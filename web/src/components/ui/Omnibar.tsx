@@ -4,7 +4,7 @@ import { Search, CornerDownLeft, Loader2, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SearchPillInput, type SearchModifier } from '@skyhook-io/k8s-ui'
 import { getResourceIcon } from '../../utils/resource-icons'
-import { useSearch, useNamespaceScope, type SearchHit, type SearchMatchedField } from '../../api/client'
+import { useSearch, useNamespaceScope, useContexts, type SearchHit, type SearchMatchedField } from '../../api/client'
 import { useAPIResources } from '../../api/apiResources'
 import { loadRecentResources, recordRecentResource } from '../../hooks/useRecentResources'
 import { useCommandItems, bestScore, type CommandItem, type CommandItemCallbacks } from './command-items'
@@ -110,6 +110,10 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
   const { data: nsScope } = useNamespaceScope()
   const { data: apiResources } = useAPIResources()
+  const { data: contexts } = useContexts()
+  // Recents are partitioned by the current cluster so a context switch never
+  // surfaces (or opens) the previous cluster's resources.
+  const contextKey = useMemo(() => contexts?.find((c) => c.isCurrent)?.name ?? '', [contexts])
   // ns + kind are the bounded, knowable modifier value sets worth autocompleting.
   const modifierOptions = useMemo(() => ({
     ns: nsScope?.accessibleNamespaces ?? [],
@@ -174,13 +178,13 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   // fresh from localStorage each open.
   const recentRows = useMemo<Row[]>(() => {
     if (!open || freeText || pills.length > 0) return []
-    return loadRecentResources().map((r) => ({
+    return loadRecentResources(contextKey).map((r) => ({
       id: `recent:${r.kind}:${r.group || ''}:${r.namespace || ''}:${r.name}`,
       kind: 'resource' as const,
       recent: true,
       hit: { score: 0, kind: r.kind, group: r.group, namespace: r.namespace, name: r.name } as SearchHit,
     }))
-  }, [open, freeText, pills.length])
+  }, [open, freeText, pills.length, contextKey])
 
   // Remaining matched commands (leading kinds removed so they don't repeat),
   // grouped by their real category in a fixed order.
@@ -240,14 +244,14 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
       row.command.action()
     } else {
       const h = row.hit
-      recordRecentResource({ kind: h.kind, group: h.group, namespace: h.namespace, name: h.name })
+      recordRecentResource({ kind: h.kind, group: h.group, namespace: h.namespace, name: h.name }, contextKey)
       onOpenResource(h)
     }
     setOpen(false)
     setText('')
     setPills([])
     inputRef.current?.blur()
-  }, [onOpenResource])
+  }, [onOpenResource, contextKey])
 
   // The resources shown don't (yet) belong to the current query: the debounce
   // hasn't fired, the data is React Query placeholder from a prior query, or
@@ -263,9 +267,16 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     else if (e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1) }
     else if (e.key === 'PageDown') { e.preventDefault(); moveSelection(pageStep()) }
     else if (e.key === 'PageUp') { e.preventDefault(); moveSelection(-pageStep()) }
-    else if (e.key === 'Home') { e.preventDefault(); moveSelection(-rows.length) }
-    else if (e.key === 'End') { e.preventDefault(); moveSelection(rows.length) }
-    else if (e.key === 'Enter') { e.preventDefault(); if (resourcesStale) return; const row = rows[selectedIndex]; if (row) execute(row) }
+    // Home/End deliberately left native so they move the text caret, not the list.
+    else if (e.key === 'Enter') {
+      e.preventDefault()
+      const row = rows[selectedIndex]
+      if (!row) return
+      // Block Enter only for a stale RESOURCE row (could open a hidden/stale
+      // hit); commands and ready resources fire immediately.
+      if (row.kind === 'resource' && resourcesStale) return
+      execute(row)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, selectedIndex, execute, resourcesStale])
 

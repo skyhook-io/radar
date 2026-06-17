@@ -13,13 +13,20 @@ export interface RecentResource {
 const KEY = 'radar-recent-resources'
 const MAX = 7
 
+// Partition by the current cluster/context: a resource is identified by
+// (kind, ns, name) WITHIN a cluster, so a global store would surface the prior
+// cluster's names after a context switch and open ns/name in the wrong cluster.
+function storageKey(contextKey: string): string {
+  return `${KEY}::${contextKey || 'default'}`
+}
+
 function keyOf(r: RecentResource): string {
   return `${r.kind}\x00${r.group || ''}\x00${r.namespace || ''}\x00${r.name}`
 }
 
-export function loadRecentResources(): RecentResource[] {
+export function loadRecentResources(contextKey: string): RecentResource[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = localStorage.getItem(storageKey(contextKey))
     if (raw) return JSON.parse(raw)
   } catch {
     // ignore parse/storage errors — recents are best-effort
@@ -27,12 +34,12 @@ export function loadRecentResources(): RecentResource[] {
   return []
 }
 
-export function recordRecentResource(r: RecentResource): void {
+export function recordRecentResource(r: RecentResource, contextKey: string): void {
   if (!r.name || !r.kind) return
   try {
     const k = keyOf(r)
-    const next = [r, ...loadRecentResources().filter((x) => keyOf(x) !== k)].slice(0, MAX)
-    localStorage.setItem(KEY, JSON.stringify(next))
+    const next = [r, ...loadRecentResources(contextKey).filter((x) => keyOf(x) !== k)].slice(0, MAX)
+    localStorage.setItem(storageKey(contextKey), JSON.stringify(next))
   } catch {
     // ignore storage errors
   }

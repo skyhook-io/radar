@@ -131,7 +131,7 @@ export function SearchPillInput({
 
   const suggesting = !dismissed && filtered.length > 0
 
-  useEffect(() => { setSel(0) }, [filtered.length, mod?.canon])
+  useEffect(() => { setSel(0) }, [filtered.length, mod?.canon, mod?.partial])
   useEffect(() => { onSuggestingChange?.(suggesting) }, [suggesting, onSuggestingChange])
 
   // Anchor the portaled suggestion dropdown under the input box.

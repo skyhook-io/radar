@@ -128,23 +128,34 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
     }
 
     if (contexts) {
-      for (const ctx of contexts) {
-        // Show the friendly parsed cluster name (like the cluster picker), not
-        // the raw ARN/gke context string; keep raw name + account as hidden
-        // search terms so typing either still finds it.
+      // Show the friendly parsed cluster name (like the cluster picker), not the
+      // raw ARN/gke context string. provider/region may live in the cluster id
+      // (e.g. EKS ARN) when the context name is already friendly — fall back to
+      // it. Count display names so genuine duplicates (same cluster name from
+      // different kubeconfig sources) stay distinguishable; unique ones stay clean.
+      const labelCount = new Map<string, number>()
+      const parsedCtx = contexts.map((ctx) => {
         const parsed = parseContextName(stripSourceSuffix(ctx.name, ctx.source))
-        // provider/region may live in the cluster id (e.g. EKS ARN) when the
-        // context name itself is already friendly — fall back to it for the meta.
         const fromCluster = ctx.cluster ? parseContextName(ctx.cluster) : null
-        const meta = [parsed.provider ?? fromCluster?.provider, parsed.region ?? fromCluster?.region].filter(Boolean).join(' · ')
+        labelCount.set(parsed.clusterName, (labelCount.get(parsed.clusterName) ?? 0) + 1)
+        return {
+          ctx,
+          clusterName: parsed.clusterName,
+          account: parsed.account,
+          meta: [parsed.provider ?? fromCluster?.provider, parsed.region ?? fromCluster?.region].filter(Boolean).join(' · '),
+        }
+      })
+      for (const { ctx, clusterName, account, meta } of parsedCtx) {
+        const disambig = (labelCount.get(clusterName) ?? 0) > 1 ? (ctx.source || ctx.name) : ''
+        const sub = [ctx.isCurrent ? 'current' : meta, disambig].filter(Boolean).join(' · ')
         result.push({
           id: `context-${ctx.name}`,
-          label: parsed.clusterName,
-          sublabel: ctx.isCurrent ? 'current' : (meta || undefined),
+          label: clusterName,
+          sublabel: sub || undefined,
           category: 'Clusters',
           icon: Server,
           action: () => { if (!ctx.isCurrent) cb.onSwitchContext(ctx.name) },
-          searchTerms: [ctx.name, parsed.account || ''].filter(Boolean),
+          searchTerms: [ctx.name, account || ''].filter(Boolean),
         })
       }
     }
