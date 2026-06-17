@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import yaml from 'yaml'
@@ -204,6 +204,28 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
     window.setTimeout(refetchTable, 1200)
   }
 
+  // Cold-cache catch-up: right after a cluster/namespace switch (or first open)
+  // the GitOps CRD informers can still be warming, so the first list resolves
+  // EMPTY even though apps exist — stranding the user on "No applications found"
+  // until the 120s poll (which is why a manual Refresh "fixes" it). When the
+  // fetch settles empty, briefly retry (bounded) to catch the cache as it syncs.
+  // Reset the budget whenever the cluster (apiResources identity) or namespace
+  // scope changes so each switch gets a fresh set of retries.
+  const coldRetriesRef = useRef(0)
+  // While we're still retrying a cold cache, the view shows a spinner (not the
+  // false "No applications found") — so the user sees "loading", not "empty".
+  const [coldRetrying, setColdRetrying] = useState(false)
+  useEffect(() => { coldRetriesRef.current = 0; setColdRetrying(false) }, [apiResources, namespacesParam])
+  useEffect(() => {
+    if (apiResourcesLoading || rowsQuery.isFetching) return
+    if ((rowsQuery.data?.length ?? 0) > 0) { setColdRetrying(false); return }
+    if (coldRetriesRef.current >= 4) { setColdRetrying(false); return }
+    setColdRetrying(true)
+    const t = window.setTimeout(() => { coldRetriesRef.current += 1; refetchTable() }, 2000)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowsQuery.data, rowsQuery.isFetching, apiResourcesLoading])
+
   const handleRowAction = (row: GitOpsRow, action: GitOpsRowAction) => {
     const { kindName: kind, namespace, name, id } = row
     const settle = { onSuccess: refetchTableAfterMutation, onSettled: () => markAction(id, action, false) }
@@ -246,7 +268,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
     <>
       <SharedGitOpsTableView
         rows={rowsQuery.data ?? []}
-        loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading}
+        loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading || coldRetrying}
         error={(rowsQuery.error as Error | null) ?? null}
         counts={countsQuery.data?.counts ?? {}}
         onRefresh={() => rowsQuery.refetch()}

@@ -33,6 +33,7 @@ import { FacetSection, FacetButton } from '../ui/Facet'
 import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
+import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
@@ -298,6 +299,10 @@ export function GitOpsTableView({
   const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
   const [reconcilingOnly, setReconcilingOnly] = useState(false)
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'urgency', dir: 'asc' })
+  // Shared refresh feedback (spin ≥400ms → checkmark) so clicking Refresh gives
+  // the same visual confirmation as every other view, even when the refetch is
+  // instant (the cache is already warm).
+  const [triggerRefresh, , refreshPhase] = useRefreshAnimation(onRefresh ?? (() => {}))
   // Clicking a column sorts by it (starting at the column's natural direction —
   // e.g. last-sync newest-first); clicking the active column reverses.
   const onSort = useCallback(
@@ -680,10 +685,12 @@ export function GitOpsTableView({
               <Tooltip content="Refresh GitOps resources">
                 <button
                   type="button"
-                  onClick={onRefresh}
+                  onClick={triggerRefresh}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-theme-border bg-theme-base text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
                 >
-                  <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  {refreshPhase === 'success'
+                    ? <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    : <RefreshCw className={clsx('h-3.5 w-3.5', (refreshPhase === 'spinning' || loading) && 'animate-spin')} />}
                 </button>
               </Tooltip>
             )}
