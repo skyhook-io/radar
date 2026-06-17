@@ -35,13 +35,48 @@ describe('detectBlastRadius', () => {
     expect(reasons[0].reason).toMatch(/cluster-admin/)
   })
 
-  it('flags verb wildcards', () => {
+  it('flags verb wildcards spanning every apiGroup', () => {
+    // apiGroups:['*'] with a verb wildcard is god-mode regardless of binding
+    // scope — admin-shaped roles look exactly like this.
     const b = binding({
-      rules: [{ verbs: ['*'], resources: ['pods'], apiGroups: [''] }],
+      rules: [{ verbs: ['*'], resources: ['pods'], apiGroups: ['*'] }],
     })
     const reasons = detectBlastRadius(subject([b]))
     expect(reasons).toHaveLength(1)
     expect(reasons[0].reason).toMatch(/verb wildcard/)
+  })
+
+  it('flags verb wildcards on a cluster-wide binding (incl. cluster-wide secrets)', () => {
+    // Cluster-wide `verbs:['*']` on secrets is read-every-secret takeover and
+    // MUST stay loud even though the resource is named, not `*`.
+    const b = binding({
+      binding: { kind: 'ClusterRoleBinding', namespace: '', name: 'cluster-b', roleRef: { kind: 'ClusterRole', namespace: '', name: 'r' } },
+      rules: [{ verbs: ['*'], resources: ['secrets'], apiGroups: [''] }],
+    })
+    const reasons = detectBlastRadius(subject([b]))
+    expect(reasons).toHaveLength(1)
+    expect(reasons[0].reason).toMatch(/verb wildcard/)
+  })
+
+  it("does NOT flag a verb wildcard scoped to one operator's own CRDs", () => {
+    // `verbs:['*']` confined to a specific apiGroup+resources in a single
+    // namespace (RoleBinding) is the routine operator-owns-its-CRDs grant —
+    // expanding the Permissions section on every such SA is the over-fire
+    // this exclusion fixes.
+    const b = binding({
+      rules: [{ verbs: ['*'], resources: ['widgets'], apiGroups: ['acme.example.com'] }],
+    })
+    expect(detectBlastRadius(subject([b]))).toHaveLength(0)
+  })
+
+  it('does NOT flag a namespace RoleBinding with resource-wildcard verb-wildcard over one group', () => {
+    // `verbs:['*']` over `resources:['*']` in one apiGroup, bound via a
+    // namespace RoleBinding, is namespace-scoped — broad within the namespace
+    // but not cluster takeover. Common operator shape; stays collapsed.
+    const b = binding({
+      rules: [{ verbs: ['*'], resources: ['*'], apiGroups: ['acme.example.com'] }],
+    })
+    expect(detectBlastRadius(subject([b]))).toHaveLength(0)
   })
 
   it('flags escalation verbs', () => {
@@ -89,8 +124,9 @@ describe('detectBlastRadius', () => {
 
   it('dedupes by binding identity when multiple risky rules match', () => {
     const b = binding({
+      binding: { kind: 'ClusterRoleBinding', namespace: '', name: 'cluster-b', roleRef: { kind: 'ClusterRole', namespace: '', name: 'r' } },
       rules: [
-        { verbs: ['*'], resources: ['pods'], apiGroups: [''] },
+        { verbs: ['*'], resources: ['secrets'], apiGroups: [''] },
         { verbs: ['escalate'], resources: ['roles'], apiGroups: ['rbac.authorization.k8s.io'] },
       ],
     })
