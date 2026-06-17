@@ -8,6 +8,7 @@
 
 @theme inline {
   /* Backgrounds */
+  --color-theme-sidebar: var(--bg-sidebar);
   --color-theme-base: var(--bg-base);
   --color-theme-surface: var(--bg-surface);
   --color-theme-elevated: var(--bg-elevated);

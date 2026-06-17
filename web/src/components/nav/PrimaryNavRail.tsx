@@ -75,11 +75,12 @@ export function PrimaryNavRail({ activeView, onNavigate, pinned, onTogglePinned,
     <aside
       aria-label="Primary navigation"
       className={clsx(
-        // Recessed to the `base` floor tone (not `surface`) so the rail reads as
-        // chrome the content panels float above — content uses `surface`, so a
-        // same-tone rail only separated by a 1px border. Neutral by design: the
-        // brand accent lives on the active item, not the nav background.
-        'shrink-0 flex flex-col bg-theme-base border-r border-theme-border h-full transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]',
+        // Dedicated sidebar token = the DEEPEST layer of the elevation scale, so
+        // the rail reads as chrome on EVERY view — not just ones where a `surface`
+        // facet pane happens to sit next to it (the content floor is `base`, which
+        // a `base` rail blends into). Neutral by design: the brand accent lives on
+        // the active item, not the nav background.
+        'shrink-0 flex flex-col bg-theme-sidebar border-r border-theme-border h-full transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]',
         // w-44 (176px): OSS labels are short (longest is "Applications"), so the
         // rail is trimmer than Radar Cloud's w-60 (which carries long cluster
         // names). Keep in sync with the minWidth content-floor calc in App.tsx.

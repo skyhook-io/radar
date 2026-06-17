@@ -30,10 +30,14 @@
   --color-error-dark: #DC2626;
   --color-info: #3B82F6;
 
-  /* ── Backgrounds ──
-     base     = page bg, header/toolbar chrome (barely-blue cool gray)
-     surface  = sidebars, content panels, cards (near-white)
+  /* ── Backgrounds (elevation scale) ──
+     sidebar  = primary nav rail — the DEEPEST layer, its own token so the rail
+                reads as chrome on every view regardless of what content puts
+                next to it (vs. borrowing contrast from an adjacent surface pane)
+     base     = content floor, page bg, header/toolbar chrome (barely-blue gray)
+     surface  = content panels, cards, tables, facet panes (raised, near-white)
      elevated = inputs, count badges, dropdowns (very lightly blue-tinted) */
+  --bg-sidebar: light-dark(#E7ECF5, #080B16);
   --bg-base: light-dark(#F0F3F9, #0B0F1E);
   --bg-surface: light-dark(#F8FBFE, #14192A);
   --bg-elevated: light-dark(#E6ECF5, #1E2338);
