@@ -72,7 +72,10 @@ export type GitOpsMode = 'applications' | 'sources' | 'projects' | 'alerts'
 // switcher is just noise (an always-selected pill that can't be changed).
 const AVAILABLE_MODES: GitOpsMode[] = ['applications']
 export type GitOpsViewMode = 'table' | 'tiles'
-export type SortKey = 'name' | 'health' | 'sync' | 'lastSync' | 'project'
+// 'urgency' is the curated DEFAULT order (what needs attention first) — not a
+// column, so no header shows it as active; clicking any header replaces it with
+// that column's own semantics.
+export type SortKey = 'urgency' | 'name' | 'health' | 'sync' | 'lastSync' | 'project'
 
 // Row-level actions surfaced from the table's three-dot menu. The set
 // mirrors what the detail page exposes today; callers wire the mutations
@@ -294,7 +297,7 @@ export function GitOpsTableView({
   }, [])
   const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
   const [reconcilingOnly, setReconcilingOnly] = useState(false)
-  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'health', dir: 'asc' })
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'urgency', dir: 'asc' })
   // Clicking a column sorts by it (starting at the column's natural direction —
   // e.g. last-sync newest-first); clicking the active column reverses.
   const onSort = useCallback(
@@ -936,6 +939,7 @@ export function GitOpsIconToggle({ active, label, icon: Icon, onClick }: { activ
 // Tile mode has no sortable column headers, so it gets this themed sort menu
 // (a native <select> can't be styled to match the rest of the toolbar).
 const SORT_OPTIONS: [SortKey, string][] = [
+  ['urgency', 'Priority'],
   ['health', 'Health'],
   ['sync', 'Sync'],
   ['lastSync', 'Last sync'],
@@ -1624,11 +1628,12 @@ export function summarizeGitOpsRows(rows: GitOpsRow[]) {
 // Natural direction per column, used the first time a column is clicked: the
 // urgency-ordered facets default ascending (most-urgent first); recency defaults
 // to newest-first.
-const SORT_DEFAULT_DIR: Record<SortKey, SortDir> = { name: 'asc', health: 'asc', sync: 'asc', lastSync: 'desc', project: 'asc' }
+const SORT_DEFAULT_DIR: Record<SortKey, SortDir> = { urgency: 'asc', name: 'asc', health: 'asc', sync: 'asc', lastSync: 'desc', project: 'asc' }
 
 // Ascending comparator per column (the caller flips it for descending). health
 // ascends worst→best (urgencyRank 0 = broken); lastSync ascends oldest→newest.
 function compareRows(a: GitOpsRow, b: GitOpsRow, sortKey: SortKey) {
+  if (sortKey === 'urgency') return urgencyRank(a) - urgencyRank(b) || a.name.localeCompare(b.name)
   if (sortKey === 'health') return healthRank(a) - healthRank(b) || a.name.localeCompare(b.name)
   if (sortKey === 'sync') return syncRank(a.sync) - syncRank(b.sync) || a.name.localeCompare(b.name)
   if (sortKey === 'lastSync') return (Date.parse(a.lastSync || a.createdAt) || 0) - (Date.parse(b.lastSync || b.createdAt) || 0)
@@ -1647,6 +1652,21 @@ const HEALTH_RANK: Record<string, number> = {
 }
 function healthRank(row: GitOpsRow): number {
   return HEALTH_RANK[row.health] ?? 2
+}
+
+// urgencyRank groups rows by what the operator should do about them — the curated
+// DEFAULT order (sortKey 'urgency'), surfacing broken/drifted apps first.
+//   0 broken (Terminating/Degraded/Missing) · 1 OutOfSync, manual · 2 OutOfSync,
+//   auto · 3 Progressing/Reconciling · 4 Unknown · 5 Suspended · 6 Synced+Healthy.
+function urgencyRank(row: GitOpsRow): number {
+  if (row.terminating) return 0
+  if (row.health === 'Degraded' || row.health === 'Missing') return 0
+  if (row.sync === 'OutOfSync' && !row.autoSync) return 1
+  if (row.sync === 'OutOfSync') return 2
+  if (row.health === 'Progressing' || row.sync === 'Reconciling') return 3
+  if (row.suspended || row.health === 'Suspended') return 5
+  if (row.health === 'Healthy' && row.sync === 'Synced') return 6
+  return 4
 }
 
 function syncRank(sync: string) {
