@@ -413,7 +413,10 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
                   </div>
                 ) : (
                   resourceRows.map((row) => row.kind === 'resource' && (
-                    <ResourceRow key={row.id} hit={row.hit} selected={row.id === selectedId} onSelect={() => selectRow(row.id)} onActivate={() => execute(row)} />
+                    // Mirror the Enter guard: ignore clicks on stale rows (prior
+                    // query's results during debounce/placeholder) so a click can't
+                    // open/record the wrong resource. Dim them so it reads as pending.
+                    <ResourceRow key={row.id} hit={row.hit} stale={resourcesStale} selected={row.id === selectedId} onSelect={() => selectRow(row.id)} onActivate={() => { if (!resourcesStale) execute(row) }} />
                   ))
                 )}
               </>
@@ -445,7 +448,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   )
 })
 
-function ResourceRow({ hit, selected, onSelect, onActivate }: { hit: SearchHit; selected: boolean; onSelect: () => void; onActivate: () => void }) {
+function ResourceRow({ hit, selected, stale, onSelect, onActivate }: { hit: SearchHit; selected: boolean; stale?: boolean; onSelect: () => void; onActivate: () => void }) {
   const Icon = getResourceIcon(hit.kind)
   const dot = healthDot(hit.summaryContext?.health)
   const issues = hit.summaryContext?.issueCount ?? 0
@@ -457,7 +460,7 @@ function ResourceRow({ hit, selected, onSelect, onActivate }: { hit: SearchHit; 
       data-selected={selected}
       onClick={onActivate}
       onMouseMove={onSelect}
-      className={clsx('w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors', selected ? 'selection' : 'hover:bg-theme-elevated/40')}
+      className={clsx('w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors', selected ? 'selection' : 'hover:bg-theme-elevated/40', stale && 'opacity-50')}
     >
       <Icon className="w-4 h-4 shrink-0 text-theme-text-tertiary" />
       <span className="min-w-0 truncate text-sm text-theme-text-primary">{highlight(hit.name, tokensForSite(hit.matched, 'name'))}</span>

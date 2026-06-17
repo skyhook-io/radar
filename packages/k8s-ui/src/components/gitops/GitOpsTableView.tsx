@@ -495,10 +495,11 @@ export function GitOpsTableView({
 
   const showCrossClusterTile = typeof crossClusterCount === 'number' && mode === 'applications'
 
-  // Header tiles ARE the matching facet — clicking one toggles the same filter
-  // the sidebar facet does (and the sidebar reflects it), so there's one source
-  // of truth. 'active' tracks facet membership (composes with other filters),
-  // not sole-filter, so a tile lights whenever its value is part of the filter.
+  // Header tiles are facet shortcuts: clicking one REPLACES the filter with that
+  // single facet value (the tile onClick clears first, then applies) and the
+  // sidebar reflects it, so there's one source of truth. 'active' = "this value
+  // is the sole filter". Replacement (not toggle on a pre-clear snapshot) is
+  // required because the onClick's clearAllFilters() and apply() batch together.
   const summaryTiles: SummaryTileSpec[] = [
     {
       key: 'total',
@@ -506,39 +507,38 @@ export function GitOpsTableView({
       value: allRows.length,
       tone: 'neutral',
       active: noOtherFiltersActive(),
-      apply: clearAllFilters,
     },
     {
       key: 'outOfSync',
       label: 'Out of sync',
       value: statusSummary.outOfSync,
       tone: 'warning',
-      active: syncFilters.has('OutOfSync'),
-      apply: () => toggleSet(syncFilters, setSyncFilters, 'OutOfSync'),
+      active: syncFilters.size === 1 && syncFilters.has('OutOfSync') && noOtherFiltersActive('sync'),
+      apply: () => setSyncFilters(new Set(['OutOfSync'])),
     },
     {
       key: 'degraded',
       label: 'Degraded',
       value: statusSummary.degraded,
       tone: 'error',
-      active: healthFilters.has('Degraded'),
-      apply: () => toggleSet(healthFilters, setHealthFilters, 'Degraded'),
+      active: healthFilters.size === 1 && healthFilters.has('Degraded') && noOtherFiltersActive('health'),
+      apply: () => setHealthFilters(new Set(['Degraded'])),
     },
     {
       key: 'suspended',
       label: 'Suspended',
       value: statusSummary.suspended,
       tone: 'warning',
-      active: automationFilters.has('suspended'),
-      apply: () => toggleAutomation('suspended'),
+      active: automationFilters.size === 1 && automationFilters.has('suspended') && noOtherFiltersActive('automation'),
+      apply: () => setAutomationFilters(new Set(['suspended'])),
     },
     {
       key: 'reconciling',
       label: 'Reconciling',
       value: syncCounts.get('Reconciling') ?? 0,
       tone: 'info',
-      active: syncFilters.has('Reconciling'),
-      apply: () => toggleSet(syncFilters, setSyncFilters, 'Reconciling'),
+      active: syncFilters.size === 1 && syncFilters.has('Reconciling') && noOtherFiltersActive('sync'),
+      apply: () => setSyncFilters(new Set(['Reconciling'])),
     },
     ...(showCrossClusterTile
       ? [
@@ -578,8 +578,8 @@ export function GitOpsTableView({
         />
       </div>
       <div
-        className={`flex min-w-0 flex-1 overflow-hidden max-sm:flex-col ${
-          filtersSide === 'right' ? 'sm:flex-row-reverse' : ''
+        className={`flex min-w-0 flex-1 overflow-hidden max-[899px]:flex-col ${
+          filtersSide === 'right' ? 'min-[900px]:flex-row-reverse' : ''
         }`}
       >
       <GitOpsFilterSidebar
@@ -823,8 +823,8 @@ function GitOpsFilterSidebar({
 }) {
   return (
     <aside
-      className={`flex w-72 shrink-0 flex-col overflow-hidden border-theme-border bg-theme-surface/90 max-sm:max-h-72 max-sm:w-full max-sm:border-b ${
-        side === 'right' ? 'border-l max-sm:border-l-0' : 'border-r max-sm:border-r-0'
+      className={`flex w-72 shrink-0 flex-col overflow-hidden border-theme-border bg-theme-surface/90 max-[899px]:max-h-72 max-[899px]:w-full max-[899px]:border-b ${
+        side === 'right' ? 'border-l max-[899px]:border-l-0' : 'border-r max-[899px]:border-r-0'
       }`}
     >
       <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">

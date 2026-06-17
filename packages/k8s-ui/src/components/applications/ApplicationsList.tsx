@@ -356,9 +356,11 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
       </div>
 
       {/* Body: filter sidebar | content (toolbar + table). */}
-      <div className="flex min-w-0 flex-1 overflow-hidden max-sm:flex-col">
-        {/* Filters sidebar — titled, with Clear; mirrors the GitOps facet rail. */}
-        <aside className="flex w-52 shrink-0 flex-col overflow-hidden border-r border-theme-border bg-theme-surface/90 max-sm:max-h-72 max-sm:w-full max-sm:border-b max-sm:border-r-0">
+      <div className="flex min-w-0 flex-1 overflow-hidden max-[899px]:flex-col">
+        {/* Filters sidebar — titled, with Clear; mirrors the GitOps facet rail.
+            Arbitrary 900px breakpoint (not `sm`) so the collapse is independent of
+            the consuming app's Tailwind breakpoint config (Hub uses defaults). */}
+        <aside className="flex w-52 shrink-0 flex-col overflow-hidden border-r border-theme-border bg-theme-surface/90 max-[899px]:max-h-72 max-[899px]:w-full max-[899px]:border-b max-[899px]:border-r-0">
           <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">
             <span className="text-sm font-medium text-theme-text-secondary">Filters</span>
             {anyFilterActive && (
