@@ -35,15 +35,24 @@ describe('detectBlastRadius', () => {
     expect(reasons[0].reason).toMatch(/cluster-admin/)
   })
 
-  it('flags verb wildcards spanning every apiGroup', () => {
-    // apiGroups:['*'] with a verb wildcard is god-mode regardless of binding
-    // scope — admin-shaped roles look exactly like this.
+  it('flags an admin-shaped grant via ClusterRoleBinding', () => {
+    // apiGroups/resources/verbs all `*` bound cluster-wide is god-mode.
     const b = binding({
-      rules: [{ verbs: ['*'], resources: ['pods'], apiGroups: ['*'] }],
+      binding: { kind: 'ClusterRoleBinding', namespace: '', name: 'admin-crb', roleRef: { kind: 'ClusterRole', namespace: '', name: 'admin' } },
+      rules: [{ verbs: ['*'], resources: ['*'], apiGroups: ['*'] }],
     })
     const reasons = detectBlastRadius(subject([b]))
     expect(reasons).toHaveLength(1)
     expect(reasons[0].reason).toMatch(/verb wildcard/)
+  })
+
+  it('does NOT flag the same admin-shaped grant via a namespace RoleBinding', () => {
+    // A RoleBinding is namespace-scoped by apiserver construction — even
+    // `*/*/*` is namespace-admin, not cluster takeover, so it stays collapsed.
+    const b = binding({
+      rules: [{ verbs: ['*'], resources: ['*'], apiGroups: ['*'] }],
+    })
+    expect(detectBlastRadius(subject([b]))).toHaveLength(0)
   })
 
   it('flags verb wildcards on a cluster-wide binding (incl. cluster-wide secrets)', () => {

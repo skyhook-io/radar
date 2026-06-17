@@ -47,20 +47,19 @@ export interface BlastRadiusReason {
  *
  *   1. cluster-admin role-name match (covers the "bound my SA to cluster-admin
  *      for testing" pattern even when rules aren't loaded)
- *   2. verb wildcards (`*`) that are also broadly scoped — i.e. the rule spans
- *      every apiGroup, or the binding is cluster-wide (a ClusterRoleBinding)
+ *   2. verb wildcards (`*`) granted by a cluster-wide binding (ClusterRoleBinding)
  *   3. escalation verbs (`escalate` / `bind` / `impersonate`)
  *   4. cluster-wide `create pods` (lateral-movement vector)
  *
  * Resource-only wildcards (e.g. `view`'s fluxcd CRD coverage) deliberately
  * do NOT trigger — they fire on every authenticated SA and would train
- * operators to ignore the alarm. A verb wildcard confined to a single
- * namespace (a RoleBinding) is likewise excluded — even `verbs:['*']` over
- * `resources:['*']` in one apiGroup is namespace-scoped, not cluster takeover,
- * and operators routinely hold exactly that over their own CRDs. Only a
- * cluster-wide binding, or a wildcard spanning every apiGroup, counts as
- * genuine god-mode. The current set is the calibrated minimum for "the Pod's
- * identity is genuinely god-mode".
+ * operators to ignore the alarm. A verb wildcard granted by a RoleBinding is
+ * likewise excluded — a RoleBinding is namespace-scoped by apiserver
+ * construction, so even `verbs:['*']` over `resources:['*']` across every
+ * apiGroup (namespace-admin) is not cluster takeover, and operators routinely
+ * hold broad wildcards over their own CRDs. Only a cluster-wide binding counts
+ * as genuine god-mode. The current set is the calibrated minimum for "the
+ * Pod's identity is genuinely god-mode".
  *
  * Dedupes by binding identity so a binding with multiple risky rules
  * counts once; first matching reason wins.
@@ -79,9 +78,12 @@ export function detectBlastRadius(rbacData: RBACSubjectResponse): BlastRadiusRea
     for (const r of br.rules ?? []) {
       const verbs = r.verbs ?? []
       const resources = r.resources ?? []
-      const groups = r.apiGroups ?? []
-      const broadlyScoped = groups.includes('*') || br.binding.kind === 'ClusterRoleBinding'
-      if (verbs.includes('*') && broadlyScoped) {
+      // A verb wildcard is only cluster takeover when the binding is itself
+      // cluster-wide. A RoleBinding is namespace-scoped by apiserver
+      // construction no matter how broad its rule (apiGroups/resources `*`
+      // included), so namespace-admin SAs stay collapsed; only
+      // ClusterRoleBindings count.
+      if (verbs.includes('*') && br.binding.kind === 'ClusterRoleBinding') {
         reasons.push({ binding: br, reason: 'grants verb wildcard (*) — every action on the listed resources' })
         break
       }
