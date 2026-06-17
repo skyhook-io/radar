@@ -3,7 +3,9 @@ import { clsx } from 'clsx'
 import {
   AlertTriangle,
   ArrowDownUp,
+  Check,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   CircleDot,
   GitBranch,
@@ -622,18 +624,7 @@ export function GitOpsTableView({
                 pattern); tile mode has no headers, so it keeps a compact sort
                 control wired to the same sort state. */}
             {viewMode === 'tiles' && (
-              <select
-                value={sort.key}
-                onChange={(e) => { const k = e.target.value as SortKey; setSort({ key: k, dir: SORT_DEFAULT_DIR[k] }) }}
-                aria-label="Sort"
-                className="h-8 rounded-md border border-theme-border bg-theme-base px-2 text-xs text-theme-text-primary focus:outline-none focus:ring-1 focus:ring-skyhook-500/50"
-              >
-                <option value="health">Sort: health</option>
-                <option value="sync">Sort: sync</option>
-                <option value="lastSync">Sort: last sync</option>
-                <option value="project">Sort: project</option>
-                <option value="name">Sort: name</option>
-              </select>
+              <GitOpsSortMenu sortKey={sort.key} onChange={(k) => setSort({ key: k, dir: SORT_DEFAULT_DIR[k] })} />
             )}
             {labels.length > 0 && (
               <LabelsDropdown
@@ -942,6 +933,59 @@ export function GitOpsIconToggle({ active, label, icon: Icon, onClick }: { activ
   )
 }
 
+// Tile mode has no sortable column headers, so it gets this themed sort menu
+// (a native <select> can't be styled to match the rest of the toolbar).
+const SORT_OPTIONS: [SortKey, string][] = [
+  ['health', 'Health'],
+  ['sync', 'Sync'],
+  ['lastSync', 'Last sync'],
+  ['project', 'Project'],
+  ['name', 'Name'],
+]
+function GitOpsSortMenu({ sortKey, onChange }: { sortKey: SortKey; onChange: (key: SortKey) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+  const current = SORT_OPTIONS.find(([k]) => k === sortKey)?.[1] ?? 'Name'
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label="Sort"
+        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2.5 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+      >
+        <ArrowDownUp className="h-3.5 w-3.5" />
+        Sort: {current}
+        <ChevronDown className="h-3 w-3 opacity-60" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 w-40 overflow-hidden rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl">
+          {SORT_OPTIONS.map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => { onChange(key); setOpen(false) }}
+              className={clsx(
+                'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-theme-hover',
+                key === sortKey ? 'font-medium text-theme-text-primary' : 'text-theme-text-secondary',
+              )}
+            >
+              <Check className={clsx('h-3.5 w-3.5 shrink-0', key === sortKey ? 'opacity-100 text-skyhook-500' : 'opacity-0')} />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function LabelsDropdown({
   labels,
   activeLabels,
@@ -964,8 +1008,17 @@ function LabelsDropdown({
   const filtered = search.trim()
     ? labels.filter((label) => label.name.toLowerCase().includes(search.trim().toLowerCase()))
     : labels
+  const containerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) onOpenChange(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open, onOpenChange])
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
@@ -1056,9 +1109,9 @@ function StatusDistribution({ rows }: { rows: GitOpsRow[] }) {
     <DistributionBar
       ariaLabel="Health distribution"
       segments={[
-        { key: 'healthy', count: summary.healthy, fillClass: 'bg-emerald-500' },
-        { key: 'progressing', count: summary.progressing, fillClass: 'bg-sky-500' },
         { key: 'degraded', count: summary.degraded, fillClass: 'bg-red-500' },
+        { key: 'progressing', count: summary.progressing, fillClass: 'bg-sky-500' },
+        { key: 'healthy', count: summary.healthy, fillClass: 'bg-emerald-500' },
         { key: 'unknown', count: Math.max(0, rows.length - summary.healthy - summary.progressing - summary.degraded), fillClass: 'bg-theme-text-tertiary/40' },
       ]}
     />
@@ -1089,7 +1142,7 @@ function GitOpsTable({
   const showActions = !!onRowAction
   return (
     <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-sm">
-      <thead className="sticky top-0 z-10 bg-theme-surface">
+      <thead className="sticky top-0 z-10 bg-theme-base">
         <tr>
           <SortableTh label="Application" sortKey="name" activeKey={sort.key} direction={sort.dir} onSort={onSort} className={showActions ? 'w-[16%]' : 'w-[22%]'} />
           <SortableTh label="Project" sortKey="project" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
@@ -1576,31 +1629,24 @@ const SORT_DEFAULT_DIR: Record<SortKey, SortDir> = { name: 'asc', health: 'asc',
 // Ascending comparator per column (the caller flips it for descending). health
 // ascends worst→best (urgencyRank 0 = broken); lastSync ascends oldest→newest.
 function compareRows(a: GitOpsRow, b: GitOpsRow, sortKey: SortKey) {
-  if (sortKey === 'health') return urgencyRank(a) - urgencyRank(b) || a.name.localeCompare(b.name)
+  if (sortKey === 'health') return healthRank(a) - healthRank(b) || a.name.localeCompare(b.name)
   if (sortKey === 'sync') return syncRank(a.sync) - syncRank(b.sync) || a.name.localeCompare(b.name)
   if (sortKey === 'lastSync') return (Date.parse(a.lastSync || a.createdAt) || 0) - (Date.parse(b.lastSync || b.createdAt) || 0)
   if (sortKey === 'project') return a.project.localeCompare(b.project) || a.name.localeCompare(b.name)
   return a.name.localeCompare(b.name)
 }
 
-// urgencyRank groups rows by what the operator should do about them.
-// Tiers:
-//   0 — broken (Terminating, Degraded, Missing). Won't self-heal.
-//   1 — OutOfSync, no auto-sync. Drifted, waiting for a human.
-//   2 — OutOfSync with auto-sync. Healing in progress.
-//   3 — Progressing / Reconciling. Mid-rollout.
-//   4 — Unknown. Indeterminate.
-//   5 — Suspended. Intentional non-green.
-//   6 — Synced + Healthy. Calm.
-function urgencyRank(row: GitOpsRow): number {
-  if (row.terminating) return 0
-  if (row.health === 'Degraded' || row.health === 'Missing') return 0
-  if (row.sync === 'OutOfSync' && !row.autoSync) return 1
-  if (row.sync === 'OutOfSync') return 2
-  if (row.health === 'Progressing' || row.sync === 'Reconciling') return 3
-  if (row.suspended || row.health === 'Suspended') return 5
-  if (row.health === 'Healthy' && row.sync === 'Synced') return 6
-  return 4
+// Sort the Health column by health STATUS, worst first — so clicking the column
+// groups rows the way its header implies. (This is deliberately NOT the old
+// composite "urgency" rank that also weighed sync / auto-sync: that conflated two
+// dimensions and made the Health column look broken — an OutOfSync-but-Healthy
+// row sorting above a Synced-Progressing one. A sync-aware triage ordering is a
+// reasonable separate default, but not what "sort by Health" should mean.)
+const HEALTH_RANK: Record<string, number> = {
+  Degraded: 0, Missing: 0, Suspended: 1, Unknown: 2, Progressing: 3, Healthy: 4,
+}
+function healthRank(row: GitOpsRow): number {
+  return HEALTH_RANK[row.health] ?? 2
 }
 
 function syncRank(sync: string) {
