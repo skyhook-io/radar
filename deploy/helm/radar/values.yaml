@@ -21,7 +21,11 @@ fullnameOverride: ""
 # Debug feature (terminal "Debug" tab): the image used for ephemeral debug
 # containers attached to pods and for privileged node debug pods. Point this at
 # a reachable mirror in air-gapped / private-registry clusters where the default
-# busybox:latest cannot be pulled. Empty = busybox:latest.
+# busybox:latest cannot be pulled. If built-in restricted PodSecurity rejects
+# the default pod debug container, Radar retries with a restricted-compatible
+# Linux security context using the target/pod non-root UID, or UID 65532 by
+# default. Custom images used there must work as a non-root user.
+# Empty = busybox:latest.
 # Note: Radar does not attach imagePullSecrets to debug containers/pods —
 # ephemeral containers inherit the target pod's, and node debug pods rely on the
 # default namespace's ServiceAccount / node registry config — so the image must

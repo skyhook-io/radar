@@ -147,7 +147,7 @@ radar
 | `--disable-exec` | `false` | Disable terminal and debug shell |
 | `--disable-helm-write` | `false` | Disable Helm write operations |
 | `--disable-local-terminal` | `false` | Disable local terminal feature |
-| `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. Point at a mirror for air-gapped / private-registry clusters. |
+| `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
 | `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
 | `--first-paint-backstop` | `5m` | Hard upper bound on the initial critical-cache sync wait before Radar falls through to a partial-data render. Env: `RADAR_FIRST_PAINT_BACKSTOP`. |

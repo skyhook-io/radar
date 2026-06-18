@@ -86,7 +86,7 @@ touches its contents.
 | `image.tag` | Image tag | Chart appVersion |
 | `service.type` | Service type | `ClusterIP` |
 | `service.port` | Service port | `9280` |
-| `debug.image` | Image for ephemeral debug containers and node debug pods (point at a mirror for air-gapped / private-registry clusters) | `""` (busybox:latest) |
+| `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `ingress.enabled` | Enable ingress | `false` |
 | `ingress.className` | Ingress class name | `""` |

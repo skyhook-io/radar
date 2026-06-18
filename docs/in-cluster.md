@@ -153,7 +153,7 @@ rbac:
   helm: false         # Enable Helm write operations (broad permissions)
 ```
 
-The terminal's **Debug** action launches a throwaway container (ephemeral container on a pod, or a privileged pod on a node) using `busybox:latest` by default. In air-gapped or private-registry clusters where that image can't be pulled, point it at a reachable mirror:
+The terminal's **Debug** action launches a throwaway container (ephemeral container on a pod, or a privileged pod on a node) using `busybox:latest` by default. If the built-in restricted Pod Security Standard rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default, so custom images used in restricted namespaces must work as a non-root user. In air-gapped or private-registry clusters where the default image can't be pulled, point it at a reachable mirror:
 
 ```yaml
 # values.yaml
@@ -296,7 +296,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `ingress.className` | Ingress class | `""` |
 | `service.port` | Service port | `9280` |
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
-| `debug.image` | Image for ephemeral debug containers and node debug pods (point at a mirror for air-gapped / private-registry clusters) | `""` (busybox:latest) |
+| `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `timeline.storage` | Event storage (memory/sqlite) | `memory` |
 | `timeline.dbPath` | SQLite database path | `/data/timeline.db` |
