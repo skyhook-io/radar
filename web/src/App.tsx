@@ -181,6 +181,11 @@ function AppInner() {
   // Standalone Radar gets the left nav rail; embedded hosts (Radar Hub) own
   // the left chrome via their own fleet rail and keep Radar's top-bar pills.
   const showNavRail = !navCustomization.embedded
+  // Chromeless embed: the host (Radar Hub) owns ALL chrome and drives view
+  // navigation + scope from its own UI, so Radar renders just the active view's
+  // content — no top bar, no view-switcher. Used for per-cluster views surfaced
+  // as native cloud destinations behind a cluster picker.
+  const chromeless = navCustomization.embedded === true && navCustomization.chrome === 'none'
   // Force the slim rail on narrow windows: a pinned 176px rail needs viewport
   // ≥976 to keep content above its ~800px floor (collapsed needs only ≥856).
   // Below 976 we render collapsed regardless of the pin preference — a
@@ -1223,7 +1228,8 @@ function AppInner() {
           span the content area AFTER the rail rather than the full viewport
           under it. `fixed` splashes (connecting/switching) are unaffected. */}
       <div className="relative flex flex-col flex-1 min-w-0 h-full">
-      {/* Header */}
+      {/* Header — suppressed in chromeless embed; the host owns the chrome. */}
+      {!chromeless && (
       <header className="relative z-50 flex items-center justify-between px-4 py-2 bg-theme-base/90 backdrop-blur-sm border-b border-theme-border/50">
         {/* Left: Logo + Cluster info */}
         <div className="flex items-center gap-4 shrink-0">
@@ -1448,6 +1454,7 @@ function AppInner() {
           {navCustomization.rightExtras}
         </div>
       </header>
+      )}
 
       {/* Auth barrier - show when auth is enabled but user is not authenticated */}
       {authMe?.authEnabled && !authMe?.username && authMe.authMode === 'proxy' && (
@@ -1897,10 +1904,10 @@ function AppInner() {
       {/* Spacer for dock */}
       <DockSpacer />
 
-      {/* Floating action buttons — embedded only. Standalone moved help + bug
-          to visible top-bar icons (the rail owns chrome); this also avoids the
-          floating pair overlapping the BottomDock. */}
-      {!showNavRail && (
+      {/* Floating action buttons — embedded only, and not in chromeless (the
+          host owns help/diagnostics chrome). Standalone moved help + bug to
+          visible top-bar icons (the rail owns chrome). */}
+      {!showNavRail && !chromeless && (
         <FloatingButtons showHelp={showHelp} showCommandPalette={showCommandPalette} showDiagnostics={showDiagnostics} onHelp={() => setShowHelp(true)} onBugReport={() => setShowDiagnostics(true)} />
       )}
 

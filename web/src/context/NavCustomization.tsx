@@ -43,6 +43,17 @@ interface NavCustomizationBase {
    * keeps its single-cluster Audit tab.
    */
   clusterChecksHref?: () => string;
+  /**
+   * Chrome level for embedded hosts. Default ('full', or omitted) renders
+   * Radar's top bar + the view-switcher. 'none' suppresses BOTH — the host
+   * drives view navigation and cluster/namespace scope from its OWN chrome, and
+   * Radar renders just the active view's content full-bleed. Radar Hub uses this
+   * to surface per-cluster views (Topology / Resources / Traffic / Cost) that
+   * don't aggregate to the fleet as native cloud destinations under one chrome,
+   * gated by a cluster picker — instead of a second, redundant in-cluster nav.
+   * Only meaningful with `embedded: true`.
+   */
+  chrome?: 'full' | 'none';
 }
 
 /**
