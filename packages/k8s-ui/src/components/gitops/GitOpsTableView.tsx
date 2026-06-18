@@ -163,7 +163,11 @@ interface SummaryTileSpec {
   value: number
   tone: SummaryTone
   active: boolean
+  // A status tile toggles its OWN dimension: `apply` sets it (when off),
+  // `clear` resets just that dimension (when on) — composing with other
+  // facets + search instead of wiping them. The Total tile resets everything.
   apply?: () => void
+  clear?: () => void
 }
 
 // ----- Component props -------------------------------------------------------
@@ -444,21 +448,18 @@ export function GitOpsTableView({
     onDestinationFilterChange?.('all')
   }, [onClearNamespaces, onDestinationFilterChange])
 
+  // True when nothing is filtered at all — backs the Total tile's active state.
   const noOtherFiltersActive = useCallback(
-    (
-      exclude: 'sync' | 'health' | 'automation' | 'destination' | null = null,
-    ) => {
-      if (search !== '') return false
-      if (exclude !== 'sync' && syncFilters.size > 0) return false
-      if (exclude !== 'health' && healthFilters.size > 0) return false
-      if (projectFilters.size > 0) return false
-      if (namespaceFilters.size > 0) return false
-      if (labelFilters.size > 0) return false
-      if (exclude !== 'automation' && automationFilters.size > 0) return false
-      if (lifecycleFilter !== 'all') return false
-      if (exclude !== 'destination' && destinationFilter && destinationFilter !== 'all') return false
-      return true
-    },
+    () =>
+      search === '' &&
+      syncFilters.size === 0 &&
+      healthFilters.size === 0 &&
+      projectFilters.size === 0 &&
+      namespaceFilters.size === 0 &&
+      labelFilters.size === 0 &&
+      automationFilters.size === 0 &&
+      lifecycleFilter === 'all' &&
+      (!destinationFilter || destinationFilter === 'all'),
     [
       search,
       syncFilters,
@@ -477,7 +478,10 @@ export function GitOpsTableView({
   // namespace-scoped zero is NOT the same as cluster-empty. Fall through
   // to the actionable empty state below when the host owns a namespace
   // pick we can clear; otherwise the user lands here with no escape hatch.
-  if (totalGitOps === 0 && !loading && !hasGlobalNamespaceFilter) {
+  // Also require zero actual rows: the cold-cache retry can populate `rows`
+  // before the separate counts map catches up, and a populated table must not
+  // be hidden behind a "nothing here" screen.
+  if (totalGitOps === 0 && allRowsInput.length === 0 && !loading && !hasGlobalNamespaceFilter) {
     return (
       <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-theme-base p-4">
         <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
@@ -495,11 +499,11 @@ export function GitOpsTableView({
 
   const showCrossClusterTile = typeof crossClusterCount === 'number' && mode === 'applications'
 
-  // Header tiles are facet shortcuts: clicking one REPLACES the filter with that
-  // single facet value (the tile onClick clears first, then applies) and the
-  // sidebar reflects it, so there's one source of truth. 'active' = "this value
-  // is the sole filter". Replacement (not toggle on a pre-clear snapshot) is
-  // required because the onClick's clearAllFilters() and apply() batch together.
+  // Header tiles unify with the facet rail: each STATUS tile toggles its own
+  // dimension and composes with the other facets + search (clicking "Out of
+  // sync" adds sync=OutOfSync without wiping an active health filter or your
+  // search). `active` = "this dimension is exactly this value". The Total tile
+  // is the reset — it clears everything.
   const summaryTiles: SummaryTileSpec[] = [
     {
       key: 'total',
@@ -507,38 +511,44 @@ export function GitOpsTableView({
       value: allRows.length,
       tone: 'neutral',
       active: noOtherFiltersActive(),
+      apply: clearAllFilters,
+      clear: clearAllFilters,
     },
     {
       key: 'outOfSync',
       label: 'Out of sync',
       value: statusSummary.outOfSync,
       tone: 'warning',
-      active: syncFilters.size === 1 && syncFilters.has('OutOfSync') && noOtherFiltersActive('sync'),
+      active: syncFilters.size === 1 && syncFilters.has('OutOfSync'),
       apply: () => setSyncFilters(new Set(['OutOfSync'])),
+      clear: () => setSyncFilters(new Set()),
     },
     {
       key: 'degraded',
       label: 'Degraded',
       value: statusSummary.degraded,
       tone: 'error',
-      active: healthFilters.size === 1 && healthFilters.has('Degraded') && noOtherFiltersActive('health'),
+      active: healthFilters.size === 1 && healthFilters.has('Degraded'),
       apply: () => setHealthFilters(new Set(['Degraded'])),
+      clear: () => setHealthFilters(new Set()),
     },
     {
       key: 'suspended',
       label: 'Suspended',
       value: statusSummary.suspended,
       tone: 'warning',
-      active: automationFilters.size === 1 && automationFilters.has('suspended') && noOtherFiltersActive('automation'),
+      active: automationFilters.size === 1 && automationFilters.has('suspended'),
       apply: () => setAutomationFilters(new Set(['suspended'])),
+      clear: () => setAutomationFilters(new Set()),
     },
     {
       key: 'reconciling',
       label: 'Reconciling',
       value: syncCounts.get('Reconciling') ?? 0,
       tone: 'info',
-      active: syncFilters.size === 1 && syncFilters.has('Reconciling') && noOtherFiltersActive('sync'),
+      active: syncFilters.size === 1 && syncFilters.has('Reconciling'),
       apply: () => setSyncFilters(new Set(['Reconciling'])),
+      clear: () => setSyncFilters(new Set()),
     },
     ...(showCrossClusterTile
       ? [
@@ -547,8 +557,9 @@ export function GitOpsTableView({
             label: 'Cross-cluster',
             value: crossClusterCount!,
             tone: 'info' as const,
-            active: destinationFilter === 'cross-cluster' && noOtherFiltersActive('destination'),
+            active: destinationFilter === 'cross-cluster',
             apply: () => onDestinationFilterChange?.('cross-cluster'),
+            clear: () => onDestinationFilterChange?.('all'),
           },
         ]
       : []),
@@ -570,8 +581,8 @@ export function GitOpsTableView({
               tone={tile.tone}
               active={tile.active}
               onClick={() => {
-                clearAllFilters()
-                if (!tile.active && tile.apply) tile.apply()
+                if (tile.active) tile.clear?.()
+                else tile.apply?.()
               }}
             />
           ))}

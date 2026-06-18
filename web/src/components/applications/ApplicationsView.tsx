@@ -4,6 +4,7 @@ import {
   ApplicationsList,
   ApplicationDetail,
   CenteredEmpty,
+  PageHeader,
   useToast,
   orderEnvs,
   matchWorkloadAcrossInstances,
@@ -66,17 +67,32 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
   }
 
   // The header + status + filters + table chassis lives inside ApplicationsList
-  // (mirroring GitOpsTableView), so the wrapper only owns data states here. The
-  // empty-cluster case is handled inside the chassis so its header still shows.
+  // (mirroring GitOpsTableView), which renders only on the data path. To keep
+  // the page header from vanishing while loading / on error, the wrapper shows
+  // the same header bar above those states. (Keep title + description in sync
+  // with ApplicationsList's PageHeader.)
+  if (query.isLoading || query.error) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-theme-border px-4 py-4">
+          <PageHeader
+            icon={Boxes}
+            title="Applications"
+            description="Deployable software in this cluster — your services, workers, and jobs, grouped by app/release evidence."
+          />
+        </div>
+        {query.isLoading ? (
+          <CenteredEmpty icon={Boxes} headline="Loading applications…" />
+        ) : (
+          <CenteredEmpty tone="filtered" icon={Boxes} headline="Failed to load applications" body={(query.error as Error).message} />
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {query.isLoading ? (
-        <CenteredEmpty icon={Boxes} headline="Loading applications…" />
-      ) : query.error ? (
-        <CenteredEmpty tone="filtered" icon={Boxes} headline="Failed to load applications" body={(query.error as Error).message} />
-      ) : (
-        <ApplicationsList apps={apps} onSelect={selectApp} />
-      )}
+      <ApplicationsList apps={apps} onSelect={selectApp} />
     </div>
   )
 }

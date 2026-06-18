@@ -343,7 +343,7 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
               <SummaryTile label={total === 1 ? 'application' : 'applications'} value={total} />
               {healthTile('unhealthy', 'error')}
               {healthTile('degraded', 'warning')}
-              {healthTile('healthy', 'neutral')}
+              {healthTile('healthy', 'success')}
               {healthTile('unknown', 'neutral')}
             </>
           }
