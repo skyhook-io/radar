@@ -15,6 +15,8 @@ export interface OmnibarRecent {
   group?: string
   namespace?: string
   name: string
+  cluster?: string
+  clusterName?: string
 }
 
 // Search results the host feeds in (it runs its own search hook keyed on the
@@ -204,17 +206,17 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
   const resourceRows = useMemo<Row[]>(() => {
     const hits = searchData?.hits ?? []
-    return hits.map((hit) => ({ id: `res:${hit.kind}:${hit.group || ''}:${hit.namespace || ''}:${hit.name}`, kind: 'resource' as const, hit }))
+    return hits.map((hit) => ({ id: `res:${hit.cluster || ''}:${hit.kind}:${hit.group || ''}:${hit.namespace || ''}:${hit.name}`, kind: 'resource' as const, hit }))
   }, [searchData])
 
   // Launcher recents: only in the truly-empty state (no text, no pills).
   const recentRows = useMemo<Row[]>(() => {
     if (!open || freeText || pills.length > 0 || !loadRecents) return []
     return loadRecents().map((r) => ({
-      id: `recent:${r.kind}:${r.group || ''}:${r.namespace || ''}:${r.name}`,
+      id: `recent:${r.cluster || ''}:${r.kind}:${r.group || ''}:${r.namespace || ''}:${r.name}`,
       kind: 'resource' as const,
       recent: true,
-      hit: { score: 0, kind: r.kind, group: r.group, namespace: r.namespace, name: r.name } as SearchHit,
+      hit: { score: 0, kind: r.kind, group: r.group, namespace: r.namespace, name: r.name, cluster: r.cluster, clusterName: r.clusterName } as SearchHit,
     }))
   }, [open, freeText, pills.length, loadRecents])
 
@@ -471,6 +473,7 @@ function ResourceRow({ hit, selected, stale, onSelect, onActivate }: { hit: Sear
       <span className="shrink-0 max-w-[45%] truncate text-xs text-theme-text-tertiary">
         {highlight(hit.kind, tokensForSite(hit.matched, 'kind'))}
         {hit.namespace ? <> · {highlight(hit.namespace, tokensForSite(hit.matched, 'namespace'))}</> : ''}
+        {hit.clusterName ? <> · <span className="text-theme-text-secondary">{hit.clusterName}</span></> : ''}
       </span>
       {contentOnly && <span className="shrink-0 text-[10px] text-theme-text-tertiary italic">in spec</span>}
       {issues > 0 && <span className="ml-auto shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-400">{issues} issue{issues === 1 ? '' : 's'}</span>}

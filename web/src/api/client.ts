@@ -717,6 +717,11 @@ export interface SearchHit {
   name: string
   matched?: SearchMatchedField[]
   summaryContext?: SearchSummaryContext
+  /** Embedder (Radar Hub) only: the cluster this hit belongs to, for
+   *  cross-cluster fleet search. Standalone Radar (single-cluster) leaves these
+   *  unset — the omnibar keys + displays the cluster only when present. */
+  cluster?: string
+  clusterName?: string
 }
 
 export interface SearchResult {
