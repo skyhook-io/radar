@@ -241,13 +241,17 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   }, [open, freeText, pills.length, loadRecents])
 
   // Remaining matched commands (leading kinds removed so they don't repeat),
-  // grouped by their real category in a fixed order.
+  // grouped by their real category in a fixed order. The empty launcher IS the
+  // command menu, so show it in full; while searching, cap so resource hits stay
+  // prominent.
   const commandGroups = useMemo(() => {
-    const rest = scoredCommands.filter((x) => !leadingIds.has(x.item.id)).slice(0, 8).map((x) => x.item)
+    const launcher = !freeText && pills.length === 0
+    const filtered = scoredCommands.filter((x) => !leadingIds.has(x.item.id))
+    const rest = (launcher ? filtered : filtered.slice(0, 8)).map((x) => x.item)
     const byCat = new Map<string, CommandItem[]>()
     for (const c of rest) { const l = byCat.get(c.category) ?? []; l.push(c); byCat.set(c.category, l) }
     return COMMAND_CATEGORY_ORDER.filter((cat) => byCat.has(cat)).map((cat) => ({ category: cat, items: byCat.get(cat)! }))
-  }, [scoredCommands, leadingIds])
+  }, [scoredCommands, leadingIds, freeText, pills.length])
 
   const toCmdRow = (c: CommandItem): Row => ({ id: `cmd:${c.id}`, kind: 'command', command: c })
 
@@ -405,8 +409,15 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
       {open && anchor && (dropdownOpen || suggesting) && createPortal(
         <>
+          {/* Click-catcher below the field. The slim top-bar launcher dims the
+              page behind it; the hero (a landing-page search box, not a modal)
+              stays transparent — Google-style — so it never dims the dashboard
+              or seams across the rail. Both close on outside click. */}
           <div
-            className="fixed left-0 right-0 bottom-0 z-[120] bg-black/25 dark:bg-black/55 backdrop-blur-[2px]"
+            className={clsx(
+              'fixed left-0 right-0 bottom-0 z-[120]',
+              !hero && 'bg-black/25 dark:bg-black/55 backdrop-blur-[2px]',
+            )}
             style={{ top: anchor.top }}
             onClick={() => { setOpen(false); inputRef.current?.blur() }}
           />
