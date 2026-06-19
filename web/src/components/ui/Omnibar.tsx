@@ -106,6 +106,10 @@ export interface OmnibarProps {
   /** Recently-viewed resources for the empty launcher (host owns storage). */
   loadRecents?: () => OmnibarRecent[]
   recordRecent?: (r: OmnibarRecent) => void
+  /** When set, a "See all N results" row appears below the resource hits while
+   *  searching, handing the full (uncapped) query off to the host's dedicated
+   *  search surface. Omit to keep the omnibar a pure launcher. */
+  onViewAllResults?: (query: string) => void
   placeholder?: string
   /** `hero` renders a large, centered field for landing surfaces (Home);
    *  `default` is the slim top-bar field. */
@@ -117,6 +121,7 @@ export interface OmnibarProps {
 type Row =
   | { id: string; kind: 'resource'; hit: SearchHit; recent?: boolean }
   | { id: string; kind: 'command'; command: CommandItem }
+  | { id: string; kind: 'viewAll'; query: string; count: number }
 
 const COMMAND_CATEGORY_ORDER = ['Views', 'Resource Kinds', 'Namespaces', 'Clusters', 'Actions']
 const PAGE = 8
@@ -146,6 +151,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     seedNamespaces,
     loadRecents,
     recordRecent,
+    onViewAllResults,
     placeholder = 'Search resources & commands…',
     size = 'default',
     autoFocus = false,
@@ -251,9 +257,16 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const rows = useMemo<Row[]>(() => {
     const cmds: Row[] = commandGroups.flatMap((g) => g.items.map(toCmdRow))
     if (!freeText && pills.length === 0) return [...recentRows, ...cmds]
-    return [...leadingKinds.map(toCmdRow), ...(searchActive ? resourceRows : []), ...cmds]
+    const out: Row[] = [...leadingKinds.map(toCmdRow), ...(searchActive ? resourceRows : []), ...cmds]
+    // "See all results" tails the list when the host wired a full-search surface
+    // and there's something to expand to.
+    if (onViewAllResults && searchActive && resourceRows.length > 0) {
+      out.push({ id: 'view-all', kind: 'viewAll', query: queryString, count: searchData?.total_matched ?? resourceRows.length })
+    }
+    return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recentRows, leadingKinds, resourceRows, commandGroups, freeText, pills.length, searchActive])
+  }, [recentRows, leadingKinds, resourceRows, commandGroups, freeText, pills.length, searchActive, onViewAllResults, queryString, searchData])
+  const viewAllRow = rows.find((r): r is Extract<Row, { kind: 'viewAll' }> => r.kind === 'viewAll')
 
   // Selection tracked by stable id (not array index) so Enter can never fire a
   // stale row when the set shifts. Auto-follows the TOP result until the user
@@ -286,6 +299,8 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const execute = useCallback((row: Row) => {
     if (row.kind === 'command') {
       row.command.action()
+    } else if (row.kind === 'viewAll') {
+      onViewAllResults?.(row.query)
     } else {
       const h = row.hit
       recordRecent?.({ kind: h.kind, group: h.group, namespace: h.namespace, name: h.name })
@@ -295,7 +310,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     setText('')
     setPills([])
     inputRef.current?.blur()
-  }, [onOpenResource, recordRecent])
+  }, [onOpenResource, recordRecent, onViewAllResults])
 
   // The resources shown don't (yet) belong to the current query: the debounce
   // hasn't fired, the data is React Query placeholder, or results haven't landed.
@@ -458,6 +473,20 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
                 })}
               </div>
             ))}
+
+            {viewAllRow && (
+              <button
+                type="button"
+                data-selected={viewAllRow.id === selectedId}
+                onMouseEnter={() => selectRow(viewAllRow.id)}
+                onMouseDown={(e) => { e.preventDefault(); execute(viewAllRow) }}
+                className={clsx('w-full flex items-center gap-2.5 px-3 py-1.5 mt-1 text-left border-t border-theme-border transition-colors', viewAllRow.id === selectedId ? 'selection' : 'hover:bg-theme-elevated/40')}
+              >
+                <Search className="w-4 h-4 shrink-0 text-theme-text-tertiary" />
+                <span className="text-sm text-[var(--color-brand)]">See all {viewAllRow.count} result{viewAllRow.count === 1 ? '' : 's'}</span>
+                <CornerDownLeft className="w-3 h-3 ml-auto shrink-0 text-theme-text-tertiary" />
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-3 px-3 py-1.5 border-t border-theme-border text-[11px] text-theme-text-tertiary">
             <span className="flex items-center gap-1"><CornerDownLeft className="w-3 h-3" /> open</span>
