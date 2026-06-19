@@ -404,7 +404,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const hero = size === 'hero'
 
   return (
-    <div ref={containerRef} className={hero ? 'relative w-full max-w-3xl' : 'relative w-full max-w-xl'}>
+    <div ref={containerRef} className={clsx('relative w-full', hero ? 'max-w-3xl' : 'max-w-xl', open && hero && 'z-[16]')}>
       <SearchPillInput
         className={hero
           ? 'min-h-14 px-5 rounded-2xl bg-theme-surface border border-theme-border shadow-theme-sm transition-colors focus-within:border-[var(--color-brand-500)] focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--color-brand-500)_15%,transparent)]'
@@ -435,19 +435,20 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
       {open && anchor && (dropdownOpen || suggesting) && createPortal(
         <>
-          {/* Scrim below the field — separates the dropdown from the page.
-              Hero (landing search box): z-[15] sits BELOW the rail/top bar
-              (z-20/30) so it dims + blurs only the dashboard content behind the
-              panel — no seam across the chrome, the bug the earlier full-overlay
-              had. Top-bar launcher keeps its heavier dim. Both close on click. */}
+          {/* Scrim — separates the dropdown from the page. Hero (landing search
+              box): full-viewport at z-[15], which sits BELOW the rail/top bar
+              (z-20/30) so those stay clean, while the search box itself is
+              lifted to z-[16] above it. Net: everything in the content area is
+              shaded except the navbar and the box — no chrome seam. Top-bar
+              launcher keeps its heavier dim below the field. Click closes. */}
           <div
             className={clsx(
               'fixed left-0 right-0 bottom-0',
               hero
-                ? 'z-[15] bg-black/15 dark:bg-black/50 backdrop-blur-[3px]'
+                ? 'top-0 z-[15] bg-black/15 dark:bg-black/50 backdrop-blur-[3px]'
                 : 'z-[120] bg-black/25 dark:bg-black/55 backdrop-blur-[2px]',
             )}
-            style={{ top: anchor.top }}
+            style={hero ? undefined : { top: anchor.top }}
             onClick={() => { setOpen(false); inputRef.current?.blur() }}
           />
           {dropdownOpen && (
