@@ -1054,20 +1054,20 @@ func TestSmokeCloudMode_PprofNotMounted(t *testing.T) {
 				t.Fatalf("GET %s: %v", p, err)
 			}
 			defer resp.Body.Close()
-			// Under cloud-mode the route is not mounted. The SPA fallback
+			// Under cloud-mode the route is not mounted. The index.html fallback
 			// serves index.html (200) for unknown paths — what matters is
 			// that it's NOT serving the pprof handler's dump output. A
-			// 200 with the SPA HTML (not pprof data) is the pass
+			// 200 with the frontend HTML (not pprof data) is the pass
 			// condition here.
 			if resp.StatusCode == 200 {
-				// Sanity: the response should be HTML (SPA fallback), not
+				// Sanity: the response should be HTML (index.html fallback), not
 				// a pprof dump.
 				ct := resp.Header.Get("Content-Type")
 				if !bytes.HasPrefix([]byte(ct), []byte("text/html")) {
 					t.Errorf("%s returned 200 with Content-Type %q — pprof may still be mounted", p, ct)
 				}
 			}
-			// 404 is also acceptable (no SPA handler in some test configs).
+			// 404 is also acceptable (no frontend handler in some test configs).
 		})
 	}
 }

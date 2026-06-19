@@ -288,7 +288,7 @@ func managedScanKindsFromDiscovery() []managedScanKind {
 
 // handleGitOpsManagedResources discovers resources in THIS cluster that are
 // managed by the named Argo Application, returning them as a synthetic
-// ResourceTree the SPA can render with the existing GitOpsTreeGraph
+// ResourceTree the frontend can render with the existing GitOpsTreeGraph
 // component.
 //
 // The endpoint is the destination-side companion to /api/gitops/tree —
@@ -321,7 +321,7 @@ func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Req
 	if noNamespaceAccess(allowedNamespaces) {
 		// Caller has no namespace access — return a tree with just the
 		// synthetic root + a warning. Mirrors handleGitOpsTree's behavior
-		// rather than 403'ing so the SPA can render an honest empty state.
+		// rather than 403'ing so the frontend can render an honest empty state.
 		empty := gitopstree.BuildManagedTree(app, nsFilter, nil)
 		empty.Warnings = []string{"You do not have access to any namespace; managed resources are filtered out."}
 		s.writeJSON(w, empty)
@@ -358,7 +358,7 @@ func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Req
 	// indistinguishable from "this app legitimately manages 0
 	// resources." A single-kind failure (CRD not installed, narrow
 	// RBAC) is expected and the scan continues; if every kind fails,
-	// the warning surfaces in the response so the SPA can render an
+	// the warning surfaces in the response so the frontend can render an
 	// inline note.
 	var kindErrors []string
 	for _, mk := range scanKinds {

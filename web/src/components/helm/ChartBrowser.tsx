@@ -27,7 +27,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
 
   // Repo refresh is gated only by `requireHelmWrite` on the backend
   // (handleUpdateRepository deliberately skips requireCloudRole — it
-  // mutates pod-local chart cache, not cluster state). So the SPA gate
+  // mutates pod-local chart cache, not cluster state). So the frontend gate
   // here must NOT include the Cloud role check, or Cloud viewers with
   // rbac.helm=true would be blocked from a refresh the backend allows.
   const canHelmWrite = useCanHelmWrite()

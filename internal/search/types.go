@@ -79,7 +79,7 @@ type Result struct {
 	Searched int   `json:"searched"` // approx. number of objects scanned
 	// TotalMatched is the count of hits BEFORE truncation by Limit.
 	// Equals Total when no truncation occurred. Surfaced so callers
-	// (the hub's fleet aggregator, agents, the SPA) can report honest
+	// (the hub's fleet aggregator, agents, the frontend) can report honest
 	// "X of N" counts when the limit clips the result set — without
 	// it the caller has no way to tell it's looking at a windowed view.
 	TotalMatched int `json:"total_matched"`

@@ -505,7 +505,7 @@ func (s *Server) setupRoutes() {
 
 	// OAuth/OIDC discovery probes from MCP HTTP clients. Without these
 	// explicit 404s, two failure modes appear:
-	//   (a) the SPA fallback below answers root-level /.well-known/* with the
+	//   (a) the index.html fallback below answers root-level /.well-known/* with the
 	//       React index.html (HTTP 200, text/html);
 	//   (b) the /mcp Mount answers /mcp/.well-known/* with 405 because the
 	//       MCP handler only accepts POST.
@@ -529,7 +529,7 @@ func (s *Server) setupRoutes() {
 		r.Mount("/mcp", s.mcpHandler)
 	}
 
-	// OAuth discovery probes from MCP HTTP clients. Without this, the SPA
+	// OAuth discovery probes from MCP HTTP clients. Without this, the frontend
 	// catch-all answers /.well-known/oauth-* with HTML 200, which newer
 	// claude-code parses as a broken OAuth flow and aborts MCP registration.
 	// Radar's MCP server is unauthenticated when run locally; signal that
@@ -537,17 +537,17 @@ func (s *Server) setupRoutes() {
 	r.Get("/.well-known/oauth-protected-resource", http.NotFound)
 	r.Get("/.well-known/oauth-authorization-server", http.NotFound)
 
-	// Static files (frontend) - SPA fallback to index.html
+	// Static files (frontend) - index.html fallback for client-side routes.
 	if s.staticFS != nil {
-		r.Handle("/*", spaHandler(http.FS(s.staticFS)))
+		r.Handle("/*", frontendHandler(http.FS(s.staticFS)))
 	} else if s.devMode {
 		// In dev mode, serve from web/dist
-		r.Handle("/*", spaHandler(http.Dir("web/dist")))
+		r.Handle("/*", frontendHandler(http.Dir("web/dist")))
 	}
 }
 
-// spaHandler serves static files, falling back to index.html for SPA routing
-func spaHandler(fsys http.FileSystem) http.Handler {
+// frontendHandler serves static files, falling back to index.html for client-side routing
+func frontendHandler(fsys http.FileSystem) http.Handler {
 	fileServer := http.FileServer(fsys)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -556,7 +556,7 @@ func spaHandler(fsys http.FileSystem) http.Handler {
 		// Try to open the file
 		f, err := fsys.Open(path)
 		if err != nil {
-			// File doesn't exist - serve index.html for SPA routing
+			// File doesn't exist - serve index.html for client-side routing
 			r.URL.Path = "/"
 			fileServer.ServeHTTP(w, r)
 			return
@@ -1194,7 +1194,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	namespaces := s.parseNamespacesForUser(r)
 
 	// Shared RBAC gate. REST converts denies to 200 with `[]` (legacy shape
-	// the SPA tolerates and that doesn't leak kind existence); the AI path
+	// the frontend tolerates and that doesn't leak kind existence); the AI path
 	// returns the explicit status.
 	finalNamespaces, _, _, ok := s.preflightResourceList(r, kind, group, namespaces)
 	if !ok {
@@ -1721,7 +1721,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 
 	// A non-empty group routes to the dynamic/CRD cache so CRDs whose plural
 	// collides with a core kind (e.g. KNative serving.knative.dev/services vs
-	// core "services") reach the right resource. But the SPA also threads the
+	// core "services") reach the right resource. But the frontend also threads the
 	// real apiGroup for BUILT-IN workloads (e.g. apps/Deployment), and those
 	// live in the typed cache, not the dynamic one — so a built-in addressed by
 	// its own group must still take the typed path below. Without this guard,
@@ -3334,7 +3334,7 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 }
 
 // writeErrorCode is writeError plus a stable machine-readable `error_code`
-// the SPA branches on (e.g. cloud_role_insufficient → "your role can't do
+// the frontend branches on (e.g. cloud_role_insufficient → "your role can't do
 // this" instead of a generic auth failure).
 func (s *Server) writeErrorCode(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -3397,7 +3397,7 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		"authEnabled": s.authConfig.Enabled(),
 		"authMode":    s.authConfig.Mode,
 	}
-	// Tells the SPA whether proxy-mode logout can tear down the upstream
+	// Tells the frontend whether proxy-mode logout can tear down the upstream
 	// session (vs only clearing Radar's cookie), so it can warn the user.
 	if s.authConfig.Mode == "proxy" {
 		resp["proxyLogoutConfigured"] = s.authConfig.ProxyLogoutURL != ""
@@ -3405,7 +3405,7 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		resp["username"] = user.Username
 		resp["groups"] = user.Groups
-		// Pre-compute the Cloud role so the SPA doesn't have to
+		// Pre-compute the Cloud role so the frontend doesn't have to
 		// re-parse `cloud:<tier>` group prefixes. Empty string means
 		// "not running under Cloud" (OSS deploy or no role group).
 		if role := auth.CloudRoleFromGroups(user.Groups); role != auth.RoleNone {

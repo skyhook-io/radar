@@ -1130,7 +1130,7 @@ function AppInner() {
     // Fleet mode overrides visible kinds to show only CAPI resources + Node
     const effectiveKinds = topologyMode === 'fleet' ? FLEET_MODE_KINDS : visibleKinds
 
-    // Filter by namespace (frontend-side) and by visible kinds
+    // Filter by namespace (client-side) and by visible kinds
     const nsSet = namespaces.length > 0 ? new Set(namespaces) : null
     const filteredNodes = displayedTopology.nodes.filter(node =>
       effectiveKinds.has(node.kind) &&

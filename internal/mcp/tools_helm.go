@@ -92,11 +92,11 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 
 	includes := parseIncludes(input.Include)
 
-	// Mirror the SPA gate on sensitive Helm reads: viewers cannot pull
+	// Mirror the frontend gate on sensitive Helm reads: viewers cannot pull
 	// values/manifest/diff. Without this the user would still be blocked
 	// by K8s RBAC (view ClusterRole excludes secrets), but the error would
 	// be a confusing K8s "secrets is forbidden" rather than the structured
-	// cloud_role_insufficient code the SPA emits.
+	// cloud_role_insufficient code the frontend emits.
 	cloudRole := pkgauth.CloudRoleFromContext(ctx)
 	gatedSensitive := !cloudRole.AtLeast(pkgauth.RoleMember)
 

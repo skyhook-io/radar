@@ -1,14 +1,14 @@
 // /api/ai/* is the REST mirror of the MCP agent surface. Both target AI
-// consumers (Claude, scripted agents) rather than the SPA, and both
+// consumers (Claude, scripted agents) rather than the frontend, and both
 // intentionally evolve at agent-iteration speed.
 //
-// Unlike /api/* (consumed by the SPA via a generated TypeScript client),
+// Unlike /api/* (consumed by the frontend via a generated TypeScript client),
 // the /api/ai/* surface is NOT specified in openapi.yaml. The original
 // motivation for OpenAPI-first in radar was frontend/backend type safety —
 // one spec, regenerated as Go server stubs + TS client. That value
 // proposition does not apply here: the agent consumer doesn't read
 // OpenAPI specs (it reads MCP tool descriptions or in-prompt instructions),
-// and the SPA doesn't call these endpoints at all.
+// and the frontend doesn't call these endpoints at all.
 //
 // Wire shapes for the agent surface live in pkg/resourcecontext (typed
 // JSON DTOs) and pkg/topology. MCP tools document their wire via

@@ -102,7 +102,7 @@ export interface FleetClusterStamp {
   name: string
 }
 export type FleetDestinationMatch = 'in_cluster' | 'exact' | 'inferred' | 'unmatched'
-// FleetDestinationConfidence is a coarse signal the SPA uses to style
+// FleetDestinationConfidence is a coarse signal the frontend uses to style
 // the destination chip. `high` = URL-equality match (either direct or
 // via Argo cluster-secret), `medium` = name-equality match (more
 // fragile, more likely to be a false positive when two clusters share
@@ -116,7 +116,7 @@ export interface FleetDestinationStamp {
   // Confidence + reason are populated for non-unmatched rows. They power
   // the chip's visual treatment (a checkmark on high-confidence matches)
   // and its title= tooltip respectively. Both come from the hub —
-  // adding new values shouldn't break the SPA (unknown confidence
+  // adding new values shouldn't break the frontend (unknown confidence
   // falls back to no special styling).
   confidence?: FleetDestinationConfidence
   reason?: string
@@ -184,7 +184,7 @@ export interface GitOpsTableViewProps {
   onRefresh?: () => void
   // Row click — caller routes to its own detail page. When the host also
   // passes `rowHrefFor`, the callback receives the MouseEvent so it can
-  // `preventDefault()` for SPA-local nav (e.g. react-router) or skip the
+  // `preventDefault()` for same-tree nav (e.g. react-router) or skip the
   // preventDefault to let the anchor's default full-page navigation run
   // (required for cross-router-boundary links).
   onRowClick: (row: GitOpsRow, event?: ReactMouseEvent) => void

@@ -11,7 +11,7 @@ import (
 // TestGetKyvernoStatus_LifecycleTransitions pins the four states callers
 // can observe via the public GetKyvernoStatus accessor. The status backs
 // the meta.kyverno field on /api/issues + the MCP issues tool, so a regression
-// here flips the SPA/agent's behavior between "no findings yet" copy and
+// here flips the frontend/agent's behavior between "no findings yet" copy and
 // "no violations" copy — both bad.
 //
 // We drive the state via direct manipulation of the package-level atomics

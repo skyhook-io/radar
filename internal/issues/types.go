@@ -51,7 +51,7 @@ const (
 )
 
 // Source records which underlying detection channel emitted this issue.
-// It is an OUTPUT label (for SPA copy that explains why a row appeared,
+// It is an OUTPUT label (for frontend copy that explains why a row appeared,
 // and as a CEL filter binding), not an input filter — issues composes all
 // four sources unconditionally; detection provenance is not a triage axis.
 type Source = issuesapi.Source

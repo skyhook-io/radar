@@ -225,7 +225,7 @@ func classifyInstallError(err error) InstallErrorClass {
 }
 
 // writeInstallError maps a Helm install error onto an HTTP response with a
-// stable error_code the SPA can branch on.
+// stable error_code the frontend can branch on.
 func writeInstallError(w http.ResponseWriter, err error) {
 	cls := classifyInstallError(err)
 	if cls.Code != "" {

@@ -54,7 +54,7 @@ export interface TimelineSwimlanesProps {
   // RBAC capability flag (was a radar/web context); host passes it. Default false.
   hasLimitedAccess?: boolean
   // GitOps lane labels deep-link to a controller path; the host decides how to
-  // navigate (radar router push, or cross-SPA href). When omitted, GitOps lanes
+  // navigate (radar router push, or cross-route-tree href). When omitted, GitOps lanes
   // fall back to onResourceClick (the resource drawer).
   onNavigatePath?: (path: string) => void
 }

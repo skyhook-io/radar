@@ -12,7 +12,7 @@
 package packages
 
 // SourceCode is the single-character code identifying which signal
-// contributed to a PackageRow. Stable on-wire — agents, SPAs, Hub
+// contributed to a PackageRow. Stable on-wire — agents, frontends, Hub
 // fan-in, etc. depend on these exact strings. Defined as a named type
 // so call sites get compile-time checks against typos.
 type SourceCode string
@@ -225,7 +225,7 @@ type PackageRow struct {
 	Contributors []SourceContribution `json:"contributors,omitempty"`
 	// FromCRDGroup, when set, indicates this row originated from a CRD
 	// whose group wasn't in crdGroupToChart — Chart is the group string
-	// itself in that case. Lets the SPA render with appropriate framing
+	// itself in that case. Lets the frontend render with appropriate framing
 	// ("cert-manager.io CRDs detected") vs a real chart row.
 	FromCRDGroup string `json:"fromCRDGroup,omitempty"`
 	// Overlay is the resolved Tier-2 app identity for this package (the

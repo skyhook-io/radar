@@ -817,7 +817,7 @@ export function useAuthMe() {
 }
 
 // Tier ordering for Cloud-role gates. Mirrors radar OSS pkg/auth
-// CloudRole.AtLeast — the SPA must agree with the backend on what
+// CloudRole.AtLeast — the frontend must agree with the backend on what
 // "member-or-higher" means; otherwise we'd hide a button the
 // backend would happily honor (or vice versa).
 const CLOUD_ROLE_RANK: Record<string, number> = { viewer: 1, member: 2, owner: 3 }

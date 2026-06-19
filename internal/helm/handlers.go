@@ -986,7 +986,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 // writeErrorCode is writeError with a stable machine-readable error_code
-// in the response body so the SPA + MCP clients can branch on the error
+// in the response body so the frontend + MCP clients can branch on the error
 // type without parsing the human message. Used for role-gated 403s and
 // any other case where the consumer wants to react differently per code.
 func writeErrorCode(w http.ResponseWriter, status int, code, message string) {
@@ -1011,7 +1011,7 @@ func writeErrorCode(w http.ResponseWriter, status int, code, message string) {
 // strictly additive for Cloud-attributed callers.
 //
 // When the caller IS Cloud-attributed and their tier is below `min`,
-// returns 403 with error_code=cloud_role_insufficient so the SPA can
+// returns 403 with error_code=cloud_role_insufficient so the frontend can
 // render a friendly "your role doesn't allow this" message instead of
 // a generic auth failure.
 func requireCloudRole(w http.ResponseWriter, r *http.Request, min auth.CloudRole, opName string) bool {

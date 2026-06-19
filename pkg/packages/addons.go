@@ -13,7 +13,7 @@ import "strings"
 //     so (1) can't catch them.
 //
 // The Applications and Add-ons surfaces share this classifier rather than each
-// carrying a private allowlist. The SPA's interim KNOWN_ADDON_CHARTS
+// carrying a private allowlist. The frontend's interim KNOWN_ADDON_CHARTS
 // (radar-hub-web packagesModel.ts) mirrors this list until the hub forwards the
 // classification on the wire; keep the two in sync until then.
 

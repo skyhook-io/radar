@@ -20,7 +20,7 @@ import (
 //   - Unknown CRD groups stay as their own rows (FromCRDGroup set).
 //
 // Determinism: rows are returned sorted by (chart, namespace,
-// release_name) so consumers (SPA tables, MCP tool output) get stable
+// release_name) so consumers (frontend tables, MCP tool output) get stable
 // ordering across calls.
 func Aggregate(s Sources) []PackageRow {
 	// CRD-only rows that don't resolve to a chart get a synthetic key

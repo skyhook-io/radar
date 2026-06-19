@@ -88,18 +88,18 @@ type PackagesResponse struct {
 // SourceError carries a per-source failure. Field names + JSON tags
 // are part of the /api/packages public response shape — wire-stable.
 // Code values are likewise stable (see ErrCode* below); add new codes,
-// never rename. Renaming any of these fields silently breaks the SPA
+// never rename. Renaming any of these fields silently breaks the frontend
 // (radar-hub-web) and MCP fleet_list_packages clients.
 type SourceError struct {
 	Source     packages.SourceCode `json:"source"`
 	StatusCode int                 `json:"statusCode,omitempty"`
 	Error      string              `json:"error"`
 	// Code is a machine-readable category for this failure. Stable
-	// across phrasing changes in Error so consumers (the SPA's
+	// across phrasing changes in Error so consumers (the frontend's
 	// categorize fn, MCP clients) can branch without string-matching
 	// log messages. Populated for known failure shapes; empty for
 	// generic errors (consumer falls back to category="failed").
-	// Producer: errorCodeForHelm in this file. Consumer: the SPA's
+	// Producer: errorCodeForHelm in this file. Consumer: the frontend's
 	// categorizeSourceError in radar-hub-web.
 	Code string `json:"code,omitempty"`
 	// AffectedNamespaces, when set, lists the namespaces this error
@@ -110,8 +110,8 @@ type SourceError struct {
 	AffectedNamespaces []string `json:"affectedNamespaces,omitempty"`
 }
 
-// Error code constants. Stable wire values — the SPA categorize and
-// MCP clients branch on these. Add new codes here, never rename.
+// Error code constants. Stable wire values that the frontend and MCP clients
+// branch on. Add new codes here, never rename.
 const (
 	ErrCodeRBACDenied   = "rbac_denied"
 	ErrCodeUnreachable  = "unreachable"
@@ -121,7 +121,7 @@ const (
 )
 
 // errorCodeForHelm classifies a Helm error string + status into a
-// stable Code value. The SPA used to do this with regex on the user-
+// stable Code value. The frontend used to do this with regex on the user-
 // visible string; doing it backend-side means a phrasing change in
 // the SDK doesn't silently move errors into "failed" until someone
 // updates the regex too.

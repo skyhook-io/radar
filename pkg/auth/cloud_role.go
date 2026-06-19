@@ -30,7 +30,7 @@ const cloudGroupPrefix = "cloud:"
 
 // ErrCodeCloudRoleInsufficient is the stable wire value emitted in 403
 // response bodies (`error_code` field) when a request is denied by a
-// Cloud role gate. SPA + MCP clients branch on this exact string —
+// Cloud role gate. frontend + MCP clients branch on this exact string —
 // never rename. Hoisted out of internal/helm/handlers.go so the
 // canonical value lives next to the role types it pertains to.
 const ErrCodeCloudRoleInsufficient = "cloud_role_insufficient"

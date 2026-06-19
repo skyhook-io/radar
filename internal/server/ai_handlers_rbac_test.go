@@ -108,7 +108,7 @@ func TestProxyAuth_AIGetPod_NamespaceAllowed(t *testing.T) {
 //   - list-namespaces SAR for `kind=namespaces`
 //   - per-namespace and/or cluster-wide list-secrets SAR for `kind=secrets`
 //
-// Where the REST path returns 200 with `[]` for denies (legacy SPA
+// Where the REST path returns 200 with `[]` for denies (legacy frontend
 // shape that doesn't leak kind existence), the AI path returns the
 // explicit status so agents see the failure instead of confusing
 // "empty cluster" output.

@@ -34,7 +34,7 @@ func putConfigStatus(t *testing.T, user *auth.User) (int, string) {
 
 func TestPutConfig_RoleGate(t *testing.T) {
 	// Non-owner Cloud roles are rejected with the stable error_code so the
-	// SPA can branch on it.
+	// frontend can branch on it.
 	for _, tier := range []string{"cloud:viewer", "cloud:member"} {
 		code, body := putConfigStatus(t, userWithGroups(tier))
 		if code != http.StatusForbidden {

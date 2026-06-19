@@ -7,7 +7,7 @@ import (
 )
 
 // TestTypedKindOwnsGroup pins the typed-vs-dynamic routing contract used by the
-// resource GET/LIST handlers (REST + AI). The bug this guards: the SPA threads
+// resource GET/LIST handlers (REST + AI). The bug this guards: the frontend threads
 // the real apiGroup for built-in workloads (deployments?group=apps), and the
 // handlers' "explicit group ⇒ dynamic cache" dispatch sent those to the dynamic
 // cache — which has no informer for built-ins — yielding a 400 "unknown

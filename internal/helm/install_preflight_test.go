@@ -208,7 +208,7 @@ func TestClassifyHelmRBACError_NotMatching(t *testing.T) {
 }
 
 // TestClassifyInstallError pins the (status, code, message) mapping for every
-// branch the SPA depends on. Streaming and non-streaming endpoints both go
+// branch the frontend depends on. Streaming and non-streaming endpoints both go
 // through this classifier, so a regression here breaks both UIs at once.
 func TestClassifyInstallError(t *testing.T) {
 	rbacErr := errors.New(`Unable to continue: clusterroles.rbac.authorization.k8s.io "x" is forbidden: ` +
@@ -245,7 +245,7 @@ func TestClassifyInstallError(t *testing.T) {
 
 // TestInstallStreamErrorEvent ensures the SSE envelope carries the same
 // friendly message and error_code as the JSON HTTP path. A typo in the
-// field name ("errorCode" vs "error_code") would silently break the SPA's
+// field name ("errorCode" vs "error_code") would silently break the frontend's
 // install-stream branching; this pins the wire format.
 func TestInstallStreamErrorEvent(t *testing.T) {
 	event := installStreamErrorEvent(&ReleasePendingError{Name: "x", Namespace: "y", Status: "pending-install", Revision: 1})

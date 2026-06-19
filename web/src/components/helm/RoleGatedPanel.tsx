@@ -22,7 +22,7 @@ interface RoleGatedPanelProps {
  *
  * Bypasses for non-Cloud users (OSS, OIDC, etc.) — `canAtLeast` returns
  * true when no Cloud role is present. The backend gate has the same
- * shape, so the SPA stays in lockstep.
+ * shape, so the frontend stays in lockstep.
  */
 export function RoleGatedPanel({ min, feature, children }: RoleGatedPanelProps) {
   const { role, canAtLeast } = useCloudRole()

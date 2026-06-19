@@ -80,7 +80,7 @@ describe('getGitOpsTool', () => {
     expect(getGitOpsTool('appprojects', 'argoproj.io')).toBe('argo')
   })
   // Argo kinds without an explicit group still route to 'argo'.
-  // Defends against a normalizer that drops `group` from the SPA payload.
+  // Defends against a normalizer that drops `group` from the frontend payload.
   test('Argo kinds without group still route to argo', () => {
     expect(getGitOpsTool('applications', undefined)).toBe('argo')
     expect(getGitOpsTool('applicationsets', '')).toBe('argo')

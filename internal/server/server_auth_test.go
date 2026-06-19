@@ -89,7 +89,7 @@ func TestHandleAuthMe_AuthEnabled_WithUser(t *testing.T) {
 	if len(groups) != 2 {
 		t.Errorf("groups = %v, want 2 groups", groups)
 	}
-	// Non-Cloud user — cloudRole must be absent so the SPA's
+	// Non-Cloud user — cloudRole must be absent so the frontend's
 	// useCloudRole hook treats them as "not under Cloud."
 	if _, has := body["cloudRole"]; has {
 		t.Errorf("cloudRole should not be present for non-Cloud user (groups=%v)", groups)
