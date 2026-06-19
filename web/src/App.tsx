@@ -1851,6 +1851,9 @@ function AppInner() {
         <ResourceDetailDrawer
           resource={drawerResource}
           initialTab={drawerInitialTab}
+          // No Radar header in chromeless embeds (Radar Hub) — anchor the drawer
+          // to the top of the content area instead of leaving a 49px gap.
+          headerHeight={chromeless ? 0 : undefined}
           isOpen={resourceDrawer.isOpen}
           expanded={drawerExpanded}
           onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail'); setDrawerExpanded(false) }}
