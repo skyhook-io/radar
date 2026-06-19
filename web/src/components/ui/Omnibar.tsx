@@ -404,7 +404,14 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const hero = size === 'hero'
 
   return (
-    <div ref={containerRef} className={clsx('relative w-full', hero ? 'max-w-3xl' : 'max-w-xl', open && hero && 'z-[16]')}>
+    <div
+      ref={containerRef}
+      className={clsx('relative w-full', hero ? 'max-w-3xl' : 'max-w-xl', open && hero && 'z-[16]')}
+      // Open on click even when the field is already focused — onFocus alone
+      // never fires again, so an autofocused hero (Home) wouldn't reveal the
+      // launcher on a click.
+      onMouseDown={() => setOpen(true)}
+    >
       <SearchPillInput
         className={hero
           ? 'min-h-14 px-5 rounded-2xl bg-theme-surface border border-theme-border shadow-theme-sm transition-colors focus-within:border-[var(--color-brand-500)] focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--color-brand-500)_15%,transparent)]'
@@ -435,20 +442,17 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
       {open && anchor && (dropdownOpen || suggesting) && createPortal(
         <>
-          {/* Scrim — separates the dropdown from the page. Hero (landing search
-              box): full-viewport at z-[15], which sits BELOW the rail/top bar
-              (z-20/30) so those stay clean, while the search box itself is
-              lifted to z-[16] above it. Net: everything in the content area is
-              shaded except the navbar and the box — no chrome seam. Top-bar
-              launcher keeps its heavier dim below the field. Click closes. */}
+          {/* Scrim — separates the dropdown from the page, consistently in both
+              modes. At z-[15] it sits BELOW the rail/top bar (z-20/30), so the
+              nav chrome stays lit while the content behind the panel dims+blurs:
+              a "spotlight on search", not a full-screen modal dim (which fits a
+              centered command palette, not an anchored omnibar). The hero covers
+              from the top (its box is in the content, lifted to z-[16]); the
+              top-bar launcher covers from below the field (its box is already in
+              the z-20 chrome). Click closes. */}
           <div
-            className={clsx(
-              'fixed left-0 right-0 bottom-0',
-              hero
-                ? 'top-0 z-[15] bg-black/15 dark:bg-black/50 backdrop-blur-[3px]'
-                : 'z-[120] bg-black/25 dark:bg-black/55 backdrop-blur-[2px]',
-            )}
-            style={hero ? undefined : { top: anchor.top }}
+            className="fixed left-0 right-0 bottom-0 z-[15] bg-black/15 dark:bg-black/50 backdrop-blur-[3px]"
+            style={{ top: hero ? 0 : anchor.top }}
             onClick={() => { setOpen(false); inputRef.current?.blur() }}
           />
           {dropdownOpen && (
