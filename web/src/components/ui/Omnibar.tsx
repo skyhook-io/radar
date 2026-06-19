@@ -176,7 +176,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   // trap the dim overlay). `centerX` aligns the panel under the input; `top` is
   // the HEADER's bottom (not the input's) so the dim starts cleanly below the
   // whole top bar.
-  const [anchor, setAnchor] = useState<{ centerX: number; top: number } | null>(null)
+  const [anchor, setAnchor] = useState<{ centerX: number; top: number; width: number } | null>(null)
 
   useImperativeHandle(ref, () => ({ focus: () => { inputRef.current?.focus(); inputRef.current?.select() } }), [])
 
@@ -285,14 +285,21 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   // Selection tracked by stable id (not array index) so Enter can never fire a
   // stale row when the set shifts. Auto-follows the TOP result until the user
   // arrow-keys; a new query re-enables auto-follow.
+  // When the host wires a search page (onViewAllResults), Enter on an
+  // un-touched query goes THERE with the query rather than firing the top hit —
+  // so we never pre-select a row (the user opts into a specific result by
+  // arrowing/hovering). Without a search page (OSS), keep auto-follow-top so
+  // Enter still opens the best match.
+  const submitToSearch = !!onViewAllResults
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const userMovedRef = useRef(false)
   useEffect(() => { userMovedRef.current = false }, [queryString])
   const rowsKey = rows.map((r) => r.id).join('|')
   useEffect(() => {
+    const dflt = submitToSearch ? null : (rows[0]?.id ?? null)
     setSelectedId((cur) => {
-      if (!userMovedRef.current) return rows[0]?.id ?? null
-      return cur && rows.some((r) => r.id === cur) ? cur : rows[0]?.id ?? null
+      if (!userMovedRef.current) return dflt
+      return cur && rows.some((r) => r.id === cur) ? cur : dflt
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowsKey])
@@ -339,12 +346,21 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     else if (e.key === 'Enter') {
       e.preventDefault()
       const row = rows[selectedIndex]
-      if (!row) return
-      if (row.kind === 'resource' && resourcesStale) return
-      execute(row)
+      if (row) {
+        if (row.kind === 'resource' && resourcesStale) return
+        execute(row)
+        return
+      }
+      // No row chosen: submit the query to the full search page (the default
+      // for a host that wired one). viewAllRow carries the count when results
+      // are in; fall back to the raw query while they're still loading.
+      if (submitToSearch && searchActive) {
+        if (viewAllRow) execute(viewAllRow)
+        else { onViewAllResults?.(queryString); setOpen(false); setText(''); setPills([]); inputRef.current?.blur() }
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, selectedIndex, execute, resourcesStale])
+  }, [rows, selectedIndex, execute, resourcesStale, submitToSearch, searchActive, viewAllRow, onViewAllResults, queryString])
 
   useEffect(() => {
     listRef.current?.querySelector('[data-selected="true"]')?.scrollIntoView({ block: 'nearest' })
@@ -369,7 +385,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
       if (!el) return
       const r = el.getBoundingClientRect()
       const header = el.closest('header')
-      setAnchor({ centerX: r.left + r.width / 2, top: header ? header.getBoundingClientRect().bottom : r.bottom })
+      setAnchor({ centerX: r.left + r.width / 2, top: header ? header.getBoundingClientRect().bottom : r.bottom, width: r.width })
     }
     update()
     window.addEventListener('resize', update)
@@ -419,14 +435,17 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
       {open && anchor && (dropdownOpen || suggesting) && createPortal(
         <>
-          {/* Click-catcher below the field. The slim top-bar launcher dims the
-              page behind it; the hero (a landing-page search box, not a modal)
-              stays transparent — Google-style — so it never dims the dashboard
-              or seams across the rail. Both close on outside click. */}
+          {/* Scrim below the field — separates the dropdown from the page.
+              Hero (landing search box): z-[15] sits BELOW the rail/top bar
+              (z-20/30) so it dims + blurs only the dashboard content behind the
+              panel — no seam across the chrome, the bug the earlier full-overlay
+              had. Top-bar launcher keeps its heavier dim. Both close on click. */}
           <div
             className={clsx(
-              'fixed left-0 right-0 bottom-0 z-[120]',
-              !hero && 'bg-black/25 dark:bg-black/55 backdrop-blur-[2px]',
+              'fixed left-0 right-0 bottom-0',
+              hero
+                ? 'z-[15] bg-black/15 dark:bg-black/50 backdrop-blur-[3px]'
+                : 'z-[120] bg-black/25 dark:bg-black/55 backdrop-blur-[2px]',
             )}
             style={{ top: anchor.top }}
             onClick={() => { setOpen(false); inputRef.current?.blur() }}
@@ -434,8 +453,8 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
           {dropdownOpen && (
           <div
             ref={panelRef}
-            style={{ position: 'fixed', top: anchor.top + 8, left: anchor.centerX, transform: 'translateX(-50%)', width: 640, maxWidth: 'calc(100vw - 2rem)' }}
-            className="z-[121] dialog shadow-theme-lg overflow-hidden"
+            style={{ position: 'fixed', top: anchor.top + 8, left: anchor.centerX, transform: 'translateX(-50%)', width: hero ? Math.round(anchor.width) : 640, maxWidth: 'calc(100vw - 2rem)' }}
+            className="z-[121] dialog shadow-theme-lg ring-1 ring-black/5 dark:ring-white/10 overflow-hidden"
           >
           <div ref={listRef} className="max-h-[60vh] overflow-y-auto py-1">
             {recentRows.length > 0 && (
@@ -510,7 +529,9 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
             )}
           </div>
           <div className="flex items-center gap-3 px-3 py-1.5 border-t border-theme-border text-[11px] text-theme-text-tertiary">
-            <span className="flex items-center gap-1"><CornerDownLeft className="w-3 h-3" /> open</span>
+            <span className="flex items-center gap-1">
+              <CornerDownLeft className="w-3 h-3" /> {submitToSearch && searchActive && selectedIndex < 0 ? 'search all' : 'open'}
+            </span>
             <span>↑↓ navigate</span>
             <span>⇞⇟ page</span>
             <span>esc close</span>
