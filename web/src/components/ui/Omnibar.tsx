@@ -107,6 +107,11 @@ export interface OmnibarProps {
   loadRecents?: () => OmnibarRecent[]
   recordRecent?: (r: OmnibarRecent) => void
   placeholder?: string
+  /** `hero` renders a large, centered field for landing surfaces (Home);
+   *  `default` is the slim top-bar field. */
+  size?: 'default' | 'hero'
+  /** Focus the field on mount (Home hero — the primary action on the page). */
+  autoFocus?: boolean
 }
 
 type Row =
@@ -142,6 +147,8 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     loadRecents,
     recordRecent,
     placeholder = 'Search resources & commands…',
+    size = 'default',
+    autoFocus = false,
   },
   ref,
 ) {
@@ -160,6 +167,13 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const [anchor, setAnchor] = useState<{ centerX: number; top: number } | null>(null)
 
   useImperativeHandle(ref, () => ({ focus: () => { inputRef.current?.focus(); inputRef.current?.select() } }), [])
+
+  // Hero autofocus parks the cursor in the field on mount (Home's primary
+  // action) but must NOT pop the dropdown — landing on the page shouldn't dim
+  // it behind a command palette. Suppress exactly the programmatic focus; a
+  // later user focus opens normally.
+  const skipFocusOpen = useRef(false)
+  useEffect(() => { if (autoFocus) { skipFocusOpen.current = true; inputRef.current?.focus() } }, [autoFocus])
 
   // Reflect the current view scope as an editable `ns:` pill on open, so a
   // deliberately broad ⌘K search shows (and lets you remove) the namespace it's
@@ -342,25 +356,30 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
   const clearNsPills = () => { setPills((prev) => prev.filter((p) => p.key !== 'ns')); inputRef.current?.focus() }
 
+  const hero = size === 'hero'
+
   return (
-    <div ref={containerRef} className="relative w-full max-w-xl">
+    <div ref={containerRef} className={hero ? 'relative w-full max-w-3xl' : 'relative w-full max-w-xl'}>
       <SearchPillInput
-        className="min-h-8 px-2.5 rounded-md bg-theme-elevated border border-transparent focus-within:border-theme-border focus-within:bg-theme-surface transition-colors"
+        className={hero
+          ? 'min-h-14 px-5 rounded-2xl bg-theme-surface border border-theme-border shadow-theme-sm transition-colors focus-within:border-[var(--color-brand-500)] focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--color-brand-500)_15%,transparent)]'
+          : 'min-h-8 px-2.5 rounded-md bg-theme-elevated border border-transparent focus-within:border-theme-border focus-within:bg-theme-surface transition-colors'}
+        inputClassName={hero ? 'text-lg py-4' : undefined}
         text={text}
         pills={pills}
         onChange={({ text: t, pills: p }) => { setText(t); setPills(p); setOpen(true) }}
         onKeyDown={handleKeyDown}
-        onFocus={() => setOpen(true)}
+        onFocus={() => { if (skipFocusOpen.current) { skipFocusOpen.current = false; return } setOpen(true) }}
         onSuggestingChange={setSuggesting}
         modifierOptions={modifierOptions}
         placeholder={placeholder}
         aria-label="Search resources and commands"
         inputRef={inputRef}
-        leftSlot={<Search className="w-3.5 h-3.5 shrink-0 text-theme-text-tertiary" />}
+        leftSlot={<Search className={hero ? 'w-5 h-5 shrink-0 text-theme-text-tertiary' : 'w-3.5 h-3.5 shrink-0 text-theme-text-tertiary'} />}
         rightSlot={
           <div className="flex items-center gap-1.5 shrink-0">
             <SearchSyntaxHelp />
-            {!text && pills.length === 0 && (
+            {!hero && !text && pills.length === 0 && (
               <kbd className="text-[10px] text-theme-text-tertiary bg-theme-surface px-1 py-0.5 rounded border border-theme-border-light">
                 {mac ? '⌘' : 'Ctrl+'}K
               </kbd>

@@ -38,6 +38,8 @@ export interface SearchPillInputProps {
   rightSlot?: React.ReactNode
   /** Applied to the input container (host owns the box chrome: height, bg, border). */
   className?: string
+  /** Applied to the `<input>` itself (host owns text size: e.g. a hero variant). */
+  inputClassName?: string
   'aria-label'?: string
   /** Fires when the modifier autocomplete opens/closes, so the host can suppress
       its own results dropdown while a modifier is being completed. */
@@ -101,6 +103,7 @@ export function SearchPillInput({
   leftSlot,
   rightSlot,
   className,
+  inputClassName,
   onSuggestingChange,
   ...rest
 }: SearchPillInputProps) {
@@ -207,7 +210,10 @@ export function SearchPillInput({
         onFocus={onFocus}
         placeholder={pills.length ? '' : placeholder}
         aria-label={rest['aria-label']}
-        className="flex-1 min-w-[80px] bg-transparent text-sm text-theme-text-primary placeholder-theme-text-tertiary outline-none"
+        className={clsx(
+          'flex-1 min-w-[80px] bg-transparent text-theme-text-primary placeholder-theme-text-tertiary outline-none',
+          inputClassName ?? 'text-sm',
+        )}
       />
       {rightSlot}
       {suggesting && anchor && mod && createPortal(
