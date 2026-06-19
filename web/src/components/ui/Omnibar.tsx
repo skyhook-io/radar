@@ -110,6 +110,11 @@ export interface OmnibarProps {
    *  searching, handing the full (uncapped) query off to the host's dedicated
    *  search surface. Omit to keep the omnibar a pure launcher. */
   onViewAllResults?: (query: string) => void
+  /** Empty-launcher content. `true` (default) lists Views + Actions — the
+   *  cmd-K menu. `false` shows only Actions so recents/search lead and views
+   *  surface on type (use when the views are already always-visible, e.g. a
+   *  persistent nav rail). */
+  launcherShowsViews?: boolean
   placeholder?: string
   /** `hero` renders a large, centered field for landing surfaces (Home);
    *  `default` is the slim top-bar field. */
@@ -152,6 +157,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     loadRecents,
     recordRecent,
     onViewAllResults,
+    launcherShowsViews = true,
     placeholder = 'Search resources & commands…',
     size = 'default',
     autoFocus = false,
@@ -206,15 +212,19 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   useEffect(() => { onQueryChange?.(debounced, open) }, [debounced, open, onQueryChange])
 
   // Commands score against the FREE text only — modifiers live in pills, so the
-  // launcher never sees "ns:" polluting a "go to topology" match. Empty + no
-  // pills → Views + Actions (launcher default); with pills but no text the user
-  // is browsing a scope, so suppress the command default.
+  // launcher never sees "ns:" polluting a "go to topology" match. With pills but
+  // no text the user is browsing a scope, so suppress the command default. Empty
+  // + no pills → the launcher default: Views + Actions, or (when the host opts
+  // into a lean launcher) Actions only, so recents/search lead and the views
+  // surface on type instead of walling the dropdown.
   const scoredCommands = useMemo(() => {
     if (!freeText) {
-      return pills.length ? [] : commandItems.filter((i) => i.category === 'Views' || i.category === 'Actions').map((item) => ({ item, score: 1 }))
+      if (pills.length) return []
+      const cats = launcherShowsViews ? ['Views', 'Actions'] : ['Actions']
+      return commandItems.filter((i) => cats.includes(i.category)).map((item) => ({ item, score: 1 }))
     }
     return commandItems.map((item) => ({ item, score: bestScore(item, freeText) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score)
-  }, [commandItems, freeText, pills.length])
+  }, [commandItems, freeText, pills.length, launcherShowsViews])
 
   // Kinds whose NAME strongly matches (exact 150 / prefix 100) lead ABOVE the
   // resource instances.
