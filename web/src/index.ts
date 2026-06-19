@@ -31,3 +31,18 @@ export type { ClusterSwitcherProps, ClusterSwitcherItem } from '@skyhook-io/k8s-
 // cluster prefix (e.g. /c/:id).
 export { resourcePath, buildWorkloadPath } from './utils/navigation';
 export type { SelectedResource } from '@skyhook-io/k8s-ui/types/core';
+
+// Injectable omnibar — the standalone search/command surface, decoupled from
+// Radar's own data hooks so embedders (Radar Hub) can drive it with fleet
+// search + their own command items while sharing the exact UX (pills, modifier
+// autocomplete, kind-first ranking, match highlighting, keyboard nav, recents).
+export { Omnibar } from './components/ui/Omnibar';
+export type {
+  OmnibarProps,
+  OmnibarHandle,
+  OmnibarRecent,
+  OmnibarSearchResult,
+} from './components/ui/Omnibar';
+export { bestScore } from './components/ui/command-items';
+export type { CommandItem } from './components/ui/command-items';
+export type { SearchHit, SearchMatchedField } from './api/client';

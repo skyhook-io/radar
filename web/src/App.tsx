@@ -56,7 +56,8 @@ import { SettingsDialog } from './components/settings/SettingsDialog'
 import { MyPermissionsDialog } from './components/settings/MyPermissionsDialog'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { kindToPlural, openExternal, apiVersionToGroup, buildWorkloadPath, searchHitToSelectedResource } from './utils/navigation'
-import { Omnibar, type OmnibarHandle } from './components/ui/Omnibar'
+import { type OmnibarHandle } from './components/ui/Omnibar'
+import { RadarOmnibar } from './components/ui/RadarOmnibar'
 import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 
 // All possible node kinds (core + GitOps)
@@ -1352,7 +1353,7 @@ function AppInner() {
             Fills the space the pill bar left; embedded keeps the pills + modal. */}
         {showNavRail && (
           <div className="hidden sm:flex flex-1 justify-center min-w-0 px-3">
-            <Omnibar
+            <RadarOmnibar
               ref={omnibarRef}
               onNavigateView={(view) => setMainView(view)}
               onNavigateKind={(kind, group) => {
