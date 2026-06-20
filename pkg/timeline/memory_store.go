@@ -334,6 +334,10 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 		}
 	}
 
+	if opts.ExcludeDeleted && event.EventType == EventTypeDelete {
+		return false
+	}
+
 	// Handle IncludeManaged
 	// If opts.IncludeManaged is true, it overrides the preset's IncludeManaged setting
 	// This allows queries to explicitly request managed resources even with "default" preset

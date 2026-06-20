@@ -350,6 +350,13 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		query.WriteString(")")
 	}
 
+	// Filter deletes in SQL (before ORDER/LIMIT) so hiding them can't under-fill
+	// the page when the newest rows happen to be deletes.
+	if opts.ExcludeDeleted {
+		query.WriteString(" AND event_type != ?")
+		args = append(args, string(EventTypeDelete))
+	}
+
 	if opts.ClusterContext != "" {
 		query.WriteString(" AND cluster_context = ?")
 		args = append(args, opts.ClusterContext)

@@ -1036,6 +1036,7 @@ export interface UseChangesOptions {
   filter?: string // Filter preset name ('default', 'all', 'warnings-only', 'workloads')
   includeK8sEvents?: boolean
   includeManaged?: boolean
+  includeDeleted?: boolean
   limit?: number
   enabled?: boolean
 }
@@ -1060,7 +1061,7 @@ function getTimeRangeDate(range: TimeRange): Date | null {
 }
 
 export function useChanges(options: UseChangesOptions = {}) {
-  const { namespaces = [], kind, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, limit = 200, enabled = true } = options
+  const { namespaces = [], kind, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, includeDeleted = true, limit = 200, enabled = true } = options
 
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
@@ -1068,6 +1069,7 @@ export function useChanges(options: UseChangesOptions = {}) {
   if (filter) params.set('filter', filter)
   if (!includeK8sEvents) params.set('include_k8s_events', 'false')
   if (includeManaged) params.set('include_managed', 'true')
+  if (!includeDeleted) params.set('include_deleted', 'false')
   params.set('limit', String(limit))
 
   const sinceDate = getTimeRangeDate(timeRange)
@@ -1078,7 +1080,7 @@ export function useChanges(options: UseChangesOptions = {}) {
   const queryString = params.toString()
 
   return useQuery<TimelineEvent[]>({
-    queryKey: ['changes', namespaces, kind, timeRange, filter, includeK8sEvents, includeManaged, limit],
+    queryKey: ['changes', namespaces, kind, timeRange, filter, includeK8sEvents, includeManaged, includeDeleted, limit],
     queryFn: () => fetchJSON(`/changes${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // Consider data stale after 5 seconds to ensure fresh data on navigation
     refetchInterval: 60000, // SSE handles real-time updates; this is a fallback

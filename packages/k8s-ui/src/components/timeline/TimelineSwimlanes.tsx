@@ -21,6 +21,7 @@ import {
   Timer,
   RotateCcw,
   Shield,
+  Trash2,
 } from 'lucide-react'
 import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -203,6 +204,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   const [expandedLanes, setExpandedLanes] = useState<Set<string>>(new Set())
   const [hasAutoZoomed, setHasAutoZoomed] = useState(false)
   const [groupByApp, setGroupByApp] = useState(true) // Group by app.kubernetes.io/name label
+  const [showDeleted, setShowDeleted] = useState(true)
 
   // Stable lane ordering - use ref to avoid render loop (lanes depends on order, order depends on lanes)
   const laneOrderRef = useRef<Map<string, number>>(new Map())
@@ -253,17 +255,18 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
 
   // Filter events by search term
   const filteredEvents = useMemo(() => {
-    if (!searchTerm) return events
+    const baseEvents = showDeleted ? events : events.filter(e => e.eventType !== 'delete')
+    if (!searchTerm) return baseEvents
 
     const term = searchTerm.toLowerCase()
-    return events.filter(e =>
+    return baseEvents.filter(e =>
       e.name.toLowerCase().includes(term) ||
       e.kind.toLowerCase().includes(term) ||
       e.namespace?.toLowerCase().includes(term) ||
       e.reason?.toLowerCase().includes(term) ||
       e.message?.toLowerCase().includes(term)
     )
-  }, [events, searchTerm])
+  }, [events, searchTerm, showDeleted])
 
   // Build hierarchical lanes using owner references + topology edges
   // Uses the shared utility from utils/resource-hierarchy.ts
@@ -512,6 +515,18 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                   className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-accent focus:ring-accent focus:ring-offset-0"
                 />
                 <span className="border-b border-dotted border-theme-text-tertiary">Group by app</span>
+              </label>
+            </Tooltip>
+            <Tooltip content="Show resources Radar observed being deleted, including Pods that no longer exist" position="bottom">
+              <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary">
+                <input
+                  type="checkbox"
+                  checked={showDeleted}
+                  onChange={(e) => setShowDeleted(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-accent focus:ring-accent focus:ring-offset-0"
+                />
+                <Trash2 className="w-3.5 h-3.5" />
+                <span className="border-b border-dotted border-theme-text-tertiary">Deleted</span>
               </label>
             </Tooltip>
             {/* View toggle */}

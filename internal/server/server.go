@@ -2375,6 +2375,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	filterPreset := r.URL.Query().Get("filter")
 	includeK8sEvents := r.URL.Query().Get("include_k8s_events") != "false" // default true
 	includeManaged := r.URL.Query().Get("include_managed") == "true"       // default false
+	includeDeleted := r.URL.Query().Get("include_deleted") != "false"      // default true
 	sourcesParam := r.URL.Query().Get("sources")                           // comma-separated, e.g. "k8s_event"
 
 	// Parse since timestamp
@@ -2410,6 +2411,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		Since:            since,
 		Limit:            limit,
 		IncludeManaged:   includeManaged,
+		ExcludeDeleted:   !includeDeleted,
 		IncludeK8sEvents: includeK8sEvents,
 		FilterPreset:     filterPreset,
 		// The persistent store retains events from previously-connected

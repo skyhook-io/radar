@@ -75,6 +75,7 @@ type QueryOptions struct {
 
 	// Include/exclude options
 	IncludeManaged   bool // Include ReplicaSets, Pods, Events (default false)
+	ExcludeDeleted   bool // Exclude delete events
 	IncludeK8sEvents bool // Include K8s Event resources (default true)
 }
 
@@ -84,6 +85,7 @@ func DefaultQueryOptions() QueryOptions {
 		Limit:            200,
 		GroupBy:          GroupByNone,
 		IncludeManaged:   false,
+		ExcludeDeleted:   false,
 		IncludeK8sEvents: true,
 	}
 }

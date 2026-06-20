@@ -421,6 +421,53 @@ func TestMemoryStore_IncludeManaged(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_DeletedFiltering(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+	now := time.Now()
+
+	events := []TimelineEvent{
+		{ID: "deploy-add", Timestamp: now, Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeAdd, Source: SourceInformer},
+		{ID: "deploy-delete", Timestamp: now.Add(time.Second), Kind: "Deployment", Namespace: "default", Name: "deploy-2", EventType: EventTypeDelete, Source: SourceInformer},
+		{
+			ID: "pod-delete", Timestamp: now.Add(2 * time.Second), Kind: "Pod", Namespace: "default", Name: "pod-1",
+			EventType: EventTypeDelete, Source: SourceInformer,
+			Owner: &OwnerInfo{Kind: "ReplicaSet", Name: "deploy-1-abc"},
+		},
+	}
+	_ = store.AppendBatch(ctx, events)
+
+	// Default: top-level deletes show, managed (Pod) deletes do not — they follow IncludeManaged.
+	result, err := store.Query(ctx, QueryOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("Expected Deployment add + Deployment delete, got %d: %+v", len(result), result)
+	}
+	if result[0].ID != "deploy-delete" || result[1].ID != "deploy-add" {
+		t.Fatalf("unexpected result order: %+v", result)
+	}
+
+	// ExcludeDeleted drops the top-level delete too.
+	result, err = store.Query(ctx, QueryOptions{Limit: 10, ExcludeDeleted: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 1 || result[0].ID != "deploy-add" {
+		t.Fatalf("Expected only Deployment add with ExcludeDeleted, got %+v", result)
+	}
+
+	// IncludeManaged surfaces the managed Pod delete alongside the rest.
+	result, err = store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 3 {
+		t.Fatalf("Expected all 3 events with IncludeManaged, got %d: %+v", len(result), result)
+	}
+}
+
 func TestMemoryStore_FilterPreset(t *testing.T) {
 	store := NewMemoryStore(100)
 	ctx := context.Background()

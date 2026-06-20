@@ -19,11 +19,12 @@ interface TimelineListProps {
 
 export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange }: TimelineListProps) {
   const hasLimitedAccess = useHasLimitedAccess()
-  const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kind?: string }>({
+  const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kind?: string; includeDeleted: boolean }>({
     timeRange: initialTimeRange ?? '1h',
+    includeDeleted: true,
   })
 
-  const handleQueryChange = useCallback((params: { timeRange: TimeRange; kind?: string }) => {
+  const handleQueryChange = useCallback((params: { timeRange: TimeRange; kind?: string; includeDeleted: boolean }) => {
     setQueryParams(params)
   }, [])
 
@@ -32,6 +33,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     kind: queryParams.kind,
     timeRange: queryParams.timeRange,
     includeK8sEvents: true,
+    includeDeleted: queryParams.includeDeleted,
     limit: 500,
   })
 
