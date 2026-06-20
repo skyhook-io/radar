@@ -58,6 +58,11 @@ export interface TimelineSwimlanesProps {
   // navigate (radar router push, or cross-route-tree href). When omitted, GitOps lanes
   // fall back to onResourceClick (the resource drawer).
   onNavigatePath?: (path: string) => void
+  // Controlled "show deleted" toggle. When omitted the component manages it
+  // internally; the host passes it to share one toggle with the list view and
+  // to drive server-side delete filtering on the underlying fetch.
+  showDeleted?: boolean
+  onShowDeletedChange?: (showDeleted: boolean) => void
 }
 
 interface ResourceLane extends BaseResourceLane {
@@ -181,7 +186,7 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
   return breakdown
 }
 
-export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath }: TimelineSwimlanesProps) {
+export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange }: TimelineSwimlanesProps) {
   // Timeline lane labels for GitOps CRs (Application/Kustomization/HelmRelease)
   // deep-link to GitOps detail rather than the resource drawer — the lane is
   // already telling the user "this controller had changes/events"; the GitOps
@@ -204,7 +209,9 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   const [expandedLanes, setExpandedLanes] = useState<Set<string>>(new Set())
   const [hasAutoZoomed, setHasAutoZoomed] = useState(false)
   const [groupByApp, setGroupByApp] = useState(true) // Group by app.kubernetes.io/name label
-  const [showDeleted, setShowDeleted] = useState(true)
+  const [showDeletedInternal, setShowDeletedInternal] = useState(true)
+  const showDeleted = showDeletedProp ?? showDeletedInternal
+  const setShowDeleted = onShowDeletedChange ?? setShowDeletedInternal
 
   // Stable lane ordering - use ref to avoid render loop (lanes depends on order, order depends on lanes)
   const laneOrderRef = useRef<Map<string, number>>(new Map())

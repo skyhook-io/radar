@@ -45,7 +45,7 @@ export interface TimelineListProps {
   events: TimelineEvent[]
   isLoading: boolean
   onRefresh?: () => void
-  onQueryChange?: (params: { timeRange: TimeRange; kind?: string; includeDeleted: boolean }) => void
+  onQueryChange?: (params: { timeRange: TimeRange; kind?: string }) => void
   hasLimitedAccess?: boolean
   namespaces?: string[]
   onViewChange?: (view: 'list' | 'swimlane') => void
@@ -53,6 +53,11 @@ export interface TimelineListProps {
   onResourceClick?: NavigateToResource
   initialFilter?: ActivityTypeFilter
   initialTimeRange?: TimeRange
+  // Controlled "show deleted" toggle. When omitted the component manages it
+  // internally; the host passes it to share one toggle across list + swimlane
+  // and to drive server-side delete filtering.
+  showDeleted?: boolean
+  onShowDeletedChange?: (showDeleted: boolean) => void
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -80,17 +85,19 @@ const RESOURCE_KINDS = [
   'StatefulSet',
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, showDeleted: showDeletedProp, onShowDeletedChange }: TimelineListProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [activityTypeFilter, setActivityTypeFilter] = useState<ActivityTypeFilter>(initialFilter ?? 'all')
   const [timeRange, setTimeRange] = useState<TimeRange>(initialTimeRange ?? '1h')
   const [kindFilter, setKindFilter] = useState<string>('')
-  const [showDeleted, setShowDeleted] = useState(true)
+  const [showDeletedInternal, setShowDeletedInternal] = useState(true)
+  const showDeleted = showDeletedProp ?? showDeletedInternal
+  const setShowDeleted = onShowDeletedChange ?? setShowDeletedInternal
   const [expandedItem, setExpandedItem] = useState<string | null>(null)
 
   useEffect(() => {
-    onQueryChange?.({ timeRange, kind: kindFilter || undefined, includeDeleted: showDeleted })
-  }, [timeRange, kindFilter, showDeleted, onQueryChange])
+    onQueryChange?.({ timeRange, kind: kindFilter || undefined })
+  }, [timeRange, kindFilter, onQueryChange])
 
 
   const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(onRefresh ?? (() => {}))
@@ -311,7 +318,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
 
         <button
           type="button"
-          onClick={() => setShowDeleted((v) => !v)}
+          onClick={() => setShowDeleted(!showDeleted)}
           title="Show or hide resources that were deleted, including Pods that no longer exist"
           className={clsx(
             'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 bg-theme-elevated',
