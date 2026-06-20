@@ -118,6 +118,12 @@ export function SearchPillInput({
   // them so every pill stays removable.
   const [pillsExpanded, setPillsExpanded] = useState(false)
   const MAX_VISIBLE_PILLS = 3
+  // Reset the expand toggle once there's nothing to collapse (pills cleared or
+  // trimmed) — otherwise a later seed of many pills would render expanded,
+  // re-flooding the field instead of collapsing.
+  useEffect(() => {
+    if (pills.length <= MAX_VISIBLE_PILLS + 1) setPillsExpanded(false)
+  }, [pills.length])
   const collapsePills = !pillsExpanded && pills.length > MAX_VISIBLE_PILLS + 1
   const shownPills = collapsePills ? pills.slice(0, MAX_VISIBLE_PILLS) : pills
   const hiddenPillCount = pills.length - shownPills.length
