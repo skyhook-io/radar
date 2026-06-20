@@ -260,7 +260,12 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     const rest = (launcher ? filtered : filtered.slice(0, 8)).map((x) => x.item)
     const byCat = new Map<string, CommandItem[]>()
     for (const c of rest) { const l = byCat.get(c.category) ?? []; l.push(c); byCat.set(c.category, l) }
-    return COMMAND_CATEGORY_ORDER.filter((cat) => byCat.has(cat)).map((cat) => ({ category: cat, items: byCat.get(cat)! }))
+    // `CommandItem.category` is an open string, so a host can use one we don't
+    // rank — render those AFTER the known order rather than silently dropping
+    // their commands.
+    const known = COMMAND_CATEGORY_ORDER.filter((cat) => byCat.has(cat))
+    const extra = [...byCat.keys()].filter((cat) => !COMMAND_CATEGORY_ORDER.includes(cat))
+    return [...known, ...extra].map((cat) => ({ category: cat, items: byCat.get(cat)! }))
   }, [scoredCommands, leadingIds, freeText, pills.length])
 
   const toCmdRow = (c: CommandItem): Row => ({ id: `cmd:${c.id}`, kind: 'command', command: c })
