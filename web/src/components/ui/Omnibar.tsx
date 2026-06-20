@@ -296,7 +296,11 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   useEffect(() => { userMovedRef.current = false }, [queryString])
   const rowsKey = rows.map((r) => r.id).join('|')
   useEffect(() => {
-    const dflt = submitToSearch ? null : (rows[0]?.id ?? null)
+    // Only suppress the pre-selection while actively SEARCHING (so Enter goes to
+    // the search page, not a maybe-wrong top hit). In the empty launcher there's
+    // no search to defer to, so auto-select the first row — otherwise Enter is a
+    // no-op while the footer still reads "open".
+    const dflt = submitToSearch && searchActive ? null : (rows[0]?.id ?? null)
     setSelectedId((cur) => {
       if (!userMovedRef.current) return dflt
       return cur && rows.some((r) => r.id === cur) ? cur : dflt
@@ -324,7 +328,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
       onViewAllResults?.(row.query)
     } else {
       const h = row.hit
-      recordRecent?.({ kind: h.kind, group: h.group, namespace: h.namespace, name: h.name })
+      recordRecent?.({ kind: h.kind, group: h.group, namespace: h.namespace, name: h.name, cluster: h.cluster, clusterName: h.clusterName })
       onOpenResource(h)
     }
     setOpen(false)
