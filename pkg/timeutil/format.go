@@ -13,7 +13,7 @@ import (
 // "3s", "12m", "4h", "21d". Negative inputs clamp to zero — duration
 // formatting is for display, not validation, so don't surface "-1s".
 //
-// keep in sync: web/src/components/gitops/GitOpsView.tsx::formatRelativeAge
+// keep in sync: packages/k8s-ui/src/utils/format.ts::formatCompactAge
 // (TypeScript). Adding a new tier (e.g. "weeks") here without mirroring
 // it in TS would let the audit finding and the fleet banner disagree on
 // the same age.

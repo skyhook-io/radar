@@ -39,7 +39,7 @@ func TestFormatAgeShort(t *testing.T) {
 
 // Each tier boundary must flip the unit exactly at its threshold — a
 // regression here silently desyncs the Go-rendered age from the TypeScript
-// mirror in GitOpsView.tsx::formatRelativeAge.
+// mirror in packages/k8s-ui/src/utils/format.ts::formatCompactAge.
 func TestFormatAgeShort_TierBoundaries(t *testing.T) {
 	boundaries := []struct {
 		below     time.Duration
