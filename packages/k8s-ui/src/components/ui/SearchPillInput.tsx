@@ -113,6 +113,14 @@ export function SearchPillInput({
   const [sel, setSel] = useState(0)
   const [dismissed, setDismissed] = useState(false)
   const [anchor, setAnchor] = useState<{ left: number; bottom: number } | null>(null)
+  // Collapse a long pill list to a few + "+N more" so they don't flood the
+  // field (e.g. a broad namespace scope seeded as ns: pills). Expanding wraps
+  // them so every pill stays removable.
+  const [pillsExpanded, setPillsExpanded] = useState(false)
+  const MAX_VISIBLE_PILLS = 3
+  const collapsePills = !pillsExpanded && pills.length > MAX_VISIBLE_PILLS + 1
+  const shownPills = collapsePills ? pills.slice(0, MAX_VISIBLE_PILLS) : pills
+  const hiddenPillCount = pills.length - shownPills.length
 
   const mod = useMemo(() => activeModifier(text, aliases), [text, aliases])
 
@@ -184,12 +192,12 @@ export function SearchPillInput({
   }, [suggesting, filtered, sel, mod, text, pills, commitPill, onChange, onKeyDown])
 
   return (
-    <div ref={containerRef} className={clsx('flex items-center gap-1.5', className)} onClick={() => inputRef.current?.focus()}>
+    <div ref={containerRef} className={clsx('flex items-center gap-1.5', pillsExpanded && 'flex-wrap', className)} onClick={() => inputRef.current?.focus()}>
       {leftSlot}
-      {pills.map((p, i) => (
+      {shownPills.map((p, i) => (
         <span key={`${p.key}:${p.value}:${i}`} className="inline-flex items-center gap-1 shrink-0 rounded-md bg-theme-elevated border border-theme-border-light pl-1.5 pr-1 py-0.5 text-xs whitespace-nowrap">
           <span className="text-theme-text-tertiary">{p.key}:</span>
-          <span className="text-theme-text-primary font-medium">{p.value}</span>
+          <span className="max-w-[16ch] truncate font-medium text-theme-text-primary" title={p.value}>{p.value}</span>
           <button
             type="button"
             tabIndex={-1}
@@ -201,6 +209,27 @@ export function SearchPillInput({
           </button>
         </span>
       ))}
+      {collapsePills && hiddenPillCount > 0 && (
+        <button
+          type="button"
+          tabIndex={-1}
+          onMouseDown={(e) => { e.preventDefault(); setPillsExpanded(true) }}
+          className="shrink-0 rounded-md bg-theme-elevated border border-theme-border-light px-1.5 py-0.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary whitespace-nowrap"
+          title="Show all filters"
+        >
+          +{hiddenPillCount} more
+        </button>
+      )}
+      {pillsExpanded && pills.length > MAX_VISIBLE_PILLS + 1 && (
+        <button
+          type="button"
+          tabIndex={-1}
+          onMouseDown={(e) => { e.preventDefault(); setPillsExpanded(false) }}
+          className="shrink-0 rounded-md px-1.5 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary whitespace-nowrap"
+        >
+          less
+        </button>
+      )}
       <input
         ref={inputRef}
         type="text"
