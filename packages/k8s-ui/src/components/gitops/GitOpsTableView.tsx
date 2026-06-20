@@ -217,8 +217,11 @@ export interface GitOpsTableViewProps {
   searchHotkey?: boolean
   // emptyStateTitle / emptyStateBody override the "No GitOps resources
   // detected" copy. Hub passes "No GitOps resources across the fleet".
-  emptyStateTitle?: string
-  emptyStateBody?: string
+  // ReactNode (not just string) so a host can split the body across lines
+  // (e.g. a `<br/>` between "what's wrong" and "what to do") or emphasize
+  // part of it. Strings still work unchanged.
+  emptyStateTitle?: ReactNode
+  emptyStateBody?: ReactNode
   /**
    * Which side the filter rail sits on. Default 'left' (OSS Radar, which
    * has no app sidebar). A host with its own left navigation rail (the
@@ -483,7 +486,7 @@ export function GitOpsTableView({
   // be hidden behind a "nothing here" screen.
   if (totalGitOps === 0 && allRowsInput.length === 0 && !loading && !hasGlobalNamespaceFilter) {
     return (
-      <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-theme-base p-4">
+      <div className="flex h-full min-h-0 flex-1 items-start justify-center bg-theme-base px-4 pb-4 pt-[22vh]">
         <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
           <GitBranch className="mx-auto h-8 w-8 text-theme-text-tertiary" />
           <h2 className="mt-3 text-base font-semibold text-theme-text-primary">
