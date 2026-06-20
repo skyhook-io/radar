@@ -1127,6 +1127,10 @@ export function cronToHuman(cron: string): string {
   if (minute === '0' && hour === '0' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return 'Daily at midnight'
   }
+  if (minute === '0' && hour.startsWith('*/') && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    const interval = hour.slice(2)
+    return interval === '1' ? 'Every hour' : `Every ${interval} hours`
+  }
   if (minute === '0' && hour !== '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return `Daily at ${hour}:00`
   }
