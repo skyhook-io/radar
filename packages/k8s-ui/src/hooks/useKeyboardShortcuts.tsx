@@ -1,4 +1,5 @@
 import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { isMac as isMacPlatform } from '../utils/platform'
 
 export type ShortcutScope = 'global' | 'topology' | 'resources' | 'timeline' | 'helm' | 'gitops' | 'traffic' | 'applications' | 'audit' | 'drawer'
 
@@ -78,7 +79,7 @@ interface KeyMatcher {
   altKey?: boolean
 }
 
-const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+const isMac = isMacPlatform()
 
 function parseKeys(keys: string): KeyMatcher {
   // Multi-key sequence (space-separated, e.g. "g g")

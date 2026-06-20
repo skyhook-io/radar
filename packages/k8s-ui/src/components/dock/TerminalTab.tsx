@@ -5,6 +5,9 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { RefreshCw, ChevronDown, Bug } from 'lucide-react'
 import { clsx } from 'clsx'
+import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
+import { TerminalClipboardToolbar } from './TerminalClipboardToolbar'
+import { useMultilinePasteConfirm } from './useMultilinePasteConfirm'
 
 export interface TerminalTabProps {
   namespace: string
@@ -46,6 +49,12 @@ export function TerminalTab({
   const [errorType, setErrorType] = useState<string | null>(null)
   const [isCreatingDebug, setIsCreatingDebug] = useState(false)
   const [selectedContainer, setSelectedContainer] = useState(containerName)
+  const [hasSelection, setHasSelection] = useState(false)
+  const { confirmPaste, pasteDialog } = useMultilinePasteConfirm()
+
+  const handleCopy = useCallback(() => {
+    if (xtermRef.current) copyTerminalSelection(xtermRef.current)
+  }, [])
 
   const connect = useCallback(() => {
     if (!terminalRef.current) return
@@ -99,6 +108,12 @@ export function TerminalTab({
     xtermRef.current = xterm
     fitAddonRef.current = fitAddon
 
+    setHasSelection(false)
+    const disposeClipboard = setupTerminalClipboard(xterm, terminalRef.current, {
+      confirmPaste,
+      onSelectionChange: setHasSelection,
+    })
+
     const doFit = (ws?: WebSocket) => {
       const dims = fitAddon.proposeDimensions()
       if (dims) xterm.resize(dims.cols, dims.rows)
@@ -140,7 +155,10 @@ export function TerminalTab({
       }, 100)
     })
     resizeObserver.observe(terminalRef.current)
-    cleanupRef.current = () => resizeObserver.disconnect()
+    cleanupRef.current = () => {
+      resizeObserver.disconnect()
+      disposeClipboard()
+    }
 
     createSessionRef.current(selectedContainer)
       .then(({ wsUrl }) => {
@@ -276,6 +294,8 @@ export function TerminalTab({
             Reconnect
           </button>
         )}
+
+        {!error && <TerminalClipboardToolbar hasSelection={hasSelection} onCopy={handleCopy} />}
       </div>
 
       {/* Terminal or error — key forces xterm canvas unmount/remount on toggle */}
@@ -330,6 +350,7 @@ export function TerminalTab({
       ) : (
         <div key="terminal" ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       )}
+      {pasteDialog}
     </div>
   )
 }
