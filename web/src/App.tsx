@@ -542,7 +542,9 @@ function AppInner() {
       description: 'Show keyboard shortcuts',
       category: 'General' as const,
       scope: 'global' as const,
-      handler: () => setShowHelp(prev => !prev),
+      // Chromeless embeds (Radar Hub) own their own help surface — don't open a
+      // competing Radar overlay.
+      handler: () => { if (!chromeless) setShowHelp(prev => !prev) },
     },
     {
       id: 'command-palette',
@@ -551,8 +553,10 @@ function AppInner() {
       category: 'General' as const,
       scope: 'global' as const,
       allowInInputs: true,
-      // Standalone focuses the top-center omnibar; embedded opens the modal.
-      handler: () => { if (showNavRail) omnibarRef.current?.focus(); else setShowCommandPalette(true) },
+      // Standalone focuses the top-center omnibar; embedded opens the modal. In
+      // a chromeless embed the HOST owns ⌘K (its own omnibar), so do nothing —
+      // otherwise both the host omnibar and Radar's palette fire on one ⌘K.
+      handler: () => { if (showNavRail) omnibarRef.current?.focus(); else if (!chromeless) setShowCommandPalette(true) },
     },
     {
       id: 'diagnostics',
