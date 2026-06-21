@@ -165,11 +165,21 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     () => foldAppGroups(entries, expandedGroups, FAMILY_AUTO_EXPAND_ON_SEARCH && textFilter.trim() !== '',
       variant === 'fleet'
         ? {
-            localScope: (e) => (e.variant === 'fleet' ? e.clusters.map((c) => c.id).sort().join(',') : ''),
+            // Fall back to the row key so the scope is never empty — an empty
+            // localScope would make foldAppGroups treat a non-portable identity
+            // as un-scoped and fold it across unrelated rows.
+            localScope: (e) => (e.variant === 'fleet' ? e.clusters.map((c) => c.id).sort().join(',') || e.row.key : ''),
             // The fold ladder reads the host's per-cluster env slices, not the
             // single identity.env (which the hub can stale when it joins one
-            // overlay key across clusters with different envs).
-            envsOf: (e) => (e.variant === 'fleet' ? e.envs.map((s) => ({ env: s.env, health: s.health })) : []),
+            // overlay key across clusters with different envs). Fall back to the
+            // identity env if a row somehow has no slices, so the ladder never
+            // collapses to a misleading "0 envs".
+            envsOf: (e) =>
+              e.variant === 'fleet'
+                ? e.envs.length
+                  ? e.envs.map((s) => ({ env: s.env, health: s.health }))
+                  : [{ env: e.row.identity?.env ?? '', health: e.health }]
+                : [],
           }
         : undefined,
     ),
