@@ -542,9 +542,11 @@ function AppInner() {
       description: 'Show keyboard shortcuts',
       category: 'General' as const,
       scope: 'global' as const,
-      // Chromeless embeds (Radar Hub) own their own help surface — don't open a
-      // competing Radar overlay.
-      handler: () => { if (!chromeless) setShowHelp(prev => !prev) },
+      // Radar owns the shortcut registry even in a chromeless embed, so its `?`
+      // overlay is the one that actually lists the working shortcuts. The host
+      // (Radar Hub) drives it from its own chrome by dispatching a `?` keydown —
+      // it has no registry of its own to populate a competing overlay with.
+      handler: () => setShowHelp(prev => !prev),
     },
     {
       id: 'command-palette',
