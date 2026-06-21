@@ -1,5 +1,9 @@
 export { ApplicationsList } from './ApplicationsList'
 export type { ApplicationsListProps } from './ApplicationsList'
+export { ApplicationsView } from './ApplicationsView'
+export type { ApplicationsViewProps } from './ApplicationsView'
+export type { AppEntry, SingleAppEntry, FleetAppEntry, EnvSlice, AppClusterRef } from '../../utils/applications'
+export { buildSingleAppEntry } from '../../utils/applications'
 // Facet moved to the shared ui/ primitives; re-exported here for compatibility.
 export { Facet } from '../ui/Facet'
 export { ApplicationDetail } from './ApplicationDetail'

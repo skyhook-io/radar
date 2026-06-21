@@ -474,6 +474,12 @@ export interface FoldAppGroupsOptions<T extends AppGroupFoldEntry> {
    *  should include the cluster id so local name/repo evidence cannot merge
    *  unrelated clusters. Portable identities ignore the scope. */
   localScope?: (entry: T) => string | undefined
+  /** Per-member env slices for the env ladder. A fleet member spans several
+   *  per-cluster envs, so the host supplies them (cluster-coverage derived,
+   *  authoritative) rather than the single `identity.env` — which the hub can
+   *  stale when it joins the same overlay key across clusters. Defaults to the
+   *  member's single identity env. */
+  envsOf?: (entry: T) => Array<{ env: string; health: AppHealth }>
 }
 
 export function foldAppGroups<T extends AppGroupFoldEntry>(
@@ -518,15 +524,20 @@ export function foldAppGroups<T extends AppGroupFoldEntry>(
     let desired = 0
     let health: AppHealth = 'unknown'
     for (const m of members) {
-      const env = m.row.identity!.env
       const v = newest(m)
-      const cur = cellMap.get(env)
-      if (!cur) {
-        cellMap.set(env, { env, health: m.health, version: v, count: 1, firstKey: m.row.key })
-      } else {
-        cur.count++
-        if ((HEALTH_RANK[m.health] ?? 0) > (HEALTH_RANK[cur.health] ?? 0)) cur.health = m.health
-        if (v && (!cur.version || compareVersions(v, cur.version) === 1)) cur.version = v
+      // A fleet member spans several per-cluster envs; the host supplies them so
+      // the ladder reflects every env, not just the member's (possibly stale)
+      // single identity env. Default: the one identity env.
+      const slices = options.envsOf?.(m) ?? [{ env: m.row.identity!.env, health: m.health }]
+      for (const slice of slices) {
+        const cur = cellMap.get(slice.env)
+        if (!cur) {
+          cellMap.set(slice.env, { env: slice.env, health: slice.health, version: v, count: 1, firstKey: m.row.key })
+        } else {
+          cur.count++
+          if ((HEALTH_RANK[slice.health] ?? 0) > (HEALTH_RANK[cur.health] ?? 0)) cur.health = slice.health
+          if (v && (!cur.version || compareVersions(v, cur.version) === 1)) cur.version = v
+        }
       }
       if ((HEALTH_RANK[m.health] ?? 0) > (HEALTH_RANK[health] ?? 0)) health = m.health
       ready += m.ready
@@ -671,4 +682,128 @@ export function newestTag(versions: string[]): string | undefined {
     else if (compareVersions(t, best) === 1) best = t
   }
   return best
+}
+
+// -----------------------------------------------------------------------------
+// Applications list entry model — the per-row shape the shared list core renders.
+// Discriminated on `variant` so the OSS single-cluster row and the Cloud fleet
+// row (one row spanning several clusters) carry their own fields with no loose
+// optional-superset overlap. The base carries everything the facet rail, fold,
+// counts, and sort read; the variant arms carry only what their instance-row
+// renderer needs. Both arms satisfy AppGroupFoldEntry, so foldAppGroups is shared.
+// -----------------------------------------------------------------------------
+
+export interface AppEntryBase {
+  row: AppRow
+  health: AppHealth
+  versions: string[]
+  kinds: Record<string, number>
+  workloadClass: AppWorkloadClass
+  /** Distinct contained classes — the inclusive facet-matching set. */
+  classSet: AppWorkloadClass[]
+  classComposition: { cls: AppWorkloadClass; count: number }[]
+  category: AppCategory
+  ready: number
+  desired: number
+  /** ready/desired as a fraction for sorting; -1 when nothing is desired. */
+  readyRatio: number
+  source: AppSource
+}
+
+export interface SingleAppEntry extends AppEntryBase {
+  variant: 'single'
+  namespace: string
+  namespaces: string[]
+  env: string
+  envInferred: boolean
+}
+
+/** One environment instance within a fleet row (env name + worst health across
+ *  its clusters + whether the env was inferred from the namespace). */
+export interface EnvSlice {
+  env: string
+  health: AppHealth
+  inferred: boolean
+}
+
+/** A cluster this fleet row's app runs in. */
+export interface AppClusterRef {
+  id: string
+  name: string
+  health: AppHealth
+}
+
+export interface FleetAppEntry extends AppEntryBase {
+  variant: 'fleet'
+  envs: EnvSlice[]
+  clusters: AppClusterRef[]
+  /** True when the app runs different versions across its clusters/envs. */
+  versionSkew: boolean
+}
+
+export type AppEntry = SingleAppEntry | FleetAppEntry
+
+/** Build a single-cluster list entry from a wire row. The env is resolved via
+ *  the server's identity classification (authoritative) with a namespace
+ *  heuristic fallback for plain rows. */
+export function buildSingleAppEntry(row: AppRow, discoveredEnvs?: ReadonlySet<string>): SingleAppEntry {
+  const kinds: Record<string, number> = {}
+  let ready = 0
+  let desired = 0
+  for (const wl of row.workloads || []) {
+    kinds[wl.kind] = (kinds[wl.kind] ?? 0) + 1
+    ready += wl.ready ?? 0
+    desired += wl.desired ?? 0
+  }
+  const namespace = namespaceOf(row)
+  // The server's identity classification carries the authoritative env (label/
+  // declared/discovered); plain rows fall back to the trio + discovered-token
+  // namespace heuristic.
+  const resolved = resolveEnv(undefined, namespace, discoveredEnvs)
+  const env = row.identity?.env ?? resolved.env
+  const inferred = row.identity ? identityEnvInferred(row.identity) : resolved.inferred
+  return {
+    variant: 'single',
+    row,
+    health: healthOf(row.health),
+    versions: Array.from(new Set((row.versions || []).filter(Boolean))),
+    namespace,
+    namespaces: namespacesOf(row),
+    env,
+    envInferred: inferred,
+    kinds,
+    workloadClass: workloadClassOf(row.workload_class),
+    classSet: classSetOf(row),
+    classComposition: classCompositionOf(row),
+    category: categoryOf(row.category),
+    ready,
+    desired,
+    readyRatio: desired > 0 ? ready / desired : -1,
+    source: sourceOf(row.tier),
+  }
+}
+
+/** The text an entry matches free-text search against — name, key, namespace,
+ *  source/class/category labels, versions, env, workload kinds + identity. Pure
+ *  and exported so the list core and tests share one definition. */
+export function searchTextForEntry(e: AppEntry): string {
+  const workloadText = (e.row.workloads || []).flatMap((wl) => [wl.kind, wl.namespace, wl.name, wl.version])
+  const envParts = e.variant === 'single' ? [e.env || 'unlabeled'] : e.envs.map((s) => s.env || 'unlabeled')
+  const nsParts = e.variant === 'single' ? [e.namespace] : e.clusters.map((c) => c.name)
+  return [
+    e.row.name,
+    e.row.key,
+    ...nsParts,
+    SOURCE_META[e.source].label,
+    CLASS_META[e.workloadClass].label,
+    ...e.classSet.map((c) => CLASS_META[c].label),
+    CATEGORY_META[e.category].label,
+    ...e.versions,
+    ...envParts,
+    ...Object.keys(e.kinds),
+    ...workloadText,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
 }
