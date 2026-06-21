@@ -1311,21 +1311,28 @@ export interface TopNodeMetrics {
   memoryAllocatable: number // bytes
 }
 
-// Fetch bulk metrics for all pods (for CPU/Memory columns in resource table)
-export function useTopPodMetrics() {
+// Fetch bulk metrics for pods (for CPU/Memory columns in resource table)
+export function useTopPodMetrics(options?: { enabled?: boolean; namespaces?: string[] }) {
+  const namespacesParam = options?.namespaces?.join(',') ?? ''
+  const params = new URLSearchParams()
+  if (namespacesParam) params.set('namespaces', namespacesParam)
+  const queryString = params.toString()
+
   return useQuery<TopPodMetrics[]>({
-    queryKey: ['top-pod-metrics'],
-    queryFn: () => fetchJSON('/metrics/top/pods'),
+    queryKey: ['top-pod-metrics', namespacesParam],
+    queryFn: () => fetchJSON(`/metrics/top/pods${queryString ? `?${queryString}` : ''}`),
+    enabled: options?.enabled ?? true,
     staleTime: 25000,
     refetchInterval: 30000,
   })
 }
 
 // Fetch bulk metrics for all nodes (for CPU/Memory columns in resource table)
-export function useTopNodeMetrics() {
+export function useTopNodeMetrics(options?: { enabled?: boolean }) {
   return useQuery<TopNodeMetrics[]>({
     queryKey: ['top-node-metrics'],
     queryFn: () => fetchJSON('/metrics/top/nodes'),
+    enabled: options?.enabled ?? true,
     staleTime: 25000,
     refetchInterval: 30000,
   })

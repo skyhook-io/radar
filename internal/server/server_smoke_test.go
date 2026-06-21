@@ -524,6 +524,50 @@ func TestSmokeListPods(t *testing.T) {
 	}
 }
 
+func TestSmokeTopPodsHonorsNamespaceFilter(t *testing.T) {
+	resp, err := http.Get(testServer.URL + "/api/metrics/top/pods?namespaces=default")
+	if err != nil {
+		t.Fatalf("GET /api/metrics/top/pods?namespaces=default: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body []k8s.TopPodMetrics
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(body) < 1 {
+		t.Fatal("expected at least 1 pod metric row")
+	}
+	for _, pod := range body {
+		if pod.Namespace != "default" {
+			t.Fatalf("expected only default namespace rows, got %s/%s", pod.Namespace, pod.Name)
+		}
+	}
+
+	resp, err = http.Get(testServer.URL + "/api/metrics/top/pods?namespaces=missing")
+	if err != nil {
+		t.Fatalf("GET /api/metrics/top/pods?namespaces=missing: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for missing namespace filter, got %d", resp.StatusCode)
+	}
+
+	body = nil
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode missing namespace response: %v", err)
+	}
+	if len(body) != 0 {
+		t.Fatalf("expected missing namespace filter to return no pod metrics, got %d rows", len(body))
+	}
+}
+
 func TestSmokeListDeployments(t *testing.T) {
 	resp, err := http.Get(testServer.URL + "/api/resources/deployments")
 	if err != nil {

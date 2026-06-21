@@ -36,11 +36,23 @@ interface ResourcesViewProps {
 
 type SelectedKindInfo = { name: string; kind: string; group: string } | null
 
+const LARGE_RESOURCE_LIST_LIMIT = 25000
+const LARGE_RESOURCE_LIST_GUARD_KEYS = new Set([
+  'Pod',
+  'Event',
+  'apps/ReplicaSet',
+  'discovery.k8s.io/EndpointSlice',
+])
+
 const deniedWorkloadWrites: WorkloadWritePermissions = {
   deployments: false,
   daemonSets: false,
   statefulSets: false,
   rollouts: false,
+}
+
+function resourceCountKey(kind: NonNullable<SelectedKindInfo>): string {
+  return kind.group ? `${kind.group}/${kind.kind}` : kind.kind
 }
 
 export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces }: ResourcesViewProps) {
@@ -93,7 +105,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Lightweight resource counts for sidebar badges (~2KB instead of ~608MB)
   const namespacesParam = namespaces.join(',')
-  const { data: countsData } = useQuery({
+  const { data: countsData, isError: countsIsError } = useQuery({
     queryKey: ['resource-counts', namespacesParam],
     queryFn: async () => {
       const params = new URLSearchParams()
@@ -122,6 +134,26 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       ?? CORE_RESOURCES.find(r => r.name === selectedKind.name && r.group === selectedKind.group)
     return match?.isCrd ?? (!!selectedKind.group) // default: has group = likely CRD
   }, [selectedKind, apiResources])
+
+  const selectedCountKey = selectedKind ? resourceCountKey(selectedKind) : ''
+  const selectedCount = selectedCountKey ? countsData?.counts[selectedCountKey] : undefined
+  const isSelectedKindGuarded = selectedCountKey !== '' && LARGE_RESOURCE_LIST_GUARD_KEYS.has(selectedCountKey)
+  const waitingForGuardCount = isSelectedKindGuarded && !countsData && !countsIsError
+  const largeListBlocked = isSelectedKindGuarded && countsData != null && (selectedCount ?? 0) > LARGE_RESOURCE_LIST_LIMIT
+  const selectedKindQueryBlocked = waitingForGuardCount || largeListBlocked
+  const podCount = countsData?.counts.Pod
+  const podCountAllowsBulkMetrics = countsData != null && (podCount ?? 0) <= LARGE_RESOURCE_LIST_LIMIT
+  const selectedKindName = selectedKind?.name.toLowerCase() ?? ''
+  const topPodMetricsEnabled = selectedKindName === 'pods' && podCountAllowsBulkMetrics
+  const topNodeMetricsEnabled = selectedKindName === 'nodes' && namespaces.length === 0 && podCountAllowsBulkMetrics
+  const largeListGuard = selectedKind && largeListBlocked
+    ? {
+        kind: selectedKind.name,
+        count: selectedCount,
+        limit: LARGE_RESOURCE_LIST_LIMIT,
+        namespaces,
+      }
+    : null
 
   // Fetch full data only for the selected kind
   const selectedKindQuery = useQuery({
@@ -156,7 +188,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       }
       return res.json()
     },
-    enabled: !!selectedKind,
+    enabled: !!selectedKind && !selectedKindQueryBlocked,
     staleTime: 30000,
     refetchInterval: 120000, // Safety net — SSE k8s_event drives near-real-time invalidation
     retry: (failureCount: number, error: Error) => {
@@ -169,17 +201,17 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const selectedKindQueryResult: ResourceQueryResult | undefined = useMemo(() => {
     if (!selectedKind) return undefined
     return {
-      data: selectedKindQuery.data as any[] | undefined,
-      isLoading: selectedKindQuery.isLoading,
-      error: selectedKindQuery.error,
+      data: selectedKindQueryBlocked ? [] : selectedKindQuery.data as any[] | undefined,
+      isLoading: waitingForGuardCount || selectedKindQuery.isLoading,
+      error: selectedKindQueryBlocked ? undefined : selectedKindQuery.error,
       refetch: selectedKindQuery.refetch,
       dataUpdatedAt: selectedKindQuery.dataUpdatedAt,
     }
-  }, [selectedKind, selectedKindQuery.data, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
+  }, [selectedKind, selectedKindQueryBlocked, waitingForGuardCount, selectedKindQuery.data, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
 
   // Metrics
-  const { data: topPodMetrics } = useTopPodMetrics()
-  const { data: topNodeMetrics } = useTopNodeMetrics()
+  const { data: topPodMetrics } = useTopPodMetrics({ enabled: topPodMetricsEnabled, namespaces })
+  const { data: topNodeMetrics } = useTopNodeMetrics({ enabled: topNodeMetricsEnabled })
 
   // Certificate expiry
   const { data: certExpiry, isError: certExpiryError } = useSecretCertExpiry()
@@ -249,6 +281,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       resourceCounts={countsData?.counts}
       resourceForbidden={countsData?.forbidden}
       selectedKindQuery={selectedKindQueryResult}
+      largeListGuard={largeListGuard}
       onSelectedKindChange={setSelectedKind}
       topPodMetrics={topPodMetrics}
       topNodeMetrics={topNodeMetrics}

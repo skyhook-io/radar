@@ -1813,6 +1813,19 @@ export interface ResourceQueryResult {
   dataUpdatedAt?: number
 }
 
+export interface LargeListGuardState {
+  kind: string
+  count?: number
+  limit: number
+  namespaces: string[]
+}
+
+function formatLargeListScope(namespaces: string[]): string {
+  if (namespaces.length === 0) return 'all namespaces'
+  if (namespaces.length === 1) return namespaces[0]
+  return `${namespaces.length.toLocaleString()} namespaces`
+}
+
 interface ResourcesViewProps {
   namespaces: string[]
   selectedResource?: SelectedResource | null
@@ -1828,6 +1841,7 @@ interface ResourcesViewProps {
   resourceForbidden?: string[]
   // Single query for the currently selected kind's full data
   selectedKindQuery?: ResourceQueryResult
+  largeListGuard?: LargeListGuardState | null
   topPodMetrics?: TopPodMetrics[]
   topNodeMetrics?: TopNodeMetrics[]
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
@@ -2043,6 +2057,7 @@ export function ResourcesView({
   resourceCounts: resourceCountsProp,
   resourceForbidden: resourceForbiddenProp,
   selectedKindQuery: selectedKindQueryProp,
+  largeListGuard,
   topPodMetrics,
   topNodeMetrics,
   certExpiry,
@@ -4483,6 +4498,23 @@ export function ResourcesView({
               <Shield className="w-8 h-8 text-amber-400 mb-2" />
               <p className="text-theme-text-secondary font-medium">Access Restricted</p>
               <p className="text-sm mt-1">Insufficient permissions to list {selectedKind.kind} resources</p>
+            </div>
+          ) : largeListGuard ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary px-6 text-center">
+              <AlertTriangle className="w-8 h-8 text-amber-400 mb-2" />
+              <p className="text-theme-text-secondary font-medium">
+                Too many {largeListGuard.kind.toLowerCase()} to show
+              </p>
+              <p className="text-sm mt-1 max-w-xl">
+                {largeListGuard.count?.toLocaleString()} {largeListGuard.kind.toLowerCase()} are in the current scope.
+                Choose a namespace or smaller namespace set to load this view.
+              </p>
+              <p className="text-xs mt-2 text-theme-text-disabled">
+                Radar limits full table loads to {largeListGuard.limit.toLocaleString()} resources to keep the UI responsive.
+              </p>
+              <p className="text-xs mt-2 text-theme-text-disabled">
+                Scope: {formatLargeListScope(largeListGuard.namespaces)}
+              </p>
             </div>
           ) : filteredResources.length === 0 ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary">

@@ -2091,6 +2091,11 @@ func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, []k8s.TopPodMetrics{})
+		return
+	}
 
 	// Build metrics lookup (may be empty if metrics-server is unavailable)
 	metricsMap := make(map[string]*k8s.TopPodMetrics)
@@ -2107,17 +2112,34 @@ func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
 		// No cache — return metrics-only data
 		result := make([]k8s.TopPodMetrics, 0, len(metricsMap))
 		for _, m := range metricsMap {
+			if !namespaceAllowed(namespaces, m.Namespace) {
+				continue
+			}
 			result = append(result, *m)
 		}
 		s.writeJSON(w, result)
 		return
 	}
 
-	pods, err := cache.Pods().List(labels.Everything())
-	if err != nil {
-		log.Printf("[metrics] Failed to list pods for top pods: %v", err)
-		s.writeError(w, http.StatusInternalServerError, "Failed to list pods")
-		return
+	var pods []*corev1.Pod
+	if namespaces == nil {
+		var err error
+		pods, err = cache.Pods().List(labels.Everything())
+		if err != nil {
+			log.Printf("[metrics] Failed to list pods for top pods: %v", err)
+			s.writeError(w, http.StatusInternalServerError, "Failed to list pods")
+			return
+		}
+	} else {
+		for _, ns := range namespaces {
+			items, err := cache.Pods().Pods(ns).List(labels.Everything())
+			if err != nil {
+				log.Printf("[metrics] Failed to list pods for top pods in filtered namespace: %v", err)
+				s.writeError(w, http.StatusInternalServerError, "Failed to list pods")
+				return
+			}
+			pods = append(pods, items...)
+		}
 	}
 
 	result := make([]k8s.TopPodMetrics, 0, len(pods))
