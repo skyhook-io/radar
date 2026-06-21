@@ -122,7 +122,7 @@ export interface DashboardProblem {
   namespace: string
   name: string
   group?: string
-  severity: 'critical' | 'high' | 'medium'
+  severity: 'critical' | 'high' | 'medium' | 'warning' | 'info'
   reason: string
   message: string
   age: string
@@ -341,8 +341,9 @@ export function useAudit(namespaces: string[] = []) {
 
 // Live cluster Issues — the grouped triage queue (radar's /api/issues =
 // internal/issues.Compose+Classify+Group). Single-cluster here; the Hub fleet
-// view fans the same shape across clusters. keepPreviousData semantics via
-// placeholderData so the queue doesn't flash empty on the 30s refresh.
+// view fans the same shape across clusters. Do not carry old data across query
+// keys: issues are scope-sensitive, so namespace changes must not show the
+// previous scope's rows while the new scope fetches.
 // total = rows returned (after the cap); total_matched = rows that matched
 // before the cap. total_matched > total means the queue was truncated — surface
 // that honestly rather than presenting a capped list as if it were complete.
@@ -365,7 +366,6 @@ export function useIssues(namespaces: string[] = []) {
     queryFn: () => fetchJSON(`/issues${params}`),
     staleTime: 30000,
     refetchInterval: 30000,
-    placeholderData: (prev) => prev,
   })
 }
 

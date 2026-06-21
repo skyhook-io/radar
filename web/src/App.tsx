@@ -1608,21 +1608,7 @@ function AppInner() {
               console.debug('[filters] App.onNavigateToResourceKind: navigating to', targetURL)
               navigate({ pathname: `/resources/${kind}`, search: newParams.toString() })
             }}
-            onNavigateToResource={(resource) => {
-              // Switch to resources view and open the resource detail drawer
-              setSelectedResource(resource)
-              const newParams = new URLSearchParams(searchParams)
-              newParams.delete('kind') // kind is now in the path
-              newParams.delete('mode')
-              newParams.delete('group')
-              newParams.delete('resource')
-              if (resource.group) {
-                newParams.set('apiGroup', resource.group)
-              } else {
-                newParams.delete('apiGroup')
-              }
-              navigate({ pathname: `/resources/${resource.kind}`, search: newParams.toString() })
-            }}
+            onNavigateToResource={navigateFromIssue}
           />
         )}
 

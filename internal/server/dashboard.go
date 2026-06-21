@@ -717,11 +717,18 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 
 	// Sort: critical first, then high, then medium; within each group sort by age (most recent first)
 	// "warning" is below medium — degraded states that aren't immediate
-	// failures. Listed explicitly so the Go zero-value (0) doesn't accidentally
-	// sort warnings ahead of critical when an unknown severity is encountered.
-	severityOrder := map[string]int{"critical": 0, "high": 1, "medium": 2, "warning": 3}
+	// failures. Info is inert/posture and ranks last. Unknown severities also
+	// rank last instead of falling through to Go's zero value beside critical.
+	severityOrder := map[string]int{"critical": 0, "high": 1, "medium": 2, "warning": 3, "info": 4}
 	sort.SliceStable(problems, func(i, j int) bool {
-		si, sj := severityOrder[problems[i].Severity], severityOrder[problems[j].Severity]
+		si, ok := severityOrder[problems[i].Severity]
+		if !ok {
+			si = len(severityOrder)
+		}
+		sj, ok := severityOrder[problems[j].Severity]
+		if !ok {
+			sj = len(severityOrder)
+		}
 		if si != sj {
 			return si < sj
 		}

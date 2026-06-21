@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { DashboardResponse, DashboardMetrics, DashboardCRDCount, DashboardProblem } from '../../api/client'
+import type { DashboardResponse, DashboardMetrics, DashboardCRDCount } from '../../api/client'
 import { HealthRing } from './HealthRing'
 import {
   AlertTriangle, CheckCircle, XCircle,
@@ -23,12 +23,13 @@ interface ClusterHealthCardProps {
   metrics: DashboardMetrics | null
   metricsServerAvailable: boolean
   topCRDs?: DashboardCRDCount[] // Loaded lazily, may be undefined
-  problems: DashboardProblem[]
+  issueCount: number
+  hasCriticalIssues: boolean
   nodeVersionSkew: DashboardResponse['nodeVersionSkew']
   onNavigateToKind: (kind: string, group?: string) => void
   onNavigateToView: () => void
   onWarningEventsClick?: () => void
-  onUnhealthyClick?: () => void
+  onIssuesClick?: () => void
 }
 
 function getMetricsInstallHint(platform: string): string {
@@ -113,12 +114,13 @@ export function ClusterHealthCard({
   metrics,
   metricsServerAvailable,
   topCRDs: _topCRDs,
-  problems,
+  issueCount,
+  hasCriticalIssues,
   nodeVersionSkew,
   onNavigateToKind,
   onNavigateToView,
   onWarningEventsClick,
-  onUnhealthyClick,
+  onIssuesClick,
 }: ClusterHealthCardProps) {
   void _topCRDs // Reserved for future CRD display
 
@@ -450,14 +452,14 @@ export function ClusterHealthCard({
               <span><span className="font-mono">{health.warningEvents}</span> Warning Events</span>
             </button>
           )}
-          {problems.length > 0 && (
+          {issueCount > 0 && (
             <button
-              onClick={onUnhealthyClick}
-              title="View timeline of unhealthy/degraded workload events"
-              className="badge status-unhealthy w-fit gap-1.5 hover:opacity-80 transition-opacity"
+              onClick={onIssuesClick}
+              title="View grouped live operational issues"
+              className={clsx('badge w-fit gap-1.5 hover:opacity-80 transition-opacity', hasCriticalIssues ? 'status-unhealthy' : 'status-degraded')}
             >
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-              <span>View unhealthy workload events</span>
+              <span>{pluralize(issueCount, 'Active Issue')}</span>
             </button>
           )}
         </div>
