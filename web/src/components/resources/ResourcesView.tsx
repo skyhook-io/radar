@@ -23,6 +23,7 @@ import { getSkeletonYaml } from '../../utils/skeleton-yaml'
 interface ResourceCountsResponse {
   counts: Record<string, number>
   forbidden?: string[]
+  unavailable?: string[]
 }
 
 interface ResourcesViewProps {
@@ -137,19 +138,22 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   const selectedCountKey = selectedKind ? resourceCountKey(selectedKind) : ''
   const selectedCount = selectedCountKey ? countsData?.counts[selectedCountKey] : undefined
+  const selectedCountUnavailable = selectedCountKey ? countsData?.unavailable?.includes(selectedCountKey) ?? false : false
   const isSelectedKindGuarded = selectedCountKey !== '' && LARGE_RESOURCE_LIST_GUARD_KEYS.has(selectedCountKey)
   const waitingForGuardCount = isSelectedKindGuarded && !countsData && !countsIsError
-  const largeListBlocked = isSelectedKindGuarded && countsData != null && (selectedCount ?? 0) > LARGE_RESOURCE_LIST_LIMIT
+  const largeListBlocked = isSelectedKindGuarded && countsData != null && (selectedCountUnavailable || (selectedCount ?? 0) > LARGE_RESOURCE_LIST_LIMIT)
   const selectedKindQueryBlocked = waitingForGuardCount || largeListBlocked
   const podCount = countsData?.counts.Pod
-  const podCountAllowsBulkMetrics = countsData != null && (podCount ?? 0) <= LARGE_RESOURCE_LIST_LIMIT
+  const podCountUnavailable = countsData?.unavailable?.includes('Pod') ?? false
+  const podCountAllowsBulkMetrics = countsData != null && !podCountUnavailable && (podCount ?? 0) <= LARGE_RESOURCE_LIST_LIMIT
   const selectedKindName = selectedKind?.name.toLowerCase() ?? ''
   const topPodMetricsEnabled = selectedKindName === 'pods' && podCountAllowsBulkMetrics
   const topNodeMetricsEnabled = selectedKindName === 'nodes' && namespaces.length === 0 && podCountAllowsBulkMetrics
   const largeListGuard = selectedKind && largeListBlocked
     ? {
         kind: selectedKind.name,
-        count: selectedCount,
+        count: selectedCountUnavailable ? undefined : selectedCount,
+        reason: selectedCountUnavailable ? 'count-unavailable' as const : 'too-many' as const,
         limit: LARGE_RESOURCE_LIST_LIMIT,
         namespaces,
       }
@@ -280,6 +284,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       // Lightweight counts for sidebar (replaces 233 parallel queries)
       resourceCounts={countsData?.counts}
       resourceForbidden={countsData?.forbidden}
+      resourceUnavailable={countsData?.unavailable}
       selectedKindQuery={selectedKindQueryResult}
       largeListGuard={largeListGuard}
       onSelectedKindChange={setSelectedKind}

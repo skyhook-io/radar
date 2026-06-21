@@ -34,7 +34,8 @@ export interface ResourcesSidebarProps {
   onSelectedKindChange: (kind: SelectedKindInfo) => void
   onKindChange?: () => void
   apiResources?: APIResource[]
-  resourceCounts?: Record<string, number>
+  resourceCounts?: Record<string, number | null>
+  resourceUnavailable?: string[]
   resourceForbidden?: string[]
   pinned?: PinnedItem[]
   togglePin?: (item: PinnedItem) => void
@@ -176,6 +177,7 @@ export function ResourcesSidebar({
   onKindChange,
   apiResources,
   resourceCounts,
+  resourceUnavailable,
   resourceForbidden,
   pinned = [],
   togglePin = () => {},
@@ -257,11 +259,11 @@ export function ResourcesSidebar({
     }))
   }, [categories])
 
-  // null for a key means "not loaded yet" (rendered as a placeholder
-  // dash in the badge). 0 means "the API replied and confirmed there
-  // are zero of this kind". Don't conflate them — otherwise the
-  // sidebar shows a confident "0" for every kind while the count
-  // payload is still in flight.
+  const unavailableKinds = useMemo(() => new Set(resourceUnavailable ?? []), [resourceUnavailable])
+
+  // null for a key means "count unknown/unavailable" (rendered as a
+  // placeholder dash in the badge). 0 means "the API replied and
+  // confirmed there are zero of this kind".
   const counts = useMemo(() => {
     const results: Record<string, number | null> = {}
     if (!resourceCounts) {
@@ -273,15 +275,16 @@ export function ResourcesSidebar({
     }
     for (const resource of resourcesToCount) {
       const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
-      const v = resourceCounts[key]
-      // Treat missing keys in a present resourceCounts payload as
-      // "the API replied and didn't include this kind" → 0. Treat the
-      // entire payload being absent as "not loaded" → null (handled
-      // above).
-      results[key] = v ?? 0
+      if (unavailableKinds.has(key)) {
+        results[key] = null
+      } else if (key in resourceCounts) {
+        results[key] = resourceCounts[key] ?? null
+      } else {
+        results[key] = 0
+      }
     }
     return results
-  }, [resourcesToCount, resourceCounts])
+  }, [resourcesToCount, resourceCounts, unavailableKinds])
 
   // Track which resource kinds returned 403 Forbidden
   const forbiddenKinds = useMemo(() => {

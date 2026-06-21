@@ -20,6 +20,9 @@ import (
 )
 
 var ErrResourceNotFound = errors.New("resource not found")
+var ErrResourceCountUnavailable = errors.New("resource count unavailable")
+
+const directCountProbeLimit int64 = 2
 
 // informerKey identifies one informer. ns == "" means a cluster-wide watch;
 // a non-empty ns is a namespace-scoped watch. A GVR can have one cluster-wide
@@ -761,6 +764,83 @@ func (d *DynamicResourceCache) Count(gvr schema.GroupVersionResource, namespaces
 	return total, nil
 }
 
+// CountWatched returns cached object counts for every currently watched and
+// synced GVR. It never starts informers and never probes the apiserver.
+func (d *DynamicResourceCache) CountWatched(namespaces []string) map[schema.GroupVersionResource]int {
+	if d == nil {
+		return nil
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	type watchedSet struct {
+		clusterWide *informerEntry
+		byNamespace map[string]*informerEntry
+	}
+	byGVR := make(map[schema.GroupVersionResource]*watchedSet)
+	for k, e := range d.informers {
+		if !e.informer.HasSynced() {
+			continue
+		}
+		set := byGVR[k.gvr]
+		if set == nil {
+			set = &watchedSet{byNamespace: make(map[string]*informerEntry)}
+			byGVR[k.gvr] = set
+		}
+		if k.ns == "" {
+			set.clusterWide = e
+		} else {
+			set.byNamespace[k.ns] = e
+		}
+	}
+
+	counts := make(map[schema.GroupVersionResource]int)
+	for gvr, set := range byGVR {
+		if len(namespaces) == 0 {
+			if set.clusterWide != nil {
+				counts[gvr] = len(set.clusterWide.informer.GetIndexer().List())
+				continue
+			}
+			if d.config.NamespaceFallback == "" {
+				continue
+			}
+			total := 0
+			for _, e := range set.byNamespace {
+				total += len(e.informer.GetIndexer().List())
+			}
+			counts[gvr] = total
+			continue
+		}
+		if set.clusterWide != nil {
+			n, err := countByNamespaces(set.clusterWide, namespaces)
+			if err == nil {
+				counts[gvr] = n
+			}
+			continue
+		}
+		total := 0
+		complete := true
+		for _, ns := range namespaces {
+			e, ok := set.byNamespace[ns]
+			if !ok {
+				complete = false
+				break
+			}
+			n, err := countByNamespaces(e, []string{ns})
+			if err != nil {
+				complete = false
+				break
+			}
+			total += n
+		}
+		if complete {
+			counts[gvr] = total
+		}
+	}
+	return counts
+}
+
 func countByNamespaces(e *informerEntry, namespaces []string) (int, error) {
 	total := 0
 	for _, ns := range namespaces {
@@ -771,6 +851,97 @@ func countByNamespaces(e *informerEntry, namespaces []string) (int, error) {
 		total += len(items)
 	}
 	return total, nil
+}
+
+func (d *DynamicResourceCache) CountDirectProbe(ctx context.Context, gvr schema.GroupVersionResource, namespaces []string, maxNamespaces, concurrency int) (int, error) {
+	if d == nil {
+		return 0, fmt.Errorf("dynamic resource cache not initialized")
+	}
+	if d.config.DynamicClient == nil {
+		return 0, fmt.Errorf("dynamic client not initialized")
+	}
+	if len(namespaces) == 0 {
+		return d.countDirectProbeOne(ctx, gvr, "")
+	}
+	if maxNamespaces > 0 && len(namespaces) > maxNamespaces {
+		return 0, ErrResourceCountUnavailable
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > len(namespaces) {
+		concurrency = len(namespaces)
+	}
+
+	type result struct {
+		count int
+		err   error
+	}
+	jobs := make(chan string)
+	results := make(chan result, len(namespaces))
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ns := range jobs {
+				n, err := d.countDirectProbeOne(ctx, gvr, ns)
+				results <- result{count: n, err: err}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, ns := range namespaces {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- ns:
+			}
+		}
+	}()
+	wg.Wait()
+	close(results)
+
+	total := 0
+	for r := range results {
+		if r.err != nil {
+			return 0, r.err
+		}
+		total += r.count
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (d *DynamicResourceCache) countDirectProbeOne(ctx context.Context, gvr schema.GroupVersionResource, namespace string) (int, error) {
+	var list *unstructured.UnstructuredList
+	var err error
+	opts := metav1.ListOptions{Limit: directCountProbeLimit}
+	if namespace != "" {
+		list, err = d.config.DynamicClient.Resource(gvr).Namespace(namespace).List(ctx, opts)
+	} else {
+		list, err = d.config.DynamicClient.Resource(gvr).List(ctx, opts)
+	}
+	if err != nil {
+		if isAuthProbeError(err) {
+			return 0, ErrResourceCountUnavailable
+		}
+		return 0, fmt.Errorf("failed to probe resource count: %w", err)
+	}
+	if list == nil {
+		return 0, ErrResourceCountUnavailable
+	}
+	if remaining := list.GetRemainingItemCount(); remaining != nil {
+		return len(list.Items) + int(*remaining), nil
+	}
+	if list.GetContinue() == "" {
+		return len(list.Items), nil
+	}
+	return 0, ErrResourceCountUnavailable
 }
 
 // List returns all resources of a given GVR, optionally filtered by namespace.

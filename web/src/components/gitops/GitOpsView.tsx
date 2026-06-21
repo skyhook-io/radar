@@ -83,6 +83,7 @@ const KIND_BY_NAME = new Map(GITOPS_KINDS.map((k) => [k.name, k]))
 interface ResourceCountsResponse {
   counts: Record<string, number>
   forbidden?: string[]
+  unavailable?: string[]
 }
 
 interface GitOpsViewProps {
@@ -136,9 +137,9 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
     initNavigationMap([...(apiResources ?? []), ...GITOPS_KINDS])
   }, [apiResources])
 
-  // Counts come from radar's /api/resource-counts, kind-filtered to the
-  // GitOps set. The extracted GitOpsTableView reads them for the
-  // Scope-section mode tabs + the empty-state check.
+  // Counts come from radar's /api/resource-counts. The extracted
+  // GitOpsTableView reads only the GitOps keys for mode tabs + empty-state
+  // checks.
   const countsQuery = useQuery({
     queryKey: ['gitops-resource-counts', namespacesParam],
     queryFn: async () => {
@@ -271,6 +272,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading || coldRetrying}
         error={(rowsQuery.error as Error | null) ?? null}
         counts={countsQuery.data?.counts ?? {}}
+        countsUnavailable={countsQuery.data?.unavailable}
         onRefresh={() => rowsQuery.refetch()}
         onRowClick={(row) => {
           const ns = row.namespace || '_'
@@ -958,5 +960,3 @@ function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
     </div>
   )
 }
-
-

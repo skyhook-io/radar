@@ -72,11 +72,22 @@ export type GitOpsMode = 'applications' | 'sources' | 'projects' | 'alerts'
 // the Scope switcher stays hidden until a second category lands. A one-option
 // switcher is just noise (an always-selected pill that can't be changed).
 const AVAILABLE_MODES: GitOpsMode[] = ['applications']
+const GITOPS_COUNT_GROUP_PREFIXES = [
+  'argoproj.io/',
+  'source.toolkit.fluxcd.io/',
+  'kustomize.toolkit.fluxcd.io/',
+  'helm.toolkit.fluxcd.io/',
+  'notification.toolkit.fluxcd.io/',
+]
 export type GitOpsViewMode = 'table' | 'tiles'
 // 'urgency' is the curated DEFAULT order (what needs attention first) — not a
 // column, so no header shows it as active; clicking any header replaces it with
 // that column's own semantics.
 export type SortKey = 'urgency' | 'name' | 'health' | 'sync' | 'lastSync' | 'project'
+
+function isGitOpsCountKey(key: string): boolean {
+  return GITOPS_COUNT_GROUP_PREFIXES.some((prefix) => key.startsWith(prefix))
+}
 
 // Row-level actions surfaced from the table's three-dot menu. The set
 // mirrors what the detail page exposes today; callers wire the mutations
@@ -180,6 +191,7 @@ export interface GitOpsTableViewProps {
   // counts keyed "group/Kind" — e.g. "argoproj.io/Application" → 17. Drives
   // the Scope-section mode tabs and the empty-state check.
   counts: Record<string, number>
+  countsUnavailable?: string[]
   // Caller refresh — typically invalidates its useQuery + refetches.
   onRefresh?: () => void
   // Row click — caller routes to its own detail page. When the host also
@@ -262,6 +274,7 @@ export function GitOpsTableView({
   loading,
   error,
   counts,
+  countsUnavailable,
   onRefresh,
   onRowClick,
   rowHrefFor,
@@ -356,7 +369,14 @@ export function GitOpsTableView({
     projects: counts['argoproj.io/AppProject'] ?? 0,
     alerts: counts['notification.toolkit.fluxcd.io/Alert'] ?? 0,
   }
-  const totalGitOps = Object.values(counts).reduce((sum, n) => sum + n, 0)
+  const totalGitOps = Object.entries(counts).reduce(
+    (sum, [key, n]) => sum + (isGitOpsCountKey(key) ? n : 0),
+    0,
+  )
+  const hasUnavailableGitOpsCounts = useMemo(
+    () => (countsUnavailable ?? []).some(isGitOpsCountKey),
+    [countsUnavailable],
+  )
 
   const projects = useMemo(
     () => countValues(allRows.map((row) => row.project).filter(Boolean)),
@@ -484,7 +504,7 @@ export function GitOpsTableView({
   // Also require zero actual rows: the cold-cache retry can populate `rows`
   // before the separate counts map catches up, and a populated table must not
   // be hidden behind a "nothing here" screen.
-  if (totalGitOps === 0 && allRowsInput.length === 0 && !loading && !hasGlobalNamespaceFilter) {
+  if (totalGitOps === 0 && allRowsInput.length === 0 && !loading && !hasGlobalNamespaceFilter && !hasUnavailableGitOpsCounts) {
     return (
       <div className="flex h-full min-h-0 flex-1 items-start justify-center bg-theme-base px-4 pb-4 pt-[22vh]">
         <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">

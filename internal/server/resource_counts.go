@@ -1,19 +1,27 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"slices"
-	"sync"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type ResourceCountsResponse struct {
-	Counts    map[string]int `json:"counts"`
-	Forbidden []string       `json:"forbidden,omitempty"`
+	Counts      map[string]int `json:"counts"`
+	Forbidden   []string       `json:"forbidden,omitempty"`
+	Unavailable []string       `json:"unavailable,omitempty"`
 }
+
+const (
+	endpointSliceCountKey          = "discovery.k8s.io/EndpointSlice"
+	endpointSliceCountNamespaceCap = 50
+	endpointSliceCountConcurrency  = 8
+)
 
 func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
@@ -34,37 +42,28 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 
 	counts := make(map[string]int)
 	var forbidden []string
+	var unavailable []string
 
 	countEndpointSlices := func() {
 		dynamicCache := k8s.GetDynamicResourceCache()
 		if dynamicCache == nil {
+			unavailable = append(unavailable, endpointSliceCountKey)
 			return
 		}
 		gvr, ok := k8s.BuiltinGVR("endpointslices", "discovery.k8s.io")
 		if !ok {
+			unavailable = append(unavailable, endpointSliceCountKey)
 			return
 		}
-		total := 0
-		if len(namespaces) == 0 {
-			items, err := dynamicCache.ListDirect(r.Context(), gvr, "")
-			if err != nil {
+		total, err := dynamicCache.CountDirectProbe(r.Context(), gvr, namespaces, endpointSliceCountNamespaceCap, endpointSliceCountConcurrency)
+		if err != nil {
+			unavailable = append(unavailable, endpointSliceCountKey)
+			if !errors.Is(err, k8score.ErrResourceCountUnavailable) {
 				log.Printf("[resource-counts] Failed to count EndpointSlice: %v", err)
-				return
 			}
-			total = len(items)
-		} else {
-			for _, ns := range namespaces {
-				items, err := dynamicCache.ListDirect(r.Context(), gvr, ns)
-				if err != nil {
-					log.Printf("[resource-counts] Failed to count EndpointSlice in namespace %s: %v", ns, err)
-					continue
-				}
-				total += len(items)
-			}
+			return
 		}
-		if total > 0 {
-			counts["discovery.k8s.io/EndpointSlice"] = total
-		}
+		counts[endpointSliceCountKey] = total
 	}
 
 	for _, kl := range k8score.AllKindListers() {
@@ -90,12 +89,10 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		if kl.Kind() == "Namespace" && len(namespaces) > 0 {
 			n = len(namespaces)
 		}
-		if n > 0 {
-			counts[kl.CountKey()] = n
-		}
+		counts[kl.CountKey()] = n
 	}
 
-	// 2. Dynamic resources (CRDs) — counted concurrently since each Count() hits a separate informer indexer
+	// 2. Dynamic resources (CRDs) — report counts only for already-watched informers.
 	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
 	if discovery != nil && dynamicCache != nil {
@@ -103,15 +100,18 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("[resource-counts] Failed to discover API resources for CRD counts: %v", err)
 		} else {
-			// Deduplicate CRDs by group+kind
+			// Deduplicate CRDs by group+kind, keeping the most stable served version.
 			type crdInfo struct {
 				kind       string
 				group      string
 				resource   string
+				version    string
 				namespaced bool
+				gvr        schema.GroupVersionResource
 			}
 			seen := make(map[string]bool)
-			var crds []crdInfo
+			crds := make(map[string]crdInfo)
+			var order []string
 			for _, res := range resources {
 				if !res.IsCRD {
 					continue
@@ -125,51 +125,54 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 				key := res.Group + "/" + res.Kind
 				if !seen[key] {
 					seen[key] = true
-					crds = append(crds, crdInfo{kind: res.Kind, group: res.Group, resource: res.Name, namespaced: res.Namespaced})
+					order = append(order, key)
+					crds[key] = crdInfo{
+						kind:       res.Kind,
+						group:      res.Group,
+						resource:   res.Name,
+						version:    res.Version,
+						namespaced: res.Namespaced,
+						gvr:        schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name},
+					}
+				} else if k8score.IsMoreStableVersion(res.Version, crds[key].version) {
+					crds[key] = crdInfo{
+						kind:       res.Kind,
+						group:      res.Group,
+						resource:   res.Name,
+						version:    res.Version,
+						namespaced: res.Namespaced,
+						gvr:        schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name},
+					}
 				}
 			}
 
-			var mu sync.Mutex
-			var wg sync.WaitGroup
-			for _, crd := range crds {
-				wg.Add(1)
-				go func(c crdInfo) {
-					defer wg.Done()
-					gvr, ok := discovery.GetGVRWithGroup(c.kind, c.group)
-					if !ok {
-						return
-					}
-					ns := namespaces
-					if !c.namespaced {
-						// Cluster-scoped CRD: per-kind SAR gate before
-						// listing cluster-wide. Mirrors the dashboard's
-						// collectClusterScopedCRDCounts.
-						if !s.canRead(r, c.group, c.resource, "", "list") {
-							return
-						}
-						ns = nil
-					}
-					n, err := dynamicCache.Count(gvr, ns)
-					if err != nil {
-						log.Printf("[resource-counts] Failed to count CRD %s/%s: %v", c.group, c.kind, err)
-						return
-					}
-					if n == 0 {
-						return
-					}
-					countKey := c.group + "/" + c.kind
-					mu.Lock()
-					counts[countKey] = n
-					mu.Unlock()
-				}(crd)
+			watchedCounts := dynamicCache.CountWatched(namespaces)
+			clusterScopedWatchedCounts := watchedCounts
+			if len(namespaces) > 0 {
+				clusterScopedWatchedCounts = dynamicCache.CountWatched(nil)
 			}
-			wg.Wait()
+			for _, key := range order {
+				crd := crds[key]
+				countSource := watchedCounts
+				if !crd.namespaced {
+					if !s.canRead(r, crd.group, crd.resource, "", "list") {
+						continue
+					}
+					countSource = clusterScopedWatchedCounts
+				}
+				if n, ok := countSource[crd.gvr]; ok {
+					counts[key] = n
+					continue
+				}
+				unavailable = append(unavailable, key)
+			}
 		}
 	}
 	countEndpointSlices()
 
 	s.writeJSON(w, ResourceCountsResponse{
-		Counts:    counts,
-		Forbidden: forbidden,
+		Counts:      counts,
+		Forbidden:   forbidden,
+		Unavailable: unavailable,
 	})
 }

@@ -1816,6 +1816,7 @@ export interface ResourceQueryResult {
 export interface LargeListGuardState {
   kind: string
   count?: number
+  reason?: 'too-many' | 'count-unavailable'
   limit: number
   namespaces: string[]
 }
@@ -1839,6 +1840,7 @@ interface ResourcesViewProps {
   // Lightweight counts for sidebar badges (from /api/resource-counts)
   resourceCounts?: Record<string, number>
   resourceForbidden?: string[]
+  resourceUnavailable?: string[]
   // Single query for the currently selected kind's full data
   selectedKindQuery?: ResourceQueryResult
   largeListGuard?: LargeListGuardState | null
@@ -2056,6 +2058,7 @@ export function ResourcesView({
   resourceQueries: resourceQueriesProp,
   resourceCounts: resourceCountsProp,
   resourceForbidden: resourceForbiddenProp,
+  resourceUnavailable: resourceUnavailableProp,
   selectedKindQuery: selectedKindQueryProp,
   largeListGuard,
   topPodMetrics,
@@ -3252,22 +3255,29 @@ export function ResourcesView({
   const counts = useMemo(() => {
     if (useNewCountsMode) {
       // resourceCountsProp uses "group/Kind" keys for CRDs, "Kind" for core — same format as sidebar
-      const results: Record<string, number> = {}
+      const unavailableKinds = new Set(resourceUnavailableProp ?? [])
+      const results: Record<string, number | null> = {}
       for (const resource of resourcesToCount) {
         const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
-        results[key] = resourceCountsProp![key] ?? 0
+        if (unavailableKinds.has(key)) {
+          results[key] = null
+        } else if (key in resourceCountsProp!) {
+          results[key] = resourceCountsProp![key]
+        } else {
+          results[key] = 0
+        }
       }
       return results
     }
     // Legacy: derive counts from full query data
-    const results: Record<string, number> = {}
+    const results: Record<string, number | null> = {}
     resourcesToCount.forEach((resource, index) => {
       const data = resourceQueries[index]?.data
       const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
       results[key] = Array.isArray(data) ? data.length : 0
     })
     return results
-  }, [useNewCountsMode, resourcesToCount, resourceCountsProp, resourceQueries])
+  }, [useNewCountsMode, resourcesToCount, resourceCountsProp, resourceUnavailableProp, resourceQueries])
 
   // Track which resource kinds returned 403 Forbidden
   const forbiddenKinds = useMemo(() => {
@@ -4002,6 +4012,7 @@ export function ResourcesView({
           apiResources={apiResourcesProp}
           resourceCounts={counts}
           resourceForbidden={Array.from(forbiddenKinds)}
+          resourceUnavailable={resourceUnavailableProp}
           pinned={pinned}
           togglePin={togglePin}
           isPinned={isPinned}
@@ -4503,11 +4514,14 @@ export function ResourcesView({
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary px-6 text-center">
               <AlertTriangle className="w-8 h-8 text-amber-400 mb-2" />
               <p className="text-theme-text-secondary font-medium">
-                Too many {largeListGuard.kind.toLowerCase()} to show
+                {largeListGuard.reason === 'count-unavailable'
+                  ? `${largeListGuard.kind} count unavailable`
+                  : `Too many ${largeListGuard.kind.toLowerCase()} to show`}
               </p>
               <p className="text-sm mt-1 max-w-xl">
-                {largeListGuard.count?.toLocaleString()} {largeListGuard.kind.toLowerCase()} are in the current scope.
-                Choose a namespace or smaller namespace set to load this view.
+                {largeListGuard.reason === 'count-unavailable'
+                  ? 'Radar could not verify this list is small enough to load. Choose a namespace or smaller namespace set to try again.'
+                  : `${largeListGuard.count?.toLocaleString()} ${largeListGuard.kind.toLowerCase()} are in the current scope. Choose a namespace or smaller namespace set to load this view.`}
               </p>
               <p className="text-xs mt-2 text-theme-text-disabled">
                 Radar limits full table loads to {largeListGuard.limit.toLocaleString()} resources to keep the UI responsive.
