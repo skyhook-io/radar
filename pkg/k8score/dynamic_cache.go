@@ -706,9 +706,9 @@ func entriesSynced(entries []*informerEntry) bool {
 // Count reads only what is already watched and synced; it does not start informers.
 //
 // A cluster-wide informer serves any namespace filter. Without one, Count can
-// only answer for explicitly-named namespaces (each must have its own synced
-// informer); counting "all" (nil namespaces) is unsupported in that mode and
-// returns a not-synced error rather than an incidental per-namespace union.
+// answer for explicitly-named namespaces when each has its own synced informer.
+// In namespace-fallback mode, Count(nil) unions the namespace-scoped informers
+// so it agrees with all-namespace reads.
 func (d *DynamicResourceCache) Count(gvr schema.GroupVersionResource, namespaces []string) (int, error) {
 	if d == nil {
 		return 0, fmt.Errorf("dynamic resource cache not initialized")
@@ -718,7 +718,7 @@ func (d *DynamicResourceCache) Count(gvr schema.GroupVersionResource, namespaces
 	defer d.mu.RUnlock()
 
 	if e, ok := d.informers[informerKey{gvr: gvr}]; ok {
-		if !e.synced {
+		if !e.informer.HasSynced() {
 			return 0, fmt.Errorf("informer not found or not synced for %v", gvr)
 		}
 		if len(namespaces) == 0 {
@@ -741,7 +741,7 @@ func (d *DynamicResourceCache) Count(gvr schema.GroupVersionResource, namespaces
 			if k.gvr != gvr {
 				continue
 			}
-			if !e.synced {
+			if !e.informer.HasSynced() {
 				return 0, fmt.Errorf("informer not found or not synced for %v", gvr)
 			}
 			found = true
@@ -756,7 +756,7 @@ func (d *DynamicResourceCache) Count(gvr schema.GroupVersionResource, namespaces
 	total := 0
 	for _, ns := range namespaces {
 		e, ok := d.informers[informerKey{gvr: gvr, ns: ns}]
-		if !ok || !e.synced {
+		if !ok || !e.informer.HasSynced() {
 			return 0, fmt.Errorf("informer not found or not synced for %v in namespace %s", gvr, ns)
 		}
 		n, err := countByNamespaces(e, []string{ns})
