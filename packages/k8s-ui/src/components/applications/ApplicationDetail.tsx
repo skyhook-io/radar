@@ -93,6 +93,13 @@ export type ApplicationDetailProps = {
   /** Env tokens the cluster proved (the list derives the same set) — keeps a
    *  ungrouped app's Environment fact consistent between list and detail. */
   discoveredEnvs?: ReadonlySet<string>
+  /** Which instance in `identityInstances` is active, by its `appKey`. Defaults
+   *  to `app.key` — correct for the OSS case, where each instance IS a distinct
+   *  app row keyed the same way. A host that keys instances on something other
+   *  than the app key (e.g. the Cloud fleet keys per cluster, while `app.key`
+   *  must stay the logical app key for provenance) passes the active instance's
+   *  key here so the switcher marks it. */
+  activeInstanceKey?: string
 } & SelectionProps
 
 function ContextFact({ label, children }: { label: string; children: ReactNode }) {
@@ -132,7 +139,7 @@ function compareDefinedVersions(a: string | undefined, b: string | undefined): n
   return compareVersions(a, b) ?? 0
 }
 
-export function ApplicationDetail({ app, onBack, renderWorkload, topology, topologyLoading, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, selectedWorkloadKey, onSelectWorkload }: ApplicationDetailProps) {
+export function ApplicationDetail({ app, onBack, renderWorkload, topology, topologyLoading, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, selectedWorkloadKey, onSelectWorkload }: ApplicationDetailProps) {
   // Stable order regardless of API ordering: rail rows and the per-workload
   // color assignment both follow this array, so an order flap between
   // refetches must not reshuffle rows or reassign a workload's hue.
@@ -286,7 +293,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
           // pills for a handful; a picker beyond that (scales to ~any count).
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">Environment</span>
-            <EnvSwitcher identityKey={app.identity?.key ?? ''} instances={identityInstances} activeKey={app.key} onSwitch={onSwitchInstance} />
+            <EnvSwitcher identityKey={app.identity?.key ?? ''} instances={identityInstances} activeKey={activeInstanceKey ?? app.key} onSwitch={onSwitchInstance} />
           </div>
         ) : env ? (
           <ContextFact label="Environment">
