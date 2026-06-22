@@ -178,6 +178,7 @@ jobs:
               token: dummy' > ~/.kube/config
 
       - name: Build Windows exe
+        shell: bash
         run: cd cmd/desktop && wails build -platform windows/amd64 -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
 
       - name: Create archive
