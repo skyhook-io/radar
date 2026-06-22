@@ -96,6 +96,56 @@ func TestDynamicResourceCache_CountDirectProbeUnavailableWithoutRemainingCount(t
 	}
 }
 
+func TestDynamicResourceCache_ProbeCountUsesRemainingCount(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "WidgetList"},
+	)
+	dyn.PrependReactor("list", "widgets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		remaining := int64(41)
+		list := &unstructured.UnstructuredList{
+			Items: []unstructured.Unstructured{{}},
+		}
+		list.SetRemainingItemCount(&remaining)
+		list.SetContinue("next")
+		return true, list, nil
+	})
+
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+
+	if got := d.ProbeCount(gvr); got != 42 {
+		t.Fatalf("ProbeCount = %d, want 42", got)
+	}
+}
+
+func TestDynamicResourceCache_ProbeCountDefersWithoutRemainingCount(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "WidgetList"},
+	)
+	dyn.PrependReactor("list", "widgets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		list := &unstructured.UnstructuredList{
+			Items: []unstructured.Unstructured{{}},
+		}
+		list.SetContinue("next")
+		return true, list, nil
+	})
+
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+
+	if got := d.ProbeCount(gvr); got != -2 {
+		t.Fatalf("ProbeCount = %d, want -2", got)
+	}
+}
+
 func TestDynamicResourceCache_CountDirectProbeSumsNamespacesAndCapsFanout(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(

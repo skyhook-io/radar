@@ -407,8 +407,12 @@ func (d *DynamicResourceCache) ProbeCount(gvr schema.GroupVersionResource) int {
 	}
 
 	count := len(list.Items)
-	if list.GetRemainingItemCount() != nil {
-		count += int(*list.GetRemainingItemCount())
+	if remaining := list.GetRemainingItemCount(); remaining != nil {
+		count += int(*remaining)
+		return count
+	}
+	if list.GetContinue() != "" {
+		return -2
 	}
 	return count
 }
