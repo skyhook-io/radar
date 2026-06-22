@@ -29,9 +29,16 @@ interface HomeViewProps {
   onNavigateToView: (view: ExtendedMainView, params?: Record<string, string>) => void
   onNavigateToResourceKind: (kind: string, group?: string, filters?: Record<string, string[]>) => void
   onNavigateToResource: (resource: SelectedResource) => void
+  /**
+   * Optional override for the Certificate Health card's click. When an embedded
+   * host (Radar Cloud) takes Certs over with its own fleet page, it passes this
+   * to route there instead of Radar's TLS-secrets resource list. Omitted in
+   * standalone OSS → the card drills into secrets as before.
+   */
+  onNavigateToCerts?: () => void
 }
 
-export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToResourceKind, onNavigateToResource }: HomeViewProps) {
+export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts }: HomeViewProps) {
   const { data, isLoading, error } = useDashboard(namespaces)
   const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError } = useIssues(namespaces)
   const issues = issuesData?.issues ?? []
@@ -165,7 +172,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
                   <BandItem>
                     <CertificateHealthCard
                       data={data.certificateHealth}
-                      onNavigate={() => onNavigateToResourceKind('secrets', undefined, { type: ['TLS'] })}
+                      onNavigate={onNavigateToCerts ?? (() => onNavigateToResourceKind('secrets', undefined, { type: ['TLS'] }))}
                     />
                   </BandItem>
                 )}

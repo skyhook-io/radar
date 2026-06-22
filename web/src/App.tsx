@@ -29,6 +29,7 @@ import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { useNavCustomization } from './context/NavCustomization'
+import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
@@ -276,21 +277,46 @@ function AppInner() {
     navigate({ pathname: path, search: newParams.toString() })
   }, [navigate, searchParams])
 
-  // Cloud (embedded) makes the host's fleet Checks queue the one canonical
-  // surface — owned by the host's left rail — so Radar drops its own Audit
-  // pill (see the nav below) and any route to /audit redirects to the fleet
-  // Checks queue scoped to this cluster. Entry points that still land on
-  // /audit — the Home "Cluster Audit" card, ⌘K, WorkloadView's "view all"
-  // findings, bookmarks/deep links — all funnel through here. `replace` (not
-  // assign) keeps the transient /audit URL out of history so Back doesn't
-  // bounce off the redirect. Standalone OSS (no clusterChecksHref) is
-  // unaffected and renders the in-app audit view as before.
+  // Cloud (embedded) takes over the "fleet-shaped" per-cluster views with its
+  // own fleet pages scoped to this cluster — owned by the host's left rail — so
+  // Radar drops the matching pills (see the nav below) and any route into one
+  // of these views redirects to the host. Entry points that still land on the
+  // view — Home cards, ⌘K, WorkloadView's "view all" findings, bookmarks/deep
+  // links — all funnel through here. The view name doubles as the takeover
+  // target ('issues' | 'gitops' | 'checks'; 'audit' normalizes to 'checks' via
+  // getViewFromPath). `replace` (not assign) keeps the transient /<view> URL
+  // out of history so Back doesn't bounce off the redirect. Standalone OSS (no
+  // fleetTakeoverHref) is unaffected and renders the in-app view as before.
+  // Resolve every takeover target's host URL ONCE per render so the redirect
+  // effect, nav-pill filtering, inline-view gating, and the cert click handler
+  // all close over the SAME value — host callbacks aren't guaranteed idempotent
+  // (scope / flags / signed URLs can shift between calls). undefined = not taken
+  // over → Radar renders the view itself. `clusterChecksHref` is the deprecated
+  // pre-1.7 hook, folded into the 'checks' target for back-compat.
+  const fleetTakeoverHref = navCustomization.fleetTakeoverHref
   const clusterChecksHref = navCustomization.clusterChecksHref
+  const takeover: Record<FleetTakeoverTarget, string | undefined> = {
+    issues: fleetTakeoverHref?.('issues'),
+    gitops: fleetTakeoverHref?.('gitops'),
+    checks: fleetTakeoverHref?.('checks') ?? clusterChecksHref?.(),
+    certs: fleetTakeoverHref?.('certs'),
+  }
+  // Has the host claimed this view? View-shaped targets only ('certs' has no
+  // Radar view — only its Home card consults `takeover`). Used to drop the nav
+  // pill and gate the inline view render in favor of the "Opening…" splash.
+  const isViewTakenOver = (view: ExtendedMainView): boolean =>
+    (view === 'issues' || view === 'gitops' || view === 'checks') && !!takeover[view]
+  // The host's URL for the CURRENT view, if taken over. Drives the redirect
+  // effect and the "Opening…" splash.
+  const viewTakeoverHref =
+    mainView === 'issues' || mainView === 'gitops' || mainView === 'checks'
+      ? takeover[mainView]
+      : undefined
   useEffect(() => {
-    if (clusterChecksHref && mainView === 'checks') {
-      window.location.replace(clusterChecksHref())
+    if (viewTakeoverHref) {
+      window.location.replace(viewTakeoverHref)
     }
-  }, [clusterChecksHref, mainView])
+  }, [viewTakeoverHref])
 
   const [namespaces, setNamespaces] = useState<string[]>(getInitialState().namespaces)
   // For large clusters: force SSE to reconnect with namespace filter
@@ -1318,15 +1344,14 @@ function AppInner() {
             // command palette (⌘K). Remove this comment to restore it.
             { view: 'checks' as const, icon: ShieldCheck, label: 'Checks' },
           ] as const)
-            // In Cloud, Checks is a fleet-scoped feature owned by the host's
-            // left rail; the per-cluster view is just that fleet queue filtered
-            // to this cluster, so duplicating it as a peer pill here would be a
-            // second "Checks" that teleports out of the cluster shell. Drop the
-            // Audit tab when embedded — cluster-scoped access stays available
-            // via the Home "Cluster Audit" card (→ /audit, redirected to the
-            // scoped fleet Checks by the clusterChecksHref effect above), ⌘K,
-            // and bookmarks. Standalone OSS keeps the Audit tab.
-            .filter(({ view }) => !(view === 'checks' && clusterChecksHref))
+            // In Cloud, fleet-shaped views (Checks, Issues, GitOps) are owned by
+            // the host's left rail; the per-cluster view is just that fleet page
+            // filtered to this cluster, so duplicating it as a peer pill here
+            // would be a second copy that teleports out of the cluster shell.
+            // Drop any pill the host took over — cluster-scoped access stays
+            // available via the Home cards (redirected by the takeover effect
+            // above), ⌘K, and bookmarks. Standalone OSS keeps every pill.
+            .filter(({ view }) => !isViewTakenOver(view))
             .map(({ view, icon: Icon, label }) => (
             <Tooltip key={view} content={label} delay={100} position="bottom">
               <button
@@ -1611,6 +1636,15 @@ function AppInner() {
               navigate({ pathname: `/resources/${kind}`, search: newParams.toString() })
             }}
             onNavigateToResource={navigateFromIssue}
+            // Certs has no Radar view, so it can't ride the view-redirect effect
+            // above — wire the Certificate Health card straight to the host's
+            // fleet Certs page (scoped to this cluster) when claimed. `assign`
+            // (not replace): the user is navigating forward from a card, so this
+            // belongs in history. Omitted → the card falls back to Radar's own
+            // TLS-secrets resource list.
+            onNavigateToCerts={
+              takeover.certs ? () => window.location.assign(takeover.certs!) : undefined
+            }
           />
         )}
 
@@ -1765,8 +1799,9 @@ function AppInner() {
           />
         )}
 
-        {/* GitOps view */}
-        {mainView === 'gitops' && (
+        {/* GitOps view (inline only when the host hasn't taken it over — see
+            the takeover splash below). */}
+        {mainView === 'gitops' && !isViewTakenOver('gitops') && (
           <GitOpsView
             namespaces={namespaces}
             onOpenResource={(resource) => {
@@ -1796,17 +1831,21 @@ function AppInner() {
           <CostView onBack={() => setMainView('home')} />
         )}
 
-        {/* Best practices detail view. In Cloud this redirects to the host's
-            fleet Checks queue (clusterChecksHref effect above) — render a brief
-            splash instead of the single-cluster view while the cross-document
-            nav lands. */}
-        {mainView === 'checks' && clusterChecksHref && (
+        {/* Takeover splash. When the host claims the current view via
+            fleetTakeoverHref, the redirect effect above is mid-flight — render a
+            brief splash instead of the inline view (which would flash + fire its
+            own fetches) while the cross-document nav lands. Covers checks /
+            issues / gitops with one block since only one view is active. */}
+        {viewTakeoverHref && (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-theme-base">
             <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
-            <p className="text-sm text-theme-text-secondary">Opening Checks…</p>
+            <p className="text-sm text-theme-text-secondary">Opening…</p>
           </div>
         )}
-        {mainView === 'checks' && !clusterChecksHref && (
+
+        {/* Best practices detail view (inline only when the host hasn't taken
+            Checks over — standalone OSS, or Cloud without a checks takeover). */}
+        {mainView === 'checks' && !isViewTakenOver('checks') && (
           <AuditView
             namespaces={namespaces}
             onNavigateToResource={navigateToResourceList}
@@ -1816,8 +1855,9 @@ function AppInner() {
         {/* Issues — per-cluster live triage queue (hidden route: not yet in the
             nav `views` list; reachable at /issues). Same shared <IssuesView> the
             Hub fleet uses; a GitOps reconciler subject routes to its detail page,
-            other resources open the standard resource view. */}
-        {mainView === 'issues' && (
+            other resources open the standard resource view. Inline only when the
+            host hasn't taken it over. */}
+        {mainView === 'issues' && !isViewTakenOver('issues') && (
           <IssuesPane
             namespaces={namespaces}
             onNavigateToResource={navigateFromIssue}
