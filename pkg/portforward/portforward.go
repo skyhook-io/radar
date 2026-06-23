@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,7 +16,6 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 )
 
 // RunPortForward runs a SPDY port-forward from localPort to targetPort on the given pod.
@@ -35,12 +33,11 @@ func RunPortForward(ctx context.Context, client kubernetes.Interface, config *re
 			Ports: []int32{int32(targetPort)},
 		}, scheme.ParameterCodec)
 
-	transport, upgrader, err := spdy.RoundTripperFor(config)
+	dialer, err := portforward.NewSPDYOverWebsocketDialer(req.URL(), config)
 	if err != nil {
-		return fmt.Errorf("failed to create round tripper: %w", err)
+		return fmt.Errorf("failed to create dialer: %w", err)
 	}
 
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", req.URL())
 	ports := []string{fmt.Sprintf("%d:%d", localPort, targetPort)}
 
 	pf, err := portforward.New(dialer, ports, stopCh, readyCh, io.Discard, io.Discard)

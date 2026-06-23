@@ -5,13 +5,15 @@ import (
 	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// NewPodExecExecutor creates an SPDY executor for running commands in a pod container.
+// NewPodExecExecutor creates an executor for running commands in a pod container.
+// Tries WebSocket first (k8s ≥1.29); falls back to SPDY on upgrade failure for older clusters.
 // The caller uses the returned Executor to call StreamWithContext.
 func NewPodExecExecutor(client kubernetes.Interface, config *rest.Config, namespace, podName, containerName string, command []string, tty bool) (remotecommand.Executor, error) {
 	if client == nil {
@@ -28,15 +30,20 @@ func NewPodExecExecutor(client kubernetes.Interface, config *rest.Config, namesp
 			Stdin:     true,
 			Stdout:    true,
 			// When TTY is true, the terminal muxes stderr into stdout, so Stderr must be false.
-			// Setting both TTY and Stderr causes SPDY stream errors on some API servers; matches kubectl exec -it.
+			// Setting both TTY and Stderr causes stream errors on some API servers; matches kubectl exec -it.
 			Stderr: !tty,
 			TTY:    tty,
 		}, scheme.ParameterCodec)
 
-	executor, err := remotecommand.NewSPDYExecutor(config, http.MethodPost, req.URL())
+	wsExecutor, err := remotecommand.NewWebSocketExecutor(config, http.MethodGet, req.URL().String())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create exec executor for %s/%s/%s: %w", namespace, podName, containerName, err)
+		return nil, fmt.Errorf("failed to create websocket executor for %s/%s/%s: %w", namespace, podName, containerName, err)
 	}
 
-	return executor, nil
+	spdyExecutor, err := remotecommand.NewSPDYExecutor(config, http.MethodPost, req.URL())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create spdy executor for %s/%s/%s: %w", namespace, podName, containerName, err)
+	}
+
+	return remotecommand.NewFallbackExecutor(wsExecutor, spdyExecutor, httpstream.IsUpgradeFailure)
 }
