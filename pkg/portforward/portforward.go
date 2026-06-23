@@ -1,10 +1,7 @@
 // Package portforward provides low-level K8s port-forwarding primitives.
 // These are the pure K8s API building blocks: finding pods, finding ports,
-// and running tunnels. Tunnels try SPDY-over-WebSocket first (to traverse
-// proxies like Connect Gateway that reject raw SPDY upgrades) and fall back
-// to raw SPDY for clusters that predate the WebSocket port-forward subprotocol.
-// Lifecycle management and singleton state live in each consumer (e.g.,
-// Radar's internal/portforward for metrics proxying).
+// and running tunnels. Lifecycle management and singleton state live in each
+// consumer (e.g., Radar's internal/portforward for metrics proxying).
 package portforward
 
 import (
@@ -25,11 +22,9 @@ import (
 	"k8s.io/client-go/transport/spdy"
 )
 
-// NewDialer builds a port-forward dialer that tries SPDY-over-WebSocket first
-// and falls back to raw SPDY when the apiserver rejects the WebSocket upgrade.
-// WebSocket is required to traverse proxies like Connect Gateway (k8s ≥1.31);
-// the SPDY fallback keeps clusters older than the WebSocket port-forward
-// subprotocol (pre-1.30) working.
+// NewDialer builds a port-forward dialer that uses the WebSocket API
+// (SPDY-over-WebSocket), falling back to the legacy raw-SPDY API when the
+// apiserver doesn't support the WebSocket port-forward subprotocol.
 func NewDialer(config *rest.Config, u *url.URL) (httpstream.Dialer, error) {
 	wsDialer, err := portforward.NewSPDYOverWebsocketDialer(u, config)
 	if err != nil {

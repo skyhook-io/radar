@@ -1,7 +1,5 @@
-// Package remotecommand builds remote command executors that negotiate WebSocket first
-// and fall back to SPDY only when the apiserver rejects the WebSocket upgrade.
-// WebSocket is required to traverse proxies like Connect Gateway that reject
-// raw SPDY upgrades (k8s ≥1.31); the SPDY fallback keeps older clusters working.
+// Package remotecommand builds executors for running commands in pod containers
+// (exec, attach, cp).
 package remotecommand
 
 import (
@@ -12,8 +10,9 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// NewExecutor creates a WebSocket executor with SPDY fallback for clusters that
-// don't support WebSocket exec.
+// NewExecutor builds an executor that uses the WebSocket API, falling back to
+// the legacy SPDY API when the apiserver doesn't support the WebSocket exec
+// subprotocol.
 func NewExecutor(config *rest.Config, u *url.URL) (remotecommand.Executor, error) {
 	wsExec, err := remotecommand.NewWebSocketExecutor(config, "GET", u.String())
 	if err != nil {
