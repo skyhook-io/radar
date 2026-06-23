@@ -2,14 +2,14 @@ package k8score
 
 import (
 	"fmt"
-	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+
+	rce "github.com/skyhook-io/radar/pkg/remotecommand"
 )
 
 // NewPodExecExecutor creates an executor for running commands in a pod container.
@@ -35,15 +35,5 @@ func NewPodExecExecutor(client kubernetes.Interface, config *rest.Config, namesp
 			TTY:    tty,
 		}, scheme.ParameterCodec)
 
-	wsExecutor, err := remotecommand.NewWebSocketExecutor(config, http.MethodGet, req.URL().String())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create websocket executor for %s/%s/%s: %w", namespace, podName, containerName, err)
-	}
-
-	spdyExecutor, err := remotecommand.NewSPDYExecutor(config, http.MethodPost, req.URL())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create spdy executor for %s/%s/%s: %w", namespace, podName, containerName, err)
-	}
-
-	return remotecommand.NewFallbackExecutor(wsExecutor, spdyExecutor, httpstream.IsUpgradeFailure)
+	return rce.NewExecutor(config, req.URL())
 }

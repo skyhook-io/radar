@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"path"
 	"sort"
 	"strconv"
@@ -15,13 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/images"
+	rce "github.com/skyhook-io/radar/pkg/remotecommand"
 )
 
 // PodFilesystem represents the file listing response for a pod container
@@ -77,7 +75,7 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := newExecExecutor(config, req.URL())
+	exec, err := rce.NewExecutor(config, req.URL())
 	if err != nil {
 		log.Printf("[copy] Failed to create executor for %s/%s: %v", namespace, podName, err)
 		errorlog.Record("copy", "error", "failed to create executor for %s/%s: %v", namespace, podName, err)
@@ -90,7 +88,6 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
-
 	if err != nil {
 		// find failed — could be missing command, unsupported flags (e.g. -printf on BusyBox), etc.
 		// Always fall back to ls which is more universally available.
@@ -133,7 +130,7 @@ func (s *Server) listFilesWithLS(r *http.Request, namespace, podName, container,
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := newExecExecutor(config, req.URL())
+	exec, err := rce.NewExecutor(config, req.URL())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -195,7 +192,7 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := newExecExecutor(config, req.URL())
+	exec, err := rce.NewExecutor(config, req.URL())
 	if err != nil {
 		log.Printf("[copy] Failed to create executor for download %s/%s: %v", namespace, podName, err)
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create executor: %v", err))
@@ -207,7 +204,6 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
-
 	if err != nil {
 		errMsg := err.Error() + " " + stderr.String()
 		if isCommandNotFound(errMsg) {
@@ -292,7 +288,7 @@ func (s *Server) downloadWithCat(r *http.Request, namespace, podName, container,
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := newExecExecutor(config, req.URL())
+	exec, err := rce.NewExecutor(config, req.URL())
 	if err != nil {
 		return nil, err
 	}
@@ -307,19 +303,6 @@ func (s *Server) downloadWithCat(r *http.Request, namespace, podName, container,
 	}
 
 	return stdout.Bytes(), nil
-}
-
-// newExecExecutor creates a WebSocket executor with SPDY fallback for clusters that don't support WebSocket exec.
-func newExecExecutor(config *rest.Config, u *url.URL) (remotecommand.Executor, error) {
-	wsExec, err := remotecommand.NewWebSocketExecutor(config, "GET", u.String())
-	if err != nil {
-		return nil, err
-	}
-	spdyExec, err := remotecommand.NewSPDYExecutor(config, "POST", u)
-	if err != nil {
-		return nil, err
-	}
-	return remotecommand.NewFallbackExecutor(wsExec, spdyExec, httpstream.IsUpgradeFailure)
 }
 
 // parseFindOutput parses the output of find -printf '%y\t%s\t%T@\t%m\t%p\n'
