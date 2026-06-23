@@ -41,6 +41,7 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
@@ -488,6 +489,7 @@ func (s *Server) setupRoutes() {
 			// Config (persisted startup configuration)
 			r.Get("/config", s.handleGetConfig)
 			r.Put("/config", s.handlePutConfig)
+			r.Put("/integrations/prometheus", s.handleApplyPrometheusURL)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)
@@ -3774,6 +3776,59 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	result.PrometheusHeaders = nil
 	s.writeJSON(w, result)
+}
+
+// handleApplyPrometheusURL re-points the running Prometheus client at a new URL
+// immediately and persists it. The Prometheus URL is one of the few settings
+// that doesn't need a restart: the metrics path reads it from a mutable global
+// per query, so re-pointing it live is safe and saves operators a restart loop
+// when tuning discovery. Reset() drops the cached connection so the next probe
+// rediscovers against the new URL rather than reusing the old endpoint. The
+// response carries the live reachability result so the UI can confirm the URL
+// actually works. An empty URL reverts to auto-discovery.
+func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
+		return
+	}
+	if !s.requireConnected(w) {
+		return
+	}
+	var body struct {
+		PrometheusURL string `json:"prometheusUrl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	url := strings.TrimSpace(body.PrometheusURL)
+
+	prometheuspkg.SetManualURL(url)
+	traffic.SetMetricsURL(url)
+	prometheuspkg.Reset()
+
+	if _, err := config.Update(func(c *config.Config) { c.PrometheusURL = url }); err != nil {
+		log.Printf("[config] Failed to persist Prometheus URL: %v", err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	resp := struct {
+		Connected bool   `json:"connected"`
+		Address   string `json:"address,omitempty"`
+		Error     string `json:"error,omitempty"`
+	}{}
+	if client := prometheuspkg.GetClient(); client != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		defer cancel()
+		addr, _, err := client.EnsureConnected(ctx)
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.Connected = true
+			resp.Address = addr
+		}
+	}
+	s.writeJSON(w, resp)
 }
 
 // Debug handlers for event pipeline diagnostics

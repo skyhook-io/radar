@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock } from 'lucide-react'
+import { Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
@@ -336,7 +336,7 @@ function StartupConfigTab({
 
       <ConfigField
         label="Default Namespace"
-        help="Initial namespace filter on startup"
+        help="Startup default only — change the active namespace live anytime from the header switcher"
         value={config.namespace ?? ''}
         effectiveValue={effectiveConfig?.namespace}
         placeholder="All namespaces"
@@ -419,12 +419,8 @@ function StartupConfigTab({
         <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-3">Integrations</h4>
 
         <div className="space-y-4">
-          <ConfigField
-            label="Prometheus URL"
-            help="Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)"
+          <PrometheusConfigField
             value={config.prometheusUrl ?? ''}
-            effectiveValue={effectiveConfig?.prometheusUrl}
-            placeholder="http://prometheus-server.monitoring:9090"
             onChange={(v) => onChange('prometheusUrl', v || undefined)}
           />
         </div>
@@ -510,6 +506,103 @@ function MCPSection({
             </p>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+// -- Prometheus (live-appliable) ----------------------------------------------
+
+// Unlike the rest of this dialog, the Prometheus URL can be re-pointed without
+// a restart — the metrics path reads it from a mutable global. "Apply now" hits
+// PUT /integrations/prometheus, which persists the URL AND re-points the running
+// client, then probes it so we can confirm reachability inline. The global Save
+// still persists this field too (taking effect next launch, like everything
+// else); Apply is the shortcut to "now". No EffectiveHint here — the per-field
+// restart-diff hint would contradict the whole point of applying live.
+type ApplyState =
+  | { status: 'idle' }
+  | { status: 'applying' }
+  | { status: 'connected'; address: string }
+  | { status: 'error'; error: string }
+
+function PrometheusConfigField({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (value: string) => void
+}) {
+  const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
+
+  const handleApply = async () => {
+    setApply({ status: 'applying' })
+    try {
+      const res = await fetch(apiUrl('/integrations/prometheus'), {
+        method: 'PUT',
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ prometheusUrl: value.trim() }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setApply({ status: 'error', error: data?.error || res.statusText })
+        return
+      }
+      if (data?.connected) {
+        setApply({ status: 'connected', address: data.address || value.trim() })
+      } else {
+        setApply({ status: 'error', error: data?.error || 'not reachable' })
+      }
+    } catch (err) {
+      setApply({ status: 'error', error: String(err) })
+    }
+  }
+
+  return (
+    <div>
+      <label className="block text-sm font-medium text-theme-text-primary mb-1">
+        Prometheus URL
+      </label>
+      <p className="text-xs text-theme-text-tertiary mb-1">
+        Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)
+      </p>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value)
+            if (apply.status !== 'applying') setApply({ status: 'idle' })
+          }}
+          placeholder="http://prometheus-server.monitoring:9090"
+          className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+        />
+        <button
+          onClick={handleApply}
+          disabled={apply.status === 'applying'}
+          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated border border-theme-border rounded-md transition-colors disabled:opacity-50"
+          title="Apply this URL to the running server now — no restart"
+        >
+          {apply.status === 'applying'
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : <Plug className="w-3.5 h-3.5" />}
+          Apply now
+        </button>
+      </div>
+      {apply.status === 'connected' ? (
+        <p className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+          <Check className="w-3 h-3 shrink-0" />
+          Connected to {apply.address} — applied, no restart needed
+        </p>
+      ) : apply.status === 'error' ? (
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
+          Saved, but not reachable: {apply.error}
+        </p>
+      ) : (
+        <p className="mt-1 text-xs text-theme-text-tertiary">
+          Applies immediately — no restart needed.
+        </p>
       )}
     </div>
   )
