@@ -5,9 +5,9 @@ package remotecommand
 import (
 	"net/url"
 
-	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	streamhttp "k8s.io/streaming/pkg/httpstream"
 )
 
 // NewExecutor builds an executor that uses the WebSocket API, falling back to
@@ -22,5 +22,5 @@ func NewExecutor(config *rest.Config, u *url.URL) (remotecommand.Executor, error
 	if err != nil {
 		return nil, err
 	}
-	return remotecommand.NewFallbackExecutor(wsExec, spdyExec, httpstream.IsUpgradeFailure)
+	return remotecommand.NewFallbackExecutor(wsExec, spdyExec, streamhttp.IsUpgradeFailure)
 }

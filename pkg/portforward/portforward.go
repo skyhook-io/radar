@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+	streamhttp "k8s.io/streaming/pkg/httpstream"
 )
 
 // NewDialer builds a port-forward dialer that uses the WebSocket API
@@ -37,7 +38,9 @@ func NewDialer(config *rest.Config, u *url.URL) (httpstream.Dialer, error) {
 	}
 	spdyDialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", u)
 
-	return portforward.NewFallbackDialer(wsDialer, spdyDialer, httpstream.IsUpgradeFailure), nil
+	// The WebSocket dialer is built on k8s.io/streaming/pkg/httpstream, so a
+	// rejected upgrade surfaces as that package's UpgradeFailureError.
+	return portforward.NewFallbackDialer(wsDialer, spdyDialer, streamhttp.IsUpgradeFailure), nil
 }
 
 // RunPortForward runs a port-forward from localPort to targetPort on the given pod.
