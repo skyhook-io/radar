@@ -8,6 +8,7 @@ import {
   rbacApiGroupBadgeClass,
   rbacResourceNameBadgeClass,
   rbacNonResourceUrlBadgeClass,
+  type RBACWhoamiResponse,
 } from '@skyhook-io/k8s-ui'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
@@ -141,7 +142,7 @@ export function MyPermissionsDialog({ open, onClose }: MyPermissionsDialogProps)
   )
 }
 
-function PermissionsTable({ whoami }: { whoami: { resourceRules: any[]; nonResourceRules: any[] } }) {
+function PermissionsTable({ whoami }: { whoami: RBACWhoamiResponse }) {
   const resourceRules = whoami.resourceRules ?? []
   const nonResourceRules = whoami.nonResourceRules ?? []
 

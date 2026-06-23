@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState, useCallback, useRef } from 'react'
+import { useMemo, useEffect, useState, useCallback, useRef, type MutableRefObject } from 'react'
 import {
   ReactFlow,
   Background,
@@ -971,6 +971,33 @@ const nodeTypes = {
   addonGroup: AddonGroupNode,
 }
 
+// Fits the view once nodes have been laid out. Module-scope (not defined inside
+// TrafficGraph's render) so it keeps a stable identity — otherwise it remounts
+// every render and its effect churns. Must render inside <ReactFlow> for the
+// useReactFlow() context; the trigger state is passed in as props.
+function FitViewOnChange({
+  shouldFitViewRef,
+  layoutedNodes,
+}: {
+  shouldFitViewRef: MutableRefObject<boolean>
+  layoutedNodes: Node<TrafficNodeData>[]
+}) {
+  const { fitView } = useReactFlow()
+
+  useEffect(() => {
+    if (shouldFitViewRef.current && layoutedNodes.length > 0) {
+      // Small delay to ensure nodes are rendered
+      const timer = setTimeout(() => {
+        fitView({ padding: 0.2, duration: 200 })
+        shouldFitViewRef.current = false
+      }, 50)
+      return () => clearTimeout(timer)
+    }
+  }, [fitView, layoutedNodes, shouldFitViewRef])
+
+  return null
+}
+
 export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', onSelectionChange }: TrafficGraphProps) {
   const isIstio = trafficSource === 'istio'
   const connLabel = isIstio ? 'req/s' : 'conn'
@@ -1492,27 +1519,6 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     onSelectionChange?.(null)
   }, [onSelectionChange])
 
-  // FitView handler component - must be inside ReactFlow
-  const FitViewOnChange = () => {
-    const { fitView } = useReactFlow()
-
-    useEffect(() => {
-      if (shouldFitViewRef.current && layoutedNodes.length > 0) {
-        // Small delay to ensure nodes are rendered
-        const timer = setTimeout(() => {
-          fitView({ padding: 0.2, duration: 200 })
-          shouldFitViewRef.current = false
-        }, 50)
-        return () => clearTimeout(timer)
-      }
-      // layoutedNodes is outer-scope state read here to re-fit once nodes land;
-      // keeping it as a dep preserves that trigger.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [fitView, layoutedNodes])
-
-    return null
-  }
-
   return (
     <div className="w-full h-full relative">
       <ReactFlow
@@ -1538,7 +1544,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       >
         <Background />
         <Controls />
-        <FitViewOnChange />
+        <FitViewOnChange shouldFitViewRef={shouldFitViewRef} layoutedNodes={layoutedNodes} />
       </ReactFlow>
 
       {/* Legend */}
