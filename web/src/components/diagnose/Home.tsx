@@ -17,13 +17,34 @@ function relativeTime(ts: number, now: number): string {
 function statusDot(status: RunSummary["status"]) {
   if (status === "running")
     return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent" />;
+  // stopped (user-initiated) is neutral, NOT a failure — distinct from error.
   const color =
-    status === "error" || status === "stopped"
+    status === "error"
       ? "bg-red-400"
-      : status === "stale"
-        ? "bg-amber-400"
-        : "bg-emerald-400";
+      : status === "stopped"
+        ? "bg-theme-text-tertiary"
+        : status === "stale"
+          ? "bg-amber-400"
+          : "bg-emerald-400";
   return <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${color}`} />;
+}
+
+// A short text status for terminal non-done states, so the run's outcome doesn't
+// rely on decoding a 6px colored dot (and so "I stopped it" reads differently from
+// "it failed"). Done/running are conveyed by the dot + time already.
+function statusWord(
+  status: RunSummary["status"],
+): { text: string; cls: string } | null {
+  switch (status) {
+    case "error":
+      return { text: "Failed", cls: "text-red-400" };
+    case "stopped":
+      return { text: "Stopped", cls: "text-theme-text-tertiary" };
+    case "stale":
+      return { text: "Stale", cls: "text-amber-500" };
+    default:
+      return null;
+  }
 }
 
 export function RecentList({
@@ -80,9 +101,21 @@ export function RecentList({
               {r.name}
             </span>
             <span className="shrink-0 text-[11px] text-theme-text-tertiary">
-              {r.status === "running"
-                ? "running…"
-                : relativeTime(new Date(r.updatedAt).getTime(), now)}
+              {r.status === "running" ? (
+                "running…"
+              ) : (
+                <>
+                  {(() => {
+                    const w = statusWord(r.status);
+                    return w ? (
+                      <span className={`font-medium ${w.cls}`}>
+                        {w.text} ·{" "}
+                      </span>
+                    ) : null;
+                  })()}
+                  {relativeTime(new Date(r.updatedAt).getTime(), now)}
+                </>
+              )}
             </span>
           </div>
           {r.preview && (

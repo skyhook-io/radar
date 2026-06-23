@@ -2,7 +2,7 @@
 // persistence, no app/routing knowledge) so they lift cleanly into k8s-ui later
 // and Cloud can reuse them. The stateful controller lives in DiagnoseContext;
 // the run logic in InvestigationView.
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Loader2,
   CheckCircle2,
@@ -95,14 +95,18 @@ const CLAUDE_MODEL_OPTIONS: Option[] = [
 // Codex has no stable alias set and no way to enumerate models, and slugs change
 // across versions — so we take a free-text override rather than a list that rots.
 const EFFORT_OPTIONS: Option[] = [
-  { value: "", label: "Default", description: "Balanced — Radar's default" },
+  {
+    value: "",
+    label: "Default",
+    description: "Recommended — Radar's default (medium)",
+  },
   {
     value: "minimal",
     label: "Minimal",
     description: "Fastest, least reasoning",
   },
   { value: "low", label: "Low", description: "Quick" },
-  { value: "medium", label: "Medium", description: "Balanced" },
+  { value: "medium", label: "Medium", description: "Balanced depth" },
   { value: "high", label: "High", description: "Most thorough, slowest" },
 ];
 
@@ -271,7 +275,7 @@ export function AgentControls({
             value={isolated}
             onChange={onSetIsolated}
             options={[
-              { value: true, label: "Isolated" },
+              { value: true, label: "Isolated (recommended)" },
               { value: false, label: "My setup" },
             ]}
           />
@@ -394,6 +398,21 @@ export function TurnView({
   // not a fresh diagnosis — render it as a plain answer, never the root-cause
   // anchor or a remediation card.
   const followup = !!turn.question && !turn.apply;
+  // Whether the done turn has anything for ResultCard to render — mirrors its
+  // branch order exactly (apply → followup → structured/healthy), since a followup
+  // ONLY ever renders FollowupAnswer (report/rootCause), never the remediation list.
+  // When false, TurnView shows the narration or an explicit empty note, not a blank.
+  const dx = turn.diagnosis;
+  const hasVerdict = !!dx
+    ? turn.apply
+      ? true // ApplyOutcomeCard always renders an outcome
+      : followup
+        ? !!(dx.report?.trim() || dx.rootCause?.trim()) // FollowupAnswer
+        : dx.healthy ||
+          !!dx.rootCause ||
+          (dx.remediation?.length ?? 0) > 0 ||
+          !!dx.report?.trim()
+    : false;
   return (
     <div className="space-y-2">
       {turn.question && (
@@ -417,16 +436,27 @@ export function TurnView({
           {stripJsonBlock(turn.answer)}
         </AIMarkdown>
       )}
-      {turn.status === "done" && turn.diagnosis && (
-        <ResultCard
-          diagnosis={turn.diagnosis}
-          onApply={onApply}
-          apply={turn.apply}
-          followup={followup}
-          reveal={reveal}
-          onCheckStatus={onCheckStatus}
-        />
-      )}
+      {turn.status === "done" &&
+        (hasVerdict ? (
+          <ResultCard
+            diagnosis={turn.diagnosis!}
+            onApply={onApply}
+            apply={turn.apply}
+            followup={followup}
+            reveal={reveal}
+            onCheckStatus={onCheckStatus}
+          />
+        ) : stripJsonBlock(turn.answer).trim() ? (
+          // No structured verdict, but the agent narrated something — show it
+          // rather than a blank card.
+          <div className="mt-1 rounded-lg border border-theme-border bg-theme-elevated p-3">
+            <AIMarkdown className="text-sm text-theme-text-secondary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+              {stripJsonBlock(turn.answer)}
+            </AIMarkdown>
+          </div>
+        ) : (
+          <EmptyResult />
+        ))}
       {turn.status === "error" && turn.error && (
         <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
@@ -455,7 +485,9 @@ export function ConsentCard({
       <div className="mb-2 flex items-center gap-2">
         <ShieldCheck className="h-4 w-4 text-accent" />
         <div className="text-sm font-medium text-theme-text-primary">
-          Run a read-only AI investigation?
+          {isolated
+            ? "Run a read-only AI investigation?"
+            : "Run an AI investigation?"}
         </div>
       </div>
       <p className="text-sm leading-relaxed text-theme-text-secondary">
@@ -474,6 +506,10 @@ export function ConsentCard({
       </p>
       <ul className="mt-2 space-y-1 text-xs text-theme-text-tertiary">
         <li>• Runs locally — no Radar cloud, no API key needed.</li>
+        <li>
+          • {agentName} sends this data to its own model provider under your
+          account — not to Radar.
+        </li>
         {isolated ? (
           <li>
             • Isolated: only Radar&apos;s read-only investigation tools — your
@@ -576,9 +612,9 @@ export function ApplyDialog({
             <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
             <span>
               <span className="font-medium">Managed by {managedBy}.</span> A
-              direct change will be reverted on the next reconcile — change it
-              in Git (the {managedBy} source) instead, or expect it to be
-              undone.
+              direct change here will be automatically undone within minutes,
+              when {managedBy} re-syncs this resource from Git — change it in
+              Git (the {managedBy} source) instead.
             </span>
           </div>
         )}
@@ -680,11 +716,51 @@ export function Timeline({
         (synthLabel ? (
           <SynthBeat label={synthLabel} />
         ) : (
-          <div className="flex items-center gap-2 pt-1 text-xs">
-            <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent" />
-            <span className="ai-shimmer">{runningLabel}</span>
-          </div>
+          <RunningStatus label={runningLabel} />
         ))}
+    </div>
+  );
+}
+
+// The live "working" line: spinner + shimmering activity verb, plus an elapsed
+// counter and — if the same activity sits with no update for a while — a soft
+// "still working" reassurance, so a long investigation reads as progress and a
+// genuine hang is at least legible (a non-expert can't otherwise tell them apart).
+// Self-contained: counts from when this line mounts; the stall timer resets each
+// time the label changes (i.e. whenever the agent moves to a new tool/phase).
+function RunningStatus({ label }: { label: string }) {
+  const [elapsed, setElapsed] = useState(0);
+  const elapsedRef = useRef(0);
+  const lastChangeRef = useRef(0);
+  const prevLabelRef = useRef(label);
+  // Reset the stall timer synchronously when the label changes (i.e. the agent moved
+  // to a new tool/phase) — doing it during render, not in an effect, so an already-
+  // stalled line never flashes "no update for Ns" for a tick before resetting.
+  if (prevLabelRef.current !== label) {
+    prevLabelRef.current = label;
+    lastChangeRef.current = elapsedRef.current;
+  }
+  useEffect(() => {
+    const id = setInterval(() => {
+      elapsedRef.current += 1;
+      setElapsed(elapsedRef.current);
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+  const sinceChange = elapsed - lastChangeRef.current;
+  const stalled = elapsed >= 30 && sinceChange >= 30;
+  return (
+    <div className="flex items-center gap-2 pt-1 text-xs">
+      <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent" />
+      <span className="ai-shimmer">{label}</span>
+      {elapsed >= 3 && (
+        <span className="shrink-0 text-theme-text-tertiary">· {elapsed}s</span>
+      )}
+      {stalled && (
+        <span className="shrink-0 text-theme-text-tertiary">
+          · still working — no update for {sinceChange}s
+        </span>
+      )}
     </div>
   );
 }
@@ -1049,8 +1125,10 @@ function DiagnosisResult({
               <span className="absolute -bottom-0.5 left-0 right-0 h-px bg-amber-500/60 animate-underline-sweep" />
             </div>
             <div className="flex items-center gap-2">
-              {diagnosis.confidence != null && (
+              {diagnosis.confidence != null ? (
                 <ConfidenceMeter value={diagnosis.confidence} />
+              ) : (
+                <ConfidenceUnstated />
               )}
               <CopyButton text={rootCause} />
             </div>
@@ -1168,9 +1246,9 @@ function DiagnosisResult({
       )}
 
       {reveal === "full" && (
-        <div className="flex items-center gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
-          <ShieldCheck className="h-3 w-3 shrink-0" />
-          <span className="truncate">AI-generated — review before applying</span>
+        <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
+          <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>AI-generated — review before applying</span>
         </div>
       )}
     </div>
@@ -1186,7 +1264,7 @@ function AllClearCard({ diagnosis }: { diagnosis: Diagnosis }) {
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-500">
             <CheckCircle2 className="h-3.5 w-3.5" />
-            Healthy
+            No problems found
           </div>
           <CopyButton text={text} />
         </div>
@@ -1194,9 +1272,9 @@ function AllClearCard({ diagnosis }: { diagnosis: Diagnosis }) {
           {text}
         </AIMarkdown>
       </div>
-      <div className="flex items-center gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
-        <ShieldCheck className="h-3 w-3 shrink-0" />
-        <span className="truncate">AI-generated — verify if symptoms persist</span>
+      <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
+        <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>AI-generated — verify if symptoms persist</span>
       </div>
     </div>
   );
@@ -1219,6 +1297,21 @@ function FollowupAnswer({ diagnosis }: { diagnosis: Diagnosis }) {
       <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_code]:font-normal [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0">
         {text}
       </AIMarkdown>
+    </div>
+  );
+}
+
+// A done turn that produced no renderable verdict at all (empty diagnosis, no
+// narration). Without this the turn would render blank — which reads as "the tool
+// broke." Make the dead-end explicit and point at the recovery (a follow-up).
+function EmptyResult() {
+  return (
+    <div className="mt-1 flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
+      <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
+      <span>
+        The investigation finished without a clear result. Try a follow-up
+        question, or re-run Diagnose.
+      </span>
     </div>
   );
 }
@@ -1305,28 +1398,38 @@ function confidenceLabel(c: number): string {
   return "Low";
 }
 
-// Confidence shown as a band + a short bar that fills on reveal — the bar encodes
-// the band (Low/Med/High), deliberately NOT a precise % (see confidenceLabel). The
-// fill is accent-toned so it reads as "trust in the analysis," not problem severity.
+// Confidence shown as a band + three discrete pips (Low=1, Med=2, High=3 filled).
+// Deliberately discrete, NOT a continuous bar: a filled fraction reads as a precise
+// percentage, which is exactly the false calibration `confidenceLabel` exists to
+// avoid (an LLM's two-sig-fig confidence isn't that precise). Accent-toned so it
+// reads as "trust in the analysis," not problem severity.
 function ConfidenceMeter({ value }: { value: number }) {
   const band = confidenceLabel(value);
-  const frac = band === "High" ? 1 : band === "Medium" ? 0.62 : 0.32;
-  const [w, setW] = useState(0);
-  useEffect(() => {
-    const id = requestAnimationFrame(() => setW(frac));
-    return () => cancelAnimationFrame(id);
-  }, [frac]);
+  const filled = band === "High" ? 3 : band === "Medium" ? 2 : 1;
   return (
     <span className="flex items-center gap-1.5">
       <span className="text-[11px] text-theme-text-tertiary">
         {band} confidence
       </span>
-      <span className="h-1 w-9 overflow-hidden rounded-full bg-theme-base">
-        <span
-          className="block h-full rounded-full bg-accent transition-[width] duration-700 ease-out"
-          style={{ width: `${w * 100}%` }}
-        />
+      <span className="flex items-center gap-0.5" aria-hidden>
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className={`h-1 w-2.5 rounded-full ${i < filled ? "bg-accent" : "bg-theme-base"}`}
+          />
+        ))}
       </span>
+    </span>
+  );
+}
+
+// Shown when the model returned no confidence at all — so "unknown confidence"
+// is visible rather than silently absent (which looks identical to high confidence
+// minus the badge) on a trust-bearing surface.
+function ConfidenceUnstated() {
+  return (
+    <span className="text-[11px] text-theme-text-tertiary">
+      Confidence not stated
     </span>
   );
 }

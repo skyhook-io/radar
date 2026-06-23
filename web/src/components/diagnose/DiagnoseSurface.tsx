@@ -257,7 +257,7 @@ export function DiagnoseSurface({
     <div
       role="dialog"
       aria-label="AI investigations"
-      className="fixed z-50 flex flex-col border-l border-theme-border bg-theme-surface shadow-2xl"
+      className="fixed z-50 flex flex-col border-l border-theme-border bg-theme-surface shadow-drawer"
       style={{
         ...positionStyle,
         animation: "slide-in-from-right 0.22s cubic-bezier(0.32,0.72,0,1)",

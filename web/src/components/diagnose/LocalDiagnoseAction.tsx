@@ -101,7 +101,10 @@ export function GlobalDiagnoseButton() {
   const d = useDiagnose();
   if (!d.available) return null;
   return (
-    <Tooltip content="AI investigations" position="bottom">
+    <Tooltip
+      content={`AI investigations — runs your own ${d.agentLabel} locally`}
+      position="bottom"
+    >
       <button
         onClick={d.openHome}
         className="rounded-md bg-theme-elevated p-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"

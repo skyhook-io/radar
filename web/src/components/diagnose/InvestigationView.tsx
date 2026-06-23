@@ -39,7 +39,7 @@ export function InvestigationView({
   maximized: boolean;
 }) {
   const { kind, namespace, name } = run;
-  const { refreshRuns } = useDiagnose();
+  const { refreshRuns, openInvestigation } = useDiagnose();
   const queryClient = useQueryClient();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
@@ -281,6 +281,25 @@ export function InvestigationView({
             break;
         }
       },
+      // The run can no longer produce events (evicted / gone). Stale runs emit their
+      // own error event + banner before closing, so this only bites the case where a
+      // run vanishes while we still think it's running — clear the spinner and mark
+      // the open turn terminal so it can't shimmer forever.
+      onClosed: () => {
+        stopReveal();
+        clearSynth();
+        setBusy(false);
+        updateLast((t) =>
+          t.status === "running"
+            ? {
+                ...t,
+                status: "error",
+                error:
+                  "This investigation is no longer available. Re-run Diagnose to analyze the current cluster.",
+              }
+            : t,
+        );
+      },
     });
     return () => {
       stopReveal();
@@ -378,16 +397,24 @@ export function InvestigationView({
         <div className={maximized ? "mx-auto max-w-3xl" : ""}>
           <div className="space-y-4">
             {stale && (
-              <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-theme-text-secondary">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                <span>
-                  This investigation ran against{" "}
-                  <span className="font-medium text-theme-text-primary">
-                    {run.context || "a different cluster"}
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-theme-text-secondary">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                  <span>
+                    This investigation ran against{" "}
+                    <span className="font-medium text-theme-text-primary">
+                      {run.context || "a different cluster"}
+                    </span>
+                    . The cluster context has changed — it's read-only now.
                   </span>
-                  . The cluster context has changed — it's read-only now; re-run
-                  Diagnose to analyze the current cluster.
-                </span>
+                </div>
+                <button
+                  onClick={() => openInvestigation({ kind, namespace, name })}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-amber-500/50 px-2.5 py-1 font-medium text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                >
+                  <Send className="h-3 w-3" />
+                  Re-run on current cluster
+                </button>
               </div>
             )}
             {turns.map((t, i) => {

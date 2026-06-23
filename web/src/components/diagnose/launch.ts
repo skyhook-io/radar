@@ -44,11 +44,13 @@ export function buildLaunchCommand(
     // Codex threads are stored globally by id (cwd-independent); -c re-attaches MCP.
     return `codex resume ${sq(run.sessionId)} -c ${sq(`mcp_servers.radar.url="${mcpUrl}"`)}`;
   }
-  // Claude Code: --resume is cwd-scoped; Radar runs its headless sessions from the
-  // home dir (see claudeAgent), which is also the local terminal's cwd, so this
-  // resolves. --mcp-config MERGES radar alongside the user's own servers.
+  // Claude Code: --resume is cwd-scoped, and Radar runs its headless sessions from
+  // the home dir (see claudeAgent). The Radar terminal starts there too, but a user
+  // pasting this into their own terminal is usually in a project dir — so prefix
+  // `cd ~` to resolve the session wherever it's run (harmless in the home-dir case).
+  // --mcp-config MERGES radar alongside the user's own servers.
   const cfg = JSON.stringify({
     mcpServers: { radar: { type: "http", url: mcpUrl } },
   });
-  return `claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
+  return `cd ~ && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
 }
