@@ -32,6 +32,12 @@ var (
 	initOnce sync.Once
 	initErr  error
 
+	// metricsConfigMu guards the configured-metrics globals below. Originally
+	// these were written only at startup (no concurrent readers), but the live
+	// "apply Prometheus URL" path now writes them at runtime while a concurrent
+	// context-switch rebuild reads them in initOnce.Do — so the access needs a
+	// lock, matching the mutex-guarded prometheus client.
+	metricsConfigMu sync.RWMutex
 	// configuredMetricsURL is the user-provided --prometheus-url flag value.
 	// Stored at package level so it persists across context-switch resets.
 	configuredMetricsURL string
@@ -42,12 +48,16 @@ var (
 
 // SetMetricsURL sets a manual Prometheus/VictoriaMetrics URL, bypassing auto-discovery.
 func SetMetricsURL(url string) {
+	metricsConfigMu.Lock()
+	defer metricsConfigMu.Unlock()
 	configuredMetricsURL = url
 }
 
 // SetMetricsHeaders sets HTTP headers attached to every Prometheus query.
 // Used for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
 func SetMetricsHeaders(h map[string]string) {
+	metricsConfigMu.Lock()
+	defer metricsConfigMu.Unlock()
 	if len(h) == 0 {
 		configuredMetricsHeaders = nil
 		return
@@ -55,6 +65,13 @@ func SetMetricsHeaders(h map[string]string) {
 	out := make(map[string]string, len(h))
 	maps.Copy(out, h)
 	configuredMetricsHeaders = out
+}
+
+// metricsConfig returns the configured URL + headers under the read lock.
+func metricsConfig() (string, map[string]string) {
+	metricsConfigMu.RLock()
+	defer metricsConfigMu.RUnlock()
+	return configuredMetricsURL, configuredMetricsHeaders
 }
 
 // Initialize sets up the traffic manager with the given K8s client
@@ -74,10 +91,11 @@ func InitializeWithConfig(client kubernetes.Interface, config *rest.Config, cont
 		// Register available sources
 		manager.sources["hubble"] = NewHubbleSource(client)
 		caretta := NewCarettaSource(client)
-		if configuredMetricsURL != "" {
-			caretta.metricsURL = configuredMetricsURL
+		metricsURL, metricsHeaders := metricsConfig()
+		if metricsURL != "" {
+			caretta.metricsURL = metricsURL
 		}
-		caretta.headers = configuredMetricsHeaders
+		caretta.headers = metricsHeaders
 		manager.sources["caretta"] = caretta
 		manager.sources["istio"] = NewIstioSource(client)
 
@@ -317,8 +335,8 @@ func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceSta
 	for _, s := range detected {
 		if s.Name == "istio" && s.Status == "error" {
 			return &Recommendation{
-				Name:   "istio",
-				Reason: "Istio service mesh detected but Prometheus not reachable. Use --prometheus-url to point Radar to your Prometheus instance for Istio traffic visibility.",
+				Name:    "istio",
+				Reason:  "Istio service mesh detected but Prometheus not reachable. Use --prometheus-url to point Radar to your Prometheus instance for Istio traffic visibility.",
 				DocsURL: "https://istio.io/latest/docs/ops/integrations/prometheus/",
 			}
 		}

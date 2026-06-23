@@ -3802,15 +3802,19 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	}
 	url := strings.TrimSpace(body.PrometheusURL)
 
-	prometheuspkg.SetManualURL(url)
-	traffic.SetMetricsURL(url)
-	prometheuspkg.Reset()
-
+	// Persist first: a failed disk write must not leave the running client
+	// pointed somewhere the on-disk config disagrees with.
 	if _, err := config.Update(func(c *config.Config) { c.PrometheusURL = url }); err != nil {
 		log.Printf("[config] Failed to persist Prometheus URL: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Apply to the running client. Reset() drops the cached connection so the
+	// probe below rediscovers against the new URL instead of the old endpoint.
+	prometheuspkg.SetManualURL(url)
+	traffic.SetMetricsURL(url)
+	prometheuspkg.Reset()
 
 	resp := struct {
 		Connected bool   `json:"connected"`
