@@ -7,6 +7,7 @@ import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useCloudRole, useVersionCheck } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import { Tooltip } from '../ui/Tooltip'
 import type { DeploymentMode } from '../../types'
 
 interface Config {
@@ -157,7 +158,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
         className={clsx(
           'relative bg-theme-surface border border-theme-border shadow-theme-lg w-full outline-none flex flex-col',
           'max-sm:inset-0 max-sm:absolute max-sm:rounded-none max-sm:max-h-full max-sm:border-0',
-          'sm:rounded-xl sm:max-w-xl sm:mx-4 sm:max-h-[85vh]',
+          'sm:rounded-xl sm:max-w-2xl sm:mx-4 sm:max-h-[85vh]',
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
@@ -243,15 +244,16 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
         {canEditConfig && (
         <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-theme-border shrink-0">
             <div className="flex items-center gap-2">
-              <button
-                onClick={resetConfig}
-                disabled={saving}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
-                title="Reset all configuration to defaults"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Reset
-              </button>
+              <Tooltip content="Clear all fields — reverts to defaults when saved">
+                <button
+                  onClick={resetConfig}
+                  disabled={saving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Reset
+                </button>
+              </Tooltip>
               {saveMessage && (
                 <span className={clsx(
                   'text-xs',
@@ -293,6 +295,19 @@ function SectionLabel({ children }: { children: ReactNode }) {
   )
 }
 
+// A titled card grouping related config fields. Cards (vs thin dividers) give the
+// sections clear visual separation in the scroll.
+function ConfigSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="rounded-lg border border-theme-border bg-theme-elevated/30 p-4">
+      <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-3">
+        {title}
+      </h4>
+      <div className="space-y-4">{children}</div>
+    </section>
+  )
+}
+
 // -- Startup Configuration Tab ------------------------------------------------
 
 function StartupConfigTab({
@@ -312,74 +327,76 @@ function StartupConfigTab({
 }) {
   const showBrowserLaunchControls = !isDesktop && deploymentMode === 'local'
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <p className="text-xs text-theme-text-tertiary">
-        Changes require a restart to take effect.
+        Most changes require a restart to take effect.
         {isDesktop
           ? ' Quit and relaunch Radar to apply.'
           : ' Stop and restart the radar command to apply.'}
       </p>
 
-      <ConfigField
-        label="Kubeconfig"
-        help="Path to kubeconfig file"
-        value={config.kubeconfig ?? ''}
-        effectiveValue={effectiveConfig?.kubeconfig}
-        placeholder="~/.kube/config"
-        onChange={(v) => onChange('kubeconfig', v || undefined)}
-      />
+      <ConfigSection title="Cluster">
+        <ConfigField
+          label="Kubeconfig"
+          help="Path to kubeconfig file"
+          value={config.kubeconfig ?? ''}
+          effectiveValue={effectiveConfig?.kubeconfig}
+          placeholder="~/.kube/config"
+          onChange={(v) => onChange('kubeconfig', v || undefined)}
+        />
 
-      <ConfigArrayField
-        label="Kubeconfig Directories"
-        help="Comma-separated directories containing kubeconfig files"
-        value={config.kubeconfigDirs}
-        effectiveValue={effectiveConfig?.kubeconfigDirs}
-        placeholder="/path/to/dir1, /path/to/dir2"
-        onChange={(v) => onChange('kubeconfigDirs', v)}
-      />
+        <ConfigArrayField
+          label="Kubeconfig Directories"
+          help="Comma-separated directories containing kubeconfig files"
+          value={config.kubeconfigDirs}
+          effectiveValue={effectiveConfig?.kubeconfigDirs}
+          placeholder="/path/to/dir1, /path/to/dir2"
+          onChange={(v) => onChange('kubeconfigDirs', v)}
+        />
 
-      <ConfigField
-        label="Default Namespace"
-        help="Startup default only — change the active namespace live anytime from the header switcher"
-        value={config.namespace ?? ''}
-        effectiveValue={effectiveConfig?.namespace}
-        placeholder="All namespaces"
-        onChange={(v) => onChange('namespace', v || undefined)}
-      />
+        <ConfigField
+          label="Default Namespace"
+          help="Startup default only — change the active namespace live anytime from the header switcher"
+          value={config.namespace ?? ''}
+          effectiveValue={effectiveConfig?.namespace}
+          placeholder="All namespaces"
+          onChange={(v) => onChange('namespace', v || undefined)}
+        />
+      </ConfigSection>
 
-      <ConfigNumberField
-        label="Port"
-        help={isDesktop
-          ? 'Fixed server port (leave empty for random). Set this to keep a stable MCP endpoint.'
-          : 'Server port'}
-        value={config.port}
-        effectiveValue={effectiveConfig?.port}
-        placeholder={isDesktop ? 'Random' : '9280'}
-        onChange={(v) => onChange('port', v)}
-      />
+      <ConfigSection title="Server">
+        <ConfigNumberField
+          label="Port"
+          help={isDesktop
+            ? 'Fixed server port (leave empty for random). Set this to keep a stable MCP endpoint.'
+            : 'Server port'}
+          value={config.port}
+          effectiveValue={effectiveConfig?.port}
+          placeholder={isDesktop ? 'Random' : '9280'}
+          onChange={(v) => onChange('port', v)}
+        />
 
-      {showBrowserLaunchControls && (
-        <>
-          <ConfigToggle
-            label="Open browser on start"
-            value={!(config.noBrowser ?? false)}
-            onChange={(v) => onChange('noBrowser', !v ? true : undefined)}
-          />
+        {showBrowserLaunchControls && (
+          <>
+            <ConfigToggle
+              label="Open browser on start"
+              value={!(config.noBrowser ?? false)}
+              onChange={(v) => onChange('noBrowser', !v ? true : undefined)}
+            />
 
-          <ConfigField
-            label="Browser"
-            help="Browser for automatic launch; macOS app names are supported"
-            value={config.browser ?? ''}
-            effectiveValue={effectiveConfig?.browser}
-            placeholder="System default"
-            onChange={(v) => onChange('browser', v || undefined)}
-          />
-        </>
-      )}
+            <ConfigField
+              label="Browser"
+              help="Browser for automatic launch; macOS app names are supported"
+              value={config.browser ?? ''}
+              effectiveValue={effectiveConfig?.browser}
+              placeholder="System default"
+              onChange={(v) => onChange('browser', v || undefined)}
+            />
+          </>
+        )}
+      </ConfigSection>
 
-      <div className="border-t border-theme-border pt-4 mt-4">
-        <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-3">AI Tools</h4>
-
+      <ConfigSection title="AI Tools">
         <MCPSection
           mcpEnabled={config.mcp ?? true}
           onToggle={(v) => onChange('mcp', v)}
@@ -387,49 +404,41 @@ function StartupConfigTab({
           portPinned={config.port != null && config.port > 0}
           onPinPort={(port) => onChange('port', port)}
         />
-      </div>
+      </ConfigSection>
 
-      <div className="border-t border-theme-border pt-4 mt-4">
-        <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-3">Timeline</h4>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-theme-text-primary mb-1">
-              Storage Backend
-            </label>
-            <select
-              value={config.timelineStorage ?? 'memory'}
-              onChange={(e) => onChange('timelineStorage', e.target.value === 'memory' ? undefined : e.target.value as 'sqlite')}
-              className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-skyhook-500"
-            >
-              <option value="memory">Memory (default)</option>
-              <option value="sqlite">SQLite (persistent)</option>
-            </select>
-            <EffectiveHint current={config.timelineStorage} effective={effectiveConfig?.timelineStorage} />
-          </div>
-
-          <ConfigNumberField
-            label="History Limit"
-            help="Maximum events to retain"
-            value={config.historyLimit}
-            effectiveValue={effectiveConfig?.historyLimit}
-            placeholder="10000"
-            onChange={(v) => onChange('historyLimit', v)}
-          />
+      <ConfigSection title="Timeline">
+        <div>
+          <label className="block text-sm font-medium text-theme-text-primary mb-1">
+            Storage Backend
+          </label>
+          <select
+            value={config.timelineStorage ?? 'memory'}
+            onChange={(e) => onChange('timelineStorage', e.target.value === 'memory' ? undefined : e.target.value as 'sqlite')}
+            className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-skyhook-500"
+          >
+            <option value="memory">Memory (default)</option>
+            <option value="sqlite">SQLite (persistent)</option>
+          </select>
+          <EffectiveHint current={config.timelineStorage} effective={effectiveConfig?.timelineStorage} />
         </div>
-      </div>
 
-      <div className="border-t border-theme-border pt-4 mt-4">
-        <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-3">Integrations</h4>
+        <ConfigNumberField
+          label="History Limit"
+          help="Maximum events to retain"
+          value={config.historyLimit}
+          effectiveValue={effectiveConfig?.historyLimit}
+          placeholder="10000"
+          onChange={(v) => onChange('historyLimit', v)}
+        />
+      </ConfigSection>
 
-        <div className="space-y-4">
-          <PrometheusConfigField
-            value={config.prometheusUrl ?? ''}
-            configuredHeaderKeys={prometheusHeaderKeys}
-            onChange={(v) => onChange('prometheusUrl', v || undefined)}
-          />
-        </div>
-      </div>
+      <ConfigSection title="Integrations">
+        <PrometheusConfigField
+          value={config.prometheusUrl ?? ''}
+          configuredHeaderKeys={prometheusHeaderKeys}
+          onChange={(v) => onChange('prometheusUrl', v || undefined)}
+        />
+      </ConfigSection>
     </div>
   )
 }
@@ -467,7 +476,7 @@ function MCPSection({
   return (
     <div className="space-y-3">
       <ConfigToggle
-        label="MCP Server (AI tools)"
+        label="MCP Server"
         value={mcpEnabled}
         onChange={onToggle}
       />
@@ -480,13 +489,14 @@ function MCPSection({
               <code className="flex-1 px-2.5 py-1.5 text-xs font-mono bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary truncate">
                 {mcpUrl}
               </code>
-              <button
-                onClick={handleCopy}
-                className="shrink-0 p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors"
-                title="Copy MCP URL"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
+              <Tooltip content="Copy MCP URL" wrapperClassName="shrink-0">
+                <button
+                  onClick={handleCopy}
+                  className="p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </Tooltip>
             </div>
           </div>
 
@@ -614,17 +624,18 @@ function PrometheusConfigField({
           placeholder="http://prometheus-server.monitoring:9090"
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
-        <button
-          onClick={handleApply}
-          disabled={apply.status === 'applying'}
-          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated border border-theme-border rounded-md transition-colors disabled:opacity-50"
-          title="Apply this URL to the running server now — no restart"
-        >
-          {apply.status === 'applying'
-            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            : <Plug className="w-3.5 h-3.5" />}
-          Apply now
-        </button>
+        <Tooltip content="Apply this URL to the running server now — no restart" wrapperClassName="shrink-0">
+          <button
+            onClick={handleApply}
+            disabled={apply.status === 'applying'}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated border border-theme-border rounded-md transition-colors disabled:opacity-50"
+          >
+            {apply.status === 'applying'
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <Plug className="w-3.5 h-3.5" />}
+            Apply now
+          </button>
+        </Tooltip>
       </div>
       {apply.status === 'connected' ? (
         <p className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
@@ -685,13 +696,14 @@ function PrometheusConfigField({
                   placeholder="Value (e.g. Bearer …)"
                   className="flex-1 min-w-0 px-2.5 py-1.5 text-xs bg-theme-base border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
                 />
-                <button
-                  onClick={() => setHeaderRows((rows) => rows!.filter((_, j) => j !== i))}
-                  className="shrink-0 p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
-                  title="Remove header"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
+                <Tooltip content="Remove header" wrapperClassName="shrink-0">
+                  <button
+                    onClick={() => setHeaderRows((rows) => rows!.filter((_, j) => j !== i))}
+                    className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </Tooltip>
               </div>
             ))}
             <div className="flex items-center justify-between gap-2">
@@ -709,8 +721,8 @@ function PrometheusConfigField({
               </button>
             </div>
             <p className="text-xs text-theme-text-tertiary">
-              Applied with the URL above. Replaces all stored headers — values are
-              write-only, so re-enter any you want to keep.
+              Saved when you click Apply now. Replaces all stored headers — existing
+              values are hidden, so re-enter any you want to keep.
             </p>
           </div>
         )}
