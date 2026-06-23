@@ -61,6 +61,7 @@ type PrometheusResetFunc func()
 type PrometheusReinitFunc func() error
 
 var (
+	beforeContextSwitchCallbacks   []ContextSwitchCallback
 	contextSwitchCallbacks         []ContextSwitchCallback
 	namespaceRescopeCallbacks      []NamespaceRescopeCallback
 	contextSwitchProgressCallbacks []ContextSwitchProgressCallback
@@ -162,6 +163,16 @@ func stopActiveSessions() {
 	}
 }
 
+// OnBeforeContextSwitch registers a callback fired at the very start of
+// PerformContextSwitch, BEFORE the client is repointed at the new cluster — for
+// teardown that must happen against the old context (e.g. cancelling in-flight
+// AI investigations so their agent can't touch the new cluster).
+func OnBeforeContextSwitch(callback ContextSwitchCallback) {
+	contextSwitchMu.Lock()
+	defer contextSwitchMu.Unlock()
+	beforeContextSwitchCallbacks = append(beforeContextSwitchCallbacks, callback)
+}
+
 // OnContextSwitch registers a callback to be called when the context is switched
 func OnContextSwitch(callback ContextSwitchCallback) {
 	contextSwitchMu.Lock()
@@ -182,6 +193,17 @@ func OnContextSwitchProgress(callback ContextSwitchProgressCallback) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()
 	contextSwitchProgressCallbacks = append(contextSwitchProgressCallbacks, callback)
+}
+
+// notifyBeforeContextSwitch fires before-switch callbacks (old context still active).
+func notifyBeforeContextSwitch(newContext string) {
+	contextSwitchMu.RLock()
+	callbacks := make([]ContextSwitchCallback, len(beforeContextSwitchCallbacks))
+	copy(callbacks, beforeContextSwitchCallbacks)
+	contextSwitchMu.RUnlock()
+	for _, callback := range callbacks {
+		callback(newContext)
+	}
 }
 
 // reportProgress notifies all registered progress callbacks
@@ -331,6 +353,12 @@ func PerformContextSwitch(newContext string) error {
 	if ForceNamespaceScope && ProspectiveNamespaceScopeTarget(newContext) == "" {
 		return fmt.Errorf("%w: --namespace-scope requires --namespace, a namespace on context %q, or a saved namespace pick", ErrContextSwitchPreflight, newContext)
 	}
+
+	// Fire before-switch callbacks while the OLD context is still active, so
+	// teardown (e.g. cancelling in-flight AI investigations) can't leak onto the
+	// cluster we're about to connect to. After the preflight above — a failed
+	// preflight leaves the current connection (and its runs) intact.
+	notifyBeforeContextSwitch(newContext)
 
 	// Cancel any in-flight API calls from the previous context (RBAC checks,
 	// capability probes, etc.) so they don't serialize through the old exec

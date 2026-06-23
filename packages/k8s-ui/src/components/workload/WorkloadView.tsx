@@ -48,7 +48,7 @@ import {
 } from '../timeline/shared'
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
-import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from '../shared/ResourceRendererDispatch'
+import { ResourceRendererDispatch, getResourceStatus, diagnoseHealthHint, type RendererOverrides } from '../shared/ResourceRendererDispatch'
 import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
@@ -563,6 +563,21 @@ export function WorkloadView({
 
   const status = getResourceStatus(apiKind, resource)
 
+  // The AI/Diagnose action lives in the header chrome (next to expand/refresh/close),
+  // set apart from the imperative ops in the action bar — it's an invitation to
+  // understand the resource, not another verb to run on it. Adaptive by health:
+  // prominent "Diagnose" on a problem, a quiet icon when fine. Rendered via the host
+  // slot (DiagnoseCustomization); standalone Radar injects it, Hub overrides it.
+  const renderDiagnose = actionsBarProps?.renderDiagnose as
+    | ((ctx: { kind: string; namespace: string; name: string; health?: string }) => ReactNode)
+    | undefined
+  const diagnoseAction = renderDiagnose?.({
+    kind: apiKind,
+    namespace,
+    name,
+    health: diagnoseHealthHint(apiKind, resource),
+  })
+
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
   const tabs: DetailShellTab<TabType>[] = [
     { id: 'overview', label: 'Overview', icon: <Layers className="w-4 h-4" /> },
@@ -596,7 +611,8 @@ export function WorkloadView({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
+              {diagnoseAction}
               {onExpand && (
                 <button
                   onClick={() => onExpand({ yaml: showYaml })}
@@ -784,6 +800,7 @@ export function WorkloadView({
       }
       headerActions={
         <>
+          {diagnoseAction}
           <button
             onClick={() => refetch()}
             disabled={isRefreshAnimating}

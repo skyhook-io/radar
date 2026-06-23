@@ -1,0 +1,482 @@
+// A view over one durable, server-side investigation run. It SUBSCRIBES to the
+// run's event stream (replay + live) and reconstructs the transcript; it does not
+// own the run's lifetime — the server does. So closing the panel or navigating
+// away just unsubscribes; the run keeps going and re-subscribing replays it.
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Send, AlertTriangle, ArrowDown } from "lucide-react";
+import {
+  subscribeRun,
+  addTurn,
+  stopRun,
+  DiagnoseError,
+  type Diagnosis,
+  type DiagnoseStreamEvent,
+  type RunSummary,
+} from "../../api/diagnose";
+import { useDiagnose } from "./DiagnoseContext";
+import {
+  TurnView,
+  ApplyDialog,
+  appendThinking,
+  upsertTool,
+  type Turn,
+} from "./parts";
+
+export function InvestigationView({
+  run,
+  agentLabel,
+  maximized,
+}: {
+  run: RunSummary;
+  agentLabel: string;
+  maximized: boolean;
+}) {
+  const { kind, namespace, name } = run;
+  const { refreshRuns } = useDiagnose();
+  const queryClient = useQueryClient();
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [input, setInput] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pendingApplyRef = useRef(false);
+  // Stick-to-bottom: follow streaming output while the user is at/near the bottom,
+  // detach the moment they scroll up to read history, re-attach when they return.
+  // Tracked from scroll events (the user's intent) — NOT post-render geometry, which
+  // mis-detaches whenever a streamed chunk is taller than the threshold.
+  const pinnedRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const STICK_THRESHOLD = 64; // px from bottom counted as "at the bottom"
+
+  // Staged synthesis beats: when a real diagnosis is ready, hold it for a beat and
+  // narrate the closing reasoning ("Formulating the root cause…" → "Weighing
+  // remediation options…") before revealing the verdict. These ARE the phases the
+  // model just ran; pacing their presentation makes the payoff feel earned instead
+  // of dumped. Apply outcomes and plain follow-ups skip it (no root cause to build).
+  const [synth, setSynth] = useState<string | null>(null);
+  // Controls how much of a freshly-revealed diagnosis the card shows, so the verdict
+  // unfolds in beats: "rca" = root cause only (+ a "weighing remediation" beat),
+  // "full" = everything. null/"full" for replayed turns (no choreography on rebuild).
+  const [reveal, setReveal] = useState<"rca" | "full" | null>(null);
+  const synthTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const clearSynth = () => {
+    synthTimers.current.forEach(clearTimeout);
+    synthTimers.current = [];
+    setSynth(null);
+  };
+
+  // After a successful apply, refresh the cluster-state views so the fix shows in
+  // the surrounding UI (Issues, the resource, topology, …), not just the transcript.
+  const refreshClusterState = useCallback(() => {
+    for (const key of [
+      ["issues"],
+      ["dashboard"],
+      ["topology"],
+      ["applications"],
+      ["audit"],
+      ["gitops-insights"],
+      ["gitops-tree"],
+      ["resource", kind, namespace, name],
+    ]) {
+      queryClient.invalidateQueries({ queryKey: key });
+    }
+  }, [queryClient, kind, namespace, name]);
+
+  const updateLast = (fn: (t: Turn) => Turn) =>
+    setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? fn(t) : t)));
+
+  // Progressive reasoning reveal: the agent hands us each thinking block whole, but
+  // dumping a paragraph at once reads as a jarring pop. Instead we buffer it and
+  // drip it into the transcript line-by-line so it streams the way Claude Code /
+  // Codex feel live. A tool call, the final report, or an error flushes the buffer
+  // instantly (reasoning must fully precede its own tool, and the result can't wait
+  // on an animation) — which also makes tab-reopen replay fast-forward for free,
+  // since every turn ends in one of those events.
+  const revealBufRef = useRef("");
+  const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopReveal = () => {
+    if (revealTimerRef.current) {
+      clearInterval(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+  };
+  const flushReveal = () => {
+    stopReveal();
+    const rest = revealBufRef.current;
+    revealBufRef.current = "";
+    if (rest)
+      updateLast((t) => ({ ...t, timeline: appendThinking(t.timeline, rest) }));
+  };
+  // Next reveal unit: a whole line, but cap a long unwrapped line at a sentence
+  // boundary so prose paragraphs (no hard breaks) still reveal in pieces.
+  const nextRevealUnit = (buf: string): [string, string] => {
+    const nl = buf.indexOf("\n");
+    let cut = nl === -1 ? buf.length : nl + 1;
+    if (cut > 160) {
+      const seg = buf.slice(0, 160);
+      const s = Math.max(
+        seg.lastIndexOf(". "),
+        seg.lastIndexOf("? "),
+        seg.lastIndexOf("! "),
+      );
+      cut = s > 40 ? s + 2 : 160;
+    }
+    return [buf.slice(0, cut), buf.slice(cut)];
+  };
+  const pumpReveal = () => {
+    if (revealTimerRef.current) return;
+    revealTimerRef.current = setInterval(() => {
+      if (!revealBufRef.current) {
+        stopReveal();
+        return;
+      }
+      // Drain faster when a backlog builds so the reveal can't fall behind a fast
+      // model — pace is cosmetic, never a bottleneck on the actual investigation.
+      const units = revealBufRef.current.length > 900 ? 3 : 1;
+      let take = "";
+      for (let k = 0; k < units && revealBufRef.current; k++) {
+        const [u, rest] = nextRevealUnit(revealBufRef.current);
+        take += u;
+        revealBufRef.current = rest;
+      }
+      if (take)
+        updateLast((t) => ({
+          ...t,
+          timeline: appendThinking(t.timeline, take),
+        }));
+    }, 150);
+  };
+
+  // Subscribe to the run's event stream; rebuild the transcript from scratch on
+  // (re)subscribe — the server replays everything, so a fresh tab reconstructs the
+  // whole conversation.
+  useEffect(() => {
+    setTurns([]);
+    setBusy(false);
+    setActionError(null);
+    pendingApplyRef.current = false;
+    revealBufRef.current = "";
+    stopReveal();
+    clearSynth();
+    setReveal(null);
+    const cancel = subscribeRun(run.id, {
+      onEvent: (ev: DiagnoseStreamEvent) => {
+        switch (ev.type) {
+          case "turn":
+            flushReveal(); // close out the prior turn's reasoning before the new one
+            clearSynth();
+            setReveal(null);
+            if (ev.apply) pendingApplyRef.current = true;
+            setBusy(true);
+            setTurns((prev) => [
+              ...prev,
+              {
+                question: ev.question,
+                timeline: [],
+                answer: "",
+                diagnosis: null,
+                error: null,
+                status: "running",
+                apply: ev.apply,
+              },
+            ]);
+            break;
+          case "thinking":
+            if (ev.token) {
+              revealBufRef.current += ev.token;
+              pumpReveal();
+            }
+            break;
+          case "step":
+            flushReveal(); // reasoning fully precedes the tool it led to
+            if (ev.step)
+              updateLast((t) => ({
+                ...t,
+                timeline: upsertTool(t.timeline, ev.step!),
+              }));
+            break;
+          case "token":
+            if (ev.token)
+              updateLast((t) => ({
+                ...t,
+                answer: (t.answer + ev.token).slice(-4000),
+              }));
+            break;
+          case "done": {
+            flushReveal(); // the result can't wait on a reveal animation
+            const dx = (ev.diagnosis ?? null) as Diagnosis | null;
+            const isApply = pendingApplyRef.current;
+            const finalize = () => {
+              setBusy(false);
+              if (isApply) {
+                pendingApplyRef.current = false;
+                refreshClusterState();
+              }
+              refreshRuns();
+            };
+            const showCard = (stage: "rca" | "full") => {
+              setReveal(stage);
+              updateLast((t) => ({ ...t, diagnosis: dx, status: "done" }));
+            };
+            // Only a real, structured diagnosis earns the staged reveal — and only
+            // when live (a backlog of buffered events means we're replaying history,
+            // where the beats would just stall the rebuild).
+            const hasRC = !!dx?.rootCause;
+            const hasRem = (dx?.remediation?.length ?? 0) > 0;
+            const allClear = !!dx?.healthy && !hasRC;
+            const structured = !!dx && (allClear || hasRC || hasRem);
+            if (!isApply && structured && revealBufRef.current === "") {
+              const STEP = 2000;
+              // Beat 1 (in the timeline): formulating, before any card is shown.
+              setReveal(null);
+              setSynth(
+                allClear
+                  ? "Confirming health"
+                  : hasRC
+                    ? "Formulating the root cause"
+                    : "Analyzing the findings",
+              );
+              synthTimers.current.push(
+                setTimeout(() => {
+                  setSynth(null);
+                  // Reveal the root cause. If remediation follows, the card shows a
+                  // "weighing remediation options" beat where the steps will land.
+                  showCard(hasRC && hasRem ? "rca" : "full");
+                  if (hasRC && hasRem) {
+                    synthTimers.current.push(
+                      setTimeout(() => {
+                        setReveal("full");
+                        finalize();
+                      }, STEP),
+                    );
+                  } else {
+                    finalize();
+                  }
+                }, STEP),
+              );
+            } else {
+              setReveal("full");
+              updateLast((t) => ({ ...t, diagnosis: dx, status: "done" }));
+              finalize();
+            }
+            break;
+          }
+          case "error":
+            flushReveal();
+            updateLast((t) => ({
+              ...t,
+              error: ev.error || "The investigation failed.",
+              status: "error",
+            }));
+            setBusy(false);
+            pendingApplyRef.current = false;
+            refreshRuns();
+            break;
+        }
+      },
+    });
+    return () => {
+      stopReveal();
+      clearSynth();
+      cancel();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.id]);
+
+  // Follow the bottom IFF still pinned, on anything that changes rendered height:
+  // new transcript content (turns), the staged verdict reveal (reveal: rca→full
+  // adds the remediation card), and synthesis beats (synth). useLayoutEffect runs
+  // before paint, so the jump is invisible and it overrides browser scroll-anchoring
+  // (which would otherwise nudge us off the bottom when the remediation card lands).
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+  }, [turns, reveal, synth]);
+
+  // User scroll updates the pin state: scrolling up past the threshold detaches;
+  // scrolling back within it re-attaches. Programmatic scroll-to-bottom lands at
+  // distance≈0, so it keeps us pinned — no fight with the auto-follow.
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD;
+    pinnedRef.current = atBottom;
+    setShowJump(!atBottom);
+  };
+  const jumpToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinnedRef.current = true;
+    setShowJump(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
+
+  const stale = run.status === "stale";
+
+  const submitFollowup = () => {
+    const q = input.trim();
+    if (!q || busy || stale) return;
+    setInput("");
+    setActionError(null);
+    pinnedRef.current = true; // a user-initiated turn always follows to the bottom
+    addTurn(run.id, { question: q }).catch((e) =>
+      setActionError(e instanceof DiagnoseError ? e.message : "Couldn't send."),
+    );
+  };
+  const stop = () => stopRun(run.id);
+
+  // Apply: a user-confirmed remediation turn. Any step is applyable; the chosen
+  // step's text is sent so the server binds the apply to it.
+  const [confirmApply, setConfirmApply] = useState(false);
+  const [pendingFix, setPendingFix] = useState("");
+  const requestApply = (fix: string) => {
+    setPendingFix(fix);
+    setConfirmApply(true);
+  };
+  const runApply = () => {
+    setConfirmApply(false);
+    setActionError(null);
+    addTurn(run.id, { apply: true, fix: pendingFix }).catch((e) =>
+      setActionError(
+        e instanceof DiagnoseError ? e.message : "Couldn't apply.",
+      ),
+    );
+  };
+  const checkStatus = () =>
+    addTurn(run.id, {
+      question:
+        "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.",
+    }).catch(() => {});
+
+  // Apply tracks the latest turn that produced remediation (so follow-ups don't
+  // strip it) and is blocked on a stale (context-switched) run.
+  let lastRemediationIdx = -1;
+  turns.forEach((t, i) => {
+    if (
+      t.status === "done" &&
+      !t.apply &&
+      (t.diagnosis?.remediation?.length ?? 0) > 0
+    )
+      lastRemediationIdx = i;
+  });
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 [scrollbar-gutter:stable]"
+      >
+        <div className={maximized ? "mx-auto max-w-3xl" : ""}>
+          <div className="space-y-4">
+            {stale && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-theme-text-secondary">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                <span>
+                  This investigation ran against{" "}
+                  <span className="font-medium text-theme-text-primary">
+                    {run.context || "a different cluster"}
+                  </span>
+                  . The cluster context has changed — it's read-only now; re-run
+                  Diagnose to analyze the current cluster.
+                </span>
+              </div>
+            )}
+            {turns.map((t, i) => {
+              const isLast = i === turns.length - 1;
+              const canApply = i === lastRemediationIdx && !stale;
+              const canCheck = isLast && t.status === "done" && !!t.apply;
+              return (
+                <TurnView
+                  key={i}
+                  turn={t}
+                  synthLabel={isLast ? synth : null}
+                  reveal={isLast ? (reveal ?? "full") : "full"}
+                  onApply={canApply ? requestApply : undefined}
+                  onCheckStatus={canCheck ? checkStatus : undefined}
+                />
+              );
+            })}
+            {actionError && (
+              <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                <span>{actionError}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {showJump && (
+        <button
+          onClick={jumpToBottom}
+          className="absolute bottom-20 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-3 py-1.5 text-xs font-medium text-theme-text-secondary shadow-theme-md transition hover:bg-theme-hover hover:text-theme-text-primary"
+        >
+          <ArrowDown className="h-3.5 w-3.5" />
+          {busy ? "Jump to latest" : "Scroll to bottom"}
+        </button>
+      )}
+
+      <ApplyDialog
+        open={confirmApply}
+        onClose={() => setConfirmApply(false)}
+        onConfirm={runApply}
+        agentLabel={agentLabel}
+        resourceLabel={`${kind} ${namespace ? `${namespace}/` : ""}${name}`}
+        fix={pendingFix}
+        managedBy={run.managedBy}
+        confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
+      />
+
+      <div
+        className={`border-t border-theme-border px-3 py-2.5 ${maximized ? "[&>*]:mx-auto [&>*]:max-w-3xl" : ""}`}
+      >
+        {busy ? (
+          <button
+            onClick={stop}
+            className="w-full rounded-lg border border-theme-border py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+          >
+            Stop
+          </button>
+        ) : (
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submitFollowup();
+                }
+              }}
+              rows={1}
+              disabled={stale}
+              placeholder={
+                stale
+                  ? "Cluster changed — re-run Diagnose"
+                  : "Ask a follow-up or refine…"
+              }
+              className="max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-accent focus:outline-none disabled:opacity-50"
+            />
+            <button
+              onClick={submitFollowup}
+              disabled={!input.trim() || stale}
+              className="shrink-0 rounded-lg btn-brand p-2 disabled:opacity-40"
+              aria-label="Send follow-up"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

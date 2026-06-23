@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
@@ -57,22 +58,23 @@ import (
 
 // Server is the Explorer HTTP server
 type Server struct {
-	router          *chi.Mux
-	broadcaster     *SSEBroadcaster
-	vitalsMetrics   vitalsMetricsMemo
-	port            int
-	devMode         bool
-	staticFS        fs.FS
-	startTime       time.Time
-	listener        net.Listener
-	updater         *updater.Updater
-	mcpHandler      http.Handler
-	diagConfig      *DiagConfig
-	effectiveConfig *config.Config // running config for GET /api/config
-	authConfig      auth.Config
-	permCache       *auth.PermissionCache
-	oidcHandler     *auth.OIDCHandler
-	saveFileFunc    func(defaultFilename string, data []byte) (string, error)
+	router             *chi.Mux
+	broadcaster        *SSEBroadcaster
+	vitalsMetrics      vitalsMetricsMemo
+	port               int
+	devMode            bool
+	staticFS           fs.FS
+	startTime          time.Time
+	listener           net.Listener
+	updater            *updater.Updater
+	mcpHandler         http.Handler
+	mcpReadOnlyHandler http.Handler
+	diagConfig         *DiagConfig
+	effectiveConfig    *config.Config // running config for GET /api/config
+	authConfig         auth.Config
+	permCache          *auth.PermissionCache
+	oidcHandler        *auth.OIDCHandler
+	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
 
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
@@ -103,18 +105,26 @@ type Server struct {
 	// burst. Index is a pure projection of four cached listers — TTL has
 	// no semantic effect.
 	rbacMemo *rbac.Memoizer
+
+	// aiDiagnoser drives a local agent CLI for "Diagnose with AI" (nil when no
+	// CLI is on PATH — the endpoints then 501). Resolved once at startup.
+	aiDiagnoser *ai.Diagnoser
+	// aiRuns owns investigations as durable server-side jobs (survive panel close
+	// / navigation / refresh). nil exactly when aiDiagnoser is.
+	aiRuns *ai.RunManager
 }
 
 // Config holds server configuration
 type Config struct {
-	Port            int
-	DevMode         bool           // Serve frontend from filesystem instead of embedded
-	StaticFS        embed.FS       // Embedded frontend files
-	StaticRoot      string         // Path within StaticFS
-	MCPHandler      http.Handler   // MCP server handler (nil = MCP disabled)
-	DiagConfig      *DiagConfig    // Sanitized config for diagnostics endpoint
-	EffectiveConfig *config.Config // Running startup config for GET /api/config
-	AuthConfig      auth.Config    // Authentication configuration
+	Port               int
+	DevMode            bool           // Serve frontend from filesystem instead of embedded
+	StaticFS           embed.FS       // Embedded frontend files
+	StaticRoot         string         // Path within StaticFS
+	MCPHandler         http.Handler   // MCP server handler (nil = MCP disabled)
+	MCPReadOnlyHandler http.Handler   // read-only MCP handler (read tools only)
+	DiagConfig         *DiagConfig    // Sanitized config for diagnostics endpoint
+	EffectiveConfig    *config.Config // Running startup config for GET /api/config
+	AuthConfig         auth.Config    // Authentication configuration
 }
 
 // New creates a new server instance
@@ -122,17 +132,36 @@ func New(cfg Config) *Server {
 	cfg.AuthConfig.Defaults()
 
 	s := &Server{
-		router:          chi.NewRouter(),
-		broadcaster:     NewSSEBroadcaster(),
-		port:            cfg.Port,
-		devMode:         cfg.DevMode,
-		startTime:       time.Now(),
-		mcpHandler:      cfg.MCPHandler,
-		diagConfig:      cfg.DiagConfig,
-		effectiveConfig: cfg.EffectiveConfig,
-		authConfig:      cfg.AuthConfig,
-		topoMemo:        topology.NewMemoizer(5 * time.Second),
-		rbacMemo:        rbac.NewMemoizer(5 * time.Second),
+		router:             chi.NewRouter(),
+		broadcaster:        NewSSEBroadcaster(),
+		port:               cfg.Port,
+		devMode:            cfg.DevMode,
+		startTime:          time.Now(),
+		mcpHandler:         cfg.MCPHandler,
+		mcpReadOnlyHandler: cfg.MCPReadOnlyHandler,
+		diagConfig:         cfg.DiagConfig,
+		effectiveConfig:    cfg.EffectiveConfig,
+		authConfig:         cfg.AuthConfig,
+		topoMemo:           topology.NewMemoizer(5 * time.Second),
+		rbacMemo:           rbac.NewMemoizer(5 * time.Second),
+	}
+
+	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
+	// subscription). nil when none is found — the feature stays disabled.
+	//
+	// Gated to no-auth (local/standalone) Radar: the engine drives the CLI
+	// against this server's OWN localhost /mcp with no credentials, which only
+	// works when /mcp is unauthenticated. Under proxy/OIDC auth (team / cloud
+	// deployments) the MCP requires identity headers the local CLI can't supply,
+	// and AI diagnosis is the embedding host's job (e.g. Radar Hub) anyway.
+	// Also requires /mcp to be mounted — the agent reaches the cluster only
+	// through it, so with --no-mcp the feature can't work.
+	if !s.authConfig.Enabled() && s.mcpHandler != nil {
+		if d, err := ai.NewDetected(context.Background()); err == nil {
+			s.aiDiagnoser = d
+			s.aiRuns = ai.NewRunManager(d, s.ActualPort, k8s.GetContextName)
+			log.Printf("[ai] diagnose enabled (default agent: %s)", d.DefaultAgent())
+		}
 	}
 
 	// Register a single context-switch callback so every PerformContextSwitch
@@ -142,6 +171,13 @@ func New(cfg Config) *Server {
 	// for mcpPermCache.
 	k8s.OnContextSwitch(func(_ string) {
 		s.finalizePostContextSwitch()
+	})
+	// Cancel + stale AI investigations BEFORE the client repoints at the new
+	// cluster, so an in-flight agent (especially an apply) can't write to it.
+	k8s.OnBeforeContextSwitch(func(_ string) {
+		if s.aiRuns != nil {
+			s.aiRuns.OnContextSwitch()
+		}
 	})
 
 	// Let the destructive cache operations (context switch, namespace rescope)
@@ -279,6 +315,9 @@ func (s *Server) setupRoutes() {
 		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
+		// AI investigation event stream via SSE — long-lived; lives outside the
+		// 60s timeout group. The run keeps going server-side after disconnect.
+		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
 
 		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
@@ -288,6 +327,12 @@ func (s *Server) setupRoutes() {
 			r.Use(middleware.Timeout(60 * time.Second))
 
 			r.Get("/health", s.handleHealth)
+			r.Get("/agents", s.handleListAgents)
+			// AI investigations as durable server-side jobs (start/list/turn/stop).
+			r.Post("/diagnose/runs", s.handleDiagnoseStart)
+			r.Get("/diagnose/runs", s.handleDiagnoseList)
+			r.Post("/diagnose/runs/{id}/turns", s.handleDiagnoseTurn)
+			r.Post("/diagnose/runs/{id}/stop", s.handleDiagnoseStop)
 			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)
@@ -562,6 +607,9 @@ func (s *Server) setupRoutes() {
 	if s.mcpHandler != nil {
 		r.Mount("/mcp", s.mcpHandler)
 	}
+	if s.mcpReadOnlyHandler != nil {
+		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
+	}
 
 	// OAuth discovery probes from MCP HTTP clients. Without this, the frontend
 	// catch-all answers /.well-known/oauth-* with HTML 200, which newer
@@ -670,6 +718,9 @@ func (s *Server) Handler() http.Handler {
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
 	StopAllLocalTermSessions()
+	if s.aiRuns != nil {
+		s.aiRuns.Shutdown() // cancel investigations so agent children don't outlive us
+	}
 	s.broadcaster.Stop()
 	if s.listener != nil {
 		s.listener.Close()

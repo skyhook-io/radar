@@ -15,6 +15,7 @@ import {
   type SummaryTone,
 } from '@skyhook-io/k8s-ui'
 import { AlertTriangle } from 'lucide-react'
+import { IssueDiagnoseButton } from '../diagnose/LocalDiagnoseAction'
 
 const SEVERITY_TONE: Record<IssueSeverity, SummaryTone> = { critical: 'error', warning: 'warning' }
 
@@ -136,7 +137,14 @@ export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps
       ) : (
         /* anyData = the query resolved, i.e. the cluster is reachable; an empty
            list then means "nothing broken" rather than "not connected". */
-        <IssuesView issues={shown} anyData={!!data} onResourceClick={onResourceClick} />
+        <IssuesView
+          issues={shown}
+          anyData={!!data}
+          onResourceClick={onResourceClick}
+          renderActions={({ issue }) => (
+            <IssueDiagnoseButton kind={issue.kind} namespace={issue.namespace ?? ''} name={issue.name} />
+          )}
+        />
       )}
     </div>
   )

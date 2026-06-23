@@ -16,24 +16,37 @@
 // Both are applied before any children render so downstream code that
 // reads config synchronously (e.g. URL construction inside fetchJSON)
 // sees the host's values.
-import React from 'react';
-import { BrowserRouter, MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider, MutationCache, QueryCache } from '@tanstack/react-query';
+import React from "react";
+import { BrowserRouter, MemoryRouter } from "react-router-dom";
+import {
+  QueryClient,
+  QueryClientProvider,
+  MutationCache,
+  QueryCache,
+} from "@tanstack/react-query";
 
-import App from './App';
-import { ThemeProvider } from './context/ThemeContext';
-import { ToastProvider, showApiError, showApiSuccess } from './components/ui/Toast';
-import { setApiBase, setBasename } from './api/config';
-import { NavCustomizationProvider } from './context/NavCustomization';
-import { FilterLocationBridge } from './filter/FilterLocationBridge';
-import type { NavCustomization } from './context/NavCustomization';
-import type { ClusterLoadState } from './types/clusterLoadState';
+import App from "./App";
+import { ThemeProvider } from "./context/ThemeContext";
+import {
+  ToastProvider,
+  showApiError,
+  showApiSuccess,
+} from "./components/ui/Toast";
+import { setApiBase, setBasename } from "./api/config";
+import { NavCustomizationProvider } from "./context/NavCustomization";
+import { FilterLocationBridge } from "./filter/FilterLocationBridge";
+import type { NavCustomization } from "./context/NavCustomization";
+import type { ClusterLoadState } from "./types/clusterLoadState";
+import { DiagnoseCustomizationProvider } from "./context/DiagnoseCustomization";
+import type { RenderDiagnoseAction } from "./context/DiagnoseCustomization";
+import { defaultDiagnoseAction } from "./components/diagnose/LocalDiagnoseAction";
+import { DiagnoseProvider } from "./components/diagnose/DiagnoseContext";
 
 // Declare the shape of mutation meta here — inlined rather than in a
 // separate side-effect-only module so consumers that tree-shake aggressively
 // (package.json sets sideEffects: ["*.css"]) can't drop the augmentation.
 // Any consumer that imports RadarApp will pull in this declaration.
-declare module '@tanstack/react-query' {
+declare module "@tanstack/react-query" {
   interface Register {
     mutationMeta: {
       errorMessage?: string;
@@ -58,7 +71,7 @@ export interface RadarAppProps {
    *     Escape hatch for tests and for host apps that can't restructure
    *     around a single top-level BrowserRouter.
    */
-  router?: 'browser' | 'memory';
+  router?: "browser" | "memory";
   /**
    * Optional QueryClient override. When consuming Radar inside another app
    * that already has a QueryClientProvider higher in the tree, you may
@@ -87,6 +100,14 @@ export interface RadarAppProps {
    * Defaults to `' · Radar'`.
    */
   documentTitleSuffix?: string;
+  /**
+   * Injects a resource-level "Diagnose" action (e.g. a "Diagnose with AI"
+   * button) into every resource detail action bar's right-aligned universal
+   * actions. The host returns the node to render given the resource context.
+   * Standalone Radar omits this and renders no Diagnose button — OSS stays
+   * agent-free. See ./context/DiagnoseCustomization for the render-prop shape.
+   */
+  renderDiagnoseAction?: RenderDiagnoseAction;
   /**
    * Initial route for `router: 'memory'` (ignored for 'browser'). Lets a host
    * deep-link a specific view (e.g. '/topology') without owning the URL bar —
@@ -120,13 +141,18 @@ function makeDefaultQueryClient(): QueryClient {
       },
       onSuccess: (_data, _variables, _context, mutation) => {
         const message = mutation.options.meta?.successMessage;
-        if (message) showApiSuccess(message, mutation.options.meta?.successDetail);
+        if (message)
+          showApiSuccess(message, mutation.options.meta?.successDetail);
       },
     }),
     queryCache: new QueryCache({
       onError: (error, query) => {
         if (query.state.data !== undefined) {
-          console.warn('[Background sync failed]', query.queryKey, (error as Error).message);
+          console.warn(
+            "[Background sync failed]",
+            query.queryKey,
+            (error as Error).message,
+          );
         }
       },
     }),
@@ -136,11 +162,12 @@ function makeDefaultQueryClient(): QueryClient {
 export function RadarApp({
   apiBase,
   basename,
-  router = 'browser',
+  router = "browser",
   queryClient,
   navSlots,
   manageDocumentTitle = false,
   documentTitleSuffix,
+  renderDiagnoseAction,
   initialPath,
   onClusterLoadStateChange,
 }: RadarAppProps): React.ReactElement {
@@ -155,7 +182,10 @@ export function RadarApp({
 
   // Memo so we don't recreate the QueryClient on every render when the
   // consumer didn't pass one.
-  const client = React.useMemo(() => queryClient ?? makeDefaultQueryClient(), [queryClient]);
+  const client = React.useMemo(
+    () => queryClient ?? makeDefaultQueryClient(),
+    [queryClient],
+  );
 
   const inner = (
     <ThemeProvider>
@@ -163,11 +193,17 @@ export function RadarApp({
         <ToastProvider>
           <NavCustomizationProvider value={navSlots}>
             <FilterLocationBridge>
-              <App
-                manageDocumentTitle={manageDocumentTitle}
-                documentTitleSuffix={documentTitleSuffix}
-                onClusterLoadStateChange={onClusterLoadStateChange}
-              />
+              <DiagnoseCustomizationProvider
+                value={renderDiagnoseAction ?? defaultDiagnoseAction}
+              >
+                <DiagnoseProvider>
+                  <App
+                    manageDocumentTitle={manageDocumentTitle}
+                    documentTitleSuffix={documentTitleSuffix}
+                    onClusterLoadStateChange={onClusterLoadStateChange}
+                  />
+                </DiagnoseProvider>
+              </DiagnoseCustomizationProvider>
             </FilterLocationBridge>
           </NavCustomizationProvider>
         </ToastProvider>
@@ -175,11 +211,15 @@ export function RadarApp({
     </ThemeProvider>
   );
 
-  if (router === 'memory') {
-    return <MemoryRouter initialEntries={[initialPath || '/']}>{inner}</MemoryRouter>;
+  if (router === "memory") {
+    return (
+      <MemoryRouter initialEntries={[initialPath || "/"]}>{inner}</MemoryRouter>
+    );
   }
 
-  return <BrowserRouter basename={basename || undefined}>{inner}</BrowserRouter>;
+  return (
+    <BrowserRouter basename={basename || undefined}>{inner}</BrowserRouter>
+  );
 }
 
 export default RadarApp;

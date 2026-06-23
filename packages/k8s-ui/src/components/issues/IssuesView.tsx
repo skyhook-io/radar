@@ -61,12 +61,15 @@ export interface IssuesViewProps {
   clusterLabel?: (issue: Issue) => string | undefined;
   /** Empty-state CTA shown when there's no data. */
   emptyAction?: ReactNode;
+  /** Per-row trailing action, rendered after the severity badge — e.g. the
+   *  "Diagnose with AI" button in OSS. Omit to render no per-row action. */
+  renderActions?: (ctx: IssueRowSlotContext) => ReactNode;
 }
 
 // The queue list. Filtering/faceting is the host page's job (FleetPageShell on
 // the hub, a thin wrapper in OSS) — this renders the rows + the healthy /
 // no-data terminal states only.
-export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction }: IssuesViewProps) {
+export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions }: IssuesViewProps) {
   // Single-open accordion: opening a row collapses the previous one, so the
   // queue stays scannable and you never lose your place to a wall of expansions.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -105,6 +108,7 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
             onToggle={() => setOpenId((cur) => (cur === rowKey ? null : rowKey))}
             resourceHref={resourceHref}
             onResourceClick={onResourceClick}
+            renderActions={renderActions}
           />
         );
       })}

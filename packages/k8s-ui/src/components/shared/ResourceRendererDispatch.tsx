@@ -722,6 +722,27 @@ export function ResourceRendererDispatch({
 // RESOURCE STATUS HELPER
 // ============================================================================
 
+// Coarse health hint for the per-resource Diagnose entry point: should the action
+// read as an urgent "Diagnose" (resource has a live problem) or a quiet "ask AI"?
+// Derived from the same status the detail badge shows, so the button matches what
+// the user sees. We key off the StatusBadge `level` (the workload/pod status fns
+// return it) — NOT the color string, which varies by helper. 'unknown' for kinds
+// without a level (we don't assert "Diagnose" when we can't tell → quiet variant).
+export type DiagnoseHealthHint = 'problem' | 'healthy' | 'unknown'
+export function diagnoseHealthHint(kind: string, data: any): DiagnoseHealthHint {
+  const st = getResourceStatus(kind, data) as { level?: string } | null
+  switch (st?.level) {
+    case 'unhealthy':
+    case 'degraded':
+    case 'alert':
+      return 'problem'
+    case 'healthy':
+      return 'healthy'
+    default:
+      return 'unknown'
+  }
+}
+
 export function getResourceStatus(kind: string, data: any): { text: string; color: string } | null {
   if (!data) return null
   const k = kind.toLowerCase()

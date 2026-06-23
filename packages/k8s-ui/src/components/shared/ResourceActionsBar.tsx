@@ -491,7 +491,9 @@ export function ResourceActionsBar({
       {/* Spacer pushes universal actions to the right */}
       <div className="flex-1" />
 
-      {/* Universal actions (right-aligned) */}
+      {/* Universal actions (right-aligned). The AI/Diagnose action is NOT here — it
+          lives in the detail header chrome (see WorkloadView), set apart from these
+          imperative ops. */}
       {onToggleYaml && (
         <button
           onClick={onToggleYaml}

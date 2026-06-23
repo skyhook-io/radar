@@ -12,7 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/version"
 )
 
-func newServer() *mcpsdk.Server {
+func newServer(includeWrites bool) *mcpsdk.Server {
 	server := mcpsdk.NewServer(
 		&mcpsdk.Implementation{
 			Name:    "radar",
@@ -21,19 +21,26 @@ func newServer() *mcpsdk.Server {
 		nil,
 	)
 
-	registerTools(server)
+	registerTools(server, includeWrites)
 	registerResources(server)
 
 	return server
 }
 
-// RunStdio runs the MCP server over stdio.
+// RunStdio runs the MCP server over stdio (full tool set).
 func RunStdio(ctx context.Context) error {
-	return newServer().Run(ctx, &mcpsdk.StdioTransport{})
+	return newServer(true).Run(ctx, &mcpsdk.StdioTransport{})
 }
 
-// NewHandler creates the MCP HTTP handler to mount on chi.
-func NewHandler() http.Handler {
+// NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
+func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
+
+// NewReadOnlyHandler creates an MCP handler exposing only read tools. Radar points
+// read-only AI investigations here so a mutating tool can't even be discovered —
+// server-side enforcement that doesn't depend on the agent CLI restricting itself.
+func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }
+
+func handlerForServer(server *mcpsdk.Server) http.Handler {
 	streamOpts := &mcpsdk.StreamableHTTPOptions{Stateless: true}
 	// The MCP SDK auto-enables DNS-rebinding protection (Host header must be
 	// loopback) when the server binds to a loopback address. That blocks
@@ -44,7 +51,6 @@ func NewHandler() http.Handler {
 		log.Printf("[mcp] WARNING: DNS-rebinding Host check DISABLED via env (bench mode)")
 	}
 
-	server := newServer()
 	handler := mcpsdk.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcpsdk.Server { return server },
 		streamOpts,

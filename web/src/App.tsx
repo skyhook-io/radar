@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
+import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useAPIResources, CORE_RESOURCES } from './api/apiResources'
@@ -496,6 +497,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     window.addEventListener('radar:open-settings', handler)
     return () => window.removeEventListener('radar:open-settings', handler)
   }, [])
+
+  // Listen for "open-local-terminal" DOM event — the AI surface is portaled above
+  // the DockProvider, so it can't call useOpenLocalTerminal directly; it dispatches
+  // this instead (mirrors the open-settings pattern).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { command, title } = (e as CustomEvent).detail ?? {}
+      openLocalTerminal({ initialCommand: command, title })
+    }
+    window.addEventListener('radar:open-local-terminal', handler)
+    return () => window.removeEventListener('radar:open-local-terminal', handler)
+  }, [openLocalTerminal])
 
   // Diagnostics overlay state
   const [showDiagnostics, setShowDiagnostics] = useState(false)
@@ -1557,9 +1570,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           span the content area AFTER the rail rather than the full viewport
           under it. `fixed` splashes (connecting/switching) are unaffected. */}
       <div className="relative flex flex-col flex-1 min-w-0 h-full">
-      {/* Header — suppressed in chromeless embed; the host owns the chrome. */}
+      {/* Header — suppressed in chromeless embed; the host owns the chrome.
+          @container: the header's responsive layout keys off its OWN width, not the
+          viewport — so it reflows correctly when the AI panel pushes the app narrower
+          (viewport media queries can't see that). The @min-[…px] thresholds below are
+          header-width (≈ viewport − nav rail), calibrated to preserve the no-panel layout. */}
       {!chromeless && (
-      <header className="relative z-50 flex items-center justify-between px-4 py-2 bg-theme-base/90 backdrop-blur-sm border-b border-theme-border/50">
+      <header className="@container relative z-50 flex items-center justify-between px-4 py-2 bg-theme-base/90 backdrop-blur-sm border-b border-theme-border/50">
         {/* Left: Logo + Cluster info. In the standalone (nav-rail) layout this
             is a FIXED-WIDTH column so the omnibar after it is force-pinned: the
             scope pill + status dot can change width (cluster/namespace value)
@@ -1652,7 +1669,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             navigates via the left rail (showNavRail), so the pill bar is
             suppressed there to avoid a duplicate primary nav. */}
         {!showNavRail && (
-        <div className="md:absolute md:left-1/2 md:-translate-x-1/2 flex items-center gap-0.5 bg-theme-elevated/50 rounded-full p-1 ml-2 md:ml-0">
+        <div className="@min-[920px]:absolute @min-[920px]:left-1/2 @min-[920px]:-translate-x-1/2 flex items-center gap-0.5 bg-theme-elevated/50 rounded-full p-1 ml-2 @min-[920px]:ml-0">
           {([
             { view: 'home' as const, icon: Home, label: 'Home' },
             { view: 'topology' as const, icon: Network, label: 'Topology' },
@@ -1699,7 +1716,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                     off-system breakpoint chosen by measurement at the time
                     of this PR — recompute if the cluster switcher cap or
                     other left-section chrome changes appreciably. */}
-                <span className="hidden min-[1440px]:inline">{label}</span>
+                <span className="hidden @min-[1264px]:inline">{label}</span>
               </button>
             </Tooltip>
           ))}
@@ -1714,7 +1731,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             "Disconnected" text). Overflowing side content truncates instead of
             dragging the box. Same pattern as Radar Hub's ClusterTopBar. */}
         {showNavRail && (
-          <div className="hidden sm:flex flex-1 justify-center min-w-0 px-3">
+          <div className="hidden @min-[720px]:flex flex-1 justify-center min-w-0 px-3">
             <RadarOmnibar
               ref={omnibarRef}
               onNavigateView={(view) => setMainView(view)}
@@ -1755,10 +1772,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
           {/* GitHub star — hidden in embedded mode (not OSS-distribution chrome). */}
           {!navCustomization.embedded && (
-            <div className="hidden lg:block">
+            <div className="hidden @min-[1100px]:block">
               <GitHubStarButton />
             </div>
           )}
+
+          {/* AI investigations (self-hides when no agent CLI is present) */}
+          <GlobalDiagnoseButton />
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
@@ -1780,7 +1800,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               to the host's cookie/backend) and the user would see the theme
               bounce on every navigation between host routes and /c/:id. */}
           {!navCustomization.embedded && (
-            <div className="hidden md:flex items-center">
+            <div className="hidden @min-[920px]:flex items-center">
               <ThemeToggle />
             </div>
           )}

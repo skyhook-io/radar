@@ -267,6 +267,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 
 	if cfg.MCPEnabled {
 		serverCfg.MCPHandler = mcppkg.NewHandler()
+		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		if cfg.Port != 0 {
 			log.Printf("MCP server enabled at http://localhost:%d/mcp", cfg.Port)
 		} else {

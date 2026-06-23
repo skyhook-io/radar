@@ -1,0 +1,97 @@
+// The recent-investigations list — now backed by server-side runs (the source of
+// truth), so background/running investigations appear here live. Used both as the
+// docked Home view and the master pane of the maximized workspace.
+import { Loader2, Sparkles } from "lucide-react";
+import { type RunSummary } from "../../api/diagnose";
+
+// Compact "3m ago" / "2h ago" / date label.
+function relativeTime(ts: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ts) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+function statusDot(status: RunSummary["status"]) {
+  if (status === "running")
+    return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent" />;
+  const color =
+    status === "error" || status === "stopped"
+      ? "bg-red-400"
+      : status === "stale"
+        ? "bg-amber-400"
+        : "bg-emerald-400";
+  return <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${color}`} />;
+}
+
+export function RecentList({
+  agentLabel,
+  runs,
+  onSelect,
+  selectedId,
+}: {
+  agentLabel: string;
+  runs: RunSummary[];
+  onSelect: (id: string) => void;
+  selectedId?: string | null;
+}) {
+  const now = Date.now();
+
+  if (runs.length === 0) {
+    return (
+      <div className="flex flex-col items-center px-4 py-12 text-center">
+        <Sparkles className="mb-3 h-7 w-7 text-accent" />
+        <div className="text-sm font-medium text-theme-text-primary">
+          No investigations yet
+        </div>
+        <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
+          Open a resource and use its{" "}
+          <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
+          action to investigate it with {agentLabel} —{" "}
+          <span className="font-medium text-theme-text-secondary">Diagnose</span>{" "}
+          a problem, or just ask about it. Investigations keep running here in the
+          background.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+        Investigations
+      </div>
+      {runs.map((r) => (
+        <button
+          key={r.id}
+          onClick={() => onSelect(r.id)}
+          className={`flex w-full flex-col gap-0.5 rounded-md border px-2.5 py-2 text-left ${
+            r.id === selectedId
+              ? "border-accent/50 bg-accent/10"
+              : "border-theme-border/60 bg-theme-base/40 hover:bg-theme-hover"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {statusDot(r.status)}
+            <span className="min-w-0 flex-1 truncate text-sm text-theme-text-primary">
+              {r.kind} {r.namespace ? `${r.namespace}/` : ""}
+              {r.name}
+            </span>
+            <span className="shrink-0 text-[11px] text-theme-text-tertiary">
+              {r.status === "running"
+                ? "running…"
+                : relativeTime(new Date(r.updatedAt).getTime(), now)}
+            </span>
+          </div>
+          {r.preview && (
+            <div className="truncate pl-3.5 text-xs text-theme-text-tertiary">
+              {r.preview}
+            </div>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}

@@ -16,6 +16,7 @@ export {
   getCredentialsMode,
 } from './api/config';
 export type { NavCustomization, FleetTakeoverTarget } from './context/NavCustomization';
+export type { RenderDiagnoseAction } from './context/DiagnoseCustomization';
 export { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay';
 
 // Shared cluster-switcher primitive — re-exported from @skyhook-io/k8s-ui so
