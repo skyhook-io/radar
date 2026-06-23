@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings, X, RotateCcw, Loader2, Copy, Check, Pin, Shield, Lock } from 'lucide-react'
+import { Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
@@ -165,7 +165,13 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
           <div className="flex items-center gap-2">
             <Settings className="w-5 h-5 text-theme-text-secondary" />
-            <h2 className="text-lg font-semibold text-theme-text-primary">Settings</h2>
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-lg font-semibold text-theme-text-primary">Settings</h2>
+              <span className="text-[11px] text-theme-text-tertiary">
+                Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion}` : ''}
+                <span className="text-theme-text-disabled"> · by Skyhook</span>
+              </span>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -233,7 +239,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
             the save controls entirely for non-owners (personal sections save
             themselves). */}
         {canEditConfig && (
-        <div className="flex items-center justify-between gap-3 p-4 border-t border-theme-border shrink-0">
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-theme-border shrink-0">
             <div className="flex items-center gap-2">
               <button
                 onClick={resetConfig}
@@ -253,32 +259,22 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
                 </span>
               )}
             </div>
-            <button
-              onClick={saveConfig}
-              disabled={saving || !configDirty}
-              className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
-            >
-              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              Save
-            </button>
+            <div className="flex items-center gap-3">
+              <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
+                <RotateCw className="w-3 h-3" />
+                Applies on next launch
+              </span>
+              <button
+                onClick={saveConfig}
+                disabled={saving || !configDirty}
+                className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+              >
+                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                Save
+              </button>
+            </div>
           </div>
         )}
-
-        {/* About — muted version footer (canonical "Settings → About"). */}
-        <div className="flex items-center justify-between gap-2 px-4 py-2 border-t border-theme-border/60 text-[11px] text-theme-text-tertiary shrink-0">
-          <span>
-            Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion}` : ''}
-            <span className="text-theme-text-disabled"> · by Skyhook</span>
-          </span>
-          <a
-            href="https://github.com/skyhook-io/radar"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-accent-text hover:underline"
-          >
-            GitHub
-          </a>
-        </div>
       </div>
     </div>,
     document.body
@@ -378,6 +374,18 @@ function StartupConfigTab({
       )}
 
       <div className="border-t border-theme-border pt-4 mt-4">
+        <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-3">AI Tools</h4>
+
+        <MCPSection
+          mcpEnabled={config.mcp ?? true}
+          onToggle={(v) => onChange('mcp', v)}
+          isDesktop={isDesktop}
+          portPinned={config.port != null && config.port > 0}
+          onPinPort={(port) => onChange('port', port)}
+        />
+      </div>
+
+      <div className="border-t border-theme-border pt-4 mt-4">
         <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-3">Timeline</h4>
 
         <div className="space-y-4">
@@ -388,7 +396,7 @@ function StartupConfigTab({
             <select
               value={config.timelineStorage ?? 'memory'}
               onChange={(e) => onChange('timelineStorage', e.target.value === 'memory' ? undefined : e.target.value as 'sqlite')}
-              className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-blue-500"
+              className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-skyhook-500"
             >
               <option value="memory">Memory (default)</option>
               <option value="sqlite">SQLite (persistent)</option>
@@ -418,14 +426,6 @@ function StartupConfigTab({
             effectiveValue={effectiveConfig?.prometheusUrl}
             placeholder="http://prometheus-server.monitoring:9090"
             onChange={(v) => onChange('prometheusUrl', v || undefined)}
-          />
-
-          <MCPSection
-            mcpEnabled={config.mcp ?? true}
-            onToggle={(v) => onChange('mcp', v)}
-            isDesktop={isDesktop}
-            portPinned={config.port != null && config.port > 0}
-            onPinPort={(port) => onChange('port', port)}
           />
         </div>
       </div>
@@ -543,7 +543,7 @@ function ConfigField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-blue-500"
+        className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
       />
       <EffectiveHint current={value || undefined} effective={effectiveValue} />
     </div>
@@ -603,7 +603,7 @@ function ConfigArrayField({
           commit(e.target.value)
         }}
         placeholder={placeholder}
-        className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-blue-500"
+        className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
       />
       <EffectiveHint current={canonical(value) || undefined} effective={canonical(effectiveValue) || undefined} />
     </div>
@@ -636,7 +636,7 @@ function ConfigNumberField({
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value ? parseInt(e.target.value, 10) || undefined : undefined)}
         placeholder={placeholder}
-        className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-blue-500"
+        className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
       />
       <EffectiveHint current={value} effective={effectiveValue} />
     </div>
