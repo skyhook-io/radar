@@ -3800,9 +3800,9 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
-	if !s.requireConnected(w) {
-		return
-	}
+	// No requireConnected: persisting + applying a manual URL needs no cluster
+	// (the probe hits the URL over HTTP), so operators can point at an external
+	// Prometheus even while the cluster is unreachable, like handlePutConfig.
 	var body struct {
 		PrometheusURL string `json:"prometheusUrl"`
 		// Headers is a pointer so we can tell "not editing headers" (nil — keep

@@ -576,14 +576,20 @@ function PrometheusConfigField({
 
   const handleApply = async () => {
     setApply({ status: 'applying' })
-    const editedHeaders =
-      headerRows === null
-        ? undefined
-        : Object.fromEntries(
-            headerRows
-              .map((r) => [r.key.trim(), r.value] as const)
-              .filter(([k, v]) => k !== '' && v !== '')
-          )
+    // Decide what to do with headers. undefined = leave them untouched. Only send
+    // a replacement when the editor has real content, or {} when the user emptied
+    // every row (explicit clear) — blank in-progress rows must NOT wipe stored
+    // secrets just because the editor happens to be open for a URL-only change.
+    let editedHeaders: Record<string, string> | undefined
+    if (headerRows !== null) {
+      const entered = Object.fromEntries(
+        headerRows
+          .map((r) => [r.key.trim(), r.value] as const)
+          .filter(([k, v]) => k !== '' && v !== '')
+      )
+      if (Object.keys(entered).length > 0) editedHeaders = entered
+      else if (headerRows.length === 0) editedHeaders = {}
+    }
     try {
       const res = await fetch(apiUrl('/integrations/prometheus'), {
         method: 'PUT',
@@ -601,6 +607,8 @@ function PrometheusConfigField({
       }
       if (editedHeaders !== undefined) {
         setAppliedKeys(Object.keys(editedHeaders).sort())
+      }
+      if (headerRows !== null) {
         setHeaderRows(null)
       }
       if (data?.connected) {
@@ -726,8 +734,9 @@ function PrometheusConfigField({
               </button>
             </div>
             <p className="text-xs text-theme-text-tertiary">
-              Saved when you click Apply now. Replaces all stored headers — existing
-              values are hidden, so re-enter any you want to keep.
+              Saved when you click Apply now. Entered headers replace all stored
+              ones — values are hidden, so re-enter any you want to keep. Leave
+              blank to keep existing headers unchanged.
             </p>
           </div>
         )}
