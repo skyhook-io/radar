@@ -134,6 +134,34 @@ func TestResourceCountsOmitsClusterScopedCRDWhenCanReadDenies(t *testing.T) {
 	}
 }
 
+func TestResourceCountsSurfacesDeniedCoreClusterScopedKindAsForbidden(t *testing.T) {
+	// A core cluster-scoped kind (Node) always exists, so an RBAC denial must be
+	// surfaced as forbidden — not silently omitted, which would render as
+	// "0 / No Node found", indistinguishable from an empty cluster.
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	user := &auth.User{Username: "alice"}
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "nodes", "", false)
+	s.permCache.Set(user.Username, perms)
+	req := requestWithUser(http.MethodGet, "/api/resource-counts", user)
+
+	rec := httptest.NewRecorder()
+	s.handleResourceCounts(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var body ResourceCountsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := body.Counts["Node"]; ok {
+		t.Fatalf("denied Node leaked a count: %v", body.Counts["Node"])
+	}
+	if !containsString(body.Forbidden, "Node") {
+		t.Fatalf("denied core cluster-scoped Node should be in forbidden, got: %v", body.Forbidden)
+	}
+}
+
 func TestResourceCountsCountsClusterScopedCRDDespiteNamespaceFilter(t *testing.T) {
 	nodePoolGVR := schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
 	endpointSliceGVR := schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}

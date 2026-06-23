@@ -77,7 +77,14 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		// per-user via SAR before counting.
 		if k8s.IsClusterOnlyKind(kl.Kind()) {
 			group, resource, ok := k8s.ClusterOnlyKindGVR(kl.Kind())
-			if !ok || !s.canRead(r, group, resource, "", "list") {
+			if !ok {
+				continue
+			}
+			// A core cluster-scoped kind always exists, so an RBAC denial is
+			// surfaced as forbidden rather than silently omitted — otherwise the
+			// UI shows "0 / No X found", indistinguishable from an empty cluster.
+			if !s.canRead(r, group, resource, "", "list") {
+				forbidden = append(forbidden, kl.CountKey())
 				continue
 			}
 		}
