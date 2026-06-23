@@ -524,7 +524,8 @@ type ApplyState =
   | { status: 'idle' }
   | { status: 'applying' }
   | { status: 'connected'; address: string }
-  | { status: 'error'; error: string }
+  | { status: 'unreachable'; error: string } // persisted, but the probe failed
+  | { status: 'failed'; error: string }       // request itself failed — nothing saved
 
 function PrometheusConfigField({
   value,
@@ -546,16 +547,16 @@ function PrometheusConfigField({
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
-        setApply({ status: 'error', error: data?.error || res.statusText })
+        setApply({ status: 'failed', error: data?.error || res.statusText })
         return
       }
       if (data?.connected) {
         setApply({ status: 'connected', address: data.address || value.trim() })
       } else {
-        setApply({ status: 'error', error: data?.error || 'not reachable' })
+        setApply({ status: 'unreachable', error: data?.error || 'not reachable' })
       }
     } catch (err) {
-      setApply({ status: 'error', error: String(err) })
+      setApply({ status: 'failed', error: String(err) })
     }
   }
 
@@ -595,9 +596,13 @@ function PrometheusConfigField({
           <Check className="w-3 h-3 shrink-0" />
           Connected to {apply.address} — applied, no restart needed
         </p>
-      ) : apply.status === 'error' ? (
+      ) : apply.status === 'unreachable' ? (
         <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
           Saved, but not reachable: {apply.error}
+        </p>
+      ) : apply.status === 'failed' ? (
+        <p className="mt-1 text-xs text-red-600 dark:text-red-400/80">
+          Couldn't apply: {apply.error}
         </p>
       ) : (
         <p className="mt-1 text-xs text-theme-text-tertiary">

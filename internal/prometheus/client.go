@@ -77,12 +77,19 @@ func newMCPHTTPClient() *http.Client {
 }
 
 // SetManualURL sets the --prometheus-url override on the global client.
+// manualURL is read under the per-client c.mu (discover, Reinitialize), so the
+// write must take c.mu too — not clientMu — to avoid a lock-mismatch race once
+// this is callable at runtime. Mirrors SetHeaders.
 func SetManualURL(rawURL string) {
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	if globalClient != nil {
-		globalClient.manualURL = strings.TrimRight(rawURL, "/")
+	clientMu.RLock()
+	c := globalClient
+	clientMu.RUnlock()
+	if c == nil {
+		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.manualURL = strings.TrimRight(rawURL, "/")
 }
 
 // SetHeaders sets HTTP headers attached to every Prometheus request on the

@@ -3800,11 +3800,20 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	url := strings.TrimSpace(body.PrometheusURL)
+	rawURL := strings.TrimSpace(body.PrometheusURL)
+
+	// Reject anything startup would log.Fatalf on, so "Apply now" can't persist a
+	// config that bricks the next launch. Empty reverts to auto-discovery.
+	if rawURL != "" {
+		if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			s.writeError(w, http.StatusBadRequest, "Prometheus URL must be a valid HTTP(S) URL (e.g., http://prometheus-server.monitoring:9090)")
+			return
+		}
+	}
 
 	// Persist first: a failed disk write must not leave the running client
 	// pointed somewhere the on-disk config disagrees with.
-	if _, err := config.Update(func(c *config.Config) { c.PrometheusURL = url }); err != nil {
+	if _, err := config.Update(func(c *config.Config) { c.PrometheusURL = rawURL }); err != nil {
 		log.Printf("[config] Failed to persist Prometheus URL: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -3812,8 +3821,8 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 
 	// Apply to the running client. Reset() drops the cached connection so the
 	// probe below rediscovers against the new URL instead of the old endpoint.
-	prometheuspkg.SetManualURL(url)
-	traffic.SetMetricsURL(url)
+	prometheuspkg.SetManualURL(rawURL)
+	traffic.SetMetricsURL(rawURL)
 	prometheuspkg.Reset()
 
 	resp := struct {
