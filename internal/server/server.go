@@ -3705,7 +3705,12 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	r.URL.RawQuery = q.Encode()
-	s.broadcaster.HandleSSE(w, r)
+	// Cluster-scoped topology kinds (Nodes, PV, StorageClass, NodePool, …) have
+	// no namespace to filter on, so strip the ones this user can't list — the
+	// same gate the REST /api/topology handler applies. Resolved here (the
+	// request is available) and threaded through so the broadcast loop never
+	// runs a SAR.
+	s.broadcaster.HandleSSE(w, r, s.deniedClusterScopedTopoKinds(r))
 }
 
 // Settings handlers

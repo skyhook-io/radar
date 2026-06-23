@@ -58,6 +58,11 @@ type ClientInfo struct {
 	Namespaces       []string // Filter to specific namespaces (empty = all)
 	ViewMode         string   // "full" or "traffic"
 	ShowPolicyEffect bool     // Evaluate NetworkPolicies on edges
+	// DeniedKinds are cluster-scoped topology kinds (Nodes, PV, StorageClass,
+	// NodePool, …) this user can't list, stripped from every topology frame.
+	// Resolved once at subscribe time (the request is available there) so the
+	// broadcast loop never runs a SAR. nil/empty for users with full access.
+	DeniedKinds map[topology.NodeKind]bool
 }
 
 type clientRegistration struct {
@@ -65,6 +70,7 @@ type clientRegistration struct {
 	namespaces       []string
 	viewMode         string
 	showPolicyEffect bool
+	deniedKinds      map[topology.NodeKind]bool
 }
 
 // SSEEvent represents an event to send to clients
@@ -365,7 +371,7 @@ func (b *SSEBroadcaster) run() {
 				close(reg.ch) // Signal rejection by closing the channel
 				continue
 			}
-			b.clients[reg.ch] = ClientInfo{Namespaces: reg.namespaces, ViewMode: reg.viewMode, ShowPolicyEffect: reg.showPolicyEffect}
+			b.clients[reg.ch] = ClientInfo{Namespaces: reg.namespaces, ViewMode: reg.viewMode, ShowPolicyEffect: reg.showPolicyEffect, DeniedKinds: reg.deniedKinds}
 			b.mu.Unlock()
 			log.Printf("SSE client connected (namespaces=%v, view=%s), total clients: %d", reg.namespaces, reg.viewMode, len(b.clients))
 
@@ -600,20 +606,25 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 	// Note: namespaces are pre-sorted at subscription time for consistent grouping
 	type clientKey struct {
 		namespacesKey    string // comma-separated sorted namespaces
+		deniedKindsKey   string // comma-separated sorted denied cluster-scoped kinds
 		viewMode         string
 		showPolicyEffect bool
 	}
 	type clientGroup struct {
 		namespaces       []string
 		showPolicyEffect bool
+		deniedKinds      map[topology.NodeKind]bool
 		channels         []chan SSEEvent
 	}
 	clientGroups := make(map[clientKey]*clientGroup)
 	for ch, info := range clients {
 		nsKey := strings.Join(info.Namespaces, ",") // namespaces already sorted at subscribe time
-		key := clientKey{namespacesKey: nsKey, viewMode: info.ViewMode, showPolicyEffect: info.ShowPolicyEffect}
+		// Users with identical namespace + cluster-scoped RBAC share one frame;
+		// a user denied cluster-scoped kinds gets a distinct, stripped frame
+		// rather than the unfiltered bytes of a more-privileged peer.
+		key := clientKey{namespacesKey: nsKey, deniedKindsKey: deniedKindsKey(info.DeniedKinds), viewMode: info.ViewMode, showPolicyEffect: info.ShowPolicyEffect}
 		if clientGroups[key] == nil {
-			clientGroups[key] = &clientGroup{namespaces: info.Namespaces, showPolicyEffect: info.ShowPolicyEffect}
+			clientGroups[key] = &clientGroup{namespaces: info.Namespaces, showPolicyEffect: info.ShowPolicyEffect, deniedKinds: info.DeniedKinds}
 		}
 		clientGroups[key].channels = append(clientGroups[key].channels, ch)
 	}
@@ -638,6 +649,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 			log.Printf("Error building topology for broadcast: %v", err)
 			continue
 		}
+		topo.StripNodeKinds(group.deniedKinds)
 
 		if int64(topo.EstimatedNodes) > maxEstimated {
 			maxEstimated = int64(topo.EstimatedNodes)
@@ -664,6 +676,21 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 	// when maxEstimated stayed 0 (eg. every build errored) — that just
 	// falls through to the bootstrap proxy in topologyDebounceFor.
 	b.lastBroadcastMaxEstimated.Store(maxEstimated)
+}
+
+// deniedKindsKey builds a stable grouping key from a denied-kinds set so that
+// clients with the same effective cluster-scoped RBAC share a pre-marshaled
+// frame. Empty (full access) collapses to "" — the common case.
+func deniedKindsKey(deny map[topology.NodeKind]bool) string {
+	if len(deny) == 0 {
+		return ""
+	}
+	kinds := make([]string, 0, len(deny))
+	for k := range deny {
+		kinds = append(kinds, string(k))
+	}
+	sort.Strings(kinds)
+	return strings.Join(kinds, ",")
 }
 
 // heartbeat sends periodic heartbeats to keep connections alive
@@ -697,7 +724,7 @@ func (b *SSEBroadcaster) Broadcast(event SSEEvent) {
 }
 
 // Subscribe adds a new SSE client. Returns nil if max clients reached.
-func (b *SSEBroadcaster) Subscribe(namespaces []string, viewMode string, showPolicyEffect ...bool) chan SSEEvent {
+func (b *SSEBroadcaster) Subscribe(namespaces []string, viewMode string, deniedKinds map[topology.NodeKind]bool, showPolicyEffect ...bool) chan SSEEvent {
 	// Check client count before creating the channel to fail fast
 	b.mu.RLock()
 	clientCount := len(b.clients)
@@ -719,7 +746,7 @@ func (b *SSEBroadcaster) Subscribe(namespaces []string, viewMode string, showPol
 
 	policyEffect := len(showPolicyEffect) > 0 && showPolicyEffect[0]
 	ch := make(chan SSEEvent, 10)
-	b.register <- clientRegistration{ch: ch, namespaces: sortedNs, viewMode: viewMode, showPolicyEffect: policyEffect}
+	b.register <- clientRegistration{ch: ch, namespaces: sortedNs, viewMode: viewMode, showPolicyEffect: policyEffect, deniedKinds: deniedKinds}
 	return ch
 }
 
@@ -805,7 +832,7 @@ func buildFullTopology() (*topology.Topology, error) {
 }
 
 // HandleSSE is the HTTP handler for the SSE endpoint
-func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
+func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, deniedKinds map[topology.NodeKind]bool) {
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -828,7 +855,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Subscribe to events
-	eventCh := b.Subscribe(namespaces, viewMode, policyEffect)
+	eventCh := b.Subscribe(namespaces, viewMode, deniedKinds, policyEffect)
 	if eventCh == nil {
 		http.Error(w, "Too many SSE connections", http.StatusServiceUnavailable)
 		return
@@ -860,6 +887,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		}
 		opts.ShowPolicyEffect = policyEffect
 		if topo, err := builder.Build(opts); err == nil {
+			topo.StripNodeKinds(deniedKinds)
 			data, marshalErr := json.Marshal(topo)
 			if marshalErr != nil {
 				log.Printf("SSE: failed to marshal initial topology: %v", marshalErr)
