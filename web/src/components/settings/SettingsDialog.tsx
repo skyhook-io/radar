@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug } from 'lucide-react'
+import { Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug, Plus } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
@@ -27,6 +27,7 @@ interface ConfigResponse {
   file: Config
   effective: Config
   isDesktop: boolean
+  prometheusHeaderKeys?: string[]
 }
 
 interface SettingsDialogProps {
@@ -218,6 +219,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
               effectiveConfig={configData?.effective}
               isDesktop={isDesktop}
               deploymentMode={deploymentMode}
+              prometheusHeaderKeys={configData?.prometheusHeaderKeys ?? []}
               onChange={updateConfigField}
             />
           ) : (
@@ -298,12 +300,14 @@ function StartupConfigTab({
   effectiveConfig,
   isDesktop,
   deploymentMode,
+  prometheusHeaderKeys,
   onChange,
 }: {
   config: Config
   effectiveConfig?: Config
   isDesktop: boolean
   deploymentMode: DeploymentMode
+  prometheusHeaderKeys: string[]
   onChange: <K extends keyof Config>(field: K, value: Config[K]) => void
 }) {
   const showBrowserLaunchControls = !isDesktop && deploymentMode === 'local'
@@ -421,6 +425,7 @@ function StartupConfigTab({
         <div className="space-y-4">
           <PrometheusConfigField
             value={config.prometheusUrl ?? ''}
+            configuredHeaderKeys={prometheusHeaderKeys}
             onChange={(v) => onChange('prometheusUrl', v || undefined)}
           />
         </div>
@@ -527,28 +532,58 @@ type ApplyState =
   | { status: 'unreachable'; error: string } // persisted, but the probe failed
   | { status: 'failed'; error: string }       // request itself failed — nothing saved
 
+type HeaderRow = { key: string; value: string }
+
 function PrometheusConfigField({
   value,
   onChange,
+  configuredHeaderKeys,
 }: {
   value: string
   onChange: (value: string) => void
+  configuredHeaderKeys: string[]
 }) {
   const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
+  // null = not editing headers (preserve what's stored). A non-null array means
+  // the user opened the editor; on Apply we send it verbatim, replacing all
+  // stored headers (values are write-only, so the server never sends them back).
+  const [headerRows, setHeaderRows] = useState<HeaderRow[] | null>(null)
+  // Mirrors the server's configured header keys so the summary updates after a
+  // successful apply without refetching the whole config.
+  const [storedKeys, setStoredKeys] = useState<string[]>(configuredHeaderKeys)
+
+  const clearStatus = () => {
+    if (apply.status !== 'applying') setApply({ status: 'idle' })
+  }
 
   const handleApply = async () => {
     setApply({ status: 'applying' })
+    const editedHeaders =
+      headerRows === null
+        ? undefined
+        : Object.fromEntries(
+            headerRows
+              .map((r) => [r.key.trim(), r.value] as const)
+              .filter(([k, v]) => k !== '' && v !== '')
+          )
     try {
       const res = await fetch(apiUrl('/integrations/prometheus'), {
         method: 'PUT',
         credentials: getCredentialsMode(),
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ prometheusUrl: value.trim() }),
+        body: JSON.stringify({
+          prometheusUrl: value.trim(),
+          ...(editedHeaders !== undefined ? { headers: editedHeaders } : {}),
+        }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
         setApply({ status: 'failed', error: data?.error || res.statusText })
         return
+      }
+      if (editedHeaders !== undefined) {
+        setStoredKeys(Object.keys(editedHeaders).sort())
+        setHeaderRows(null)
       }
       if (data?.connected) {
         setApply({ status: 'connected', address: data.address || value.trim() })
@@ -574,7 +609,7 @@ function PrometheusConfigField({
           value={value}
           onChange={(e) => {
             onChange(e.target.value)
-            if (apply.status !== 'applying') setApply({ status: 'idle' })
+            clearStatus()
           }}
           placeholder="http://prometheus-server.monitoring:9090"
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
@@ -609,6 +644,77 @@ function PrometheusConfigField({
           Applies immediately — no restart needed.
         </p>
       )}
+
+      {/* Auth headers — for token / multi-tenant backends (Bearer, X-Scope-OrgID). */}
+      <div className="mt-3">
+        {headerRows === null ? (
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-theme-text-tertiary">
+              {storedKeys.length > 0
+                ? <>Auth headers: <span className="text-theme-text-secondary">{storedKeys.join(', ')}</span> <span className="text-theme-text-disabled">(values hidden)</span></>
+                : 'No auth headers'}
+            </span>
+            <button
+              onClick={() => { setHeaderRows([{ key: '', value: '' }]); clearStatus() }}
+              className="shrink-0 text-xs font-medium text-accent-text hover:underline"
+            >
+              {storedKeys.length > 0 ? 'Edit headers' : 'Add auth headers'}
+            </button>
+          </div>
+        ) : (
+          <div className="rounded-md border border-theme-border bg-theme-elevated/40 p-2.5 space-y-2">
+            {headerRows.map((row, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={row.key}
+                  onChange={(e) => {
+                    setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, key: e.target.value } : r))
+                    clearStatus()
+                  }}
+                  placeholder="Header (e.g. Authorization)"
+                  className="flex-1 min-w-0 px-2.5 py-1.5 text-xs bg-theme-base border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+                />
+                <input
+                  type="password"
+                  value={row.value}
+                  onChange={(e) => {
+                    setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, value: e.target.value } : r))
+                    clearStatus()
+                  }}
+                  placeholder="Value (e.g. Bearer …)"
+                  className="flex-1 min-w-0 px-2.5 py-1.5 text-xs bg-theme-base border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+                />
+                <button
+                  onClick={() => setHeaderRows((rows) => rows!.filter((_, j) => j !== i))}
+                  className="shrink-0 p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
+                  title="Remove header"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+            <div className="flex items-center justify-between gap-2">
+              <button
+                onClick={() => setHeaderRows((rows) => [...rows!, { key: '', value: '' }])}
+                className="flex items-center gap-1 text-xs font-medium text-accent-text hover:underline"
+              >
+                <Plus className="w-3 h-3" /> Add header
+              </button>
+              <button
+                onClick={() => { setHeaderRows(null); clearStatus() }}
+                className="text-xs text-theme-text-tertiary hover:text-theme-text-primary"
+              >
+                Cancel
+              </button>
+            </div>
+            <p className="text-xs text-theme-text-tertiary">
+              Applied with the URL above. Replaces all stored headers — values are
+              write-only, so re-enter any you want to keep.
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

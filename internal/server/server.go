@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -3731,6 +3732,9 @@ type configResponse struct {
 	File      config.Config `json:"file"`
 	Effective config.Config `json:"effective"`
 	IsDesktop bool          `json:"isDesktop"`
+	// PrometheusHeaderKeys lists the configured Prometheus header names so the UI
+	// can show what's set without ever receiving the (secret) values.
+	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
 }
 
 // handleGetConfig returns the on-disk config file alongside the effective startup config.
@@ -3738,10 +3742,16 @@ type configResponse struct {
 // diagnostics endpoint already masks them as a presence bool.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	file := config.Load()
+	headerKeys := make([]string, 0, len(file.PrometheusHeaders))
+	for k := range file.PrometheusHeaders {
+		headerKeys = append(headerKeys, k)
+	}
+	sort.Strings(headerKeys)
 	file.PrometheusHeaders = nil
 	resp := configResponse{
-		File:      file,
-		IsDesktop: version.IsDesktop(),
+		File:                 file,
+		IsDesktop:            version.IsDesktop(),
+		PrometheusHeaderKeys: headerKeys,
 	}
 	if s.effectiveConfig != nil {
 		effective := *s.effectiveConfig
@@ -3795,6 +3805,11 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	}
 	var body struct {
 		PrometheusURL string `json:"prometheusUrl"`
+		// Headers is a pointer so we can tell "not editing headers" (nil — keep
+		// what's on disk) apart from "clear all headers" (present but empty). The
+		// UI only sends it when the user touched the header editor, since GET
+		// redacts the values and can't round-trip them.
+		Headers *map[string]string `json:"headers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -3811,9 +3826,24 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	var headers map[string]string
+	if body.Headers != nil {
+		headers = make(map[string]string, len(*body.Headers))
+		for k, v := range *body.Headers {
+			if k = strings.TrimSpace(k); k != "" {
+				headers[k] = v
+			}
+		}
+	}
+
 	// Persist first: a failed disk write must not leave the running client
 	// pointed somewhere the on-disk config disagrees with.
-	if _, err := config.Update(func(c *config.Config) { c.PrometheusURL = rawURL }); err != nil {
+	if _, err := config.Update(func(c *config.Config) {
+		c.PrometheusURL = rawURL
+		if body.Headers != nil {
+			c.PrometheusHeaders = headers
+		}
+	}); err != nil {
 		log.Printf("[config] Failed to persist Prometheus URL: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -3823,6 +3853,10 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	// probe below rediscovers against the new URL instead of the old endpoint.
 	prometheuspkg.SetManualURL(rawURL)
 	traffic.SetMetricsURL(rawURL)
+	if body.Headers != nil {
+		prometheuspkg.SetHeaders(headers)
+		traffic.SetMetricsHeaders(headers)
+	}
 	prometheuspkg.Reset()
 
 	resp := struct {
