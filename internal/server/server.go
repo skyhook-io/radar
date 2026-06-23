@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1008,12 +1009,32 @@ func (s *Server) filterNamespacesByCanRead(r *http.Request, group, resource, ver
 	if len(namespaces) == 0 {
 		return namespaces
 	}
+	// Bounded-parallel: each canRead miss is a SAR round-trip, so a serial loop
+	// over a large candidate set (e.g. a cluster-wide reader's full namespace
+	// list in resolveHelmNamespaces) would block the request for N round-trips.
+	// canRead memoizes on the mutex-guarded UserPermissions.canI, mirroring the
+	// parallel SAR probing in internal/k8s/capabilities.go. Result is sorted so
+	// the output is deterministic regardless of goroutine completion order.
+	const maxConcurrent = 16
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	out := make([]string, 0, len(namespaces))
 	for _, ns := range namespaces {
-		if s.canRead(r, group, resource, ns, verb) {
-			out = append(out, ns)
-		}
+		wg.Add(1)
+		go func(ns string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if s.canRead(r, group, resource, ns, verb) {
+				mu.Lock()
+				out = append(out, ns)
+				mu.Unlock()
+			}
+		}(ns)
 	}
+	wg.Wait()
+	sort.Strings(out)
 	return out
 }
 
