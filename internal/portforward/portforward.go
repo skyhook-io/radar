@@ -2,7 +2,7 @@
 // It is used by both the traffic package (for Caretta/Hubble) and the prometheus
 // package (for resource metrics), breaking what would otherwise be an import cycle.
 //
-// The low-level SPDY primitives (RunPortForward, FindPodForService, FindFreePort)
+// The low-level primitives (RunPortForward, FindPodForService, FindFreePort)
 // live in pkg/portforward. This package manages the singleton lifecycle and
 // Radar-specific context tracking on top of those primitives.
 package portforward
@@ -255,7 +255,8 @@ func IsConnectedForContext(contextName string) bool {
 }
 
 func runPortForward(ctx context.Context, client kubernetes.Interface, config *rest.Config,
-	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{}) error {
+	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{},
+) error {
 	return pfpkg.RunPortForward(ctx, client, config, namespace, podName, localPort, targetPort, stopCh, readyCh)
 }
 

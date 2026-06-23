@@ -9,7 +9,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 
-	rce "github.com/skyhook-io/radar/pkg/remotecommand"
+	rcpkg "github.com/skyhook-io/radar/pkg/remotecommand"
 )
 
 // NewPodExecExecutor creates an executor for running commands in a pod container.
@@ -35,5 +35,5 @@ func NewPodExecExecutor(client kubernetes.Interface, config *rest.Config, namesp
 			TTY:    tty,
 		}, scheme.ParameterCodec)
 
-	return rce.NewExecutor(config, req.URL())
+	return rcpkg.NewExecutor(config, req.URL())
 }

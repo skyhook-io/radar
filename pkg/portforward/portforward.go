@@ -1,7 +1,10 @@
-// Package portforward provides low-level K8s SPDY port-forwarding primitives.
+// Package portforward provides low-level K8s port-forwarding primitives.
 // These are the pure K8s API building blocks: finding pods, finding ports,
-// and running SPDY tunnels. Lifecycle management and singleton state live in
-// each consumer (e.g., Radar's internal/portforward for metrics proxying).
+// and running tunnels. Tunnels try SPDY-over-WebSocket first (to traverse
+// proxies like Connect Gateway that reject raw SPDY upgrades) and fall back
+// to raw SPDY for clusters that predate the WebSocket port-forward subprotocol.
+// Lifecycle management and singleton state live in each consumer (e.g.,
+// Radar's internal/portforward for metrics proxying).
 package portforward
 
 import (
@@ -9,21 +12,45 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
+	"k8s.io/client-go/transport/spdy"
 )
 
-// RunPortForward runs a SPDY port-forward from localPort to targetPort on the given pod.
+// NewDialer builds a port-forward dialer that tries SPDY-over-WebSocket first
+// and falls back to raw SPDY when the apiserver rejects the WebSocket upgrade.
+// WebSocket is required to traverse proxies like Connect Gateway (k8s ≥1.31);
+// the SPDY fallback keeps clusters older than the WebSocket port-forward
+// subprotocol (pre-1.30) working.
+func NewDialer(config *rest.Config, u *url.URL) (httpstream.Dialer, error) {
+	wsDialer, err := portforward.NewSPDYOverWebsocketDialer(u, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create websocket dialer: %w", err)
+	}
+
+	transport, upgrader, err := spdy.RoundTripperFor(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create round tripper: %w", err)
+	}
+	spdyDialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", u)
+
+	return portforward.NewFallbackDialer(wsDialer, spdyDialer, httpstream.IsUpgradeFailure), nil
+}
+
+// RunPortForward runs a port-forward from localPort to targetPort on the given pod.
 // It blocks until the port-forward terminates (stopCh closed or context cancelled).
 // readyCh is closed once the tunnel is established and ready to accept connections.
 func RunPortForward(ctx context.Context, client kubernetes.Interface, config *rest.Config,
-	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{}) error {
-
+	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{},
+) error {
 	req := client.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
@@ -33,9 +60,9 @@ func RunPortForward(ctx context.Context, client kubernetes.Interface, config *re
 			Ports: []int32{int32(targetPort)},
 		}, scheme.ParameterCodec)
 
-	dialer, err := portforward.NewSPDYOverWebsocketDialer(req.URL(), config)
+	dialer, err := NewDialer(config, req.URL())
 	if err != nil {
-		return fmt.Errorf("failed to create dialer: %w", err)
+		return err
 	}
 
 	ports := []string{fmt.Sprintf("%d:%d", localPort, targetPort)}

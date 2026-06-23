@@ -25,6 +25,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	pfpkg "github.com/skyhook-io/radar/pkg/portforward"
 )
 
 // PortForwardSession represents an active port forward
@@ -289,9 +290,9 @@ func runPortForward(ctx context.Context, session *PortForwardSession) error {
 			Ports: []int32{int32(session.PodPort)},
 		}, scheme.ParameterCodec)
 
-	dialer, err := portforward.NewSPDYOverWebsocketDialer(req.URL(), config)
+	dialer, err := pfpkg.NewDialer(config, req.URL())
 	if err != nil {
-		return fmt.Errorf("failed to create dialer: %w", err)
+		return err
 	}
 
 	ports := []string{fmt.Sprintf("%d:%d", session.LocalPort, session.PodPort)}

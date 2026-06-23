@@ -330,7 +330,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	}
 	command := defaultExecCommand(overrideShell, DefaultPodShellCommand, podOS)
 
-	// Create SPDY executor
+	// Create remote command executor
 	exec, err := k8score.NewPodExecExecutor(client, config, namespace, podName, container, command, true)
 	if err != nil {
 		sendWSError(conn, fmt.Sprintf("Failed to create executor: %v", err))
@@ -502,7 +502,7 @@ func isShellNotFoundError(errMsg string) bool {
 		"not found in $path",
 		// POSIX exit 127 = "command not found". Some runtime/kubelet
 		// combinations surface a missing shell as "command terminated with
-		// exit code 127" via the SPDY stream rather than as a structured
+		// exit code 127" via the exec stream rather than as a structured
 		// runtime error. Our default exec wraps in `sh -c <script>`, so an
 		// exit-127 from that wrapper means `sh` itself couldn't run — i.e.
 		// shell missing. The drift canary picked this up against distroless

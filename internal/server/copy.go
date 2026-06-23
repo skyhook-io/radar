@@ -19,7 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/images"
-	rce "github.com/skyhook-io/radar/pkg/remotecommand"
+	rcpkg "github.com/skyhook-io/radar/pkg/remotecommand"
 )
 
 // PodFilesystem represents the file listing response for a pod container
@@ -75,7 +75,7 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := rce.NewExecutor(config, req.URL())
+	exec, err := rcpkg.NewExecutor(config, req.URL())
 	if err != nil {
 		log.Printf("[copy] Failed to create executor for %s/%s: %v", namespace, podName, err)
 		errorlog.Record("copy", "error", "failed to create executor for %s/%s: %v", namespace, podName, err)
@@ -130,7 +130,7 @@ func (s *Server) listFilesWithLS(r *http.Request, namespace, podName, container,
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := rce.NewExecutor(config, req.URL())
+	exec, err := rcpkg.NewExecutor(config, req.URL())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -192,7 +192,7 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := rce.NewExecutor(config, req.URL())
+	exec, err := rcpkg.NewExecutor(config, req.URL())
 	if err != nil {
 		log.Printf("[copy] Failed to create executor for download %s/%s: %v", namespace, podName, err)
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create executor: %v", err))
@@ -288,7 +288,7 @@ func (s *Server) downloadWithCat(r *http.Request, namespace, podName, container,
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := rce.NewExecutor(config, req.URL())
+	exec, err := rcpkg.NewExecutor(config, req.URL())
 	if err != nil {
 		return nil, err
 	}
