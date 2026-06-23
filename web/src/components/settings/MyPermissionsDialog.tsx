@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { Shield, X, Loader2 } from 'lucide-react'
+import { Shield, X, Loader2, Lock, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useQuery } from '@tanstack/react-query'
 import {
   rbacVerbBadgeClass,
   rbacResourceBadgeClass,
@@ -12,7 +13,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
-import { useNamespaces, useAuthMe } from '../../api/client'
+import { useNamespaces, useAuthMe, fetchJSON } from '../../api/client'
 import { useRBACWhoami } from '../../api/rbac'
 
 interface MyPermissionsDialogProps {
@@ -72,7 +73,7 @@ export function MyPermissionsDialog({ open, onClose }: MyPermissionsDialogProps)
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
           <div className="flex items-center gap-2">
             <Shield className="w-5 h-5 text-theme-text-secondary" />
-            <h2 className="text-lg font-semibold text-theme-text-primary">My Permissions</h2>
+            <h2 className="text-lg font-semibold text-theme-text-primary">Your access on this cluster</h2>
           </div>
           <button
             onClick={onClose}
@@ -135,6 +136,8 @@ export function MyPermissionsDialog({ open, onClose }: MyPermissionsDialogProps)
           ) : whoami ? (
             <PermissionsTable whoami={whoami} />
           ) : null}
+
+          <RestrictedResources enabled={open} />
         </div>
       </div>
     </div>,
@@ -227,6 +230,62 @@ function ResourceRuleRow({ rule }: { rule: { verbs?: string[]; apiGroups?: strin
           ))}
         </>
       )}
+    </div>
+  )
+}
+
+// displayKind strips the API group from a resource-counts key ("group/Kind" →
+// "Kind"; core kinds have no prefix).
+function displayKind(countKey: string): string {
+  const i = countKey.indexOf('/')
+  return i === -1 ? countKey : countKey.slice(i + 1)
+}
+
+// RestrictedResources surfaces the kinds Radar isn't showing the user (the
+// resource-counts `forbidden` set) — the "what's hidden from me" half of access,
+// alongside the SelfSubjectRulesReview rules above. That set mixes RBAC denials
+// with not-installed/not-watched kinds, so the copy says "usually RBAC" rather
+// than asserting a cause, and links to the docs that carry the unblock RBAC.
+function RestrictedResources({ enabled }: { enabled: boolean }) {
+  const { data } = useQuery<{ forbidden?: string[] }>({
+    queryKey: ['resource-counts', 'your-access'],
+    queryFn: () => fetchJSON('/resource-counts'),
+    enabled,
+    staleTime: 10000,
+  })
+  const forbidden = data?.forbidden ?? []
+  if (forbidden.length === 0) return null
+
+  return (
+    <div>
+      <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-2 flex items-center gap-1.5">
+        <Lock className="w-3.5 h-3.5 text-amber-400" />
+        Restricted or unavailable ({forbidden.length})
+      </div>
+      <p className="text-xs text-theme-text-tertiary mb-2">
+        Resource types Radar isn't showing you — usually because your RBAC doesn't allow listing
+        them, sometimes because the type isn't installed or watched on this cluster. Either way,
+        not an empty cluster.
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {forbidden.map((k) => (
+          <span
+            key={k}
+            className="inline-flex items-center px-2 py-0.5 text-xs rounded border border-theme-border bg-theme-elevated text-theme-text-secondary"
+          >
+            {displayKind(k)}
+          </span>
+        ))}
+      </div>
+      <a
+        href="https://radarhq.io/docs/cloud/rbac"
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline mt-2"
+      >
+        How to get access
+        <ExternalLink className="w-3 h-3" />
+      </a>
     </div>
   )
 }
