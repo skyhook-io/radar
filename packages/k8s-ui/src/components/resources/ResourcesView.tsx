@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useCallback, useRef, useContext, u
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { PaneLoader } from '../ui/PaneLoader'
+import { RestrictedState } from '../ui/RestrictedState'
 import type { TopPodMetrics, TopNodeMetrics } from '../../types'
 import {
   Search,
@@ -4505,10 +4506,12 @@ export function ResourcesView({
           {isLoading ? (
             <PaneLoader className="absolute inset-0" />
           ) : isSelectedForbidden ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary">
-              <Shield className="w-8 h-8 text-amber-400 mb-2" />
-              <p className="text-theme-text-secondary font-medium">Access Restricted</p>
-              <p className="text-sm mt-1">Insufficient permissions to list {selectedKind.kind} resources</p>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <RestrictedState
+                kindLabel={selectedKind.kind}
+                group={selectedKind.group}
+                resource={selectedKind.name}
+              />
             </div>
           ) : largeListGuard ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary px-6 text-center">
