@@ -4506,12 +4506,17 @@ export function ResourcesView({
           {isLoading ? (
             <PaneLoader className="absolute inset-0" />
           ) : isSelectedForbidden ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <RestrictedState
-                kindLabel={selectedKind.kind}
-                group={selectedKind.group}
-                resource={selectedKind.name}
-              />
+            // overflow-y-auto + min-h-full: centered when the panel is short
+            // (collapsed), scrollable (no top clip) when the RBAC snippet is
+            // expanded on a shorter pane.
+            <div className="absolute inset-0 overflow-y-auto">
+              <div className="min-h-full flex items-center justify-center">
+                <RestrictedState
+                  kindLabel={selectedKind.kind}
+                  group={selectedKind.group}
+                  resource={selectedKind.name}
+                />
+              </div>
             </div>
           ) : largeListGuard ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary px-6 text-center">

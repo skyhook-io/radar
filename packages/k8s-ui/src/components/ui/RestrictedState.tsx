@@ -25,7 +25,10 @@ interface Props {
 }
 
 function buildRbacRequest(kindLabel: string, group: string, resource: string): string {
-  const roleName = `radar-read-${resource}`
+  // resource is the placeholder when we don't have a confident API plural
+  // (e.g. a CRD deep-link before discovery resolves the kind) — use a generic
+  // role name rather than radar-read-<Kind>.
+  const roleName = resource === '<resource>' ? 'radar-read-access' : `radar-read-${resource}`
   return [
     `I need read access to ${kindLabel} in this Kubernetes cluster via Radar.`,
     `Please grant my identity (user, group, or ServiceAccount) get/list/watch on "${resource}".`,
@@ -58,7 +61,13 @@ export function RestrictedState({ kindLabel, group = '', resource, compact, clas
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  const snippet = buildRbacRequest(kindLabel, group, resource || '<resource>')
+  // RBAC `resources` must be the lowercase API plural. selectedKind.name is
+  // that in normal use, but a CRD deep-link can transiently carry the Kind
+  // (e.g. "HTTPRoute") before discovery resolves it — emitting that would
+  // produce a snippet that doesn't grant access. Only inline the resource when
+  // it looks like a valid resource name; otherwise leave a clear placeholder.
+  const validResource = resource && /^[a-z0-9.-]+$/.test(resource) ? resource : '<resource>'
+  const snippet = buildRbacRequest(kindLabel, group, validResource)
 
   const copy = () => {
     navigator.clipboard.writeText(snippet).then(
@@ -101,7 +110,7 @@ export function RestrictedState({ kindLabel, group = '', resource, compact, clas
               install or your cluster RBAC) — it asks them to grant your identity read access.
             </p>
             <div className="relative">
-              <pre className="text-xs bg-theme-base border border-theme-border rounded-md p-3 overflow-x-auto text-theme-text-secondary">
+              <pre className="text-xs bg-theme-base border border-theme-border rounded-md p-3 max-h-72 overflow-auto text-theme-text-secondary">
                 {snippet}
               </pre>
               <button
