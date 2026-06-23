@@ -148,14 +148,11 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		return traffic.ReinitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
 	})
 
+	// Reinitialize carries the current manual URL + headers forward (including any
+	// applied live via /integrations/prometheus). Re-applying the captured startup
+	// cfg here would revert a live change on context switch, so we don't.
 	k8s.RegisterPrometheusFuncs(prometheuspkg.Reset, func() error {
 		prometheuspkg.Reinitialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
-		if cfg.PrometheusURL != "" {
-			prometheuspkg.SetManualURL(cfg.PrometheusURL)
-		}
-		if len(cfg.PrometheusHeaders) > 0 {
-			prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
-		}
 		return nil
 	})
 }

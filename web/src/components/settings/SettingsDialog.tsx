@@ -558,13 +558,21 @@ function PrometheusConfigField({
   // the user opened the editor; on Apply we send it verbatim, replacing all
   // stored headers (values are write-only, so the server never sends them back).
   const [headerRows, setHeaderRows] = useState<HeaderRow[] | null>(null)
-  // Mirrors the server's configured header keys so the summary updates after a
-  // successful apply without refetching the whole config.
-  const [storedKeys, setStoredKeys] = useState<string[]>(configuredHeaderKeys)
+  // Show the server's configured header keys, but let a successful apply override
+  // optimistically (config isn't refetched). Derived from the prop — not a
+  // mount-time snapshot — so it stays correct as config loads asynchronously.
+  const [appliedKeys, setAppliedKeys] = useState<string[] | null>(null)
+  const storedKeys = appliedKeys ?? configuredHeaderKeys
 
   const clearStatus = () => {
     if (apply.status !== 'applying') setApply({ status: 'idle' })
   }
+
+  // Footer Reset (and any external edit) clears the URL field without a keystroke;
+  // drop a stale "Connected"/"Saved" status so it doesn't describe an emptied field.
+  useEffect(() => {
+    setApply((s) => (s.status === 'idle' || s.status === 'applying' ? s : { status: 'idle' }))
+  }, [value])
 
   const handleApply = async () => {
     setApply({ status: 'applying' })
@@ -592,7 +600,7 @@ function PrometheusConfigField({
         return
       }
       if (editedHeaders !== undefined) {
-        setStoredKeys(Object.keys(editedHeaders).sort())
+        setAppliedKeys(Object.keys(editedHeaders).sort())
         setHeaderRows(null)
       }
       if (data?.connected) {
@@ -617,10 +625,7 @@ function PrometheusConfigField({
         <input
           type="text"
           value={value}
-          onChange={(e) => {
-            onChange(e.target.value)
-            clearStatus()
-          }}
+          onChange={(e) => onChange(e.target.value)}
           placeholder="http://prometheus-server.monitoring:9090"
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
