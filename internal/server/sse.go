@@ -6,6 +6,7 @@ import (
 	"log"
 	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -520,10 +521,10 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 						"summary": change.Diff.Summary,
 					}
 				}
-				b.Broadcast(SSEEvent{
+				b.broadcastResourceChange(SSEEvent{
 					Event: "k8s_event",
 					Data:  eventData,
-				})
+				}, change.Namespace, change.Kind)
 			}
 
 			// Schedule debounced topology update. Re-evaluate debounce on
@@ -721,6 +722,49 @@ func (b *SSEBroadcaster) Broadcast(event SSEEvent) {
 	for ch := range b.clients {
 		safeSend(ch, event)
 	}
+}
+
+// broadcastResourceChange sends a per-resource change frame (k8s_event, which
+// can carry a spec/data diff) only to clients whose RBAC plausibly permits the
+// resource. Namespaced changes go only to clients whose RBAC-filtered namespace
+// set includes the namespace; cluster-scoped changes go only to clients not
+// denied that kind (the topology denied set resolved at subscribe time).
+//
+// This is a PARTIAL gate, not a complete authorization boundary, and is a big
+// reduction over the previous broadcast-to-all (which leaked every diff to every
+// client). Two gaps remain, both needing per-(group,resource) state this path
+// doesn't carry yet (ResourceChange has only Kind):
+//   - namespaced kinds the user can't read WITHIN an allowed namespace (e.g.
+//     Secrets/Roles for a list-pods-only viewer) still pass the namespace check;
+//   - cluster-scoped kinds outside the topology set (ClusterRole, webhooks,
+//     cluster-scoped CRDs) aren't in DeniedKinds, and kind-string matching misses
+//     CRD variants (EC2NodeClass vs synthesized NodeClass).
+// The complete fix carries the exact GVR on ResourceChange and authorizes each
+// client via the cached per-user canRead — tracked separately.
+func (b *SSEBroadcaster) broadcastResourceChange(event SSEEvent, namespace, kind string) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for ch, info := range b.clients {
+		if clientCanSeeChange(info, namespace, kind) {
+			safeSend(ch, event)
+		}
+	}
+}
+
+// clientCanSeeChange reports whether a client's RBAC allows a change frame.
+func clientCanSeeChange(info ClientInfo, namespace, kind string) bool {
+	if namespace != "" {
+		// Namespaced change: deliver only if the client can see that namespace.
+		// nil Namespaces means all-namespace access (no RBAC restriction).
+		if info.Namespaces == nil {
+			return true
+		}
+		return slices.Contains(info.Namespaces, namespace)
+	}
+	// Cluster-scoped change (no namespace): deliver unless the kind is one this
+	// client was denied — the per-kind SAR result resolved at subscribe time.
+	return !info.DeniedKinds[topology.NodeKind(kind)]
 }
 
 // Subscribe adds a new SSE client. Returns nil if max clients reached.

@@ -33,3 +33,36 @@ func TestDeniedKindsKey(t *testing.T) {
 		t.Fatalf("key = %q, want Node,PersistentVolume,StorageClass", a)
 	}
 }
+
+// clientCanSeeChange gates k8s_event (diff-bearing) frames per client so a
+// restricted user doesn't receive change content for namespaces or cluster-scoped
+// kinds their RBAC forbids.
+func TestClientCanSeeChange(t *testing.T) {
+	allAccess := ClientInfo{Namespaces: nil}
+	scopedAB := ClientInfo{Namespaces: []string{"a", "b"}}
+	noAccess := ClientInfo{Namespaces: []string{"__no_access__"}}
+	deniedNodes := ClientInfo{DeniedKinds: map[topology.NodeKind]bool{"Node": true}}
+
+	cases := []struct {
+		name      string
+		info      ClientInfo
+		namespace string
+		kind      string
+		want      bool
+	}{
+		{"all-access sees namespaced change", allAccess, "a", "ConfigMap", true},
+		{"scoped sees allowed namespace", scopedAB, "a", "Deployment", true},
+		{"scoped does NOT see other namespace", scopedAB, "c", "Deployment", false},
+		{"no-access sees nothing namespaced", noAccess, "a", "ConfigMap", false},
+		{"cluster-scoped allowed when not denied", scopedAB, "", "Node", true},
+		{"cluster-scoped denied kind blocked", deniedNodes, "", "Node", false},
+		{"cluster-scoped non-denied kind allowed", deniedNodes, "", "StorageClass", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clientCanSeeChange(tc.info, tc.namespace, tc.kind); got != tc.want {
+				t.Fatalf("clientCanSeeChange(%v, %q, %q) = %v, want %v", tc.info, tc.namespace, tc.kind, got, tc.want)
+			}
+		})
+	}
+}
