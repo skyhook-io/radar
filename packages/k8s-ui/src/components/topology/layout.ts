@@ -496,6 +496,23 @@ export function buildHierarchicalElkGraph(
     }
   }
 
+  // A group is "effectively collapsed" (rendered as a single chip/card with its
+  // members hidden) when it's explicitly in collapsedGroups, OR levels exist for
+  // the current grouping mode and this group lacks an explicit 'topology' level.
+  // The second clause covers groups that appeared after the smart-default chip
+  // pass — e.g. a namespace that only surfaces after switching Resources↔Traffic,
+  // which therefore has no groupLevels entry at all.
+  //
+  // Node placement and edge redirect MUST share this predicate: if a member is
+  // hidden inside a chip but an edge still references it by plain id, ELK fails
+  // to import the graph ("Referenced shape does not exist").
+  const groupPrefix = `group-${groupingMode}-`
+  const hasLevelsForCurrentMode = !!groupLevels && groupLevels.size > 0 &&
+    [...groupLevels.keys()].some(k => k.startsWith(groupPrefix))
+  const isGroupCollapsed = (groupId: string): boolean =>
+    collapsedGroups.has(groupId) ||
+    (hasLevelsForCurrentMode && groupLevels!.get(groupId) !== 'topology')
+
   const children: ElkNode[] = []
   const processedNodes = new Set<string>()
 
@@ -516,16 +533,7 @@ export function buildHierarchicalElkGraph(
     // Create group nodes with children
     for (const [groupKey, memberIds] of groupMap) {
       const groupId = `group-${groupingMode}-${groupKey}`
-      // When groupLevels has entries for the CURRENT grouping mode, any group without
-      // an explicit 'topology' level is collapsed. This prevents late-arriving namespaces
-      // from defaulting to expanded and overlapping with collapsed chips.
-      // Only apply when levels exist for the same grouping prefix — don't let namespace
-      // levels leak into app/label grouping contexts.
-      const groupPrefix = `group-${groupingMode}-`
-      const hasLevelsForCurrentMode = groupLevels && groupLevels.size > 0 &&
-        [...groupLevels.keys()].some(k => k.startsWith(groupPrefix))
-      const isCollapsed = collapsedGroups.has(groupId) ||
-        (hasLevelsForCurrentMode && groupLevels!.get(groupId) !== 'topology')
+      const isCollapsed = isGroupCollapsed(groupId)
 
       if (isCollapsed) {
         const displayLevel = groupLevels?.get(groupId) || 'chip'
@@ -623,6 +631,18 @@ export function buildHierarchicalElkGraph(
     }
   }
 
+  // Every ELK edge endpoint must reference a node present in the graph (a
+  // top-level child, or a member of an expanded group). A single dangling
+  // reference makes ELK reject the whole import, blanking the topology — so we
+  // drop the stray edge instead. With the unified isGroupCollapsed predicate
+  // this should never fire; it's insurance against future placement/redirect
+  // drift.
+  const validEndpointIds = new Set<string>()
+  for (const child of children) {
+    validEndpointIds.add(child.id)
+    if (child.children) for (const c of child.children) validEndpointIds.add(c.id)
+  }
+
   // Build edges, redirecting to groups when collapsed
   const elkEdges: ElkEdge[] = []
   const seenEdges = new Set<string>()
@@ -631,16 +651,20 @@ export function buildHierarchicalElkGraph(
     let source = edge.source
     let target = edge.target
 
-    // Redirect edges to collapsed groups
+    // Redirect edges to collapsed groups — same predicate as node placement so
+    // an edge never references a member hidden inside a chip.
     const sourceGroup = nodeToGroup.get(source)
-    if (sourceGroup && collapsedGroups.has(sourceGroup)) {
+    if (sourceGroup && isGroupCollapsed(sourceGroup)) {
       source = sourceGroup
     }
 
     const targetGroup = nodeToGroup.get(target)
-    if (targetGroup && collapsedGroups.has(targetGroup)) {
+    if (targetGroup && isGroupCollapsed(targetGroup)) {
       target = targetGroup
     }
+
+    // Drop edges whose endpoints aren't in the graph (see validEndpointIds)
+    if (!validEndpointIds.has(source) || !validEndpointIds.has(target)) continue
 
     // Skip self-loops
     if (source === target) continue
