@@ -3048,7 +3048,7 @@ export function useSwitchContext() {
       } catch (error) {
         clearTimeout(timeoutId)
         if (error instanceof Error && error.name === 'AbortError') {
-          throw new Error('Context switch timed out. The cluster may be unreachable.')
+          throw new Error('Context switch timed out. The cluster may be unreachable.', { cause: error })
         }
         throw error
       }
@@ -3151,7 +3151,7 @@ export function useSetActiveNamespace() {
           error: error instanceof Error ? error.message : String(error),
         })
         if (error instanceof Error && error.name === 'AbortError') {
-          throw new Error('Namespace switch timed out. The cluster may be unreachable.')
+          throw new Error('Namespace switch timed out. The cluster may be unreachable.', { cause: error })
         }
         throw error
       }
