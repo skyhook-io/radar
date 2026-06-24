@@ -1410,7 +1410,7 @@ function AppInner() {
             // the bar is full, and the view's primary home is Cloud's fleet
             // rail. The view still exists and is reachable via /applications
             // and the view-switching shortcuts. Same treatment as Cost below.
-            { view: 'traffic' as const, icon: Activity, label: 'Traffic' },
+            { view: 'traffic' as const, icon: Activity, label: 'Live Traffic' },
             // Cost is intentionally hidden from the pill bar for now — the view still
             // exists and is reachable via /cost, the Home dashboard card, and the
             // command palette (⌘K). Remove this comment to restore it.
@@ -1793,7 +1793,7 @@ function AppInner() {
                   <TopologySearch
                     nodes={filteredTopology?.nodes ?? []}
                     allNodes={topology?.nodes}
-                    viewModeLabel={topologyMode === 'fleet' ? 'Fleet' : topologyMode === 'traffic' ? 'Traffic' : 'Resources'}
+                    viewModeLabel={topologyMode === 'fleet' ? 'Fleet' : topologyMode === 'traffic' ? 'Network Flow' : 'Resources'}
                     onNodeSelect={handleNodeClick}
                     onZoomToNode={(id) => setTopologyFocus((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }))}
                     // Stack below the namespace breadcrumb (shown only for a single
@@ -1815,6 +1815,7 @@ function AppInner() {
                     showPolicyEffect={showPolicyEffect}
                     onShowPolicyEffectChange={setShowPolicyEffect}
                     showFleetMode={displayedTopology?.nodes?.some(n => FLEET_MODE_KINDS.has(n.kind as NodeKind)) ?? false}
+                    onNavigateToTraffic={() => setMainView('traffic')}
                   />
                 </div>
               </>

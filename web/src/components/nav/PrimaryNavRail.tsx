@@ -45,7 +45,7 @@ const NAV_ITEMS: NavItemDef[] = [
   { view: 'topology', icon: Network, label: 'Topology' },
   { view: 'applications', icon: Boxes, label: 'Applications' },
   { view: 'timeline', icon: Clock, label: 'Timeline' },
-  { view: 'traffic', icon: Activity, label: 'Traffic' },
+  { view: 'traffic', icon: Activity, label: 'Live Traffic' },
   { view: 'helm', icon: Package, label: 'Helm' },
   { view: 'gitops', icon: GitBranch, label: 'GitOps' },
   { view: 'checks', icon: ShieldCheck, label: 'Checks' },

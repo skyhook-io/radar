@@ -91,7 +91,7 @@ const VIEW_ENTRIES: { view: MainView; label: string; icon: React.ComponentType<{
   { view: 'timeline', label: 'Timeline', icon: Clock, shortcut: 'g l' },
   { view: 'helm', label: 'Helm', icon: Package, shortcut: 'g m' },
   { view: 'gitops', label: 'GitOps', icon: GitBranch, shortcut: 'g o' },
-  { view: 'traffic', label: 'Traffic', icon: Activity, shortcut: 'g f' },
+  { view: 'traffic', label: 'Live Traffic', icon: Activity, shortcut: 'g f' },
   { view: 'checks', label: 'Checks', icon: ShieldCheck, shortcut: 'g u' },
   { view: 'cost', label: 'Cost', icon: DollarSign, shortcut: 'g c' },
 ]

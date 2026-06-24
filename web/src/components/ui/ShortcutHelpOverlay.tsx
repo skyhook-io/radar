@@ -29,7 +29,7 @@ const VIEW_LABELS: Record<string, string> = {
   timeline: 'Timeline',
   helm: 'Helm',
   gitops: 'GitOps',
-  traffic: 'Traffic',
+  traffic: 'Live Traffic',
 }
 
 type ShortcutEntry = { description: string; keys: string[] }
