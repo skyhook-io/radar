@@ -267,7 +267,9 @@ export function DiagnoseSurface({
         <div
           onMouseDown={startResize}
           className="absolute left-0 top-0 z-10 h-full w-1.5 cursor-ew-resize bg-theme-border/40 transition-colors hover:bg-accent/50"
-          title="Drag to resize"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize panel"
         />
       )}
 
