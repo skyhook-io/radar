@@ -245,19 +245,11 @@ async function runLayoutOnMainThread(
 
   // Phase 2: Build meta-graph and position groups based on inter-group edges
   // (nodeToGroup was built once above).
-  const interGroupEdges: ElkEdge[] = []
-  const seen = new Set<string>()
-  for (const edge of elkGraph.edges) {
-    const sg = nodeToGroup.get(edge.sources[0])
-    const tg = nodeToGroup.get(edge.targets[0])
-    if (sg && tg && sg !== tg) {
-      const key = `${sg}->${tg}`
-      if (!seen.has(key)) { seen.add(key); interGroupEdges.push({ id: `inter-${key}`, sources: [sg], targets: [tg] }) }
-    } else if ((!sg && tg) || (sg && !tg)) {
-      const s = sg || edge.sources[0], t = tg || edge.targets[0], key = `${s}->${t}`
-      if (!seen.has(key)) { seen.add(key); interGroupEdges.push({ id: `inter-${key}`, sources: [s], targets: [t] }) }
-    }
-  }
+  const metaIds = new Set<string>([
+    ...groupLayouts.map(g => g.groupId),
+    ...ungroupedNodes.map(n => n.id),
+  ])
+  const interGroupEdges = buildInterGroupEdges(elkGraph.edges, nodeToGroup, metaIds)
 
   const metaResult = await elk.layout({
     id: 'meta-root',
@@ -321,6 +313,36 @@ interface ElkGraph {
   layoutOptions: Record<string, string>
   children: ElkNode[]
   edges: ElkEdge[]
+}
+
+/**
+ * Build the meta-graph edges that position groups relative to each other (Phase 2).
+ * Each endpoint is normalized to its meta node: an expanded group's member maps to
+ * its group (via nodeToGroup); a collapsed-group chip id or an ungrouped node id is
+ * ALREADY a meta node and is used as-is. Edges between two already-meta nodes
+ * (chip↔chip, chip↔ungrouped) must still be included — dropping them loses the
+ * connectivity ELK uses to place connected groups near each other. Endpoints absent
+ * from metaIds are skipped (defensive — keeps the meta graph importable).
+ *
+ * Mirrored inline in layout.worker.ts, which is intentionally self-contained.
+ */
+export function buildInterGroupEdges(
+  edges: ElkEdge[],
+  nodeToGroup: Map<string, string>,
+  metaIds: Set<string>,
+): ElkEdge[] {
+  const out: ElkEdge[] = []
+  const seen = new Set<string>()
+  for (const edge of edges) {
+    const s = nodeToGroup.get(edge.sources[0]) ?? edge.sources[0]
+    const t = nodeToGroup.get(edge.targets[0]) ?? edge.targets[0]
+    if (s === t || !metaIds.has(s) || !metaIds.has(t)) continue
+    const key = `${s}->${t}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ id: `inter-${key}`, sources: [s], targets: [t] })
+  }
+  return out
 }
 
 // Get app label from a node (if it has one)

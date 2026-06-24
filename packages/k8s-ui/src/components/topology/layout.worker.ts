@@ -198,44 +198,28 @@ self.onmessage = async (e: MessageEvent<LayoutRequest>) => {
     }
 
     // Phase 2: Build meta-graph and position groups (nodeToGroup built once above).
-    // Find inter-group edges
-    const interGroupEdges: ElkEdge[] = []
-    const seenInterGroupEdges = new Set<string>()
-
-    for (const edge of elkGraph.edges) {
-      const sourceGroup = nodeToGroup.get(edge.sources[0])
-      const targetGroup = nodeToGroup.get(edge.targets[0])
-
-      if (sourceGroup && targetGroup && sourceGroup !== targetGroup) {
-        const edgeKey = `${sourceGroup}->${targetGroup}`
-        if (!seenInterGroupEdges.has(edgeKey)) {
-          seenInterGroupEdges.add(edgeKey)
-          interGroupEdges.push({
-            id: `inter-${edgeKey}`,
-            sources: [sourceGroup],
-            targets: [targetGroup],
-          })
-        }
-      } else if ((!sourceGroup && targetGroup) || (sourceGroup && !targetGroup)) {
-        const source = sourceGroup || edge.sources[0]
-        const target = targetGroup || edge.targets[0]
-        const edgeKey = `${source}->${target}`
-        if (!seenInterGroupEdges.has(edgeKey)) {
-          seenInterGroupEdges.add(edgeKey)
-          interGroupEdges.push({
-            id: `inter-${edgeKey}`,
-            sources: [source],
-            targets: [target],
-          })
-        }
-      }
-    }
-
-    // Build and layout meta-graph
+    // Canonical version: buildInterGroupEdges in layout.ts — kept inline here because
+    // the worker is intentionally self-contained. Normalize each endpoint to its meta
+    // node (expanded member → its group; a chip id or ungrouped id is already a meta
+    // node) and keep edges between two already-meta nodes (chip↔chip, chip↔ungrouped),
+    // which the old branching dropped — losing the connectivity used to place groups.
     const metaChildren: ElkNode[] = [
       ...groupLayouts.map(g => ({ id: g.groupId, width: g.width, height: g.height })),
       ...ungroupedNodes.map(n => ({ id: n.id, width: n.width, height: n.height })),
     ]
+    const metaIds = new Set<string>(metaChildren.map(c => c.id))
+
+    const interGroupEdges: ElkEdge[] = []
+    const seenInterGroupEdges = new Set<string>()
+    for (const edge of elkGraph.edges) {
+      const source = nodeToGroup.get(edge.sources[0]) ?? edge.sources[0]
+      const target = nodeToGroup.get(edge.targets[0]) ?? edge.targets[0]
+      if (source === target || !metaIds.has(source) || !metaIds.has(target)) continue
+      const edgeKey = `${source}->${target}`
+      if (seenInterGroupEdges.has(edgeKey)) continue
+      seenInterGroupEdges.add(edgeKey)
+      interGroupEdges.push({ id: `inter-${edgeKey}`, sources: [source], targets: [target] })
+    }
 
     const metaGraph: ElkGraph = {
       id: 'meta-root',

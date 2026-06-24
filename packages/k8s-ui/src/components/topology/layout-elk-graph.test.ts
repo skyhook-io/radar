@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { buildHierarchicalElkGraph, applyHierarchicalLayout, setLayoutEngine, type GroupDisplayLevel } from './layout'
+import { buildHierarchicalElkGraph, applyHierarchicalLayout, buildInterGroupEdges, setLayoutEngine, type GroupDisplayLevel } from './layout'
 import type { TopologyNode, TopologyEdge } from '../../types'
 
 // Collect every id ELK will see as a layoutable shape: top-level children plus
@@ -129,6 +129,66 @@ describe('buildHierarchicalElkGraph — collapse predicate consistency', () => {
       expect(valid.has(edge.sources[0])).toBe(true)
       expect(valid.has(edge.targets[0])).toBe(true)
     }
+  })
+})
+
+// Phase-2 meta layout: edges that position groups relative to each other must
+// survive even when both endpoints are already meta nodes (two collapsed chips, or
+// a chip and an ungrouped node). The old branching dropped those, so connected
+// chips weren't pulled together.
+describe('buildInterGroupEdges — meta-graph connectivity', () => {
+  const edge = (id: string, source: string, target: string) => ({ id, sources: [source], targets: [target] })
+
+  it('keeps chip↔chip edges (both endpoints already meta nodes)', () => {
+    const metaIds = new Set(['group-namespace-app1', 'group-namespace-app2'])
+    // Neither endpoint is an expanded-group member, so nodeToGroup is empty.
+    const out = buildInterGroupEdges([edge('e1', 'group-namespace-app1', 'group-namespace-app2')], new Map(), metaIds)
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ sources: ['group-namespace-app1'], targets: ['group-namespace-app2'] })
+  })
+
+  it('keeps chip↔ungrouped edges', () => {
+    const metaIds = new Set(['group-namespace-app1', 'orphan-node'])
+    const out = buildInterGroupEdges([edge('e1', 'group-namespace-app1', 'orphan-node')], new Map(), metaIds)
+    expect(out).toHaveLength(1)
+  })
+
+  it('normalizes expanded-group members to their group', () => {
+    const nodeToGroup = new Map([
+      ['deployment/app1/web', 'group-namespace-app1'],
+      ['deployment/app2/api', 'group-namespace-app2'],
+    ])
+    const metaIds = new Set(['group-namespace-app1', 'group-namespace-app2'])
+    const out = buildInterGroupEdges([edge('e1', 'deployment/app1/web', 'deployment/app2/api')], nodeToGroup, metaIds)
+    expect(out[0]).toMatchObject({ sources: ['group-namespace-app1'], targets: ['group-namespace-app2'] })
+  })
+
+  it('drops intra-group edges and endpoints absent from the meta graph', () => {
+    const nodeToGroup = new Map([
+      ['deployment/app1/web', 'group-namespace-app1'],
+      ['deployment/app1/api', 'group-namespace-app1'],
+    ])
+    const metaIds = new Set(['group-namespace-app1'])
+    // Same group on both ends → intra, skip. And an edge to a non-meta id → skip.
+    const out = buildInterGroupEdges([
+      edge('e1', 'deployment/app1/web', 'deployment/app1/api'),
+      edge('e2', 'group-namespace-app1', 'ghost-node'),
+    ], nodeToGroup, metaIds)
+    expect(out).toHaveLength(0)
+  })
+
+  it('dedupes edges collapsing to the same meta pair', () => {
+    const nodeToGroup = new Map([
+      ['deployment/app1/web', 'group-namespace-app1'],
+      ['deployment/app1/api', 'group-namespace-app1'],
+      ['deployment/app2/x', 'group-namespace-app2'],
+    ])
+    const metaIds = new Set(['group-namespace-app1', 'group-namespace-app2'])
+    const out = buildInterGroupEdges([
+      edge('e1', 'deployment/app1/web', 'deployment/app2/x'),
+      edge('e2', 'deployment/app1/api', 'deployment/app2/x'),
+    ], nodeToGroup, metaIds)
+    expect(out).toHaveLength(1)
   })
 })
 
