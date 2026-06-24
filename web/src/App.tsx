@@ -171,6 +171,15 @@ function AuthBarrier({ authMode }: { authMode: string }) {
   )
 }
 
+// Identity of the "page" a non-URL-backed peek drawer belongs to. Pathname alone
+// is not enough: Applications keeps the list and an app's detail on the same
+// `/applications` pathname and distinguishes them with `?app=`, so a Back from
+// detail to list would otherwise leave the peek orphaned. Only `app` is included
+// (not the whole query) so filter/tab/namespace churn doesn't close the peek.
+function peekOwnerKey(pathname: string, search: string): string {
+  return `${pathname} ${new URLSearchParams(search).get('app') ?? ''}`
+}
+
 function AppInner() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -410,8 +419,9 @@ function AppInner() {
   // selected drawer resource. This covers both in-view kind switches and
   // cross-kind navigations from expanded drawers (for example Node -> View Pods).
   const prevResourcesKindKeyRef = useRef<string | null>(null)
-  // Pathname a non-URL-backed peek drawer was opened on (see navigateToResource).
-  const peekOwnerPathRef = useRef<string | null>(null)
+  // Owner-key (pathname + ?app) a non-URL-backed peek was opened on; see
+  // navigateToResource and peekOwnerKey.
+  const peekOwnerKeyRef = useRef<string | null>(null)
   const currentResourceKindSlug = normalizedResourcesKindSlug.toLowerCase()
   const currentResourceGroup = searchParams.get('apiGroup') ?? ''
   const selectedResourceKindSlug = selectedResource ? kindToPlural(selectedResource.kind).toLowerCase() : ''
@@ -426,13 +436,14 @@ function AppInner() {
 
   // A peek opened outside /resources (topology, GitOps, Applications) carries no
   // URL backing, so the only signal that the page beneath it has navigated is
-  // that the pathname no longer matches where it was opened. Hiding it here, at
-  // render time, closes the orphan on Back without adding another clearing
-  // effect that would race the `suppressViewClearRef` lifecycle. The /resources
-  // case is URL-backed and handled above; an expanded drawer (drawerExpanded)
-  // legitimately lives at /workload and must stay open across that navigation.
+  // that its owner-key (pathname + ?app) no longer matches where it was opened.
+  // Hiding it here, at render time, closes the orphan on Back without adding
+  // another clearing effect that would race the `suppressViewClearRef` lifecycle.
+  // The /resources case is URL-backed and handled above; an expanded drawer
+  // (drawerExpanded) legitimately lives at /workload and must stay open there.
   const peekRouteOrphaned = !!selectedResource && !drawerExpanded && mainView !== 'resources' &&
-    peekOwnerPathRef.current !== null && peekOwnerPathRef.current !== location.pathname
+    peekOwnerKeyRef.current !== null &&
+    peekOwnerKeyRef.current !== peekOwnerKey(location.pathname, location.search)
 
   // In Applications the inline WorkloadView (?workload) and the peek drawer are
   // mutually exclusive — never two detail surfaces at once. ?workload is the
@@ -478,12 +489,13 @@ function AppInner() {
 
   // Navigate to a resource — uses View Transitions cross-fade when drawer is already open
   const navigateToResource = useCallback((res: SelectedResource, tab: 'detail' | 'yaml' = 'detail') => {
-    // Record the route this peek was opened on. Outside /resources the drawer is
+    // Record the page this peek was opened on. Outside /resources the drawer is
     // not URL-backed, so this ref is what lets the render-time gate below close
     // the peek when the page under it changes (e.g. browser Back off a GitOps
-    // detail page). window.location is read (not the `location` closure) so the
-    // value is always current regardless of this callback's memoization.
-    peekOwnerPathRef.current = window.location.pathname
+    // detail page, or Applications detail → list via ?app). window.location is
+    // read (not the `location` closure) so the value is always current
+    // regardless of this callback's memoization.
+    peekOwnerKeyRef.current = peekOwnerKey(window.location.pathname, window.location.search)
     const update = () => { setDrawerInitialTab(tab); setSelectedResource(res) }
     // Skip the cross-fade animation entirely on first open (no
     // `selectedResource`); otherwise route through
