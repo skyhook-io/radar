@@ -598,9 +598,9 @@ export function ApplyDialog({
   // A GitOps/Helm-managed resource needs an explicit acknowledgment before applying
   // a direct change — it's the canonical footgun (the controller reverts it). Gating
   // (not just warning) makes the user opt into "yes, I know this may be undone."
-  // TODO(SCM-PR): once Radar can connect the user's SCM (GitHub/GitLab/…), replace
+  // TODO(SKY-1075): once Radar can connect the user's SCM (GitHub/GitLab/…), replace
   //   direct apply on managed resources with "open a PR against the Git source"
-  //   instead — the durable fix. Tracked in Linear (radar). See product-review.
+  //   instead — the durable fix. See Linear SKY-1075.
   const [acked, setAcked] = useState(false);
   useEffect(() => {
     if (open) setAcked(false);
