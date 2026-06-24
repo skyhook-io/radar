@@ -282,7 +282,7 @@ function WorkloadRows({ namespace }: { namespace: string }) {
     return (
       <div className="px-4 py-3 flex items-center gap-2 text-xs text-theme-text-tertiary bg-theme-elevated/30">
         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-        Loading workloads...
+        Loading workloads…
       </div>
     )
   }

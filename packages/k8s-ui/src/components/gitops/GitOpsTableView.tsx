@@ -12,7 +12,6 @@ import {
   HeartPulse,
   LayoutGrid,
   List,
-  Loader2,
   Pause,
   Play,
   RefreshCw,
@@ -33,6 +32,7 @@ import { FacetSection, FacetButton } from '../ui/Facet'
 import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
+import { PaneLoader } from '../ui/PaneLoader'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
@@ -754,9 +754,7 @@ export function GitOpsTableView({
               {modeLabel(mode)} view is queued behind the application list.
             </div>
           ) : loading && filteredRows.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading GitOps applications...
-            </div>
+            <PaneLoader label="Loading GitOps applications…" className="h-full" />
           ) : error ? (
             <div className="p-4 text-sm text-red-500">Failed to load GitOps applications: {error.message}</div>
           ) : filteredRows.length === 0 ? (

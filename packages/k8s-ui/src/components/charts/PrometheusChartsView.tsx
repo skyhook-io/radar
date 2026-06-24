@@ -1,6 +1,7 @@
 import { clsx } from 'clsx'
 import { BarChart3, Wifi, WifiOff, Loader2 } from 'lucide-react'
 import { AreaChart } from './AreaChart'
+import { PaneLoader } from '../ui/PaneLoader'
 import { MetricsSummary } from './MetricsSummary'
 import { SeriesLegend } from './SeriesLegend'
 import type { TimeSeries, ReferenceLine } from './types'
@@ -108,10 +109,7 @@ export function PrometheusChartsView({
   if (statusLoading) {
     if (!showEmptyState) return null
     return (
-      <div className="flex items-center justify-center py-12 text-theme-text-tertiary">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-        Checking Prometheus availability...
-      </div>
+      <PaneLoader label="Checking Prometheus availability…" className="py-12" />
     )
   }
 
@@ -181,10 +179,7 @@ export function PrometheusChartsView({
       {/* Chart area */}
       <div className="min-h-[280px] flex-1 p-4">
         {metricsLoading ? (
-          <div className="flex min-h-[240px] items-center justify-center text-theme-text-tertiary">
-            <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-            Loading metrics...
-          </div>
+          <PaneLoader label="Loading metrics…" className="min-h-[240px]" />
         ) : metricsError ? (
           <div className="flex h-full items-center justify-center text-sm text-red-400">
             Failed to load metrics: {(metricsError as Error).message}

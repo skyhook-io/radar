@@ -190,7 +190,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                 </button>
                 <div className="border-t border-theme-border my-1" />
                 {reposLoading ? (
-                  <div className="px-3 py-2 text-sm text-theme-text-tertiary">Loading...</div>
+                  <div className="px-3 py-2 text-sm text-theme-text-tertiary">Loading…</div>
                 ) : repositories?.length === 0 ? (
                   <div className="px-3 py-2 text-sm text-theme-text-tertiary">No repositories configured</div>
                 ) : (

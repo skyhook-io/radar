@@ -990,7 +990,7 @@ export function EventsSection({ events, updates = [], isLoading, eventsError, up
   if (isLoading) {
     return (
       <Section title="Recent Events" defaultExpanded>
-        <div className="text-sm text-theme-text-tertiary">Loading events...</div>
+        <div className="text-sm text-theme-text-tertiary">Loading events…</div>
       </Section>
     )
   }

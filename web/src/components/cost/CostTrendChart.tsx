@@ -34,7 +34,7 @@ export function CostTrendChart() {
       <div className="rounded-lg border border-theme-border bg-theme-surface/50 p-4">
         <div className="flex items-center justify-center h-[200px] text-theme-text-tertiary">
           <Loader2 className="w-5 h-5 animate-spin mr-2" />
-          Loading cost trend...
+          Loading cost trend…
         </div>
       </div>
     )

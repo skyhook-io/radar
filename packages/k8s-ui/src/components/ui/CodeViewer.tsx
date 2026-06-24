@@ -391,7 +391,7 @@ export function CodeViewer({
         style={{ maxHeight }}
       >
         {highlighting ? (
-          <div className="p-4 text-theme-text-tertiary text-sm font-mono">Loading...</div>
+          <div className="p-4 text-theme-text-tertiary text-sm font-mono">Loading…</div>
         ) : (
           <div
             ref={contentRef}

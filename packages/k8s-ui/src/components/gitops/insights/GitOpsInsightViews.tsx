@@ -1,4 +1,5 @@
 import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, Trash2 } from 'lucide-react'
+import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
@@ -725,7 +726,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
     return <InsightErrorState error={error} />
   }
   if (!insight) {
-    return <CenteredText>Loading GitOps resources...</CenteredText>
+    return <PaneLoader label="Loading GitOps resources…" className="h-full" />
   }
   // Build plan metadata maps keyed by ref so each Change row can advertise
   // its sync step, hook phase, and wave assignment. The plan and changes
@@ -1274,7 +1275,7 @@ interface GitOpsActivityInsightViewProps {
 
 export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOpsActivityInsightViewProps) {
   if (error && !insight) return <InsightErrorState error={error} />
-  if (!insight) return <CenteredText>Loading GitOps activity...</CenteredText>
+  if (!insight) return <PaneLoader label="Loading GitOps activity…" className="h-full" />
   const canRollback = !!insight.capabilities?.rollback && !!onRollback
   // Auto-sync makes rollback futile — the controller would re-sync to HEAD
   // immediately. Argo's own Web UI disables the button in this state. Detect
@@ -1427,10 +1428,6 @@ function SectionHeader({ icon: Icon, title, hint }: { icon: typeof GitBranch; ti
       )}
     </div>
   )
-}
-
-function CenteredText({ children }: { children: ReactNode }) {
-  return <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">{children}</div>
 }
 
 // Surfaced when the insights endpoint errors. Without this the subviews

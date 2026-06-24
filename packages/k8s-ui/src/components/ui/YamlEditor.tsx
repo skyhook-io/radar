@@ -233,7 +233,7 @@ export function YamlEditor({
         }}
         loading={
           <div className="flex items-center justify-center h-full bg-theme-surface text-theme-text-secondary">
-            Loading editor...
+            Loading editor…
           </div>
         }
       />

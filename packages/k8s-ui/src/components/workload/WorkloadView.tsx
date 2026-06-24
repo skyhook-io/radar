@@ -1126,7 +1126,7 @@ function EventsTab({
     return (
       <div className="flex items-center justify-center h-full text-theme-text-tertiary">
         <RefreshCw className="w-5 h-5 animate-spin mr-2" />
-        Loading events...
+        Loading events…
       </div>
     )
   }

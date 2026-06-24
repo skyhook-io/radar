@@ -796,7 +796,7 @@ export function LogCore({
         <div className={`flex-1 flex items-center justify-center ${palette.textTertiary}`}>
           <div className="flex items-center gap-2">
             <RotateCcw className="w-4 h-4 animate-spin" />
-            <span>Loading logs...</span>
+            <span>Loading logs…</span>
           </div>
         </div>
       ) : errorMessage ? (

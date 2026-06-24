@@ -15,7 +15,8 @@ import {
   type NodeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { AlertTriangle, ChevronRight, Loader2, Maximize, Search, X } from 'lucide-react'
+import { AlertTriangle, ChevronRight, Maximize, Search, X } from 'lucide-react'
+import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
 
 import type { GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, HealthStatus } from '../../../types'
@@ -127,12 +128,7 @@ function GitOpsTreeGraphInner({
   }, [onNodeClick])
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center text-theme-text-secondary">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        Loading GitOps resource tree...
-      </div>
-    )
+    return <PaneLoader label="Loading GitOps resource tree…" className="h-full" />
   }
 
   if (error) {

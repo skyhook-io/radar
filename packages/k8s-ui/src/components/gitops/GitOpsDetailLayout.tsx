@@ -1,5 +1,6 @@
 import { useEffect, type ComponentType, type ReactNode } from 'react'
 import { ArrowDownUp, ChevronDown, ChevronRight, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
+import { PaneLoader } from '../ui/PaneLoader'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
@@ -487,9 +488,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
       )}
 
       {resourceLoading ? (
-        <div className="flex flex-1 items-center justify-center text-theme-text-secondary">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading GitOps resource…
-        </div>
+        <PaneLoader label="Loading GitOps resource…" className="flex-1" />
       ) : resourceError ? (
         <div className="p-4 text-sm text-red-500">Failed to load resource: {resourceError.message}</div>
       ) : (

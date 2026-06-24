@@ -128,7 +128,7 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpoint
       {hasNoSelector && !isExternalName && (
         <Section title="EndpointSlices" icon={Radio}>
           {endpointSlicesLoading ? (
-            <div className="text-sm text-theme-text-tertiary">Loading EndpointSlices...</div>
+            <div className="text-sm text-theme-text-tertiary">Loading EndpointSlices…</div>
           ) : endpointSlices && endpointSlices.length > 0 ? (
             <div className="space-y-2">
               {endpointSlices.map((slice: any) => {

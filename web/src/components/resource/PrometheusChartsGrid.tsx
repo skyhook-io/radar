@@ -316,7 +316,7 @@ function PanelLoading() {
   return (
     <div className="flex items-center justify-center h-full min-h-[160px] text-theme-text-tertiary text-xs">
       <Loader2 className="w-4 h-4 animate-spin mr-2" />
-      Loading...
+      Loading…
     </div>
   )
 }

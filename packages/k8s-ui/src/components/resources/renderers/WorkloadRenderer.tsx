@@ -422,7 +422,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
 
 function ScalerDiagnosisRow({ entry }: { entry: ScalerDiagnosis }) {
   if (entry.loading) {
-    return <div className="text-xs text-theme-text-tertiary">Loading autoscaler diagnosis...</div>
+    return <div className="text-xs text-theme-text-tertiary">Loading autoscaler diagnosis…</div>
   }
   if (entry.error) {
     return <div className="text-xs text-theme-text-tertiary">Autoscaler diagnosis unavailable</div>

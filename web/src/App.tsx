@@ -138,14 +138,19 @@ function AuthBarrier({ authMode }: { authMode: string }) {
             src={radarLoadingIcon}
             alt=""
             aria-hidden
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-11 h-11"
+            // Integer offset (vw/2 − 22) — matches the Connecting/Opening splashes;
+            // avoids sub-pixel jitter from translate(-50%) on odd-width viewports.
+            className="absolute w-11 h-11"
+            style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
           />
-          <p
-            className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary"
+          <div
+            className="absolute left-1/2 -translate-x-1/2 text-center"
             style={{ top: 'calc(50% + 34px)' }}
           >
-            Redirecting to login…
-          </p>
+            <p className="whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
+              Redirecting to login…
+            </p>
+          </div>
         </div>
       </div>
     )
@@ -1866,9 +1871,26 @@ function AppInner() {
             own fetches) while the cross-document nav lands. Covers checks /
             issues / gitops with one block since only one view is active. */}
         {viewTakeoverHref && (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-theme-base">
-            <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
-            <p className="text-sm text-theme-text-secondary">Opening…</p>
+          <div className="flex-1 relative bg-theme-base">
+            {/* Viewport-anchored, 17px — identical to the "Connecting" splash so
+                the mark doesn't move or resize across the takeover hand-off. */}
+            <div className="fixed inset-0 pointer-events-none">
+              <img
+                src={radarLoadingIcon}
+                alt=""
+                aria-hidden
+                className="absolute w-11 h-11"
+                style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
+              />
+              <div
+                className="absolute left-1/2 -translate-x-1/2 text-center"
+                style={{ top: 'calc(50% + 34px)' }}
+              >
+                <p className="whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
+                  Opening…
+                </p>
+              </div>
+            </div>
           </div>
         )}
 

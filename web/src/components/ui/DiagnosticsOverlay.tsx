@@ -99,7 +99,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
         {/* Content */}
         <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
           {isLoading && (
-            <div className="text-sm text-theme-text-tertiary text-center py-8">Loading diagnostics...</div>
+            <div className="text-sm text-theme-text-tertiary text-center py-8">Loading diagnostics…</div>
           )}
           {error && (
             <div className="text-sm text-red-400 text-center py-8">Failed to load diagnostics: {(error as Error).message}</div>

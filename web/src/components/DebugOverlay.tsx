@@ -88,7 +88,7 @@ export function DebugOverlay() {
             )}
           </>
         ) : (
-          <span className="text-theme-text-tertiary">Loading...</span>
+          <span className="text-theme-text-tertiary">Loading…</span>
         )}
       </div>
     </div>

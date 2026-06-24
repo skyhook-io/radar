@@ -907,7 +907,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
         <div className={clsx("p-4 overflow-y-auto", diffRevision ? "max-h-48 shrink-0" : "max-h-80")}>
           {isLoading && (
             <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
-              Loading revisions...
+              Loading revisions…
             </div>
           )}
 
