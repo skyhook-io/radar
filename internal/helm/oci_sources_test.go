@@ -137,6 +137,42 @@ func TestDiscoverOCIUpgrade_TagCacheDedupes(t *testing.T) {
 	}
 }
 
+// transientTagLister fails the first failCount calls for a ref, then succeeds —
+// models a transient timeout/network error.
+type transientTagLister struct {
+	tags      []string
+	failCount int
+	calls     int
+}
+
+func (l *transientTagLister) Tags(string) ([]string, error) {
+	l.calls++
+	if l.calls <= l.failCount {
+		return nil, fmt.Errorf("transient timeout")
+	}
+	return l.tags, nil
+}
+
+func TestDiscoverOCIUpgrade_DoesNotCacheFailures(t *testing.T) {
+	withOCISources(t, []string{"oci://reg/c"})
+	lister := &transientTagLister{tags: []string{"1.0.0"}, failCount: 1}
+	cache := map[string][]string{}
+	c := &Client{}
+
+	// First probe fails transiently — must NOT be cached as "untracked".
+	if m := c.discoverOCIUpgrade("app", lister, cache); m != nil {
+		t.Fatalf("expected nil on transient failure, got %+v", m)
+	}
+	// Second probe retries (failure wasn't cached) and succeeds.
+	m := c.discoverOCIUpgrade("app", lister, cache)
+	if m == nil || m.LatestVersion != "1.0.0" {
+		t.Fatalf("expected retry to succeed with 1.0.0, got %+v (calls=%d)", m, lister.calls)
+	}
+	if lister.calls != 2 {
+		t.Errorf("expected 2 calls (retry after transient failure), got %d", lister.calls)
+	}
+}
+
 func TestApplyOCIUpgrade_SetsFields(t *testing.T) {
 	withOCISources(t, []string{"oci://reg/c"})
 	lister := &fakeTagLister{tags: map[string][]string{"reg/c/app": {"1.5.0"}}}

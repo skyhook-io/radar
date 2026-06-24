@@ -206,10 +206,12 @@ func (c *Client) discoverOCIUpgrade(chartName string, lister ociTagLister, tagCa
 			tags, err = lister.Tags(ref)
 			if err != nil {
 				// Expected when this prefix doesn't publish this chart (404) —
-				// the chart may live under a different registered prefix.
+				// the chart may live under a different registered prefix. Do NOT
+				// cache the failure: a transient timeout/network error would
+				// otherwise mark every release sharing this ref as untracked for
+				// the whole batch. A genuine 404 is cheap to re-probe.
 				tags = nil
-			}
-			if tagCache != nil {
+			} else if tagCache != nil {
 				tagCache[ref] = tags
 			}
 		}

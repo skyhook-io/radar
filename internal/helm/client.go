@@ -1176,6 +1176,7 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 	// OCI fallback with an empty classic-candidate set rather than returning early.
 	var candidates []repoVersionInfo
 	noClassicRepos := false
+	indexLoadFailed := false
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	switch {
@@ -1194,6 +1195,7 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 			indexFile, err := repo.LoadIndexFile(indexPath)
 			if err != nil {
 				log.Printf("[helm] skipping repo %q: failed to load index %s: %v", r.Name, indexPath, err)
+				indexLoadFailed = true
 				continue
 			}
 
@@ -1221,10 +1223,17 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 	}
 
 	if len(candidates) == 0 {
-		// No classic match → registered OCI sources are the fallback for the user's
-		// own OCI-published charts. Only here (genuine absence), never on classic
-		// ambiguity below — falling back on ambiguity could advertise an OCI source
-		// for a release that actually came from a classic repo.
+		// A failed classic index could be hiding the release's real (classic)
+		// source, so surface that before OCI — matching resolveUpgradeChartPath —
+		// rather than mislabel a classic-repo release as OCI-tracked.
+		if indexLoadFailed {
+			info.Error = "failed to load one or more configured repository indexes"
+			return info, nil
+		}
+		// Genuine absence → registered OCI sources are the fallback for the user's
+		// own OCI-published charts. Only here, never on classic ambiguity below —
+		// falling back on ambiguity could advertise an OCI source for a release
+		// that actually came from a classic repo.
 		if c.applyOCIUpgrade(info, chartName, currentVersion, nil, nil) {
 			return info, nil
 		}
@@ -1682,9 +1691,15 @@ type chartPathCandidate struct {
 }
 
 func (c *Client) resolveUpgradeChartPath(chartName, targetVersion, repositoryName string, sourceHosts []string) (chartPath, resolvedRepo string, err error) {
+	// A missing/unreadable repo config is not fatal: a pure-OCI user has no
+	// repositories.yaml, and discovery may have advertised an OCI upgrade. Proceed
+	// with an empty classic set so the OCI fallback below can still resolve.
 	repos, err := repo.LoadFile(c.settings.RepositoryConfig)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to load repo file: %w", err)
+		if !os.IsNotExist(err) {
+			log.Printf("[helm] failed to load repository config during upgrade (treating as no classic repos): %v", err)
+		}
+		repos = &repo.File{}
 	}
 
 	var candidates []chartPathCandidate
@@ -1861,11 +1876,13 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 	chartAllVersions := make(map[string]map[string][]string)
 
 	cacheDir := c.settings.RepositoryCache
+	indexLoadFailed := false
 	for _, r := range f.Repositories {
 		indexPath := filepath.Join(cacheDir, fmt.Sprintf("%s-index.yaml", r.Name))
 		indexFile, err := repo.LoadIndexFile(indexPath)
 		if err != nil {
 			log.Printf("[helm] skipping repo %q: failed to load index %s: %v", r.Name, indexPath, err)
+			indexLoadFailed = true
 			continue
 		}
 
@@ -1922,8 +1939,12 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 
 		baseCandidates, ok := chartRepoVersions[chartName]
 		if !ok {
-			// No classic match → OCI fallback (genuine absence only).
-			if !ociFallback(info, chartName, currentVersion) {
+			// A failed classic index could be hiding this release's real source —
+			// surface that before OCI rather than mislabel it as OCI-tracked.
+			if indexLoadFailed {
+				info.Error = "failed to load one or more configured repository indexes"
+			} else if !ociFallback(info, chartName, currentVersion) {
+				// Genuine absence → OCI fallback for the user's own OCI charts.
 				info.Error = "chart not found in configured repositories or registered OCI sources"
 			}
 			result.Releases[key] = info
