@@ -30,7 +30,7 @@ import { K8sResourceNode } from './K8sResourceNode'
 import { GroupNode } from './GroupNode'
 import { NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
-import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, type GroupDisplayLevel } from './layout'
+import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, isGroupEffectivelyCollapsed, type GroupDisplayLevel } from './layout'
 import type { Topology, TopologyNode, TopologyEdge, ViewMode, GroupingMode } from '../../types'
 import { pluralize } from '../../utils/pluralize'
 import { foldHash } from '../../utils/structure-hash'
@@ -94,7 +94,9 @@ function buildEdges(
   groupingMode: GroupingMode,
   isTrafficView: boolean,
   nodeToGroup?: Map<string, string>,
-  nodeCount?: number
+  nodeCount?: number,
+  groupLevels?: Map<string, GroupDisplayLevel>,
+  smartDefaultActive = false,
 ): Edge[] {
   const edges: Edge[] = []
   const seenEdgeIds = new Set<string>() // O(1) duplicate detection
@@ -117,15 +119,17 @@ function buildEdges(
     let source = edge.source
     let target = edge.target
 
-    // If source is in a collapsed group, point to the group instead
+    // If source is in a collapsed group, point to the group instead. Same
+    // predicate as ELK node placement (isGroupEffectivelyCollapsed) so a
+    // rendered edge never references a member hidden inside a chip.
     const sourceGroup = nodeGroupMap.get(source)
-    if (sourceGroup && collapsedGroups.has(sourceGroup)) {
+    if (sourceGroup && isGroupEffectivelyCollapsed(sourceGroup, collapsedGroups, groupLevels, smartDefaultActive)) {
       source = sourceGroup
     }
 
     // If target is in a collapsed group, point to the group instead
     const targetGroup = nodeGroupMap.get(target)
-    if (targetGroup && collapsedGroups.has(targetGroup)) {
+    if (targetGroup && isGroupEffectivelyCollapsed(targetGroup, collapsedGroups, groupLevels, smartDefaultActive)) {
       target = targetGroup
     }
 
@@ -607,13 +611,20 @@ export function TopologyGraph({
     // Increment version to invalidate any previous in-flight layout
     const thisLayoutVersion = ++layoutVersionRef.current
 
+    // The smart-default chip pass only ever materializes namespace groups, so its
+    // "no-entry group defaults to collapsed" semantics apply only in namespace
+    // mode. Outside it (small clusters, app grouping) a no-entry group stays
+    // expanded — see isGroupEffectivelyCollapsed.
+    const smartDefaultActive = hasAppliedSmartDefaultRef.current && groupingMode === 'namespace'
+
     // Build hierarchical ELK graph
     const { elkGraph, groupMap, nodeToGroup } = buildHierarchicalElkGraph(
       workingNodes,
       workingEdges,
       groupingMode,
       collapsedGroups,
-      groupLevels
+      groupLevels,
+      smartDefaultActive
     )
     groupMapRef.current = groupMap
 
@@ -711,7 +722,9 @@ export function TopologyGraph({
           groupingMode,
           isTrafficView,
           nodeToGroup,
-          nodesWithHandlers.length
+          nodesWithHandlers.length,
+          groupLevels,
+          smartDefaultActive
         )
         setEdges(builtEdges)
       }

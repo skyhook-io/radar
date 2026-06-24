@@ -459,13 +459,41 @@ function pickGroupName(nodes: TopologyNode[]): string {
   return sorted[0].name
 }
 
+/**
+ * Whether a group renders as a single collapsed chip/card (members hidden) vs an
+ * expanded container. This is the ONE predicate that node placement, ELK edge
+ * redirect, and ReactFlow edge building must all agree on — if they diverge, an
+ * edge can reference a member hidden inside a chip, which either crashes ELK
+ * ("Referenced shape does not exist") or silently drops the rendered edge.
+ *
+ * - Explicit chip/cardGrid levels are always collapsed (they're in collapsedGroups).
+ * - When the smart-default chip pass is active (large clusters), a group with no
+ *   level entry is a late arrival and defaults to collapsed — e.g. a namespace
+ *   that only surfaces after switching Resources↔Traffic. When it is NOT active
+ *   (small clusters, manual per-group toggles), a no-entry group stays expanded,
+ *   so collapsing one group never cascades to untouched groups.
+ */
+export function isGroupEffectivelyCollapsed(
+  groupId: string,
+  collapsedGroups: Set<string>,
+  groupLevels: Map<string, GroupDisplayLevel> | undefined,
+  smartDefaultActive: boolean,
+): boolean {
+  if (collapsedGroups.has(groupId)) return true
+  if (smartDefaultActive && groupLevels?.get(groupId) !== 'topology') return true
+  return false
+}
+
 // Build hierarchical ELK graph with groups containing children
 export function buildHierarchicalElkGraph(
   topologyNodes: TopologyNode[],
   edges: Array<{ id: string; source: string; target: string; type: string }>,
   groupingMode: GroupingMode,
   collapsedGroups: Set<string>,
-  groupLevels?: Map<string, GroupDisplayLevel>
+  groupLevels?: Map<string, GroupDisplayLevel>,
+  /** True when the large-cluster smart-default chip pass has materialized levels;
+   *  makes no-entry groups default to collapsed (see isGroupEffectivelyCollapsed). */
+  smartDefaultActive = false,
 ): { elkGraph: ElkGraph; groupMap: Map<string, string[]>; nodeToGroup: Map<string, string> } {
   const groupMap = new Map<string, string[]>()
   const nodeToGroup = new Map<string, string>()
@@ -496,22 +524,10 @@ export function buildHierarchicalElkGraph(
     }
   }
 
-  // A group is "effectively collapsed" (rendered as a single chip/card with its
-  // members hidden) when it's explicitly in collapsedGroups, OR levels exist for
-  // the current grouping mode and this group lacks an explicit 'topology' level.
-  // The second clause covers groups that appeared after the smart-default chip
-  // pass — e.g. a namespace that only surfaces after switching Resources↔Traffic,
-  // which therefore has no groupLevels entry at all.
-  //
-  // Node placement and edge redirect MUST share this predicate: if a member is
-  // hidden inside a chip but an edge still references it by plain id, ELK fails
-  // to import the graph ("Referenced shape does not exist").
-  const groupPrefix = `group-${groupingMode}-`
-  const hasLevelsForCurrentMode = !!groupLevels && groupLevels.size > 0 &&
-    [...groupLevels.keys()].some(k => k.startsWith(groupPrefix))
+  // Node placement and edge redirect MUST share this predicate — see
+  // isGroupEffectivelyCollapsed for why.
   const isGroupCollapsed = (groupId: string): boolean =>
-    collapsedGroups.has(groupId) ||
-    (hasLevelsForCurrentMode && groupLevels!.get(groupId) !== 'topology')
+    isGroupEffectivelyCollapsed(groupId, collapsedGroups, groupLevels, smartDefaultActive)
 
   const children: ElkNode[] = []
   const processedNodes = new Set<string>()
@@ -889,12 +905,13 @@ export async function applyHierarchicalLayout(
       positions.set(group.groupId, pos)
 
       const { worstStatus, unhealthyCount } = computeGroupHealth(memberIds, nodeMap)
-      // Default to 'chip' when groupLevels has entries for the current grouping mode,
-      // so late-arriving namespaces don't render as expanded topology and overlap with chips.
-      const hasLevelsForMode = groupLevels && groupLevels.size > 0 &&
-        [...groupLevels.keys()].some(k => k.startsWith(`group-${groupingMode}-`))
-      const defaultLevel: GroupDisplayLevel = hasLevelsForMode ? 'chip' : 'topology'
-      const displayLevel: GroupDisplayLevel = groupLevels?.get(group.groupId) || (group.isCollapsed ? 'chip' : defaultLevel)
+      // Display level derives from the SAME source of truth as ELK node placement:
+      // group.isCollapsed reflects buildHierarchicalElkGraph's isGroupEffectivelyCollapsed
+      // decision (an expanded group was laid out with its children). Recomputing a
+      // separate "default" here would let the rendered chip disagree with the laid-out
+      // children — e.g. a manual single collapse rendering untouched groups as chips
+      // while their children are still placed. An explicit level (e.g. cardGrid) wins.
+      const displayLevel: GroupDisplayLevel = groupLevels?.get(group.groupId) || (group.isCollapsed ? 'chip' : 'topology')
 
       // Compute kind breakdown for collapsed chips
       const kindCounts: Record<string, number> = {}

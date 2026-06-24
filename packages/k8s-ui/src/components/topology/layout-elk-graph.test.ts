@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { buildHierarchicalElkGraph, type GroupDisplayLevel } from './layout'
+import { describe, it, expect, beforeAll } from 'vitest'
+import { buildHierarchicalElkGraph, applyHierarchicalLayout, setLayoutEngine, type GroupDisplayLevel } from './layout'
 import type { TopologyNode, TopologyEdge } from '../../types'
 
 // Collect every id ELK will see as a layoutable shape: top-level children plus
@@ -44,7 +44,9 @@ describe('buildHierarchicalElkGraph — collapse predicate consistency', () => {
     // collapsedGroups mirrors TopologyGraph: only explicit non-'topology' levels.
     const collapsedGroups = new Set<string>(['group-namespace-app1'])
 
-    const { elkGraph } = buildHierarchicalElkGraph(nodes, edges, 'namespace', collapsedGroups, groupLevels)
+    // smartDefaultActive=true: the large-cluster chip pass ran, so the
+    // late-arriving skyhook-gateway defaults to collapsed.
+    const { elkGraph } = buildHierarchicalElkGraph(nodes, edges, 'namespace', collapsedGroups, groupLevels, true)
 
     const valid = validEndpointIds(elkGraph)
     for (const edge of elkGraph.edges) {
@@ -56,6 +58,38 @@ describe('buildHierarchicalElkGraph — collapse predicate consistency', () => {
     const endpoints = elkGraph.edges.flatMap(e => [...e.sources, ...e.targets])
     expect(endpoints).not.toContain('deployment/skyhook-gateway/skyhook-frpc')
     expect(endpoints).toContain('group-namespace-skyhook-gateway')
+  })
+
+  // Without smart-default (small clusters, manual toggles), collapsing one group
+  // must NOT cascade-collapse untouched no-entry groups. app2 has no level entry;
+  // since smartDefaultActive is false it stays expanded and its member renders.
+  it('does not cascade-collapse no-entry groups when smart-default is inactive', () => {
+    const nodes: TopologyNode[] = [
+      deployment('app1', 'web'),
+      deployment('app2', 'api'),
+    ]
+    const edges: TopologyEdge[] = [
+      { id: 'e1', source: 'deployment/app1/web', target: 'deployment/app2/api', type: 'routes-to' },
+    ]
+    // User collapsed only app1; app2 untouched (no entry).
+    const groupLevels = new Map<string, GroupDisplayLevel>([['group-namespace-app1', 'chip']])
+    const collapsedGroups = new Set<string>(['group-namespace-app1'])
+
+    const { elkGraph } = buildHierarchicalElkGraph(nodes, edges, 'namespace', collapsedGroups, groupLevels, false)
+
+    // app2 stays expanded with its member as a child.
+    const app2 = elkGraph.children.find(c => c.id === 'group-namespace-app2')
+    expect(app2?.children?.some(c => c.id === 'deployment/app2/api')).toBe(true)
+
+    // Edge stays valid: app1 redirected to its chip, app2 member kept (it exists).
+    const valid = validEndpointIds(elkGraph)
+    for (const edge of elkGraph.edges) {
+      expect(valid.has(edge.sources[0])).toBe(true)
+      expect(valid.has(edge.targets[0])).toBe(true)
+    }
+    const endpoints = elkGraph.edges.flatMap(e => [...e.sources, ...e.targets])
+    expect(endpoints).toContain('group-namespace-app1')
+    expect(endpoints).toContain('deployment/app2/api')
   })
 
   it('keeps edges between expanded groups referencing plain member ids', () => {
@@ -95,5 +129,34 @@ describe('buildHierarchicalElkGraph — collapse predicate consistency', () => {
       expect(valid.has(edge.sources[0])).toBe(true)
       expect(valid.has(edge.targets[0])).toBe(true)
     }
+  })
+})
+
+// Render layer: the GroupNode's displayLevel must agree with ELK placement, or a
+// chip renders over its own laid-out children. group.isCollapsed (from the layout
+// engine) is the single source of truth.
+describe('applyHierarchicalLayout — rendered displayLevel matches placement', () => {
+  beforeAll(() => setLayoutEngine('main-thread'))
+
+  const noop = () => {}
+  const callbacks = { onSetLevel: noop, onCardClick: noop }
+
+  it('renders an untouched no-entry group as topology (not chip) on manual collapse', async () => {
+    const nodes: TopologyNode[] = [deployment('app1', 'web'), deployment('app2', 'api')]
+    const edges: TopologyEdge[] = [
+      { id: 'e1', source: 'deployment/app1/web', target: 'deployment/app2/api', type: 'routes-to' },
+    ]
+    // Small cluster, smart-default inactive: user collapsed only app1.
+    const groupLevels = new Map<string, GroupDisplayLevel>([['group-namespace-app1', 'chip']])
+    const collapsedGroups = new Set<string>(['group-namespace-app1'])
+
+    const { elkGraph, groupMap } = buildHierarchicalElkGraph(nodes, edges, 'namespace', collapsedGroups, groupLevels, false)
+    const { nodes: rendered } = await applyHierarchicalLayout(
+      elkGraph, nodes, edges, groupMap, 'namespace', collapsedGroups, callbacks, false, groupLevels,
+    )
+
+    const groupNode = (id: string) => rendered.find(n => n.id === id && n.type === 'group')
+    expect(groupNode('group-namespace-app1')?.data.displayLevel).toBe('chip')
+    expect(groupNode('group-namespace-app2')?.data.displayLevel).toBe('topology')
   })
 })
