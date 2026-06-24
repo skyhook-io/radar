@@ -2,6 +2,7 @@
 // truth), so background/running investigations appear here live. Used both as the
 // docked Home view and the master pane of the maximized workspace.
 import { Loader2, Sparkles } from "lucide-react";
+import { StatusDot, type StatusTone } from "@skyhook-io/k8s-ui";
 import { type RunSummary } from "../../api/diagnose";
 
 // Compact "3m ago" / "2h ago" / date label.
@@ -14,19 +15,25 @@ function relativeTime(ts: number, now: number): string {
   return new Date(ts).toLocaleDateString();
 }
 
+// Map a run status to the design-system status tone (StatusDot). stopped is
+// user-initiated → neutral/unknown, NOT a failure (distinct from error).
+function runTone(status: RunSummary["status"]): StatusTone {
+  switch (status) {
+    case "error":
+      return "unhealthy";
+    case "stale":
+      return "degraded";
+    case "done":
+      return "healthy";
+    default: // stopped
+      return "unknown";
+  }
+}
+
 function statusDot(status: RunSummary["status"]) {
   if (status === "running")
     return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent" />;
-  // stopped (user-initiated) is neutral, NOT a failure — distinct from error.
-  const color =
-    status === "error"
-      ? "bg-red-400"
-      : status === "stopped"
-        ? "bg-theme-text-tertiary"
-        : status === "stale"
-          ? "bg-amber-400"
-          : "bg-emerald-400";
-  return <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${color}`} />;
+  return <StatusDot tone={runTone(status)} className="shrink-0" />;
 }
 
 // A short text status for terminal non-done states, so the run's outcome doesn't

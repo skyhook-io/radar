@@ -323,7 +323,9 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
             <div className="flex items-center gap-3">
               <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
                 <RotateCw className="w-3 h-3" />
-                Applies on next launch
+                {aiDirty && !configDirty
+                  ? 'Applies to new investigations'
+                  : 'Applies on next launch'}
               </span>
               <button
                 onClick={saveConfig}

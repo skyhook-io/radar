@@ -13,7 +13,6 @@ import {
   ChevronRight,
   ChevronDown,
   Wrench,
-  Wand2,
   Sparkles,
   RefreshCw,
   Maximize2,
@@ -696,7 +695,7 @@ export function ApplyDialog({
           disabled={applyBlocked}
           className="flex items-center gap-1.5 rounded-lg btn-brand px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <Wand2 className="h-4 w-4" />
+          <Wrench className="h-4 w-4" />
           Apply fix
         </button>
       </div>
@@ -1280,7 +1279,7 @@ function DiagnosisResult({
                               : "hover:bg-accent/10"
                           }`}
                         >
-                          <Wand2 className="h-3 w-3" />
+                          <Wrench className="h-3 w-3" />
                           Apply…
                         </button>
                       )}
