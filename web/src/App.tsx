@@ -7,7 +7,8 @@ import { useNavigate, useLocation, useSearchParams, useNavigationType, Navigatio
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
-import { useDiagnose } from './components/diagnose/DiagnoseContext'
+import { useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
+import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useAPIResources, CORE_RESOURCES } from './api/apiResources'
@@ -88,6 +89,12 @@ const DEFAULT_VISIBLE_KINDS = ALL_NODE_KINDS.filter(k => k !== 'ReplicaSet')
 // CRD kinds hidden by default in the topology (infrastructure plumbing).
 // Users can re-enable via the filter sidebar.
 const CRD_HIDDEN_BY_DEFAULT = new Set(['GatewayClass', 'IngressClass', 'NodePool', 'NodeClaim', 'NodeClass'])
+
+// Top-bar height in px. The body frame's right-side surfaces (AI panel, resource +
+// Helm drawers) all inset their top by this so they sit BELOW the header. 0 in
+// chromeless embeds (the host owns the chrome, no Radar header). Keep in sync with
+// the <header> py/line-height; the drawers historically hardcoded the same 49.
+const APP_HEADER_HEIGHT = 49
 
 // CAPI kinds shown in Fleet topology mode (+ Node for Machine→Node edges)
 // Includes core CAPI kinds and all infrastructure provider kinds
@@ -279,9 +286,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const capabilities = useCapabilitiesContext()
   const openLocalTerminal = useOpenLocalTerminal()
   const navCustomization = useNavCustomization()
-  // The AI panel reserves a right gutter on the CONTENT area only — the navbar and
-  // nav rail stay global/static (never pushed), so opening the panel doesn't shift them.
-  const { contentGutter } = useDiagnose()
+  // The AI panel is an absolute slot in the body frame (the column under the header):
+  // it reserves a right gutter on the CONTENT only, so the navbar + nav rail stay
+  // static. contentGutter is the docked panel width (0 when closed/overlay/maximized).
+  const { open: diagnoseOpen, contentGutter } = useDiagnoseLayout()
   // Hand off to a host-owned URL. The host's `onHostNavigate` (Radar Cloud's
   // cross-tree swap) navigates same-document so the chrome morphs instead of
   // cold-booting; without it we fall back to a hard `window.location` nav.
@@ -1845,6 +1853,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       </header>
       )}
 
+      {/* Body frame — every content state lives here and reflows left of the docked
+          AI panel (an absolute slot in this column). The header + nav rail are OUTSIDE
+          this wrapper, so they never move when the panel opens. */}
+      <div className="relative flex flex-1 flex-col min-h-0" style={{ paddingRight: contentGutter, transition: 'padding-right 0.2s ease' }}>
+
       {/* Auth barrier - show when auth is enabled but user is not authenticated */}
       {authMe?.authEnabled && !authMe?.username && authMe.authMode === 'proxy' && (
         <AuthBarrier authMode="proxy" />
@@ -1926,7 +1939,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* inert while a fullscreen detail overlay covers the views — keeps the
           retained background list out of the focus order + a11y tree (the visual
           cover already blocks pointer events). */}
-      {contentReady && <div className="flex-1 flex overflow-hidden" inert={expandedView} style={{ paddingRight: contentGutter, transition: 'padding-right 0.2s ease' }}>
+      {contentReady && <div className="flex-1 flex overflow-hidden" inert={expandedView}>
         <ErrorBoundary>
         {/* Home dashboard */}
         {mainView === 'home' && (
@@ -2222,6 +2235,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         </ErrorBoundary>
       </div>}
+      </div>{/* /body frame */}
 
       {/* Resource detail drawer — stays mounted, expands to full-screen WorkloadView.
           Gated on contentReady so it never renders over the connecting/switching
@@ -2233,6 +2247,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           // No Radar header in chromeless embeds (Radar Hub) — anchor the drawer
           // to the top of the content area instead of leaving a 49px gap.
           headerHeight={chromeless ? 0 : undefined}
+          rightInset={contentGutter}
           isOpen={resourceDrawer.isOpen}
           expanded={drawerExpandedProp}
           onClose={closeDrawer}
@@ -2274,6 +2289,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         <HelmReleaseDrawer
           release={drawerHelmRelease}
           isOpen={helmDrawer.isOpen}
+          rightInset={contentGutter}
           onClose={() => {
             setSelectedHelmRelease(null)
             const params = new URLSearchParams(window.location.search)
@@ -2292,6 +2308,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           }}
         />
       )}
+
+      {/* AI investigation panel — an absolute slot in this column (the body frame),
+          below the header and right of the nav rail, sharing the frame with the
+          drawers above. Docked = right slot (pushes content via contentGutter);
+          maximized = fills the frame. */}
+      {diagnoseOpen && <DiagnoseSurface topInset={chromeless ? 0 : APP_HEADER_HEIGHT} />}
 
       {/* Port Forward floating panel (indicator lives in header) */}
       <PortForwardPanel />

@@ -32,6 +32,9 @@ interface ResourceDetailDrawerProps {
   headerHeight?: number
   /** Left offset to exclude (e.g. sidebar width) so expanded mode doesn't cover the sidebar (default: 0) */
   leftOffset?: number
+  /** Right inset in px to leave clear (e.g. a docked side panel) so the drawer sits
+   *  beside it instead of under it. Shared "right-side surface" contract (default: 0). */
+  rightInset?: number
   /** Render the content inside the drawer */
   children: (props: {
     resource: SelectedResource
@@ -81,7 +84,7 @@ function usePrefersReducedMotion(): boolean {
   return reduced
 }
 
-export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, canCollapseToDrawer = true, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, children }: ResourceDetailDrawerProps) {
+export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, canCollapseToDrawer = true, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, rightInset = 0, children }: ResourceDetailDrawerProps) {
   const [drawerWidth, setDrawerWidth] = useState(() => getDefaultWidth(resource.kind))
   const [isResizing, setIsResizing] = useState(false)
   const resizeStartX = useRef(0)
@@ -225,7 +228,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   // During the pre-mount frames (transitioning but not yet armed) hold the frame
   // at its START width so the width transition fires only once the incoming
   // layer has painted; otherwise it snaps to the target.
-  const fullW = `calc(100% - ${leftOffset}px)`
+  const fullW = `calc(100% - ${leftOffset}px - ${rightInset}px)`
   const startWidth = settledExpanded.current ? fullW : drawerWidth
   const targetWidth = expanded ? fullW : drawerWidth
   const containerWidth = transitioning && !crossfadeArmed ? startWidth : targetWidth
@@ -274,6 +277,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       style={{
         width: containerWidth,
         top: headerHeight,
+        right: rightInset, // leave room for a docked side panel (AI), else flush right
         height: `calc(100% - ${headerHeight}px - ${dockInset}px)`,
         // Inline so the morph duration/easing is controlled precisely (and stays
         // in lockstep with the crossfade + JS window). Width only animates when

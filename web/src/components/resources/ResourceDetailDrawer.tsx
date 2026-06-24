@@ -23,6 +23,8 @@ interface ResourceDetailDrawerProps {
   /** Top offset for the drawer (px). Defaults to Radar's 49px header height;
    *  pass 0 in chromeless embeds where there's no Radar header above it. */
   headerHeight?: number
+  /** Right inset in px so the drawer sits beside a docked side panel (AI), not under it. */
+  rightInset?: number
 }
 
 export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {

@@ -3,8 +3,7 @@
 //  - expanded: a master-detail workspace that fills ONLY the content area (does
 //    not cover the left nav rail or top bar) — recent list on the left, the
 //    selected investigation/report on the right.
-import { useLayoutEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
 import {
   Sparkles,
   X,
@@ -20,6 +19,7 @@ import {
 import { Tooltip } from "../ui/Tooltip";
 import {
   useDiagnose,
+  useDiagnoseLayout,
   agentLabelFor,
   openDiagnoseSettings,
 } from "./DiagnoseContext";
@@ -130,44 +130,21 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   );
 }
 
-export function DiagnoseSurface({
-  width,
-  setWidth,
-  maximized,
-  setMaximized,
-  narrow,
-  minW,
-  maxW,
-  widthKey,
-}: {
-  width: number;
-  setWidth: (fn: (w: number) => number) => void;
-  maximized: boolean;
-  setMaximized: (fn: (v: boolean) => boolean) => void;
-  narrow: boolean;
-  minW: number;
-  maxW: number;
-  widthKey: string;
-}) {
+// The panel is an ABSOLUTE slot inside the app's body frame (the column under the
+// header, right of the nav rail) — App renders it there and passes topInset (the
+// header height; 0 in chromeless embeds). It shares that frame with the resource/
+// Helm drawers, so it no longer floats viewport-fixed or DOM-measures the chrome.
+export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
   const d = useDiagnose();
-  // Measure the top bar + nav rail so the panel sits WITHIN the app frame: docked,
-  // it starts below the navbar (top only); maximized, it also insets past the nav
-  // rail (top + left). Keeping the global chrome reachable during a long
-  // investigation — and making docked/maximized share the same top edge.
-  const [chrome, setChrome] = useState({ top: 0, left: 0 });
-  useLayoutEffect(() => {
-    const measure = () => {
-      const h = document.querySelector("header");
-      const nav = document.querySelector('[aria-label="Primary navigation"]');
-      setChrome({
-        top: h ? Math.round(h.getBoundingClientRect().bottom) : 0,
-        left: nav ? Math.round(nav.getBoundingClientRect().right) : 0,
-      });
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [maximized]);
+  const {
+    maximized,
+    setMaximized,
+    panelWidth: width,
+    setPanelWidth: setWidth,
+    panelNarrow: narrow,
+    panelBounds: { min: minW, max: maxW },
+    panelWidthKey: widthKey,
+  } = useDiagnoseLayout();
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -211,9 +188,11 @@ export function DiagnoseSurface({
     ? `${activeRun.kind} ${activeRun.namespace ? `${activeRun.namespace}/` : ""}${activeRun.name}`
     : "AI investigations";
 
+  // Absolute within the body frame: maximized fills it; docked is a right slot.
+  // topInset clears the header (the frame spans the full column incl. the header).
   const positionStyle: React.CSSProperties = maximized
-    ? { top: chrome.top, left: chrome.left, right: 0, bottom: 0 }
-    : { top: chrome.top, right: 0, bottom: 0, width, maxWidth: "100vw" };
+    ? { top: topInset, left: 0, right: 0, bottom: 0 }
+    : { top: topInset, right: 0, bottom: 0, width, maxWidth: "100%" };
 
   // The detail pane (right side when expanded; the whole body when docked).
   // Keyed by run id so toggling Expand doesn't remount a focused run's view.
@@ -255,11 +234,11 @@ export function DiagnoseSurface({
 
   const showBreadcrumb = !maximized && d.view !== "home";
 
-  return createPortal(
+  return (
     <div
       role="dialog"
       aria-label="AI investigations"
-      className="fixed z-50 flex flex-col border-l border-theme-border bg-theme-surface shadow-drawer"
+      className="absolute z-40 flex flex-col border-l border-theme-border bg-theme-surface shadow-drawer"
       style={{
         ...positionStyle,
         animation: "slide-in-from-right 0.22s cubic-bezier(0.32,0.72,0,1)",
@@ -371,7 +350,6 @@ export function DiagnoseSurface({
           </div>
         )}
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }

@@ -8,9 +8,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import {
   fetchAgents,
@@ -19,7 +22,6 @@ import {
   DiagnoseError,
 } from "../../api/diagnose";
 import { type RunSummary, type AgentInfo } from "../../api/diagnose";
-import { DiagnoseSurface } from "./DiagnoseSurface";
 
 export interface Target {
   kind: string;
@@ -40,7 +42,6 @@ interface DiagnoseCtx {
   setModel: (v: string) => void;
   effort: string; // optional Codex reasoning effort ("" = default)
   setEffort: (v: string) => void;
-  open: boolean;
   view: DiagnoseView;
   activeRunId: string | null;
   runs: RunSummary[];
@@ -55,10 +56,32 @@ interface DiagnoseCtx {
   cancelConsent: () => void;
   refreshRuns: () => void;
   dismissError: () => void;
-  contentGutter: number; // px right-gutter for the content area when the panel is docked (0 = overlay/closed)
+}
+
+// Layout state is a SEPARATE context from the business state above. The app shell
+// (App) consumes only this to position the panel + reserve the content gutter, and
+// its value is memoized on layout-only deps — so the panel's 4s run-poll (which
+// churns the business context) doesn't re-render the whole shell.
+interface DiagnoseLayoutCtx {
+  open: boolean;
+  contentGutter: number; // px right-gutter for the content area when docked (0 = overlay/closed)
+  maximized: boolean;
+  setMaximized: Dispatch<SetStateAction<boolean>>;
+  panelWidth: number;
+  setPanelWidth: Dispatch<SetStateAction<number>>;
+  panelNarrow: boolean; // viewport too tight to push → overlay
+  panelBounds: { min: number; max: number };
+  panelWidthKey: string;
 }
 
 const Ctx = createContext<DiagnoseCtx | null>(null);
+const LayoutCtx = createContext<DiagnoseLayoutCtx | null>(null);
+
+export function useDiagnoseLayout(): DiagnoseLayoutCtx {
+  const c = useContext(LayoutCtx);
+  if (!c) throw new Error("useDiagnoseLayout must be used within DiagnoseProvider");
+  return c;
+}
 
 export function useDiagnose(): DiagnoseCtx {
   const c = useContext(Ctx);
@@ -68,6 +91,7 @@ export function useDiagnose(): DiagnoseCtx {
 
 const MIN_W = 400;
 const MAX_W = 1100;
+const PANEL_BOUNDS = { min: MIN_W, max: MAX_W }; // stable ref for the layout context
 const WIDTH_KEY = "radar-ai-panel-width";
 const CONSENT_KEY = "radar-ai-consent-v2"; // v2: agent picker + isolation choice
 // Cursor's trust model is materially different (it can't be isolated — the user's
@@ -331,7 +355,6 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     setModel,
     effort,
     setEffort,
-    open,
     view,
     activeRunId,
     runs,
@@ -348,24 +371,30 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     cancelConsent,
     refreshRuns,
     dismissError,
-    contentGutter,
   };
+
+  // Layout value memoized on layout-only deps (setters/bounds/key are stable), so
+  // the 4s run-poll churning `value` above doesn't re-render the app shell, which
+  // consumes ONLY this. The panel itself is rendered by the shell (App) as an
+  // absolute slot in the body frame — not here.
+  const layout = useMemo<DiagnoseLayoutCtx>(
+    () => ({
+      open,
+      contentGutter,
+      maximized,
+      setMaximized,
+      panelWidth: width,
+      setPanelWidth: setWidth,
+      panelNarrow: narrow,
+      panelBounds: PANEL_BOUNDS,
+      panelWidthKey: WIDTH_KEY,
+    }),
+    [open, contentGutter, maximized, width, narrow, setMaximized, setWidth],
+  );
 
   return (
     <Ctx.Provider value={value}>
-      {children}
-      {open && (
-        <DiagnoseSurface
-          width={width}
-          setWidth={setWidth}
-          maximized={maximized}
-          setMaximized={setMaximized}
-          narrow={narrow}
-          minW={MIN_W}
-          maxW={MAX_W}
-          widthKey={WIDTH_KEY}
-        />
-      )}
+      <LayoutCtx.Provider value={layout}>{children}</LayoutCtx.Provider>
     </Ctx.Provider>
   );
 }

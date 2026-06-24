@@ -30,6 +30,8 @@ interface HelmReleaseDrawerProps {
   onNavigateToResource?: NavigateToResource
   /** Controls slide-in/out animation (driven by useAnimatedUnmount) */
   isOpen?: boolean
+  /** Right inset in px so the drawer sits beside a docked side panel (AI), not under it. */
+  rightInset?: number
 }
 
 type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks'
@@ -38,7 +40,7 @@ const MIN_WIDTH = 500
 const MAX_WIDTH_PERCENT = 0.8
 const DEFAULT_WIDTH = 1000
 
-export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true }: HelmReleaseDrawerProps) {
+export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true, rightInset = 0 }: HelmReleaseDrawerProps) {
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [copied, setCopied] = useState<string | null>(null)
@@ -325,7 +327,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         TRANSITION_DRAWER,
         isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
       )}
-      style={{ width: renderedDrawerWidth, top: headerHeight, height: `calc(100vh - ${headerHeight}px - ${dockInset}px)` }}
+      style={{ width: renderedDrawerWidth, top: headerHeight, right: rightInset, height: `calc(100vh - ${headerHeight}px - ${dockInset}px)` }}
     >
       {/* Resize handle */}
       <div
