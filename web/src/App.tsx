@@ -410,6 +410,8 @@ function AppInner() {
   // selected drawer resource. This covers both in-view kind switches and
   // cross-kind navigations from expanded drawers (for example Node -> View Pods).
   const prevResourcesKindKeyRef = useRef<string | null>(null)
+  // Pathname a non-URL-backed peek drawer was opened on (see navigateToResource).
+  const peekOwnerPathRef = useRef<string | null>(null)
   const currentResourceKindSlug = normalizedResourcesKindSlug.toLowerCase()
   const currentResourceGroup = searchParams.get('apiGroup') ?? ''
   const selectedResourceKindSlug = selectedResource ? kindToPlural(selectedResource.kind).toLowerCase() : ''
@@ -421,9 +423,27 @@ function AppInner() {
   const resourcesKindRouteChanged = mainView === 'resources' &&
     prevResourcesKindKeyRef.current !== null &&
     prevResourcesKindKeyRef.current !== `${currentResourceGroup}/${currentResourceKindSlug}`
-  const routeSelectedResource = resourcesKindRouteChanged && selectedResourceRouteMismatch
-    ? null
-    : selectedResource
+
+  // A peek opened outside /resources (topology, GitOps, Applications) carries no
+  // URL backing, so the only signal that the page beneath it has navigated is
+  // that the pathname no longer matches where it was opened. Hiding it here, at
+  // render time, closes the orphan on Back without adding another clearing
+  // effect that would race the `suppressViewClearRef` lifecycle. The /resources
+  // case is URL-backed and handled above; an expanded drawer (drawerExpanded)
+  // legitimately lives at /workload and must stay open across that navigation.
+  const peekRouteOrphaned = !!selectedResource && !drawerExpanded && mainView !== 'resources' &&
+    peekOwnerPathRef.current !== null && peekOwnerPathRef.current !== location.pathname
+
+  // In Applications the inline WorkloadView (?workload) and the peek drawer are
+  // mutually exclusive — never two detail surfaces at once. ?workload is the
+  // single source of truth: while it's set the peek yields to the inline view.
+  // (Opening a child peek from Applications clears ?workload, see onOpenResource.)
+  const appsInlineWorkloadActive = mainView === 'applications' && searchParams.has('workload')
+
+  const routeSelectedResource =
+    (resourcesKindRouteChanged && selectedResourceRouteMismatch) || peekRouteOrphaned || appsInlineWorkloadActive
+      ? null
+      : selectedResource
 
   useEffect(() => {
     if (mainView !== 'resources') {
@@ -458,6 +478,12 @@ function AppInner() {
 
   // Navigate to a resource — uses View Transitions cross-fade when drawer is already open
   const navigateToResource = useCallback((res: SelectedResource, tab: 'detail' | 'yaml' = 'detail') => {
+    // Record the route this peek was opened on. Outside /resources the drawer is
+    // not URL-backed, so this ref is what lets the render-time gate below close
+    // the peek when the page under it changes (e.g. browser Back off a GitOps
+    // detail page). window.location is read (not the `location` closure) so the
+    // value is always current regardless of this callback's memoization.
+    peekOwnerPathRef.current = window.location.pathname
     const update = () => { setDrawerInitialTab(tab); setSelectedResource(res) }
     // Skip the cross-fade animation entirely on first open (no
     // `selectedResource`); otherwise route through
@@ -1834,7 +1860,10 @@ function AppInner() {
           <GitOpsView
             namespaces={namespaces}
             onOpenResource={(resource) => {
-              setSelectedResource(resource)
+              // Route through navigateToResource so the peek records the page it
+              // opened on — that's what lets Back off the GitOps detail page close
+              // the drawer instead of orphaning it on the list.
+              navigateToResource(resource)
             }}
             onClearNamespaces={clearAllNamespaces}
           />
@@ -1845,7 +1874,17 @@ function AppInner() {
           <ApplicationsView
             namespaces={namespaces}
             onOpenResource={(resource) => {
-              setSelectedResource(resource)
+              // The peek and the inline WorkloadView are mutually exclusive: drop
+              // the inline workload selection so the app graph (not a second
+              // detail panel) sits behind the peek. Search-only change keeps the
+              // pathname — and thus the peek's owner-path — intact.
+              const params = new URLSearchParams(window.location.search)
+              if (params.has('workload') || params.has('tab')) {
+                params.delete('workload')
+                params.delete('tab')
+                navigate({ pathname: window.location.pathname, search: params.toString() }, { replace: true })
+              }
+              navigateToResource(resource)
             }}
           />
         )}
