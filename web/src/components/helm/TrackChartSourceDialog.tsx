@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
-import { X, Plus, Trash2, Link2 } from 'lucide-react'
+import { X, Plus, Trash2, Link2, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useHelmOCISources, useAddOCISource, useRemoveOCISource } from '../../api/client'
+import { useHelmOCISources, useAddOCISource, useRemoveOCISource, useClusterInfo } from '../../api/client'
 
 interface TrackChartSourceDialogProps {
   open: boolean
@@ -19,8 +19,14 @@ interface TrackChartSourceDialogProps {
 export function TrackChartSourceDialog({ open, onClose, chartName }: TrackChartSourceDialogProps) {
   const [value, setValue] = useState('')
   const { data: sources } = useHelmOCISources()
+  const { data: clusterInfo } = useClusterInfo()
   const addSource = useAddOCISource()
   const removeSource = useRemoveOCISource()
+
+  // In-cluster Radar has no `helm registry login` store (the pod's HELM_CONFIG_HOME
+  // points at an empty /tmp), so private registries can't authenticate — only
+  // public charts can be tracked. Be honest about it rather than silently failing.
+  const inCluster = clusterInfo?.inCluster ?? false
 
   const trimmed = value.trim()
   const invalid = trimmed !== '' && !trimmed.startsWith('oci://')
@@ -113,10 +119,22 @@ export function TrackChartSourceDialog({ open, onClose, chartName }: TrackChartS
           </div>
         )}
 
-        <p className="text-xs text-theme-text-tertiary">
-          Credentials are reused from your <span className="font-mono">helm registry login</span>.
-          Radar stores no registry secrets.
-        </p>
+        {inCluster ? (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+            <span>
+              Radar is running in-cluster, where it has no{' '}
+              <span className="font-mono">helm registry login</span> credentials — only{' '}
+              <strong>public</strong> charts can be tracked. Private-registry support for in-cluster
+              Radar isn&apos;t available yet.
+            </span>
+          </div>
+        ) : (
+          <p className="text-xs text-theme-text-tertiary">
+            Credentials are reused from your <span className="font-mono">helm registry login</span>.
+            Radar stores no registry secrets.
+          </p>
+        )}
       </div>
     </DialogPortal>
   )
