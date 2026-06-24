@@ -20,6 +20,7 @@ import {
   Globe,
   Monitor,
   PenLine,
+  RotateCw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 // CSS_EASE (the shared spring curve) is intentionally NOT used for this panel —
@@ -30,6 +31,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
 import { openExternal } from '../../utils/navigation'
 import { apiUrl } from '../../api/config'
+import { apiFetch } from '../../api/client'
 import { pluralize } from '@skyhook-io/k8s-ui'
 
 // --- Types -------------------------------------------------------------------
@@ -86,7 +88,7 @@ function usePortForwardQuery() {
   return useQuery<PortForwardSession[]>({
     queryKey: ['portforwards'],
     queryFn: async () => {
-      const res = await fetch(apiUrl('/portforwards'))
+      const res = await apiFetch(apiUrl('/portforwards'))
       if (!res.ok) throw new Error('Failed to fetch port forwards')
       return res.json()
     },
@@ -390,6 +392,9 @@ export function PortForwardPanel() {
   // without disabling all stop buttons (the old shared-mutation approach blocked
   // every row when any single stop was in-flight).
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set())
+  // Per-session retry tracking — same rationale as stoppingIds: multiple failed
+  // forwards can be retried independently without disabling every retry button.
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(() => new Set())
   const queryClient = useQueryClient()
   const { showSuccess, showError } = useToast()
 
@@ -424,7 +429,7 @@ export function PortForwardPanel() {
   const stopPortForward = useCallback(async (id: string) => {
     setStoppingIds(prev => new Set(prev).add(id))
     try {
-      const res = await fetch(apiUrl(`/portforwards/${id}`), { method: 'DELETE' })
+      const res = await apiFetch(apiUrl(`/portforwards/${id}`), { method: 'DELETE' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error || `Failed to stop port forward (HTTP ${res.status})`)
@@ -444,6 +449,48 @@ export function PortForwardPanel() {
     }
   }, [queryClient, showError])
 
+  // Recreate a failed forward. The errored session is already dead — there's no live
+  // forward to lose — so we drop the stale row FIRST, then recreate. Delete-first keeps
+  // the panel at exactly one row in every outcome (success → one running row; failure →
+  // one errored row), avoiding the orphaned-duplicate the reverse order would leave when
+  // the backend keeps a failed-start session in its map. A 404 means it was already
+  // cleared (e.g. context switch) — benign, proceed. Service-resolved sessions re-route
+  // through the service path via buildRecreateBody, so a retry after the backing pod was
+  // replaced re-resolves to a currently-running pod.
+  const retryPortForward = useCallback(async (session: PortForwardSession) => {
+    commitInteraction()
+    setRetryingIds(prev => new Set(prev).add(session.id))
+    try {
+      const delRes = await apiFetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
+      if (!delRes.ok && delRes.status !== 404) {
+        const body = await delRes.json().catch(() => ({}))
+        throw new Error(body.error || `Failed to clear failed port forward (HTTP ${delRes.status})`)
+      }
+      const res = await apiFetch(apiUrl('/portforwards'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildRecreateBody(session, { localPort: session.localPort, listenAddress: session.listenAddress })),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `Failed to retry port forward (HTTP ${res.status})`)
+      }
+      queryClient.invalidateQueries({ queryKey: ['portforwards'] })
+      showSuccess('Port forward restarted', `Now listening on localhost:${session.localPort}`)
+    } catch (err) {
+      queryClient.invalidateQueries({ queryKey: ['portforwards'] })
+      const msg = err instanceof Error ? err.message : 'Failed to retry port forward'
+      showError('Failed to retry port forward', msg)
+      console.error('Failed to retry port forward:', err)
+    } finally {
+      setRetryingIds(prev => {
+        const next = new Set(prev)
+        next.delete(session.id)
+        return next
+      })
+    }
+  }, [commitInteraction, queryClient, showSuccess, showError])
+
   const toggleListenAddress = async (session: PortForwardSession) => {
     commitInteraction()
     const newAddress = session.listenAddress === '0.0.0.0' ? '127.0.0.1' : '0.0.0.0'
@@ -454,13 +501,13 @@ export function PortForwardPanel() {
     // apart from "original gone and recreate failed = data loss."
     let deleted = false
     try {
-      const delRes = await fetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
+      const delRes = await apiFetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
       if (!delRes.ok) {
         const body = await delRes.json().catch(() => ({}))
         throw new Error(body.error || `Failed to stop existing port forward (HTTP ${delRes.status})`)
       }
       deleted = true
-      const res = await fetch(apiUrl('/portforwards'), {
+      const res = await apiFetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildRecreateBody(session, { localPort: session.localPort, listenAddress: newAddress })),
@@ -501,13 +548,13 @@ export function PortForwardPanel() {
     // apart from "original gone and recreate failed = data loss."
     let deleted = false
     try {
-      const delRes = await fetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
+      const delRes = await apiFetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
       if (!delRes.ok) {
         const body = await delRes.json().catch(() => ({}))
         throw new Error(body.error || `Failed to stop existing port forward (HTTP ${delRes.status})`)
       }
       deleted = true
-      const res = await fetch(apiUrl('/portforwards'), {
+      const res = await apiFetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildRecreateBody(session, { localPort: newPort, listenAddress: session.listenAddress })),
@@ -716,6 +763,21 @@ export function PortForwardPanel() {
                       </button>
                       </Tooltip>
                     )}
+                    {session.status === 'error' && (
+                      <Tooltip content="Retry" delay={300} position="bottom" disabled={!isPanelOpen}>
+                      <button
+                        onClick={() => retryPortForward(session)}
+                        disabled={retryingIds.has(session.id)}
+                        className="p-1.5 text-theme-text-tertiary hover:text-green-400 hover:bg-theme-hover rounded disabled:opacity-50"
+                      >
+                        {retryingIds.has(session.id) ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RotateCw className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      </Tooltip>
+                    )}
                     <Tooltip content={session.status === 'error' ? 'Dismiss' : 'Stop'} delay={300} position="bottom" disabled={!isPanelOpen}>
                     <button
                       onClick={() => {
@@ -882,7 +944,7 @@ export function useStartPortForward() {
       localPort?: number
       listenAddress?: string // "127.0.0.1" (default) or "0.0.0.0"
     }) => {
-      const res = await fetch(apiUrl('/portforwards'), {
+      const res = await apiFetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
