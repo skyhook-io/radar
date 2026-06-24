@@ -55,6 +55,7 @@ interface DiagnoseCtx {
   cancelConsent: () => void;
   refreshRuns: () => void;
   dismissError: () => void;
+  contentGutter: number; // px right-gutter for the content area when the panel is docked (0 = overlay/closed)
 }
 
 const Ctx = createContext<DiagnoseCtx | null>(null);
@@ -313,6 +314,11 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   }, []);
   const dismissError = useCallback(() => setStartError(null), []);
 
+  // Reserve a right gutter on the CONTENT area (not the navbar/rail — those stay
+  // global and static) so docked content reflows beside the panel. Wide viewports
+  // only; maximized or too-narrow → the panel overlays, no gutter.
+  const contentGutter = open && !narrow && !maximized ? width : 0;
+
   const value: DiagnoseCtx = {
     available,
     agentLabel,
@@ -342,22 +348,12 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     cancelConsent,
     refreshRuns,
     dismissError,
+    contentGutter,
   };
-
-  // Push the whole app left by reserving the surface's width (wide viewports
-  // only; maximized or narrow → overlay, no reserved gutter).
-  const pushed = open && !narrow && !maximized;
 
   return (
     <Ctx.Provider value={value}>
-      <div
-        style={{
-          paddingRight: pushed ? width : 0,
-          transition: "padding-right 0.2s ease",
-        }}
-      >
-        {children}
-      </div>
+      {children}
       {open && (
         <DiagnoseSurface
           width={width}

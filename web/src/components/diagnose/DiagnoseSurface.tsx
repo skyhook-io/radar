@@ -150,11 +150,12 @@ export function DiagnoseSurface({
   widthKey: string;
 }) {
   const d = useDiagnose();
-  // When expanded, fill the content area only — measure the top bar + nav rail
-  // so we don't cover the app chrome.
+  // Measure the top bar + nav rail so the panel sits WITHIN the app frame: docked,
+  // it starts below the navbar (top only); maximized, it also insets past the nav
+  // rail (top + left). Keeping the global chrome reachable during a long
+  // investigation — and making docked/maximized share the same top edge.
   const [chrome, setChrome] = useState({ top: 0, left: 0 });
   useLayoutEffect(() => {
-    if (!maximized) return;
     const measure = () => {
       const h = document.querySelector("header");
       const nav = document.querySelector('[aria-label="Primary navigation"]');
@@ -212,7 +213,7 @@ export function DiagnoseSurface({
 
   const positionStyle: React.CSSProperties = maximized
     ? { top: chrome.top, left: chrome.left, right: 0, bottom: 0 }
-    : { top: 0, right: 0, bottom: 0, width, maxWidth: "100vw" };
+    : { top: chrome.top, right: 0, bottom: 0, width, maxWidth: "100vw" };
 
   // The detail pane (right side when expanded; the whole body when docked).
   // Keyed by run id so toggling Expand doesn't remount a focused run's view.

@@ -7,6 +7,7 @@ import { useNavigate, useLocation, useSearchParams, useNavigationType, Navigatio
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
+import { useDiagnose } from './components/diagnose/DiagnoseContext'
 import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useAPIResources, CORE_RESOURCES } from './api/apiResources'
@@ -278,6 +279,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const capabilities = useCapabilitiesContext()
   const openLocalTerminal = useOpenLocalTerminal()
   const navCustomization = useNavCustomization()
+  // The AI panel reserves a right gutter on the CONTENT area only — the navbar and
+  // nav rail stay global/static (never pushed), so opening the panel doesn't shift them.
+  const { contentGutter } = useDiagnose()
   // Hand off to a host-owned URL. The host's `onHostNavigate` (Radar Cloud's
   // cross-tree swap) navigates same-document so the chrome morphs instead of
   // cold-booting; without it we fall back to a hard `window.location` nav.
@@ -1571,10 +1575,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           under it. `fixed` splashes (connecting/switching) are unaffected. */}
       <div className="relative flex flex-col flex-1 min-w-0 h-full">
       {/* Header — suppressed in chromeless embed; the host owns the chrome.
-          @container: the header's responsive layout keys off its OWN width, not the
-          viewport — so it reflows correctly when the AI panel pushes the app narrower
-          (viewport media queries can't see that). The @min-[…px] thresholds below are
-          header-width (≈ viewport − nav rail), calibrated to preserve the no-panel layout. */}
+          @container: the header's responsive layout keys off its OWN width (≈ viewport
+          − nav rail), not the viewport, so it collapses gracefully on narrow windows.
+          The AI panel docks BELOW the navbar and pushes only the content region, so the
+          navbar is never squeezed by it — these thresholds react to real window width. */}
       {!chromeless && (
       <header className="@container relative z-50 flex items-center justify-between px-4 py-2 bg-theme-base/90 backdrop-blur-sm border-b border-theme-border/50">
         {/* Left: Logo + Cluster info. In the standalone (nav-rail) layout this
@@ -1922,7 +1926,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* inert while a fullscreen detail overlay covers the views — keeps the
           retained background list out of the focus order + a11y tree (the visual
           cover already blocks pointer events). */}
-      {contentReady && <div className="flex-1 flex overflow-hidden" inert={expandedView}>
+      {contentReady && <div className="flex-1 flex overflow-hidden" inert={expandedView} style={{ paddingRight: contentGutter, transition: 'padding-right 0.2s ease' }}>
         <ErrorBoundary>
         {/* Home dashboard */}
         {mainView === 'home' && (
