@@ -112,41 +112,122 @@ export function podMatchesProblemCategory(problems: PodProblem[], restarts: numb
   }
 }
 
+// A transient lifecycle state (plain Pending, Terminating, awaiting an address)
+// is not a fault while it's young — it becomes one only once it's stuck past
+// these windows, mirroring the backend health thresholds (ClassifyPodHealth:
+// pending 5m; detect.go: terminating 10m, LB/PVC pending 5m). Two things escalate
+// immediately, regardless of age, because they're definitive failures the backend
+// also flags at once: fatal *container* states (CrashLoopBackOff, ImagePull,
+// InvalidImageName, OOMKilled, …) and Unschedulable (the scheduler tried and
+// could not place the pod).
+const PENDING_STUCK_MINUTES = 5
+const TERMINATING_STUCK_MINUTES = 10
+
+// minutesSince returns minutes elapsed since an ISO timestamp, or 0 when it's
+// missing/invalid — so "unknown age" is treated as not-yet-stuck (benign).
+function minutesSince(timestamp?: string): number {
+  if (!timestamp) return 0
+  const t = new Date(timestamp).getTime()
+  if (Number.isNaN(t)) return 0
+  return (Date.now() - t) / 60000
+}
+
+function podUnschedulable(pod: any): boolean {
+  const conds = pod?.status?.conditions || []
+  return conds.some(
+    (c: any) => c.type === 'PodScheduled' && c.status === 'False' && c.reason === 'Unschedulable'
+  )
+}
+
+// A container that has terminated successfully (exit 0) is done, not "not ready".
+// A completing Job pod (Running phase, container Completed, Ready=false) must not
+// read as degraded just because ready<total — this mirrors ClassifyPodHealth, so
+// the badge agrees with the timeline/Problems verdict.
+function containerSettledOk(cs: any): boolean {
+  return cs?.ready === true || cs?.state?.terminated?.exitCode === 0
+}
+
+// Hard-failure waiting reasons that won't self-resolve — mirrors the backend's
+// isFatalWaitingReason. These escalate immediately regardless of pod age or a
+// Terminating overlay (a bad image / config error is a real failure now, not a
+// benign young-Pending pod).
+const FATAL_WAITING_REASONS = new Set([
+  'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'InvalidImageName',
+  'ImageInspectError', 'CreateContainerConfigError', 'CreateContainerError', 'RunContainerError',
+])
+
+// firstFatalContainer returns the first init- or main-container in a hard-failure
+// state (or null). Init containers are walked first: when init is failing the pod
+// stays Pending and main ContainerStatuses haven't populated yet, so checking main
+// alone would miss it and fall through to a benign "Pending".
+function firstFatalContainer(pod: any): { name: string; reason: string } | null {
+  const init = pod?.status?.initContainerStatuses || []
+  const main = pod?.status?.containerStatuses || []
+  for (const cs of [...init, ...main]) {
+    const w = cs?.state?.waiting?.reason
+    if (w && FATAL_WAITING_REASONS.has(w)) return { name: cs?.name, reason: w }
+    if (cs?.state?.terminated?.reason === 'OOMKilled') return { name: cs?.name, reason: 'OOMKilled' }
+  }
+  return null
+}
+
 export function getPodStatus(pod: any): StatusBadge {
   const phase = pod.status?.phase || 'Unknown'
   const containerStatuses = pod.status?.containerStatuses || []
 
-  // Check for terminating
-  if (pod.metadata?.deletionTimestamp) {
-    return { text: 'Terminating', color: healthColors.degraded, level: 'degraded' }
+  // Fatal init/main container states win over the Pending grace AND a Terminating
+  // overlay — a crash-loop, bad image, or config error is a real failure now,
+  // whatever the pod's age or deletion state. Skip for Succeeded: a terminal
+  // success must not flip unhealthy on a sidecar that OOMed before the main
+  // container finished (matches getPodPhaseDisplay + ClassifyPodHealth).
+  if (phase !== 'Succeeded') {
+    const fatal = firstFatalContainer(pod)
+    if (fatal) {
+      return { text: fatal.reason, color: healthColors.unhealthy, level: 'unhealthy' }
+    }
   }
 
-  // Check container states for issues
-  for (const cs of containerStatuses) {
-    if (cs.state?.waiting?.reason) {
-      const reason = cs.state.waiting.reason
-      if (['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'CreateContainerConfigError'].includes(reason)) {
-        return { text: reason, color: healthColors.unhealthy, level: 'unhealthy' }
-      }
+  // A terminal failure stays unhealthy even while the pod is being deleted — the
+  // Terminating overlay below must not mask a Failed pod (the Problems panel and
+  // dashboard report it as an error regardless).
+  if (phase === 'Failed') {
+    return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
+  // Terminating: neutral while gracefully shutting down, degraded once stuck
+  // (a wedged finalizer / preStop hook holding the pod open).
+  if (pod.metadata?.deletionTimestamp) {
+    if (minutesSince(pod.metadata.deletionTimestamp) >= TERMINATING_STUCK_MINUTES) {
+      return { text: 'Terminating', color: healthColors.degraded, level: 'degraded' }
     }
-    if (cs.state?.terminated?.reason === 'OOMKilled') {
-      return { text: 'OOMKilled', color: healthColors.unhealthy, level: 'unhealthy' }
-    }
+    return { text: 'Terminating', color: healthColors.neutral, level: 'neutral' }
   }
 
   switch (phase) {
-    case 'Running':
-      // Check if all containers are ready
+    case 'Running': {
+      // Degrade only on containers that are neither ready nor successfully done —
+      // a completed container (exit 0) on a Running pod is finishing, not a fault.
       const ready = containerStatuses.filter((c: any) => c.ready).length
       const total = containerStatuses.length
-      if (total > 0 && ready < total) {
+      const unsettled = containerStatuses.filter((c: any) => !containerSettledOk(c)).length
+      if (unsettled > 0) {
         return { text: `Running (${ready}/${total})`, color: healthColors.degraded, level: 'degraded' }
       }
       return { text: 'Running', color: healthColors.healthy, level: 'healthy' }
+    }
     case 'Succeeded':
       return { text: 'Completed', color: healthColors.neutral, level: 'neutral' }
     case 'Pending':
-      return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+      // Unschedulable = the scheduler tried and failed to place this pod; the
+      // backend flags it immediately (severity ramps with duration), so the badge
+      // does too. Plain Pending (not yet placed) keeps the young-grace window.
+      if (podUnschedulable(pod)) {
+        return { text: 'Unschedulable', color: healthColors.degraded, level: 'degraded' }
+      }
+      if (minutesSince(pod.metadata?.creationTimestamp) >= PENDING_STUCK_MINUTES) {
+        return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+      }
+      return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
     case 'Failed':
       return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
     default:
@@ -181,49 +262,51 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
     0
   )
 
-  if (pod?.metadata?.deletionTimestamp) {
-    return {
-      phase,
-      text: `${phase} — Terminating`,
-      level: 'degraded',
-      hint: 'Pod has a deletionTimestamp set; awaiting graceful termination.',
+  // Container-state failures take precedence over phase AND over a Terminating
+  // overlay: a CrashLoopBackOff pod can still report phase: Running, an init
+  // failure keeps the pod Pending, and a pod crashing while being deleted is
+  // still a failure worth surfacing. Skip for Succeeded — a Job pod whose sidecar
+  // was OOMKilled before the main container completed should not read unhealthy
+  // after terminal success.
+  if (phase !== 'Succeeded') {
+    const fatal = firstFatalContainer(pod)
+    if (fatal) {
+      return {
+        phase,
+        text: `${phase} — ${fatal.reason}`,
+        level: 'unhealthy',
+        hint: fatal.reason === 'OOMKilled'
+          ? `Container "${fatal.name}" was OOMKilled.`
+          : `Container "${fatal.name}" is stuck in ${fatal.reason}.`,
+      }
     }
   }
 
-  // Container-state failures take precedence over phase: a CrashLoopBackOff
-  // pod can still report phase: Running. Skip for Succeeded — a Job pod whose
-  // sidecar was OOMKilled before the main container completed should not be
-  // shown as unhealthy after the pod has reached terminal success.
-  if (phase !== 'Succeeded') {
-    for (const cs of containerStatuses) {
-      const waitingReason = cs?.state?.waiting?.reason
-      if (
-        waitingReason === 'CrashLoopBackOff' ||
-        waitingReason === 'ImagePullBackOff' ||
-        waitingReason === 'ErrImagePull' ||
-        waitingReason === 'CreateContainerConfigError'
-      ) {
-        return {
-          phase,
-          text: `${phase} — ${waitingReason}`,
-          level: 'unhealthy',
-          hint: `Container "${cs.name}" is stuck in ${waitingReason}.`,
-        }
-      }
-      if (cs?.state?.terminated?.reason === 'OOMKilled') {
-        return {
-          phase,
-          text: `${phase} — OOMKilled`,
-          level: 'unhealthy',
-          hint: `Container "${cs.name}" was OOMKilled.`,
-        }
-      }
+  // A terminal failure stays unhealthy even while the pod is being deleted — don't
+  // let the Terminating overlay mask a Failed pod.
+  if (phase === 'Failed') {
+    return { phase, text: 'Failed', level: 'unhealthy' }
+  }
+
+  // Terminating: neutral while gracefully shutting down, degraded once stuck.
+  if (pod?.metadata?.deletionTimestamp) {
+    const stuck = minutesSince(pod.metadata.deletionTimestamp) >= TERMINATING_STUCK_MINUTES
+    return {
+      phase,
+      text: `${phase} — Terminating`,
+      level: stuck ? 'degraded' : 'neutral',
+      hint: stuck
+        ? 'Pod has been terminating for a while — a finalizer or preStop hook may be wedged.'
+        : 'Pod has a deletionTimestamp set; awaiting graceful termination.',
     }
   }
 
   switch (phase) {
     case 'Running': {
-      const notReady = totalContainers > 0 && readyContainers < totalContainers
+      // A successfully-completed container (exit 0) is settled, not "not ready" —
+      // don't degrade a completing pod over it (matches getPodStatus / timeline).
+      const unsettled = containerStatuses.filter((c) => !containerSettledOk(c)).length
+      const notReady = totalContainers > 0 && unsettled > 0
       const cycling = restartTotal > RESTART_CYCLING_THRESHOLD
       if (notReady && cycling) {
         return {
@@ -254,7 +337,26 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
     case 'Succeeded':
       return { phase, text: 'Completed', level: 'neutral' }
     case 'Pending':
-      return { phase, text: 'Pending', level: 'degraded' }
+      // Unschedulable = the scheduler tried and failed; surface it immediately
+      // (the backend does, with severity ramping by duration). Plain Pending
+      // (not yet placed) keeps the young-grace window.
+      if (podUnschedulable(pod)) {
+        return {
+          phase,
+          text: `${phase} — Unschedulable`,
+          level: 'degraded',
+          hint: 'No node can accept this pod (insufficient resources, taints, affinity, or quota).',
+        }
+      }
+      if (minutesSince(pod?.metadata?.creationTimestamp) >= PENDING_STUCK_MINUTES) {
+        return {
+          phase,
+          text: 'Pending',
+          level: 'degraded',
+          hint: 'Pod has been Pending for several minutes — check scheduling and image pulls.',
+        }
+      }
+      return { phase, text: 'Pending', level: 'neutral' }
     case 'Failed':
       return { phase, text: 'Failed', level: 'unhealthy' }
     default:
@@ -778,7 +880,12 @@ export function getIngressStatus(ingress: any): StatusBadge {
   if (lbIngress.length > 0) {
     return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
   }
-  return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+  // Awaiting an external address is normal right after creation; only flag it
+  // once the ingress/LB controller has had time and still hasn't assigned one.
+  if (minutesSince(ingress.metadata?.creationTimestamp) >= PENDING_STUCK_MINUTES) {
+    return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+  }
+  return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getIngressHosts(ingress: any): string {
@@ -905,7 +1012,7 @@ export function getJobStatus(job: any): StatusBadge {
   }
 
   if (job.spec?.suspend) {
-    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+    return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 
   if (status.active > 0) {
@@ -936,7 +1043,7 @@ export function getJobDuration(job: any): string | null {
 
 export function getCronJobStatus(cj: any): StatusBadge {
   if (cj.spec?.suspend) {
-    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+    return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
   const activeJobs = cj.status?.active?.length || 0
   if (activeJobs > 0) {
@@ -1010,6 +1117,9 @@ export function getNodeStatus(node: any): StatusBadge {
   const isUnschedulable = node.spec?.unschedulable === true
 
   if (isReady && isUnschedulable) {
+    // Cordon is intentional but consequential — it's lost scheduling capacity, and
+    // a forgotten cordon strands nodes — so it stays on the warning axis (matching
+    // the backend Cordoned issue), unlike no-op intentional states (suspended/idle).
     return { text: 'Ready,SchedulingDisabled', color: healthColors.degraded, level: 'degraded' }
   }
   if (isReady) {
@@ -1161,7 +1271,12 @@ export function getPVCStatus(pvc: any): StatusBadge {
     case 'Bound':
       return { text: 'Bound', color: healthColors.healthy, level: 'healthy' }
     case 'Pending':
-      return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+      // Pending is benign here: a WaitForFirstConsumer claim stays Pending by
+      // design until a pod needs it (could be forever for a scaled-to-zero
+      // workload). We can't see the StorageClass binding mode from the PVC alone,
+      // so age can't distinguish that from genuinely-stuck — the Problems panel,
+      // which has that context, owns the stuck-PVC alarm.
+      return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
     case 'Lost':
       return { text: 'Lost', color: healthColors.unhealthy, level: 'unhealthy' }
     default:
@@ -1236,7 +1351,7 @@ export function getWorkflowStatus(workflow: any): StatusBadge {
     case 'Succeeded':
       return { text: 'Succeeded', color: healthColors.healthy, level: 'healthy' }
     case 'Running':
-      return { text: 'Running', color: healthColors.degraded, level: 'degraded' }
+      return { text: 'Running', color: healthColors.neutral, level: 'neutral' }
     case 'Failed':
       return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
     case 'Error':

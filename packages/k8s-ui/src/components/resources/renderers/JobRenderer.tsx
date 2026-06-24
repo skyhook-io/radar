@@ -35,11 +35,6 @@ function getJobProblems(data: any): string[] {
     }
   }
 
-  // Check for suspended
-  if (spec.suspend) {
-    problems.push('Job is suspended — pods will not be created')
-  }
-
   return problems
 }
 
@@ -62,12 +57,18 @@ export function JobRenderer({ data }: JobRendererProps) {
 
   // Check if job completed successfully
   const isComplete = conditions.some((c: any) => c.type === 'Complete' && c.status === 'True')
+  const isSuspended = spec.suspend === true
 
   return (
     <>
       {/* Problems alert */}
       {hasProblems && (
         <AlertBanner variant="error" title="Job Issues" items={problems} />
+      )}
+
+      {/* Suspended is an intentional state, not a fault — keep it informational. */}
+      {isSuspended && !hasProblems && (
+        <AlertBanner variant="info" title="Job Suspended" message="Pods will not be created until this Job is resumed." />
       )}
 
       {/* Success banner */}

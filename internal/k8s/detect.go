@@ -565,6 +565,12 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				if scaledToZeroBackingWorkload(cache, svc) {
 					reason = "Backing workload scaled to 0"
 					message = "selector matches a Deployment/StatefulSet that is intentionally scaled to 0 replicas"
+				} else if selectorMatchesSucceededPod(svc, podsByNamespace[svc.Namespace]) {
+					// The selector DOES match pods — they're just completed Job pods,
+					// which aren't routable endpoints. "matches no pods" would be a
+					// false lead for an operator who can see them with kubectl.
+					reason = "Selector matches only completed pods"
+					message = "selector matches finished Job pods, which are not routable endpoints"
 				}
 				problems = append(problems, Detection{
 					Kind:            "Service",
@@ -1678,11 +1684,37 @@ func podsMatchingService(svc *corev1.Service, pods []*corev1.Pod) []*corev1.Pod 
 	selector := labels.SelectorFromSet(labels.Set(svc.Spec.Selector))
 	out := make([]*corev1.Pod, 0, len(pods))
 	for _, pod := range pods {
+		// Succeeded pods are never endpoints — Kubernetes excludes them from
+		// EndpointSlices. A Service whose selector happens to overlap completed
+		// Job pods (common when a chart shares app labels) must not be counted as
+		// "0/N ready" because of those benign, finished pods. Failed pods are
+		// deliberately kept: a Service backed only by Failed pods is a real
+		// no-ready-endpoints outage, not a benign empty selector.
+		if pod.Status.Phase == corev1.PodSucceeded {
+			continue
+		}
 		if selector.Matches(labels.Set(pod.Labels)) {
 			out = append(out, pod)
 		}
 	}
 	return out
+}
+
+// selectorMatchesSucceededPod reports whether the Service's selector matches at
+// least one Succeeded pod. Used only on the zero-live-endpoints branch to tell a
+// genuinely-orphaned selector from one matching only completed Job pods, so the
+// message stays accurate.
+func selectorMatchesSucceededPod(svc *corev1.Service, pods []*corev1.Pod) bool {
+	if svc == nil || len(svc.Spec.Selector) == 0 {
+		return false
+	}
+	selector := labels.SelectorFromSet(labels.Set(svc.Spec.Selector))
+	for _, pod := range pods {
+		if pod.Status.Phase == corev1.PodSucceeded && selector.Matches(labels.Set(pod.Labels)) {
+			return true
+		}
+	}
+	return false
 }
 
 // scaledToZeroBackingWorkload reports whether the Service's selector matches a

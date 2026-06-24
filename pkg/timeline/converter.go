@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -170,82 +169,11 @@ func ExtractLabels(obj any) map[string]string {
 	return relevant
 }
 
-// DetermineHealthState determines health state from an object
-func DetermineHealthState(kind string, obj any) HealthState {
-	switch kind {
-	case "Pod":
-		if pod, ok := obj.(*corev1.Pod); ok {
-			switch pod.Status.Phase {
-			case corev1.PodRunning:
-				for _, cs := range pod.Status.ContainerStatuses {
-					if !cs.Ready {
-						return HealthDegraded
-					}
-				}
-				return HealthHealthy
-			case corev1.PodSucceeded:
-				return HealthHealthy
-			case corev1.PodFailed:
-				return HealthUnhealthy
-			case corev1.PodPending:
-				return HealthDegraded
-			}
-		}
-	case "Deployment":
-		if dep, ok := obj.(*appsv1.Deployment); ok {
-			desired := int32(1)
-			if dep.Spec.Replicas != nil {
-				desired = *dep.Spec.Replicas
-			}
-			if dep.Status.ReadyReplicas == desired && dep.Status.AvailableReplicas == desired {
-				return HealthHealthy
-			}
-			if dep.Status.ReadyReplicas > 0 {
-				return HealthDegraded
-			}
-			return HealthUnhealthy
-		}
-	case "ReplicaSet":
-		if rs, ok := obj.(*appsv1.ReplicaSet); ok {
-			desired := int32(1)
-			if rs.Spec.Replicas != nil {
-				desired = *rs.Spec.Replicas
-			}
-			if rs.Status.ReadyReplicas == desired {
-				return HealthHealthy
-			}
-			if rs.Status.ReadyReplicas > 0 {
-				return HealthDegraded
-			}
-			return HealthUnhealthy
-		}
-	case "DaemonSet":
-		if ds, ok := obj.(*appsv1.DaemonSet); ok {
-			if ds.Status.NumberReady == ds.Status.DesiredNumberScheduled && ds.Status.DesiredNumberScheduled > 0 {
-				return HealthHealthy
-			}
-			if ds.Status.NumberReady > 0 {
-				return HealthDegraded
-			}
-			return HealthUnhealthy
-		}
-	case "StatefulSet":
-		if sts, ok := obj.(*appsv1.StatefulSet); ok {
-			desired := int32(1)
-			if sts.Spec.Replicas != nil {
-				desired = *sts.Spec.Replicas
-			}
-			if sts.Status.ReadyReplicas == desired {
-				return HealthHealthy
-			}
-			if sts.Status.ReadyReplicas > 0 {
-				return HealthDegraded
-			}
-			return HealthUnhealthy
-		}
-	}
-	return HealthUnknown
-}
+// Resource health classification for timeline events lives with the canonical
+// classifiers in internal/k8s (classifyTimelineHealth → ClassifyPodHealth), not
+// here: the timeline package can't reach that logic across the module boundary,
+// so the caller computes health and the event just stores it. A duplicate copy
+// here previously drifted and misclassified completing Job pods as degraded.
 
 // OperationToEventType converts an operation string to EventType
 func OperationToEventType(op string) EventType {

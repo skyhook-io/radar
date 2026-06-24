@@ -50,7 +50,9 @@ export function getScaledObjectStatus(resource: any): StatusBadge {
     return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
   }
   if (activeCond?.status === 'False') {
-    return { text: 'Idle', color: healthColors.degraded, level: 'degraded' }
+    // Idle is the normal resting state of a scaler with no triggers firing
+    // (like a CronJob waiting for its next run), not a fault.
+    return { text: 'Idle', color: healthColors.neutral, level: 'neutral' }
   }
 
   if (readyCond?.status === 'True') {
@@ -129,17 +131,21 @@ export function getScaledJobStatus(resource: any): StatusBadge {
   if (readyCond?.status === 'True') {
     return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
   }
+  // A non-operational scaler (Ready=False) is unhealthy and must take precedence
+  // over the Idle (Active=False) branch below — otherwise a broken-and-idle
+  // ScaledJob hides as benign "Idle". Mirrors getScaledObjectStatus.
+  if (readyCond?.status === 'False') {
+    return { text: readyCond.reason || 'NotReady', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
 
   const activeCond = conditions.find((c: any) => c.type === 'Active')
   if (activeCond?.status === 'True') {
     return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
   }
   if (activeCond?.status === 'False') {
-    return { text: 'Idle', color: healthColors.degraded, level: 'degraded' }
-  }
-
-  if (readyCond?.status === 'False') {
-    return { text: readyCond.reason || 'NotReady', color: healthColors.unhealthy, level: 'unhealthy' }
+    // Idle is the normal resting state of a scaler with no triggers firing
+    // (like a CronJob waiting for its next run), not a fault.
+    return { text: 'Idle', color: healthColors.neutral, level: 'neutral' }
   }
 
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }

@@ -7519,7 +7519,9 @@ func extractKedaScaledObjectStatus(so unstructured.Unstructured) HealthStatus {
 		case "True":
 			return StatusHealthy
 		case "False":
-			return StatusDegraded
+			// Idle (no triggers firing) is the normal resting state of a Ready
+			// scaler, not degradation — match the resource view's neutral tone.
+			return StatusHealthy
 		}
 	}
 
@@ -7566,7 +7568,9 @@ func extractKedaScaledJobStatus(sj unstructured.Unstructured) HealthStatus {
 		case "True":
 			return StatusHealthy
 		case "False":
-			return StatusDegraded
+			// Idle (no jobs currently scaled) is a Ready scaler's normal resting
+			// state, not degradation — match the resource view's neutral tone.
+			return StatusHealthy
 		}
 	}
 

@@ -394,7 +394,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 
 	owner := timeline.ExtractOwner(obj)
 	labels := timeline.ExtractLabels(obj)
-	healthState := timeline.DetermineHealthState(kind, obj)
+	healthState := classifyTimelineHealth(kind, obj, time.Now())
 	apiVersion := extractAPIVersion(obj)
 
 	var createdAt *time.Time

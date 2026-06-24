@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/cronsched"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
@@ -422,9 +423,12 @@ func summarizeCronJob(cj *batchv1.CronJob) *ResourceSummary {
 	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 		s.Suspended = cj.Spec.Suspend
 	} else {
-		if cj.Status.LastScheduleTime != nil && time.Since(cj.Status.LastScheduleTime.Time) > 24*time.Hour {
+		// Staleness is relative to the schedule's cadence, not a flat day: a
+		// weekly job that ran on schedule 25h ago is healthy, not stale.
+		threshold := cronsched.StaleThreshold(cj.Spec.Schedule)
+		if cj.Status.LastScheduleTime != nil && time.Since(cj.Status.LastScheduleTime.Time) > threshold {
 			s.Issue = "no recent runs"
-		} else if cj.Status.LastScheduleTime == nil && time.Since(cj.CreationTimestamp.Time) > 24*time.Hour {
+		} else if cj.Status.LastScheduleTime == nil && time.Since(cj.CreationTimestamp.Time) > threshold {
 			s.Issue = "never scheduled"
 		}
 	}

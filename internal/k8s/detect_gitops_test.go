@@ -551,35 +551,6 @@ func TestDetectArgoAppProblems_EmptyOpMessagePrefersCondition(t *testing.T) {
 	}
 }
 
-func TestEstimateCronMinInterval(t *testing.T) {
-	day := 24 * time.Hour
-	cases := []struct {
-		schedule string
-		wantOK   bool
-		atLeast  time.Duration // returned interval must be >= this
-	}{
-		{"*/5 * * * *", true, time.Hour}, // every 5 min → intra-day floor
-		{"0 * * * *", true, time.Hour},   // hourly (minute 0, every hour) → intra-day floor
-		{"0 0 * * *", true, day},         // daily
-		{"0 0 * * 1", true, 7 * day},     // weekly
-		{"0 0 1 * *", true, 28 * day},    // monthly (specific dom)
-		{"0 0 1 */4 *", true, 28 * day},  // quarterly (constrained month) — the hubble FP
-		{"@daily", true, day},            //
-		{"@weekly", true, 7 * day},       //
-		{"not a schedule", false, 0},     //
-	}
-	for _, c := range cases {
-		got, ok := estimateCronMinInterval(c.schedule)
-		if ok != c.wantOK {
-			t.Errorf("%q: ok=%v want %v", c.schedule, ok, c.wantOK)
-			continue
-		}
-		if ok && got < c.atLeast {
-			t.Errorf("%q: interval=%s, want >= %s", c.schedule, got, c.atLeast)
-		}
-	}
-}
-
 func TestDetectCronJobProblems_CadenceAware(t *testing.T) {
 	now := time.Now()
 	mk := func(name, schedule string, lastRunAgo time.Duration) *batchv1.CronJob {

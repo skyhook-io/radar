@@ -2,12 +2,12 @@ package k8s
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 
+	"github.com/skyhook-io/radar/pkg/cronsched"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 )
 
@@ -99,51 +99,6 @@ type CronJobProblem struct {
 	Reason    string
 }
 
-// estimateCronMinInterval returns a coarse lower bound on the time between runs
-// of a standard 5-field cron schedule (minute hour dom month dow), plus the
-// common @-macros. It is deliberately approximate — its only job is to keep
-// DetectCronJobProblems from flagging a rare-cadence job (weekly / monthly /
-// quarterly) as "stale" against a flat daily threshold. ok=false for schedules
-// it can't parse; the caller then falls back to the flat threshold.
-func estimateCronMinInterval(schedule string) (time.Duration, bool) {
-	const day = 24 * time.Hour
-	s := strings.TrimSpace(schedule)
-	switch s {
-	case "@yearly", "@annually":
-		return 365 * day, true
-	case "@monthly":
-		return 28 * day, true
-	case "@weekly":
-		return 7 * day, true
-	case "@daily", "@midnight":
-		return day, true
-	case "@hourly":
-		return time.Hour, true
-	}
-	fields := strings.Fields(s)
-	if len(fields) != 5 {
-		return 0, false
-	}
-	hour, dom, month, dow := fields[1], fields[2], fields[3], fields[4]
-	switch {
-	case month != "*":
-		// Constrained to certain months → at most monthly, often far less.
-		return 28 * day, true
-	case dom != "*":
-		// Specific day(s)-of-month → monthly cadence.
-		return 28 * day, true
-	case dow != "*":
-		// Specific day(s)-of-week → weekly is the conservative lower bound.
-		return 7 * day, true
-	case hour != "*" && !strings.HasPrefix(hour, "*/"):
-		// Specific hour(s) each day → daily.
-		return day, true
-	default:
-		// Intra-day cadence (every minute / */n minutes or hours).
-		return time.Hour, true
-	}
-}
-
 // DetectCronJobProblems finds non-suspended CronJobs that haven't run recently.
 func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
 	var problems []CronJobProblem
@@ -152,15 +107,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
 		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 			continue
 		}
-		// Staleness is relative to the schedule's cadence, not a flat day: a
-		// quarterly job that ran on schedule 29 days ago is healthy, not stale.
-		// Floor at 24h so frequent jobs keep the original sensitivity.
-		threshold := 24 * time.Hour
-		if interval, ok := estimateCronMinInterval(cj.Spec.Schedule); ok {
-			if grace := interval + interval/2; grace > threshold {
-				threshold = grace
-			}
-		}
+		threshold := cronsched.StaleThreshold(cj.Spec.Schedule)
 		if cj.Status.LastScheduleTime != nil {
 			sinceLast := now.Sub(cj.Status.LastScheduleTime.Time)
 			if sinceLast > threshold {

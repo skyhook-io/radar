@@ -283,7 +283,7 @@ export function getCNPGScheduledBackupStatus(resource: any): StatusBadge {
   const isSuspended = resource.spec?.suspend === true
 
   if (isSuspended) {
-    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+    return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 
   // If we have a last schedule time, it's active

@@ -910,6 +910,48 @@ func TestDetectProblems_OperationalSignals(t *testing.T) {
 	assertProblem(t, problems, "Job", "migrate", "BackoffLimitExceeded", "critical")
 }
 
+func TestPodsMatchingServiceExcludesSucceededPods(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "prod"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "worker"}},
+	}
+	mkPod := func(name string, phase corev1.PodPhase) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod", Labels: map[string]string{"app": "worker"}},
+			Status:     corev1.PodStatus{Phase: phase},
+		}
+	}
+
+	// Succeeded (completed Job) pods are excluded; Failed pods are kept so a
+	// Service backed only by failed pods still reads as a real outage.
+	matched := podsMatchingService(svc, []*corev1.Pod{
+		mkPod("done", corev1.PodSucceeded),
+		mkPod("crashed", corev1.PodFailed),
+		mkPod("serving", corev1.PodRunning),
+	})
+	gotNames := map[string]bool{}
+	for _, p := range matched {
+		gotNames[p.Name] = true
+	}
+	if len(matched) != 2 || !gotNames["serving"] || !gotNames["crashed"] {
+		t.Fatalf("expected serving+crashed to match (Succeeded excluded), got %d: %+v", len(matched), matched)
+	}
+
+	// A Service backed solely by a completed Job pod must select no endpoints.
+	if got := podsMatchingService(svc, []*corev1.Pod{mkPod("done", corev1.PodSucceeded)}); len(got) != 0 {
+		t.Fatalf("Service matching only a completed Job pod should select no endpoints, got %d", len(got))
+	}
+
+	// ...but the selector DID match a completed pod, so the zero-endpoint message
+	// can say so instead of the false "matches no pods".
+	if !selectorMatchesSucceededPod(svc, []*corev1.Pod{mkPod("done", corev1.PodSucceeded)}) {
+		t.Fatal("selectorMatchesSucceededPod should detect a matching completed pod")
+	}
+	if selectorMatchesSucceededPod(svc, []*corev1.Pod{mkPod("serving", corev1.PodRunning)}) {
+		t.Fatal("selectorMatchesSucceededPod should be false when matches are not Succeeded")
+	}
+}
+
 func TestImagePullDiagnosis(t *testing.T) {
 	cases := []struct {
 		name      string

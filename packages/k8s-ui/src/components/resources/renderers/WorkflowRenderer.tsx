@@ -48,7 +48,7 @@ function getPhaseBadgeClass(phase: string): string {
     case 'Succeeded':
       return 'status-healthy'
     case 'Running':
-      return 'status-degraded'
+      return 'status-neutral'
     case 'Failed':
     case 'Error':
       return 'status-unhealthy'
