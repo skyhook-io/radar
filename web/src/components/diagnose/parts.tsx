@@ -415,7 +415,7 @@ export function TurnView({
   // ONLY ever renders FollowupAnswer (report/rootCause), never the remediation list.
   // When false, TurnView shows the narration or an explicit empty note, not a blank.
   const dx = turn.diagnosis;
-  const hasVerdict = !!dx
+  const hasVerdict = dx
     ? turn.apply
       ? true // ApplyOutcomeCard always renders an outcome
       : dx.healthy && !dx.rootCause
