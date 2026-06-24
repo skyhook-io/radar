@@ -767,7 +767,7 @@ export function PortForwardPanel() {
                       <Tooltip content="Retry" delay={300} position="bottom" disabled={!isPanelOpen}>
                       <button
                         onClick={() => retryPortForward(session)}
-                        disabled={retryingIds.has(session.id)}
+                        disabled={retryingIds.has(session.id) || stoppingIds.has(session.id)}
                         className="p-1.5 text-theme-text-tertiary hover:text-green-400 hover:bg-theme-hover rounded disabled:opacity-50"
                       >
                         {retryingIds.has(session.id) ? (
@@ -784,7 +784,7 @@ export function PortForwardPanel() {
                         commitInteraction()
                         stopPortForward(session.id)
                       }}
-                      disabled={stoppingIds.has(session.id)}
+                      disabled={stoppingIds.has(session.id) || retryingIds.has(session.id)}
                       className="p-1.5 text-theme-text-tertiary hover:text-red-400 hover:bg-theme-hover rounded disabled:opacity-50"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
