@@ -51,6 +51,7 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// --- Cross-resource checks ---
 	findings = append(findings, checkServiceNoMatchingPods(input.Services, podsBySelector)...)
 	findings = append(findings, checkIngressNoMatchingService(input.Ingresses, servicesByName)...)
+	findings = append(findings, checkTraefikDanglingRefs(input)...)
 
 	// --- Utilization checks (optional, only when metrics provided) ---
 	findings = append(findings, checkResourceUtilization(input.PodMetrics)...)

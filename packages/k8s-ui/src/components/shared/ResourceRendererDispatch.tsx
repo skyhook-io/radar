@@ -181,6 +181,10 @@ import {
   RuntimeClassRenderer,
   LeaseRenderer,
   TraefikIngressRouteRenderer,
+  TraefikMiddlewareRenderer,
+  TraefikServiceRenderer,
+  TraefikTLSOptionRenderer,
+  TraefikServersTransportRenderer,
   ContourHTTPProxyRenderer,
   CAPIClusterRenderer,
   CAPIMachineRenderer,
@@ -348,6 +352,8 @@ const KNOWN_KINDS = new Set([
   'channels', 'inmemorychannels', 'subscriptions', 'sequences', 'parallels',
   'knativeingresses', 'knativecertificates', 'serverlessservices', 'domainmappings',
   'ingressroutes', 'ingressroutetcps', 'ingressrouteudps',
+  'middlewares', 'middlewaretcps', 'traefikservices',
+  'serverstransports', 'serverstransporttcps', 'tlsoptions',
   'httpproxies',
   'machinedeployments', 'machines', 'machinesets', 'machinepools',
   'kubeadmcontrolplanes', 'clusterclasses', 'machinehealthchecks',
@@ -665,6 +671,10 @@ export function ResourceRendererDispatch({
 
         {/* Traefik */}
         {(kind === 'ingressroutes' || kind === 'ingressroutetcps' || kind === 'ingressrouteudps') && <TraefikIngressRouteRenderer data={data} onNavigate={onNavigate} />}
+        {(kind === 'middlewares' || kind === 'middlewaretcps') && <TraefikMiddlewareRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'traefikservices' && <TraefikServiceRenderer data={data} onNavigate={onNavigate} />}
+        {(kind === 'serverstransports' || kind === 'serverstransporttcps') && <TraefikServersTransportRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'tlsoptions' && <TraefikTLSOptionRenderer data={data} />}
 
         {/* Contour */}
         {kind === 'httpproxies' && <ContourHTTPProxyRenderer data={data} onNavigate={onNavigate} />}

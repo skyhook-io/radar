@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
@@ -57,6 +58,12 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	mrs, xrs := listCrossplaneDynamic(namespaces)
 	input.ManagedResources = mrs
 	input.CompositeResources = xrs
+
+	// Traefik routers + their reference targets (Middlewares, TraefikServices)
+	// for the dangling-reference checks. Unlike Crossplane (unbounded CRDs), the
+	// Traefik kind set is small and bounded, so we ensure-watch it explicitly —
+	// the checks should fire even if nobody has opened the topology yet.
+	input.IngressRoutes, input.Middlewares, input.TraefikServices = listTraefikDynamic(namespaces)
 
 	return bp.RunChecks(input)
 }
@@ -120,6 +127,102 @@ func listCrossplaneDynamic(namespaces []string) (mrs, xrs []*unstructured.Unstru
 		}
 	}
 	return mrs, xrs
+}
+
+// traefikGroups are the two CRD groups Traefik has shipped — current and legacy.
+var traefikGroups = []string{"traefik.io", "traefik.containo.us"}
+
+// traefikRefKinds are the bounded kinds the dangling-ref checks need: routers
+// plus their reference targets. (resource, kind) pairs, both v1alpha1.
+var traefikRefKinds = []struct{ resource, kind string }{
+	{"ingressroutes", "IngressRoute"},
+	{"ingressroutetcps", "IngressRouteTCP"},
+	{"ingressrouteudps", "IngressRouteUDP"},
+	{"middlewares", "Middleware"},
+	{"middlewaretcps", "MiddlewareTCP"},
+	{"traefikservices", "TraefikService"},
+}
+
+// listTraefikDynamic returns Traefik routers, middlewares, and traefikservices
+// from the dynamic cache for the dangling-ref checks. The kind set is bounded
+// (≤ 6 kinds × 2 groups), so unlike listCrossplaneDynamic we ensure-watch each
+// up front — EnsureWatching cheaply rejects unserved groups (SupportsWatchGVR)
+// and RBAC-denied kinds, so the cost is one bounded probe sweep, and the checks
+// then work even if nobody has opened the topology view yet.
+func listTraefikDynamic(namespaces []string) (routes, middlewares, traefikServices []*unstructured.Unstructured) {
+	cache := k8s.GetDynamicResourceCache()
+	if cache == nil {
+		return nil, nil, nil
+	}
+
+	for _, group := range traefikGroups {
+		for _, rk := range traefikRefKinds {
+			gvr := schema.GroupVersionResource{Group: group, Version: "v1alpha1", Resource: rk.resource}
+			// Best-effort: unserved group / denied RBAC just means "nothing here".
+			_ = cache.EnsureWatching(gvr)
+		}
+	}
+
+	nsSet := make(map[string]bool, len(namespaces))
+	for _, ns := range namespaces {
+		nsSet[ns] = true
+	}
+
+	// Track which target categories we listed from a SYNCED informer. The checks
+	// distinguish "listed, none exist" (authoritative empty) from "couldn't list"
+	// (nil → skip, no false positive); without the synced gate, EnsureWatching's
+	// async sync would let an empty-but-warming cache fabricate "missing" findings.
+	var mwSynced, tsSynced bool
+
+	for _, gvr := range cache.WatchedGVRs() {
+		if gvr.Group != "traefik.io" && gvr.Group != "traefik.containo.us" {
+			continue
+		}
+		if !cache.IsSynced(gvr) {
+			continue
+		}
+		items, err := cache.ListWatched(gvr)
+		if err != nil {
+			if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+				log.Printf("[audit] Traefik scan: skipping %s/%s: %v", gvr.GroupResource(), gvr.Version, err)
+			}
+			continue
+		}
+		switch gvr.Resource {
+		case "middlewares", "middlewaretcps":
+			mwSynced = true
+		case "traefikservices":
+			tsSynced = true
+		}
+		for _, u := range items {
+			if u == nil {
+				continue
+			}
+			if len(namespaces) > 0 {
+				if ns := u.GetNamespace(); ns != "" && !nsSet[ns] {
+					continue
+				}
+			}
+			switch u.GetKind() {
+			case "IngressRoute", "IngressRouteTCP", "IngressRouteUDP":
+				routes = append(routes, u)
+			case "Middleware", "MiddlewareTCP":
+				middlewares = append(middlewares, u)
+			case "TraefikService":
+				traefikServices = append(traefikServices, u)
+			}
+		}
+	}
+
+	// Non-nil empty = "listed, none exist" (lets the check flag a dangling ref);
+	// nil = "not listed/synced" (the check skips it). See checkTraefikDanglingRefs.
+	if mwSynced && middlewares == nil {
+		middlewares = []*unstructured.Unstructured{}
+	}
+	if tsSynced && traefikServices == nil {
+		traefikServices = []*unstructured.Unstructured{}
+	}
+	return routes, middlewares, traefikServices
 }
 
 // isCrossplaneMR mirrors the frontend heuristic — a Managed Resource always

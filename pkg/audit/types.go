@@ -42,6 +42,14 @@ type CheckInput struct {
 	// isn't installed or RBAC denies discovery.
 	ManagedResources   []*unstructured.Unstructured // detected by spec.providerConfigRef (v1) or spec.crossplane.providerConfigRef (v2)
 	CompositeResources []*unstructured.Unstructured // detected by spec.resourceRefs / spec.crossplane.resourceRefs; includes v1 Claims
+
+	// Traefik CRDs arrive unstructured (no shared typed schema). Used by the
+	// reference-integrity checks (route → Service/Middleware). Populated from the
+	// dynamic cache; nil when Traefik isn't installed or RBAC denies it. Both the
+	// traefik.io and legacy traefik.containo.us groups land here.
+	IngressRoutes   []*unstructured.Unstructured // IngressRoute / IngressRouteTCP / IngressRouteUDP
+	Middlewares     []*unstructured.Unstructured // Middleware / MiddlewareTCP
+	TraefikServices []*unstructured.Unstructured // TraefikService
 }
 
 // PodMetricsInput provides metrics data for resource utilization checks.
