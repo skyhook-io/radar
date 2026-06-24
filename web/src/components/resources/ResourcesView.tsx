@@ -23,6 +23,7 @@ import { getSkeletonYaml } from '../../utils/skeleton-yaml'
 interface ResourceCountsResponse {
   counts: Record<string, number>
   forbidden?: string[]
+  reasons?: Record<string, string>
   unavailable?: string[]
 }
 
@@ -284,6 +285,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       // Lightweight counts for sidebar (replaces 233 parallel queries)
       resourceCounts={countsData?.counts}
       resourceForbidden={countsData?.forbidden}
+      resourceReasons={countsData?.reasons}
       resourceUnavailable={countsData?.unavailable}
       selectedKindQuery={selectedKindQueryResult}
       largeListGuard={largeListGuard}

@@ -1841,6 +1841,9 @@ interface ResourcesViewProps {
   // Lightweight counts for sidebar badges (from /api/resource-counts)
   resourceCounts?: Record<string, number>
   resourceForbidden?: string[]
+  /** Per-kind reason a forbidden kind is hidden ("rbac_denied" | "unavailable"),
+   *  keyed by the same count key as resourceForbidden. Drives RestrictedState copy. */
+  resourceReasons?: Record<string, string>
   resourceUnavailable?: string[]
   // Single query for the currently selected kind's full data
   selectedKindQuery?: ResourceQueryResult
@@ -2059,6 +2062,7 @@ export function ResourcesView({
   resourceQueries: resourceQueriesProp,
   resourceCounts: resourceCountsProp,
   resourceForbidden: resourceForbiddenProp,
+  resourceReasons,
   resourceUnavailable: resourceUnavailableProp,
   selectedKindQuery: selectedKindQueryProp,
   largeListGuard,
@@ -4524,6 +4528,7 @@ export function ResourcesView({
                   kindLabel={selectedKind.kind}
                   group={selectedKind.group}
                   resource={selectedKind.name}
+                  reason={resourceReasons?.[selectedKindCountKey]}
                 />
               </div>
             </div>

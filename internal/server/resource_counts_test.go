@@ -160,6 +160,9 @@ func TestResourceCountsSurfacesDeniedCoreClusterScopedKindAsForbidden(t *testing
 	if !containsString(body.Forbidden, "Node") {
 		t.Fatalf("denied core cluster-scoped Node should be in forbidden, got: %v", body.Forbidden)
 	}
+	if body.Reasons["Node"] != "rbac_denied" {
+		t.Fatalf("Node reason = %q, want rbac_denied (SA can read it, user can't)", body.Reasons["Node"])
+	}
 }
 
 func TestResourceCountsCountsClusterScopedCRDDespiteNamespaceFilter(t *testing.T) {

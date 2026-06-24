@@ -15,7 +15,19 @@ type ResourceCountsResponse struct {
 	Counts      map[string]int `json:"counts"`
 	Forbidden   []string       `json:"forbidden,omitempty"`
 	Unavailable []string       `json:"unavailable,omitempty"`
+	// Reasons maps a forbidden kind key to why it's hidden:
+	//   "rbac_denied" — Radar's ServiceAccount can read the kind but the user's
+	//      own RBAC denies it. Granting the user list access surfaces it.
+	//   "unavailable" — Radar can't read the kind at all (no informer): its type
+	//      isn't installed, the SA lacks RBAC, or the feature is off (e.g.
+	//      rbac.viewRBAC). A user-level grant won't help.
+	Reasons map[string]string `json:"reasons,omitempty"`
 }
+
+const (
+	reasonRBACDenied  = "rbac_denied"
+	reasonUnavailable = "unavailable"
+)
 
 const (
 	endpointSliceCountKey          = "discovery.k8s.io/EndpointSlice"
@@ -43,6 +55,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	counts := make(map[string]int)
 	var forbidden []string
 	var unavailable []string
+	reasons := map[string]string{}
 
 	countEndpointSlices := func() {
 		dynamicCache := k8s.GetDynamicResourceCache()
@@ -69,7 +82,10 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	for _, kl := range k8score.AllKindListers() {
 		l := kl.Lister()(cache.ResourceCache)
 		if l == nil {
+			// No informer: Radar's SA can't read this kind (not installed, SA
+			// RBAC, or feature off) — a user-level grant won't surface it.
 			forbidden = append(forbidden, kl.CountKey())
+			reasons[kl.CountKey()] = reasonUnavailable
 			continue
 		}
 		// Cluster-scoped kinds: ListCountNamespaced ignores the namespace
@@ -85,6 +101,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 			// UI shows "0 / No X found", indistinguishable from an empty cluster.
 			if !s.canRead(r, group, resource, "", "list") {
 				forbidden = append(forbidden, kl.CountKey())
+				reasons[kl.CountKey()] = reasonRBACDenied
 				continue
 			}
 		}
@@ -181,5 +198,6 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		Counts:      counts,
 		Forbidden:   forbidden,
 		Unavailable: unavailable,
+		Reasons:     reasons,
 	})
 }

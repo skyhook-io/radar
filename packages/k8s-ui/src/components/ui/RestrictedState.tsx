@@ -19,6 +19,11 @@ interface Props {
   /** Plural resource name, e.g. "nodes". When omitted the snippet uses a
    *  placeholder the admin fills in. */
   resource?: string
+  /** Why the kind is hidden. "rbac_denied" (default): Radar can read it but the
+   *  user's RBAC can't — show the grant request. "unavailable": Radar's
+   *  ServiceAccount can't read it at all (not installed / SA RBAC / feature off)
+   *  — a user grant won't help, so show a different message and no snippet. */
+  reason?: 'rbac_denied' | 'unavailable' | string
   /** Tightens spacing for inline/embedded use (topology overlay, etc.). */
   compact?: boolean
   className?: string
@@ -57,9 +62,10 @@ function buildRbacRequest(kindLabel: string, group: string, resource: string): s
   ].join('\n')
 }
 
-export function RestrictedState({ kindLabel, group = '', resource, compact, className }: Props) {
+export function RestrictedState({ kindLabel, group = '', resource, reason, compact, className }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
+  const isUnavailable = reason === 'unavailable'
 
   // RBAC `resources` must be the lowercase API plural. selectedKind.name is
   // that in normal use, but a CRD deep-link can transiently carry the Kind
@@ -88,42 +94,57 @@ export function RestrictedState({ kindLabel, group = '', resource, compact, clas
       )}
     >
       <Shield className="w-8 h-8 text-amber-400 mb-2" />
-      <p className="text-theme-text-secondary font-medium">You don't have access to {kindLabel}</p>
-      <p className="text-sm mt-1 max-w-md">
-        Your Kubernetes RBAC doesn't allow listing {kindLabel} in this cluster. This isn't an empty
-        cluster — Radar is hiding what your identity can't read.
-      </p>
+      {isUnavailable ? (
+        // Radar's ServiceAccount can't read this kind — a user grant won't help.
+        <>
+          <p className="text-theme-text-secondary font-medium">{kindLabel} isn't available here</p>
+          <p className="text-sm mt-1 max-w-md">
+            Radar can't read {kindLabel} in this cluster — the type may not be installed, or read
+            access isn't granted to Radar's ServiceAccount (some kinds, like RBAC objects and
+            Secrets, are off unless enabled in the Radar chart). Granting your own identity access
+            won't surface it.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-theme-text-secondary font-medium">You don't have access to {kindLabel}</p>
+          <p className="text-sm mt-1 max-w-md">
+            Your Kubernetes RBAC doesn't allow listing {kindLabel} in this cluster. This isn't an
+            empty cluster — Radar is hiding what your identity can't read.
+          </p>
 
-      <div className="mt-3 w-full max-w-md">
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          className="flex items-center gap-1.5 mx-auto text-sm text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-        >
-          <ChevronDown className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-180')} />
-          How to get access
-        </button>
+          <div className="mt-3 w-full max-w-md">
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="flex items-center gap-1.5 mx-auto text-sm text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+            >
+              <ChevronDown className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-180')} />
+              How to get access
+            </button>
 
-        {expanded && (
-          <div className="mt-2 text-left">
-            <p className="text-xs text-theme-text-tertiary mb-2">
-              Send this to whoever administers your cluster (the person who manages your Radar
-              install or your cluster RBAC) — it asks them to grant your identity read access.
-            </p>
-            <div className="relative">
-              <pre className="text-xs bg-theme-base border border-theme-border rounded-md p-3 max-h-72 overflow-auto text-theme-text-secondary">
-                {snippet}
-              </pre>
-              <button
-                onClick={copy}
-                className="absolute top-2 right-2 flex items-center gap-1 text-xs px-2 py-1 rounded bg-theme-elevated hover:bg-theme-border text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-              >
-                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                {copied ? 'Copied' : 'Copy request'}
-              </button>
-            </div>
+            {expanded && (
+              <div className="mt-2 text-left">
+                <p className="text-xs text-theme-text-tertiary mb-2">
+                  Send this to whoever administers your cluster (the person who manages your Radar
+                  install or your cluster RBAC) — it asks them to grant your identity read access.
+                </p>
+                <div className="relative">
+                  <pre className="text-xs bg-theme-base border border-theme-border rounded-md p-3 max-h-72 overflow-auto text-theme-text-secondary">
+                    {snippet}
+                  </pre>
+                  <button
+                    onClick={copy}
+                    className="absolute top-2 right-2 flex items-center gap-1 text-xs px-2 py-1 rounded bg-theme-elevated hover:bg-theme-border text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copied ? 'Copied' : 'Copy request'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   )
 }
