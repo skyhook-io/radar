@@ -179,6 +179,12 @@ export function InvestigationView({
     stopReveal();
     clearSynth();
     setReveal(null);
+    // Was the run ALREADY finished when we opened it? Then this subscribe is a
+    // replay of history — show every verdict immediately, no staged-reveal beats.
+    // The choreography is only for a verdict we watch land live (status running at
+    // open). Captured here, not read live, so a follow-up later doesn't re-trigger
+    // it for the replayed turns.
+    const replaying = run.status !== "running";
     const cancel = subscribeRun(run.id, {
       onEvent: (ev: DiagnoseStreamEvent) => {
         switch (ev.type) {
@@ -250,15 +256,16 @@ export function InvestigationView({
               updateLast((t) => ({ ...t, diagnosis: dx, status: "done" }));
             };
             // Only a real, structured diagnosis earns the staged reveal — and only
-            // when live (a backlog of buffered events means we're replaying history,
-            // where the beats would just stall the rebuild).
+            // when watched live. On replay (the run was already finished when we
+            // opened it) the beats would just stall showing a verdict that's
+            // already known, so we skip straight to the full card.
             const hasRC = !!dx?.rootCause;
             const hasRem = (dx?.remediation?.length ?? 0) > 0;
             const allClear = !!dx?.healthy && !hasRC;
             const inconclusive = !!dx?.inconclusive && !hasRC;
             const structured =
               !!dx && (allClear || inconclusive || hasRC || hasRem);
-            if (!isApply && structured && revealBufRef.current === "") {
+            if (!isApply && structured && !replaying) {
               const STEP = 2000;
               // Beat 1 (in the timeline): formulating, before any card is shown.
               setReveal(null);
