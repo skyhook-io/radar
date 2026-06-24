@@ -63,10 +63,31 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 
 	// We are the yamux *server* (accepts streams). Cloud is the client
 	// (opens streams when browser requests arrive).
-	mux, err := yamux.Server(newWSConn(ws), yamux.DefaultConfig())
+	mux, err := yamux.Server(newWSConn(ws), tunnelYamuxConfig())
 	if err != nil {
 		ws.Close()
 		return nil, fmt.Errorf("yamux server setup: %w", err)
 	}
 	return mux, nil
+}
+
+// tunnelYamuxConfig is the yamux config for the Cloud tunnel. It differs from
+// yamux's defaults only in MaxStreamWindowSize.
+//
+// Per-stream throughput over yamux is capped at window/RTT, and yamux v0.1.2 has
+// no RTT-based window auto-tuning, so the ceiling is committed per-stream and
+// must be set statically. yamux's 256KB default throttles a single stream to
+// under 2MB/s across an intercontinental hop (100-200ms RTT); 4MB lifts that to
+// ~27MB/s at 150ms RTT.
+//
+// This is our *receive* window — it governs the hub→agent direction (request
+// bodies, exec stdin, apply payloads), which is small, so the value is not
+// load-bearing here. The bulk path is responses (agent→hub), gated by the hub's
+// own window (radar-hub tunnelYamuxConfig). We keep this side aligned at 4MB for
+// symmetry; the customer binary is single-tenant, so the per-stream buffer cost
+// is negligible.
+func tunnelYamuxConfig() *yamux.Config {
+	cfg := yamux.DefaultConfig()
+	cfg.MaxStreamWindowSize = 4 << 20 // 4MB
+	return cfg
 }
