@@ -75,6 +75,10 @@ type Request struct {
 	// Health is Radar's current server-side signal for the target at run start.
 	// It frames the first prompt; follow-ups may still re-check live state.
 	Health *ResourceHealthSignal
+	// WorkDir is a stable per-run scratch directory the RunManager assigns (same
+	// across the run's turns). Backends that need filesystem-scoped session state
+	// use it (Cursor's --resume is workspace-scoped); others ignore it.
+	WorkDir string
 }
 
 // ResourceHealthSignal is the compact server-side health frame captured when a
@@ -222,7 +226,7 @@ const defaultMaxTurns = 15
 
 // agentCLICandidates are CLIs whose event stream we can parse + drive. Order is
 // the default-selection preference when several are installed.
-var agentCLICandidates = []string{"claude", "codex"}
+var agentCLICandidates = []string{"claude", "codex", "cursor-agent"}
 
 // Detector / Diagnoser ------------------------------------------------------
 
@@ -366,6 +370,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		mcpURL: mcpURL, prompt: prompt, systemPrompt: sys,
 		sessionID: sessionID, apply: req.Apply, isolated: req.Isolated,
 		model: req.Model, effort: req.Effort, maxTurns: maxTurns(),
+		workdir: req.WorkDir,
 	})
 	if err != nil {
 		return Diagnosis{}, err

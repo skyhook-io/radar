@@ -255,6 +255,8 @@ export function AgentControls({
   onSetEffort: (v: string) => void;
 }) {
   const isCodex = selectedAgent === "codex";
+  const isClaude = selectedAgent === "claude";
+  const isCursor = selectedAgent === "cursor-agent";
   return (
     <div className="space-y-3">
       {agents.length >= 2 && (
@@ -296,25 +298,31 @@ export function AgentControls({
           )}
         </div>
       )}
-      {isCodex ? (
-        <TextField
-          label="Model"
-          value={model}
-          placeholder="Default (e.g. gpt-5-codex, o3)"
-          onChange={onSetModel}
-          hint={
-            !isolated
-              ? "“My setup” uses your own Codex config's model; set a slug here to override it."
-              : "Leave empty for Codex's default, or enter a model your Codex version supports."
-          }
-        />
-      ) : (
+      {isClaude ? (
         <SelectMenu
           label="Model"
           value={model}
           options={CLAUDE_MODEL_OPTIONS}
           onChange={onSetModel}
           hint="Aliases always resolve to the latest of that tier."
+        />
+      ) : (
+        <TextField
+          label="Model"
+          value={model}
+          placeholder={
+            isCursor
+              ? "Default (e.g. auto, gpt-5.2, composer-2.5)"
+              : "Default (e.g. gpt-5-codex, o3)"
+          }
+          onChange={onSetModel}
+          hint={
+            isCursor
+              ? "Leave empty for your Cursor default, or enter a model slug Cursor supports."
+              : !isolated
+                ? "“My setup” uses your own Codex config's model; set a slug here to override it."
+                : "Leave empty for Codex's default, or enter a model your Codex version supports."
+          }
         />
       )}
       {isCodex && (
@@ -494,23 +502,28 @@ export function TurnView({
 //   flows. This is also a natural "upgrade to Cloud" surface.
 export function ConsentCard({
   agentName,
+  agent,
   isolated = true,
   onOpenSettings,
   onApprove,
   onCancel,
 }: {
   agentName: string;
+  agent?: string;
   isolated?: boolean;
   onOpenSettings?: () => void;
   onApprove: () => void;
   onCancel: () => void;
 }) {
+  // Cursor can't be isolated (no flag suppresses its global MCP servers), so it
+  // gets its own honest framing rather than the isolated/my-setup pair.
+  const isCursor = agent === "cursor-agent";
   return (
     <div className="rounded-lg border border-theme-border bg-theme-elevated p-4">
       <div className="mb-2 flex items-center gap-2">
         <ShieldCheck className="h-4 w-4 text-accent" />
         <div className="text-sm font-medium text-theme-text-primary">
-          {isolated
+          {isolated && !isCursor
             ? "Run a read-only AI investigation?"
             : "Run an AI investigation?"}
         </div>
@@ -523,7 +536,7 @@ export function ConsentCard({
         on your machine — no Radar cloud, no API key, no account. Radar sends
         this resource&apos;s spec, recent events, and pod logs to it (and on to
         its model provider under your account, not to Radar).
-        {isolated && (
+        {isolated && !isCursor && (
           <>
             {" "}
             Through Radar the agent can only{" "}
@@ -533,7 +546,14 @@ export function ConsentCard({
         )}
       </p>
       <ul className="mt-2 space-y-1 text-xs text-theme-text-tertiary">
-        {isolated ? (
+        {isCursor ? (
+          <li>
+            • Through Radar the agent only <span className="font-medium">reads</span>{" "}
+            your cluster. But Cursor also loads your own global MCP servers and
+            Radar can&apos;t exclude them (unlike Claude or Codex), so if any of
+            those can make changes, Cursor could use them.
+          </li>
+        ) : isolated ? (
           <li>
             • Isolated: only Radar&apos;s read-only investigation tools — your
             other CLI config and MCP servers are excluded.

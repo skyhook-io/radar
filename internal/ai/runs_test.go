@@ -1,6 +1,28 @@
 package ai
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
+
+// TestRunWorkDirUnderPrivateRoot pins that per-run scratch dirs live UNDER the
+// manager's private root (so they can't collide across Radar restarts / co-running
+// processes or sit at a predictable /tmp path), and that a missing root degrades to
+// "" rather than a guessable path.
+func TestRunWorkDirUnderPrivateRoot(t *testing.T) {
+	m := &RunManager{workRoot: filepath.Join(t.TempDir(), "root")}
+	a, b := m.runWorkDir("run-1"), m.runWorkDir("run-2")
+	if a == b {
+		t.Errorf("per-run dirs must differ: %q == %q", a, b)
+	}
+	if filepath.Dir(a) != m.workRoot {
+		t.Errorf("run dir %q is not under workRoot %q", a, m.workRoot)
+	}
+	none := &RunManager{workRoot: ""}
+	if none.runWorkDir("run-1") != "" {
+		t.Error("no root must yield empty workdir, not a predictable path")
+	}
+}
 
 // TestRunSubscribeReplay pins the SSE-replay contract: a subscriber gets the
 // backlog after its last-seen seq, then live events, then a close on terminal.

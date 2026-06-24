@@ -34,13 +34,22 @@ type turnSpec struct {
 	model        string // optional model override; empty = the CLI's default
 	effort       string // optional reasoning effort (Codex only); empty = default
 	maxTurns     int
+	// workdir is a stable per-RUN scratch directory (same across the run's turns).
+	// Cursor needs it: its --resume is workspace-scoped, so follow-ups must run in
+	// the same workspace as the first turn. Empty for one-shot (non-RunManager) use.
+	workdir string
 }
 
 // resolveAgent picks a backend from the CLI binary name (e.g. RADAR_AI_CLI_BIN or
-// the detected CLI): "codex" → Codex, anything else → Claude.
+// the detected CLI): "cursor-agent" → Cursor, "codex" → Codex, else → Claude.
 func resolveAgent(bin string) Agent {
-	if strings.Contains(strings.ToLower(filepath.Base(bin)), "codex") {
+	base := strings.ToLower(filepath.Base(bin))
+	switch {
+	case strings.Contains(base, "cursor"):
+		return &cursorAgent{bin: bin}
+	case strings.Contains(base, "codex"):
 		return &codexAgent{bin: bin}
+	default:
+		return &claudeAgent{bin: bin}
 	}
-	return &claudeAgent{bin: bin}
 }

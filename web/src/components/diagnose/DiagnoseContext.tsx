@@ -69,6 +69,13 @@ const MIN_W = 400;
 const MAX_W = 1100;
 const WIDTH_KEY = "radar-ai-panel-width";
 const CONSENT_KEY = "radar-ai-consent-v2"; // v2: agent picker + isolation choice
+// Cursor's trust model is materially different (it can't be isolated — the user's
+// own global MCP servers also load), so it gets its OWN consent: a user who already
+// approved Claude/Codex must still see Cursor's distinct disclosure before it runs.
+const CURSOR_CONSENT_KEY = "radar-ai-consent-cursor";
+function consentKeyFor(agent: string): string {
+  return agent === "cursor-agent" ? CURSOR_CONSENT_KEY : CONSENT_KEY;
+}
 const AGENT_KEY = "radar-ai-agent";
 const ISOLATED_KEY = "radar-ai-isolated";
 const MODEL_KEY = "radar-ai-model";
@@ -98,9 +105,9 @@ export function openDiagnoseSettings() {
 }
 
 // localStorage can throw (private mode); never let it crash the always-mounted provider.
-function readConsent(): boolean {
+function readConsent(agent: string): boolean {
   try {
-    return localStorage.getItem(CONSENT_KEY) === "1";
+    return localStorage.getItem(consentKeyFor(agent)) === "1";
   } catch {
     return false;
   }
@@ -140,7 +147,6 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [view, setView] = useState<DiagnoseView>("home");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [consented, setConsented] = useState(readConsent());
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
@@ -240,6 +246,11 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(t);
   }, [open, available, refreshRuns]);
 
+  // Keep the live selected agent reachable from the [] -dep callbacks below
+  // (consent is agent-specific, so they must read the CURRENT pick, not a closure).
+  const selectedAgentRef = useRef(selectedAgent);
+  selectedAgentRef.current = selectedAgent;
+
   const startRunRef = useRef<(t: Target) => void>(() => {});
   startRunRef.current = (t: Target) => {
     createRun(t, {
@@ -267,7 +278,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const openInvestigation = useCallback((t: Target) => {
     setStartError(null);
     setOpen(true);
-    if (!readConsent()) {
+    if (!readConsent(selectedAgentRef.current)) {
       setPendingTarget(t);
       setView("investigation");
       return;
@@ -288,11 +299,10 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const close = useCallback(() => setOpen(false), []);
   const approveConsent = useCallback(() => {
     try {
-      localStorage.setItem(CONSENT_KEY, "1");
+      localStorage.setItem(consentKeyFor(selectedAgentRef.current), "1");
     } catch {
       /* storage disabled — consent holds for this session */
     }
-    setConsented(true);
     const t = pendingTarget;
     setPendingTarget(null);
     if (t) startRunRef.current(t);
@@ -319,7 +329,9 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     view,
     activeRunId,
     runs,
-    needsConsent: !!pendingTarget && !consented,
+    // pendingTarget is set ONLY when the current agent's consent is missing, and
+    // cleared on approve/cancel — so its presence is exactly "consent needed now".
+    needsConsent: !!pendingTarget,
     startError,
     openInvestigation,
     openRun,

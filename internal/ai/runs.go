@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -29,6 +32,13 @@ type RunManager struct {
 	baseCtx    context.Context // parent of every run ctx; cancelled on Shutdown
 	baseCancel context.CancelFunc
 
+	// workRoot is a private, randomly-named scratch root created once per process
+	// (mode 0700). Per-run dirs live UNDER it, so run scratch can't collide across
+	// Radar restarts or co-running processes and isn't at a predictable /tmp path.
+	// "" only if creating it failed (then runs get no workdir — Cursor falls back to
+	// its own temp workspace per turn, losing cross-turn resume but staying correct).
+	workRoot string
+
 	mu            sync.Mutex
 	runs          map[string]*Run
 	order         []string // insertion order, for eviction
@@ -46,6 +56,7 @@ type Run struct {
 	Name      string // immutable
 	Context   string // immutable — kube-context the run is about (baseline)
 	Agent     string // immutable — backend CLI driving this run ("claude"/"codex")
+	WorkDir   string // immutable — per-run scratch dir (under RunManager.workRoot); "" if none
 	Isolated  bool   // immutable — isolation mode chosen at Start
 	Model     string // immutable — optional model override ("" = agent default)
 	Effort    string // immutable — optional reasoning effort (Codex; "" = default)
@@ -114,16 +125,33 @@ const (
 // callbacks because the listener port and kube-context are only known at runtime.
 func NewRunManager(d *Diagnoser, mcpPort func() int, ctxLabel func() string) *RunManager {
 	ctx, cancel := context.WithCancel(context.Background())
+	// Best-effort: a failure here just means runs get no shared workdir (logged).
+	root, err := os.MkdirTemp("", "radar-ai-")
+	if err != nil {
+		log.Printf("[ai] could not create AI scratch root: %v (Cursor resume will be degraded)", err)
+		root = ""
+	}
 	return &RunManager{
 		d:             d,
 		mcpPort:       mcpPort,
 		ctxLabel:      ctxLabel,
 		baseCtx:       ctx,
 		baseCancel:    cancel,
+		workRoot:      root,
 		runs:          map[string]*Run{},
 		maxRetained:   defaultMaxRetained,
 		maxConcurrent: defaultMaxConcurrent,
 	}
+}
+
+// runWorkDir is the per-run scratch dir under the manager's private root — stable
+// across a run's turns so a workspace-scoped resume (Cursor) reattaches to the
+// prior turn's session. "" when no root exists (backends then self-manage).
+func (m *RunManager) runWorkDir(id string) string {
+	if m.workRoot == "" {
+		return ""
+	}
+	return filepath.Join(m.workRoot, id)
 }
 
 // Shutdown cancels every run (killing agent child processes) — called on server
@@ -143,6 +171,10 @@ func (m *RunManager) Shutdown() {
 		if c != nil {
 			c()
 		}
+	}
+	// Drop every run's scratch in one shot — the process is going away.
+	if m.workRoot != "" {
+		_ = os.RemoveAll(m.workRoot)
 	}
 }
 
@@ -215,9 +247,10 @@ func (m *RunManager) Start(kind, namespace, name, agent string, isolated bool, m
 		return RunSummary{}, ErrAtCapacity
 	}
 	m.nextID++
+	id := fmt.Sprintf("run-%d", m.nextID)
 	r := &Run{
-		ID: fmt.Sprintf("run-%d", m.nextID), Kind: kind, Namespace: namespace,
-		Name: name, Context: cur, Agent: agent, Isolated: isolated,
+		ID: id, Kind: kind, Namespace: namespace,
+		Name: name, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Isolated: isolated,
 		Model: model, Effort: effort, ManagedBy: managedBy, Health: health, CreatedAt: nowUTC(),
 		status: "running", inFlight: true, updatedAt: nowUTC(),
 		subs: map[int]chan RunEvent{},
@@ -264,7 +297,7 @@ func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, sessio
 			MCPPort: m.mcpPort(), SessionID: session,
 			Question: question, Apply: apply, Fix: fix,
 			Agent: r.Agent, Isolated: r.Isolated, Model: r.Model, Effort: r.Effort,
-			Health: r.Health,
+			Health: r.Health, WorkDir: r.WorkDir,
 		}, func(ev StreamEvent) { r.append(ev) })
 
 		r.mu.Lock()
@@ -341,6 +374,7 @@ func (m *RunManager) OnContextSwitch() {
 		}
 		r.append(StreamEvent{Type: "error", Error: "Cluster context changed — this investigation was about a different cluster."})
 		r.finalize()
+		r.removeWorkDir() // stale runs can't resume — their workspace is dead weight
 	}
 }
 
@@ -383,6 +417,15 @@ func (m *RunManager) evictLocked() {
 		delete(m.runs, id)
 		m.order = append(m.order[:idx], m.order[idx+1:]...)
 		victim.finalize()
+		victim.removeWorkDir() // best-effort: drop the evicted run's scratch dir
+	}
+}
+
+// removeWorkDir deletes a run's scratch dir (best-effort, async). Safe once the run
+// is finalized/evicted: it can no longer produce turns, so nothing will read it.
+func (r *Run) removeWorkDir() {
+	if r.WorkDir != "" {
+		go os.RemoveAll(r.WorkDir)
 	}
 }
 

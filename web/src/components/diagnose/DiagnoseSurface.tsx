@@ -221,6 +221,7 @@ export function DiagnoseSurface({
       <div className={maximized ? "mx-auto max-w-3xl" : ""}>
         <ConsentCard
           agentName={d.agentLabel}
+          agent={d.selectedAgent}
           isolated={d.isolated}
           onOpenSettings={openDiagnoseSettings}
           onApprove={d.approveConsent}

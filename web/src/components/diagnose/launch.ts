@@ -14,7 +14,9 @@ function sq(s: string): string {
 }
 
 export function launchAgentLabel(run: RunSummary): string {
-  return run.agent === "codex" ? "Codex" : "Claude Code";
+  if (run.agent === "codex") return "Codex";
+  if (run.agent === "cursor-agent") return "Cursor";
+  return "Claude Code";
 }
 
 // openInTerminal asks App (which owns the DockProvider) to open Radar's local
@@ -40,6 +42,13 @@ export function buildLaunchCommand(
 ): string | null {
   if (!run.sessionId || run.status === "stale") return null;
 
+  if (run.agent === "cursor-agent") {
+    // Cursor's --resume is workspace-scoped, and Radar runs each investigation in a
+    // throwaway per-run workspace the user doesn't have — no command can reattach
+    // both that session and Radar's MCP in the user's own terminal. So there's no
+    // hand-off for Cursor; the in-panel investigation is self-contained.
+    return null;
+  }
   if (run.agent === "codex") {
     // Codex threads are stored globally by id (cwd-independent); -c re-attaches MCP.
     return `codex resume ${sq(run.sessionId)} -c ${sq(`mcp_servers.radar.url="${mcpUrl}"`)}`;
