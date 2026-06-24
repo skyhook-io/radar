@@ -72,6 +72,13 @@ interface DiagnoseLayoutCtx {
   panelNarrow: boolean; // viewport too tight to push → overlay
   panelBounds: { min: number; max: number };
   panelWidthKey: string;
+  runningKeys: ReadonlySet<string>; // resources with a live investigation (see runTargetKey)
+}
+
+// Stable key for "is THIS resource being investigated right now" — built the same way
+// from a run summary and from a button's target so the two always match.
+export function runTargetKey(kind: string, namespace: string, name: string): string {
+  return `${kind} ${namespace} ${name}`;
 }
 
 const Ctx = createContext<DiagnoseCtx | null>(null);
@@ -262,14 +269,31 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       .catch(() => {});
   }, [available]);
 
-  // Keep the run list (statuses, new background runs) fresh while the surface is
-  // open — cheap poll; background runs surface here without a manual refresh.
+  // A content-stable signature of the resources with a live (running) investigation,
+  // so the per-resource Diagnose buttons can show a "running" indicator even with the
+  // panel closed — and only re-render when the set actually changes, not every poll.
+  const runningSig = runs
+    .filter((r) => r.status === "running")
+    .map((r) => `${r.kind} ${r.namespace} ${r.name}`)
+    .sort()
+    .join("|");
+  const runningKeys = useMemo(
+    () => new Set(runningSig ? runningSig.split("|") : []),
+    [runningSig],
+  );
+  const hasRunning = runningSig.length > 0;
+
+  // Keep the run list (statuses, new background runs) fresh while the surface is open
+  // OR while any investigation is still running — so the button indicator stays live
+  // after the panel is closed, and stops polling once everything has settled. One
+  // fetch on mount catches runs already in flight from a prior page load.
   useEffect(() => {
-    if (!open || !available) return;
+    if (!available) return;
     refreshRuns();
+    if (!open && !hasRunning) return;
     const t = setInterval(refreshRuns, 4000);
     return () => clearInterval(t);
-  }, [open, available, refreshRuns]);
+  }, [open, available, hasRunning, refreshRuns]);
 
   // Keep the live selected agent reachable from the [] -dep callbacks below
   // (consent is agent-specific, so they must read the CURRENT pick, not a closure).
@@ -388,8 +412,9 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       panelNarrow: narrow,
       panelBounds: PANEL_BOUNDS,
       panelWidthKey: WIDTH_KEY,
+      runningKeys,
     }),
-    [open, contentGutter, maximized, width, narrow, setMaximized, setWidth],
+    [open, contentGutter, maximized, width, narrow, runningKeys, setMaximized, setWidth],
   );
 
   return (

@@ -358,6 +358,40 @@ body {
 .animate-verdict-glow {
   animation: verdict-glow 1100ms ease-out 120ms both;
 }
+
+/* Richer verdict reveal — a colored ring around the border plus an UNEVEN, breathing
+   outer glow (two soft peaks), held longer (~2.4s). Tinted per verdict via --glow
+   (amber root-cause, emerald healthy, accent remediation, slate inconclusive). */
+@keyframes verdict-reveal {
+  0% {
+    box-shadow:
+      0 0 0 0 color-mix(in oklab, var(--glow, var(--accent)) 0%, transparent),
+      0 0 0 0 transparent;
+  }
+  18% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--glow, var(--accent)) 60%, transparent),
+      0 0 20px 2px color-mix(in oklab, var(--glow, var(--accent)) 42%, transparent);
+  }
+  44% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--glow, var(--accent)) 32%, transparent),
+      0 0 10px 1px color-mix(in oklab, var(--glow, var(--accent)) 20%, transparent);
+  }
+  68% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--glow, var(--accent)) 50%, transparent),
+      0 0 24px 3px color-mix(in oklab, var(--glow, var(--accent)) 38%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+}
+.animate-verdict-reveal {
+  animation: verdict-reveal 2400ms cubic-bezier(0.32, 0.72, 0, 1) 120ms both;
+}
 @media (prefers-reduced-motion: reduce) {
   .ai-shimmer {
     animation: none;
@@ -368,7 +402,8 @@ body {
   .animate-synth-pulse,
   .animate-result-in,
   .animate-underline-sweep,
-  .animate-verdict-glow {
+  .animate-verdict-glow,
+  .animate-verdict-reveal {
     animation: none;
   }
 }

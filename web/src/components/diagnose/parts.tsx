@@ -100,12 +100,7 @@ const EFFORT_OPTIONS: Option[] = [
     label: "Default",
     description: "Recommended — Radar's default (medium)",
   },
-  {
-    value: "minimal",
-    label: "Minimal",
-    description: "Fastest, least reasoning",
-  },
-  { value: "low", label: "Low", description: "Quick" },
+  { value: "low", label: "Low", description: "Fastest, least reasoning" },
   { value: "medium", label: "Medium", description: "Balanced depth" },
   { value: "high", label: "High", description: "Most thorough, slowest" },
 ];
@@ -1199,7 +1194,10 @@ function DiagnosisResult({
     <div className="mt-3 space-y-2 animate-result-in">
       {/* Root cause — the anchor: distinct tone + heavier type so it pops. */}
       {rootCause && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 animate-verdict-glow">
+        <div
+          className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 animate-verdict-reveal"
+          style={{ "--glow": "rgb(245 158 11)" } as React.CSSProperties}
+        >
           <div className="mb-1 flex items-center justify-between gap-2">
             <div className="relative flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-500">
               <AlertTriangle className="h-3.5 w-3.5" />
@@ -1239,7 +1237,10 @@ function DiagnosisResult({
       {/* Remediation — copyable steps; the recommended one is highlighted as the
           default, and any step can be applied (Apply binds to that step's text). */}
       {reveal === "full" && hasRemediation && (
-        <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
+        <div
+          className="rounded-lg border border-theme-border bg-theme-elevated p-3 animate-verdict-reveal"
+          style={{ "--glow": "var(--accent)" } as React.CSSProperties}
+        >
           <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
             <Wrench className="h-3.5 w-3.5 text-accent" />
             Remediation
@@ -1358,7 +1359,10 @@ function AllClearCard({ diagnosis }: { diagnosis: Diagnosis }) {
     diagnosis.report || "No active problem found for this resource.";
   return (
     <div className="mt-3 space-y-2 animate-result-in">
-      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+      <div
+        className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 animate-verdict-reveal"
+        style={{ "--glow": "rgb(16 185 129)" } as React.CSSProperties}
+      >
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-500">
             <CheckCircle2 className="h-3.5 w-3.5" />
@@ -1387,7 +1391,10 @@ function InconclusiveCard({ diagnosis }: { diagnosis: Diagnosis }) {
     "The investigation couldn't reach a clear conclusion — some checks were blocked or the evidence was ambiguous.";
   return (
     <div className="mt-3 space-y-2 animate-result-in">
-      <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
+      <div
+        className="rounded-lg border border-theme-border bg-theme-elevated p-3 animate-verdict-reveal"
+        style={{ "--glow": "rgb(100 116 139)" } as React.CSSProperties}
+      >
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-secondary">
             <HelpCircle className="h-3.5 w-3.5" />

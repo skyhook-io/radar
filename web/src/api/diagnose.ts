@@ -234,7 +234,16 @@ export function subscribeRun(
   ] as const) {
     es.addEventListener(t, dispatch);
   }
-  // Transient transport errors: let EventSource auto-reconnect (it resends
-  // Last-Event-ID, so the server replays only what we missed). No teardown here.
+  es.onerror = () => {
+    // A permanent failure (readyState CLOSED) means the run is gone — a 404 because
+    // it was evicted (retention cap) or lost on a server restart. Surface it as
+    // closed so the view shows a "no longer available" state instead of a silent
+    // blank. Transient blips stay CONNECTING and auto-reconnect (Last-Event-ID
+    // replays only what we missed), so leave those to EventSource.
+    if (es.readyState === EventSource.CLOSED) {
+      close();
+      handlers.onClosed?.();
+    }
+  };
   return close;
 }

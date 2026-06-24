@@ -45,6 +45,10 @@ export function InvestigationView({
   const { refreshRuns, openInvestigation } = useDiagnose();
   const queryClient = useQueryClient();
   const [turns, setTurns] = useState<Turn[]>([]);
+  // The run is gone server-side (evicted past the retention cap, or lost on a
+  // restart) — the stream 404s / closes with nothing to replay. Without this we'd
+  // show a silent blank panel; instead we render a "no longer available" state.
+  const [gone, setGone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -166,6 +170,7 @@ export function InvestigationView({
   // whole conversation.
   useEffect(() => {
     setTurns([]);
+    setGone(false);
     setBusy(false);
     setActionError(null);
     pendingApplyRef.current = false;
@@ -311,6 +316,7 @@ export function InvestigationView({
         stopReveal();
         clearSynth();
         setBusy(false);
+        setGone(true); // render decides: empty → gone state; mid-run → terminal error
         updateLast((t) =>
           t.status === "running"
             ? {
@@ -443,6 +449,25 @@ export function InvestigationView({
                 >
                   <Send className="h-3 w-3" />
                   Re-run on current cluster
+                </button>
+              </div>
+            )}
+            {gone && turns.length === 0 && (
+              <div className="rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                  <span>
+                    This investigation is no longer available — investigations are
+                    kept in memory and clear when Radar restarts or after enough
+                    newer ones. Re-run Diagnose to analyze the current cluster.
+                  </span>
+                </div>
+                <button
+                  onClick={() => openInvestigation({ kind, namespace, name })}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-theme-border px-2.5 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
+                >
+                  <Send className="h-3 w-3" />
+                  Re-run Diagnose
                 </button>
               </div>
             )}

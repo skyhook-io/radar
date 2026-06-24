@@ -45,6 +45,11 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	// calls (off by default — without this the stream is only tool calls + the final
 	// message). The Codex parser maps these `reasoning` items to thinking events.
 	base = append(base, "-c", `model_reasoning_summary="auto"`)
+	// Disable Codex's built-in web_search tool: it reaches the public internet
+	// (server-side, so --sandbox can't stop it), which breaks the "contained, reads
+	// only this cluster" guarantee. The diagnosis needs cluster data via MCP, not the
+	// web. (image_gen is also built in but is inert for k8s and can't be disabled.)
+	base = append(base, "-c", `web_search="disabled"`)
 	if s.isolated {
 		base = append(base, "--ignore-user-config")
 	}
@@ -57,6 +62,11 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	effort := s.effort
 	if effort == "" {
 		effort = "medium"
+	}
+	// Codex's always-on image_gen tool is rejected by the API at "minimal" effort
+	// (400), and it can't be disabled — so clamp minimal up to low.
+	if effort == "minimal" {
+		effort = "low"
 	}
 	base = append(base, "-c", fmt.Sprintf("model_reasoning_effort=%q", effort))
 

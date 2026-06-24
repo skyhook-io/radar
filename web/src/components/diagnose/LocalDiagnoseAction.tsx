@@ -1,5 +1,5 @@
-import { Sparkles } from "lucide-react";
-import { useDiagnose } from "./DiagnoseContext";
+import { Loader2, Sparkles } from "lucide-react";
+import { useDiagnose, useDiagnoseLayout, runTargetKey } from "./DiagnoseContext";
 import { Tooltip } from "../ui/Tooltip";
 import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
 
@@ -25,24 +25,41 @@ function DiagnoseResourceButton({
   health?: "problem" | "healthy" | "unknown";
 }) {
   const d = useDiagnose();
+  const { runningKeys } = useDiagnoseLayout();
   if (!d.available) return null;
   const problem = health === "problem";
-  const tooltip = problem
-    ? `Diagnose with your own ${d.agentLabel} — runs locally, reads this resource's spec, events & logs to find the root cause.`
-    : `Ask your own ${d.agentLabel} about this resource — runs locally, reads its spec, events & logs.`;
+  const running = runningKeys.has(runTargetKey(kind, namespace, name));
+  const tooltip = running
+    ? `${d.agentLabel} is investigating this resource — click to watch it live.`
+    : problem
+      ? `Diagnose with your own ${d.agentLabel} — runs locally, reads this resource's spec, events & logs to find the root cause.`
+      : `Ask your own ${d.agentLabel} about this resource — runs locally, reads its spec, events & logs.`;
+  // While an investigation is live, the button advertises it (and clicking focuses
+  // the existing run rather than starting a new one — openInvestigation dedups).
+  const showLabel = problem || running;
   return (
     <Tooltip content={tooltip} position="bottom">
       <button
         onClick={() => d.openInvestigation({ kind, namespace, name })}
-        aria-label={problem ? "Diagnose with AI" : "Ask AI about this resource"}
+        aria-label={
+          running
+            ? "Investigation running — click to view"
+            : problem
+              ? "Diagnose with AI"
+              : "Ask AI about this resource"
+        }
         className={
-          problem
+          showLabel
             ? "inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/5 px-2.5 py-1.5 text-sm font-medium text-accent hover:bg-accent/10"
             : "inline-flex items-center rounded-lg border border-theme-border p-1.5 text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
         }
       >
-        <Sparkles className="h-3.5 w-3.5 text-accent" />
-        {problem && "Diagnose"}
+        {running ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+        ) : (
+          <Sparkles className="h-3.5 w-3.5 text-accent" />
+        )}
+        {running ? "Investigating…" : problem && "Diagnose"}
       </button>
     </Tooltip>
   );
@@ -99,18 +116,34 @@ export function IssueDiagnoseButton({
 // investigations). Self-hides when no agent CLI is present.
 export function GlobalDiagnoseButton() {
   const d = useDiagnose();
+  const { runningKeys } = useDiagnoseLayout();
   if (!d.available) return null;
+  const runningCount = runningKeys.size;
   return (
     <Tooltip
-      content={`AI investigations — runs your own ${d.agentLabel} locally`}
+      content={
+        runningCount > 0
+          ? `${runningCount} investigation${runningCount > 1 ? "s" : ""} running — runs your own ${d.agentLabel} locally`
+          : `AI investigations — runs your own ${d.agentLabel} locally`
+      }
       position="bottom"
     >
       <button
         onClick={d.openHome}
-        className="rounded-md bg-theme-elevated p-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-        aria-label="AI investigations"
+        className="relative rounded-md bg-theme-elevated p-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+        aria-label={
+          runningCount > 0
+            ? `AI investigations (${runningCount} running)`
+            : "AI investigations"
+        }
       >
         <Sparkles className="h-4 w-4 text-accent" />
+        {runningCount > 0 && (
+          <span className="absolute right-0.5 top-0.5 flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+          </span>
+        )}
       </button>
     </Tooltip>
   );
