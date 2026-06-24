@@ -84,6 +84,12 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		// Chart browser (local repositories)
 		r.Get("/repositories", h.handleListRepositories)
 		r.Post("/repositories/{name}/update", h.handleUpdateRepository)
+
+		// Registered OCI chart sources (the OCI analog of `helm repo add`) — let
+		// Radar track upgrades for the user's own OCI-published charts.
+		r.Get("/oci-sources", h.handleListOCISources)
+		r.Post("/oci-sources", h.handleAddOCISource)
+		r.Delete("/oci-sources", h.handleRemoveOCISource)
 		r.Get("/charts", h.handleSearchCharts)
 		r.Get("/charts/{repo}/{chart}", h.handleGetChartDetail)
 		r.Get("/charts/{repo}/{chart}/{version}", h.handleGetChartDetailVersion)
@@ -748,6 +754,54 @@ func (h *Handlers) handleUpdateRepository(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, map[string]string{"status": "success", "message": "Repository updated"})
+}
+
+// ociSourceRequest is the body for registering/unregistering an OCI chart source.
+type ociSourceRequest struct {
+	Source string `json:"source"`
+}
+
+// handleListOCISources returns the registered OCI chart-source prefixes.
+func (h *Handlers) handleListOCISources(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, ListOCISources())
+}
+
+// handleAddOCISource registers an OCI chart-source prefix. Gated by
+// requireHelmWrite (same as repo refresh): it mutates pod-local config and
+// underpins later upgrades, but is not a cluster mutation.
+func (h *Handlers) handleAddOCISource(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+	var req ociSourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	sources, err := AddOCISource(req.Source)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, sources)
+}
+
+// handleRemoveOCISource unregisters an OCI chart-source prefix.
+func (h *Handlers) handleRemoveOCISource(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+	var req ociSourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	sources, err := RemoveOCISource(req.Source)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, sources)
 }
 
 // handleSearchCharts searches for charts across all repositories

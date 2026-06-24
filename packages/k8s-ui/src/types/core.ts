@@ -649,6 +649,11 @@ export interface UpgradeInfo {
   latestVersion?: string
   updateAvailable: boolean
   repositoryName?: string
+  // 'repository' for classic HTTP-repo matches, 'oci' when discovered via a
+  // registered OCI chart source. Absent when the source couldn't be determined.
+  sourceType?: 'repository' | 'oci'
+  // oci:// chart reference an OCI-sourced upgrade lives at (display only).
+  chartRef?: string
   error?: string
 }
 

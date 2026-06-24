@@ -38,6 +38,14 @@ type Settings struct {
 	// Empty slice (or missing key) means no pick is active and reads default
 	// to the user's full RBAC ceiling (typically "All namespaces").
 	ActiveNamespaces map[string][]string `json:"activeNamespaces,omitempty"`
+	// HelmOCISources are registered OCI chart-source prefixes (e.g.
+	// "oci://ghcr.io/myorg/charts") — the OCI analog of `helm repo add`, which
+	// has no native equivalent for OCI registries. Helm doesn't persist the ref
+	// a release was installed from, so these let Radar discover upgrades for the
+	// user's own OCI-published charts by probing "<prefix>/<chartName>". Not
+	// cluster-scoped: a registry is where your charts live, independent of which
+	// cluster they're deployed to.
+	HelmOCISources []string `json:"helmOciSources,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent PUTs from

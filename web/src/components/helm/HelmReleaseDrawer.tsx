@@ -23,6 +23,7 @@ import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
 import { OwnedResources } from './OwnedResources'
 import { ManifestDiffViewer } from './ManifestDiffViewer'
+import { TrackChartSourceDialog } from './TrackChartSourceDialog'
 
 interface HelmReleaseDrawerProps {
   release: SelectedHelmRelease
@@ -50,6 +51,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [rollbackRevision, setRollbackRevision] = useState<number | null>(null)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false)
+  const [showTrackSource, setShowTrackSource] = useState(false)
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(DEFAULT_WIDTH)
   const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
@@ -342,8 +344,18 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 upgrade check failed
               </span>
               </Tooltip>
+            ) : upgradeInfo?.updateAvailable && releaseDetail?.managedByFluxHelmRelease ? (
+              // Route-only for GitOps-managed releases: a direct `helm upgrade`
+              // would be reverted at the next reconcile, so surface the available
+              // version as info and point at GitOps rather than offer the upgrade.
+              <Tooltip content={`${upgradeInfo.latestVersion} available — managed by Flux, upgrade via the GitOps view (a direct upgrade would be reverted at the next reconcile).`}>
+              <span className={clsx('badge', SEVERITY_BADGE.warning, 'opacity-90')}>
+                <ArrowUpCircle className="w-3 h-3" />
+                {upgradeInfo.latestVersion}
+              </span>
+              </Tooltip>
             ) : upgradeInfo?.updateAvailable ? (
-              <Tooltip content={canHelmWrite ? `Click to upgrade: ${upgradeInfo.currentVersion} → ${upgradeInfo.latestVersion}${upgradeInfo.repositoryName ? ` (${upgradeInfo.repositoryName})` : ''}` : helmActReason}>
+              <Tooltip content={canHelmWrite ? `Click to upgrade: ${upgradeInfo.currentVersion} → ${upgradeInfo.latestVersion}${upgradeInfo.repositoryName ? ` (${upgradeInfo.repositoryName})` : upgradeInfo.sourceType === 'oci' ? ' (OCI)' : ''}` : helmActReason}>
               <button
                 onClick={() => setShowUpgradeConfirm(true)}
                 disabled={!canHelmWrite}
@@ -363,13 +375,31 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               </span>
               </Tooltip>
             ) : upgradeInfo?.error ? (
-              <Tooltip content={upgradeInfo.error}>
-              <span
-                className="badge bg-theme-hover/50 text-theme-text-secondary"
-              >
-                upstream unknown
-              </span>
-              </Tooltip>
+              releaseDetail?.managedByFluxHelmRelease ? (
+                // Managed by Flux — the "Managed by Flux" badge routes to GitOps,
+                // where the chart source lives. Don't push a Helm source here.
+                <Tooltip content="Chart source is managed by Flux — track upgrades from the GitOps view.">
+                <span className="badge bg-theme-hover/50 text-theme-text-secondary">
+                  source via GitOps
+                </span>
+                </Tooltip>
+              ) : (
+                // Helm doesn't record the install source. Offer to register one so
+                // Radar can track upgrades for the user's own (e.g. OCI) charts.
+                <Tooltip content={canHelmWrite ? "Radar can't tell where this chart was installed from. Register your chart source to track upgrades." : upgradeInfo.error}>
+                <button
+                  onClick={() => canHelmWrite && setShowTrackSource(true)}
+                  disabled={!canHelmWrite}
+                  className={clsx(
+                    'badge transition-colors disabled:pointer-events-none bg-theme-hover/50 text-theme-text-secondary',
+                    canHelmWrite ? 'hover:bg-theme-hover cursor-pointer' : 'opacity-50 cursor-not-allowed'
+                  )}
+                >
+                  <Link2 className="w-3 h-3" />
+                  source not tracked
+                </button>
+                </Tooltip>
+              )
             ) : null}
           </div>
           <div className="flex items-center gap-1">
@@ -592,6 +622,12 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       >
         {upgradeProgress.length > 0 && <ProgressLog entries={upgradeProgress} />}
       </ConfirmDialog>
+
+      <TrackChartSourceDialog
+        open={showTrackSource}
+        onClose={() => setShowTrackSource(false)}
+        chartName={releaseDetail?.chart}
+      />
     </div>
   )
 }

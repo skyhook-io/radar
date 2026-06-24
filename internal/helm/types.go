@@ -112,7 +112,14 @@ type UpgradeInfo struct {
 	LatestVersion   string `json:"latestVersion,omitempty"`
 	UpdateAvailable bool   `json:"updateAvailable"`
 	RepositoryName  string `json:"repositoryName,omitempty"`
-	Error           string `json:"error,omitempty"`
+	// SourceType is "repository" for classic HTTP-repo matches and "oci" when the
+	// upgrade was discovered via a registered OCI source. Drives how the frontend
+	// frames the upgrade and the "source not tracked" affordance.
+	SourceType string `json:"sourceType,omitempty"`
+	// ChartRef is the oci:// chart reference an OCI-sourced upgrade lives at
+	// (display only — the upgrade path re-derives it from registered sources).
+	ChartRef string `json:"chartRef,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // BatchUpgradeInfo contains upgrade info for multiple releases

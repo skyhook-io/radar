@@ -2668,6 +2668,54 @@ export function useUpdateRepositorySilent() {
   })
 }
 
+// Registered OCI chart sources (the OCI analog of `helm repo add`). Used to
+// track upgrades for the user's own OCI-published charts.
+export function useHelmOCISources() {
+  return useQuery<string[]>({
+    queryKey: ['helm-oci-sources'],
+    queryFn: () => fetchJSON('/helm/oci-sources'),
+  })
+}
+
+async function mutateOCISource(method: 'POST' | 'DELETE', source: string): Promise<string[]> {
+  const response = await apiFetch(`${getApiBase()}/helm/oci-sources`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+    throw new Error(error.error || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+// Invalidate the upgrade-info queries so a newly-registered source is probed
+// immediately and "source not tracked" re-resolves.
+function invalidateHelmAfterSourceChange(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['helm-oci-sources'] })
+  queryClient.invalidateQueries({ queryKey: ['helm-upgrade-info'] })
+  queryClient.invalidateQueries({ queryKey: ['helm-batch-upgrade-info'] })
+}
+
+export function useAddOCISource() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (source: string) => mutateOCISource('POST', source),
+    meta: { errorMessage: 'Failed to add chart source', successMessage: 'Chart source added' },
+    onSuccess: () => invalidateHelmAfterSourceChange(queryClient),
+  })
+}
+
+export function useRemoveOCISource() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (source: string) => mutateOCISource('DELETE', source),
+    meta: { errorMessage: 'Failed to remove chart source', successMessage: 'Chart source removed' },
+    onSuccess: () => invalidateHelmAfterSourceChange(queryClient),
+  })
+}
+
 // Search charts across all repositories
 export function useSearchCharts(query: string, allVersions = false, enabled = true) {
   return useQuery<ChartSearchResult>({
