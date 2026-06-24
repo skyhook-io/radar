@@ -196,6 +196,12 @@ func (s *Server) setupRoutes() {
 	r.Use(middleware.Recoverer)
 	// Note: Timeout middleware is applied per-group below to exempt streaming endpoints
 
+	// gzip response compression (content-type aware: JSON yes, SSE/WS no).
+	// nil when RADAR_COMPRESS_LEVEL=0. See compress.go.
+	if cm := compressMiddleware(); cm != nil {
+		r.Use(cm)
+	}
+
 	// CORS for development
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:*", "http://127.0.0.1:*"},
