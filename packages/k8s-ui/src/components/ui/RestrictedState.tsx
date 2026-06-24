@@ -29,15 +29,12 @@ interface Props {
   className?: string
 }
 
-function buildRbacRequest(kindLabel: string, group: string, resource: string): string {
+function buildRbacRequest(group: string, resource: string): string {
   // resource is the placeholder when we don't have a confident API plural
   // (e.g. a CRD deep-link before discovery resolves the kind) — use a generic
   // role name rather than radar-read-<Kind>.
   const roleName = resource === '<resource>' ? 'radar-read-access' : `radar-read-${resource}`
   return [
-    `I need read access to ${kindLabel} in this Kubernetes cluster via Radar.`,
-    `Please grant my identity (user, group, or ServiceAccount) get/list/watch on "${resource}".`,
-    ``,
     `apiVersion: rbac.authorization.k8s.io/v1`,
     `kind: ClusterRole`,
     `metadata:`,
@@ -73,7 +70,7 @@ export function RestrictedState({ kindLabel, group = '', resource, reason, compa
   // produce a snippet that doesn't grant access. Only inline the resource when
   // it looks like a valid resource name; otherwise leave a clear placeholder.
   const validResource = resource && /^[a-z0-9.-]+$/.test(resource) ? resource : '<resource>'
-  const snippet = buildRbacRequest(kindLabel, group, validResource)
+  const snippet = buildRbacRequest(group, validResource)
 
   const copy = () => {
     navigator.clipboard.writeText(snippet).then(
@@ -99,18 +96,18 @@ export function RestrictedState({ kindLabel, group = '', resource, reason, compa
         <>
           <p className="text-theme-text-secondary font-medium">{kindLabel} isn't available here</p>
           <p className="text-sm mt-1 max-w-md">
-            Radar can't read {kindLabel} in this cluster — the type may not be installed, or read
-            access isn't granted to Radar's ServiceAccount (some kinds, like RBAC objects and
-            Secrets, are off unless enabled in the Radar chart). Granting your own identity access
-            won't surface it.
+            Radar can't read {kindLabel} resources in this cluster — the type may not be installed,
+            or read access isn't granted to Radar's ServiceAccount (some kinds, like RBAC objects
+            and Secrets, are off unless enabled in the Radar chart). Granting your own identity
+            access won't surface it.
           </p>
         </>
       ) : (
         <>
           <p className="text-theme-text-secondary font-medium">You don't have access to {kindLabel}</p>
           <p className="text-sm mt-1 max-w-md">
-            Your Kubernetes RBAC doesn't allow listing {kindLabel} in this cluster. This isn't an
-            empty cluster — Radar is hiding what your identity can't read.
+            Your Kubernetes RBAC doesn't allow listing {kindLabel} resources in this cluster. This
+            isn't an empty cluster — Radar is hiding what your identity can't read.
           </p>
 
           <div className="mt-3 w-full max-w-md">
@@ -125,20 +122,25 @@ export function RestrictedState({ kindLabel, group = '', resource, reason, compa
             {expanded && (
               <div className="mt-2 text-left">
                 <p className="text-xs text-theme-text-tertiary mb-2">
-                  Send this to whoever administers your cluster (the person who manages your Radar
-                  install or your cluster RBAC) — it asks them to grant your identity read access.
+                  Apply this, or send it to whoever administers your cluster, to grant your identity
+                  read access.
                 </p>
-                <div className="relative">
-                  <pre className="text-xs bg-theme-base border border-theme-border rounded-md p-3 max-h-72 overflow-auto text-theme-text-secondary">
+                <div className="rounded-md border border-theme-border bg-theme-base overflow-hidden">
+                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-theme-border bg-theme-elevated">
+                    <span className="text-xs text-theme-text-tertiary">
+                      ClusterRole + ClusterRoleBinding
+                    </span>
+                    <button
+                      onClick={copy}
+                      className="flex items-center gap-1 text-xs text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+                    >
+                      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copied ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <pre className="text-xs p-3 max-h-72 overflow-auto text-theme-text-secondary">
                     {snippet}
                   </pre>
-                  <button
-                    onClick={copy}
-                    className="absolute top-2 right-2 flex items-center gap-1 text-xs px-2 py-1 rounded bg-theme-elevated hover:bg-theme-border text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-                  >
-                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    {copied ? 'Copied' : 'Copy request'}
-                  </button>
                 </div>
               </div>
             )}
