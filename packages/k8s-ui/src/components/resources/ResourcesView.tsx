@@ -3233,7 +3233,6 @@ export function ResourcesView({
   }, [resources])
   const isLoading = selectedQuery?.isLoading ?? true
   const selectedQueryError = selectedQuery?.error
-  const isSelectedForbidden = isForbiddenError(selectedQueryError)
   const refetchFn = selectedQuery?.refetch
   const dataUpdatedAt = selectedQuery?.dataUpdatedAt
 
@@ -3294,6 +3293,16 @@ export function ResourcesView({
     })
     return result
   }, [useNewCountsMode, resourceForbiddenProp, resourcesToCount, resourceQueries])
+
+  // Render the restricted state when EITHER the list query 403s (namespaced
+  // denials) OR the selected kind is in the counts `forbidden` set. Denied
+  // cluster-scoped kinds return 200 with `[]` from the list endpoint, so the
+  // 403 signal alone misses them — they'd fall through to "No <kind> found".
+  const selectedKindCountKey = selectedKind.group
+    ? `${selectedKind.group}/${selectedKind.kind}`
+    : selectedKind.kind
+  const isSelectedForbidden =
+    isForbiddenError(selectedQueryError) || forbiddenKinds.has(selectedKindCountKey)
 
   // Reset sort and filters when kind changes (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
