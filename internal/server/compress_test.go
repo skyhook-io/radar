@@ -94,3 +94,32 @@ func TestCompressMiddlewareDisabled(t *testing.T) {
 		t.Fatal("expected nil middleware when RADAR_COMPRESS_LEVEL=0")
 	}
 }
+
+func TestIsStreamingRequest(t *testing.T) {
+	mk := func(h map[string]string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/x", nil)
+		for k, v := range h {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+	cases := []struct {
+		name string
+		hdr  map[string]string
+		want bool
+	}{
+		{"plain json", map[string]string{"Accept": "application/json"}, false},
+		{"sse", map[string]string{"Accept": "text/event-stream"}, true},
+		{"mcp dual accept", map[string]string{"Accept": "application/json, text/event-stream"}, true},
+		{"websocket upgrade", map[string]string{"Upgrade": "websocket", "Connection": "Upgrade"}, true},
+		{"connection upgrade only", map[string]string{"Connection": "keep-alive, Upgrade"}, true},
+		{"no headers", map[string]string{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isStreamingRequest(mk(tc.hdr)); got != tc.want {
+				t.Errorf("isStreamingRequest(%v) = %v, want %v", tc.hdr, got, tc.want)
+			}
+		})
+	}
+}

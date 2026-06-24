@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5/middleware"
 	kgzip "github.com/klauspost/compress/gzip"
@@ -61,5 +62,40 @@ func compressMiddleware() func(http.Handler) http.Handler {
 		gw, _ := kgzip.NewWriterLevel(w, lvl)
 		return gw
 	})
-	return c.Handler
+	compress := c.Handler
+	return func(next http.Handler) http.Handler {
+		compressed := compress(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip the compressor for streaming + upgrade requests. chi acquires
+			// a pooled gzip encoder per request *before* the handler sets its
+			// Content-Type, releasing it only when the handler returns — so a
+			// long-lived SSE (EventSource sends Accept-Encoding: gzip) or pod-exec
+			// WebSocket would pin an unused encoder for the whole stream. These
+			// responses aren't compressible anyway; bypass before any encoder is
+			// taken from the pool.
+			if isStreamingRequest(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			compressed.ServeHTTP(w, r)
+		})
+	}
+}
+
+// isStreamingRequest reports requests that open a long-lived response (SSE) or
+// switch protocols (WebSocket exec/terminal) and must not pass through the
+// compressor's per-request encoder acquisition.
+func isStreamingRequest(r *http.Request) bool {
+	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
+		return true
+	}
+	if r.Header.Get("Upgrade") != "" {
+		return true
+	}
+	for _, v := range strings.Split(strings.ToLower(r.Header.Get("Connection")), ",") {
+		if strings.TrimSpace(v) == "upgrade" {
+			return true
+		}
+	}
+	return false
 }
