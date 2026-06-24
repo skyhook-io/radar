@@ -3305,8 +3305,15 @@ export function ResourcesView({
   const selectedKindCountKey = selectedKind.group
     ? `${selectedKind.group}/${selectedKind.kind}`
     : selectedKind.kind
+  // Actual rows win over a stale counts `forbidden` entry: a kind can be marked
+  // forbidden/unavailable in counts (e.g. an informer not yet synced at counts
+  // time) while the list query has since returned data — show the table, not
+  // RestrictedState. A 403 on the list itself never carries rows, so it still
+  // forces the restricted state.
+  const selectedHasRows = Array.isArray(resources) && resources.length > 0
   const isSelectedForbidden =
-    isForbiddenError(selectedQueryError) || forbiddenKinds.has(selectedKindCountKey)
+    isForbiddenError(selectedQueryError) ||
+    (!selectedHasRows && forbiddenKinds.has(selectedKindCountKey))
 
   // Reset sort and filters when kind changes (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
