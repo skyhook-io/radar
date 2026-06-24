@@ -39,8 +39,11 @@ func NewDialer(config *rest.Config, u *url.URL) (httpstream.Dialer, error) {
 	spdyDialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", u)
 
 	// The WebSocket dialer is built on k8s.io/streaming/pkg/httpstream, so a
-	// rejected upgrade surfaces as that package's UpgradeFailureError.
-	return portforward.NewFallbackDialer(wsDialer, spdyDialer, streamhttp.IsUpgradeFailure), nil
+	// rejected upgrade surfaces as that package's error types.
+	shouldFallback := func(err error) bool {
+		return streamhttp.IsUpgradeFailure(err) || streamhttp.IsHTTPSProxyError(err)
+	}
+	return portforward.NewFallbackDialer(wsDialer, spdyDialer, shouldFallback), nil
 }
 
 // RunPortForward runs a port-forward from localPort to targetPort on the given pod.

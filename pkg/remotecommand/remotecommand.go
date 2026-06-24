@@ -22,5 +22,9 @@ func NewExecutor(config *rest.Config, u *url.URL) (remotecommand.Executor, error
 	if err != nil {
 		return nil, err
 	}
-	return remotecommand.NewFallbackExecutor(wsExec, spdyExec, streamhttp.IsUpgradeFailure)
+
+	shouldFallback := func(err error) bool {
+		return streamhttp.IsUpgradeFailure(err) || streamhttp.IsHTTPSProxyError(err)
+	}
+	return remotecommand.NewFallbackExecutor(wsExec, spdyExec, shouldFallback)
 }

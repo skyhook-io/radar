@@ -35,5 +35,10 @@ func NewPodExecExecutor(client kubernetes.Interface, config *rest.Config, namesp
 			TTY:    tty,
 		}, scheme.ParameterCodec)
 
-	return rcpkg.NewExecutor(config, req.URL())
+	executor, err := rcpkg.NewExecutor(config, req.URL())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create exec executor for %s/%s/%s: %w", namespace, podName, containerName, err)
+	}
+
+	return executor, nil
 }
