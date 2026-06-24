@@ -96,8 +96,11 @@ func TestCompressMiddlewareDisabled(t *testing.T) {
 }
 
 func TestIsStreamingRequest(t *testing.T) {
-	mk := func(h map[string]string) *http.Request {
-		r := httptest.NewRequest(http.MethodGet, "/x", nil)
+	mk := func(path string, h map[string]string) *http.Request {
+		if path == "" {
+			path = "/x"
+		}
+		r := httptest.NewRequest(http.MethodGet, path, nil)
 		for k, v := range h {
 			r.Header.Set(k, v)
 		}
@@ -105,20 +108,22 @@ func TestIsStreamingRequest(t *testing.T) {
 	}
 	cases := []struct {
 		name string
+		path string
 		hdr  map[string]string
 		want bool
 	}{
-		{"plain json", map[string]string{"Accept": "application/json"}, false},
-		{"sse", map[string]string{"Accept": "text/event-stream"}, true},
-		{"mcp dual accept", map[string]string{"Accept": "application/json, text/event-stream"}, true},
-		{"websocket upgrade", map[string]string{"Upgrade": "websocket", "Connection": "Upgrade"}, true},
-		{"connection upgrade only", map[string]string{"Connection": "keep-alive, Upgrade"}, true},
-		{"no headers", map[string]string{}, false},
+		{"plain json", "/api/resources", map[string]string{"Accept": "application/json"}, false},
+		{"sse", "/api/events/stream", map[string]string{"Accept": "text/event-stream"}, true},
+		{"stream route with */* accept", "/api/pods/n/p/logs/stream", map[string]string{"Accept": "*/*"}, true}, // path-based
+		{"mcp dual accept", "/mcp", map[string]string{"Accept": "application/json, text/event-stream"}, true},
+		{"websocket upgrade", "/api/pods/n/p/exec", map[string]string{"Upgrade": "websocket", "Connection": "Upgrade"}, true},
+		{"connection upgrade only", "/api/local-terminal", map[string]string{"Connection": "keep-alive, Upgrade"}, true},
+		{"no headers plain route", "/api/resources", map[string]string{}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isStreamingRequest(mk(tc.hdr)); got != tc.want {
-				t.Errorf("isStreamingRequest(%v) = %v, want %v", tc.hdr, got, tc.want)
+			if got := isStreamingRequest(mk(tc.path, tc.hdr)); got != tc.want {
+				t.Errorf("isStreamingRequest(%s, %v) = %v, want %v", tc.path, tc.hdr, got, tc.want)
 			}
 		})
 	}

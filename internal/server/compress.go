@@ -86,6 +86,13 @@ func compressMiddleware() func(http.Handler) http.Handler {
 // switch protocols (WebSocket exec/terminal) and must not pass through the
 // compressor's per-request encoder acquisition.
 func isStreamingRequest(r *http.Request) bool {
+	// Match by route, not just request headers: every SSE endpoint ends in
+	// "/stream" (events, pod/workload logs, traffic flows). This holds even if a
+	// future consumer reads the stream via fetch (Accept: */*) instead of
+	// EventSource, which the header check below would miss.
+	if strings.HasSuffix(r.URL.Path, "/stream") {
+		return true
+	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
 		return true
 	}
