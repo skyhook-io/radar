@@ -3710,7 +3710,18 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// same gate the REST /api/topology handler applies. Resolved here (the
 	// request is available) and threaded through so the broadcast loop never
 	// runs a SAR.
-	s.broadcaster.HandleSSE(w, r, s.deniedClusterScopedTopoKinds(r))
+	deny := s.deniedClusterScopedTopoKinds(r)
+	// Namespace objects are cluster-scoped too (a Namespace k8s_event carries
+	// namespace=""), but Namespace is deliberately not in the topology table.
+	// Deny its change frames when the user can't list namespaces, so a
+	// namespace-restricted user doesn't learn namespace names via SSE.
+	if !s.canRead(r, "", "namespaces", "", "list") {
+		if deny == nil {
+			deny = map[topology.NodeKind]bool{}
+		}
+		deny[topology.KindNamespace] = true
+	}
+	s.broadcaster.HandleSSE(w, r, deny)
 }
 
 // Settings handlers

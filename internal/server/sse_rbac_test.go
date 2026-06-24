@@ -42,6 +42,10 @@ func TestClientCanSeeChange(t *testing.T) {
 	scopedAB := ClientInfo{Namespaces: []string{"a", "b"}}
 	noAccess := ClientInfo{Namespaces: []string{"__no_access__"}}
 	deniedNodes := ClientInfo{DeniedKinds: map[topology.NodeKind]bool{"Node": true}}
+	// A user who can't list namespaces has Namespace added to the deny set at
+	// subscribe (handleSSE), so Namespace change events (cluster-scoped, name="")
+	// are blocked.
+	deniedNamespaces := ClientInfo{Namespaces: []string{"a"}, DeniedKinds: map[topology.NodeKind]bool{"Namespace": true}}
 
 	cases := []struct {
 		name      string
@@ -57,6 +61,8 @@ func TestClientCanSeeChange(t *testing.T) {
 		{"cluster-scoped allowed when not denied", scopedAB, "", "Node", true},
 		{"cluster-scoped denied kind blocked", deniedNodes, "", "Node", false},
 		{"cluster-scoped non-denied kind allowed", deniedNodes, "", "StorageClass", true},
+		{"Namespace event blocked when can't list namespaces", deniedNamespaces, "", "Namespace", false},
+		{"Namespace event allowed when can list namespaces", scopedAB, "", "Namespace", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
