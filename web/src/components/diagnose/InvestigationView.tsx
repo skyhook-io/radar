@@ -29,6 +29,9 @@ import {
   type Turn,
 } from "./parts";
 
+const RECHECK_QUESTION =
+  "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
+
 export function InvestigationView({
   run,
   agentLabel,
@@ -47,6 +50,10 @@ export function InvestigationView({
   const [actionError, setActionError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingApplyRef = useRef(false);
+  // Set when THIS view initiates an apply, consumed once on that apply's done event
+  // to auto-run the health re-check (the verification). Ref, not derived from the
+  // stream, so replaying a past apply on reopen never re-fires the re-check.
+  const autoRecheckRef = useRef(false);
   // Stick-to-bottom: follow streaming output while the user is at/near the bottom,
   // detach the moment they scroll up to read history, re-attach when they return.
   // Tracked from scroll events (the user's intent) — NOT post-render geometry, which
@@ -218,6 +225,17 @@ export function InvestigationView({
               if (isApply) {
                 pendingApplyRef.current = false;
                 refreshClusterState();
+                // Verify the write automatically: re-check health as a follow-up
+                // turn. Guarded by autoRecheckRef so replaying a past apply on
+                // reopen never re-fires it.
+                if (autoRecheckRef.current && run.status !== "stale") {
+                  autoRecheckRef.current = false;
+                  setTimeout(() => {
+                    addTurn(run.id, { question: RECHECK_QUESTION }).catch(
+                      () => {},
+                    );
+                  }, 900);
+                }
               }
               refreshRuns();
             };
@@ -231,7 +249,9 @@ export function InvestigationView({
             const hasRC = !!dx?.rootCause;
             const hasRem = (dx?.remediation?.length ?? 0) > 0;
             const allClear = !!dx?.healthy && !hasRC;
-            const structured = !!dx && (allClear || hasRC || hasRem);
+            const inconclusive = !!dx?.inconclusive && !hasRC;
+            const structured =
+              !!dx && (allClear || inconclusive || hasRC || hasRem);
             if (!isApply && structured && revealBufRef.current === "") {
               const STEP = 2000;
               // Beat 1 (in the timeline): formulating, before any card is shown.
@@ -239,9 +259,11 @@ export function InvestigationView({
               setSynth(
                 allClear
                   ? "Confirming health"
-                  : hasRC
-                    ? "Formulating the root cause"
-                    : "Analyzing the findings",
+                  : inconclusive
+                    ? "Weighing the evidence"
+                    : hasRC
+                      ? "Formulating the root cause"
+                      : "Analyzing the findings",
               );
               synthTimers.current.push(
                 setTimeout(() => {
@@ -352,6 +374,17 @@ export function InvestigationView({
   };
   const stop = () => stopRun(run.id);
 
+  // Ask a canned follow-up (e.g. "explain simply") — a one-tap path that turns the
+  // prompt's plain-language instruction into something the user controls.
+  const askFollowup = (q: string) => {
+    if (busy || stale) return;
+    setActionError(null);
+    pinnedRef.current = true;
+    addTurn(run.id, { question: q }).catch((e) =>
+      setActionError(e instanceof DiagnoseError ? e.message : "Couldn't send."),
+    );
+  };
+
   // Apply: a user-confirmed remediation turn. Any step is applyable; the chosen
   // step's text is sent so the server binds the apply to it.
   const [confirmApply, setConfirmApply] = useState(false);
@@ -363,17 +396,13 @@ export function InvestigationView({
   const runApply = () => {
     setConfirmApply(false);
     setActionError(null);
-    addTurn(run.id, { apply: true, fix: pendingFix }).catch((e) =>
-      setActionError(
-        e instanceof DiagnoseError ? e.message : "Couldn't apply.",
-      ),
-    );
+    autoRecheckRef.current = true; // verify the write automatically once it lands
+    addTurn(run.id, { apply: true, fix: pendingFix }).catch((e) => {
+      autoRecheckRef.current = false; // the apply never started — don't auto-recheck
+      setActionError(e instanceof DiagnoseError ? e.message : "Couldn't apply.");
+    });
   };
-  const checkStatus = () =>
-    addTurn(run.id, {
-      question:
-        "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.",
-    }).catch(() => {});
+  const checkStatus = () => addTurn(run.id, { question: RECHECK_QUESTION }).catch(() => {});
 
   // Apply tracks the latest turn that produced remediation (so follow-ups don't
   // strip it) and is blocked on a stale (context-switched) run.
@@ -428,6 +457,7 @@ export function InvestigationView({
                   synthLabel={isLast ? synth : null}
                   reveal={isLast ? (reveal ?? "full") : "full"}
                   onApply={canApply ? requestApply : undefined}
+                  onAsk={isLast && !busy && !stale ? askFollowup : undefined}
                   onCheckStatus={canCheck ? checkStatus : undefined}
                 />
               );

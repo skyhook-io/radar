@@ -17,6 +17,7 @@ import {
   Sparkles,
   RefreshCw,
   Maximize2,
+  HelpCircle,
 } from "lucide-react";
 import { stringify as toYaml } from "yaml";
 import { codeToHtml } from "shiki";
@@ -279,11 +280,21 @@ export function AgentControls({
               { value: false, label: "My setup" },
             ]}
           />
-          <p className="mt-1.5 text-[11px] leading-snug text-theme-text-tertiary">
-            {isolated
-              ? "Runs Codex on its own — no access to your other MCP servers, guidelines, or project files."
-              : "Runs Codex with your full setup (your other MCP servers + guidelines). It can also read local files."}
-          </p>
+          {isolated ? (
+            <p className="mt-1.5 text-[11px] leading-snug text-theme-text-tertiary">
+              Runs Codex on its own — no access to your other MCP servers,
+              guidelines, or project files.
+            </p>
+          ) : (
+            <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
+              <span>
+                Runs Codex with your full setup — your own MCP servers (which may
+                be write- or network-capable) and guidelines, and it can read
+                local files. Only choose this if you rely on that config.
+              </span>
+            </div>
+          )}
         </div>
       )}
       {isCodex ? (
@@ -386,12 +397,14 @@ export function TurnView({
   synthLabel,
   reveal = "full",
   onApply,
+  onAsk,
   onCheckStatus,
 }: {
   turn: Turn;
   synthLabel?: string | null;
   reveal?: "rca" | "full";
   onApply?: (fix: string) => void;
+  onAsk?: (question: string) => void;
   onCheckStatus?: () => void;
 }) {
   // A follow-up (a turn the user asked a question on) is a conversational reply,
@@ -406,12 +419,15 @@ export function TurnView({
   const hasVerdict = !!dx
     ? turn.apply
       ? true // ApplyOutcomeCard always renders an outcome
-      : followup
-        ? !!(dx.report?.trim() || dx.rootCause?.trim()) // FollowupAnswer
-        : dx.healthy ||
-          !!dx.rootCause ||
-          (dx.remediation?.length ?? 0) > 0 ||
-          !!dx.report?.trim()
+      : dx.healthy && !dx.rootCause
+        ? true // AllClearCard (checked before followup in ResultCard)
+        : dx.inconclusive && !dx.rootCause
+          ? true // InconclusiveCard
+          : followup
+            ? !!(dx.report?.trim() || dx.rootCause?.trim()) // FollowupAnswer
+            : !!dx.rootCause ||
+              (dx.remediation?.length ?? 0) > 0 ||
+              !!dx.report?.trim()
     : false;
   return (
     <div className="space-y-2">
@@ -441,6 +457,7 @@ export function TurnView({
           <ResultCard
             diagnosis={turn.diagnosis!}
             onApply={onApply}
+            onAsk={onAsk}
             apply={turn.apply}
             followup={followup}
             reveal={reveal}
@@ -467,6 +484,15 @@ export function TurnView({
   );
 }
 
+// The first-run consent + trust card. Its copy is the OSS BYO-local trust story
+// ("your own agent, on your machine, nothing to Radar").
+// TODO(cloud): this copy must become embedder-overridable for Radar Cloud, where
+//   the agent runs in the cloud (the company's self-hosted instance + their key /
+//   local LLM, OR our SaaS) — a different, honestly-different trust story ("runs in
+//   your Radar Cloud, audited, managed key"). Plumb an override through the
+//   DiagnoseCustomization seam (same place Hub overrides the entry button) before
+//   the k8s-ui lift, so OSS and Cloud don't ship the same claim over different data
+//   flows. This is also a natural "upgrade to Cloud" surface.
 export function ConsentCard({
   agentName,
   isolated = true,
@@ -491,10 +517,13 @@ export function ConsentCard({
         </div>
       </div>
       <p className="text-sm leading-relaxed text-theme-text-secondary">
-        Radar will send this resource&apos;s spec, recent events, and pod logs
-        to{" "}
-        <span className="font-medium text-theme-text-primary">{agentName}</span>
-        , running on your own machine and subscription.
+        This runs{" "}
+        <span className="font-medium text-theme-text-primary">
+          your own {agentName}
+        </span>{" "}
+        on your machine — no Radar cloud, no API key, no account. Radar sends
+        this resource&apos;s spec, recent events, and pod logs to it (and on to
+        its model provider under your account, not to Radar).
         {isolated && (
           <>
             {" "}
@@ -505,11 +534,6 @@ export function ConsentCard({
         )}
       </p>
       <ul className="mt-2 space-y-1 text-xs text-theme-text-tertiary">
-        <li>• Runs locally — no Radar cloud, no API key needed.</li>
-        <li>
-          • {agentName} sends this data to its own model provider under your
-          account — not to Radar.
-        </li>
         {isolated ? (
           <li>
             • Isolated: only Radar&apos;s read-only investigation tools — your
@@ -572,6 +596,17 @@ export function ApplyDialog({
 }) {
   const fixText = fix?.trim();
   const lowConfidence = confidence != null && confidence < 0.5;
+  // A GitOps/Helm-managed resource needs an explicit acknowledgment before applying
+  // a direct change — it's the canonical footgun (the controller reverts it). Gating
+  // (not just warning) makes the user opt into "yes, I know this may be undone."
+  // TODO(SCM-PR): once Radar can connect the user's SCM (GitHub/GitLab/…), replace
+  //   direct apply on managed resources with "open a PR against the Git source"
+  //   instead — the durable fix. Tracked in Linear (radar). See product-review.
+  const [acked, setAcked] = useState(false);
+  useEffect(() => {
+    if (open) setAcked(false);
+  }, [open]);
+  const applyBlocked = !!managedBy && !acked;
   return (
     <DialogPortal open={open} onClose={onClose} className="max-w-lg w-full">
       <div className="flex items-start gap-3 border-b border-theme-border p-4">
@@ -608,14 +643,25 @@ export function ApplyDialog({
         {/* The star warning: when we KNOW a controller owns this resource, a live
             change reverts on the next reconcile — say so authoritatively. */}
         {managedBy && (
-          <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-theme-text-primary">
-            <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-            <span>
-              <span className="font-medium">Managed by {managedBy}.</span> A
-              direct change here will be automatically undone within minutes,
-              when {managedBy} re-syncs this resource from Git — change it in
-              Git (the {managedBy} source) instead.
-            </span>
+          <div className="space-y-2 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-theme-text-primary">
+            <div className="flex items-start gap-2">
+              <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+              <span>
+                <span className="font-medium">Managed by {managedBy}.</span>{" "}
+                Unless you turn off auto-sync, a direct change here will be
+                undone within minutes when {managedBy} re-syncs from Git — the
+                durable fix is to change it in Git (the {managedBy} source).
+              </span>
+            </div>
+            <label className="flex cursor-pointer items-center gap-2 pl-6 text-xs text-theme-text-secondary">
+              <input
+                type="checkbox"
+                checked={acked}
+                onChange={(e) => setAcked(e.target.checked)}
+                className="h-3.5 w-3.5 accent-amber-500"
+              />
+              I understand {managedBy} may revert this — apply anyway.
+            </label>
           </div>
         )}
         {lowConfidence && (
@@ -647,7 +693,8 @@ export function ApplyDialog({
         </button>
         <button
           onClick={onConfirm}
-          className="flex items-center gap-1.5 rounded-lg btn-brand px-4 py-2 text-sm font-medium"
+          disabled={applyBlocked}
+          className="flex items-center gap-1.5 rounded-lg btn-brand px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Wand2 className="h-4 w-4" />
           Apply fix
@@ -1054,6 +1101,7 @@ function compactArgs(raw: string): string {
 function ResultCard({
   diagnosis,
   onApply,
+  onAsk,
   apply,
   followup,
   reveal = "full",
@@ -1061,6 +1109,7 @@ function ResultCard({
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
+  onAsk?: (question: string) => void;
   apply?: boolean;
   followup?: boolean;
   reveal?: "rca" | "full";
@@ -1074,6 +1123,10 @@ function ResultCard({
     );
   if (diagnosis.healthy && !diagnosis.rootCause)
     return <AllClearCard diagnosis={diagnosis} />;
+  // Couldn't-determine is its own honest state — never a confident all-clear, never
+  // the alarming root-cause anchor.
+  if (diagnosis.inconclusive && !diagnosis.rootCause)
+    return <InconclusiveCard diagnosis={diagnosis} />;
   // Follow-ups are conversational replies, not fresh diagnoses — plain answer.
   if (followup) return <FollowupAnswer diagnosis={diagnosis} />;
 
@@ -1085,19 +1138,29 @@ function ResultCard({
   if (!structured) return <FollowupAnswer diagnosis={diagnosis} />;
 
   return (
-    <DiagnosisResult diagnosis={diagnosis} onApply={onApply} reveal={reveal} />
+    <DiagnosisResult
+      diagnosis={diagnosis}
+      onApply={onApply}
+      onAsk={onAsk}
+      reveal={reveal}
+    />
   );
 }
+
+const EXPLAIN_SIMPLY_PROMPT =
+  "Explain this in plain language for someone who isn't a Kubernetes expert — what's broken, why it matters, and what each remediation step actually does. Gloss any k8s terms.";
 
 // The diagnosis result: root cause + remediation (any step applyable) + the
 // agent's full analysis on demand.
 function DiagnosisResult({
   diagnosis,
   onApply,
+  onAsk,
   reveal = "full",
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
+  onAsk?: (question: string) => void;
   reveal?: "rca" | "full";
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
@@ -1136,6 +1199,15 @@ function DiagnosisResult({
           <AIMarkdown className="text-sm font-medium text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary">
             {rootCause}
           </AIMarkdown>
+          {onAsk && reveal === "full" && (
+            <button
+              onClick={() => onAsk(EXPLAIN_SIMPLY_PROMPT)}
+              className="mt-2 inline-flex items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+            >
+              <HelpCircle className="h-3 w-3" />
+              Explain simply
+            </button>
+          )}
         </div>
       )}
 
@@ -1178,9 +1250,16 @@ function DiagnosisResult({
                     </span>
                     <div className="min-w-0 flex-1">
                       {isRec && (
-                        <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
-                          <Sparkles className="h-3 w-3" />
-                          Recommended
+                        <div className="mb-1">
+                          <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                            <Sparkles className="h-3 w-3" />
+                            Recommended
+                          </div>
+                          {diagnosis.recommendedReason && (
+                            <div className="mt-0.5 text-[11px] leading-snug text-theme-text-tertiary">
+                              {diagnosis.recommendedReason}
+                            </div>
+                          )}
                         </div>
                       )}
                       <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
@@ -1275,6 +1354,37 @@ function AllClearCard({ diagnosis }: { diagnosis: Diagnosis }) {
       <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
         <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
         <span>AI-generated — verify if symptoms persist</span>
+      </div>
+    </div>
+  );
+}
+
+// The agent investigated but couldn't determine an answer. A distinct, honest
+// state — neutral (not the alarming amber root cause, not the reassuring emerald
+// all-clear) — so "I couldn't tell" never reads as "you're fine."
+function InconclusiveCard({ diagnosis }: { diagnosis: Diagnosis }) {
+  const text =
+    diagnosis.report ||
+    "The investigation couldn't reach a clear conclusion — some checks were blocked or the evidence was ambiguous.";
+  return (
+    <div className="mt-3 space-y-2 animate-result-in">
+      <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-secondary">
+            <HelpCircle className="h-3.5 w-3.5" />
+            Couldn&apos;t determine
+          </div>
+          <CopyButton text={text} />
+        </div>
+        <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+          {text}
+        </AIMarkdown>
+      </div>
+      <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
+        <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>
+          Try a follow-up with more detail, or re-run after granting access.
+        </span>
       </div>
     </div>
   );

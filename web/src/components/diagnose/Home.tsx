@@ -72,8 +72,8 @@ export function RecentList({
           <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
           action to investigate it with {agentLabel} —{" "}
           <span className="font-medium text-theme-text-secondary">Diagnose</span>{" "}
-          a problem, or just ask about it. Investigations keep running here in the
-          background.
+          a problem, or just ask about it. Investigations run in the background
+          and stay here until you restart Radar.
         </p>
       </div>
     );

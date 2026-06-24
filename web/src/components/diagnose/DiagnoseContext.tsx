@@ -73,7 +73,12 @@ const AGENT_KEY = "radar-ai-agent";
 const ISOLATED_KEY = "radar-ai-isolated";
 const MODEL_KEY = "radar-ai-model";
 const EFFORT_KEY = "radar-ai-effort";
-const PUSH_MIN_VIEWPORT = 1024; // below this, overlay instead of pushing
+// Push (reflow the app left) only while the app keeps at least this much width to
+// the LEFT of the panel (nav rail ~176 + a usable content floor); otherwise overlay.
+// Panel-width-aware on purpose: a static viewport cutoff ignored the (resizable)
+// panel width and could push the app to near-zero. We don't fight to keep every-
+// thing on screen on small displays — below this, the panel floats over instead.
+const MIN_APP_LEFT_OF_PANEL = 900;
 
 const AGENT_LABELS: Record<string, string> = {
   claude: "Claude Code",
@@ -147,10 +152,11 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     }
   });
   const [maximized, setMaximized] = useState(false);
-  const [narrow, setNarrow] = useState(
-    () =>
-      typeof window !== "undefined" && window.innerWidth < PUSH_MIN_VIEWPORT,
+  const [viewportW, setViewportW] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1920,
   );
+  // Too tight to push (given the current, resizable panel width) → overlay instead.
+  const narrow = viewportW - width < MIN_APP_LEFT_OF_PANEL;
 
   useEffect(() => {
     let live = true;
@@ -213,7 +219,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < PUSH_MIN_VIEWPORT);
+    const onResize = () => setViewportW(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);

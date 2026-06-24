@@ -61,6 +61,40 @@ func TestDiagnosisFromText_ParsesHealthyAllClear(t *testing.T) {
 	}
 }
 
+// Verdict precedence must never produce a self-contradictory object: a concrete
+// finding clears both flags; inconclusive clears healthy ("absence of evidence is
+// not health"); at most one of {finding, inconclusive, healthy} survives.
+func TestDiagnosisFromText_VerdictPrecedence(t *testing.T) {
+	block := func(j string) string { return "prose\n\n```json\n" + j + "\n```" }
+
+	// healthy + a real root cause → the finding wins; healthy cleared.
+	d := diagnosisFromText(block(`{"healthy":true,"root_cause":"bad image","remediation":["fix it"],"recommended_index":1}`))
+	if d.Healthy {
+		t.Error("healthy must be cleared when a root cause is present")
+	}
+	if d.Inconclusive {
+		t.Error("inconclusive must be cleared when a root cause is present")
+	}
+	if d.RootCause != "bad image" {
+		t.Errorf("root cause = %q, want %q", d.RootCause, "bad image")
+	}
+
+	// healthy + inconclusive → inconclusive wins (never a false all-clear).
+	d = diagnosisFromText(block(`{"healthy":true,"inconclusive":true,"root_cause":"","remediation":[]}`))
+	if d.Healthy {
+		t.Error("healthy must be cleared when inconclusive is set")
+	}
+	if !d.Inconclusive {
+		t.Error("inconclusive should hold")
+	}
+
+	// inconclusive + recommended_reason carried only with a valid index (none here).
+	d = diagnosisFromText(block(`{"inconclusive":true,"root_cause":"","remediation":[],"recommended_index":0,"recommended_reason":"x"}`))
+	if d.RecommendedReason != "" {
+		t.Errorf("recommended_reason must be empty without a valid index, got %q", d.RecommendedReason)
+	}
+}
+
 func TestApplyPrompt_BindsConfirmedFix(t *testing.T) {
 	fix := "Set `spec.replicas` to `3` on Deployment `x`"
 	req := Request{Kind: "Deployment", Namespace: "prod", Name: "x", Fix: fix}

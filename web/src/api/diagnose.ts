@@ -29,10 +29,12 @@ export interface DiagnoseStep {
 
 export interface Diagnosis {
   healthy?: boolean;
+  inconclusive?: boolean; // investigated but couldn't determine — distinct from healthy
   rootCause: string;
   report: string;
   remediation: string[];
   recommendedIndex?: number; // 1-based index into remediation of the step Apply performs
+  recommendedReason?: string; // why the recommended step is the safe pick
   confidence?: number;
   costUsd?: number;
   turns?: number;
