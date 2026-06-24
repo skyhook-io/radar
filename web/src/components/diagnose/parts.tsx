@@ -401,6 +401,7 @@ export function TurnView({
   onApply,
   onAsk,
   onCheckStatus,
+  hideVerdict = false,
 }: {
   turn: Turn;
   synthLabel?: string | null;
@@ -408,6 +409,9 @@ export function TurnView({
   onApply?: (fix: string) => void;
   onAsk?: (question: string) => void;
   onCheckStatus?: () => void;
+  // In the maximized workspace the pinned turn's verdict renders in the side rail,
+  // so the transcript suppresses its own copy (reasoning + tool calls still show).
+  hideVerdict?: boolean;
 }) {
   // A follow-up (a turn the user asked a question on) is a conversational reply,
   // not a fresh diagnosis — render it as a plain answer, never the root-cause
@@ -455,7 +459,7 @@ export function TurnView({
         </AIMarkdown>
       )}
       {turn.status === "done" &&
-        (hasVerdict ? (
+        (hideVerdict && hasVerdict ? null : hasVerdict ? (
           <ResultCard
             diagnosis={turn.diagnosis!}
             onApply={onApply}
@@ -1112,7 +1116,7 @@ function compactArgs(raw: string): string {
   }
 }
 
-function ResultCard({
+export function ResultCard({
   diagnosis,
   onApply,
   onAsk,

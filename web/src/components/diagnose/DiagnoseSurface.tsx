@@ -6,6 +6,7 @@
 import { useState } from "react";
 import {
   Sparkles,
+  PanelLeft,
   X,
   Maximize2,
   Minimize2,
@@ -145,6 +146,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     panelBounds: { min: minW, max: maxW },
     panelWidthKey: widthKey,
   } = useDiagnoseLayout();
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -233,6 +235,10 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
   );
 
   const showBreadcrumb = !maximized && d.view !== "home";
+  // History (recent investigations) in the maximized workspace is collapsible — it's
+  // dead weight when sparse. Forced open when there's no active run (the list IS the
+  // content); otherwise off by default so the investigation gets the room, toggled on.
+  const showHistory = maximized && (historyOpen || !activeRun);
 
   return (
     <div
@@ -257,8 +263,24 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
       {/* Header */}
       <div className="flex items-center justify-between border-b border-theme-border px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
-          {!showBreadcrumb && (
-            <Sparkles className="h-4 w-4 shrink-0 text-accent" />
+          {maximized && activeRun ? (
+            <Tooltip
+              content={historyOpen ? "Hide history" : "Recent investigations"}
+              position="bottom"
+            >
+              <button
+                onClick={() => setHistoryOpen((v) => !v)}
+                aria-label="Toggle investigation history"
+                aria-pressed={historyOpen}
+                className={`shrink-0 rounded-md p-1 hover:bg-theme-hover ${historyOpen ? "text-accent" : "text-theme-text-tertiary hover:text-theme-text-primary"}`}
+              >
+                <PanelLeft className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          ) : (
+            !showBreadcrumb && (
+              <Sparkles className="h-4 w-4 shrink-0 text-accent" />
+            )
           )}
           <div className="min-w-0">
             {showBreadcrumb && (
@@ -320,7 +342,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
           only appears when expanded; keys keep the detail node identity-stable
           as it comes and goes. */}
       <div className="flex min-h-0 flex-1">
-        {maximized && (
+        {showHistory && (
           <aside
             key="recent"
             className="w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3"

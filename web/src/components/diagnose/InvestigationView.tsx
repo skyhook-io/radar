@@ -23,6 +23,7 @@ import {
 import { useDiagnose } from "./DiagnoseContext";
 import {
   TurnView,
+  ResultCard,
   ApplyDialog,
   appendThinking,
   upsertTool,
@@ -422,8 +423,27 @@ export function InvestigationView({
       lastRemediationIdx = i;
   });
 
+  // The "primary verdict" — the latest initial-style structured diagnosis (root
+  // cause / remediation / healthy / inconclusive), excluding apply outcomes and
+  // conversational follow-ups. In the maximized workspace this pins to a side rail
+  // so it (and Apply) stay in view while the transcript scrolls as evidence.
+  let pinnedIdx = -1;
+  turns.forEach((t, i) => {
+    const dx = t.diagnosis;
+    const structured =
+      !!dx &&
+      (!!dx.rootCause ||
+        (dx.remediation?.length ?? 0) > 0 ||
+        dx.healthy ||
+        dx.inconclusive);
+    if (t.status === "done" && !t.apply && !t.question && structured)
+      pinnedIdx = i;
+  });
+  const pinned = maximized && pinnedIdx >= 0;
+
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1">
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -484,6 +504,7 @@ export function InvestigationView({
                   onApply={canApply ? requestApply : undefined}
                   onAsk={isLast && !busy && !stale ? askFollowup : undefined}
                   onCheckStatus={canCheck ? checkStatus : undefined}
+                  hideVerdict={pinned && i === pinnedIdx}
                 />
               );
             })}
@@ -495,6 +516,24 @@ export function InvestigationView({
             )}
           </div>
         </div>
+      </div>
+      {pinned && (
+        <aside
+          className={`w-[400px] shrink-0 overflow-y-auto border-l border-theme-border px-4 py-3 ${busy ? "opacity-70" : ""}`}
+        >
+          <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+            {busy ? "Verdict · revising…" : "Verdict"}
+          </div>
+          <ResultCard
+            diagnosis={turns[pinnedIdx].diagnosis!}
+            onApply={
+              pinnedIdx === lastRemediationIdx && !stale ? requestApply : undefined
+            }
+            onAsk={!busy && !stale ? askFollowup : undefined}
+            reveal="full"
+          />
+        </aside>
+      )}
       </div>
 
       {showJump && (
