@@ -383,7 +383,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   source via GitOps
                 </span>
                 </Tooltip>
-              ) : (
+              ) : upgradeInfo.untracked ? (
                 // Helm doesn't record the install source. Offer to register one so
                 // Radar can track upgrades for the user's own (e.g. OCI) charts.
                 <Tooltip content={canHelmWrite ? "Radar can't tell where this chart was installed from. Register your chart source to track upgrades." : upgradeInfo.error}>
@@ -398,6 +398,14 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   <Link2 className="w-3 h-3" />
                   source not tracked
                 </button>
+                </Tooltip>
+              ) : (
+                // Repo-side error (stale/broken index, classic ambiguity) — not an
+                // OCI tracking issue, so surface it without steering to registration.
+                <Tooltip content={upgradeInfo.error}>
+                <span className="badge bg-theme-hover/50 text-theme-text-secondary">
+                  upgrade source unresolved
+                </span>
                 </Tooltip>
               )
             ) : null}

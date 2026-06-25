@@ -1237,6 +1237,8 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 		if c.applyOCIUpgrade(info, chartName, currentVersion, nil, nil) {
 			return info, nil
 		}
+		// Genuine untracked source — registering a chart source could fix it.
+		info.Untracked = true
 		if noClassicRepos && len(ListOCISources()) == 0 {
 			info.Error = "no chart sources configured"
 		} else {
@@ -1945,6 +1947,7 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 				info.Error = "failed to load one or more configured repository indexes"
 			} else if !ociFallback(info, chartName, currentVersion) {
 				// Genuine absence → OCI fallback for the user's own OCI charts.
+				info.Untracked = true
 				info.Error = "chart not found in configured repositories or registered OCI sources"
 			}
 			result.Releases[key] = info

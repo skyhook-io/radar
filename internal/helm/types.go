@@ -120,6 +120,12 @@ type UpgradeInfo struct {
 	// (display only — the upgrade path re-derives it from registered sources).
 	ChartRef string `json:"chartRef,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// Untracked marks the specific error state where Radar genuinely can't tell
+	// where the chart comes from — i.e. registering a chart source could fix it.
+	// It is deliberately NOT set for repo-side errors (stale/broken index, classic
+	// ambiguity) so the UI doesn't steer the user to register an OCI source when
+	// the real fix is refreshing or disambiguating repos.
+	Untracked bool `json:"untracked,omitempty"`
 }
 
 // BatchUpgradeInfo contains upgrade info for multiple releases
