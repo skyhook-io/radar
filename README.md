@@ -265,7 +265,7 @@ Unified timeline of Kubernetes events and resource changes.
 
 ### Helm
 
-Manage Helm releases deployed in your cluster.
+Manage Helm releases deployed in your cluster — inspect values and rendered manifests, diff revisions, upgrade, rollback, and uninstall. Radar tracks available chart upgrades (from your configured repos or your own OCI registries) and lets you pick a specific target version.
 
 <p align="center">
   <img src="docs/screenshots/helm-view.png" alt="Helm View" width="800">
