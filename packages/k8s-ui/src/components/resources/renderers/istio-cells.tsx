@@ -1,7 +1,7 @@
 // Istio cell components for ResourcesView table
 
 import { clsx } from 'clsx'
-import { BADGE_INACTIVE } from '../../../utils/badge-colors'
+import { Badge, type BadgeSeverity } from '../../ui/Badge'
 import {
   getVirtualServiceStatus,
   getVirtualServiceHosts,
@@ -26,17 +26,17 @@ import {
   getAuthorizationPolicyRuleCount,
 } from '../resource-utils-istio'
 
-const modeColors: Record<string, string> = {
-  STRICT: 'bg-green-500/20 text-green-400',
-  PERMISSIVE: 'bg-yellow-500/20 text-yellow-400',
-  DISABLE: 'bg-red-500/20 text-red-400',
+const modeSeverity: Record<string, BadgeSeverity> = {
+  STRICT: 'success',
+  PERMISSIVE: 'warning',
+  DISABLE: 'error',
 }
 
-const actionColors: Record<string, string> = {
-  ALLOW: 'bg-green-500/20 text-green-400',
-  DENY: 'bg-red-500/20 text-red-400',
-  CUSTOM: 'bg-blue-500/20 text-blue-400',
-  AUDIT: 'bg-yellow-500/20 text-yellow-400',
+const actionSeverity: Record<string, BadgeSeverity> = {
+  ALLOW: 'success',
+  DENY: 'error',
+  CUSTOM: 'info',
+  AUDIT: 'warning',
 }
 
 export function VirtualServiceCell({ resource, column }: { resource: any; column: string }) {
@@ -133,12 +133,9 @@ export function ServiceEntryCell({ resource, column }: { resource: any; column: 
     case 'location': {
       const location = getServiceEntryLocation(resource)
       return (
-        <span className={clsx(
-          'badge',
-          location === 'MESH_EXTERNAL' ? 'bg-orange-500/20 text-orange-400' : 'bg-blue-500/20 text-blue-400'
-        )}>
+        <Badge tone={location === 'MESH_EXTERNAL' ? 'accent2' : 'accent1'}>
           {location === 'MESH_EXTERNAL' ? 'External' : 'Internal'}
-        </span>
+        </Badge>
       )
     }
     case 'ports': {
@@ -163,12 +160,9 @@ export function PeerAuthenticationCell({ resource, column }: { resource: any; co
     case 'mode': {
       const mode = getPeerAuthenticationMode(resource)
       return (
-        <span className={clsx(
-          'badge',
-          modeColors[mode] || BADGE_INACTIVE
-        )}>
+        <Badge severity={modeSeverity[mode] ?? 'neutral'}>
           {mode}
-        </span>
+        </Badge>
       )
     }
     case 'selector': {
@@ -193,12 +187,9 @@ export function AuthorizationPolicyCell({ resource, column }: { resource: any; c
     case 'action': {
       const action = getAuthorizationPolicyAction(resource)
       return (
-        <span className={clsx(
-          'badge',
-          actionColors[action] || BADGE_INACTIVE
-        )}>
+        <Badge severity={actionSeverity[action] ?? 'neutral'}>
           {action}
-        </span>
+        </Badge>
       )
     }
     case 'rules': {

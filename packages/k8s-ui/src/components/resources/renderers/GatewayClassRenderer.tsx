@@ -1,7 +1,6 @@
 import { Cpu } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
-import { BADGE_INACTIVE } from '../../../utils/badge-colors'
+import { Badge } from '../../ui/Badge'
 
 interface GatewayClassRendererProps {
   data: any
@@ -35,16 +34,9 @@ export function GatewayClassRenderer({ data }: GatewayClassRendererProps) {
           <Property
             label="Accepted"
             value={
-              <span className={clsx(
-                'badge',
-                isAccepted
-                  ? 'bg-green-500/20 text-green-400'
-                  : isNotAccepted
-                    ? 'bg-red-500/20 text-red-400'
-                    : BADGE_INACTIVE
-              )}>
+              <Badge severity={isAccepted ? 'success' : isNotAccepted ? 'error' : 'neutral'}>
                 {isAccepted ? 'True' : isNotAccepted ? 'False' : 'Unknown'}
-              </span>
+              </Badge>
             }
           />
         </PropertyList>

@@ -1,6 +1,7 @@
 import { Radio, Server, Waypoints } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
 
 interface EndpointSliceRendererProps {
@@ -69,7 +70,7 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <span className="badge-sm bg-theme-elevated text-theme-text-secondary border border-theme-border">{port.protocol || 'TCP'}</span>
+                    <Badge size="sm" protocol={port.protocol || 'TCP'}>{port.protocol || 'TCP'}</Badge>
                     <span className="font-mono text-theme-text-secondary">{port.port ?? '-'}</span>
                   </div>
                 </div>
@@ -92,9 +93,9 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-1.5">
                         {(endpoint.addresses || []).map((address: string) => (
-                          <span key={address} className="badge-sm bg-theme-elevated text-theme-text-primary border border-theme-border font-mono">
+                          <Badge key={address} size="sm" tone="structural" className="font-mono">
                             {address}
-                          </span>
+                          </Badge>
                         ))}
                       </div>
                       {targetLabel && (

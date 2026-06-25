@@ -1,5 +1,6 @@
 import { Split, Copy } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import { getTraefikServiceType } from '../resource-utils-traefik'
 
 interface TraefikServiceRendererProps {
@@ -17,7 +18,7 @@ function ServiceRow({ svc, ns, weightPct, onNavigate }: {
   const port = svc.port ? `:${svc.port}` : ''
   return (
     <div className="flex items-center gap-2 text-xs">
-      {isTraefik && <span className="px-1.5 py-0.5 bg-cyan-500/10 text-cyan-400 rounded text-[10px]">TraefikService</span>}
+      {isTraefik && <Badge kind="TraefikService" size="sm">TraefikService</Badge>}
       <ResourceLink
         name={svc.name}
         kind={isTraefik ? 'traefikservices' : 'services'}

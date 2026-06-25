@@ -9,11 +9,31 @@ import type { ReactNode } from 'react'
 export type BadgeSeverity = 'success' | 'warning' | 'alert' | 'error' | 'info' | 'neutral'
 export type BadgeSize = 'sm' | 'default'
 
+// Intent tokens beyond severity/kind. Named by PURPOSE, not hue: two tokens may
+// share a color value today yet stay separate names so a future retune moves
+// exactly the right ones. See DESIGN.md "Badge decision tree".
+//
+// - protocol: transport/scheme tags (HTTP/TCP/UDP/…). Its OWN family because it
+//   is a recurring, meaningful axis and must NOT collide with severity hues
+//   (e.g. a green "HTTPS" must not read as "success").
+// - note:     neutral attention/FYI markers (cross-namespace, wildcard, default,
+//   immutable). Distinct from severity-info — it flags "noteworthy", not a status.
+// - accent1/2/3: LOCAL categorical distinction (rw/ro, spot/on-demand,
+//   control-plane/worker) where the hue carries no cross-screen meaning — just
+//   "tell these sibling options apart". The only place sharing is intended.
+// - structural: ports/paths/hosts/weights/names — neutral data fragments, not a
+//   status. Its own name so it can diverge from severity-neutral later.
+export type BadgeTone = 'note' | 'accent1' | 'accent2' | 'accent3' | 'structural'
+
 interface BadgeProps {
   /** Severity-based coloring (status badges) */
   severity?: BadgeSeverity
   /** K8s resource kind coloring (kind badges) */
   kind?: string
+  /** Transport protocol/scheme tag (http/https/tls/tcp/udp/grpc/h2) */
+  protocol?: string
+  /** Categorical/accent intent tone (see BadgeTone) */
+  tone?: BadgeTone
   /** Explicit color class override (bypasses severity/kind lookup) */
   colorClass?: string
   /** Size variant */
@@ -135,10 +155,45 @@ const KIND: Record<string, string> = {
 
 const DEFAULT_KIND_COLOR = 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 dark:bg-fuchsia-950/40 dark:text-fuchsia-400 dark:border-fuchsia-800/40'
 
+// ---------------------------------------------------------------------------
+// PROTOCOL COLORS — transport/scheme tags. Deliberately avoid severity hues
+// (emerald/amber/orange/red/sky) so a protocol never reads as a status.
+// ---------------------------------------------------------------------------
+const PROTOCOL: Record<string, string> = {
+  http:  'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700/40',
+  h2:    'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700/40',
+  h2c:   'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700/40',
+  https: 'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
+  tls:   'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
+  tcp:   'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40',
+  udp:   'bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-950/50 dark:text-violet-400 dark:border-violet-700/40',
+  grpc:  'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-300 dark:bg-fuchsia-950/50 dark:text-fuchsia-400 dark:border-fuchsia-700/40',
+}
+const DEFAULT_PROTOCOL_COLOR = 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-950/50 dark:text-slate-400 dark:border-slate-700/40'
+
+// ---------------------------------------------------------------------------
+// TONE COLORS — note / local-categorical accents / structural.
+// ---------------------------------------------------------------------------
+const TONE: Record<BadgeTone, string> = {
+  // attention/FYI — distinct from severity so it doesn't read as warning/info
+  note:       'bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-950/50 dark:text-violet-400 dark:border-violet-700/40',
+  // three visually-distinct accents for local "tell siblings apart" use
+  accent1:    'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700/40',
+  accent2:    'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-300 dark:bg-fuchsia-950/50 dark:text-fuchsia-400 dark:border-fuchsia-700/40',
+  accent3:    'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
+  // neutral data fragment (ports/paths/hosts/names)
+  structural: 'bg-theme-elevated text-theme-text-secondary border-theme-border',
+}
+
 // Structure classes
 const SIZE_CLASSES: Record<BadgeSize, string> = {
   default: 'badge',
   sm: 'badge-sm',
+}
+
+/** Resolve a protocol/scheme label (case-insensitive) to its color class. */
+export function getProtocolColorClass(protocol: string): string {
+  return PROTOCOL[protocol.toLowerCase().trim()] ?? DEFAULT_PROTOCOL_COLOR
 }
 
 /** Resolve kind color with fuzzy matching for plural/lowercase forms */
@@ -185,8 +240,14 @@ export function getSeverityColorClass(severity: BadgeSeverity): string {
  * Badge component — the ONE source of truth for badge rendering.
  * Use severity for status badges, kind for resource type badges, or colorClass for custom.
  */
-export function Badge({ severity, kind, colorClass, size = 'default', className, onClick, title, children }: BadgeProps) {
-  const color = colorClass ?? (severity ? SEVERITY[severity] : kind ? getKindColorClass(kind) : '')
+export function Badge({ severity, kind, protocol, tone, colorClass, size = 'default', className, onClick, title, children }: BadgeProps) {
+  const color =
+    colorClass ??
+    (severity ? SEVERITY[severity]
+      : protocol ? getProtocolColorClass(protocol)
+      : tone ? TONE[tone]
+      : kind ? getKindColorClass(kind)
+      : '')
   const cls = clsx(SIZE_CLASSES[size], color, className)
 
   if (onClick) {
@@ -196,4 +257,4 @@ export function Badge({ severity, kind, colorClass, size = 'default', className,
 }
 
 // Re-export the raw color maps for backwards compat (used by badge-colors.ts consumers)
-export { SEVERITY as BADGE_SEVERITY_COLORS, KIND as BADGE_KIND_COLORS }
+export { SEVERITY as BADGE_SEVERITY_COLORS, KIND as BADGE_KIND_COLORS, PROTOCOL as BADGE_PROTOCOL_COLORS, TONE as BADGE_TONE_COLORS }

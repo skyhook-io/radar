@@ -1,5 +1,6 @@
 import { Lock } from 'lucide-react'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 
 interface TraefikTLSOptionRendererProps {
   data: any
@@ -30,7 +31,7 @@ export function TraefikTLSOptionRenderer({ data }: TraefikTLSOptionRendererProps
         <Section title={`Cipher Suites (${ciphers.length})`}>
           <div className="flex flex-wrap gap-1">
             {ciphers.map((c, i) => (
-              <span key={i} className="px-1.5 py-0.5 bg-theme-hover rounded text-[10px] text-theme-text-secondary font-mono">{c}</span>
+              <Badge key={i} tone="structural" size="sm" className="font-mono">{c}</Badge>
             ))}
           </div>
         </Section>
@@ -40,7 +41,7 @@ export function TraefikTLSOptionRenderer({ data }: TraefikTLSOptionRendererProps
         <Section title={`Curve Preferences (${curves.length})`}>
           <div className="flex flex-wrap gap-1">
             {curves.map((c, i) => (
-              <span key={i} className="px-1.5 py-0.5 bg-theme-hover rounded text-[10px] text-theme-text-secondary font-mono">{c}</span>
+              <Badge key={i} tone="structural" size="sm" className="font-mono">{c}</Badge>
             ))}
           </div>
         </Section>

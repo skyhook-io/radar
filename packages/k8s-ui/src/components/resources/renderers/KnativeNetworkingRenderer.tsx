@@ -1,6 +1,7 @@
 import { Network, ShieldCheck, Server, Globe } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner, ResourceLink } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import { kindToPlural } from '../../../utils/navigation'
 import { getKnativeConditionStatus } from '../resource-utils-knative'
 
@@ -43,14 +44,14 @@ export function KnativeIngressRenderer({ data }: RendererProps) {
               <div key={i} className="card-inner-lg">
                 <div className="flex flex-wrap gap-1 mb-2">
                   {(rule.hosts || []).map((host: string, hi: number) => (
-                    <span key={hi} className="badge-sm bg-blue-500/10 text-blue-400">
+                    <Badge key={hi} size="sm" tone="structural">
                       {host}
-                    </span>
+                    </Badge>
                   ))}
                   {rule.visibility && (
-                    <span className="px-1.5 py-0.5 bg-theme-hover rounded text-[10px] text-theme-text-secondary">
+                    <Badge size="sm" tone="structural">
                       {rule.visibility}
-                    </span>
+                    </Badge>
                   )}
                 </div>
                 {rule.http?.paths && rule.http.paths.length > 0 && (
@@ -117,9 +118,9 @@ export function KnativeCertificateRenderer({ data }: RendererProps) {
         <Section title={`DNS Names (${dnsNames.length})`} defaultExpanded>
           <div className="flex flex-wrap gap-1">
             {dnsNames.map((name: string, i: number) => (
-              <span key={i} className="badge-sm bg-theme-elevated text-theme-text-secondary">
+              <Badge key={i} size="sm" tone="structural">
                 {name}
-              </span>
+              </Badge>
             ))}
           </div>
         </Section>
@@ -157,12 +158,9 @@ export function ServerlessServiceRenderer({ data, onNavigate }: RendererProps) {
             </span>
           } />
           <Property label="Mode" value={mode ? (
-            <span className={clsx(
-              'badge',
-              mode === 'Proxy' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
-            )}>
+            <Badge tone={mode === 'Proxy' ? 'accent1' : 'accent2'}>
               {mode}
-            </span>
+            </Badge>
           ) : undefined} />
           <Property label="Activators" value={numActivators != null ? String(numActivators) : undefined} />
           <Property label="Protocol" value={protocolType} />

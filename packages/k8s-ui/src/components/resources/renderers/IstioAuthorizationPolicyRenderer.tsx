@@ -1,18 +1,17 @@
 import { Shield } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, KeyValueBadgeList } from '../../ui/drawer-components'
+import { Badge, type BadgeSeverity } from '../../ui/Badge'
 import {
   getAuthorizationPolicyAction,
   getAuthorizationPolicyRules,
   getAuthorizationPolicySelector,
 } from '../resource-utils-istio'
-import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
-const actionColors: Record<string, string> = {
-  ALLOW: 'bg-green-500/20 text-green-400',
-  DENY: 'bg-red-500/20 text-red-400',
-  CUSTOM: 'bg-blue-500/20 text-blue-400',
-  AUDIT: 'bg-yellow-500/20 text-yellow-400',
+const actionSeverity: Record<string, BadgeSeverity> = {
+  ALLOW: 'success',
+  DENY: 'error',
+  CUSTOM: 'info',
+  AUDIT: 'warning',
 }
 
 interface IstioAuthorizationPolicyRendererProps {
@@ -51,12 +50,9 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
       <Section title="Authorization Policy" icon={Shield} defaultExpanded>
         <PropertyList>
           <Property label="Action" value={
-            <span className={clsx(
-              'badge',
-              actionColors[action] || BADGE_INACTIVE
-            )}>
+            <Badge severity={actionSeverity[action] ?? 'neutral'}>
               {action}
-            </span>
+            </Badge>
           } />
           <Property label="Scope" value={hasSelector ? 'Workload-scoped' : 'Namespace-wide'} />
           <Property label="Rules" value={String(rules.length)} />
@@ -88,24 +84,24 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
                     {rule.from.map((f: any, fi: number) => (
                       <div key={fi} className="flex flex-wrap gap-1 mb-1">
                         {f.source?.principals?.map((p: string, pi: number) => (
-                          <span key={`p-${pi}`} className="badge-sm bg-blue-500/10 text-blue-400">
+                          <Badge key={`p-${pi}`} tone="structural" size="sm">
                             principal: {p}
-                          </span>
+                          </Badge>
                         ))}
                         {f.source?.namespaces?.map((n: string, ni: number) => (
-                          <span key={`n-${ni}`} className="badge-sm bg-purple-500/10 text-purple-400">
+                          <Badge key={`n-${ni}`} tone="structural" size="sm">
                             namespace: {n}
-                          </span>
+                          </Badge>
                         ))}
                         {f.source?.ipBlocks?.map((ip: string, ipi: number) => (
-                          <span key={`ip-${ipi}`} className="badge-sm bg-orange-500/10 text-orange-400">
+                          <Badge key={`ip-${ipi}`} tone="structural" size="sm">
                             IP: {ip}
-                          </span>
+                          </Badge>
                         ))}
                         {f.source?.requestPrincipals?.map((rp: string, rpi: number) => (
-                          <span key={`rp-${rpi}`} className="badge-sm bg-cyan-500/10 text-cyan-400">
+                          <Badge key={`rp-${rpi}`} tone="structural" size="sm">
                             reqPrincipal: {rp}
-                          </span>
+                          </Badge>
                         ))}
                       </div>
                     ))}
@@ -119,24 +115,24 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
                     {rule.to.map((t: any, ti: number) => (
                       <div key={ti} className="flex flex-wrap gap-1 mb-1">
                         {t.operation?.hosts?.map((h: string, hi: number) => (
-                          <span key={`h-${hi}`} className="badge-sm bg-blue-500/10 text-blue-400">
+                          <Badge key={`h-${hi}`} tone="structural" size="sm">
                             host: {h}
-                          </span>
+                          </Badge>
                         ))}
                         {t.operation?.ports?.map((p: string, pi: number) => (
-                          <span key={`p-${pi}`} className="badge-sm bg-orange-500/10 text-orange-400">
+                          <Badge key={`p-${pi}`} tone="structural" size="sm">
                             port: {p}
-                          </span>
+                          </Badge>
                         ))}
                         {t.operation?.methods?.map((m: string, mi: number) => (
-                          <span key={`m-${mi}`} className="badge-sm bg-green-500/10 text-green-400">
+                          <Badge key={`m-${mi}`} tone="structural" size="sm">
                             method: {m}
-                          </span>
+                          </Badge>
                         ))}
                         {t.operation?.paths?.map((p: string, pi: number) => (
-                          <span key={`path-${pi}`} className="badge-sm bg-purple-500/10 text-purple-400">
+                          <Badge key={`path-${pi}`} tone="structural" size="sm">
                             path: {p}
-                          </span>
+                          </Badge>
                         ))}
                       </div>
                     ))}

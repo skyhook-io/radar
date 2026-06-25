@@ -1,5 +1,6 @@
 import { SlidersHorizontal, Layers, ShieldCheck } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import { getMiddlewareType } from '../resource-utils-traefik'
 
 interface TraefikMiddlewareRendererProps {
@@ -119,7 +120,7 @@ export function TraefikMiddlewareRenderer({ data, onNavigate }: TraefikMiddlewar
                   onNavigate={onNavigate}
                 />
                 {m.namespace && m.namespace !== ns && (
-                  <span className="px-1.5 py-0.5 bg-yellow-500/10 text-yellow-400 rounded text-[10px]">{m.namespace}</span>
+                  <Badge tone="note" size="sm">{m.namespace}</Badge>
                 )}
               </div>
             ))}

@@ -1,6 +1,6 @@
 import { Globe, ArrowRight, Network } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceRefBadge } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
 
 interface SimpleRouteRendererProps {
@@ -81,7 +81,7 @@ export function SimpleRouteRenderer({ data, kind, onNavigate }: SimpleRouteRende
                 hostnames.length > 0 ? (
                   <div className="flex flex-wrap gap-1">
                     {hostnames.map((h: string) => (
-                      <span key={h} className="badge bg-theme-elevated text-theme-text-secondary">{h}</span>
+                      <Badge key={h} tone="structural">{h}</Badge>
                     ))}
                   </div>
                 ) : (
@@ -163,20 +163,14 @@ export function SimpleRouteRenderer({ data, kind, onNavigate }: SimpleRouteRende
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {accepted && (
-                      <span className={clsx(
-                        'badge',
-                        accepted.status === 'True' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                      )}>
+                      <Badge severity={accepted.status === 'True' ? 'success' : 'error'}>
                         {accepted.status === 'True' ? 'Accepted' : 'Not Accepted'}
-                      </span>
+                      </Badge>
                     )}
                     {resolved && (
-                      <span className={clsx(
-                        'badge',
-                        resolved.status === 'True' ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
-                      )}>
+                      <Badge severity={resolved.status === 'True' ? 'success' : 'warning'}>
                         {resolved.status === 'True' ? 'Refs Resolved' : 'Unresolved Refs'}
-                      </span>
+                      </Badge>
                     )}
                   </div>
                   {accepted?.message && accepted.status === 'False' && (
