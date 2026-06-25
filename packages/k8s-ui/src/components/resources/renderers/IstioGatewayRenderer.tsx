@@ -80,13 +80,16 @@ export function IstioGatewayRenderer({ data }: IstioGatewayRendererProps) {
                         <div>
                           <span className="text-theme-text-tertiary">TLS Mode: </span>
                           <Badge
+                            // Every TLS server row already shows a teal HTTPS/TLS protocol pill, so
+                            // a teal mode badge would collide. PASSTHROUGH uses `note` (the mode where
+                            // the gateway does not terminate TLS — the one worth flagging) to stay clear.
                             tone={
                               server.tls.mode === 'SIMPLE'
                                 ? 'accent1'
                                 : server.tls.mode === 'MUTUAL' || server.tls.mode === 'ISTIO_MUTUAL'
                                   ? 'accent2'
                                   : server.tls.mode === 'PASSTHROUGH' || server.tls.mode === 'AUTO_PASSTHROUGH'
-                                    ? 'accent3'
+                                    ? 'note'
                                     : 'structural'
                             }
                             size="sm"
