@@ -1278,6 +1278,106 @@ func (c *Client) applyOCIUpgrade(info *UpgradeInfo, chartName, currentVersion st
 	return true
 }
 
+// AvailableVersions is AvailableVersionsAsUser without impersonation.
+func (c *Client) AvailableVersions(namespace, name string) ([]string, error) {
+	return c.availableVersions(namespace, name, "", nil)
+}
+
+// AvailableVersionsAsUser returns the newest-first list of chart versions a
+// release could be upgraded (or downgraded) to, resolved from its source — the
+// matching classic repo's index or, failing that, a registered OCI source. Lets
+// the upgrade dialog offer a specific target version instead of only "latest".
+// Returns an empty list (not an error) when the source can't be determined; the
+// dialog then falls back to latest-only.
+func (c *Client) AvailableVersionsAsUser(namespace, name, username string, groups []string) ([]string, error) {
+	return c.availableVersions(namespace, name, username, groups)
+}
+
+func (c *Client) availableVersions(namespace, name, username string, groups []string) ([]string, error) {
+	var actionConfig *action.Configuration
+	var err error
+	if username != "" {
+		actionConfig, err = c.getActionConfigForUser(namespace, username, groups)
+	} else {
+		actionConfig, err = c.getActionConfig(namespace)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rel, err := action.NewGet(actionConfig).Run(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get release: %w", err)
+	}
+	chartName := rel.Chart.Metadata.Name
+
+	// Resolve the classic repo the same way the upgrade check does, then return
+	// that repo's full version list — never a union across repos, which could mix
+	// an unrelated same-named chart's versions.
+	var candidates []repoVersionInfo
+	versionsByRepo := map[string][]string{}
+	if f, err := repo.LoadFile(c.settings.RepositoryConfig); err == nil {
+		cacheDir := c.settings.RepositoryCache
+		for _, r := range f.Repositories {
+			idx, err := repo.LoadIndexFile(filepath.Join(cacheDir, fmt.Sprintf("%s-index.yaml", r.Name)))
+			if err != nil {
+				continue
+			}
+			entries, ok := idx.Entries[chartName]
+			if !ok {
+				continue
+			}
+			latest := ""
+			all := make([]string, 0, len(entries))
+			hasCurrent := false
+			for _, v := range entries {
+				all = append(all, v.Version)
+				if latest == "" || compareVersions(v.Version, latest) > 0 {
+					latest = v.Version
+				}
+				if v.Version == rel.Chart.Metadata.Version {
+					hasCurrent = true
+				}
+			}
+			if latest != "" {
+				candidates = append(candidates, repoVersionInfo{repoName: r.Name, repoURL: r.URL, latestVersion: latest, hasCurrentVersion: hasCurrent})
+				versionsByRepo[r.Name] = all
+			}
+		}
+	}
+
+	if len(candidates) > 0 {
+		sourceHosts := chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources)
+		if _, repoName := findBestUpgradeVersion(candidates, sourceHosts); repoName != "" {
+			return capVersions(sortVersionsDesc(versionsByRepo[repoName])), nil
+		}
+		// Ambiguous classic source — don't guess a version list.
+		return nil, nil
+	}
+
+	return capVersions(c.discoverOCIVersions(chartName)), nil
+}
+
+// maxAvailableVersions bounds the version list returned to the upgrade dialog.
+// Some charts publish hundreds of versions; the newest N covers realistic upgrade
+// targets without an unwieldy dropdown or a large payload. The list is already
+// sorted newest-first, so this keeps the most relevant versions.
+const maxAvailableVersions = 50
+
+func capVersions(versions []string) []string {
+	if len(versions) > maxAvailableVersions {
+		return versions[:maxAvailableVersions]
+	}
+	return versions
+}
+
+// sortVersionsDesc returns versions sorted newest-first by semver.
+func sortVersionsDesc(versions []string) []string {
+	out := slices.Clone(versions)
+	sort.SliceStable(out, func(i, j int) bool { return compareVersions(out[i], out[j]) > 0 })
+	return out
+}
+
 // repoVersionInfo holds version information from a single repository for upgrade comparison.
 type repoVersionInfo struct {
 	repoName          string

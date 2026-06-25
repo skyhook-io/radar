@@ -226,6 +226,31 @@ func (c *Client) discoverOCIUpgrade(chartName string, lister ociTagLister, tagCa
 	return best
 }
 
+// discoverOCIVersions returns the full newest-first version list for chartName
+// from the registered prefix that publishes it (the one with the highest newest
+// tag, matching discoverOCIUpgrade's tiebreak). Empty if no prefix has the chart.
+func (c *Client) discoverOCIVersions(chartName string) []string {
+	prefixes := ListOCISources()
+	if len(prefixes) == 0 || chartName == "" {
+		return nil
+	}
+	lister := c.newRegistryClient()
+	if lister == nil {
+		return nil
+	}
+	var best []string
+	for _, prefix := range prefixes {
+		tags, err := lister.Tags(ociRef(prefix, chartName))
+		if err != nil || len(tags) == 0 {
+			continue
+		}
+		if best == nil || compareVersions(tags[0], best[0]) > 0 {
+			best = tags
+		}
+	}
+	return best
+}
+
 // resolveOCIUpgradeURL returns the oci:// chart URL for chartName at targetVersion
 // if some registered prefix publishes that exact version. Used by the upgrade path
 // so the server only ever pulls from a registered (configured) source — never a

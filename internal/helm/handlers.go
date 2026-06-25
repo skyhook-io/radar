@@ -71,6 +71,7 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/releases/{namespace}/{name}/values", h.handleGetValues)
 		r.Get("/releases/{namespace}/{name}/diff", h.handleGetDiff)
 		r.Get("/releases/{namespace}/{name}/upgrade-info", h.handleCheckUpgrade)
+		r.Get("/releases/{namespace}/{name}/versions", h.handleAvailableVersions)
 		r.Get("/upgrade-check", h.handleBatchUpgradeCheck)
 		// Actions (write operations)
 		r.Post("/releases/{namespace}/{name}/rollback", h.handleRollback)
@@ -285,6 +286,36 @@ func (h *Handlers) handleCheckUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, info)
+}
+
+// handleAvailableVersions returns the newest-first list of chart versions this
+// release could be upgraded/downgraded to, so the upgrade dialog can offer a
+// specific target version. Returns [] when the source can't be resolved.
+func (h *Handlers) handleAvailableVersions(w http.ResponseWriter, r *http.Request) {
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	username, groups := userCreds(r)
+	versions, err := client.AvailableVersionsAsUser(namespace, name, username, groups)
+	if err != nil {
+		if IsForbiddenError(err) {
+			writeError(w, http.StatusForbidden, "insufficient permissions to read Helm release")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if versions == nil {
+		versions = []string{}
+	}
+	writeJSON(w, versions)
 }
 
 // handleBatchUpgradeCheck checks all releases for upgrades at once

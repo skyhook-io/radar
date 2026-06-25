@@ -2396,6 +2396,19 @@ export function useHelmUpgradeInfo(namespace: string, name: string, enabled = tr
   })
 }
 
+// Available chart versions for a release (newest-first), for the upgrade dialog's
+// version picker. Empty when the source can't be resolved — the dialog then falls
+// back to the latest version from upgrade-info.
+export function useHelmReleaseVersions(namespace: string, name: string, enabled = true) {
+  return useQuery<string[]>({
+    queryKey: ['helm-release-versions', namespace, name],
+    queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}/versions`),
+    enabled: Boolean(namespace && name && enabled),
+    staleTime: 30000,
+    retry: false,
+  })
+}
+
 // Batch check for upgrade availability (for list view)
 export function useHelmBatchUpgradeInfo(namespaces: string[] = [], enabled = true) {
   const params = helmNamespaceParams(namespaces)

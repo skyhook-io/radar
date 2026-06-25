@@ -7,7 +7,7 @@ import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, useHelmUpgradeInfo, useHelmUninstall, upgradeWithProgress, rollbackWithProgress } from '../../api/client'
+import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress } from '../../api/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Tooltip } from '../ui/Tooltip'
@@ -52,6 +52,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false)
   const [showTrackSource, setShowTrackSource] = useState(false)
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(DEFAULT_WIDTH)
   const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
@@ -100,6 +101,16 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     release.name
   )
   const upgradeErrorMessage = upgradeError instanceof Error ? upgradeError.message : 'Upgrade check failed'
+
+  // Available versions for the upgrade dialog's picker — only fetched while the
+  // confirm dialog is open. Default the selection to latest when it opens.
+  const { data: availableVersions } = useHelmReleaseVersions(helmNamespace, release.name, showUpgradeConfirm)
+  const targetVersion = selectedVersion ?? upgradeInfo?.latestVersion ?? ''
+  const isDowngrade = Boolean(
+    targetVersion && upgradeInfo?.currentVersion &&
+    availableVersions && availableVersions.indexOf(targetVersion) > availableVersions.indexOf(upgradeInfo.currentVersion) &&
+    availableVersions.includes(upgradeInfo.currentVersion)
+  )
 
   // Mutations for actions
   const uninstallMutation = useHelmUninstall()
@@ -236,7 +247,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   }
 
   const handleUpgradeConfirm = async () => {
-    if (!upgradeInfo?.latestVersion) return
+    if (!targetVersion) return
     setIsUpgrading(true)
     setUpgradeProgress([])
 
@@ -244,8 +255,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       await upgradeWithProgress(
         helmNamespace,
         release.name,
-        upgradeInfo.latestVersion,
-        upgradeInfo.repositoryName,
+        targetVersion,
+        upgradeInfo?.repositoryName,
         (event) => {
           if (event.type === 'progress' && event.message) {
             setUpgradeProgress(prev => [...prev, {
@@ -258,7 +269,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
       setUpgradeProgress(prev => [...prev, {
         phase: 'complete',
-        message: `Successfully upgraded to ${upgradeInfo.latestVersion}`,
+        message: `Successfully upgraded to ${targetVersion}`,
       }])
 
       // Invalidate queries
@@ -270,6 +281,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       setTimeout(() => {
         setShowUpgradeConfirm(false)
         setUpgradeProgress([])
+        setSelectedVersion(null)
         refetch()
         switchTab('resources')
       }, 1500)
@@ -610,6 +622,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         onClose={() => {
           setShowUpgradeConfirm(false)
           setUpgradeProgress([])
+          setSelectedVersion(null)
           if (isUpgrading) {
             // Upgrade continues server-side — switch to resources tab to monitor
             setIsUpgrading(false)
@@ -618,16 +631,48 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         }}
         onConfirm={handleUpgradeConfirm}
         title="Upgrade Release"
-        message={`Upgrade "${release.name}" to version ${upgradeInfo?.latestVersion}?`}
+        message={`Upgrade "${release.name}" to version ${targetVersion}?`}
         details={upgradeProgress.length === 0
-          ? `This will upgrade the chart from version ${upgradeInfo?.currentVersion} to ${upgradeInfo?.latestVersion}. Your existing values will be preserved. The upgrade will be applied to your cluster immediately.`
+          ? `The chart will move from version ${upgradeInfo?.currentVersion} to ${targetVersion}. Your existing values will be preserved. The change is applied to your cluster immediately.`
           : undefined
         }
-        confirmLabel="Upgrade"
+        confirmLabel={isDowngrade ? 'Downgrade' : 'Upgrade'}
         variant="warning"
         isLoading={isUpgrading}
         isClosable
       >
+        {upgradeProgress.length === 0 && availableVersions && availableVersions.length > 1 && (
+          <div className="mb-1">
+            <label htmlFor="upgrade-version" className="block text-sm font-medium text-theme-text-secondary mb-1.5">
+              Target version
+            </label>
+            <select
+              id="upgrade-version"
+              value={targetVersion}
+              onChange={(e) => setSelectedVersion(e.target.value)}
+              disabled={isUpgrading}
+              className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+            >
+              {availableVersions.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                  {v === upgradeInfo?.latestVersion ? ' (latest)' : ''}
+                  {v === upgradeInfo?.currentVersion ? ' (current)' : ''}
+                </option>
+              ))}
+            </select>
+            {isDowngrade && (
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                This is a downgrade from {upgradeInfo?.currentVersion}.
+              </p>
+            )}
+            {availableVersions.length >= 50 && (
+              <p className="mt-1 text-xs text-theme-text-tertiary">
+                Showing the 50 newest versions. Type to filter.
+              </p>
+            )}
+          </div>
+        )}
         {upgradeProgress.length > 0 && <ProgressLog entries={upgradeProgress} />}
       </ConfirmDialog>
 

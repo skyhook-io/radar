@@ -197,6 +197,40 @@ func TestApplyOCIUpgrade_SetsFields(t *testing.T) {
 	}
 }
 
+func TestSortVersionsDesc(t *testing.T) {
+	in := []string{"1.2.0", "1.10.0", "1.2.3", "0.9.0", "2.0.0"}
+	got := sortVersionsDesc(in)
+	want := []string{"2.0.0", "1.10.0", "1.2.3", "1.2.0", "0.9.0"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v (semver order, not lexical)", got, want)
+		}
+	}
+	// Input must not be mutated.
+	if in[0] != "1.2.0" {
+		t.Errorf("sortVersionsDesc mutated its input: %v", in)
+	}
+}
+
+func TestCapVersions(t *testing.T) {
+	short := []string{"3.0.0", "2.0.0", "1.0.0"}
+	if got := capVersions(short); len(got) != 3 {
+		t.Errorf("short list should pass through, got %d", len(got))
+	}
+
+	many := make([]string, maxAvailableVersions+25)
+	for i := range many {
+		many[i] = "v"
+	}
+	got := capVersions(many)
+	if len(got) != maxAvailableVersions {
+		t.Errorf("capped list = %d, want %d", len(got), maxAvailableVersions)
+	}
+}
+
 // withOCISources points settings at a temp HOME and seeds the registered OCI
 // sources for the duration of the test.
 func withOCISources(t *testing.T, sources []string) {
