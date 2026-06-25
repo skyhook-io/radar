@@ -165,3 +165,15 @@ func TestRedactInlineSecrets_PreservesSecretReferences(t *testing.T) {
 		t.Errorf("inline password value must be redacted, got %v", got)
 	}
 }
+
+func TestRedactInlineSecrets_PlaintextUsersKey(t *testing.T) {
+	// `users` is a credential key (htpasswd entries). Even a plaintext value
+	// that matches no high-confidence pattern must be redacted by key.
+	spec := map[string]any{
+		"basicAuth": map[string]any{"users": []any{"admin:hunter2"}},
+	}
+	RedactInlineSecrets(spec)
+	if got := spec["basicAuth"].(map[string]any)["users"].([]any)[0]; got != "[REDACTED]" {
+		t.Errorf("plaintext users entry must be redacted by key, got %v", got)
+	}
+}

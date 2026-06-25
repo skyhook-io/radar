@@ -47,9 +47,17 @@ type CheckInput struct {
 	// reference-integrity checks (route → Service/Middleware). Populated from the
 	// dynamic cache; nil when Traefik isn't installed or RBAC denies it. Both the
 	// traefik.io and legacy traefik.containo.us groups land here.
-	IngressRoutes   []*unstructured.Unstructured // IngressRoute / IngressRouteTCP / IngressRouteUDP
-	Middlewares     []*unstructured.Unstructured // Middleware / MiddlewareTCP
-	TraefikServices []*unstructured.Unstructured // TraefikService
+	IngressRoutes   []*unstructured.Unstructured // IngressRoute / IngressRouteTCP / IngressRouteUDP (scoped to audited namespaces)
+	Middlewares     []*unstructured.Unstructured // Middleware / MiddlewareTCP (cluster-wide, for cross-ns ref resolution)
+	TraefikServices []*unstructured.Unstructured // TraefikService (cluster-wide)
+	// TraefikAuthoritativeKinds keys (group\x00Kind) the target kinds served by a
+	// synced cluster-wide informer. The dangling-ref check asserts "missing" only
+	// for kinds present here — otherwise the cache may know only a subset of
+	// namespaces and absence isn't conclusive. nil → assert nothing (safe default).
+	TraefikAuthoritativeKinds map[string]bool
+	// AllServices is the cluster-wide Service list (all namespaces) for resolving
+	// Traefik route → Service references, including cross-namespace ones.
+	AllServices []*corev1.Service
 }
 
 // PodMetricsInput provides metrics data for resource utilization checks.

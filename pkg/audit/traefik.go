@@ -30,26 +30,28 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 		return nil
 	}
 
-	// Core Services are group-agnostic (always core/v1). nil = RBAC denied → skip.
-	var coreServices map[string]bool
-	if input.Services != nil {
-		coreServices = make(map[string]bool, len(input.Services))
-		for _, svc := range input.Services {
-			coreServices[svc.Namespace+"/"+svc.Name] = true
-		}
+	// Core Services for cross-namespace ref resolution (cluster-wide). Group-
+	// agnostic (always core/v1). Trust level matches ingressNoMatchingService.
+	coreServices := make(map[string]bool, len(input.AllServices))
+	for _, svc := range input.AllServices {
+		coreServices[svc.Namespace+"/"+svc.Name] = true
 	}
+	servicesListed := input.AllServices != nil
 
-	// nil = couldn't list (denied/unsynced) → don't assert absence of TraefikServices.
-	traefikServicesListed := input.TraefikServices != nil
+	// Target inventories are gathered cluster-wide. Keys carry group + (for
+	// middlewares) kind so a traefik.io router only resolves against traefik.io
+	// targets, never the legacy group.
 	traefikServices := make(map[string]bool, len(input.TraefikServices)) // group\x00ns/name
 	for _, ts := range input.TraefikServices {
 		traefikServices[traefikGroupOf(ts)+"\x00"+ts.GetNamespace()+"/"+ts.GetName()] = true
 	}
-
 	middlewares := make(map[string]bool, len(input.Middlewares)) // group\x00kind\x00ns/name
 	for _, mw := range input.Middlewares {
 		middlewares[traefikGroupOf(mw)+"\x00"+mw.GetKind()+"\x00"+mw.GetNamespace()+"/"+mw.GetName()] = true
 	}
+	// authoritative[group\x00Kind]: only assert a kind's absence when a synced
+	// cluster-wide informer backs it (else the cache may know a subset of ns).
+	authoritative := input.TraefikAuthoritativeKinds
 
 	var findings []Finding
 	seen := make(map[string]bool)
@@ -59,8 +61,11 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 			return
 		}
 		seen[key] = true
+		// Group is intentionally left empty — the audit backfills group from the
+		// builtin table (CRDs resolve to ""), which is what the per-resource
+		// drill-down looks up. Setting it would hide these findings there.
 		findings = append(findings, Finding{
-			Kind: route.GetKind(), Group: traefikGroupOf(route),
+			Kind:      route.GetKind(),
 			Namespace: route.GetNamespace(), Name: route.GetName(),
 			CheckID: checkID, Category: CategoryReliability, Severity: SeverityWarning,
 			Message: msg,
@@ -95,18 +100,18 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 					ns = routeNs
 				}
 				if kind, _ := s["kind"].(string); kind == "TraefikService" {
-					if traefikServicesListed && !traefikServices[group+"\x00"+ns+"/"+name] {
+					if authoritative[group+"\x00TraefikService"] && !traefikServices[group+"\x00"+ns+"/"+name] {
 						add(route, "traefikRouteMissingService",
-							fmt.Sprintf("%s references non-existent TraefikService %q", routeKind, traefikRefLabel(ns, name, routeNs)))
+							fmt.Sprintf("%s references TraefikService %q which is not found in the cluster", routeKind, traefikRefLabel(ns, name, routeNs)))
 					}
-				} else if coreServices != nil && !coreServices[ns+"/"+name] {
+				} else if servicesListed && !coreServices[ns+"/"+name] {
 					add(route, "traefikRouteMissingService",
-						fmt.Sprintf("%s references non-existent Service %q", routeKind, traefikRefLabel(ns, name, routeNs)))
+						fmt.Sprintf("%s references Service %q which is not found in the cluster", routeKind, traefikRefLabel(ns, name, routeNs)))
 				}
 			}
 
-			if input.Middlewares == nil {
-				continue // couldn't list middlewares → don't assert absence
+			if !authoritative[group+"\x00"+mwKind] {
+				continue // no synced cluster-wide inventory for this kind → can't assert absence
 			}
 			for _, m := range nestedMaps(rm, "middlewares") {
 				name, _ := m["name"].(string)
@@ -119,7 +124,7 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 				}
 				if !middlewares[group+"\x00"+mwKind+"\x00"+ns+"/"+name] {
 					add(route, "traefikRouteMissingMiddleware",
-						fmt.Sprintf("%s references non-existent %s %q", routeKind, mwKind, traefikRefLabel(ns, name, routeNs)))
+						fmt.Sprintf("%s references %s %q which is not found in the cluster", routeKind, mwKind, traefikRefLabel(ns, name, routeNs)))
 				}
 			}
 		}

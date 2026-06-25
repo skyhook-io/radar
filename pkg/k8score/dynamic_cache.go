@@ -1527,6 +1527,21 @@ func (d *DynamicResourceCache) IsSynced(gvr schema.GroupVersionResource) bool {
 	return entriesSynced(d.entriesForGVR(gvr))
 }
 
+// IsClusterWideSynced reports whether gvr is served by a single cluster-wide
+// informer that has finished syncing. When true, ListWatched(gvr) is
+// authoritative for EVERY namespace — the caller can safely conclude an object
+// is absent cluster-wide. When false (namespace-scoped fallback, unsynced, or
+// unwatched), the cache may only know a subset of namespaces, so "not found"
+// must NOT be treated as "doesn't exist". The "never both" informer invariant
+// (a GVR has either one cluster-wide informer or namespaced ones, never both)
+// makes the cluster-wide check authoritative.
+func (d *DynamicResourceCache) IsClusterWideSynced(gvr schema.GroupVersionResource) bool {
+	if d == nil {
+		return false
+	}
+	return d.hasCoveringInformer(gvr, "") && d.IsSynced(gvr)
+}
+
 // ---------------------------------------------------------------------------
 // Introspection
 // ---------------------------------------------------------------------------
