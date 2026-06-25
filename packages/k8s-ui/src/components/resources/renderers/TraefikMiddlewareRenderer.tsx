@@ -63,7 +63,11 @@ export function TraefikMiddlewareRenderer({ data, onNavigate }: TraefikMiddlewar
   const type = getMiddlewareType(data)
   const ns = data.metadata?.namespace || ''
   const kindLabel = data.kind || 'Middleware'
-  const config = (type !== 'unknown' && spec[type]) || {}
+  // A middleware spec carries exactly one top-level key (its type). For known
+  // types that's `type`; for unrecognized ones fall back to whatever key the
+  // spec actually has, so the generic config section isn't rendered empty.
+  const typeKey = type === 'unknown' ? Object.keys(spec)[0] : type
+  const config = (typeKey && spec[typeKey]) || {}
 
   const isChain = type === 'chain'
   // A MiddlewareTCP chain references MiddlewareTCP members, not Middleware.
