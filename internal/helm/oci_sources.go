@@ -197,19 +197,37 @@ func (c *Client) discoverOCIUpgrade(chartName string, lister ociTagLister, tagCa
 		}
 	}
 
-	var best *ociUpgradeMatch
-	for _, prefix := range prefixes {
+	prefix, tags := c.selectBestOCIPrefix(chartName, lister, tagCache)
+	if prefix == "" {
+		return nil
+	}
+	return &ociUpgradeMatch{LatestVersion: tags[0], ChartURL: ociChartURL(prefix, chartName)}
+}
+
+// selectBestOCIPrefix probes the registered prefixes for chartName and returns the
+// one whose newest tag is highest, plus its tags (newest-first). This single tiebreak
+// is shared by discovery, the version list, AND upgrade resolution — so the version a
+// user picks is always pulled from the same registry the list came from. Picking the
+// "first prefix that happens to contain the tag" here instead would let an upgrade pull
+// a same-name/same-version chart from a different registry than the picker showed.
+// tagCache (may be nil) dedupes lookups within a batch; failed probes are not cached.
+func (c *Client) selectBestOCIPrefix(chartName string, lister ociTagLister, tagCache map[string][]string) (string, []string) {
+	if chartName == "" {
+		return "", nil
+	}
+	var bestPrefix string
+	var bestTags []string
+	for _, prefix := range ListOCISources() {
 		ref := ociRef(prefix, chartName)
 		tags, cached := tagCache[ref]
 		if !cached {
 			var err error
 			tags, err = lister.Tags(ref)
 			if err != nil {
-				// Expected when this prefix doesn't publish this chart (404) —
-				// the chart may live under a different registered prefix. Do NOT
-				// cache the failure: a transient timeout/network error would
-				// otherwise mark every release sharing this ref as untracked for
-				// the whole batch. A genuine 404 is cheap to re-probe.
+				// Expected when this prefix doesn't publish this chart (404) — the
+				// chart may live under a different registered prefix. Don't cache the
+				// failure: a transient timeout would otherwise mark every release
+				// sharing this ref as untracked for the whole batch.
 				tags = nil
 			} else if tagCache != nil {
 				tagCache[ref] = tags
@@ -218,60 +236,42 @@ func (c *Client) discoverOCIUpgrade(chartName string, lister ociTagLister, tagCa
 		if len(tags) == 0 {
 			continue
 		}
-		latest := tags[0]
-		if best == nil || compareVersions(latest, best.LatestVersion) > 0 {
-			best = &ociUpgradeMatch{LatestVersion: latest, ChartURL: ociChartURL(prefix, chartName)}
+		if bestTags == nil || compareVersions(tags[0], bestTags[0]) > 0 {
+			bestPrefix, bestTags = prefix, tags
 		}
 	}
-	return best
+	return bestPrefix, bestTags
 }
 
-// discoverOCIVersions returns the full newest-first version list for chartName
-// from the registered prefix that publishes it (the one with the highest newest
-// tag, matching discoverOCIUpgrade's tiebreak). Empty if no prefix has the chart.
+// discoverOCIVersions returns the full newest-first version list for chartName from
+// the best-matching registered prefix (see selectBestOCIPrefix). Empty if none.
 func (c *Client) discoverOCIVersions(chartName string) []string {
-	prefixes := ListOCISources()
-	if len(prefixes) == 0 || chartName == "" {
+	if len(ListOCISources()) == 0 {
 		return nil
 	}
 	lister := c.newRegistryClient()
 	if lister == nil {
 		return nil
 	}
-	var best []string
-	for _, prefix := range prefixes {
-		tags, err := lister.Tags(ociRef(prefix, chartName))
-		if err != nil || len(tags) == 0 {
-			continue
-		}
-		if best == nil || compareVersions(tags[0], best[0]) > 0 {
-			best = tags
-		}
-	}
-	return best
+	_, tags := c.selectBestOCIPrefix(chartName, lister, nil)
+	return tags
 }
 
-// resolveOCIUpgradeURL returns the oci:// chart URL for chartName at targetVersion
-// if some registered prefix publishes that exact version. Used by the upgrade path
-// so the server only ever pulls from a registered (configured) source — never a
-// client-supplied ref.
+// resolveOCIUpgradeURL returns the oci:// chart URL for chartName at targetVersion,
+// resolved from the SAME prefix discovery/the version picker used (selectBestOCIPrefix),
+// so the upgrade pulls from the registry the user's version list came from. The server
+// only ever pulls from a registered (configured) source — never a client-supplied ref.
 func (c *Client) resolveOCIUpgradeURL(chartName, targetVersion string) (string, bool) {
-	prefixes := ListOCISources()
-	if len(prefixes) == 0 {
+	if len(ListOCISources()) == 0 {
 		return "", false
 	}
 	lister := c.newRegistryClient()
 	if lister == nil {
 		return "", false
 	}
-	for _, prefix := range prefixes {
-		tags, err := lister.Tags(ociRef(prefix, chartName))
-		if err != nil {
-			continue
-		}
-		if slices.Contains(tags, targetVersion) {
-			return ociChartURL(prefix, chartName), true
-		}
+	prefix, tags := c.selectBestOCIPrefix(chartName, lister, nil)
+	if prefix != "" && slices.Contains(tags, targetVersion) {
+		return ociChartURL(prefix, chartName), true
 	}
 	return "", false
 }

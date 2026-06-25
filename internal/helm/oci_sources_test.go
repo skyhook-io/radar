@@ -2,6 +2,7 @@ package helm
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -108,6 +109,34 @@ func TestDiscoverOCIUpgrade_PicksNewestAcrossPrefixes(t *testing.T) {
 	match := c.discoverOCIUpgrade("app", lister, map[string][]string{})
 	if match == nil || match.LatestVersion != "2.1.0" {
 		t.Fatalf("expected newest 2.1.0 across prefixes, got %+v", match)
+	}
+}
+
+// Regression: discovery and upgrade resolution must agree on which prefix wins.
+// reg1 (first in settings order) also publishes the target version, but reg2 has the
+// higher newest tag, so the version picker shows reg2's list — the upgrade must
+// resolve from reg2, not "first prefix that happens to contain the tag" (reg1).
+func TestSelectBestOCIPrefix_ConsistentAcrossDiscoveryAndUpgrade(t *testing.T) {
+	withOCISources(t, []string{"oci://reg1/c", "oci://reg2/c"})
+	lister := &fakeTagLister{
+		tags: map[string][]string{
+			"reg1/c/app": {"1.0.0"},          // older, first in order, also has 1.0.0
+			"reg2/c/app": {"2.0.0", "1.0.0"}, // newer newest tag → wins
+		},
+	}
+	c := &Client{}
+	prefix, tags := c.selectBestOCIPrefix("app", lister, map[string][]string{})
+	if prefix != "oci://reg2/c" {
+		t.Fatalf("best prefix = %q, want oci://reg2/c (highest newest tag, not first-in-order)", prefix)
+	}
+	if len(tags) != 2 || tags[0] != "2.0.0" {
+		t.Fatalf("tags = %v, want reg2's [2.0.0 1.0.0]", tags)
+	}
+	// The version picker would offer 1.0.0 (in reg2's list); the upgrade must resolve
+	// 1.0.0 from reg2 too — the same prefix — even though reg1 also has it.
+	matchPrefix, matchTags := c.selectBestOCIPrefix("app", lister, map[string][]string{})
+	if matchPrefix != "oci://reg2/c" || !slices.Contains(matchTags, "1.0.0") {
+		t.Fatalf("upgrade resolution diverged: prefix=%q tags=%v", matchPrefix, matchTags)
 	}
 }
 
