@@ -21,49 +21,31 @@ function isSecretKey(key: string): boolean {
   return SECRET_VALUE_KEYS.has(key.toLowerCase().replace(/[-_]/g, ''))
 }
 
-function formatScalar(v: any): string {
-  if (Array.isArray(v)) return v.length === 0 ? '[]' : v.join(', ')
-  if (typeof v === 'object' && v !== null) return JSON.stringify(v)
-  return String(v)
-}
-
-// Deep-redact: replace any credential-bearing key's value with "(hidden)" at
-// every depth, so downstream JSON.stringify of a nested object can't leak a
-// secret buried under e.g. plugin.config.clientSecret.
-function redactConfig(v: any): any {
-  if (Array.isArray(v)) return v.map(redactConfig)
-  if (v && typeof v === 'object') {
-    const out: Record<string, any> = {}
-    for (const [k, val] of Object.entries(v)) {
-      out[k] = isSecretKey(k) ? '(hidden)' : redactConfig(val)
-    }
-    return out
-  }
-  return v
-}
-
-// Renders a middleware config object as a property list, collapsing nested
-// objects/arrays to a compact summary. Credential-bearing keys are redacted at
-// every depth before rendering.
+// Generic middleware config (unknown/plugin types). Without backend-style
+// value-pattern redaction, the frontend can't safely classify an arbitrary
+// nested string as secret-or-not, so it renders only top-level scalars
+// (credential KEYS redacted) and collapses nested objects/arrays to a
+// value-free summary — closing the whole "nested/array inline credential"
+// class rather than the structural detail, which the YAML tab still shows.
 function ConfigProperties({ config }: { config: Record<string, any> }) {
-  const safe = redactConfig(config) as Record<string, any>
-  const entries = Object.entries(safe)
+  const entries = Object.entries(config)
   if (entries.length === 0) {
     return <Property label="Config" value="(empty)" />
   }
   return (
     <>
       {entries.map(([key, value]) => {
+        if (isSecretKey(key)) {
+          return <Property key={key} label={key} value={<span className="text-theme-text-tertiary italic">hidden</span>} />
+        }
         if (Array.isArray(value)) {
-          return <Property key={key} label={key} value={value.length === 0 ? '[]' : value.map(formatScalar).join(', ')} />
+          return <Property key={key} label={key} value={value.length === 0 ? '[]' : `${value.length} item(s)`} />
         }
         if (typeof value === 'object' && value !== null) {
-          const inner = Object.entries(value)
-            .map(([k, v]) => `${k}: ${formatScalar(v)}`)
-            .join('  ·  ')
-          return <Property key={key} label={key} value={inner || '{}'} />
+          const keys = Object.keys(value)
+          return <Property key={key} label={key} value={keys.length ? `{ ${keys.join(', ')} }` : '{}'} />
         }
-        return <Property key={key} label={key} value={formatScalar(value)} />
+        return <Property key={key} label={key} value={String(value)} />
       })}
     </>
   )
