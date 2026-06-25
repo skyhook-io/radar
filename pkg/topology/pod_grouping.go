@@ -88,7 +88,7 @@ func GroupPods(pods []*corev1.Pod, opts PodGroupingOptions) *PodGroupingResult {
 		}
 
 		// Track health
-		status := getPodStatus(string(pod.Status.Phase))
+		status := podSummaryStatus(pod)
 		switch status {
 		case StatusHealthy:
 			group.Healthy++
@@ -176,7 +176,7 @@ func CreatePodNode(pod *corev1.Pod, provider ResourceProvider, includeNodeName b
 		ID:     podID,
 		Kind:   KindPod,
 		Name:   pod.Name,
-		Status: getPodStatus(string(pod.Status.Phase)),
+		Status: getPodStatus(pod),
 		Data:   data,
 	}
 }

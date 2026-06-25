@@ -3,97 +3,58 @@ package k8s
 import (
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/health"
 )
 
 // classifyTimelineHealth maps a changed resource to the timeline HealthState
-// using the SAME canonical classifiers the Problems panel and dashboards use
-// (ClassifyPodHealth for Pods), instead of a separate copy. The timeline package
-// can't reach this logic across the module boundary, so the caller — here, in
-// internal/k8s alongside ClassifyPodHealth — owns the classification and the
-// timeline just stores the result. This is what keeps a normally-completing Job
-// pod (phase Succeeded, or Ready False mid-termination) from being recorded as
-// degraded/Unhealthy the way the old naive duplicate did.
+// using the shared canonical classifiers (health.Pod / health.Workload), instead
+// of a separate copy that historically drifted. The timeline package can't reach
+// this logic across the module boundary, so the caller — here, in internal/k8s —
+// owns the classification and the timeline just stores the result.
 func classifyTimelineHealth(kind string, obj any, now time.Time) timeline.HealthState {
 	switch kind {
 	case "Pod":
-		if pod, ok := obj.(*corev1.Pod); ok {
-			// The scheduler tried and failed to place this pod — the scheduling
-			// detector flags it immediately (no age grace), so the timeline must
-			// too, instead of treating a young Pending pod as healthy.
-			if IsPodUnschedulable(pod) {
-				return timeline.HealthDegraded
-			}
-			// A pod wedged in termination is a problem the badge + terminating
-			// detector flag (10m threshold); the timeline must agree so it doesn't
-			// stay in the Unhealthy filter's blind spot. ClassifyPodHealth doesn't
-			// look at deletionTimestamp, so check it here.
-			if dt := pod.DeletionTimestamp; dt != nil && now.Sub(dt.Time) > 10*time.Minute {
-				return timeline.HealthDegraded
-			}
-			return podHealthToTimeline(ClassifyPodHealth(pod, now))
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			return timeline.HealthUnknown
 		}
-	case "Deployment":
-		if dep, ok := obj.(*appsv1.Deployment); ok {
-			return workloadReplicaHealth(specReplicas(dep.Spec.Replicas), dep.Status.ReadyReplicas, dep.Status.AvailableReplicas, true)
+		// The scheduler tried and failed to place this pod — the scheduling
+		// detector flags it immediately (no age grace), so the timeline must too,
+		// instead of treating a young Pending pod as healthy.
+		if health.IsPodUnschedulable(pod) {
+			return timeline.HealthDegraded
 		}
-	case "ReplicaSet":
-		if rs, ok := obj.(*appsv1.ReplicaSet); ok {
-			return workloadReplicaHealth(specReplicas(rs.Spec.Replicas), rs.Status.ReadyReplicas, 0, false)
+		// A pod wedged in termination is a problem the badge + terminating detector
+		// flag (10m threshold); the timeline must agree so it doesn't stay in the
+		// Unhealthy filter's blind spot. health.Pod doesn't look at
+		// deletionTimestamp, so check it here.
+		if dt := pod.DeletionTimestamp; dt != nil && now.Sub(dt.Time) > 10*time.Minute {
+			return timeline.HealthDegraded
 		}
-	case "StatefulSet":
-		if sts, ok := obj.(*appsv1.StatefulSet); ok {
-			return workloadReplicaHealth(specReplicas(sts.Spec.Replicas), sts.Status.ReadyReplicas, 0, false)
-		}
-	case "DaemonSet":
-		if ds, ok := obj.(*appsv1.DaemonSet); ok {
-			// A DaemonSet whose selector matches no nodes has DesiredNumberScheduled
-			// 0 — benign (nothing to run), not unhealthy.
-			return workloadReplicaHealth(ds.Status.DesiredNumberScheduled, ds.Status.NumberReady, 0, false)
-		}
+		return levelToTimeline(health.Pod(pod, now).Level)
+	case "Deployment", "ReplicaSet", "StatefulSet", "DaemonSet":
+		return levelToTimeline(health.Workload(obj, now).Level)
 	}
 	return timeline.HealthUnknown
 }
 
-// podHealthToTimeline maps ClassifyPodHealth's vocabulary (healthy/warning/error)
-// onto the timeline HealthState vocabulary (healthy/degraded/unhealthy).
-func podHealthToTimeline(h string) timeline.HealthState {
-	switch h {
-	case "healthy":
+// levelToTimeline projects a canonical health.Level onto the timeline's
+// HealthState vocabulary. The timeline has no neutral tier, so neutral
+// (intentional/lifecycle states — scaled-to-zero, completed) maps to healthy,
+// matching the pre-consolidation behavior where those were already recorded
+// healthy. PR3 gives the timeline a real neutral tier.
+func levelToTimeline(l health.Level) timeline.HealthState {
+	switch l {
+	case health.LevelHealthy, health.LevelNeutral:
 		return timeline.HealthHealthy
-	case "warning":
+	case health.LevelDegraded:
 		return timeline.HealthDegraded
-	case "error":
+	case health.LevelUnhealthy:
 		return timeline.HealthUnhealthy
 	default:
 		return timeline.HealthUnknown
 	}
-}
-
-// workloadReplicaHealth grades a replica-based workload. desired 0 is an
-// intentional scale-to-zero (healthy, not unhealthy); full readiness is healthy;
-// some-but-not-all ready is degraded; none ready with replicas wanted is
-// unhealthy. requireAvailable additionally demands available==desired (Deployment
-// tracks availability; ReplicaSet/StatefulSet/DaemonSet don't expose it the same).
-func workloadReplicaHealth(desired, ready, available int32, requireAvailable bool) timeline.HealthState {
-	if desired == 0 {
-		return timeline.HealthHealthy
-	}
-	if ready == desired && (!requireAvailable || available == desired) {
-		return timeline.HealthHealthy
-	}
-	if ready > 0 {
-		return timeline.HealthDegraded
-	}
-	return timeline.HealthUnhealthy
-}
-
-func specReplicas(r *int32) int32 {
-	if r != nil {
-		return *r
-	}
-	return 1
 }

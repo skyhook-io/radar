@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 )
 
@@ -3254,7 +3255,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					ID:     pvcID,
 					Kind:   KindPVC,
 					Name:   pvc.Name,
-					Status: getPVCStatus(pvc.Status.Phase),
+					Status: getPVCStatus(pvc),
 					Data: map[string]any{
 						"namespace":    pvc.Namespace,
 						"storageClass": storageClass,
@@ -6843,7 +6844,7 @@ func addPodHealth(summaries map[string]*PodSummary, nodeID string, pod *corev1.P
 		summaries[nodeID] = s
 	}
 	s.Total++
-	switch getPodStatus(string(pod.Status.Phase)) {
+	switch podSummaryStatus(pod) {
 	case StatusHealthy:
 		s.Healthy++
 	case StatusDegraded:
@@ -6966,17 +6967,12 @@ func (b *Builder) createPodOwnerEdges(
 	return edges
 }
 
-func getPodStatus(phase string) HealthStatus {
-	switch phase {
-	case "Running", "Succeeded":
-		return StatusHealthy
-	case "Pending":
-		return StatusDegraded
-	case "Failed", "CrashLoopBackOff":
-		return StatusUnhealthy
-	default:
-		return StatusUnknown
-	}
+// getPodStatus returns the node-coloring health of a pod via the canonical
+// classifier. It inspects container state (crashloop, OOM, fatal waiting), not
+// just pod.Status.Phase — so a crashlooping pod (phase Running) now reads
+// unhealthy here instead of healthy, matching the resource table.
+func getPodStatus(pod *corev1.Pod) HealthStatus {
+	return healthLevelToStatus(topoPodLevel(pod))
 }
 
 func getDeploymentStatus(ready, total int32) HealthStatus {
@@ -6993,33 +6989,11 @@ func getDeploymentStatus(ready, total int32) HealthStatus {
 }
 
 func getJobStatus(job *batchv1.Job) HealthStatus {
-	// Check completion conditions
-	for _, cond := range job.Status.Conditions {
-		if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
-			return StatusHealthy
-		}
-		if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-			return StatusUnhealthy
-		}
-	}
-	// Still running
-	if job.Status.Active > 0 {
-		return StatusDegraded
-	}
-	return StatusUnknown
+	return healthLevelToStatus(health.Workload(job, time.Now()).Level)
 }
 
-func getPVCStatus(phase corev1.PersistentVolumeClaimPhase) HealthStatus {
-	switch phase {
-	case corev1.ClaimBound:
-		return StatusHealthy
-	case corev1.ClaimPending:
-		return StatusDegraded
-	case corev1.ClaimLost:
-		return StatusUnhealthy
-	default:
-		return StatusUnknown
-	}
+func getPVCStatus(pvc *corev1.PersistentVolumeClaim) HealthStatus {
+	return healthLevelToStatus(health.Workload(pvc, time.Now()).Level)
 }
 
 // getFluxReadyStatus extracts the Ready condition status from a FluxCD resource's status map.
