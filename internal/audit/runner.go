@@ -168,31 +168,37 @@ func listTraefikDynamic(namespaces []string) (routes, middlewares, traefikServic
 		nsSet[ns] = true
 	}
 
-	// Track which target categories we listed from a SYNCED informer. The checks
-	// distinguish "listed, none exist" (authoritative empty) from "couldn't list"
-	// (nil → skip, no false positive); without the synced gate, EnsureWatching's
-	// async sync would let an empty-but-warming cache fabricate "missing" findings.
-	var mwSynced, tsSynced bool
-
+	// EnsureWatching syncs asynchronously, so a target kind's informer can be
+	// watched but not yet populated — reading it would fabricate "missing ref"
+	// findings. Require EVERY watched Traefik GVR to be synced before treating
+	// any as authoritative; otherwise skip this round (the next audit runs once
+	// they've caught up). All-or-nothing avoids a partial-sync window where one
+	// kind (e.g. middlewaretcps) is ready but another (middlewares) isn't.
+	var traefikGVRs []schema.GroupVersionResource
+	var mwWatched, tsWatched bool
 	for _, gvr := range cache.WatchedGVRs() {
 		if gvr.Group != "traefik.io" && gvr.Group != "traefik.containo.us" {
 			continue
 		}
 		if !cache.IsSynced(gvr) {
-			continue
+			return nil, nil, nil
 		}
+		traefikGVRs = append(traefikGVRs, gvr)
+		switch gvr.Resource {
+		case "middlewares", "middlewaretcps":
+			mwWatched = true
+		case "traefikservices":
+			tsWatched = true
+		}
+	}
+
+	for _, gvr := range traefikGVRs {
 		items, err := cache.ListWatched(gvr)
 		if err != nil {
 			if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
 				log.Printf("[audit] Traefik scan: skipping %s/%s: %v", gvr.GroupResource(), gvr.Version, err)
 			}
 			continue
-		}
-		switch gvr.Resource {
-		case "middlewares", "middlewaretcps":
-			mwSynced = true
-		case "traefikservices":
-			tsSynced = true
 		}
 		for _, u := range items {
 			if u == nil {
@@ -216,10 +222,12 @@ func listTraefikDynamic(namespaces []string) (routes, middlewares, traefikServic
 
 	// Non-nil empty = "listed, none exist" (lets the check flag a dangling ref);
 	// nil = "not listed/synced" (the check skips it). See checkTraefikDanglingRefs.
-	if mwSynced && middlewares == nil {
+	// Safe to coerce here: we only reach this point with every watched Traefik
+	// GVR synced, so a watched-but-empty kind is authoritatively empty.
+	if mwWatched && middlewares == nil {
 		middlewares = []*unstructured.Unstructured{}
 	}
-	if tsSynced && traefikServices == nil {
+	if tsWatched && traefikServices == nil {
 		traefikServices = []*unstructured.Unstructured{}
 	}
 	return routes, middlewares, traefikServices
