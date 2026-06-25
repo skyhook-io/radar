@@ -152,11 +152,11 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_helm_release',
-    desc: 'Detailed Helm release info with owned resources and their status. Optionally include values, revision history, or a manifest diff between revisions.',
+    desc: 'Detailed Helm release info with owned resources, status, and last Helm operation when history indicates a current failed upgrade, rollback, or stuck pending operation.',
     params: [
       { arg: 'namespace', required: true, desc: 'release namespace' },
       { arg: 'name', required: true, desc: 'release name' },
-      { arg: 'include', desc: 'values, history, diff' },
+      { arg: 'include', desc: 'values, history, operations, diff' },
       { arg: 'diff_revision_1', desc: 'first revision for diff' },
       { arg: 'diff_revision_2', desc: 'second revision for diff (defaults to current)' },
     ],

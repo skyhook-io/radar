@@ -22,6 +22,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/helmhistory"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -421,6 +422,7 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	sort.Slice(revisions, func(i, j int) bool {
 		return revisions[i].Revision > revisions[j].Revision
 	})
+	analysis := helmhistory.Analyze(rel.Name, rel.Version, toHelmHistoryRevisions(revisions), helmhistory.Options{MaxOperations: 10})
 
 	// Parse manifest to get owned resources
 	resources := parseManifestResources(rel.Manifest, rel.Namespace)
@@ -454,6 +456,8 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 		Hooks:            hooks,
 		Readme:           readme,
 		Dependencies:     dependencies,
+		LastOperation:    analysis.LastOperation,
+		Operations:       analysis.Operations,
 	}
 	if detail.StorageNamespace == detail.Namespace {
 		detail.StorageNamespace = ""
@@ -842,6 +846,21 @@ func toHelmRevision(rel *release.Release) HelmRevision {
 		Description: rel.Info.Description,
 		Updated:     rel.Info.LastDeployed.Time,
 	}
+}
+
+func toHelmHistoryRevisions(revisions []HelmRevision) []helmhistory.Revision {
+	out := make([]helmhistory.Revision, 0, len(revisions))
+	for _, r := range revisions {
+		out = append(out, helmhistory.Revision{
+			Revision:    r.Revision,
+			Status:      r.Status,
+			Chart:       r.Chart,
+			AppVersion:  r.AppVersion,
+			Description: r.Description,
+			Updated:     r.Updated,
+		})
+	}
+	return out
 }
 
 // parseManifestResources extracts K8s resources from a rendered manifest

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { History, Eye, GitCompare, Check, RotateCcw } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { HelmRevision } from '../../types'
+import type { HelmOperation, HelmRevision } from '../../types'
 import { getStatusColor, formatDate, formatAge } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
@@ -9,12 +9,13 @@ import { Tooltip } from '../ui/Tooltip'
 interface RevisionHistoryProps {
   history: HelmRevision[]
   currentRevision: number
+  operations?: HelmOperation[]
   onViewRevision: (revision: number) => void
   onCompare: (rev1: number, rev2: number) => void
   onRollback?: (revision: number) => void
 }
 
-export function RevisionHistory({ history, currentRevision, onViewRevision, onCompare, onRollback }: RevisionHistoryProps) {
+export function RevisionHistory({ history, currentRevision, operations = [], onViewRevision, onCompare, onRollback }: RevisionHistoryProps) {
   const [selectedForCompare, setSelectedForCompare] = useState<number | null>(null)
 
   const handleCompareClick = (revision: number) => {
@@ -63,6 +64,7 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
         {history.map((revision, index) => {
           const isCurrent = revision.revision === currentRevision
           const isSelectedForCompare = selectedForCompare === revision.revision
+          const annotations = operationAnnotationsForRevision(operations, revision.revision)
 
           return (
             <div
@@ -106,6 +108,11 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
                         Current
                       </span>
                     )}
+                    {annotations.map((annotation) => (
+                      <span key={annotation.label} className={clsx('badge-sm', annotation.className)}>
+                        {annotation.label}
+                      </span>
+                    ))}
                   </div>
 
                   <div className="flex items-center gap-4 mt-1 text-xs text-theme-text-tertiary">
@@ -165,4 +172,41 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
       </div>
     </div>
   )
+}
+
+function operationAnnotationsForRevision(operations: HelmOperation[], revision: number): Array<{ label: string; className: string }> {
+  const annotations: Array<{ label: string; className: string }> = []
+  const seen = new Set<string>()
+  const add = (label: string, className: string) => {
+    if (seen.has(label)) return
+    seen.add(label)
+    annotations.push({ label, className })
+  }
+
+  for (const op of operations) {
+    if (op.failedRevision === revision) {
+      add('Failed upgrade', SEVERITY_BADGE.error)
+    }
+    if (op.rollbackRevision === revision) {
+      add('Rollback revision', SEVERITY_BADGE.warning)
+    }
+    if (op.revision === revision) {
+      switch (op.kind) {
+        case 'upgrade_failed':
+          add('Failed upgrade', SEVERITY_BADGE.error)
+          break
+        case 'release_failed':
+          add('Failed', SEVERITY_BADGE.error)
+          break
+        case 'rollback':
+          add('Rollback', SEVERITY_BADGE.warning)
+          break
+        case 'pending':
+          add('Pending', SEVERITY_BADGE.warning)
+          break
+      }
+    }
+  }
+
+  return annotations
 }

@@ -32,7 +32,7 @@ type listHelmReleasesInput struct {
 type getHelmReleaseInput struct {
 	Namespace string `json:"namespace" jsonschema:"release namespace"`
 	Name      string `json:"name" jsonschema:"release name"`
-	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras to include: values, history, diff. Example: values,history"`
+	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras to include: values, history, operations, diff. Example: values,history"`
 	DiffRev1  int    `json:"diff_revision_1,omitempty" jsonschema:"first revision for diff; only used when include contains diff"`
 	DiffRev2  int    `json:"diff_revision_2,omitempty" jsonschema:"second revision for diff; only used when include contains diff, defaults to current"`
 }
@@ -96,6 +96,9 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		"description":  detail.Description,
 		"resources":    detail.Resources,
 	}
+	if detail.LastOperation != nil {
+		result["lastOperation"] = detail.LastOperation
+	}
 
 	if len(detail.Hooks) > 0 {
 		result["hooks"] = detail.Hooks
@@ -130,6 +133,9 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 
 	if includes["history"] {
 		result["history"] = detail.History
+	}
+	if includes["operations"] {
+		result["operations"] = detail.Operations
 	}
 
 	if includes["diff"] {

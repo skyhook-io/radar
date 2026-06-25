@@ -2,7 +2,11 @@ package helm
 
 import (
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/helmhistory"
 )
+
+type HelmOperation = helmhistory.Operation
 
 // HelmRelease represents a Helm release in the list view
 type HelmRelease struct {
@@ -58,6 +62,8 @@ type HelmReleaseDetail struct {
 	Hooks            []HelmHook        `json:"hooks,omitempty"`
 	Readme           string            `json:"readme,omitempty"`
 	Dependencies     []ChartDependency `json:"dependencies,omitempty"`
+	LastOperation    *HelmOperation    `json:"lastOperation,omitempty"`
+	Operations       []HelmOperation   `json:"operations,omitempty"`
 	// See HelmRelease.ManagedByFluxHelmRelease.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
 }

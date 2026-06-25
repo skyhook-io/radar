@@ -244,8 +244,10 @@ func registerTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_helm_release",
 		Description: "Get detailed information about a specific Helm release including owned resources " +
-			"and their status. Optionally include values, revision history, or manifest diff between revisions " +
-			"using the 'include' parameter (comma-separated: values, history, diff). " +
+			"and their status. The default response includes lastOperation when Helm history indicates " +
+			"a current failed upgrade, rollback-after-failure, rollback, or stuck pending operation. " +
+			"Optionally include values, revision history, operation history, or manifest diff between revisions " +
+			"using the 'include' parameter (comma-separated: values, history, operations, diff). " +
 			"diff_revision_1 and diff_revision_2 are only used when include contains diff.",
 		Annotations: readOnly,
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
