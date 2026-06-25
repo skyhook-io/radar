@@ -20,12 +20,14 @@ export type { NavigateToResource } from '@skyhook-io/k8s-ui/utils/navigation'
 /**
  * Build a /workload/:kind/:namespace/:name URL, preserving the API group as a
  * query param so the WorkloadView can resolve CRDs with colliding kind names.
- * Namespaced workloads only — WorkloadView requires a namespace. For arbitrary
- * kinds (including cluster-scoped) use resourcePath.
+ * Cluster-scoped resources (Node, PersistentVolume, Namespace, …) have no
+ * namespace; they're encoded with a '_' sentinel segment so the path stays
+ * positional and WorkloadViewRoute can parse it back. '_' is safe — it's not a
+ * valid DNS-1123 namespace label, so it can never collide with a real one.
  */
 export function buildWorkloadPath(resource: SelectedResource): string {
   const kind = encodeURIComponent(resource.kind)
-  const namespace = encodeURIComponent(resource.namespace)
+  const namespace = encodeURIComponent(resource.namespace || '_')
   const name = encodeURIComponent(resource.name)
   const base = `/workload/${kind}/${namespace}/${name}`
   return resource.group ? `${base}?apiGroup=${encodeURIComponent(resource.group)}` : base

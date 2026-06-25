@@ -90,13 +90,27 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   // Parse /workload/:kind/:ns/:name from pathname. Segments are URL-encoded by
   // buildWorkloadPath; names can also contain literal slashes (e.g. some CRD names),
   // which survive encoding as %2F and reassemble correctly here.
+  //
+  // Cluster-scoped resources (Node, PersistentVolume, Namespace, …) have no
+  // namespace: buildWorkloadPath encodes the namespace segment as '_'. Decode
+  // that back to '' here, and tolerate a legacy empty segment ('//') and the
+  // collapsed three-segment form (/workload/:kind/:name) for older links.
   const parts = location.pathname.replace(/^\//, '').split('/')
   const decode = (s: string): string => {
     try { return decodeURIComponent(s) } catch { return s }
   }
   const kind = decode(parts[1] ?? '')
-  const namespace = decode(parts[2] ?? '')
-  const name = parts.slice(3).map(decode).join('/')
+  let namespace: string
+  let name: string
+  if (parts.length <= 3) {
+    // /workload/:kind/:name — cluster-scoped link with no namespace segment.
+    namespace = ''
+    name = decode(parts[2] ?? '')
+  } else {
+    const nsSegment = parts[2] ?? ''
+    namespace = nsSegment === '_' || nsSegment === '' ? '' : decode(nsSegment)
+    name = parts.slice(3).map(decode).join('/')
+  }
   const group = searchParams.get('apiGroup') || ''
 
   const handleBack = useCallback(() => {
@@ -112,7 +126,8 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   }, [navigate])
 
   // Hooks must run unconditionally — the invalid-URL guard comes after them.
-  if (!kind || !namespace || !name) {
+  // Namespace is empty for cluster-scoped resources, so only kind + name are required.
+  if (!kind || !name) {
     return (
       <div className="flex items-center justify-center h-full text-theme-text-tertiary">
         Invalid workload URL
