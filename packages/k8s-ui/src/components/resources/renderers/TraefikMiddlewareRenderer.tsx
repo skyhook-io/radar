@@ -16,38 +16,39 @@ function formatScalar(v: any): string {
   return String(v)
 }
 
+// Deep-redact: replace any credential-bearing key's value with "(hidden)" at
+// every depth, so downstream JSON.stringify of a nested object can't leak a
+// secret buried under e.g. plugin.config.clientSecret.
+function redactConfig(v: any): any {
+  if (Array.isArray(v)) return v.map(redactConfig)
+  if (v && typeof v === 'object') {
+    const out: Record<string, any> = {}
+    for (const [k, val] of Object.entries(v)) {
+      out[k] = SECRET_KEYS.test(k) ? '(hidden)' : redactConfig(val)
+    }
+    return out
+  }
+  return v
+}
+
 // Renders a middleware config object as a property list, collapsing nested
-// objects/arrays to a compact summary and redacting credential-bearing keys.
+// objects/arrays to a compact summary. Credential-bearing keys are redacted at
+// every depth before rendering.
 function ConfigProperties({ config }: { config: Record<string, any> }) {
-  const entries = Object.entries(config)
+  const safe = redactConfig(config) as Record<string, any>
+  const entries = Object.entries(safe)
   if (entries.length === 0) {
     return <Property label="Config" value="(empty)" />
   }
   return (
     <>
       {entries.map(([key, value]) => {
-        if (SECRET_KEYS.test(key)) {
-          const count = Array.isArray(value) ? value.length : undefined
-          return (
-            <Property
-              key={key}
-              label={key}
-              value={
-                <span className="text-theme-text-tertiary italic">
-                  {count !== undefined ? `${count} inline value(s) — hidden` : 'hidden'}
-                </span>
-              }
-            />
-          )
-        }
         if (Array.isArray(value)) {
           return <Property key={key} label={key} value={value.length === 0 ? '[]' : value.map(formatScalar).join(', ')} />
         }
         if (typeof value === 'object' && value !== null) {
-          // Shallow object: render its scalar leaves on one line, redacting
-          // any nested credential-bearing keys (e.g. plugin.foo.clientSecret).
           const inner = Object.entries(value)
-            .map(([k, v]) => `${k}: ${SECRET_KEYS.test(k) ? '(hidden)' : formatScalar(v)}`)
+            .map(([k, v]) => `${k}: ${formatScalar(v)}`)
             .join('  ·  ')
           return <Property key={key} label={key} value={inner || '{}'} />
         }
@@ -65,6 +66,8 @@ export function TraefikMiddlewareRenderer({ data, onNavigate }: TraefikMiddlewar
   const config = (type !== 'unknown' && spec[type]) || {}
 
   const isChain = type === 'chain'
+  // A MiddlewareTCP chain references MiddlewareTCP members, not Middleware.
+  const chainMemberKind = data.kind === 'MiddlewareTCP' ? 'middlewaretcps' : 'middlewares'
   const isAuth = type === 'basicAuth' || type === 'digestAuth'
   const isForwardAuth = type === 'forwardAuth'
   const isErrors = type === 'errors'
@@ -93,7 +96,7 @@ export function TraefikMiddlewareRenderer({ data, onNavigate }: TraefikMiddlewar
                 <span className="text-theme-text-tertiary w-4 text-right">{i + 1}.</span>
                 <ResourceLink
                   name={m.name}
-                  kind="middlewares"
+                  kind={chainMemberKind}
                   namespace={m.namespace || ns}
                   onNavigate={onNavigate}
                 />
