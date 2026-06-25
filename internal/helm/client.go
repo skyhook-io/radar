@@ -1739,7 +1739,11 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
-	upgradeAction.ReuseValues = true // Keep existing values
+	// Reset to the new chart's defaults, then re-merge the user's previously-supplied
+	// values on top — preserves their overrides while picking up the new chart's new
+	// default keys. Plain ReuseValues keeps the old merged values and can render nil
+	// for keys a newer chart added (a cross-version upgrade footgun).
+	upgradeAction.ResetThenReuseValues = true
 
 	// Use ChartPathOptions to locate/download the chart
 	client := action.NewInstall(actionConfig)
