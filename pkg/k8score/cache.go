@@ -1198,6 +1198,19 @@ func (rc *ResourceCache) Changes() <-chan ResourceChange {
 	return rc.changes
 }
 
+// IsKindClusterWide reports whether the informer for the given resource (plural
+// lowercase name, e.g. "services") is enabled and watches ALL namespaces. When
+// true, the lister's contents are authoritative cluster-wide; when false
+// (disabled or namespace-scoped fallback), reads only cover a subset of
+// namespaces, so callers must not infer cluster-wide absence from a miss.
+func (rc *ResourceCache) IsKindClusterWide(resource string) bool {
+	if rc == nil {
+		return false
+	}
+	s, ok := rc.config.ResourceScopes[resource]
+	return ok && s.Enabled && s.Namespace == ""
+}
+
 // ChangesRaw returns the bidirectional channel for internal use.
 func (rc *ResourceCache) ChangesRaw() chan ResourceChange {
 	if rc == nil {

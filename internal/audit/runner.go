@@ -67,10 +67,11 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// served by a synced cluster-wide informer — only those let the check assert
 	// absence (see checkTraefikDanglingRefs).
 	input.IngressRoutes, input.Middlewares, input.TraefikServices, input.TraefikAuthoritativeKinds = listTraefikDynamic(namespaces)
-	// Core Services for Traefik ref resolution: cluster-wide (nil namespaces) so
-	// cross-namespace service refs resolve. Trust level matches the existing
-	// ingressNoMatchingService check, which also relies on the Services informer.
-	if len(input.IngressRoutes) > 0 {
+	// Core Services for Traefik ref resolution. Only populate (→ only assert a
+	// missing-Service finding) when the Services informer is cluster-wide, so
+	// absence is authoritative for every namespace — same coverage gate the
+	// dynamic Traefik kinds use. Namespace-scoped fallback → leave nil → skip.
+	if len(input.IngressRoutes) > 0 && cache.IsKindClusterWide("services") {
 		input.AllServices = listNamespaced(cache.Services(), nil)
 	}
 
