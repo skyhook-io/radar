@@ -747,7 +747,7 @@ function HelmOperationBanner({
           <p className="mt-1 text-sm text-theme-text-secondary">{operation.message}</p>
           {operation.kind === 'upgrade_rolled_back' && (
             <p className="mt-1 text-xs text-theme-text-tertiary">
-              Helm history does not record whether this was `--atomic`; the rollback is inferred from adjacent release revisions.
+              Helm history does not record whether <code className="inline-code text-[11px]">--atomic</code> was set; the rollback is inferred from adjacent release revisions.
             </p>
           )}
           {managedByFluxHelmRelease && (
