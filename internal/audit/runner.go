@@ -143,6 +143,18 @@ var traefikRefKinds = []struct{ resource, kind string }{
 	{"traefikservices", "TraefikService"},
 }
 
+// traefikRefResources is the resource-name set of traefikRefKinds — the only
+// kinds whose sync state gates the scan. Other Traefik kinds (TLSOption,
+// ServersTransport, …) may be watched by the UI but are irrelevant here, so an
+// unsynced one must NOT drop the whole scan.
+var traefikRefResources = func() map[string]bool {
+	m := make(map[string]bool, len(traefikRefKinds))
+	for _, rk := range traefikRefKinds {
+		m[rk.resource] = true
+	}
+	return m
+}()
+
 // listTraefikDynamic returns Traefik routers, middlewares, and traefikservices
 // from the dynamic cache for the dangling-ref checks. The kind set is bounded
 // (≤ 6 kinds × 2 groups), so unlike listCrossplaneDynamic we ensure-watch each
@@ -179,6 +191,9 @@ func listTraefikDynamic(namespaces []string) (routes, middlewares, traefikServic
 	for _, gvr := range cache.WatchedGVRs() {
 		if gvr.Group != "traefik.io" && gvr.Group != "traefik.containo.us" {
 			continue
+		}
+		if !traefikRefResources[gvr.Resource] {
+			continue // not a kind the checks read — its sync state is irrelevant
 		}
 		if !cache.IsSynced(gvr) {
 			return nil, nil, nil

@@ -7,8 +7,19 @@ interface TraefikMiddlewareRendererProps {
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
-// Keys whose values are credentials — shown as a count/marker, never inline.
-const SECRET_KEYS = /^(users|password|secret|token|key|clientsecret|tls)$/i
+// Keys whose value is inline credential MATERIAL — redacted in the generic
+// config view. Mirrors the backend's value-key set (pkg/ai/context/redact.go)
+// plus `users` (basicAuth htpasswd). Deliberately excludes reference keys like
+// `secret`/`secretName` (the NAME of a Secret, which is safe and useful to show).
+const SECRET_VALUE_KEYS = new Set([
+  'password', 'passwd', 'passphrase', 'token', 'clientsecret', 'privatekey',
+  'apikey', 'apitoken', 'accesstoken', 'sessiontoken', 'secretaccesskey',
+  'secretkey', 'authtoken', 'bearertoken', 'users',
+])
+
+function isSecretKey(key: string): boolean {
+  return SECRET_VALUE_KEYS.has(key.toLowerCase().replace(/[-_]/g, ''))
+}
 
 function formatScalar(v: any): string {
   if (Array.isArray(v)) return v.length === 0 ? '[]' : v.join(', ')
@@ -24,7 +35,7 @@ function redactConfig(v: any): any {
   if (v && typeof v === 'object') {
     const out: Record<string, any> = {}
     for (const [k, val] of Object.entries(v)) {
-      out[k] = SECRET_KEYS.test(k) ? '(hidden)' : redactConfig(val)
+      out[k] = isSecretKey(k) ? '(hidden)' : redactConfig(val)
     }
     return out
   }
