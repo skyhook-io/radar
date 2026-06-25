@@ -161,6 +161,7 @@ const DEFAULT_KIND_COLOR = 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 da
 // ---------------------------------------------------------------------------
 const PROTOCOL: Record<string, string> = {
   http:  'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700/40',
+  http2: 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700/40',
   h2:    'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700/40',
   h2c:   'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700/40',
   https: 'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
@@ -168,6 +169,7 @@ const PROTOCOL: Record<string, string> = {
   tcp:   'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40',
   udp:   'bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-950/50 dark:text-violet-400 dark:border-violet-700/40',
   grpc:  'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-300 dark:bg-fuchsia-950/50 dark:text-fuchsia-400 dark:border-fuchsia-700/40',
+  'grpc-web': 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-300 dark:bg-fuchsia-950/50 dark:text-fuchsia-400 dark:border-fuchsia-700/40',
 }
 const DEFAULT_PROTOCOL_COLOR = 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-950/50 dark:text-slate-400 dark:border-slate-700/40'
 

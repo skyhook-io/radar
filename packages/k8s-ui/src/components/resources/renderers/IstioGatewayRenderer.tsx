@@ -83,11 +83,11 @@ export function IstioGatewayRenderer({ data }: IstioGatewayRendererProps) {
                             tone={
                               server.tls.mode === 'SIMPLE'
                                 ? 'accent1'
-                                : server.tls.mode === 'MUTUAL'
+                                : server.tls.mode === 'MUTUAL' || server.tls.mode === 'ISTIO_MUTUAL'
                                   ? 'accent2'
-                                  : server.tls.mode === 'PASSTHROUGH'
+                                  : server.tls.mode === 'PASSTHROUGH' || server.tls.mode === 'AUTO_PASSTHROUGH'
                                     ? 'accent3'
-                                    : undefined
+                                    : 'structural'
                             }
                             size="sm"
                           >
