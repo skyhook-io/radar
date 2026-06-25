@@ -62,6 +62,22 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // Track if SSE has started delivering connection_state events
   // Once SSE is active, it becomes the authoritative source for connection state
   const sseActiveRef = useRef(false)
+  // Track whether we've reached 'connected' at least once. Distinguishes the
+  // initial connect (bootstrap queries already fetched while 'connecting') from
+  // a reconnect after a drop (cache may be stale across the gap).
+  const hasConnectedRef = useRef(false)
+  // Whether the QueryClient already held data when this provider mounted. A host
+  // can share one client across cluster-scoped RadarApp mounts (see RadarApp's
+  // `queryClient` prop); that client may carry another cluster's data under
+  // identical keys, so a warm-at-mount cache must be fully refreshed on first
+  // connect. A cold cache (standalone, or a per-cluster remount) takes the cheap
+  // error-only path. Snapshot synchronously before this provider's own query
+  // registers — ConnectionProvider is the outermost provider, so a fresh client
+  // is genuinely empty here.
+  const cacheWarmAtMountRef = useRef<boolean | null>(null)
+  if (cacheWarmAtMountRef.current === null) {
+    cacheWarmAtMountRef.current = queryClient.getQueryCache().getAll().length > 0
+  }
 
   // Fetch initial connection status
   // Poll while connecting to get progress updates (SSE not established yet)
@@ -143,9 +159,20 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       return status
     })
 
-    // If we just connected, invalidate queries to fetch fresh data
     if (status.state === 'connected') {
-      queryClient.invalidateQueries()
+      const firstConnect = !hasConnectedRef.current
+      hasConnectedRef.current = true
+      // A reconnect after a drop (cache stale across the gap), or a first connect
+      // onto a client that already carried data at mount (shared across clusters),
+      // refreshes the whole cache. A clean first connect only needs to recover the
+      // bootstrap queries that 503'd while the cluster was still 'connecting'
+      // (status === 'error'); the rest already fetched fresh during 'connecting',
+      // so re-fetching the whole cache there would double-load every endpoint.
+      if (!firstConnect || cacheWarmAtMountRef.current) {
+        queryClient.invalidateQueries()
+      } else {
+        queryClient.invalidateQueries({ predicate: (q) => q.state.status === 'error' })
+      }
     }
   }, [queryClient])
 
