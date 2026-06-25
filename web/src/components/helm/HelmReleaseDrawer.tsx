@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { FetchResult, useDockReservedHeight } from '@skyhook-io/k8s-ui'
+import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
@@ -106,10 +106,11 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   // confirm dialog is open. Default the selection to latest when it opens.
   const { data: availableVersions } = useHelmReleaseVersions(helmNamespace, release.name, showUpgradeConfirm)
   const targetVersion = selectedVersion ?? upgradeInfo?.latestVersion ?? ''
+  // Semver compare, not list-position: the installed version may be older than
+  // the newest-N versions the picker shows, so it isn't always in the list.
   const isDowngrade = Boolean(
     targetVersion && upgradeInfo?.currentVersion &&
-    availableVersions && availableVersions.indexOf(targetVersion) > availableVersions.indexOf(upgradeInfo.currentVersion) &&
-    availableVersions.includes(upgradeInfo.currentVersion)
+    compareVersions(targetVersion, upgradeInfo.currentVersion) === -1
   )
 
   // Mutations for actions
