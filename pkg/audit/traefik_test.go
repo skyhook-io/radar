@@ -215,3 +215,108 @@ func TestCheckTraefikDanglingRefs(t *testing.T) {
 		}
 	})
 }
+
+func traefikChainMw(group, ns, name string, chainRefs []map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": group + "/v1alpha1",
+		"kind":       "Middleware",
+		"metadata":   map[string]any{"name": name, "namespace": ns, "uid": group + "/chain/" + ns + "/" + name},
+		"spec":       map[string]any{"chain": map[string]any{"middlewares": toIfaceSlice(chainRefs)}},
+	}}
+}
+
+func traefikErrorsMw(group, ns, name string, svcRef map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": group + "/v1alpha1",
+		"kind":       "Middleware",
+		"metadata":   map[string]any{"name": name, "namespace": ns, "uid": group + "/errors/" + ns + "/" + name},
+		"spec":       map[string]any{"errors": map[string]any{"service": svcRef}},
+	}}
+}
+
+func TestCheckTraefikMiddlewareSubjectRefs(t *testing.T) {
+	const g = "traefik.io"
+
+	t.Run("chain flags missing middleware, accepts present", func(t *testing.T) {
+		input := &CheckInput{
+			Middlewares:               []*unstructured.Unstructured{traefikObj(g, "Middleware", "app", "present")},
+			TraefikAuthoritativeKinds: authoritative(g + "\x00Middleware"),
+			MiddlewareSubjects: []*unstructured.Unstructured{
+				traefikChainMw(g, "app", "c", []map[string]any{{"name": "present"}, {"name": "missing"}}),
+			},
+		}
+		if n := findingIDs(checkTraefikDanglingRefs(input))["traefikChainMissingMiddleware"]; n != 1 {
+			t.Errorf("want 1 missing chain middleware, got %d", n)
+		}
+	})
+
+	t.Run("chain cross-namespace ref resolves against cluster-wide inventory", func(t *testing.T) {
+		input := &CheckInput{
+			Middlewares:               []*unstructured.Unstructured{traefikObj(g, "Middleware", "shared", "auth")},
+			TraefikAuthoritativeKinds: authoritative(g + "\x00Middleware"),
+			MiddlewareSubjects: []*unstructured.Unstructured{
+				traefikChainMw(g, "app", "c", []map[string]any{{"name": "auth", "namespace": "shared"}}),
+			},
+		}
+		if n := findingIDs(checkTraefikDanglingRefs(input))["traefikChainMissingMiddleware"]; n != 0 {
+			t.Errorf("cross-namespace ref to an existing middleware must not be flagged, got %d", n)
+		}
+	})
+
+	t.Run("chain not authoritative → skip (no false positive)", func(t *testing.T) {
+		input := &CheckInput{
+			TraefikAuthoritativeKinds: authoritative(), // nothing authoritative
+			MiddlewareSubjects: []*unstructured.Unstructured{
+				traefikChainMw(g, "app", "c", []map[string]any{{"name": "ghost"}}),
+			},
+		}
+		if n := findingIDs(checkTraefikDanglingRefs(input))["traefikChainMissingMiddleware"]; n != 0 {
+			t.Errorf("non-authoritative middleware kind must not be asserted, got %d", n)
+		}
+	})
+
+	t.Run("errors flags missing service, accepts present", func(t *testing.T) {
+		input := &CheckInput{
+			AllServices: []*corev1.Service{svc("app", "present")},
+			MiddlewareSubjects: []*unstructured.Unstructured{
+				traefikErrorsMw(g, "app", "e-missing", map[string]any{"name": "missing"}),
+				traefikErrorsMw(g, "app", "e-present", map[string]any{"name": "present"}),
+			},
+		}
+		if n := findingIDs(checkTraefikDanglingRefs(input))["traefikErrorsMissingService"]; n != 1 {
+			t.Errorf("want 1 missing errors service, got %d", n)
+		}
+	})
+
+	t.Run("errors.service kind=TraefikService resolves against TraefikService inventory", func(t *testing.T) {
+		input := &CheckInput{
+			AllServices:               []*corev1.Service{}, // listed, empty
+			TraefikServices:           []*unstructured.Unstructured{traefikObj(g, "TraefikService", "app", "weighted")},
+			TraefikAuthoritativeKinds: authoritative(g + "\x00TraefikService"),
+			MiddlewareSubjects: []*unstructured.Unstructured{
+				traefikErrorsMw(g, "app", "e", map[string]any{"name": "weighted", "kind": "TraefikService"}),
+			},
+		}
+		if n := findingIDs(checkTraefikDanglingRefs(input))["traefikErrorsMissingService"]; n != 0 {
+			t.Errorf("present TraefikService ref must not be flagged, got %d", n)
+		}
+	})
+
+	t.Run("middleware-only namespace (no routes) still runs the checks", func(t *testing.T) {
+		// Regression guard: the early-return must not bail when there are only
+		// middleware subjects and zero IngressRoutes.
+		input := &CheckInput{
+			AllServices: []*corev1.Service{},
+			MiddlewareSubjects: []*unstructured.Unstructured{
+				traefikErrorsMw(g, "app", "e", map[string]any{"name": "missing"}),
+			},
+		}
+		got := checkTraefikDanglingRefs(input)
+		if len(got) != 1 {
+			t.Fatalf("want 1 finding from a middleware-only namespace, got %d", len(got))
+		}
+		if got[0].Kind != "Middleware" || got[0].Group != "" {
+			t.Errorf("finding must be on the Middleware with empty Group, got kind=%q group=%q", got[0].Kind, got[0].Group)
+		}
+	})
+}

@@ -332,6 +332,22 @@ var CheckRegistry = map[string]CheckMeta{
 		Remediation: "Correct the middleware name/namespace in the router's spec.routes[].middlewares, or create the missing Middleware. A same-name Middleware in a different API group (traefik.io vs traefik.containo.us) does not satisfy the reference.",
 		References:  []Reference{refTraefikCRD},
 	},
+	"traefikChainMissingMiddleware": {
+		ID:          "traefikChainMissingMiddleware",
+		Title:       "Traefik chain references missing middleware",
+		Category:    CategoryReliability,
+		Description: "A Traefik chain Middleware lists a Middleware in spec.chain.middlewares that does not exist in the resolved namespace. Traefik accepts the chain but skips the missing link, so part of the intended middleware pipeline silently does not run.",
+		Remediation: "Correct the middleware name/namespace in spec.chain.middlewares, or create the missing Middleware. A same-name Middleware in a different API group (traefik.io vs traefik.containo.us) does not satisfy the reference.",
+		References:  []Reference{refTraefikCRD},
+	},
+	"traefikErrorsMissingService": {
+		ID:          "traefikErrorsMissingService",
+		Title:       "Traefik errors middleware references missing service",
+		Category:    CategoryReliability,
+		Description: "A Traefik errors Middleware references a Service in spec.errors.service that does not exist. Traefik accepts the middleware, but when an error page is needed the backend isn't there, so users get the default error instead of the custom one.",
+		Remediation: "Correct the service name/namespace in spec.errors.service, or create the missing Service. Cross-namespace references also require allowCrossNamespace on the Traefik CRD provider.",
+		References:  []Reference{refTraefikCRD},
+	},
 	"stuckTerminating": {
 		ID:          "stuckTerminating",
 		Title:       "Stuck terminating resource",

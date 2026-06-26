@@ -66,12 +66,13 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// being fabricated as "missing". `authoritative` marks which target GVRs are
 	// served by a synced cluster-wide informer — only those let the check assert
 	// absence (see checkTraefikDanglingRefs).
-	input.IngressRoutes, input.Middlewares, input.TraefikServices, input.TraefikAuthoritativeKinds = listTraefikDynamic(namespaces)
+	input.IngressRoutes, input.Middlewares, input.TraefikServices, input.MiddlewareSubjects, input.TraefikAuthoritativeKinds = listTraefikDynamic(namespaces)
 	// Core Services for Traefik ref resolution. Only populate (→ only assert a
 	// missing-Service finding) when the Services informer is cluster-wide, so
 	// absence is authoritative for every namespace — same coverage gate the
 	// dynamic Traefik kinds use. Namespace-scoped fallback → leave nil → skip.
-	if len(input.IngressRoutes) > 0 && cache.IsKindClusterWide("services") {
+	// Middleware subjects (errors.service refs) need it too, not just routes.
+	if (len(input.IngressRoutes) > 0 || len(input.MiddlewareSubjects) > 0) && cache.IsKindClusterWide("services") {
 		input.AllServices = listNamespaced(cache.Services(), nil)
 	}
 
@@ -175,10 +176,10 @@ var traefikKindForResource = func() map[string]string {
 // per-GVR gate fixes the false-positive (partial coverage), the per-kind
 // granularity (Middleware vs MiddlewareTCP, each its own GVR), and the
 // one-stuck-informer-suppresses-all problems together — each GVR is independent.
-func listTraefikDynamic(namespaces []string) (routes, middlewares, traefikServices []*unstructured.Unstructured, authoritative map[string]bool) {
+func listTraefikDynamic(namespaces []string) (routes, middlewares, traefikServices, middlewareSubjects []*unstructured.Unstructured, authoritative map[string]bool) {
 	cache := k8s.GetDynamicResourceCache()
 	if cache == nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	for _, group := range traefikGroups {
@@ -230,12 +231,16 @@ func listTraefikDynamic(namespaces []string) (routes, middlewares, traefikServic
 				routes = append(routes, u)
 			case "Middleware", "MiddlewareTCP":
 				middlewares = append(middlewares, u) // cluster-wide (cross-ns resolution)
+				// Also a subject for the chain/errors checks when in an audited ns.
+				if len(namespaces) == 0 || nsSet[u.GetNamespace()] {
+					middlewareSubjects = append(middlewareSubjects, u)
+				}
 			case "TraefikService":
 				traefikServices = append(traefikServices, u)
 			}
 		}
 	}
-	return routes, middlewares, traefikServices, authoritative
+	return routes, middlewares, traefikServices, middlewareSubjects, authoritative
 }
 
 // isCrossplaneMR mirrors the frontend heuristic — a Managed Resource always

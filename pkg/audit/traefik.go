@@ -7,11 +7,13 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// checkTraefikDanglingRefs flags Traefik routers that reference a Service,
-// TraefikService, or Middleware that doesn't exist. Traefik ships no validation
-// webhook or linter — a typo'd ref silently drops traffic until someone reads
-// the controller logs — so this is genuinely additive (cf. Kubevious' built-in
-// "missing Middleware reference" validator).
+// checkTraefikDanglingRefs flags Traefik resources that reference a Service,
+// TraefikService, or Middleware that doesn't exist: routers (spec.routes →
+// Service/Middleware), chain middlewares (spec.chain.middlewares → Middleware),
+// and errors middlewares (spec.errors.service → Service). Traefik ships no
+// validation webhook or linter — a typo'd ref silently drops traffic or skips a
+// middleware until someone reads the controller logs — so this is genuinely
+// additive (cf. Kubevious' built-in "missing Middleware reference" validator).
 //
 // Matching is conservative to avoid false positives:
 //   - Only genuinely-absent refs are flagged; an explicit cross-namespace ref
@@ -22,11 +24,11 @@ import (
 //   - Service / Middleware presence is only asserted when we actually have the
 //     corresponding inventory (nil set = "couldn't list", so skip — never flag).
 //
-// Scope is deliberately partial: route → Service and route → Middleware. Nested
-// TraefikService services, middleware chains, errors.service, and TLS-secret
-// refs can also dangle and are not yet covered.
+// Scope is still deliberately partial: nested TraefikService weighted/mirror
+// sub-services, ServersTransport refs, and TLS-secret refs can also dangle and
+// are not yet covered.
 func checkTraefikDanglingRefs(input *CheckInput) []Finding {
-	if len(input.IngressRoutes) == 0 {
+	if len(input.IngressRoutes) == 0 && len(input.MiddlewareSubjects) == 0 {
 		return nil
 	}
 
@@ -55,8 +57,8 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 
 	var findings []Finding
 	seen := make(map[string]bool)
-	add := func(route *unstructured.Unstructured, checkID, msg string) {
-		key := string(route.GetUID()) + "\x00" + checkID + "\x00" + msg
+	add := func(subject *unstructured.Unstructured, checkID, msg string) {
+		key := string(subject.GetUID()) + "\x00" + checkID + "\x00" + msg
 		if seen[key] {
 			return
 		}
@@ -65,11 +67,57 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 		// builtin table (CRDs resolve to ""), which is what the per-resource
 		// drill-down looks up. Setting it would hide these findings there.
 		findings = append(findings, Finding{
-			Kind:      route.GetKind(),
-			Namespace: route.GetNamespace(), Name: route.GetName(),
+			Kind:      subject.GetKind(),
+			Namespace: subject.GetNamespace(), Name: subject.GetName(),
 			CheckID: checkID, Category: CategoryReliability, Severity: SeverityWarning,
 			Message: msg,
 		})
+	}
+
+	// checkServiceRef resolves a Traefik Service reference (core Service or, when
+	// kind=="TraefikService", a TraefikService) against the authoritative
+	// inventory and reports it as missing via `add`. Shared by router
+	// spec.routes[].services and errors-middleware spec.errors.service — both use
+	// the same Service ref shape. `refDesc` labels the subject in the message.
+	checkServiceRef := func(subject *unstructured.Unstructured, group, defaultNs, refDesc, checkID string, s map[string]any) {
+		name, _ := s["name"].(string)
+		if name == "" {
+			return
+		}
+		ns, _ := s["namespace"].(string)
+		if ns == "" {
+			ns = defaultNs
+		}
+		if kind, _ := s["kind"].(string); kind == "TraefikService" {
+			if authoritative[group+"\x00TraefikService"] && !traefikServices[group+"\x00"+ns+"/"+name] {
+				add(subject, checkID,
+					fmt.Sprintf("%s references TraefikService %q which is not found in the cluster", refDesc, traefikRefLabel(ns, name, defaultNs)))
+			}
+		} else if servicesListed && !coreServices[ns+"/"+name] {
+			add(subject, checkID,
+				fmt.Sprintf("%s references Service %q which is not found in the cluster", refDesc, traefikRefLabel(ns, name, defaultNs)))
+		}
+	}
+
+	// checkMiddlewareRef resolves a Traefik MiddlewareRef (name + optional
+	// namespace) against the authoritative inventory for mwKind. Shared by router
+	// spec.routes[].middlewares and chain-middleware spec.chain.middlewares[].
+	checkMiddlewareRef := func(subject *unstructured.Unstructured, group, mwKind, defaultNs, refDesc, checkID string, m map[string]any) {
+		if !authoritative[group+"\x00"+mwKind] {
+			return // no synced cluster-wide inventory for this kind → can't assert absence
+		}
+		name, _ := m["name"].(string)
+		if name == "" {
+			return
+		}
+		ns, _ := m["namespace"].(string)
+		if ns == "" {
+			ns = defaultNs
+		}
+		if !middlewares[group+"\x00"+mwKind+"\x00"+ns+"/"+name] {
+			add(subject, checkID,
+				fmt.Sprintf("%s references %s %q which is not found in the cluster", refDesc, mwKind, traefikRefLabel(ns, name, defaultNs)))
+		}
 	}
 
 	for _, route := range input.IngressRoutes {
@@ -89,44 +137,36 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 			if !ok {
 				continue
 			}
-
 			for _, s := range nestedMaps(rm, "services") {
-				name, _ := s["name"].(string)
-				if name == "" {
-					continue
-				}
-				ns, _ := s["namespace"].(string)
-				if ns == "" {
-					ns = routeNs
-				}
-				if kind, _ := s["kind"].(string); kind == "TraefikService" {
-					if authoritative[group+"\x00TraefikService"] && !traefikServices[group+"\x00"+ns+"/"+name] {
-						add(route, "traefikRouteMissingService",
-							fmt.Sprintf("%s references TraefikService %q which is not found in the cluster", routeKind, traefikRefLabel(ns, name, routeNs)))
-					}
-				} else if servicesListed && !coreServices[ns+"/"+name] {
-					add(route, "traefikRouteMissingService",
-						fmt.Sprintf("%s references Service %q which is not found in the cluster", routeKind, traefikRefLabel(ns, name, routeNs)))
-				}
-			}
-
-			if !authoritative[group+"\x00"+mwKind] {
-				continue // no synced cluster-wide inventory for this kind → can't assert absence
+				checkServiceRef(route, group, routeNs, routeKind, "traefikRouteMissingService", s)
 			}
 			for _, m := range nestedMaps(rm, "middlewares") {
-				name, _ := m["name"].(string)
-				if name == "" {
-					continue
-				}
-				ns, _ := m["namespace"].(string)
-				if ns == "" {
-					ns = routeNs
-				}
-				if !middlewares[group+"\x00"+mwKind+"\x00"+ns+"/"+name] {
-					add(route, "traefikRouteMissingMiddleware",
-						fmt.Sprintf("%s references %s %q which is not found in the cluster", routeKind, mwKind, traefikRefLabel(ns, name, routeNs)))
-				}
+				checkMiddlewareRef(route, group, mwKind, routeNs, routeKind, "traefikRouteMissingMiddleware", m)
 			}
+		}
+	}
+
+	// Middleware subjects (audited namespaces): a `chain` middleware referencing a
+	// missing Middleware, or an `errors` middleware referencing a missing Service.
+	// Same silent-failure class as routes — Traefik accepts the bad ref and the
+	// chain/error-page simply doesn't work. Only HTTP Middlewares carry chain/
+	// errors; a MiddlewareTCP has neither key, so its loops are no-ops.
+	for _, mw := range input.MiddlewareSubjects {
+		group := traefikGroupOf(mw)
+		mwKind := mw.GetKind()
+		mwNs := mw.GetNamespace()
+
+		chain, _, _ := unstructured.NestedSlice(mw.Object, "spec", "chain", "middlewares")
+		for _, c := range chain {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			checkMiddlewareRef(mw, group, mwKind, mwNs, mwKind+" chain", "traefikChainMissingMiddleware", cm)
+		}
+
+		if svc, ok, _ := unstructured.NestedMap(mw.Object, "spec", "errors", "service"); ok {
+			checkServiceRef(mw, group, mwNs, mwKind+" errors", "traefikErrorsMissingService", svc)
 		}
 	}
 	return findings

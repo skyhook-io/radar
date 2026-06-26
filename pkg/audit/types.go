@@ -50,6 +50,12 @@ type CheckInput struct {
 	IngressRoutes   []*unstructured.Unstructured // IngressRoute / IngressRouteTCP / IngressRouteUDP (scoped to audited namespaces)
 	Middlewares     []*unstructured.Unstructured // Middleware / MiddlewareTCP (cluster-wide, for cross-ns ref resolution)
 	TraefikServices []*unstructured.Unstructured // TraefikService (cluster-wide)
+	// MiddlewareSubjects are Middleware/MiddlewareTCP in the AUDITED namespaces —
+	// the subjects of the chain/errors ref-integrity checks. Distinct from
+	// Middlewares (cluster-wide targets): refs resolve against the whole cluster,
+	// but findings are only reported for middlewares we're auditing, so a
+	// middleware in a non-audited namespace never leaks into a scoped scan.
+	MiddlewareSubjects []*unstructured.Unstructured
 	// TraefikAuthoritativeKinds keys (group\x00Kind) the target kinds served by a
 	// synced cluster-wide informer. The dangling-ref check asserts "missing" only
 	// for kinds present here — otherwise the cache may know only a subset of
