@@ -204,7 +204,9 @@ func registerTools(server *mcp.Server) {
 			"ReplicaSet histories or individual audit/log streams, especially when issues " +
 			"are empty or dominated by baseline failures. Pair with since to bound the window; " +
 			"filter by namespace, kind, or name when you know the scope. Omit namespace when " +
-			"the relevant change may be outside the app namespace.",
+			"the relevant change may be outside the app namespace. Helm release deployment " +
+			"history is separate from this Kubernetes timeline; use list_helm_releases or " +
+			"get_helm_release include=history,operations for failed upgrades and rollbacks.",
 		Annotations: readOnly,
 	}, logToolCall("get_changes", handleGetChanges))
 
@@ -234,18 +236,23 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_helm_releases",
-		Description: "List all Helm releases in the cluster with their status and health. " +
-			"Returns release name, namespace, chart, version, status (deployed/failed/pending), " +
-			"and resource health (healthy/degraded/unhealthy). " +
-			"Use to get an overview of what's deployed via Helm before inspecting individual releases.",
+		Description: "List all Helm releases in the cluster with their status, resource health, " +
+			"storage namespace, Flux ownership when detected, lastOperation when Helm history " +
+			"indicates a current failed upgrade, rollback-after-failure, rollback, or stuck pending " +
+			"operation, and a capped operations trail for failed upgrades, rollbacks, and stuck operations. " +
+			"Use this first for Helm deployment debugging; if storageNamespace is present, pass that " +
+			"value as namespace to get_helm_release. Follow with get_helm_release include=history,operations " +
+			"for the full revision trail.",
 		Annotations: readOnly,
 	}, logToolCall("list_helm_releases", handleListHelmReleases))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_helm_release",
 		Description: "Get detailed information about a specific Helm release including owned resources " +
-			"and their status. The default response includes lastOperation when Helm history indicates " +
-			"a current failed upgrade, rollback-after-failure, rollback, or stuck pending operation. " +
+			"and their status. The namespace parameter is the Helm storage namespace: use storageNamespace " +
+			"from list_helm_releases when present, otherwise use namespace. The default response includes " +
+			"storageNamespace, managedByFluxHelmRelease, resource health, and lastOperation when Helm history " +
+			"indicates a current failed upgrade, rollback-after-failure, rollback, or stuck pending operation. " +
 			"Optionally include values, revision history, operation history, or manifest diff between revisions " +
 			"using the 'include' parameter (comma-separated: values, history, operations, diff). " +
 			"diff_revision_1 and diff_revision_2 are only used when include contains diff.",
@@ -325,6 +332,8 @@ func registerTools(server *mcp.Server) {
 			"healthy pod can have many audit findings; a crashing pod can have zero). Kyverno " +
 			"PolicyReport violations are not in either — they surface per-resource via " +
 			"get_resource's resourceContext policy rollup. " +
+			"Recovered Helm rollbacks are deploy history, not live issues; use get_changes for " +
+			"Kubernetes timeline changes and list_helm_releases / get_helm_release for Helm release history. " +
 			"After identifying a suspect issue, call diagnose when the affected resource " +
 			"is a workload (Pod/Deployment/StatefulSet/DaemonSet) or GitOps reconciler " +
 			"(Application/Kustomization/HelmRelease). For other non-workload kinds, call " +
@@ -2003,12 +2012,23 @@ type mcpHelmSummary struct {
 }
 
 type mcpHelmRelease struct {
-	Name           string `json:"name"`
-	Namespace      string `json:"namespace"`
-	Chart          string `json:"chart"`
-	ChartVersion   string `json:"chartVersion"`
-	Status         string `json:"status"`
-	ResourceHealth string `json:"resourceHealth,omitempty"`
+	Name                     string              `json:"name"`
+	Namespace                string              `json:"namespace"`
+	StorageNamespace         string              `json:"storageNamespace,omitempty"`
+	Chart                    string              `json:"chart"`
+	ChartVersion             string              `json:"chartVersion"`
+	Status                   string              `json:"status"`
+	Revision                 int                 `json:"revision"`
+	Updated                  time.Time           `json:"updated"`
+	ResourceHealth           string              `json:"resourceHealth,omitempty"`
+	HealthIssue              string              `json:"healthIssue,omitempty"`
+	HealthSummary            string              `json:"healthSummary,omitempty"`
+	LastOperation            *helm.HelmOperation `json:"lastOperation,omitempty"`
+	ManagedByFluxHelmRelease string              `json:"managedByFluxHelmRelease,omitempty"`
+}
+
+func mcpHelmDashboardPriority(r helm.HelmRelease) int {
+	return helm.ReleasePriority(r)
 }
 
 func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string, includeNodes bool, includeNamespaces bool) mcpDashboard {
@@ -2289,20 +2309,28 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			} else {
 				d.HelmReleases.Total = len(releases)
 
-				// Sort: failed/pending-install first, then unhealthy/degraded
+				// Sort: failed/pending first, then operation-signaled Helm rollbacks,
+				// then unhealthy/degraded owned resources.
 				sort.SliceStable(releases, func(i, j int) bool {
-					return helm.StatusPriority(releases[i].Status, releases[i].ResourceHealth) < helm.StatusPriority(releases[j].Status, releases[j].ResourceHealth)
+					return mcpHelmDashboardPriority(releases[i]) < mcpHelmDashboardPriority(releases[j])
 				})
 
 				limit := min(len(releases), 5)
 				for _, r := range releases[:limit] {
 					d.HelmReleases.Releases = append(d.HelmReleases.Releases, mcpHelmRelease{
-						Name:           r.Name,
-						Namespace:      r.Namespace,
-						Chart:          r.Chart,
-						ChartVersion:   r.ChartVersion,
-						Status:         r.Status,
-						ResourceHealth: r.ResourceHealth,
+						Name:                     r.Name,
+						Namespace:                r.Namespace,
+						StorageNamespace:         r.StorageNamespace,
+						Chart:                    r.Chart,
+						ChartVersion:             r.ChartVersion,
+						Status:                   r.Status,
+						Revision:                 r.Revision,
+						Updated:                  r.Updated,
+						ResourceHealth:           r.ResourceHealth,
+						HealthIssue:              r.HealthIssue,
+						HealthSummary:            r.HealthSummary,
+						LastOperation:            r.LastOperation,
+						ManagedByFluxHelmRelease: r.ManagedByFluxHelmRelease,
 					})
 				}
 			}

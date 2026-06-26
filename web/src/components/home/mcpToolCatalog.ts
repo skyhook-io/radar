@@ -126,7 +126,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_changes',
-    desc: 'Recent resource creates, updates, and deletes from the cluster timeline. Use to investigate what changed before an incident.',
+    desc: 'Recent resource creates, updates, and deletes from the Kubernetes timeline. Helm release history is separate; use list_helm_releases or get_helm_release include=history,operations for failed upgrades and rollbacks.',
     params: [
       { arg: 'namespace', desc: 'filter to a specific namespace' },
       { arg: 'kind', desc: 'filter to a resource kind (e.g. Deployment)' },
@@ -147,14 +147,14 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'list_helm_releases',
-    desc: 'All Helm releases in the cluster with status and resource health — name, namespace, chart, version.',
+    desc: 'All Helm releases with status, resource health, storage namespace, Flux ownership, current lastOperation, and capped operation trails for failed upgrades, rollbacks, or stuck pending operations.',
     params: [{ arg: 'namespace', desc: 'filter to a specific namespace' }],
   },
   {
     name: 'get_helm_release',
-    desc: 'Detailed Helm release info with owned resources, status, and last Helm operation when history indicates a current failed upgrade, rollback, or stuck pending operation.',
+    desc: 'Detailed Helm release info with owned resources, health, Flux ownership, and current lastOperation; include history and operations for the full revision trail.',
     params: [
-      { arg: 'namespace', required: true, desc: 'release namespace' },
+      { arg: 'namespace', required: true, desc: 'Helm storage namespace; use storageNamespace from list_helm_releases when present' },
       { arg: 'name', required: true, desc: 'release name' },
       { arg: 'include', desc: 'values, history, operations, diff' },
       { arg: 'diff_revision_1', desc: 'first revision for diff' },

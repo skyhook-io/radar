@@ -30,7 +30,7 @@ type listHelmReleasesInput struct {
 }
 
 type getHelmReleaseInput struct {
-	Namespace string `json:"namespace" jsonschema:"release namespace"`
+	Namespace string `json:"namespace" jsonschema:"Helm release storage namespace; use storageNamespace from list_helm_releases when present, otherwise namespace"`
 	Name      string `json:"name" jsonschema:"release name"`
 	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras to include: values, history, operations, diff. Example: values,history"`
 	DiffRev1  int    `json:"diff_revision_1,omitempty" jsonschema:"first revision for diff; only used when include contains diff"`
@@ -96,8 +96,23 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		"description":  detail.Description,
 		"resources":    detail.Resources,
 	}
+	if detail.StorageNamespace != "" {
+		result["storageNamespace"] = detail.StorageNamespace
+	}
+	if detail.ResourceHealth != "" {
+		result["resourceHealth"] = detail.ResourceHealth
+	}
+	if detail.HealthIssue != "" {
+		result["healthIssue"] = detail.HealthIssue
+	}
+	if detail.HealthSummary != "" {
+		result["healthSummary"] = detail.HealthSummary
+	}
 	if detail.LastOperation != nil {
 		result["lastOperation"] = detail.LastOperation
+	}
+	if detail.ManagedByFluxHelmRelease != "" {
+		result["managedByFluxHelmRelease"] = detail.ManagedByFluxHelmRelease
 	}
 
 	if len(detail.Hooks) > 0 {
@@ -135,7 +150,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		result["history"] = detail.History
 	}
 	if includes["operations"] {
-		result["operations"] = detail.Operations
+		result["operations"] = mergeHelmOperations(detail.Operations, detail.LastOperation)
 	}
 
 	if includes["diff"] {
@@ -163,6 +178,37 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	}
 
 	return toJSONResult(result)
+}
+
+func mergeHelmOperations(operations []helm.HelmOperation, lastOperation *helm.HelmOperation) []helm.HelmOperation {
+	merged := make([]helm.HelmOperation, 0, len(operations)+1)
+	seen := make(map[string]struct{}, len(operations)+1)
+	if lastOperation != nil {
+		key := helmOperationKey(*lastOperation)
+		seen[key] = struct{}{}
+		merged = append(merged, *lastOperation)
+	}
+	for _, op := range operations {
+		key := helmOperationKey(op)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, op)
+	}
+	return merged
+}
+
+func helmOperationKey(operation helm.HelmOperation) string {
+	return fmt.Sprintf(
+		"%s:%s:%d:%d:%d:%d",
+		operation.Kind,
+		operation.Status,
+		operation.Revision,
+		operation.FailedRevision,
+		operation.RollbackRevision,
+		operation.TargetRevision,
+	)
 }
 
 // parseIncludes parses a comma-separated include string into a set.

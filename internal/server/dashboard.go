@@ -1382,11 +1382,10 @@ func dashboardHelmSummaryFromReleases(releases []helm.HelmRelease) DashboardHelm
 		Total: len(releases),
 	}
 
-	// Sort: failed/unhealthy releases first to surface problems
+	// Sort: failed/pending first, then operation-signaled Helm rollbacks,
+	// then unhealthy/degraded owned resources.
 	sort.SliceStable(releases, func(i, j int) bool {
-		pi := helm.StatusPriority(releases[i].Status, releases[i].ResourceHealth)
-		pj := helm.StatusPriority(releases[j].Status, releases[j].ResourceHealth)
-		return pi < pj
+		return helm.ReleasePriority(releases[i]) < helm.ReleasePriority(releases[j])
 	})
 
 	// Take top 6 releases

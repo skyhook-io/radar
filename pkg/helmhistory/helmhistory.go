@@ -30,7 +30,10 @@ const (
 
 const defaultPendingStuckAfter = 10 * time.Minute
 
-var rollbackToPattern = regexp.MustCompile(`(?i)^rollback to ([0-9]+)(?:\b|$)`)
+var (
+	rollbackToPattern     = regexp.MustCompile(`(?i)^rollback to ([0-9]+)(?:\b|$)`)
+	upgradeFailurePattern = regexp.MustCompile(`(?i)^upgrade(?:\s+"[^"]+")?\s+failed:`)
+)
 
 type OperationKind string
 
@@ -50,18 +53,19 @@ type Revision struct {
 }
 
 type Operation struct {
-	Kind             OperationKind   `json:"kind"`
-	Status           OperationStatus `json:"status"`
-	Source           Source          `json:"source"`
-	Confidence       Confidence      `json:"confidence"`
-	Message          string          `json:"message"`
-	Evidence         string          `json:"evidence,omitempty"`
-	Revision         int             `json:"revision,omitempty"`
-	FailedRevision   int             `json:"failedRevision,omitempty"`
-	RollbackRevision int             `json:"rollbackRevision,omitempty"`
-	TargetRevision   int             `json:"targetRevision,omitempty"`
-	PendingStatus    string          `json:"pendingStatus,omitempty"`
-	Updated          time.Time       `json:"updated,omitempty"`
+	Kind               OperationKind   `json:"kind"`
+	Status             OperationStatus `json:"status"`
+	Source             Source          `json:"source"`
+	Confidence         Confidence      `json:"confidence"`
+	Message            string          `json:"message"`
+	Evidence           string          `json:"evidence,omitempty"`
+	FailureDescription string          `json:"failureDescription,omitempty"`
+	Revision           int             `json:"revision,omitempty"`
+	FailedRevision     int             `json:"failedRevision,omitempty"`
+	RollbackRevision   int             `json:"rollbackRevision,omitempty"`
+	TargetRevision     int             `json:"targetRevision,omitempty"`
+	PendingStatus      string          `json:"pendingStatus,omitempty"`
+	Updated            time.Time       `json:"updated,omitempty"`
 }
 
 type Options struct {
@@ -97,7 +101,7 @@ func Analyze(releaseName string, currentRevision int, revisions []Revision, opts
 	var ops []Operation
 	for i := 0; i < len(ordered); i++ {
 		rev := ordered[i]
-		status := strings.ToLower(rev.Status)
+		status := normalizeStatus(rev.Status)
 		if status == "failed" {
 			if i+1 < len(ordered) {
 				next := ordered[i+1]
@@ -110,7 +114,7 @@ func Analyze(releaseName string, currentRevision int, revisions []Revision, opts
 					}
 				}
 			}
-			ops = append(ops, failedOperation(releaseName, rev, SourceHistory))
+			ops = append(ops, failedOperation(rev, SourceHistory))
 			continue
 		}
 		if isCompletedRevisionStatus(status) {
@@ -127,9 +131,9 @@ func Analyze(releaseName string, currentRevision int, revisions []Revision, opts
 	}
 	var live *Operation
 	if hasCurrent {
-		switch status := strings.ToLower(current.Status); {
+		switch status := normalizeStatus(current.Status); {
 		case status == "failed":
-			op := failedOperation(releaseName, current, SourceStatus)
+			op := failedOperation(current, SourceStatus)
 			live = &op
 		case isPending(status) && !current.Updated.IsZero() && now.Sub(current.Updated) >= pendingStuckAfter:
 			op := pendingOperation(current, now.Sub(current.Updated))
@@ -165,23 +169,24 @@ func Analyze(releaseName string, currentRevision int, revisions []Revision, opts
 
 func rolledBackOperation(failed, rollback Revision, target int) Operation {
 	return Operation{
-		Kind:             KindUpgradeRolledBack,
-		Status:           StatusRolledBack,
-		Source:           SourceHistory,
-		Confidence:       ConfidenceMedium,
-		Message:          fmt.Sprintf("Upgrade failed at rev %d; Helm rolled back to rev %d as rev %d.", failed.Revision, target, rollback.Revision),
-		Evidence:         fmt.Sprintf("failed revision %d followed by rollback revision %d", failed.Revision, rollback.Revision),
-		FailedRevision:   failed.Revision,
-		RollbackRevision: rollback.Revision,
-		TargetRevision:   target,
-		Updated:          rollback.Updated,
+		Kind:               KindUpgradeRolledBack,
+		Status:             StatusRolledBack,
+		Source:             SourceHistory,
+		Confidence:         ConfidenceMedium,
+		Message:            fmt.Sprintf("Upgrade failed at rev %d; Helm rolled back to rev %d as rev %d.", failed.Revision, target, rollback.Revision),
+		Evidence:           fmt.Sprintf("failed revision %d followed by rollback revision %d", failed.Revision, rollback.Revision),
+		FailureDescription: strings.TrimSpace(failed.Description),
+		FailedRevision:     failed.Revision,
+		RollbackRevision:   rollback.Revision,
+		TargetRevision:     target,
+		Updated:            rollback.Updated,
 	}
 }
 
-func failedOperation(releaseName string, rev Revision, source Source) Operation {
+func failedOperation(rev Revision, source Source) Operation {
 	kind := KindReleaseFailed
 	message := fmt.Sprintf("Release failed at rev %d.", rev.Revision)
-	if isUpgradeFailureDescription(releaseName, rev.Description) {
+	if isUpgradeFailureDescription(rev.Description) {
 		kind = KindUpgradeFailed
 		message = fmt.Sprintf("Upgrade failed at rev %d.", rev.Revision)
 	}
@@ -244,22 +249,12 @@ func rollbackTarget(description string) (int, bool) {
 	return target, true
 }
 
-func isUpgradeFailureDescription(releaseName, description string) bool {
+func isUpgradeFailureDescription(description string) bool {
 	description = strings.TrimSpace(description)
 	if description == "" {
 		return false
 	}
-	prefixes := []string{
-		fmt.Sprintf("Upgrade %q failed:", releaseName),
-		"Upgrade failed:",
-		"Upgrade \"",
-	}
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(description, prefix) {
-			return true
-		}
-	}
-	return false
+	return upgradeFailurePattern.MatchString(description)
 }
 
 func findCurrent(ordered []Revision, currentRevision int) (Revision, bool) {
@@ -272,12 +267,17 @@ func findCurrent(ordered []Revision, currentRevision int) (Revision, bool) {
 }
 
 func isPending(status string) bool {
+	status = normalizeStatus(status)
 	return status == "pending-install" || status == "pending-upgrade" || status == "pending-rollback"
 }
 
 func isCompletedRevisionStatus(status string) bool {
-	status = strings.ToLower(status)
+	status = normalizeStatus(status)
 	return status == "deployed" || status == "superseded"
+}
+
+func normalizeStatus(status string) string {
+	return strings.ToLower(strings.TrimSpace(status))
 }
 
 func withoutDuplicateLiveFailure(ops []Operation, live Operation) []Operation {

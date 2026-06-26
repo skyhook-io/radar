@@ -524,7 +524,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               <RevisionHistory
                 history={releaseDetail.history}
                 currentRevision={releaseDetail.revision}
-                operations={releaseDetail.operations}
+                operations={mergeHelmOperations(releaseDetail.operations, releaseDetail.lastOperation)}
                 onViewRevision={handleViewRevision}
                 onCompare={handleCompareRevisions}
                 onRollback={canHelmWrite ? handleRollbackRequest : undefined}
@@ -718,6 +718,29 @@ function ProgressLog({ entries }: { entries: { phase: string; message: string }[
   )
 }
 
+function mergeHelmOperations(operations: HelmOperation[] | undefined, lastOperation: HelmOperation | undefined): HelmOperation[] {
+  const merged: HelmOperation[] = []
+  const seen = new Set<string>()
+  for (const op of [...(operations || []), ...(lastOperation ? [lastOperation] : [])]) {
+    const key = helmOperationKey(op)
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(op)
+  }
+  return merged
+}
+
+function helmOperationKey(operation: HelmOperation): string {
+  return [
+    operation.kind,
+    operation.status,
+    operation.revision || 0,
+    operation.failedRevision || 0,
+    operation.rollbackRevision || 0,
+    operation.targetRevision || 0,
+  ].join(':')
+}
+
 function HelmOperationBanner({
   operation,
   managedByFluxHelmRelease,
@@ -731,8 +754,8 @@ function HelmOperationBanner({
 
   const isFailure = operation.status === 'failed'
   const isPending = operation.status === 'stuck_pending'
-  const tone: 'error' | 'warning' = isFailure ? 'error' : 'warning'
-  const Icon = operation.kind === 'upgrade_rolled_back' ? RotateCcw : isPending ? Clock : AlertTriangle
+  const tone: 'error' | 'warning' | 'info' = isFailure ? 'error' : operation.kind === 'rollback' ? 'info' : 'warning'
+  const Icon = operation.kind === 'upgrade_rolled_back' || operation.kind === 'rollback' ? RotateCcw : isPending ? Clock : AlertTriangle
   const title = operationTitle(operation)
 
   return (
@@ -743,8 +766,14 @@ function HelmOperationBanner({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-theme-text-primary">{title}</span>
             <span className={clsx('badge-sm', SEVERITY_BADGE[tone])}>{operation.status.replace(/_/g, ' ')}</span>
+            <OperationRevisionChips operation={operation} />
           </div>
           <p className="mt-1 text-sm text-theme-text-secondary">{operation.message}</p>
+          {operation.failureDescription && (
+            <p className="mt-1 text-xs text-theme-text-tertiary truncate">
+              {operation.failureDescription}
+            </p>
+          )}
           {operation.kind === 'upgrade_rolled_back' && (
             <p className="mt-1 text-xs text-theme-text-tertiary">
               Helm history does not record whether <code className="inline-code text-[11px]">--atomic</code> was set; the rollback is inferred from adjacent release revisions.
@@ -762,13 +791,15 @@ function HelmOperationBanner({
 }
 
 function shouldShowOperationBanner(operation: HelmOperation): boolean {
-  return operation.kind === 'upgrade_rolled_back' || operation.status === 'failed' || operation.status === 'stuck_pending'
+  return operation.kind === 'upgrade_rolled_back' || operation.kind === 'rollback' || operation.status === 'failed' || operation.status === 'stuck_pending'
 }
 
 function operationTitle(operation: HelmOperation): string {
   switch (operation.kind) {
     case 'upgrade_rolled_back':
       return 'Helm rolled back after failed upgrade'
+    case 'rollback':
+      return 'Helm rollback applied'
     case 'pending':
       return 'Helm operation may be stuck'
     case 'upgrade_failed':
@@ -778,6 +809,32 @@ function operationTitle(operation: HelmOperation): string {
     default:
       return 'Helm operation'
   }
+}
+
+function OperationRevisionChips({ operation }: { operation: HelmOperation }) {
+  const chips: Array<{ key: string; label: string; className: string }> = []
+  if (operation.failedRevision) {
+    chips.push({ key: 'failed', label: `failed rev ${operation.failedRevision}`, className: SEVERITY_BADGE.error })
+  }
+  if (operation.rollbackRevision) {
+    chips.push({ key: 'rollback', label: `rollback rev ${operation.rollbackRevision}`, className: SEVERITY_BADGE.warning })
+  }
+  if (operation.targetRevision) {
+    chips.push({ key: 'target', label: `target rev ${operation.targetRevision}`, className: SEVERITY_BADGE.info })
+  }
+  if (!operation.failedRevision && !operation.rollbackRevision && operation.revision) {
+    chips.push({ key: 'revision', label: `rev ${operation.revision}`, className: SEVERITY_BADGE.neutral })
+  }
+  if (chips.length === 0) {
+    return null
+  }
+  return (
+    <>
+      {chips.map((chip) => (
+        <span key={chip.key} className={clsx('badge-sm', chip.className)}>{chip.label}</span>
+      ))}
+    </>
+  )
 }
 
 // Overview tab content

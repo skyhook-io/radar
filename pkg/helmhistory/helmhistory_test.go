@@ -46,6 +46,55 @@ func TestAnalyzeUpgradeRolledBackAfterFailure(t *testing.T) {
 	if got.LastOperation.Confidence != ConfidenceMedium {
 		t.Fatalf("confidence = %q, want %q", got.LastOperation.Confidence, ConfidenceMedium)
 	}
+	if got.LastOperation.FailureDescription != `Upgrade "cart" failed: timed out waiting for the condition` {
+		t.Fatalf("failureDescription = %q", got.LastOperation.FailureDescription)
+	}
+}
+
+func TestAnalyzeUpgradeFailureDescriptionIsCaseInsensitive(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	got := Analyze("cart", 2, []Revision{
+		rev(1, "superseded", "Install complete", now.Add(-2*time.Hour)),
+		rev(2, "failed", `upgrade "cart" failed: timed out waiting for the condition`, now.Add(-5*time.Minute)),
+	}, Options{Now: now})
+
+	if got.LastOperation == nil {
+		t.Fatal("LastOperation = nil")
+	}
+	if got.LastOperation.Kind != KindUpgradeFailed {
+		t.Fatalf("kind = %q, want %q", got.LastOperation.Kind, KindUpgradeFailed)
+	}
+}
+
+func TestAnalyzeQuotedUpgradeDescriptionRequiresFailedPrefix(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	got := Analyze("cart", 2, []Revision{
+		rev(1, "superseded", "Install complete", now.Add(-2*time.Hour)),
+		rev(2, "failed", `Upgrade "cart" canceled by operator`, now.Add(-5*time.Minute)),
+	}, Options{Now: now})
+
+	if got.LastOperation == nil {
+		t.Fatal("LastOperation = nil")
+	}
+	if got.LastOperation.Kind != KindReleaseFailed {
+		t.Fatalf("kind = %q, want %q", got.LastOperation.Kind, KindReleaseFailed)
+	}
+}
+
+func TestAnalyzeNormalizesRevisionStatuses(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	got := Analyze("cart", 3, []Revision{
+		rev(1, " Superseded ", "Install complete", now.Add(-3*time.Hour)),
+		rev(2, " Failed ", `Upgrade "cart" failed: timed out waiting for the condition`, now.Add(-10*time.Minute)),
+		rev(3, " Deployed ", "Rollback to 1", now.Add(-9*time.Minute)),
+	}, Options{Now: now})
+
+	if got.LastOperation == nil {
+		t.Fatal("LastOperation = nil")
+	}
+	if got.LastOperation.Kind != KindUpgradeRolledBack {
+		t.Fatalf("kind = %q, want %q", got.LastOperation.Kind, KindUpgradeRolledBack)
+	}
 }
 
 func TestAnalyzeManualRollback(t *testing.T) {

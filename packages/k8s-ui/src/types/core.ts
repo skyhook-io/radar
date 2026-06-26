@@ -554,6 +554,8 @@ export interface HelmRelease {
   status: string
   revision: number
   updated: string // ISO date string
+  lastOperation?: HelmOperation
+  operations?: HelmOperation[]
   // Health summary from owned resources
   resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
   healthIssue?: string    // Primary issue if unhealthy (e.g., "OOMKilled")
@@ -586,6 +588,7 @@ export interface HelmOperation {
   confidence: HelmOperationConfidence
   message: string
   evidence?: string
+  failureDescription?: string
   revision?: number
   failedRevision?: number
   rollbackRevision?: number
@@ -609,6 +612,9 @@ export interface HelmReleaseDetail {
   notes: string
   history: HelmRevision[]
   resources: HelmOwnedResource[]
+  resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+  healthIssue?: string
+  healthSummary?: string
   hooks?: HelmHook[]
   readme?: string
   dependencies?: ChartDependency[]

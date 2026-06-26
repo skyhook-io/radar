@@ -38,6 +38,11 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+const (
+	releaseHistoryMax        = 256
+	releaseListMaxOperations = 3
+)
+
 // HTTP client for ArtifactHub requests
 var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
@@ -326,42 +331,20 @@ func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username stri
 }
 
 func listReleasesWith(actionConfig *action.Configuration, namespace, username string, groups []string) ([]HelmRelease, error) {
-	listAction := action.NewList(actionConfig)
-	listAction.All = true
-	listAction.AllNamespaces = namespace == ""
-	listAction.StateMask = action.ListAll
-
-	releases, err := listAction.Run()
-	if err != nil {
+	if err := actionConfig.KubeClient.IsReachable(); err != nil {
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
 
-	storageNamespaces := make(map[string]string, len(releases))
-	if namespace == "" {
-		storageNamespaces, err = helmReleaseStorageNamespaces(username, groups)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		for _, rel := range releases {
-			storageNamespaces[releaseStorageKey(rel)] = namespace
-		}
+	client, err := helmStorageClient(username, groups)
+	if err != nil {
+		return nil, err
 	}
-	fluxMap := fluxHelmReleaseMap(context.Background())
-	result := make([]HelmRelease, 0, len(releases))
-	for _, rel := range releases {
-		storageNs := storageNamespaces[releaseStorageKey(rel)]
-		hr := toHelmRelease(rel, storageNs)
-		// Match against the release's *actual* storage namespace (the
-		// un-normalized value), since toHelmRelease zeroes StorageNamespace
-		// when it equals Namespace for compactness.
-		effectiveStorage := storageNs
-		if effectiveStorage == "" {
-			effectiveStorage = rel.Namespace
-		}
-		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
-		result = append(result, hr)
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, namespace)
+	if err != nil {
+		return nil, err
 	}
+
+	result := helmReleaseRowsFromStorageSnapshot(snapshot, fluxHelmReleaseMap(context.Background()))
 
 	// Sort by namespace, then name
 	sort.Slice(result, func(i, j int) bool {
@@ -372,6 +355,31 @@ func listReleasesWith(actionConfig *action.Configuration, namespace, username st
 	})
 
 	return result, nil
+}
+
+func helmReleaseRowsFromStorageSnapshot(snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string) []HelmRelease {
+	if snapshot == nil {
+		return nil
+	}
+	result := make([]HelmRelease, 0, len(snapshot.latest))
+	for _, rel := range snapshot.latest {
+		storageNs := snapshot.storageNamespaces[releaseStorageKey(rel)]
+		hr := toHelmRelease(rel, storageNs)
+		historyKey := releaseHistoryKey(rel)
+		analysis := helmhistory.Analyze(rel.Name, rel.Version, toHelmHistoryRevisions(snapshot.histories[historyKey]), helmhistory.Options{MaxOperations: releaseListMaxOperations})
+		hr.LastOperation = analysis.LastOperation
+		hr.Operations = analysis.Operations
+		// Match against the release's *actual* storage namespace (the
+		// un-normalized value), since toHelmRelease zeroes StorageNamespace
+		// when it equals Namespace for compactness.
+		effectiveStorage := storageNs
+		if effectiveStorage == "" {
+			effectiveStorage = rel.Namespace
+		}
+		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
+		result = append(result, hr)
+	}
+	return result
 }
 
 // GetReleaseAsUser is GetRelease with K8s impersonation.
@@ -406,7 +414,7 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 
 	// Get release history
 	historyAction := action.NewHistory(actionConfig)
-	historyAction.Max = 256
+	historyAction.Max = releaseHistoryMax
 	history, err := historyAction.Run(name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get helm release history: %w", err)
@@ -415,7 +423,9 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	// Convert history
 	revisions := make([]HelmRevision, 0, len(history))
 	for _, h := range history {
-		revisions = append(revisions, toHelmRevision(h))
+		if revision, ok := toHelmRevision(h); ok {
+			revisions = append(revisions, revision)
+		}
 	}
 
 	// Sort by revision descending (newest first)
@@ -429,6 +439,7 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 
 	// Enrich resources with live status from k8s cache
 	enrichResourcesWithStatus(resources)
+	health, issue, summary := computeResourceHealth(resources)
 
 	// Extract hooks
 	hooks := extractHooks(rel)
@@ -453,6 +464,9 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 		Notes:            rel.Info.Notes,
 		History:          revisions,
 		Resources:        resources,
+		ResourceHealth:   health,
+		HealthIssue:      issue,
+		HealthSummary:    summary,
 		Hooks:            hooks,
 		Readme:           readme,
 		Dependencies:     dependencies,
@@ -594,6 +608,13 @@ func releaseStorageKey(rel *release.Release) string {
 	return fmt.Sprintf("%s/%s/%d", rel.Namespace, rel.Name, rel.Version)
 }
 
+func releaseHistoryKey(rel *release.Release) string {
+	if rel == nil {
+		return ""
+	}
+	return rel.Namespace + "/" + rel.Name
+}
+
 func releaseUpgradeKey(rel *release.Release, storageNamespace string) string {
 	if storageNamespace == "" {
 		storageNamespace = rel.Namespace
@@ -636,7 +657,7 @@ func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
 // the change. Built from the dynamic informer cache so this is a constant-time
 // lookup per release.
 //
-// Effective storageNamespace: defaults to spec.targetNamespace if set, else
+// Effective storageNamespace: defaults to spec.storageNamespace if set, else
 // the HelmRelease's own metadata.namespace. Effective releaseName: defaults
 // to the HelmRelease's metadata.name. Both match helm-controller's behavior.
 //
@@ -685,7 +706,13 @@ func applyFluxOwnership(name, storageNamespace string, fluxMap map[string]string
 	return fluxMap[storageNamespace+"/"+name]
 }
 
-func helmReleaseStorageNamespaces(username string, groups []string) (map[string]string, error) {
+type helmReleaseStorageSnapshot struct {
+	storageNamespaces map[string]string
+	histories         map[string][]HelmRevision
+	latest            []*release.Release
+}
+
+func helmStorageClient(username string, groups []string) (kubernetes.Interface, error) {
 	var client kubernetes.Interface = k8s.GetClient()
 	if username != "" {
 		impersonated, err := k8s.ImpersonatedClient(username, groups)
@@ -697,18 +724,38 @@ func helmReleaseStorageNamespaces(username string, groups []string) (map[string]
 	if client == nil {
 		return nil, fmt.Errorf("kubernetes client not initialized for release storage lookup")
 	}
+	return client, nil
+}
+
+func helmReleaseStorageNamespaces(username string, groups []string) (map[string]string, error) {
+	client, err := helmStorageClient(username, groups)
+	if err != nil {
+		return nil, err
+	}
 	return helmReleaseStorageNamespacesWithClient(client)
 }
 
 func helmReleaseStorageNamespacesWithClient(client kubernetes.Interface) (map[string]string, error) {
-	secrets, err := client.CoreV1().Secrets("").List(context.Background(), metav1.ListOptions{
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	if err != nil {
+		return nil, err
+	}
+	return snapshot.storageNamespaces, nil
+}
+
+func helmReleaseStorageSnapshotWithClient(client kubernetes.Interface, namespace string) (*helmReleaseStorageSnapshot, error) {
+	secrets, err := client.CoreV1().Secrets(namespace).List(context.Background(), metav1.ListOptions{
 		LabelSelector: "owner=helm",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect release storage namespaces: %w", err)
 	}
 
-	result := make(map[string]string, len(secrets.Items))
+	snapshot := &helmReleaseStorageSnapshot{
+		storageNamespaces: make(map[string]string, len(secrets.Items)),
+		histories:         make(map[string][]HelmRevision),
+	}
+	latestByRelease := make(map[string]*release.Release)
 	for _, secret := range secrets.Items {
 		encoded := secret.Data["release"]
 		if len(encoded) == 0 {
@@ -719,9 +766,40 @@ func helmReleaseStorageNamespacesWithClient(client kubernetes.Interface) (map[st
 			log.Printf("[helm] failed to decode release secret %s/%s: %v", secret.Namespace, secret.Name, err)
 			continue
 		}
-		result[releaseStorageKey(rel)] = secret.Namespace
+		snapshot.storageNamespaces[releaseStorageKey(rel)] = secret.Namespace
+
+		historyKey := releaseHistoryKey(rel)
+		if revision, ok := toHelmRevision(rel); ok {
+			snapshot.histories[historyKey] = append(snapshot.histories[historyKey], revision)
+		}
+
+		if latest, exists := latestByRelease[historyKey]; !exists || latest.Version <= rel.Version {
+			latestByRelease[historyKey] = rel
+		}
 	}
-	return result, nil
+	for key := range snapshot.histories {
+		sort.Slice(snapshot.histories[key], func(i, j int) bool {
+			return snapshot.histories[key][i].Revision > snapshot.histories[key][j].Revision
+		})
+		if len(snapshot.histories[key]) > releaseHistoryMax {
+			snapshot.histories[key] = snapshot.histories[key][:releaseHistoryMax]
+		}
+	}
+	snapshot.latest = make([]*release.Release, 0, len(latestByRelease))
+	for _, rel := range latestByRelease {
+		if !helmListAllIncludes(rel) {
+			continue
+		}
+		snapshot.latest = append(snapshot.latest, rel)
+	}
+	return snapshot, nil
+}
+
+func helmListAllIncludes(rel *release.Release) bool {
+	if rel == nil || rel.Info == nil || rel.Chart == nil || rel.Chart.Metadata == nil {
+		return false
+	}
+	return action.ListAll&action.ListAll.FromName(rel.Info.Status.String()) != 0
 }
 
 func decodeHelmReleaseData(data string) (*release.Release, error) {
@@ -836,8 +914,11 @@ func computeResourceHealth(resources []OwnedResource) (health, issue, summary st
 	return health, issue, summary
 }
 
-// toHelmRevision converts a helm release to a revision entry
-func toHelmRevision(rel *release.Release) HelmRevision {
+// toHelmRevision converts a helm release to a revision entry.
+func toHelmRevision(rel *release.Release) (HelmRevision, bool) {
+	if rel == nil || rel.Info == nil || rel.Chart == nil || rel.Chart.Metadata == nil {
+		return HelmRevision{}, false
+	}
 	return HelmRevision{
 		Revision:    rel.Version,
 		Status:      rel.Info.Status.String(),
@@ -845,7 +926,7 @@ func toHelmRevision(rel *release.Release) HelmRevision {
 		AppVersion:  rel.Chart.Metadata.AppVersion,
 		Description: rel.Info.Description,
 		Updated:     rel.Info.LastDeployed.Time,
-	}
+	}, true
 }
 
 func toHelmHistoryRevisions(revisions []HelmRevision) []helmhistory.Revision {

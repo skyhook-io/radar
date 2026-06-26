@@ -11,12 +11,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/helmhistory"
+
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/release"
 	helmtime "helm.sh/helm/v3/pkg/time"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -290,15 +293,212 @@ func TestHelmReleaseStorageNamespacesWithClient_GzippedPayload(t *testing.T) {
 	assertStorageNamespaceFromSecret(t, true)
 }
 
+func TestHelmReleaseRowsFromStorageSnapshot_AttachesLastOperation(t *testing.T) {
+	revisions := []*release.Release{
+		helmTestRelease("atomic", "demo", 1, release.StatusSuperseded, "Install complete"),
+		helmTestRelease("atomic", "demo", 2, release.StatusFailed, `Upgrade "atomic" failed: timed out waiting for the condition`),
+		helmTestRelease("atomic", "demo", 3, release.StatusDeployed, "Rollback to 1"),
+	}
+	secrets := make([]*corev1.Secret, 0, len(revisions))
+	for _, rel := range revisions {
+		secrets = append(secrets, helmReleaseSecret(t, "flux-system", rel, false))
+	}
+
+	client := fake.NewSimpleClientset(secretsToObjects(secrets)...)
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.Revision != 3 {
+		t.Fatalf("revision = %d, want 3", row.Revision)
+	}
+	if row.StorageNamespace != "flux-system" {
+		t.Fatalf("storage namespace = %q, want flux-system", row.StorageNamespace)
+	}
+	if row.LastOperation == nil {
+		t.Fatal("LastOperation = nil")
+	}
+	if row.LastOperation.Kind != helmhistory.KindUpgradeRolledBack {
+		t.Fatalf("kind = %q, want %q", row.LastOperation.Kind, helmhistory.KindUpgradeRolledBack)
+	}
+	if row.LastOperation.FailedRevision != 2 || row.LastOperation.RollbackRevision != 3 || row.LastOperation.TargetRevision != 1 {
+		t.Fatalf("operation revisions = failed:%d rollback:%d target:%d", row.LastOperation.FailedRevision, row.LastOperation.RollbackRevision, row.LastOperation.TargetRevision)
+	}
+	if row.LastOperation.FailureDescription == "" {
+		t.Fatal("FailureDescription is empty")
+	}
+	if len(row.Operations) != 1 {
+		t.Fatalf("len(Operations) = %d, want 1", len(row.Operations))
+	}
+	if row.Operations[0].Kind != helmhistory.KindUpgradeRolledBack {
+		t.Fatalf("operations[0].kind = %q, want %q", row.Operations[0].Kind, helmhistory.KindUpgradeRolledBack)
+	}
+}
+
+func TestHelmReleaseRowsFromStorageSnapshot_KeepsHealthyRowsCompact(t *testing.T) {
+	rel := helmTestRelease("healthy", "demo", 1, release.StatusDeployed, "Install complete")
+	client := fake.NewSimpleClientset(helmReleaseSecret(t, "demo", rel, false))
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	if rows[0].LastOperation != nil {
+		t.Fatalf("LastOperation = %#v, want nil", rows[0].LastOperation)
+	}
+	if len(rows[0].Operations) != 0 {
+		t.Fatalf("Operations = %#v, want none", rows[0].Operations)
+	}
+}
+
+func TestHelmReleaseRowsFromStorageSnapshot_SkipsMalformedReleaseSecret(t *testing.T) {
+	malformed := &release.Release{
+		Name:      "malformed",
+		Namespace: "demo",
+		Version:   1,
+		Info: &release.Info{
+			Status:       release.StatusDeployed,
+			LastDeployed: helmtime.Unix(1, 0),
+		},
+	}
+	client := fake.NewSimpleClientset(helmReleaseSecret(t, "demo", malformed, false))
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+
+	if len(rows) != 0 {
+		t.Fatalf("len(rows) = %d, want 0 for malformed release secret", len(rows))
+	}
+}
+
+func TestHelmReleaseRowsFromStorageSnapshot_CapsOperations(t *testing.T) {
+	revisions := []*release.Release{
+		helmTestRelease("repeat", "demo", 1, release.StatusSuperseded, "Install complete"),
+		helmTestRelease("repeat", "demo", 2, release.StatusFailed, `Upgrade "repeat" failed: first`),
+		helmTestRelease("repeat", "demo", 3, release.StatusSuperseded, "Rollback to 1"),
+		helmTestRelease("repeat", "demo", 4, release.StatusFailed, `Upgrade "repeat" failed: second`),
+		helmTestRelease("repeat", "demo", 5, release.StatusSuperseded, "Rollback to 3"),
+		helmTestRelease("repeat", "demo", 6, release.StatusFailed, `Upgrade "repeat" failed: third`),
+		helmTestRelease("repeat", "demo", 7, release.StatusSuperseded, "Rollback to 5"),
+		helmTestRelease("repeat", "demo", 8, release.StatusFailed, `Upgrade "repeat" failed: fourth`),
+		helmTestRelease("repeat", "demo", 9, release.StatusDeployed, "Rollback to 7"),
+	}
+	secrets := make([]*corev1.Secret, 0, len(revisions))
+	for _, rel := range revisions {
+		secrets = append(secrets, helmReleaseSecret(t, "demo", rel, false))
+	}
+	client := fake.NewSimpleClientset(secretsToObjects(secrets)...)
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	if len(rows[0].Operations) != 3 {
+		t.Fatalf("len(Operations) = %d, want 3: %#v", len(rows[0].Operations), rows[0].Operations)
+	}
+	wantRollbackRevisions := []int{9, 7, 5}
+	for i, want := range wantRollbackRevisions {
+		if rows[0].Operations[i].RollbackRevision != want {
+			t.Fatalf("Operations[%d].RollbackRevision = %d, want %d", i, rows[0].Operations[i].RollbackRevision, want)
+		}
+	}
+}
+
+func TestHelmReleaseRowsFromStorageSnapshot_UsesDetailHistoryWindow(t *testing.T) {
+	revisions := []*release.Release{
+		helmTestRelease("long-lived", "demo", 1, release.StatusSuperseded, "Install complete"),
+		helmTestRelease("long-lived", "demo", 2, release.StatusFailed, `Upgrade "long-lived" failed: early failure`),
+		helmTestRelease("long-lived", "demo", 3, release.StatusSuperseded, "Rollback to 1"),
+	}
+	for rev := 4; rev <= releaseHistoryMax+44; rev++ {
+		status := release.StatusSuperseded
+		if rev == releaseHistoryMax+44 {
+			status = release.StatusDeployed
+		}
+		revisions = append(revisions, helmTestRelease("long-lived", "demo", rev, status, "Upgrade complete"))
+	}
+	secrets := make([]*corev1.Secret, 0, len(revisions))
+	for _, rel := range revisions {
+		secrets = append(secrets, helmReleaseSecret(t, "demo", rel, false))
+	}
+	client := fake.NewSimpleClientset(secretsToObjects(secrets)...)
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	if rows[0].Revision != releaseHistoryMax+44 {
+		t.Fatalf("revision = %d, want %d", rows[0].Revision, releaseHistoryMax+44)
+	}
+	if rows[0].LastOperation != nil {
+		t.Fatalf("LastOperation = %#v, want nil for operations outside detail history window", rows[0].LastOperation)
+	}
+	if len(rows[0].Operations) != 0 {
+		t.Fatalf("Operations = %#v, want none for operations outside detail history window", rows[0].Operations)
+	}
+	if got := len(snapshot.histories["demo/long-lived"]); got != releaseHistoryMax {
+		t.Fatalf("history window = %d, want %d", got, releaseHistoryMax)
+	}
+}
+
 func assertStorageNamespaceFromSecret(t *testing.T, gzipped bool) {
 	t.Helper()
-	rel := &release.Release{
-		Name:      "podinfo",
-		Namespace: "demo-flux-helm",
-		Version:   1,
-		Info:      &release.Info{Status: release.StatusDeployed},
-		Chart:     &chart.Chart{Metadata: &chart.Metadata{Name: "podinfo", Version: "6.11.2"}},
+	rel := helmTestRelease("podinfo", "demo-flux-helm", 1, release.StatusDeployed, "Install complete")
+	client := fake.NewSimpleClientset(helmReleaseSecret(t, "flux-system", rel, gzipped))
+
+	storageNamespaces, err := helmReleaseStorageNamespacesWithClient(client)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := storageNamespaces[releaseStorageKey(rel)]; got != "flux-system" {
+		t.Fatalf("storage namespace = %q, want flux-system", got)
+	}
+}
+
+func helmTestRelease(name, namespace string, version int, status release.Status, description string) *release.Release {
+	return &release.Release{
+		Name:      name,
+		Namespace: namespace,
+		Version:   version,
+		Info: &release.Info{
+			Status:       status,
+			Description:  description,
+			LastDeployed: helmtime.Unix(int64(version), 0),
+		},
+		Chart: &chart.Chart{Metadata: &chart.Metadata{
+			Name:       name,
+			Version:    "1.0.0",
+			AppVersion: "1.0.0",
+		}},
+	}
+}
+
+func helmReleaseSecret(t *testing.T, storageNamespace string, rel *release.Release, gzipped bool) *corev1.Secret {
+	t.Helper()
 	payload, err := json.Marshal(rel)
 	if err != nil {
 		t.Fatal(err)
@@ -314,25 +514,24 @@ func assertStorageNamespaceFromSecret(t *testing.T, gzipped bool) {
 		}
 		payload = b.Bytes()
 	}
-
-	client := fake.NewSimpleClientset(&corev1.Secret{
+	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "sh.helm.release.v1.podinfo.v1",
-			Namespace: "flux-system",
+			Name:      fmt.Sprintf("sh.helm.release.v1.%s.v%d", rel.Name, rel.Version),
+			Namespace: storageNamespace,
 			Labels:    map[string]string{"owner": "helm"},
 		},
 		Data: map[string][]byte{
 			"release": []byte(base64.StdEncoding.EncodeToString(payload)),
 		},
-	})
+	}
+}
 
-	storageNamespaces, err := helmReleaseStorageNamespacesWithClient(client)
-	if err != nil {
-		t.Fatal(err)
+func secretsToObjects(secrets []*corev1.Secret) []runtime.Object {
+	objects := make([]runtime.Object, 0, len(secrets))
+	for _, secret := range secrets {
+		objects = append(objects, secret)
 	}
-	if got := storageNamespaces[releaseStorageKey(rel)]; got != "flux-system" {
-		t.Fatalf("storage namespace = %q, want flux-system", got)
-	}
+	return objects
 }
 
 func TestResolveUpgradeChartPath_UsesRepositoryHint(t *testing.T) {

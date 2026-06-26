@@ -1,12 +1,12 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight } from 'lucide-react'
+import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
 import { PaneLoader, PageHeader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
-import type { HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
-import { getStatusColor, formatAge, truncate, isHelmReleaseActionable } from './helm-utils'
+import type { HelmOperation, HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
+import { getStatusColor, formatAge, isHelmReleaseActionable } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { ChartBrowser } from './ChartBrowser'
@@ -291,22 +291,22 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
                 <table className="w-full table-fixed">
                   <thead className="bg-theme-surface sticky top-0 z-10">
                     <tr>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-[28%]">
                         Name
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-32">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-[18%]">
                         Namespace
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-48">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-[22%]">
                         Chart
                       </th>
                       <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24 hidden xl:table-cell">
                         App Version
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-28">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-40">
                         Status
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-20">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-16">
                         Rev
                       </th>
                       <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24">
@@ -411,8 +411,74 @@ function getActionableTooltip(issue: string | undefined, summary: string | undef
   )
 }
 
+function getListOperation(release: HelmRelease): HelmOperation | undefined {
+  if (release.lastOperation) {
+    const releaseStatus = release.status.toLowerCase()
+    if (release.lastOperation.status === 'failed' && releaseStatus === 'failed') {
+      return undefined
+    }
+    if (isListOperation(release.lastOperation)) {
+      return release.lastOperation
+    }
+  }
+  return release.operations?.find(isListOperation)
+}
+
+function isListOperation(operation: HelmOperation): boolean {
+  return operation.kind === 'upgrade_rolled_back' || operation.kind === 'rollback' || operation.status === 'stuck_pending'
+}
+
+function HelmOperationChip({ operation }: { operation: HelmOperation }) {
+  const isPending = operation.status === 'stuck_pending'
+  const isRollback = operation.kind === 'upgrade_rolled_back' || operation.kind === 'rollback'
+  const Icon = isRollback ? RotateCcw : Clock
+  const tone: keyof typeof SEVERITY_BADGE = operation.kind === 'rollback' ? 'info' : isPending ? 'warning' : 'alert'
+  const label = operation.kind === 'upgrade_rolled_back'
+    ? 'rolled back'
+    : operation.kind === 'rollback'
+      ? 'rollback'
+      : 'stuck'
+
+  return (
+    <Tooltip content={
+      <div className="max-w-xs">
+        <div className="font-medium text-theme-text-primary">{operationSummary(operation)}</div>
+        <div className="mt-1 text-[10px] text-theme-text-secondary">{operation.message}</div>
+        {operation.failureDescription && (
+          <div className="mt-1.5 border-t border-theme-border pt-1.5 text-[10px] text-theme-text-tertiary">
+            {operation.failureDescription}
+          </div>
+        )}
+      </div>
+    }>
+      <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE[tone])} aria-label={operationSummary(operation)}>
+        <Icon className="h-3 w-3" />
+        <span className="sr-only">{label}</span>
+        <span className="hidden 2xl:inline" aria-hidden="true">{label}</span>
+      </span>
+    </Tooltip>
+  )
+}
+
+function operationSummary(operation: HelmOperation): string {
+  switch (operation.kind) {
+    case 'upgrade_rolled_back':
+      return 'Helm rolled back after failed upgrade'
+    case 'rollback':
+      return 'Helm rollback applied'
+    case 'pending':
+      return 'Helm operation may be stuck'
+    case 'upgrade_failed':
+      return 'Helm upgrade failed'
+    default:
+      return 'Helm release failed'
+  }
+}
+
 const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
   function ReleaseRow({ release, upgradeInfo, isSelected, isHighlighted, onClick, onMouseEnter }, ref) {
+  const listOperation = getListOperation(release)
+
   // Health badge styling
   const getHealthBadge = () => {
     if (!release.resourceHealth || release.resourceHealth === 'unknown') return null
@@ -454,10 +520,11 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
       )}
     >
       <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
-          <span className="text-sm text-theme-text-primary font-medium truncate">{release.name}</span>
+          <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{release.name}</span>
           {getHealthBadge()}
+          {listOperation && <HelmOperationChip operation={listOperation} />}
           {release.managedByFluxHelmRelease && (
             <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${release.managedByFluxHelmRelease}. Changes here will be reverted at the next reconcile — manage via the GitOps tab.`}>
               <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">
@@ -475,13 +542,15 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           )}
         </div>
       </td>
-      <td className="px-4 py-3 w-32">
-        <span className="text-sm text-theme-text-secondary">{release.namespace}</span>
+      <td className="px-4 py-3 w-[18%]">
+        <Tooltip content={release.namespace}>
+          <span className="block truncate text-sm text-theme-text-secondary">{release.namespace}</span>
+        </Tooltip>
       </td>
-      <td className="px-4 py-3 w-48">
+      <td className="px-4 py-3 w-[22%]">
         <Tooltip content={`${release.chart}-${release.chartVersion}`}>
           <span className="text-sm text-theme-text-secondary truncate block">
-            {truncate(`${release.chart}-${release.chartVersion}`, 35)}
+            {release.chart}-{release.chartVersion}
           </span>
         </Tooltip>
       </td>
@@ -494,7 +563,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           </Tooltip>
         )}
       </td>
-      <td className="px-4 py-3 w-28">
+      <td className="px-4 py-3 w-40">
         {isHelmReleaseActionable(release.status) ? (
           <Tooltip content="Click row to view rollback / history / logs and recover">
             <span
@@ -515,7 +584,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           </span>
         )}
       </td>
-      <td className="px-4 py-3 w-20">
+      <td className="px-4 py-3 w-16">
         <span className="text-sm text-theme-text-secondary">{release.revision}</span>
       </td>
       <td className="px-4 py-3 w-24">
