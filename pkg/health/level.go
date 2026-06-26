@@ -64,9 +64,15 @@ func Rank(l Level) int {
 	return 1
 }
 
-// WorseOf returns the more-severe of two levels by Rank. An empty Level is "no
-// opinion" — the other side wins. When ranks tie, a is returned (so a healthy/
-// neutral tie keeps whichever the caller folded first; both display calmly).
+// WorseOf returns the more-severe of two levels by Rank, commutatively. An empty
+// Level is "no opinion" — the other side wins.
+//
+// healthy and neutral both rank 0 (most-benign), so a rollup must break that tie
+// deterministically rather than by fold order: healthy wins. A set that mixes
+// running (healthy) and intentionally-off (neutral) workloads reads healthy — the
+// app has something running — and only an ALL-neutral set reads neutral. Every
+// other rank is held by exactly one level, so equal non-zero ranks mean the two
+// sides are the same level.
 func WorseOf(a, b Level) Level {
 	if a == "" {
 		return b
@@ -74,8 +80,17 @@ func WorseOf(a, b Level) Level {
 	if b == "" {
 		return a
 	}
-	if Rank(b) > Rank(a) {
+	ra, rb := Rank(a), Rank(b)
+	if rb > ra {
 		return b
+	}
+	if ra > rb {
+		return a
+	}
+	// Equal rank. The only collision is healthy vs neutral (both rank 0): prefer
+	// healthy unless both are neutral.
+	if ra == 0 && (a == LevelHealthy || b == LevelHealthy) {
+		return LevelHealthy
 	}
 	return a
 }

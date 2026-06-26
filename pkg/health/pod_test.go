@@ -45,6 +45,13 @@ func TestPodGoldenVectors(t *testing.T) {
 			wantLevel: LevelUnhealthy,
 		},
 		{
+			// Node unreachable / lost — container states are stale, so genuinely
+			// unknown, not the default healthy.
+			name:      "node-lost (phase Unknown) is unknown",
+			pod:       &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodUnknown}},
+			wantLevel: LevelUnknown,
+		},
+		{
 			name: "CrashLoopBackOff is unhealthy",
 			pod: &corev1.Pod{Status: corev1.PodStatus{
 				Phase: corev1.PodRunning,

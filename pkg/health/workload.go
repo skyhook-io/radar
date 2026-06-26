@@ -89,9 +89,10 @@ func jobVerdict(j *batchv1.Job) Verdict {
 }
 
 // jobDesiredCompletions is the number of successful completions a Job needs.
-// Defaults to 1 (the K8s default when completions is unset).
+// Defaults to 1 when completions is unset or non-positive — a zero target would
+// make Succeeded>=0 trivially true and mark a still-running Job as completed.
 func jobDesiredCompletions(j *batchv1.Job) int {
-	if j.Spec.Completions != nil {
+	if j.Spec.Completions != nil && *j.Spec.Completions > 0 {
 		return int(*j.Spec.Completions)
 	}
 	return 1

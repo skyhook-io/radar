@@ -27,8 +27,9 @@ func TestWorseOf(t *testing.T) {
 	}{
 		{LevelHealthy, LevelUnhealthy, LevelUnhealthy},
 		{LevelDegraded, LevelHealthy, LevelDegraded},
-		{LevelNeutral, LevelHealthy, LevelNeutral}, // tie → first arg
-		{LevelHealthy, LevelNeutral, LevelHealthy}, // tie → first arg
+		{LevelNeutral, LevelHealthy, LevelHealthy}, // tie → healthy, commutatively
+		{LevelHealthy, LevelNeutral, LevelHealthy}, // tie → healthy, commutatively
+		{LevelNeutral, LevelNeutral, LevelNeutral}, // all-neutral → neutral
 		{LevelUnknown, LevelHealthy, LevelUnknown}, // unknown beats healthy
 		{LevelNeutral, LevelDegraded, LevelDegraded},
 		{"", LevelDegraded, LevelDegraded}, // empty = no opinion

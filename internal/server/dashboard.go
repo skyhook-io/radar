@@ -857,7 +857,7 @@ func collectPodForRollup(pod *corev1.Pod, severity string, now time.Time, groups
 		g.severity = severity
 	}
 
-	reason := health.PodProblemReason(pod, time.Now())
+	reason := health.PodProblemReason(pod, now)
 	if reason != "" {
 		g.reasons[reason]++
 	}

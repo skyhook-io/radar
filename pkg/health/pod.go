@@ -51,6 +51,13 @@ func classifyPodLevel(pod *corev1.Pod, now time.Time) Level {
 	if pod.Status.Phase == corev1.PodFailed {
 		return LevelUnhealthy
 	}
+	// Phase Unknown means the node is unreachable and the kubelet has stopped
+	// reporting — the container states are stale and untrustworthy, so this is
+	// genuinely unknown, not healthy. (Without this, the default fall-through to
+	// healthy paints a node-lost pod green.)
+	if pod.Status.Phase == corev1.PodUnknown {
+		return LevelUnknown
+	}
 
 	// Stable crashloop: a container that has restarted with a recorded crash
 	// outcome is a failure REGARDLESS of whether the kubelet currently reports it

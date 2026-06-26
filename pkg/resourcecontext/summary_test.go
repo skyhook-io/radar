@@ -110,6 +110,16 @@ func TestBuildSummary_PodGoldens(t *testing.T) {
 	}
 }
 
+// TestBuildSummary_PodUnknownOmitted pins that a node-lost pod (phase Unknown)
+// does NOT get a false "healthy" health in the agent-facing summary — health is
+// omitted (and with no other fields, the whole summary is nil).
+func TestBuildSummary_PodUnknownOmitted(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodUnknown}}
+	if got := BuildSummary(pod, SummaryOptions{}); got != nil {
+		t.Fatalf("got %#v, want nil (PodUnknown health must be omitted, not healthy)", got)
+	}
+}
+
 // TestBuildSummary_DeploymentReplicasHealth covers the replica-driven
 // health heuristic across the Deployment cases.
 func TestBuildSummary_DeploymentReplicasHealth(t *testing.T) {
