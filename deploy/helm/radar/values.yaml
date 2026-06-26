@@ -417,6 +417,12 @@ env: []
 #  - name: DEBUG
 #    value: "true"
 
+# Init containers to run before the main container
+initContainers: []
+#  - name: init-myservice
+#    image: busybox:1.36
+#    command: ['sh', '-c', 'echo init']
+
 # Liveness and readiness probes
 probes:
   liveness:
