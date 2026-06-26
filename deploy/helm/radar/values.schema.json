@@ -297,17 +297,7 @@
     "initContainers": {
       "type": "array",
       "description": "Init containers to run before the main container.",
-      "items": {
-        "type": "object",
-        "additionalProperties": true,
-        "properties": {
-          "name": { "type": "string" },
-          "image": { "type": "string" },
-          "command": { "type": "array", "items": { "type": "string" } },
-          "args": { "type": "array", "items": { "type": "string" } }
-        },
-        "required": ["name", "image"]
-      }
+      "items": { "type": "object" }
     },
     "probes": {
       "type": "object",
