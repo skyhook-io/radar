@@ -162,8 +162,8 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
     ? disabledTooltip
     : scope.cacheScoped
       ? scope.namespaceRescope
-        ? 'Cache is scoped to one namespace. Switching rebuilds the local cache.'
-        : `Cache is scoped to namespace ${scope.cacheScopeNamespace || triggerLabel}.`
+        ? `Radar is watching only ${scope.cacheScopeNamespace || triggerLabel} to stay fast on large clusters. Pick another namespace to re-point it (takes a moment; closes open terminals).`
+        : `Radar is watching only ${scope.cacheScopeNamespace || triggerLabel} on this cluster.`
       : restrictedHint
       ? 'Limited namespace visibility — only namespaces granted by your RBAC are shown.'
       : isClusterWide
@@ -224,8 +224,11 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
             )}
 
             {scope.cacheScoped ? (
-              <div className="px-3 py-1.5 border-b border-theme-border text-xs text-theme-text-secondary">
-                Cache scope
+              <div className="px-3 py-1.5 border-b border-theme-border text-[11px] leading-snug text-theme-text-secondary">
+                Radar is watching one namespace to stay fast on large clusters.
+                {scope.namespaceRescope
+                  ? ' Pick another to re-point it — takes a moment and closes open terminals.'
+                  : ' This instance is locked to its startup namespace.'}
               </div>
             ) : (
               <div className="flex items-center justify-between px-2 py-1.5 border-b border-theme-border text-xs text-theme-text-secondary">

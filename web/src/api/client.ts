@@ -3191,7 +3191,14 @@ export function useSetActiveNamespace() {
       debugNamespaceLog('mutation:start', { namespaces })
       const controller = new AbortController()
       const currentScope = queryClient.getQueryData<NamespaceScope>(['namespace-scope'])
-      const timeoutMs = currentScope?.cacheScoped ? NAMESPACE_RESCOPE_TIMEOUT : NAMESPACE_SWITCH_TIMEOUT
+      // cacheScoped is a stable per-process property (the server's --namespace-scope
+      // flag). If the scope query is missing/stale we can't yet tell a cheap
+      // view-filter change from a cache-rebuilding rescope, so bias to the long
+      // timeout — only a confirmed non-scoped session gets the fast switch timeout.
+      // Aborting a real rebuild at 5s surfaces a spurious failure while the server
+      // keeps going.
+      const isRescope = currentScope?.cacheScoped !== false
+      const timeoutMs = isRescope ? NAMESPACE_RESCOPE_TIMEOUT : NAMESPACE_SWITCH_TIMEOUT
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
       const startedAt = performance.now()
       try {
@@ -3220,9 +3227,9 @@ export function useSetActiveNamespace() {
           error: error instanceof Error ? error.message : String(error),
         })
         if (error instanceof Error && error.name === 'AbortError') {
-          throw new Error(currentScope?.cacheScoped
+          throw new Error(isRescope
             ? 'Namespace rescope timed out. The cluster may still be loading.'
-            : 'Namespace switch timed out. The cluster may be unreachable.')
+            : 'Namespace switch timed out. The cluster may be unreachable.', { cause: error })
         }
         throw error
       }

@@ -299,8 +299,11 @@ func (d *DynamicResourceCache) probeScope(gvr schema.GroupVersionResource, prefe
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Forced namespace mode: only ever watch the configured namespace.
-	if d.config.NamespaceScoped && d.config.Namespace != "" {
+	// Forced namespace mode (--namespace-scope): pin NAMESPACED resources to the
+	// configured namespace. Cluster-scoped resources have no namespace dimension,
+	// so they fall through to the cluster-wide path below — pinning them to a
+	// namespace would list nothing.
+	if d.config.NamespaceScoped && d.config.Namespace != "" && d.gvrIsNamespaced(gvr) {
 		return d.classifyScope(gvr, d.config.Namespace, d.listProbe(ctx, gvr, d.config.Namespace))
 	}
 
@@ -418,7 +421,11 @@ func (d *DynamicResourceCache) ProbeCount(gvr schema.GroupVersionResource) int {
 }
 
 func (d *DynamicResourceCache) probeCountList(ctx context.Context, gvr schema.GroupVersionResource) (*unstructured.UnstructuredList, error) {
-	if d.config.NamespaceScoped && d.config.Namespace != "" {
+	// Match probeScope: under --namespace-scope only NAMESPACED resources are
+	// pinned to the configured namespace. Counting a cluster-scoped resource
+	// inside a namespace lists nothing (or errors), which would misgate the
+	// size-based eager-warm decision, so it stays cluster-wide.
+	if d.config.NamespaceScoped && d.config.Namespace != "" && d.gvrIsNamespaced(gvr) {
 		return d.config.DynamicClient.Resource(gvr).Namespace(d.config.Namespace).List(ctx, metav1.ListOptions{Limit: 1})
 	}
 

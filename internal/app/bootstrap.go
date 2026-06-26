@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -84,8 +86,10 @@ func InitializeK8s(cfg AppConfig) error {
 		k8s.SetFallbackNamespace(cfg.Namespace)
 	}
 	configureNamespaceScopePreferenceResolver(cfg)
-	if cfg.NamespaceScope && k8s.GetNamespaceScopeTarget() == "" {
-		return fmt.Errorf("--namespace-scope requires --namespace or a namespace on the current kubeconfig context")
+	if cfg.NamespaceScope {
+		if err := validateNamespaceScopeTarget(k8s.GetNamespaceScopeTarget()); err != nil {
+			return err
+		}
 	}
 
 	if len(cfg.KubeconfigDirs) > 0 {
@@ -105,11 +109,28 @@ func InitializeK8s(cfg AppConfig) error {
 	return nil
 }
 
+// validateNamespaceScopeTarget enforces that --namespace-scope resolves to
+// exactly one valid namespace. Multiple namespaces (e.g. --namespace=a,b) are
+// not supported yet — the informer cache pins to a single namespace — so reject
+// them at startup with a clear message instead of silently caching an invalid one.
+func validateNamespaceScopeTarget(target string) error {
+	if target == "" {
+		return fmt.Errorf("--namespace-scope requires --namespace or a namespace on the current kubeconfig context")
+	}
+	if errs := validation.IsDNS1123Label(target); len(errs) > 0 {
+		return fmt.Errorf("--namespace-scope supports a single namespace; %q is not a valid namespace name (multiple namespaces are not supported yet): %s", target, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
 func configureNamespaceScopePreferenceResolver(cfg AppConfig) {
 	k8s.SetNamespaceScopePreferenceResolver(nil)
-	if !cfg.NamespaceScope || cfg.Namespace != "" || cfg.AuthConfig.Enabled() {
+	if !cfg.NamespaceScope || cfg.AuthConfig.Enabled() {
 		return
 	}
+	// Resolve the scoped namespace from the local per-context pick. Registered
+	// even when --namespace is set, so a UI rescope (which persists its pick)
+	// survives a reconnect / context switch instead of snapping back.
 	k8s.SetNamespaceScopePreferenceResolver(func(ctxName string) (string, bool) {
 		activeNamespaces := settings.Load().ActiveNamespaces
 		if len(activeNamespaces[ctxName]) == 1 && activeNamespaces[ctxName][0] != "" {
@@ -117,7 +138,30 @@ func configureNamespaceScopePreferenceResolver(cfg AppConfig) {
 		}
 		return "", false
 	})
+	// Treat an explicit --namespace like a UI pick of that namespace: seed it as
+	// this run's authoritative starting scope (overwriting a stale pick from a
+	// previous run). A later UI rescope overwrites it, and that rescope is what
+	// then survives reconnects.
+	if cfg.Namespace != "" {
+		seedNamespaceScopePick(k8s.GetContextName(), cfg.Namespace)
+	}
 	k8s.RestoreNamespaceScopePreference(k8s.GetContextName())
+}
+
+// seedNamespaceScopePick persists ns as the single active namespace for ctxName,
+// mirroring what a UI namespace pick stores. No-op on an empty context name.
+func seedNamespaceScopePick(ctxName, ns string) {
+	if ctxName == "" {
+		return
+	}
+	if _, err := settings.Update(func(st *settings.Settings) {
+		if st.ActiveNamespaces == nil {
+			st.ActiveNamespaces = map[string][]string{}
+		}
+		st.ActiveNamespaces[ctxName] = []string{ns}
+	}); err != nil {
+		log.Printf("[namespace] failed to seed namespace pick for context %q: %v", ctxName, err)
+	}
 }
 
 // BuildTimelineStoreConfig creates the timeline store configuration from app config.

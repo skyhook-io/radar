@@ -96,6 +96,52 @@ func TestDynamicResourceCache_CountDirectProbeUnavailableWithoutRemainingCount(t
 	}
 }
 
+func TestDynamicResourceCache_ProbeCountClusterScopedStaysClusterWide(t *testing.T) {
+	// Under --namespace-scope, counting a cluster-scoped CRD must stay cluster-wide:
+	// a namespaced list of a cluster-scoped resource returns nothing and would
+	// misgate the size-based eager-warm decision.
+	gvr := schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
+	disc := &ResourceDiscovery{
+		resources: []APIResource{{
+			Group: gvr.Group, Version: gvr.Version, Kind: "NodePool", Name: gvr.Resource,
+			Namespaced: false, IsCRD: true, Verbs: []string{"get", "list", "watch"},
+		}},
+		resourceMap: map[string]APIResource{},
+		gvrMap:      map[string]schema.GroupVersionResource{},
+		lastRefresh: time.Now(),
+		cacheTTL:    time.Hour,
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "NodePoolList"},
+	)
+	dyn.PrependReactor("list", "nodepools", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		// Any namespaced list returns empty, so the test fails if the pin guard
+		// regresses and counts a cluster-scoped resource inside the namespace.
+		if action.GetNamespace() != "" {
+			return true, &unstructured.UnstructuredList{}, nil
+		}
+		remaining := int64(11)
+		list := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{{}}}
+		list.SetRemainingItemCount(&remaining)
+		return true, list, nil
+	})
+
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{
+		DynamicClient:   dyn,
+		Discovery:       disc,
+		NamespaceScoped: true,
+		Namespace:       "foo",
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+
+	if got := d.ProbeCount(gvr); got != 12 {
+		t.Fatalf("ProbeCount(cluster-scoped under --namespace-scope) = %d, want 12 (cluster-wide)", got)
+	}
+}
+
 func TestDynamicResourceCache_ProbeCountUsesRemainingCount(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(

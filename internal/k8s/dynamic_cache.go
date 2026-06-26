@@ -47,6 +47,18 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			nsFallback = permResult.Namespace
 		}
 
+		// --namespace-scope pins namespaced CRD informers to the target namespace
+		// (typed informers are pinned via probeResourceAccess). Cluster-scoped CRDs
+		// stay cluster-wide — enforced by the gvrIsNamespaced guard in probeScope.
+		var nsScoped bool
+		var nsTarget string
+		if ForceNamespaceScope {
+			if t := GetNamespaceScopeTarget(); t != "" {
+				nsScoped = true
+				nsTarget = t
+			}
+		}
+
 		discovery := GetResourceDiscovery()
 		var sharedDiscovery *k8score.ResourceDiscovery
 		if discovery != nil {
@@ -58,6 +70,8 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			Discovery:         sharedDiscovery,
 			Changes:           changeCh,
 			NamespaceFallback: nsFallback,
+			NamespaceScoped:   nsScoped,
+			Namespace:         nsTarget,
 			DebugEvents:       DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)

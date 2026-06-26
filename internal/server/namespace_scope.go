@@ -220,8 +220,18 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 			actives = []string{cacheScopeNs}
 		}
 		if s.authConfig.Enabled() {
-			namespaces = actives
-			authoritative = true
+			// Only advertise the pinned namespace as accessible to THIS user if
+			// they can actually list it. The shared cache holds only cacheScopeNs,
+			// but RBAC still gates each user's reads of it — claiming access the
+			// read paths then deny would make the picker lie.
+			if cacheScopeNs != "" && len(intersectPicksWithAllowed([]string{cacheScopeNs}, namespaces)) > 0 {
+				namespaces = []string{cacheScopeNs}
+				authoritative = true
+			} else {
+				actives = []string{}
+				namespaces = []string{}
+				authoritative = false
+			}
 		}
 	}
 
@@ -337,11 +347,45 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// Forced-scope requests must name exactly one namespace. Validate before any
+	// persistence so a malformed (empty / multi) request can't mutate the saved
+	// pick and then 400.
+	if k8s.ForceNamespaceScope && len(cleaned) != 1 {
+		s.writeError(w, http.StatusBadRequest, "--namespace-scope requires exactly one active namespace")
+		return
+	}
+
+	// Under --namespace-scope the persisted pick and the live cache scope must
+	// move as one commit. Serialize the whole section (persist → rescope →
+	// re-sync) so two concurrent requests can't persist one namespace while the
+	// cache ends on another. (PerformNamespaceRescope's own lock only serializes
+	// the rebuild, not this handler's persist.)
 	if k8s.ForceNamespaceScope {
-		if len(cleaned) != 1 {
-			s.writeError(w, http.StatusBadRequest, "--namespace-scope requires exactly one active namespace")
-			return
+		s.scopeMutationMu.Lock()
+		defer s.scopeMutationMu.Unlock()
+	}
+
+	// Persist the no-auth (single-user) pick across restarts before acting on it.
+	// Auth-enabled deploys skip persistence — it'd require user-keyed storage we
+	// don't have. Under --namespace-scope a reconnect restores the cache scope
+	// from this saved value, so a rescope must NOT proceed if we can't save the
+	// pick: the cache would rebuild for the new namespace but snap back to the
+	// stale saved one on the next reconnect, diverging from the live override.
+	// Outside scope mode the pick is just a view filter, so a save failure is
+	// non-fatal — log and continue.
+	if auth.UserFromContext(r.Context()) == nil {
+		if ctxName := k8s.GetContextName(); ctxName != "" {
+			if err := persistNamespacePick(ctxName, cleaned); err != nil {
+				log.Printf("[namespace] failed to persist namespace pick for context %q: %v", ctxName, err)
+				if k8s.ForceNamespaceScope {
+					s.writeError(w, http.StatusServiceUnavailable, "failed to save namespace pick: "+err.Error())
+					return
+				}
+			}
 		}
+	}
+
+	if k8s.ForceNamespaceScope {
 		currentScope := k8s.GetNamespaceScopeTarget()
 		if s.authConfig.Enabled() {
 			if cleaned[0] != currentScope {
@@ -349,7 +393,24 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 				return
 			}
 		} else if cleaned[0] != currentScope {
+			// A rescope tears down and rebuilds the informer caches for a different
+			// namespace. PerformNamespaceRescope stops active sessions itself, but
+			// only once it commits to the teardown (after its connectivity check),
+			// so a failed rescope doesn't kill port-forwards / exec for nothing.
 			if err := k8s.PerformNamespaceRescope(cleaned[0]); err != nil {
+				// We persisted the requested pick above, but the rescope didn't take
+				// (rolled back to the previous namespace, or superseded by a newer op).
+				// Re-sync the saved pick to whatever scope is actually live now, so a
+				// later reconnect doesn't restore the namespace we just rejected.
+				if ctxName := k8s.GetContextName(); ctxName != "" {
+					var livePick []string
+					if live := k8s.GetNamespaceScopeTarget(); live != "" {
+						livePick = []string{live}
+					}
+					if perr := persistNamespacePick(ctxName, livePick); perr != nil {
+						log.Printf("[namespace] failed to restore saved pick after rescope failure for context %q: %v", ctxName, perr)
+					}
+				}
 				safeNamespace := strings.ReplaceAll(strings.ReplaceAll(cleaned[0], "\n", ""), "\r", "")
 				safeErr := strings.ReplaceAll(strings.ReplaceAll(err.Error(), "\n", ""), "\r", "")
 				log.Printf("[namespace] failed to rescope cache to namespace %q: %s", safeNamespace, safeErr)
@@ -362,28 +423,22 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 
 	s.setActiveNamespaceForUser(r, cleaned)
 
-	// Persist the no-auth (single-user) pick across restarts. Auth-enabled
-	// deploys skip persistence — it'd require user-keyed storage we don't
-	// have. The in-memory pick already took effect, so a persistence failure
-	// is non-fatal — we log and continue.
-	if auth.UserFromContext(r.Context()) == nil {
-		ctxName := k8s.GetContextName()
-		if ctxName != "" {
-			if _, err := settings.Update(func(st *settings.Settings) {
-				if st.ActiveNamespaces == nil {
-					st.ActiveNamespaces = map[string][]string{}
-				}
-				if len(cleaned) == 0 {
-					delete(st.ActiveNamespaces, ctxName)
-				} else {
-					st.ActiveNamespaces[ctxName] = append([]string(nil), cleaned...)
-				}
-			}); err != nil {
-				log.Printf("[namespace] failed to persist namespace pick for context %q: %v", ctxName, err)
-			}
-		}
-	}
-
 	// Return the fresh scope state so the UI can update without a follow-up GET.
 	s.handleGetNamespaceScope(w, r)
+}
+
+// persistNamespacePick saves the single-user namespace pick for ctxName so it
+// survives restarts and is restored on reconnect. An empty pick clears it.
+func persistNamespacePick(ctxName string, cleaned []string) error {
+	_, err := settings.Update(func(st *settings.Settings) {
+		if st.ActiveNamespaces == nil {
+			st.ActiveNamespaces = map[string][]string{}
+		}
+		if len(cleaned) == 0 {
+			delete(st.ActiveNamespaces, ctxName)
+		} else {
+			st.ActiveNamespaces[ctxName] = append([]string(nil), cleaned...)
+		}
+	})
+	return err
 }

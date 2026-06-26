@@ -200,6 +200,116 @@ func TestNamespaceScopeOverrideClearsBackToStartupFallback(t *testing.T) {
 	}
 }
 
+// The startup --namespace is an *initial* filter, so it must only pin the cache
+// scope on the context it was set for. After a cross-cluster switch the new
+// context's own namespace takes over — the stale startup value must not follow.
+func TestStartupFallbackNamespaceDoesNotFollowContextSwitch(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	setContextState := func(name, ns string) {
+		clientMu.Lock()
+		contextName = name
+		contextNamespace = ns
+		clientMu.Unlock()
+	}
+	t.Cleanup(func() { setContextState("", "") })
+
+	// Boot: --namespace=cli-ns on the startup context, which has no context ns.
+	setContextState("startup-ctx", "")
+	SetFallbackNamespace("cli-ns")
+	if got := GetNamespaceScopeTarget(); got != "cli-ns" {
+		t.Fatalf("scope target on startup context = %q, want cli-ns", got)
+	}
+
+	// Switch to a different cluster whose context carries its own namespace.
+	setContextState("other-ctx", "other-ns")
+	if got := GetNamespaceScopeTarget(); got != "other-ns" {
+		t.Fatalf("scope target after switch = %q, want other-ns (not stale cli-ns)", got)
+	}
+
+	// Switch to a cluster with no context namespace and no saved pick: the stale
+	// startup value must not leak in — the target is empty so the switch can
+	// surface the "pick a namespace" requirement.
+	setContextState("bare-ctx", "")
+	if got := GetNamespaceScopeTarget(); got != "" {
+		t.Fatalf("scope target on bare context = %q, want empty", got)
+	}
+
+	// Switching back to the startup context re-activates --namespace.
+	setContextState("startup-ctx", "")
+	if got := GetNamespaceScopeTarget(); got != "cli-ns" {
+		t.Fatalf("scope target back on startup context = %q, want cli-ns", got)
+	}
+}
+
+func TestProspectiveNamespaceScopeTarget(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	contextName = "startup-ctx"
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName = ""
+		clientMu.Unlock()
+	})
+
+	// A saved pick for the target context wins.
+	SetNamespaceScopePreferenceResolver(func(ctx string) (string, bool) {
+		if ctx == "picked-ctx" {
+			return "saved-ns", true
+		}
+		return "", false
+	})
+	if got := ProspectiveNamespaceScopeTarget("picked-ctx"); got != "saved-ns" {
+		t.Fatalf("prospective target with saved pick = %q, want saved-ns", got)
+	}
+
+	// The startup --namespace only applies to its own context, never to others.
+	SetFallbackNamespace("cli-ns") // captures contextName == "startup-ctx"
+	if got := ProspectiveNamespaceScopeTarget("startup-ctx"); got != "cli-ns" {
+		t.Fatalf("prospective target on startup context = %q, want cli-ns", got)
+	}
+	// A different context with no pick and no kubeconfig on disk resolves empty —
+	// the switch guard treats that as "no usable scope target".
+	if got := ProspectiveNamespaceScopeTarget("other-ctx"); got != "" {
+		t.Fatalf("prospective target on foreign context = %q, want empty", got)
+	}
+}
+
+// A --namespace-scope switch to a context with no usable scope target must fail
+// at the pre-flight guard *before* tearing down or stopping sessions, so the
+// user keeps their current caches and port-forwards / exec terminals.
+func TestContextSwitchPreflightLeavesSessionsAlone(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	stopped := false
+	SetSessionStopper(func() { stopped = true })
+	t.Cleanup(func() { SetSessionStopper(nil) })
+
+	ForceNamespaceScope = true
+	t.Cleanup(func() { ForceNamespaceScope = false })
+
+	// No saved pick, no startup --namespace, and the context isn't in any
+	// kubeconfig → prospective scope target is empty → the switch must bail before
+	// CancelOngoingOperations / ResetAllSubsystems / stopActiveSessions.
+	err := PerformContextSwitch("nonexistent-ctx")
+	if err == nil {
+		t.Fatal("expected pre-flight failure for a context with no scope target")
+	}
+	// Must be a typed preflight error so the handler keeps the current connection
+	// instead of marking the app disconnected (nothing was torn down).
+	if !errors.Is(err, ErrContextSwitchPreflight) {
+		t.Fatalf("expected ErrContextSwitchPreflight, got %v", err)
+	}
+	if stopped {
+		t.Fatal("sessions were stopped before a switch that failed pre-flight")
+	}
+}
+
 func TestRequireNamespaceScopeTarget(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)

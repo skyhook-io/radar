@@ -59,8 +59,13 @@ var (
 	clusterName            string
 	contextNamespace       string // Default namespace from kubeconfig context
 	fallbackNamespace      string // Explicit namespace from --namespace flag
-	namespaceScopeOverride string // Runtime namespace selected by local --namespace-scope rescope
-	namespaceScopeResolver func(contextName string) (string, bool)
+	// fallbackNamespaceContext is the context that was active when --namespace was
+	// set at startup. --namespace is an *initial* value, so it only pins the cache
+	// scope for that context — after switching clusters, the scope target comes
+	// from the new context's namespace (or a saved pick), not the stale startup value.
+	fallbackNamespaceContext string
+	namespaceScopeOverride   string // Runtime namespace selected by local --namespace-scope rescope
+	namespaceScopeResolver   func(contextName string) (string, bool)
 	contextUsesExec        bool // True when the current context uses an exec credential plugin
 	// execPluginCommands is the set of unique exec-auth plugin command basenames
 	// referenced by any context in the merged kubeconfig. Populated from
@@ -671,6 +676,9 @@ func SetFallbackNamespace(ns string) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	fallbackNamespace = ns
+	// Record the context this --namespace applies to, so it only pins the cache
+	// scope while we're on that context (see GetNamespaceScopeTarget).
+	fallbackNamespaceContext = contextName
 }
 
 // SetNamespaceScopeOverride sets the runtime namespace used by local
@@ -709,17 +717,54 @@ func RestoreNamespaceScopePreference(contextName string) {
 
 // GetNamespaceScopeTarget returns the namespace used when informer caches are
 // explicitly namespace-scoped. A local runtime rescope wins first, then the
-// explicit CLI namespace, then the kubeconfig context namespace.
+// explicit CLI namespace (only while on the context it was set for), then the
+// kubeconfig context namespace.
 func GetNamespaceScopeTarget() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	if namespaceScopeOverride != "" {
 		return namespaceScopeOverride
 	}
-	if fallbackNamespace != "" {
+	// --namespace is an *initial* filter, so it only pins the scope while we're on
+	// the context it was set for. After a cross-cluster switch the new context's own
+	// namespace takes over — the stale startup value must not follow across clusters.
+	if fallbackNamespace != "" && contextName == fallbackNamespaceContext {
 		return fallbackNamespace
 	}
 	return contextNamespace
+}
+
+// ProspectiveNamespaceScopeTarget resolves what GetNamespaceScopeTarget would
+// return after switching to newContext, without mutating any client state. The
+// context-switch path uses it to reject a --namespace-scope switch that would
+// land on a context with no usable scope target *before* tearing down the
+// current caches. Keep its precedence in sync with GetNamespaceScopeTarget:
+// saved pick → startup --namespace (only for its context) → context namespace.
+func ProspectiveNamespaceScopeTarget(newContext string) string {
+	clientMu.RLock()
+	resolver := namespaceScopeResolver
+	startupFallback := fallbackNamespace
+	startupContext := fallbackNamespaceContext
+	clientMu.RUnlock()
+
+	if resolver != nil {
+		if ns, ok := resolver(newContext); ok && ns != "" {
+			return ns
+		}
+	}
+	if startupFallback != "" && newContext == startupContext {
+		return startupFallback
+	}
+	// GetAvailableContexts reads the kubeconfig off disk and takes clientMu, so
+	// it must run after the snapshot above is released.
+	if contexts, err := GetAvailableContexts(); err == nil {
+		for _, c := range contexts {
+			if c.Name == newContext {
+				return c.Namespace
+			}
+		}
+	}
+	return ""
 }
 
 // GetEffectiveNamespace returns the namespace to use for RBAC fallback checks.

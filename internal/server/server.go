@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -79,6 +80,13 @@ type Server struct {
 	// other users' views).
 	nsPreferences sync.Map
 
+	// scopeMutationMu serializes a forced (--namespace-scope) namespace change so
+	// its persisted pick and the live cache scope move as one commit. Without it,
+	// two concurrent rescope requests could persist one namespace while the cache
+	// ends on another (PerformNamespaceRescope's own lock only serializes the
+	// rebuild, not this handler's persist step).
+	scopeMutationMu sync.Mutex
+
 	// Short-TTL cache for topology builds. The Topology graph is a
 	// deterministic projection of the informer cache; rebuilding it walks
 	// every resource of every kind. A 5s TTL absorbs the typical bursts
@@ -132,6 +140,12 @@ func New(cfg Config) *Server {
 	k8s.OnContextSwitch(func(_ string) {
 		s.finalizePostContextSwitch()
 	})
+
+	// Let the destructive cache operations (context switch, namespace rescope)
+	// terminate active sessions at their point of no return, rather than the
+	// handlers stopping them up front — a switch/rescope that fails before
+	// teardown must leave port-forwards / exec terminals intact.
+	k8s.SetSessionStopper(StopAllSessions)
 
 	// Initialize auth components when auth is enabled
 	if s.authConfig.Enabled() {
@@ -877,6 +891,16 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 	// explicit filter" and fall through, rather than short-circuiting to a
 	// zero-namespace (empty) result.
 	if explicit := parseNamespaces(r.URL.Query()); len(explicit) > 0 {
+		// Under --namespace-scope the informer cache holds only the pinned
+		// namespace; keep Helm consistent with the rest of the UI by clamping an
+		// explicit filter to the pinned namespace (empty when it's out of scope)
+		// instead of reading releases the cache doesn't cover.
+		if k8s.ForceNamespaceScope {
+			if target := k8s.GetNamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
+				return []string{target}, true
+			}
+			return []string{}, true
+		}
 		return explicit, true
 	}
 
@@ -3236,10 +3260,13 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stop all active sessions before switching
-	StopAllSessions()
-
 	if err := k8s.PerformContextSwitch(name); err != nil {
+		// A preflight rejection fails before any teardown — the current cluster is
+		// still connected, so don't poison the global connection status.
+		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   name,
@@ -3294,11 +3321,13 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stop all active sessions before retrying
-	StopAllSessions()
-
-	// Reconnect to the same context (reuses PerformContextSwitch which handles full reinit)
+	// Reconnect to the same context (reuses PerformContextSwitch which handles full
+	// reinit, including stopping active sessions at teardown)
 	if err := k8s.PerformContextSwitch(ctx); err != nil {
+		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		// Set disconnected state with error
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
@@ -3450,9 +3479,11 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	StopAllSessions()
-
 	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
+		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
+			s.writeError(w, http.StatusBadRequest, "failed to switch context: "+err.Error())
+			return
+		}
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   qualifiedName,
