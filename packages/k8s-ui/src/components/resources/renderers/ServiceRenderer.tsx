@@ -99,12 +99,16 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpoint
           <div className="space-y-2">
             {ports.map((port: any, i: number) => (
               <div key={`${port.port}-${port.protocol || 'TCP'}`} className="card-inner text-sm">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-baseline gap-x-2 gap-y-0.5 min-w-0 flex-wrap">
                     <span className="text-theme-text-primary font-medium">{port.name || `port-${i + 1}`}</span>
                     <span className="text-xs text-theme-text-tertiary">{port.protocol || 'TCP'}</span>
+                    <span className="text-xs text-theme-text-secondary font-mono">
+                      {port.port}{port.targetPort != null && port.targetPort !== port.port ? ` → ${port.targetPort}` : ''}
+                      {port.nodePort ? ` (NodePort: ${port.nodePort})` : ''}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     {renderPortAction?.({
                       namespace,
                       serviceName,
@@ -114,10 +118,6 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpoint
                       appProtocol: port.appProtocol,
                     })}
                   </div>
-                </div>
-                <div className="text-xs text-theme-text-secondary mt-1">
-                  {port.port}{port.targetPort != null && port.targetPort !== port.port ? ` → ${port.targetPort}` : ''}
-                  {port.nodePort ? ` (NodePort: ${port.nodePort})` : ''}
                 </div>
                 {renderPortPanel?.({
                   namespace,

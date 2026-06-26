@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { Activity, Loader2, X, ChevronDown } from 'lucide-react'
+import { Activity, Loader2, X, ChevronDown, Maximize2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { apiFetch } from '../../api/client'
 import { apiUrl } from '../../api/config'
@@ -69,9 +69,97 @@ export function ProbeButton({ active, onClick }: { active: boolean; onClick: () 
   )
 }
 
-// Inline probe form + response. Renders in the drawer flow (inside the port
-// card) rather than as a centered modal — the action is scoped to this port, so
-// it stays in context instead of taking over the screen.
+function VerdictLine({
+  result,
+  showHeaders,
+  onToggleHeaders,
+}: {
+  result: ProbeResult
+  showHeaders: boolean
+  onToggleHeaders: () => void
+}) {
+  return (
+    <div className="flex items-center gap-3 text-xs">
+      <span className={clsx('font-mono font-semibold', statusTone(result.status))}>{result.status}</span>
+      <span className="text-theme-text-tertiary">{result.durationMs} ms</span>
+      <span className="text-theme-text-tertiary">{result.bodyBytes.toLocaleString()} bytes{result.truncated ? ' (truncated)' : ''}</span>
+      <button
+        type="button"
+        onClick={onToggleHeaders}
+        className="ml-auto flex items-center gap-1 text-theme-text-secondary hover:text-theme-text-primary"
+      >
+        Headers <ChevronDown className={clsx('w-3 h-3 transition-transform', showHeaders && 'rotate-180')} />
+      </button>
+    </div>
+  )
+}
+
+// Roomy response viewer. The narrow drawer can't show a 27 KB /metrics body
+// readably (wide lines wrap into mush), so the full body opens here: wider than
+// the drawer, monospace, no-wrap with horizontal scroll. Triggered on demand —
+// the request + verdict stay inline in the port card.
+function ProbeResponseSheet({
+  serviceName,
+  port,
+  scheme,
+  path,
+  result,
+  onClose,
+}: {
+  serviceName: string
+  port: number
+  scheme: string
+  path: string
+  result: ProbeResult
+  onClose: () => void
+}) {
+  const [showHeaders, setShowHeaders] = useState(false)
+  return (
+    <div className="fixed inset-0 z-50" onClick={(e) => e.stopPropagation()}>
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="absolute right-0 top-0 h-full w-[min(820px,92vw)] bg-theme-surface border-l border-theme-border shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between gap-3 p-4 border-b border-theme-border">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Activity className="w-4 h-4 text-blue-400 shrink-0" />
+              <h3 className="text-sm font-semibold text-theme-text-primary truncate">Probe response</h3>
+            </div>
+            <div className="text-xs text-theme-text-tertiary font-mono mt-0.5 truncate">
+              GET {scheme}://{serviceName}:{port}{path}
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Close" className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-4 py-2 border-b border-theme-border">
+          <VerdictLine result={result} showHeaders={showHeaders} onToggleHeaders={() => setShowHeaders((v) => !v)} />
+        </div>
+
+        {showHeaders && (
+          <pre className="text-xs bg-theme-base m-4 mb-0 rounded p-3 overflow-auto max-h-48 text-theme-text-secondary font-mono whitespace-pre">
+            {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
+          </pre>
+        )}
+
+        {result.error ? (
+          <div className="m-4 text-sm text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2">
+            {result.error}
+          </div>
+        ) : (
+          <pre className="flex-1 text-xs bg-theme-base m-4 rounded p-3 overflow-auto text-theme-text-primary font-mono whitespace-pre">
+            {result.body || '(empty response body)'}
+          </pre>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Inline probe: request form + verdict + a short body peek, rendered in the
+// drawer flow (inside the port card). The full body opens in ProbeResponseSheet
+// so a large response never bloats the drawer.
 export function ProbePanel({
   namespace,
   serviceName,
@@ -88,9 +176,15 @@ export function ProbePanel({
   const [scheme, setScheme] = useState<'http' | 'https'>(initialScheme)
   const [path, setPath] = useState('/')
   const [showHeaders, setShowHeaders] = useState(false)
+  const [sheetOpen, setSheetOpen] = useState(false)
+  // The path that was actually sent — so the sheet header reflects the response, not edits-in-progress.
+  const [sentPath, setSentPath] = useState('/')
+  const [sentScheme, setSentScheme] = useState<'http' | 'https'>(initialScheme)
 
   const probe = useMutation<ProbeResult>({
     mutationFn: async () => {
+      setSentPath(path)
+      setSentScheme(scheme)
       const res = await apiFetch(apiUrl('/probe/service'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -156,18 +250,7 @@ export function ProbePanel({
 
       {result && (
         <div className="space-y-2">
-          <div className="flex items-center gap-3 text-xs">
-            <span className={clsx('font-mono font-semibold', statusTone(result.status))}>{result.status}</span>
-            <span className="text-theme-text-tertiary">{result.durationMs} ms</span>
-            <span className="text-theme-text-tertiary">{result.bodyBytes.toLocaleString()} bytes{result.truncated ? ' (truncated)' : ''}</span>
-            <button
-              type="button"
-              onClick={() => setShowHeaders((v) => !v)}
-              className="ml-auto flex items-center gap-1 text-theme-text-secondary hover:text-theme-text-primary"
-            >
-              Headers <ChevronDown className={clsx('w-3 h-3 transition-transform', showHeaders && 'rotate-180')} />
-            </button>
-          </div>
+          <VerdictLine result={result} showHeaders={showHeaders} onToggleHeaders={() => setShowHeaders((v) => !v)} />
 
           {result.error && (
             <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1.5">
@@ -176,17 +259,41 @@ export function ProbePanel({
           )}
 
           {showHeaders && (
-            <pre className="text-xs bg-theme-base rounded p-2 overflow-auto max-h-40 text-theme-text-secondary font-mono">
+            <pre className="text-xs bg-theme-base rounded p-2 overflow-auto max-h-32 text-theme-text-secondary font-mono whitespace-pre">
               {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
             </pre>
           )}
 
           {!result.error && (
-            <pre className="text-xs bg-theme-base rounded p-2 overflow-auto max-h-64 text-theme-text-primary font-mono whitespace-pre-wrap break-words">
-              {result.body || '(empty response body)'}
-            </pre>
+            <>
+              {/* Short peek — bounded so a big body never takes over the drawer. */}
+              <pre className="text-xs bg-theme-base rounded p-2 overflow-hidden max-h-24 text-theme-text-primary font-mono whitespace-pre-wrap break-words">
+                {result.body || '(empty response body)'}
+              </pre>
+              {result.body && (
+                <button
+                  type="button"
+                  onClick={() => setSheetOpen(true)}
+                  className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300"
+                >
+                  <Maximize2 className="w-3 h-3" />
+                  View full response
+                </button>
+              )}
+            </>
           )}
         </div>
+      )}
+
+      {sheetOpen && result && (
+        <ProbeResponseSheet
+          serviceName={serviceName}
+          port={port}
+          scheme={sentScheme}
+          path={sentPath}
+          result={result}
+          onClose={() => setSheetOpen(false)}
+        />
       )}
     </div>
   )

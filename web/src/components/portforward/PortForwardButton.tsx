@@ -103,7 +103,7 @@ function KubectlCommandDialog({
 
         <div className="p-4 space-y-3">
           <p className="text-sm text-theme-text-secondary">
-            Live port-forwarding isn&apos;t available here — run it from your own machine instead:
+            Forward this port to your own machine — run it from your terminal:
           </p>
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2 text-sm text-theme-text-secondary">
@@ -148,7 +148,7 @@ function KubectlCommandDialog({
             </button>
           </div>
           <p className="text-xs text-theme-text-tertiary">
-            You&apos;ll need <code className="inline-code">kubectl</code> and your own credentials for this cluster to run it.
+            You&apos;ll need <code className="inline-code">kubectl</code> and access to this cluster.
           </p>
         </div>
       </div>
