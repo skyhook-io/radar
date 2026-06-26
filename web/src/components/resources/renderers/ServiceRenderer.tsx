@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ServiceRenderer as BaseServiceRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
-import { ProbeButton, ProbePanel, isHttpishPort, defaultScheme } from '../../probe/ServiceProbeButton'
+import { ProbeButton, ProbePanel, isHttpishPort, defaultScheme, defaultPathForPort } from '../../probe/ServiceProbeButton'
 import { useResources } from '../../../api/client'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
 import type { ResourceRef } from '../../../types'
@@ -74,6 +74,7 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
             serviceName={serviceName}
             port={port}
             initialScheme={defaultScheme(port, name, appProtocol)}
+            initialPath={defaultPathForPort(port, name, appProtocol)}
             onClose={() => setActiveProbePort(null)}
           />
         ) : null

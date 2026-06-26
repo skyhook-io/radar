@@ -39,6 +39,7 @@ type probeRequest struct {
 
 type probeResponse struct {
 	Status     int               `json:"status"`
+	StatusText string            `json:"statusText"` // canonical reason phrase, e.g. "OK", "Service Unavailable"
 	DurationMs int64             `json:"durationMs"`
 	Headers    map[string]string `json:"headers"`
 	Body       string            `json:"body"`
@@ -223,6 +224,7 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, probeResponse{
 		Status:     resp.StatusCode,
+		StatusText: http.StatusText(resp.StatusCode),
 		DurationMs: dur,
 		Headers:    headers,
 		Body:       respBody,

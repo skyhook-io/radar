@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { Activity, Loader2, X, ChevronDown, Maximize2 } from 'lucide-react'
+import { Activity, Loader2, X, ChevronDown, Maximize2, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { apiFetch } from '../../api/client'
 import { apiUrl } from '../../api/config'
@@ -11,6 +11,25 @@ import { Tooltip } from '../ui/Tooltip'
 // (that's the local-client TCP path's job). Heuristic over name/appProtocol/number.
 const HTTP_PORT_NUMBERS = new Set([80, 443, 8080, 8443, 8000, 8081, 3000, 5000, 9090, 9091, 9093, 9100, 15000, 15090])
 const HTTP_NAME_RE = /(^|[-_])(http|https|web|ui|console|dashboard|metrics|api|admin)([-_]|$)/i
+
+// Common metrics port numbers — used to decide which quick-path chips make sense.
+const METRICS_PORT_NUMBERS = new Set([9090, 9091, 9093, 9100, 9153, 2112, 8888])
+
+function isMetricsPort(port: number, name?: string, appProtocol?: string): boolean {
+  if ((appProtocol || '').toLowerCase().includes('metric')) return true
+  if (name && /metric/i.test(name)) return true
+  return METRICS_PORT_NUMBERS.has(port)
+}
+
+// Default request path for a port. Only metrics ports get a non-root default —
+// /metrics is a near-deterministic convention there. We deliberately don't
+// pre-fill or suggest health paths (/healthz etc.): those are genuine guesses
+// (apps vary: /health, /actuator/health, /-/healthy …) and a suggestion that
+// 404s reads as the tool being wrong. The honest one-click-health feature is to
+// derive paths from the backing pod's liveness/readiness probes — a follow-up.
+export function defaultPathForPort(port: number, name?: string, appProtocol?: string): string {
+  return isMetricsPort(port, name, appProtocol) ? '/metrics' : '/'
+}
 
 export function isHttpishPort(port: number, name?: string, appProtocol?: string, protocol?: string): boolean {
   // HTTP rides TCP — a UDP port is never a GET target (e.g. statsd "metrics-udp").
@@ -34,6 +53,7 @@ export function defaultScheme(port: number, name?: string, appProtocol?: string)
 
 interface ProbeResult {
   status: number
+  statusText: string
   durationMs: number
   headers: Record<string, string>
   body: string
@@ -42,11 +62,60 @@ interface ProbeResult {
   error?: string
 }
 
-function statusTone(status: number): string {
+function statusTextTone(status: number): string {
   if (status >= 200 && status < 300) return 'text-emerald-400'
   if (status >= 300 && status < 400) return 'text-blue-400'
   if (status >= 400 && status < 500) return 'text-amber-400'
   return 'text-red-400'
+}
+
+function statusDotTone(status: number): string {
+  if (status >= 200 && status < 300) return 'bg-emerald-400'
+  if (status >= 300 && status < 400) return 'bg-blue-400'
+  if (status >= 400 && status < 500) return 'bg-amber-400'
+  return 'bg-red-400'
+}
+
+// Make the body readable per content type: pretty-print JSON, label everything
+// else (HTML / Prometheus / XML / …) so the operator knows what they're looking at.
+function formatBody(result: ProbeResult): { text: string; label: string } {
+  const body = result.body
+  const ct = (result.headers['Content-Type'] || result.headers['content-type'] || '').toLowerCase()
+  const looksJson = ct.includes('json') || /^\s*[[{]/.test(body)
+  if (looksJson) {
+    let text = body
+    if (!result.truncated) {
+      try { text = JSON.stringify(JSON.parse(body), null, 2) } catch { /* leave raw */ }
+    }
+    return { text, label: 'JSON' }
+  }
+  if (ct.includes('html')) return { text: body, label: 'HTML' }
+  if (body.startsWith('# HELP') || body.startsWith('# TYPE') || ct.includes('openmetrics')) {
+    return { text: body, label: 'Prometheus' }
+  }
+  if (ct.includes('xml')) return { text: body, label: 'XML' }
+  const short = ct ? (ct.split(';')[0].split('/').pop() || 'text') : 'text'
+  return { text: body, label: short }
+}
+
+function CopyButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        }).catch(() => {})
+      }}
+      className={clsx('inline-flex items-center gap-1 text-xs text-theme-text-secondary hover:text-theme-text-primary', className)}
+    >
+      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  )
 }
 
 // Small toggle button rendered in a port row's action slot. The panel itself
@@ -80,7 +149,10 @@ function VerdictLine({
 }) {
   return (
     <div className="flex items-center gap-3 text-xs">
-      <span className={clsx('font-mono font-semibold', statusTone(result.status))}>{result.status}</span>
+      <span className={clsx('flex items-center gap-1.5 font-mono font-semibold', statusTextTone(result.status))}>
+        <span className={clsx('w-1.5 h-1.5 rounded-full', statusDotTone(result.status))} />
+        {result.status}{result.statusText ? ` ${result.statusText}` : ''}
+      </span>
       <span className="text-theme-text-tertiary">{result.durationMs} ms</span>
       <span className="text-theme-text-tertiary">{result.bodyBytes.toLocaleString()} bytes{result.truncated ? ' (truncated)' : ''}</span>
       <button
@@ -114,6 +186,7 @@ function ProbeResponseSheet({
   onClose: () => void
 }) {
   const [showHeaders, setShowHeaders] = useState(false)
+  const { text, label } = formatBody(result)
   return (
     <div className="fixed inset-0 z-50" onClick={(e) => e.stopPropagation()}>
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -148,9 +221,15 @@ function ProbeResponseSheet({
             {result.error}
           </div>
         ) : (
-          <pre className="flex-1 text-xs bg-theme-base m-4 rounded p-3 overflow-auto text-theme-text-primary font-mono whitespace-pre">
-            {result.body || '(empty response body)'}
-          </pre>
+          <div className="flex flex-col min-h-0 flex-1 m-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="badge-sm bg-theme-elevated text-theme-text-secondary border border-theme-border">{label}</span>
+              {result.body && <CopyButton text={text} />}
+            </div>
+            <pre className="flex-1 text-xs bg-theme-base rounded p-3 overflow-auto text-theme-text-primary font-mono whitespace-pre">
+              {text || '(empty response body)'}
+            </pre>
+          </div>
         )}
       </div>
     </div>
@@ -165,30 +244,30 @@ export function ProbePanel({
   serviceName,
   port,
   initialScheme,
+  initialPath,
   onClose,
 }: {
   namespace: string
   serviceName: string
   port: number
   initialScheme: 'http' | 'https'
+  initialPath: string
   onClose: () => void
 }) {
   const [scheme, setScheme] = useState<'http' | 'https'>(initialScheme)
-  const [path, setPath] = useState('/')
+  const [path, setPath] = useState(initialPath)
   const [showHeaders, setShowHeaders] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
-  // The path that was actually sent — so the sheet header reflects the response, not edits-in-progress.
-  const [sentPath, setSentPath] = useState('/')
-  const [sentScheme, setSentScheme] = useState<'http' | 'https'>(initialScheme)
+  // What was actually sent — so the sheet header / re-renders reflect the response.
+  const [sent, setSent] = useState<{ scheme: 'http' | 'https'; path: string }>({ scheme: initialScheme, path: initialPath })
 
-  const probe = useMutation<ProbeResult>({
-    mutationFn: async () => {
-      setSentPath(path)
-      setSentScheme(scheme)
+  const probe = useMutation<ProbeResult, Error, { scheme: 'http' | 'https'; path: string }>({
+    mutationFn: async (vars) => {
+      setSent(vars)
       const res = await apiFetch(apiUrl('/probe/service'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ namespace, name: serviceName, port: String(port), scheme, path }),
+        body: JSON.stringify({ namespace, name: serviceName, port: String(port), scheme: vars.scheme, path: vars.path }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`)
@@ -197,6 +276,7 @@ export function ProbePanel({
   })
 
   const result = probe.data
+  const peek = result && !result.error ? formatBody(result) : null
 
   return (
     <div className="mt-3 pt-3 border-t border-theme-border space-y-2" onClick={(e) => e.stopPropagation()}>
@@ -214,7 +294,7 @@ export function ProbePanel({
         </button>
       </div>
 
-      <form className="flex items-stretch gap-2" onSubmit={(e) => { e.preventDefault(); probe.mutate() }}>
+      <form className="flex items-stretch gap-2" onSubmit={(e) => { e.preventDefault(); probe.mutate({ scheme, path }) }}>
         <select
           value={scheme}
           onChange={(e) => setScheme(e.target.value as 'http' | 'https')}
@@ -264,11 +344,17 @@ export function ProbePanel({
             </pre>
           )}
 
-          {!result.error && (
+          {peek && (
             <>
-              {/* Short peek — bounded so a big body never takes over the drawer. */}
-              <pre className="text-xs bg-theme-base rounded p-2 overflow-hidden max-h-24 text-theme-text-primary font-mono whitespace-pre-wrap break-words">
-                {result.body || '(empty response body)'}
+              {result.body && (
+                <div className="flex items-center justify-between">
+                  <span className="badge-sm bg-theme-elevated text-theme-text-secondary border border-theme-border">{peek.label}</span>
+                  <CopyButton text={peek.text} />
+                </div>
+              )}
+              {/* Short peek — bounded + no-wrap so a big body never takes over the drawer. */}
+              <pre className="text-xs bg-theme-base rounded p-2 overflow-hidden max-h-24 text-theme-text-primary font-mono whitespace-pre">
+                {peek.text || '(empty response body)'}
               </pre>
               {result.body && (
                 <button
@@ -289,8 +375,8 @@ export function ProbePanel({
         <ProbeResponseSheet
           serviceName={serviceName}
           port={port}
-          scheme={sentScheme}
-          path={sentPath}
+          scheme={sent.scheme}
+          path={sent.path}
           result={result}
           onClose={() => setSheetOpen(false)}
         />
