@@ -45,6 +45,16 @@ func TestGetPodStatusInspectsContainers(t *testing.T) {
 	if got := getPodStatus(unsched); got != StatusDegraded {
 		t.Errorf("unschedulable pod node color = %q, want degraded", got)
 	}
+
+	// A pod in phase Unknown (node lost) must read gray/unknown, not green — the
+	// canonical classifier would fall it through to healthy.
+	nodeLost := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodUnknown}}
+	if got := getPodStatus(nodeLost); got != StatusUnknown {
+		t.Errorf("node-lost (phase Unknown) pod node color = %q, want unknown", got)
+	}
+	if got := podSummaryStatus(nodeLost); got != StatusUnhealthy {
+		t.Errorf("node-lost pod summary bucket = %q, want unhealthy (unknown surfaces in rollup)", got)
+	}
 }
 
 // TestPodSummaryStatusBuckets pins the counter path (distinct from node color): a

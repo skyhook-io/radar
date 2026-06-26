@@ -52,5 +52,13 @@ func topoPodLevel(pod *corev1.Pod) health.Level {
 	if health.IsPodUnschedulable(pod) {
 		return health.LevelDegraded
 	}
+	// A pod in phase Unknown (node unreachable / lost) is genuinely unknown, not
+	// healthy. health.Pod falls such phases through to healthy (mirroring the
+	// legacy ClassifyPodHealth string), so topology — whose old phase switch
+	// defaulted Unknown to gray — must restore that here, lest a node-partitioned
+	// pod render green.
+	if pod.Status.Phase == corev1.PodUnknown {
+		return health.LevelUnknown
+	}
 	return health.Pod(pod, time.Now()).Level
 }

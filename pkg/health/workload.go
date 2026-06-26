@@ -60,9 +60,9 @@ func replicaVerdict(desired, ready, available int32, requireAvailable bool) Verd
 }
 
 func jobVerdict(j *batchv1.Job) Verdict {
-	if j.Spec.Suspend != nil && *j.Spec.Suspend {
-		return Verdict{Level: LevelNeutral, Reason: "Suspended"}
-	}
+	// Terminal conditions dominate spec intent: a Job that has failed or completed
+	// must not be masked by spec.suspend (a failed-then-suspended Job is still a
+	// failure). Check the terminal conditions before the suspend branch.
 	for _, c := range j.Status.Conditions {
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
 			return Verdict{Level: LevelUnhealthy, Reason: "Failed"}
@@ -70,6 +70,9 @@ func jobVerdict(j *batchv1.Job) Verdict {
 		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
 			return Verdict{Level: LevelNeutral, Reason: "Completed"}
 		}
+	}
+	if j.Spec.Suspend != nil && *j.Spec.Suspend {
+		return Verdict{Level: LevelNeutral, Reason: "Suspended"}
 	}
 	if int(j.Status.Succeeded) >= jobDesiredCompletions(j) {
 		return Verdict{Level: LevelNeutral, Reason: "Completed"}

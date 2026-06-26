@@ -73,6 +73,10 @@ func TestWorkloadGoldenVectors(t *testing.T) {
 		{"job suspended is neutral", &batchv1.Job{
 			Spec: batchv1.JobSpec{Suspend: ptrBool(true)},
 		}, LevelNeutral, "Suspended"},
+		{"suspended job with terminal failure is still unhealthy", &batchv1.Job{
+			Spec:   batchv1.JobSpec{Suspend: ptrBool(true)},
+			Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}},
+		}, LevelUnhealthy, "Failed"},
 		{"job running is neutral", &batchv1.Job{
 			Status: batchv1.JobStatus{Active: 1},
 		}, LevelNeutral, "Running"},
