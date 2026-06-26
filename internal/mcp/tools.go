@@ -27,6 +27,7 @@ import (
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/internal/timeline"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
@@ -2043,7 +2044,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 		d.ResourceCounts["pods"] = len(pods)
 		for _, pod := range pods {
-			switch k8s.ClassifyPodHealth(pod, now) {
+			switch health.Pod(pod, now).LegacyString() {
 			case "healthy":
 				d.Health.HealthyPods++
 			case "warning":
@@ -2054,14 +2055,14 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 				// PodProblemReason returns the kubelet's waiting/terminated
 				// reason; ClassifyPodHealth==error implies the pod is in a
 				// failing state, so critical is the right default.
-				restarts, lastTermReason := k8s.PodRestartContext(pod)
+				restarts, lastTermReason := health.PodRestartContext(pod)
 				ageDur := now.Sub(pod.CreationTimestamp.Time)
 				allProblems = append(allProblems, mcpProblem{
 					Kind:                 "Pod",
 					Namespace:            pod.Namespace,
 					Name:                 pod.Name,
 					Severity:             severity,
-					Reason:               k8s.PodProblemReason(pod),
+					Reason:               health.PodProblemReason(pod, now),
 					Age:                  k8s.FormatAge(ageDur),
 					RestartCount:         restarts,
 					LastTerminatedReason: lastTermReason,
@@ -2202,7 +2203,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			d.Nodes.Total = len(nodes)
 
 			for _, node := range nodes {
-				h := k8s.ClassifyNodeHealth(node)
+				h := health.Node(node)
 				if h.Ready {
 					if h.Unschedulable {
 						d.Nodes.Cordoned++

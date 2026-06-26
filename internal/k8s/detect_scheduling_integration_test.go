@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -531,7 +532,7 @@ func TestDetectSchedulingProblems_SchedulingGatedIsNotUnschedulable(t *testing.T
 	if err := InitTestResourceCache(fake.NewClientset(gated)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
-	if IsPodUnschedulable(gated) {
+	if health.IsPodUnschedulable(gated) {
 		t.Errorf("SchedulingGated pod must not be reported unschedulable")
 	}
 	for _, p := range DetectSchedulingProblems(GetResourceCache(), "prod") {

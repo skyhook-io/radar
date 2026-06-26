@@ -1102,7 +1102,7 @@ func podsRestarts(pods []*corev1.Pod) (int, string) {
 	var worst int32 = -1
 	reason := ""
 	for _, p := range pods {
-		rc, r := k8s.PodRestartContext(p)
+		rc, r := health.PodRestartContext(p)
 		total += int(rc)
 		if rc > worst {
 			worst = rc

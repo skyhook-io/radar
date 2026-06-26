@@ -15,6 +15,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	"github.com/skyhook-io/radar/pkg/health"
 )
 
 const probeFailureWindow = 10 * time.Minute
@@ -355,25 +357,25 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, det)
 				continue
 			}
-			health := ClassifyPodHealth(pod, now)
+			healthStr := health.Pod(pod, now).LegacyString()
 			earlyProbeTargetProblem, hasEarlyProbeTargetProblem := activeProbeTargetProblem(pod, "")
-			if health == "healthy" && !hasEarlyProbeTargetProblem {
+			if healthStr == "healthy" && !hasEarlyProbeTargetProblem {
 				continue
 			}
 			// Unschedulable pods are owned by the scheduling source, which
 			// names the offending constraint instead of a bare "Pending".
-			if IsPodUnschedulable(pod) {
+			if health.IsPodUnschedulable(pod) {
 				continue
 			}
 			ageDur := now.Sub(pod.CreationTimestamp.Time)
 			severity := "high"
-			if health == "error" {
+			if healthStr == "error" {
 				severity = "critical"
 			}
-			restartCount, lastTermReason := PodRestartContext(pod)
+			restartCount, lastTermReason := health.PodRestartContext(pod)
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
-			reason := PodProblemReason(pod)
-			message := PodProblemMessage(pod)
+			reason := health.PodProblemReason(pod, now)
+			message := health.PodProblemMessage(pod)
 			if pf, ok := probeFailures[pod.Namespace+"/"+pod.Name]; ok && shouldUseProbeFailure(pod, reason, lastTermReason, pf.reason, now) {
 				reason = pf.reason
 				message = pf.message
@@ -394,7 +396,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 			var cause, action string
 			if reason == crashLoopReason {
-				cause, action = podCrashLoopDiagnosis(pod, now)
+				cause, action = health.PodCrashLoopDiagnosis(pod, now)
 			} else if c, a := imagePullDiagnosis(reason, message); c != "" {
 				cause, action = c, a
 			}
@@ -1388,7 +1390,7 @@ func classifyProbeFailureEvent(reason, msg string) (string, bool) {
 func shouldUseProbeFailure(pod *corev1.Pod, currentReason, lastTerminatedReason, probeReason string, now time.Time) bool {
 	switch probeReason {
 	case readinessProbeFailedReason:
-		return currentReason == readinessProbeFailedReason || podHasReadinessProbeFailure(pod, now)
+		return currentReason == readinessProbeFailedReason || health.PodHasReadinessProbeFailure(pod, now)
 	case livenessProbeFailedReason:
 		if lastTerminatedReason == "OOMKilled" {
 			return false

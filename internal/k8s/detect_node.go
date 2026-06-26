@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/skyhook-io/radar/pkg/health"
 )
 
 // NodeProblem describes a detected problem on a node.
@@ -19,7 +21,7 @@ func DetectNodeProblems(nodes []*corev1.Node) []NodeProblem {
 	var problems []NodeProblem
 
 	for _, node := range nodes {
-		h := ClassifyNodeHealth(node)
+		h := health.Node(node)
 
 		if !h.Ready {
 			reason := "NotReady"
