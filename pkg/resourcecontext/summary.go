@@ -2,11 +2,14 @@ package resourcecontext
 
 import (
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/health"
 )
 
 // SummaryOptions configures the compact per-result enrichment produced by
@@ -99,84 +102,40 @@ func sourceForOwner(ownerKind, group string) string {
 	return "native"
 }
 
-// deriveHealth applies a tiny per-kind heuristic to classify a resource
-// as "healthy" | "degraded" | "unhealthy". Kinds we don't recognize
-// derive to "" and the field is omitted on the wire.
-//
-// Vocabulary matches the broader status-tone scheme used across the UI
-// (k8s-ui StatusTone) so consumers don't need to translate.
+// deriveHealth classifies a resource via the shared health classifier so the AI
+// context, the dashboards, the timeline, and topology all agree. Kinds it doesn't
+// recognize derive to "" and the field is omitted on the wire.
 func deriveHealth(obj runtime.Object) string {
 	if obj == nil {
 		return ""
 	}
+	now := time.Now()
 	switch o := obj.(type) {
 	case *corev1.Pod:
-		return podHealth(o)
-	case *appsv1.Deployment:
-		// Use Spec.Replicas (desired) not Status.Replicas (current). During
-		// scale-down or rolling updates, Status.Replicas can exceed
-		// Spec.Replicas while terminating pods drain; comparing ReadyReplicas
-		// against Status.Replicas would falsely report "degraded" when all
-		// desired replicas are actually ready. Matches StatefulSet semantics.
-		desired := int32(1)
-		if o.Spec.Replicas != nil {
-			desired = *o.Spec.Replicas
-		}
-		return replicasHealth(o.Status.ReadyReplicas, desired)
-	case *appsv1.StatefulSet:
-		desired := int32(1)
-		if o.Spec.Replicas != nil {
-			desired = *o.Spec.Replicas
-		}
-		return replicasHealth(o.Status.ReadyReplicas, desired)
-	case *appsv1.DaemonSet:
-		return replicasHealth(o.Status.NumberReady, o.Status.DesiredNumberScheduled)
-	case *appsv1.ReplicaSet:
-		// Same Spec-vs-Status concern as Deployment above.
-		desired := int32(1)
-		if o.Spec.Replicas != nil {
-			desired = *o.Spec.Replicas
-		}
-		return replicasHealth(o.Status.ReadyReplicas, desired)
+		return levelToString(health.Pod(o, now).Level)
+	case *appsv1.Deployment, *appsv1.StatefulSet, *appsv1.DaemonSet, *appsv1.ReplicaSet:
+		return levelToString(health.Workload(o, now).Level)
 	case *unstructured.Unstructured:
 		return unstructuredHealth(o)
 	}
 	return ""
 }
 
-func podHealth(p *corev1.Pod) string {
-	switch p.Status.Phase {
-	case corev1.PodRunning:
-		if len(p.Status.ContainerStatuses) == 0 {
-			return "degraded"
-		}
-		for _, cs := range p.Status.ContainerStatuses {
-			if !cs.Ready {
-				return "degraded"
-			}
-		}
+// levelToString maps a canonical health.Level onto the string vocabulary the AI
+// summary emits. Unknown/unrecognized derives to "" so we don't assert a status
+// for a resource whose shape we don't understand.
+func levelToString(l health.Level) string {
+	switch l {
+	case health.LevelHealthy:
 		return "healthy"
-	case corev1.PodSucceeded:
-		return "healthy"
-	case corev1.PodFailed:
-		return "unhealthy"
-	case corev1.PodPending:
+	case health.LevelNeutral:
+		return "neutral"
+	case health.LevelDegraded:
 		return "degraded"
+	case health.LevelUnhealthy:
+		return "unhealthy"
 	}
 	return ""
-}
-
-func replicasHealth(ready, desired int32) string {
-	if desired <= 0 {
-		return ""
-	}
-	if ready >= desired {
-		return "healthy"
-	}
-	if ready <= 0 {
-		return "unhealthy"
-	}
-	return "degraded"
 }
 
 // unstructuredHealth derives health for CRDs that follow the standard

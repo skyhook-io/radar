@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/packages"
 	"github.com/skyhook-io/radar/pkg/subject"
 )
@@ -603,7 +604,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				noteErr("Deployment", ns, err)
 				for _, d := range items {
 					add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
-						deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)))
+						packages.Health(health.Workload(d, time.Now()).Level))
 				}
 				return
 			}
@@ -611,7 +612,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			noteErr("Deployment", ns, err)
 			for _, d := range items {
 				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
-					deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)))
+					packages.Health(health.Workload(d, time.Now()).Level))
 			}
 		})
 	}
@@ -622,7 +623,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				noteErr("DaemonSet", ns, err)
 				for _, d := range items {
 					add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
-						daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)))
+						packages.Health(health.Workload(d, time.Now()).Level))
 				}
 				return
 			}
@@ -630,7 +631,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			noteErr("DaemonSet", ns, err)
 			for _, d := range items {
 				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
-					daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)))
+					packages.Health(health.Workload(d, time.Now()).Level))
 			}
 		})
 	}
@@ -641,7 +642,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				noteErr("StatefulSet", ns, err)
 				for _, ss := range items {
 					add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
-						statefulsetHealth(int(ss.Status.Replicas), int(ss.Status.ReadyReplicas)))
+						packages.Health(health.Workload(ss, time.Now()).Level))
 				}
 				return
 			}
@@ -649,27 +650,12 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			noteErr("StatefulSet", ns, err)
 			for _, ss := range items {
 				add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
-					statefulsetHealth(int(ss.Status.Replicas), int(ss.Status.ReadyReplicas)))
+					packages.Health(health.Workload(ss, time.Now()).Level))
 			}
 		})
 	}
 	return out, errors.Join(listerErrs...)
 }
-
-func deploymentHealth(desired, available int) packages.Health {
-	if desired == 0 {
-		return packages.HealthUnknown
-	}
-	if available >= desired {
-		return packages.HealthHealthy
-	}
-	if available == 0 {
-		return packages.HealthUnhealthy
-	}
-	return packages.HealthDegraded
-}
-func daemonsetHealth(desired, ready int) packages.Health   { return deploymentHealth(desired, ready) }
-func statefulsetHealth(desired, ready int) packages.Health { return deploymentHealth(desired, ready) }
 
 // collectGitOpsDeclarations reads Argo Applications + Flux HelmReleases
 // + Flux Kustomizations cluster-wide. Missing CRDs (controller not

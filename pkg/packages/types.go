@@ -44,6 +44,7 @@ type Health string
 
 const (
 	HealthHealthy   Health = "healthy"
+	HealthNeutral   Health = "neutral"
 	HealthDegraded  Health = "degraded"
 	HealthUnhealthy Health = "unhealthy"
 	HealthUnknown   Health = "unknown"

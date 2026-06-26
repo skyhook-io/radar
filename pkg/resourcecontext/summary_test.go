@@ -56,7 +56,11 @@ func TestBuildSummary_PodGoldens(t *testing.T) {
 					},
 				},
 			},
-			want: `{"health":"degraded"}`,
+			// A transiently-unready container with no sustained failure signal
+			// (no probe failure over the grace window, no crashloop) is healthy
+			// under the canonical classifier — not degraded, as the old coarse
+			// any-unready-container heuristic claimed.
+			want: `{"health":"healthy"}`,
 		},
 		{
 			name: "failed",
@@ -118,7 +122,8 @@ func TestBuildSummary_DeploymentReplicasHealth(t *testing.T) {
 		{"all_ready", 3, 3, []byte(`{"health":"healthy"}`)},
 		{"none_ready", 0, 3, []byte(`{"health":"unhealthy"}`)},
 		{"partial", 1, 3, []byte(`{"health":"degraded"}`)},
-		{"scaled_to_zero", 0, 0, nil},
+		// Scaled to zero is an intentional/lifecycle state — neutral, not omitted.
+		{"scaled_to_zero", 0, 0, []byte(`{"health":"neutral"}`)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -129,6 +134,10 @@ func TestBuildSummary_DeploymentReplicasHealth(t *testing.T) {
 				},
 				Status: appsv1.DeploymentStatus{
 					ReadyReplicas: c.ready,
+					// A steady-state Deployment has available == ready; the
+					// canonical classifier requires availability for Deployments
+					// (matching the timeline + frontend), so set it here.
+					AvailableReplicas: c.ready,
 					// Status.Replicas mirrors the actual non-terminated pod count
 					// in real clusters; we set it equal to ready here so the
 					// fixture matches a steady-state Deployment for that test.
@@ -165,8 +174,9 @@ func TestBuildSummary_DeploymentHealthDuringScaleDown(t *testing.T) {
 	dep := &appsv1.Deployment{
 		Spec: appsv1.DeploymentSpec{Replicas: &desired},
 		Status: appsv1.DeploymentStatus{
-			ReadyReplicas: 2, // all DESIRED replicas are ready
-			Replicas:      4, // but 2 extras still terminating from a scale-down
+			ReadyReplicas:     2, // all DESIRED replicas are ready
+			AvailableReplicas: 2, // and available
+			Replicas:          4, // but 2 extras still terminating from a scale-down
 		},
 	}
 	got := BuildSummary(dep, SummaryOptions{})

@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/packages"
 	"github.com/skyhook-io/radar/pkg/subject"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -481,7 +482,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 			for _, d := range items {
 				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
-					deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)),
+					packages.Health(health.Workload(d, time.Now()).Level),
 					int(d.Status.AvailableReplicas), int(d.Status.Replicas), d.Spec.Selector)
 			}
 		})
@@ -497,7 +498,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 			for _, d := range items {
 				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
-					daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)),
+					packages.Health(health.Workload(d, time.Now()).Level),
 					int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled), d.Spec.Selector)
 			}
 		})
@@ -513,7 +514,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 			for _, d := range items {
 				add("StatefulSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
-					statefulsetHealth(int(d.Status.Replicas), int(d.Status.ReadyReplicas)),
+					packages.Health(health.Workload(d, time.Now()).Level),
 					int(d.Status.ReadyReplicas), int(d.Status.Replicas), d.Spec.Selector)
 			}
 		})
@@ -532,7 +533,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				}
 				add("Job", j.Namespace, j.Name, j.Labels, j.Annotations,
 					primaryImage(j.Spec.Template.Spec.Containers),
-					jobHealth(j),
+					packages.Health(health.Workload(j, time.Now()).Level),
 					int(j.Status.Succeeded), jobDesired(j), j.Spec.Selector)
 			}
 		})
@@ -548,7 +549,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 			for _, cj := range items {
 				add("CronJob", cj.Namespace, cj.Name, cj.Labels, cj.Annotations,
 					primaryImage(cj.Spec.JobTemplate.Spec.Template.Spec.Containers),
-					cronJobHealth(cj),
+					packages.Health(health.Workload(cj, time.Now()).Level),
 					0, 0, nil)
 			}
 		})
@@ -596,7 +597,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 		for _, in := range ins {
 			r.Workloads = append(r.Workloads, in.wl)
 			r.Events = append(r.Events, in.events...)
-			r.Health = string(worstAppHealth(packages.Health(r.Health), packages.Health(in.wl.Health)))
+			r.Health = string(packages.WorseHealth(packages.Health(r.Health), packages.Health(in.wl.Health)))
 			if v := in.wl.Version; v != "" && !slices.Contains(r.Versions, v) {
 				r.Versions = append(r.Versions, v)
 			}
@@ -1206,40 +1207,6 @@ func jobDesired(j *batchv1.Job) int {
 	return 1
 }
 
-func jobHealth(j *batchv1.Job) packages.Health {
-	for _, c := range j.Status.Conditions {
-		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return packages.HealthUnhealthy
-		}
-		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
-			return packages.HealthHealthy
-		}
-	}
-	if int(j.Status.Succeeded) >= jobDesired(j) {
-		return packages.HealthHealthy
-	}
-	if j.Status.Failed > 0 && j.Status.Active == 0 && j.Status.Succeeded == 0 {
-		return packages.HealthUnhealthy
-	}
-	if j.Status.Active > 0 {
-		return packages.HealthHealthy
-	}
-	return packages.HealthUnknown
-}
-
-func cronJobHealth(cj *batchv1.CronJob) packages.Health {
-	if cj == nil {
-		return packages.HealthUnknown
-	}
-	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
-		return packages.HealthUnknown
-	}
-	if cj.Status.LastScheduleTime == nil {
-		return packages.HealthUnknown
-	}
-	return packages.HealthHealthy
-}
-
 func appNameFromKey(key string) string {
 	if i := strings.LastIndex(key, "/"); i >= 0 && i < len(key)-1 {
 		return key[i+1:]
@@ -1254,32 +1221,5 @@ func namespaceFromKey(key string) string {
 	return ""
 }
 
-// worstAppHealth merges two health values (local copy of pkg/packages's
-// unexported worseHealth): unhealthy > degraded > unknown > healthy; "" defers
-// to the other side.
-func worstAppHealth(a, b packages.Health) packages.Health {
-	if a == "" {
-		return b
-	}
-	if b == "" {
-		return a
-	}
-	if appHealthRank(a) >= appHealthRank(b) {
-		return a
-	}
-	return b
-}
-
-func appHealthRank(h packages.Health) int {
-	switch h {
-	case packages.HealthUnhealthy:
-		return 4
-	case packages.HealthDegraded:
-		return 3
-	case packages.HealthUnknown:
-		return 2
-	case packages.HealthHealthy:
-		return 1
-	}
-	return 2
-}
+// (worstAppHealth / appHealthRank removed — the app rollup now uses
+// packages.WorseHealth, the single rollup ordering.)

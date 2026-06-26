@@ -3,6 +3,8 @@ package packages
 import (
 	"sort"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/health"
 )
 
 // Aggregate is the merge function. Given a Sources struct, returns a
@@ -333,16 +335,22 @@ func worseHealth(a, b Health) Health {
 	return b
 }
 
+// WorseHealth is the exported worst-of for callers outside the package (the app
+// rollup) so there is one rollup ordering, not a per-caller copy.
+func WorseHealth(a, b Health) Health { return worseHealth(a, b) }
+
+// healthRank normalizes external GitOps/Helm vocabularies onto the canonical
+// levels, then defers to the shared health.Rank ordering so the package rollup,
+// the timeline, and topology share one definition of "worse" — including neutral
+// aggregating as most-benign.
 func healthRank(h Health) int {
 	switch Health(strings.ToLower(string(h))) {
-	case HealthUnhealthy, "danger", "critical", "failed", "stalled":
-		return 4
-	case HealthDegraded, "warning", "warn", "progressing", "reconciling":
-		return 3
-	case HealthUnknown:
-		return 2
-	case HealthHealthy, "ok", "ready", "available":
-		return 1
+	case "danger", "critical", "failed", "stalled":
+		return health.Rank(health.LevelUnhealthy)
+	case "warning", "warn", "progressing", "reconciling":
+		return health.Rank(health.LevelDegraded)
+	case "ok", "ready", "available":
+		return health.Rank(health.LevelHealthy)
 	}
-	return 2
+	return health.Rank(health.Level(strings.ToLower(string(h))))
 }

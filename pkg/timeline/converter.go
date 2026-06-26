@@ -213,6 +213,8 @@ func StringToHealthState(s string) HealthState {
 	switch s {
 	case "healthy":
 		return HealthHealthy
+	case "neutral":
+		return HealthNeutral
 	case "degraded":
 		return HealthDegraded
 	case "unhealthy":

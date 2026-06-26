@@ -53,6 +53,7 @@ type HealthState string
 
 const (
 	HealthHealthy   HealthState = "healthy"
+	HealthNeutral   HealthState = "neutral"
 	HealthDegraded  HealthState = "degraded"
 	HealthUnhealthy HealthState = "unhealthy"
 	HealthUnknown   HealthState = "unknown"

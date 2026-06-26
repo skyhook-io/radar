@@ -1,6 +1,10 @@
 package timeline
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/skyhook-io/radar/pkg/health"
+)
 
 // GroupEvents groups events according to the specified mode.
 // Exported so pkg consumers (e.g. SQLite store) can share the same grouping logic.
@@ -169,16 +173,9 @@ func groupByNamespace(events []TimelineEvent) []EventGroup {
 	return groups
 }
 
-// worseHealth returns the worse of two health states.
+// worseHealth returns the worse of two health states, delegating to the shared
+// health.Rank ordering so the timeline, package rollup, and topology all agree on
+// what "worse" means (and on neutral aggregating as most-benign).
 func worseHealth(a, b HealthState) HealthState {
-	order := map[HealthState]int{
-		HealthHealthy:   0,
-		HealthUnknown:   1,
-		HealthDegraded:  2,
-		HealthUnhealthy: 3,
-	}
-	if order[b] > order[a] {
-		return b
-	}
-	return a
+	return HealthState(health.WorseOf(health.Level(a), health.Level(b)))
 }
