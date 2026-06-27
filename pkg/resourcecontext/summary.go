@@ -112,7 +112,9 @@ func deriveHealth(obj runtime.Object) string {
 	now := time.Now()
 	switch o := obj.(type) {
 	case *corev1.Pod:
-		return levelToString(health.Pod(o, now).Level)
+		// PodDisplayLevel (not raw Pod) so an unschedulable / stuck-terminating pod
+		// reads degraded in AI/search context too, consistent with topology + timeline.
+		return levelToString(health.PodDisplayLevel(o, now))
 	case *appsv1.Deployment, *appsv1.StatefulSet, *appsv1.DaemonSet, *appsv1.ReplicaSet:
 		return levelToString(health.Workload(o, now).Level)
 	case *unstructured.Unstructured:

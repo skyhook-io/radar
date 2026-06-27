@@ -552,9 +552,7 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 			case health.LevelUnhealthy:
 				dh.Error++
 				collectPodForRollup(pod, "critical", now, ownerGroups, &orphanProblems)
-			case health.LevelDegraded, health.LevelUnknown:
-				// unknown = node-lost / unobservable; surface it as a warning rather
-				// than letting the legacy string collapse it into the healthy count.
+			case health.LevelDegraded:
 				dh.Warning++
 				// Unschedulable pods (bind-time) and stuck-creating pods
 				// (post-bind) are owned by the scheduling rows appended below,
@@ -563,6 +561,13 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 				if !health.IsPodUnschedulable(pod) && !postBindPods[pod.Namespace+"/"+pod.Name] {
 					collectPodForRollup(pod, "medium", now, ownerGroups, &orphanProblems)
 				}
+			case health.LevelUnknown:
+				// node-lost / unobservable: count as warning so it isn't hidden in
+				// the healthy bucket, but don't add a per-pod rollup row — the Node
+				// NotReady row is the actionable signal (and the problem detector
+				// likewise defers to it), so a per-pod row would just be noise with
+				// no real reason to show.
+				dh.Warning++
 			default: // healthy, neutral
 				dh.Healthy++
 			}

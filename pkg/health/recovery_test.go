@@ -9,6 +9,34 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestPodDisplayLevel(t *testing.T) {
+	now := time.Now()
+	unsched := &corev1.Pod{Status: corev1.PodStatus{
+		Phase:      corev1.PodPending,
+		Conditions: []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable}},
+	}}
+	if got := PodDisplayLevel(unsched, now); got != LevelDegraded {
+		t.Errorf("unschedulable pod display level = %q, want degraded", got)
+	}
+	// Floor, not ceiling: a stuck-terminating pod that is also crashlooping stays unhealthy.
+	stuckCrash := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: now.Add(-11 * time.Minute)}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}},
+			},
+		},
+	}
+	if got := PodDisplayLevel(stuckCrash, now); got != LevelUnhealthy {
+		t.Errorf("stuck-terminating + crashloop display level = %q, want unhealthy (floor must not downgrade)", got)
+	}
+	healthy := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}}
+	if got := PodDisplayLevel(healthy, now); got != LevelHealthy {
+		t.Errorf("healthy pod display level = %q, want healthy", got)
+	}
+}
+
 func TestIsStuckTerminating(t *testing.T) {
 	now := time.Now()
 	notTerminating := &corev1.Pod{}

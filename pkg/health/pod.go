@@ -44,6 +44,23 @@ func Pod(pod *corev1.Pod, now time.Time) Verdict {
 	return v
 }
 
+// PodDisplayLevel is the pod level for the DISPLAY surfaces — topology node
+// color, timeline events, and the AI/MCP summary. On top of the canonical Pod()
+// verdict it folds the scheduling + stuck-terminating signals Pod() deliberately
+// leaves to its caller, as a FLOOR: escalate to at least degraded so a
+// scheduler-failed or wedged pod doesn't read healthy, but never downgrade a real
+// unhealthy (a crashlooping pod mid-deletion stays red).
+//
+// The dashboard / MCP health COUNTERS deliberately do NOT use this — they bucket
+// Pod().Level directly and handle scheduling through their own rollup.
+func PodDisplayLevel(pod *corev1.Pod, now time.Time) Level {
+	base := Pod(pod, now).Level
+	if IsPodUnschedulable(pod) || IsStuckTerminating(pod, now) {
+		return WorseOf(base, LevelDegraded)
+	}
+	return base
+}
+
 func classifyPodLevel(pod *corev1.Pod, now time.Time) Level {
 	if pod.Status.Phase == corev1.PodSucceeded {
 		return LevelNeutral

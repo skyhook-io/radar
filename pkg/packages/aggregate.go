@@ -329,10 +329,22 @@ func worseHealth(a, b Health) Health {
 	if b == "" {
 		return a
 	}
-	if healthRank(a) >= healthRank(b) {
-		return a
+	ra, rb := healthRank(a), healthRank(b)
+	if ra != rb {
+		if ra > rb {
+			return a
+		}
+		return b
 	}
-	return b
+	// Equal rank. The only rank-0 collision is healthy vs neutral; prefer healthy
+	// over neutral regardless of fold order (a mix of running + intentionally-off
+	// rolls up healthy, not idle), matching health.WorseOf. Neutral isn't emitted
+	// onto the package wire today, but this keeps the two worst-of definitions in
+	// lockstep for when it is.
+	if strings.EqualFold(string(a), "neutral") {
+		return b
+	}
+	return a
 }
 
 // WorseHealth is the exported worst-of for callers outside the package (the app

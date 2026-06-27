@@ -21,15 +21,10 @@ func classifyTimelineHealth(kind string, obj any, now time.Time) timeline.Health
 		if !ok {
 			return timeline.HealthUnknown
 		}
-		base := health.Pod(pod, now).Level
-		// Fold in the scheduling (no age grace) + stuck-terminating signals the
-		// canonical classifier leaves to its caller, as a FLOOR (at least degraded)
-		// so the timeline surfaces them — but never downgrade a real unhealthy (a
-		// crashlooping pod mid-deletion stays unhealthy).
-		if health.IsPodUnschedulable(pod) || health.IsStuckTerminating(pod, now) {
-			return levelToTimeline(health.WorseOf(base, health.LevelDegraded))
-		}
-		return levelToTimeline(base)
+		// PodDisplayLevel folds the scheduling + stuck-terminating signals the
+		// canonical classifier leaves to its caller, so the timeline surfaces them
+		// (and stays consistent with topology + the AI summary).
+		return levelToTimeline(health.PodDisplayLevel(pod, now))
 	case "Deployment", "ReplicaSet", "StatefulSet", "DaemonSet", "Job", "CronJob", "PersistentVolumeClaim":
 		return levelToTimeline(health.Workload(obj, now).Level)
 	}

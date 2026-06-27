@@ -629,3 +629,22 @@ func equalSources(a, b []SourceCode) bool {
 	}
 	return true
 }
+
+func TestWorseHealthCommutativeNeutral(t *testing.T) {
+	// healthy and neutral tie at rank 0; the rollup must prefer healthy regardless
+	// of fold order (matching health.WorseOf), so a mix of running + intentionally
+	// -off workloads never reads as idle.
+	if got := worseHealth("neutral", HealthHealthy); got != HealthHealthy {
+		t.Errorf(`worseHealth("neutral", healthy) = %q, want healthy`, got)
+	}
+	if got := worseHealth(HealthHealthy, "neutral"); got != HealthHealthy {
+		t.Errorf(`worseHealth(healthy, "neutral") = %q, want healthy`, got)
+	}
+	if got := worseHealth("neutral", "neutral"); got != "neutral" {
+		t.Errorf(`worseHealth("neutral","neutral") = %q, want neutral`, got)
+	}
+	// A real problem still dominates neutral either way.
+	if worseHealth("neutral", HealthDegraded) != HealthDegraded || worseHealth(HealthDegraded, "neutral") != HealthDegraded {
+		t.Error("degraded must beat neutral in both orders")
+	}
+}
