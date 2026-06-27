@@ -1244,17 +1244,30 @@ export function cronToHuman(cron: string): string {
   if (minute === '0' && hour !== '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return `Daily at ${hour}:00`
   }
-  if (minute !== '*' && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+  // Exclude step-minute ("*/N") here so it falls through to the interval branch
+  // below — otherwise "*/5 * * * *" rendered as "Every hour at :*/5" instead of
+  // "Every 5 minutes". A literal minute like "30" still reads "Every hour at :30".
+  if (minute !== '*' && !minute.startsWith('*/') && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return `Every hour at :${minute.padStart(2, '0')}`
   }
   if (minute === '*' && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return 'Every minute'
   }
-  if (minute.startsWith('*/')) {
+  // Only claim a plain "Every N minutes" when nothing else constrains the window;
+  // otherwise "*/5 9 * * *" (only at 09:xx) or "*/5 * * * 1-5" (weekdays only)
+  // would read as an unconstrained interval. Constrained shapes fall through to
+  // the raw cron rather than assert something misleading.
+  if (minute.startsWith('*/') && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     const interval = minute.slice(2)
-    return `Every ${interval} minutes`
+    return interval === '1' ? 'Every minute' : `Every ${interval} minutes`
   }
-  if (dayOfWeek === '1-5' || dayOfWeek === 'MON-FRI') {
+  // Weekday phrasing needs a literal hour:minute — a wildcard/step in either field
+  // (e.g. "*/5 * * * 1-5") would render "Weekdays at *:*/5", so let it fall to raw.
+  if (
+    (dayOfWeek === '1-5' || dayOfWeek === 'MON-FRI') &&
+    hour !== '*' && !hour.startsWith('*/') &&
+    minute !== '*' && !minute.startsWith('*/')
+  ) {
     return `Weekdays at ${hour}:${minute.padStart(2, '0')}`
   }
 
