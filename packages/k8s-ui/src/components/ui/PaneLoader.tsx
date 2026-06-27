@@ -17,8 +17,11 @@ export function PaneLoader({
   label?: string
   className?: string
 }) {
+  // No `relative` on the root: the label anchors to the inner `relative` span
+  // below, and callers may pass a positioning class (e.g. `absolute inset-0`,
+  // for topology panes) — a root `relative` would conflict with it.
   return (
-    <div className={`relative flex items-center justify-center ${className}`} aria-live="polite">
+    <div className={`flex items-center justify-center ${className}`} aria-live="polite">
       {/* The icon is the only in-flow child, so it centers in the pane. The
           label is absolutely positioned below the icon and so never shifts it. */}
       <span className="relative">
