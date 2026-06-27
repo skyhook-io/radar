@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Activity, Loader2, X, ChevronDown, Maximize2, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -167,10 +167,11 @@ function VerdictLine({
 }
 
 // Roomy response viewer. The narrow drawer can't show a 27 KB /metrics body
-// readably (wide lines wrap into mush), so the full body opens here: wider than
-// the drawer, monospace, no-wrap with horizontal scroll. Triggered on demand —
-// the request + verdict stay inline in the port card.
-function ProbeResponseSheet({
+// readably (wide lines wrap into mush), so the full body opens in a centered
+// dialog — wide, tall, monospace, no-wrap with its own scroll (decoupled from the
+// drawer, so there's no nested-scroll). Triggered on demand; the request + verdict
+// stay inline in the port card. Matches the kubectl copy-command dialog pattern.
+function ProbeResponseDialog({
   serviceName,
   port,
   scheme,
@@ -187,10 +188,15 @@ function ProbeResponseSheet({
 }) {
   const [showHeaders, setShowHeaders] = useState(false)
   const { text, label } = formatBody(result)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
   return (
-    <div className="fixed inset-0 z-50" onClick={(e) => e.stopPropagation()}>
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="absolute right-0 top-0 h-full w-[min(820px,92vw)] bg-theme-surface border-l border-theme-border shadow-2xl flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative dialog w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col outline-none">
         <div className="flex items-center justify-between gap-3 p-4 border-b border-theme-border">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -237,7 +243,7 @@ function ProbeResponseSheet({
 }
 
 // Inline probe: request form + verdict + a short body peek, rendered in the
-// drawer flow (inside the port card). The full body opens in ProbeResponseSheet
+// drawer flow (inside the port card). The full body opens in ProbeResponseDialog
 // so a large response never bloats the drawer.
 export function ProbePanel({
   namespace,
@@ -372,7 +378,7 @@ export function ProbePanel({
       )}
 
       {sheetOpen && result && (
-        <ProbeResponseSheet
+        <ProbeResponseDialog
           serviceName={serviceName}
           port={port}
           scheme={sent.scheme}

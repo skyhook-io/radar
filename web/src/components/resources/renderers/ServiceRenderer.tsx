@@ -17,10 +17,14 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
   const namespace = data.metadata?.namespace
   const serviceName = data.metadata?.name
   const { canPortForward } = useNamespacedCapabilities(namespace)
+  const isLocal = useIsLocalDeployment()
   // Offer the port-forward affordance when a live forward is possible (local +
   // RBAC) OR when we're not local — in-cluster/Cloud can't bind a local listener,
   // but we still surface a copy-paste `kubectl port-forward` command.
-  const showPortForward = canPortForward || !useIsLocalDeployment()
+  const showPortForward = canPortForward || !isLocal
+  // Curl dials the Service directly from in-cluster, so it's only available when
+  // Radar runs in-cluster/Cloud — locally you'd port-forward instead.
+  const showCurl = !isLocal
   // Which port's inline probe panel is open (one at a time). Keyed by port number.
   const [activeProbePort, setActiveProbePort] = useState<number | null>(null)
   const spec = data.spec || {}
@@ -51,7 +55,7 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
       onNavigate={onNavigate}
       renderPortAction={({ port, name, appProtocol, protocol }) => (
         <>
-          {isHttpishPort(port, name, appProtocol, protocol) && (
+          {showCurl && isHttpishPort(port, name, appProtocol, protocol) && (
             <ProbeButton
               active={activeProbePort === port}
               onClick={() => setActiveProbePort((cur) => (cur === port ? null : port))}

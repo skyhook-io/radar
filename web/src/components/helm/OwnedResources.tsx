@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { Link2, ExternalLink, AlertCircle, Terminal, FileText, Plug, X, Loader2 } from 'lucide-react'
+import { Link2, ExternalLink, AlertCircle, Terminal, FileText, X, Loader2 } from 'lucide-react'
 import { getResourceIcon } from '../../utils/resource-icons'
 import { clsx } from 'clsx'
 import type { HelmOwnedResource } from '../../types'
@@ -8,10 +8,10 @@ import { kindToPlural, apiVersionToGroup } from '../../utils/navigation'
 import { getResourceStatusColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { useQueryClient } from '@tanstack/react-query'
 import { useOpenTerminal, useOpenLogs } from '../dock'
-import { useStartPortForward } from '../portforward/PortForwardManager'
+import { PortForwardInlineButton } from '../portforward/PortForwardButton'
 import { useAvailablePorts } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
-import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
+import { useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
 import { pluralize } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 
@@ -312,11 +312,13 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
   const queryClient = useQueryClient()
   const openTerminal = useOpenTerminal()
   const openLogs = useOpenLogs()
-  const startPortForward = useStartPortForward()
   const { data: portsData, isLoading: portsLoading } = useAvailablePorts('pod', namespace, podName)
 
   // Capabilities (namespace-scoped: re-checks RBAC if globally denied)
   const { canExec, canViewLogs, canPortForward } = useNamespacedCapabilities(namespace)
+  // Live forward (local + RBAC) or the kubectl copy-command (in-cluster/Cloud);
+  // PortForwardInlineButton picks which by deployment mode.
+  const showPortForward = canPortForward || !useIsLocalDeployment()
 
   const [isLoadingAction, setIsLoadingAction] = useState(false)
 
@@ -374,14 +376,6 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
     }
   }, [namespace, podName, openLogs, fetchPodData])
 
-  const handlePortForward = useCallback((port: number) => {
-    startPortForward.mutate({
-      namespace,
-      podName,
-      podPort: port,
-    })
-  }, [namespace, podName, startPortForward])
-
   const ports = portsData?.ports || []
 
   return (
@@ -414,21 +408,9 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
         </Tooltip>
       )}
 
-      {/* Port Forward */}
-      {canPortForward && !portsLoading && ports.length > 0 && (
-        <Tooltip content={`Port forward :${ports[0].port}`}>
-        <button
-          onClick={(e) => { e.stopPropagation(); handlePortForward(ports[0].port) }}
-          disabled={startPortForward.isPending}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none"
-        >
-          {startPortForward.isPending ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <Plug className="w-3.5 h-3.5" />
-          )}
-        </button>
-        </Tooltip>
+      {/* Port Forward (live locally; kubectl copy-command in-cluster/Cloud) */}
+      {showPortForward && !portsLoading && ports.length > 0 && (
+        <PortForwardInlineButton namespace={namespace} podName={podName} port={ports[0].port} />
       )}
     </div>
   )
@@ -441,37 +423,17 @@ interface ServiceQuickActionsProps {
 }
 
 function ServiceQuickActions({ namespace, serviceName }: ServiceQuickActionsProps) {
-  const startPortForward = useStartPortForward()
   const { data: portsData, isLoading: portsLoading } = useAvailablePorts('service', namespace, serviceName)
   const { canPortForward } = useNamespacedCapabilities(namespace)
-
-  const handlePortForward = useCallback((port: number) => {
-    startPortForward.mutate({
-      namespace,
-      serviceName,
-      podPort: port,
-    })
-  }, [namespace, serviceName, startPortForward])
+  const showPortForward = canPortForward || !useIsLocalDeployment()
 
   const ports = portsData?.ports || []
 
-  if (!canPortForward || portsLoading || ports.length === 0) return null
+  if (!showPortForward || portsLoading || ports.length === 0) return null
 
   return (
     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-      <Tooltip content={`Port forward :${ports[0].port}`}>
-      <button
-        onClick={(e) => { e.stopPropagation(); handlePortForward(ports[0].port) }}
-        disabled={startPortForward.isPending}
-        className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none"
-      >
-        {startPortForward.isPending ? (
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-        ) : (
-          <Plug className="w-3.5 h-3.5" />
-        )}
-      </button>
-      </Tooltip>
+      <PortForwardInlineButton namespace={namespace} serviceName={serviceName} port={ports[0].port} />
     </div>
   )
 }
