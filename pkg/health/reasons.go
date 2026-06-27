@@ -283,6 +283,21 @@ func isPhaseOnlyReason(reason string) bool {
 	return false
 }
 
+// StuckTerminatingThreshold is how long a pod may sit with a deletionTimestamp
+// before its termination is treated as stuck (wedged on a finalizer / ungraceful
+// node drain) rather than a normal graceful shutdown.
+const StuckTerminatingThreshold = 10 * time.Minute
+
+// IsStuckTerminating reports whether a pod has been terminating longer than
+// StuckTerminatingThreshold. The canonical Pod classifier deliberately ignores
+// deletionTimestamp (folding it in would shift the dashboard/MCP health counters);
+// the display surfaces (timeline, topology) fold this signal in on top so a wedged
+// pod doesn't read healthy.
+func IsStuckTerminating(pod *corev1.Pod, now time.Time) bool {
+	dt := pod.DeletionTimestamp
+	return dt != nil && now.Sub(dt.Time) > StuckTerminatingThreshold
+}
+
 // IsPodUnschedulable reports whether the scheduler tried and failed to place the
 // pod (PodScheduled=False with reason=Unschedulable). reason=SchedulingGated is
 // an intentional not-yet-scheduled state, not a placement failure, and is

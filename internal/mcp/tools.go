@@ -2044,12 +2044,12 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 		d.ResourceCounts["pods"] = len(pods)
 		for _, pod := range pods {
-			switch health.Pod(pod, now).LegacyString() {
-			case "healthy":
-				d.Health.HealthyPods++
-			case "warning":
+			switch health.Pod(pod, now).Level {
+			case health.LevelDegraded, health.LevelUnknown:
+				// unknown = node-lost / unobservable; surface as warning rather than
+				// letting the legacy collapse hide it in the healthy count.
 				d.Health.WarningPods++
-			case "error":
+			case health.LevelUnhealthy:
 				d.Health.ErrorPods++
 				severity := "critical"
 				// PodProblemReason returns the kubelet's waiting/terminated
@@ -2068,6 +2068,8 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 					LastTerminatedReason: lastTermReason,
 					ageSeconds:           int64(ageDur.Seconds()),
 				})
+			default: // healthy, neutral
+				d.Health.HealthyPods++
 			}
 		}
 	}

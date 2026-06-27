@@ -21,21 +21,16 @@ func classifyTimelineHealth(kind string, obj any, now time.Time) timeline.Health
 		if !ok {
 			return timeline.HealthUnknown
 		}
-		// The scheduler tried and failed to place this pod — the scheduling
-		// detector flags it immediately (no age grace), so the timeline must too,
-		// instead of treating a young Pending pod as healthy.
-		if health.IsPodUnschedulable(pod) {
-			return timeline.HealthDegraded
+		base := health.Pod(pod, now).Level
+		// Fold in the scheduling (no age grace) + stuck-terminating signals the
+		// canonical classifier leaves to its caller, as a FLOOR (at least degraded)
+		// so the timeline surfaces them — but never downgrade a real unhealthy (a
+		// crashlooping pod mid-deletion stays unhealthy).
+		if health.IsPodUnschedulable(pod) || health.IsStuckTerminating(pod, now) {
+			return levelToTimeline(health.WorseOf(base, health.LevelDegraded))
 		}
-		// A pod wedged in termination is a problem the badge + terminating detector
-		// flag (10m threshold); the timeline must agree so it doesn't stay in the
-		// Unhealthy filter's blind spot. health.Pod doesn't look at
-		// deletionTimestamp, so check it here.
-		if dt := pod.DeletionTimestamp; dt != nil && now.Sub(dt.Time) > 10*time.Minute {
-			return timeline.HealthDegraded
-		}
-		return levelToTimeline(health.Pod(pod, now).Level)
-	case "Deployment", "ReplicaSet", "StatefulSet", "DaemonSet":
+		return levelToTimeline(base)
+	case "Deployment", "ReplicaSet", "StatefulSet", "DaemonSet", "Job", "CronJob", "PersistentVolumeClaim":
 		return levelToTimeline(health.Workload(obj, now).Level)
 	}
 	return timeline.HealthUnknown

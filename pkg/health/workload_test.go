@@ -104,9 +104,14 @@ func TestWorkloadGoldenVectors(t *testing.T) {
 			Spec:   batchv1.CronJobSpec{Schedule: "*/5 * * * *"},
 			Status: batchv1.CronJobStatus{LastScheduleTime: &metav1.Time{Time: now.Add(-48 * time.Hour)}},
 		}, LevelDegraded, "Stale"},
-		{"cronjob never run is neutral", &batchv1.CronJob{
-			Spec: batchv1.CronJobSpec{Schedule: "0 0 * * *"},
+		{"cronjob freshly created, never run, is neutral", &batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Minute)}},
+			Spec:       batchv1.CronJobSpec{Schedule: "0 0 * * *"},
 		}, LevelNeutral, "NeverRun"},
+		{"cronjob old and never scheduled is degraded", &batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.Time{Time: now.Add(-72 * time.Hour)}},
+			Spec:       batchv1.CronJobSpec{Schedule: "0 0 * * *"},
+		}, LevelDegraded, "NeverScheduled"},
 
 		// PVCs.
 		{"pvc bound is healthy", &corev1.PersistentVolumeClaim{

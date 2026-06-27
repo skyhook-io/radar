@@ -107,9 +107,13 @@ func cronJobVerdict(cj *batchv1.CronJob, now time.Time) Verdict {
 	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 		return Verdict{Level: LevelNeutral, Reason: "Suspended"}
 	}
-	// Never run yet: benign for a freshly-created CronJob, unknown otherwise — we
-	// can't tell missed-schedule from just-created without more state, so stay neutral.
+	// Never run yet: benign for a freshly-created CronJob, but one that has existed
+	// longer than its cadence and still never fired is stuck (bad schedule / broken
+	// controller) — degraded, matching the never-scheduled problem detector.
 	if cj.Status.LastScheduleTime == nil {
+		if now.Sub(cj.CreationTimestamp.Time) > cronsched.StaleThreshold(cj.Spec.Schedule) {
+			return Verdict{Level: LevelDegraded, Reason: "NeverScheduled"}
+		}
 		return Verdict{Level: LevelNeutral, Reason: "NeverRun"}
 	}
 	// Cadence-aware staleness: a job that has missed its schedule by more than the

@@ -2,9 +2,11 @@ package topology
 
 import (
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // TestGetPodStatusInspectsContainers pins the crashloop-green fix: a crashlooping
@@ -53,6 +55,35 @@ func TestGetPodStatusInspectsContainers(t *testing.T) {
 	if got := getPodStatus(nodeLost); got != StatusUnknown {
 		t.Errorf("node-lost (phase Unknown) pod node color = %q, want unknown", got)
 	}
+
+	// A pod wedged in termination (>10m) reads degraded, not green — topology
+	// folds the stuck-terminating signal like the timeline does.
+	stuckTerm := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: time.Now().Add(-11 * time.Minute)}},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+		},
+	}
+	if got := getPodStatus(stuckTerm); got != StatusDegraded {
+		t.Errorf("stuck-terminating pod node color = %q, want degraded", got)
+	}
+
+	// A stuck-terminating pod that is ALSO crashlooping must stay RED — the
+	// terminating/unschedulable floor must not downgrade a real unhealthy to amber.
+	stuckCrash := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: time.Now().Add(-11 * time.Minute)}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}},
+			},
+		},
+	}
+	if got := getPodStatus(stuckCrash); got != StatusUnhealthy {
+		t.Errorf("stuck-terminating + crashloop pod = %q, want unhealthy (floor must not downgrade)", got)
+	}
+
 	if got := podSummaryStatus(nodeLost); got != StatusUnhealthy {
 		t.Errorf("node-lost pod summary bucket = %q, want unhealthy (unknown surfaces in rollup)", got)
 	}

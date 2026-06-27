@@ -548,11 +548,13 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 
 	if err == nil {
 		for _, pod := range pods {
-			status := classifyPodHealth(pod, now)
-			switch status {
-			case "healthy":
-				dh.Healthy++
-			case "warning":
+			switch health.Pod(pod, now).Level {
+			case health.LevelUnhealthy:
+				dh.Error++
+				collectPodForRollup(pod, "critical", now, ownerGroups, &orphanProblems)
+			case health.LevelDegraded, health.LevelUnknown:
+				// unknown = node-lost / unobservable; surface it as a warning rather
+				// than letting the legacy string collapse it into the healthy count.
 				dh.Warning++
 				// Unschedulable pods (bind-time) and stuck-creating pods
 				// (post-bind) are owned by the scheduling rows appended below,
@@ -561,9 +563,8 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 				if !health.IsPodUnschedulable(pod) && !postBindPods[pod.Namespace+"/"+pod.Name] {
 					collectPodForRollup(pod, "medium", now, ownerGroups, &orphanProblems)
 				}
-			case "error":
-				dh.Error++
-				collectPodForRollup(pod, "critical", now, ownerGroups, &orphanProblems)
+			default: // healthy, neutral
+				dh.Healthy++
 			}
 		}
 	}
@@ -713,12 +714,6 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	})
 
 	return dh, problems
-}
-
-// classifyPodHealth delegates to the shared classifier, projected onto the legacy
-// three-value vocabulary the dashboard counters use.
-func classifyPodHealth(pod *corev1.Pod, now time.Time) string {
-	return health.Pod(pod, now).LegacyString()
 }
 
 func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProblem {

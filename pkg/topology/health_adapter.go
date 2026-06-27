@@ -49,8 +49,14 @@ func podSummaryStatus(pod *corev1.Pod) HealthStatus {
 // here instead of healthy (the canonical health.Pod leaves scheduling to its
 // caller, since folding it there would shift the dashboard/MCP health counters).
 func topoPodLevel(pod *corev1.Pod) health.Level {
-	if health.IsPodUnschedulable(pod) {
-		return health.LevelDegraded
+	now := time.Now()
+	base := health.Pod(pod, now).Level
+	// Fold in the scheduling + stuck-terminating signals the canonical classifier
+	// leaves to its caller, as a FLOOR (escalate to at least degraded) — never a
+	// ceiling: a crashlooping pod that is also unschedulable or wedged in
+	// termination must stay red, not be downgraded to amber.
+	if health.IsPodUnschedulable(pod) || health.IsStuckTerminating(pod, now) {
+		return health.WorseOf(base, health.LevelDegraded)
 	}
-	return health.Pod(pod, time.Now()).Level
+	return base
 }

@@ -293,7 +293,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			ID:     deployID,
 			Kind:   KindDeployment,
 			Name:   deploy.Name,
-			Status: getDeploymentStatus(ready, total),
+			Status: healthLevelToStatus(health.Workload(deploy, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":     deploy.Namespace,
 				"readyReplicas": ready,
@@ -2386,7 +2386,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			ID:     dsID,
 			Kind:   KindDaemonSet,
 			Name:   ds.Name,
-			Status: getDeploymentStatus(ready, total),
+			Status: healthLevelToStatus(health.Workload(ds, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":     ds.Namespace,
 				"readyReplicas": ready,
@@ -2448,7 +2448,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			ID:     stsID,
 			Kind:   KindStatefulSet,
 			Name:   sts.Name,
-			Status: getDeploymentStatus(ready, total),
+			Status: healthLevelToStatus(health.Workload(sts, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":     sts.Namespace,
 				"readyReplicas": ready,
@@ -2492,17 +2492,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		cjID := fmt.Sprintf("cronjob/%s/%s", cj.Namespace, cj.Name)
 		cronJobIDs[cj.Namespace+"/"+cj.Name] = cjID
 
-		// Determine status based on last schedule time and active jobs
-		status := StatusHealthy
-		if len(cj.Status.Active) > 0 {
-			status = StatusDegraded // Running
-		}
-
 		nodes = append(nodes, Node{
 			ID:     cjID,
 			Kind:   KindCronJob,
 			Name:   cj.Name,
-			Status: status,
+			Status: healthLevelToStatus(health.Workload(cj, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":        cj.Namespace,
 				"schedule":         cj.Spec.Schedule,
@@ -2651,7 +2645,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				ID:     rsID,
 				Kind:   KindReplicaSet,
 				Name:   rs.Name,
-				Status: getDeploymentStatus(ready, total),
+				Status: healthLevelToStatus(health.Workload(rs, time.Now()).Level),
 				Data: map[string]any{
 					"namespace":     rs.Namespace,
 					"readyReplicas": ready,

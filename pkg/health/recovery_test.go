@@ -9,6 +9,22 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestIsStuckTerminating(t *testing.T) {
+	now := time.Now()
+	notTerminating := &corev1.Pod{}
+	graceful := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: now.Add(-2 * time.Minute)}}}
+	stuck := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: now.Add(-11 * time.Minute)}}}
+	if IsStuckTerminating(notTerminating, now) {
+		t.Error("a pod with no deletionTimestamp is not stuck-terminating")
+	}
+	if IsStuckTerminating(graceful, now) {
+		t.Error("a pod terminating 2m is graceful, not stuck")
+	}
+	if !IsStuckTerminating(stuck, now) {
+		t.Error("a pod terminating 11m is stuck")
+	}
+}
+
 // legacy is a small helper: these recovery-guard cases were originally written
 // against the three-value ClassifyPodHealth ("healthy"/"warning"/"error"); they
 // now assert the same via Pod().LegacyString() so the guards stay pinned.

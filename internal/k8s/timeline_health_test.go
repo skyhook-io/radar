@@ -5,6 +5,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -119,6 +120,18 @@ func TestClassifyTimelineHealthWorkloads(t *testing.T) {
 			name: "deployment none ready is unhealthy",
 			kind: "Deployment",
 			obj:  &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Replicas: ptr32(2)}, Status: appsv1.DeploymentStatus{ReadyReplicas: 0}},
+			want: timeline.HealthUnhealthy,
+		},
+		{
+			name: "failed job is unhealthy (batch kinds now classified)",
+			kind: "Job",
+			obj:  &batchv1.Job{Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}}},
+			want: timeline.HealthUnhealthy,
+		},
+		{
+			name: "lost pvc is unhealthy",
+			kind: "PersistentVolumeClaim",
+			obj:  &corev1.PersistentVolumeClaim{Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimLost}},
 			want: timeline.HealthUnhealthy,
 		},
 		{
