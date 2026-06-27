@@ -724,6 +724,16 @@ function AppInner() {
   // Connection state (for graceful startup)
   const { connection, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
 
+  // The app's content surface is ready to show: auth resolved, not mid context-
+  // switch, and the cluster connection is live. The main content area gates on
+  // exactly this, and so do the overlay drawers — otherwise a deep-link/refresh
+  // with `?resource=`/`?release=` renders the drawer on top of the connecting/
+  // switching splash, pushing the centered loading logo off-center and showing an
+  // empty drawer over a not-yet-loaded view. Gating both on the SAME readiness so
+  // a drawer only ever sits over a real content surface.
+  const contentReady = !isSwitching && !authMePending &&
+    !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
+
   // Query client for cache invalidation
   const queryClient = useQueryClient()
 
@@ -1674,7 +1684,7 @@ function AppInner() {
       )}
 
       {/* Main content - only show when connected and authenticated */}
-      {!isSwitching && !authMePending && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && <div className="flex-1 flex overflow-hidden">
+      {contentReady && <div className="flex-1 flex overflow-hidden">
         <ErrorBoundary>
         {/* Home dashboard */}
         {mainView === 'home' && (
@@ -1982,8 +1992,10 @@ function AppInner() {
         </ErrorBoundary>
       </div>}
 
-      {/* Resource detail drawer — stays mounted, expands to full-screen WorkloadView */}
-      {resourceDrawer.shouldRender && drawerResource && (
+      {/* Resource detail drawer — stays mounted, expands to full-screen WorkloadView.
+          Gated on contentReady so it never renders over the connecting/switching
+          splash (which would push the centered logo off-center). */}
+      {contentReady && resourceDrawer.shouldRender && drawerResource && (
         <ResourceDetailDrawer
           resource={drawerResource}
           initialTab={drawerInitialTab}
@@ -2007,8 +2019,8 @@ function AppInner() {
         />
       )}
 
-      {/* Helm release drawer */}
-      {helmDrawer.shouldRender && drawerHelmRelease && (
+      {/* Helm release drawer — same contentReady gate as the resource drawer. */}
+      {contentReady && helmDrawer.shouldRender && drawerHelmRelease && (
         <HelmReleaseDrawer
           release={drawerHelmRelease}
           isOpen={helmDrawer.isOpen}
