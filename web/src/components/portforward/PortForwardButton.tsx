@@ -71,10 +71,14 @@ function KubectlCommandDialog({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      // Capture + stopPropagation so Escape closes only this dialog, not the
+      // drawer behind it (whose Escape shortcut listens in the bubble phase).
+      e.stopPropagation()
+      onClose()
     }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
+    document.addEventListener('keydown', handleKeyDown, true)
+    return () => document.removeEventListener('keydown', handleKeyDown, true)
   }, [onClose])
 
   useEffect(() => {
@@ -384,13 +388,15 @@ export function PortForwardInlineButton({
 
   return (
     <>
-      <Tooltip content={`Port forward ${port}`}>
+      <Tooltip content={inCluster ? 'Copy a kubectl port-forward command' : `Port forward ${port}`}>
       <button
         onClick={handleClick}
         disabled={disabled || isPending}
         className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-theme-elevated hover:bg-accent-muted rounded text-xs transition-colors disabled:opacity-50 disabled:hover:bg-theme-elevated disabled:pointer-events-none"
       >
-        {port}/{protocol}
+        {/* In-cluster this opens a copy-command dialog rather than forwarding now;
+            the trailing "…" signals "opens a dialog" (it doesn't fire immediately). */}
+        {port}/{protocol}{inCluster ? '…' : ''}
         {isPending ? (
           <Loader2 className="w-3 h-3 animate-spin" />
         ) : (

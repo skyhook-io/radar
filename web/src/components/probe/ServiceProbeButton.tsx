@@ -133,7 +133,8 @@ export function ProbeButton({ active, onClick }: { active: boolean; onClick: () 
         )}
       >
         Curl
-        <Activity className="w-3 h-3" />
+        {/* Disclosure caret: signals this expands an inline panel rather than firing a request. */}
+        <ChevronDown className={clsx('w-3 h-3 transition-transform', active && 'rotate-180')} />
       </button>
     </Tooltip>
   )
@@ -190,9 +191,11 @@ function ProbeResponseDialog({
   const [showHeaders, setShowHeaders] = useState(false)
   const { text, label } = formatBody(result)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
+    // Capture + stopPropagation so Escape closes only this dialog, not the drawer
+    // behind it (its Escape shortcut listens in the bubble phase).
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
   }, [onClose])
   // Portal to <body>: the drawer is a transformed ancestor, which would otherwise
   // trap this position:fixed dialog inside the drawer instead of centering it on
