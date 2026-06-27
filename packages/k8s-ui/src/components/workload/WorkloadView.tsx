@@ -52,7 +52,7 @@ import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } f
 import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
-import { getKindColorOutline, displayKindName } from '../ui/drawer-components'
+import { getKindColorOutline, displayKindName, OperationalIssuesShownContext } from '../ui/drawer-components'
 import { midTruncate } from '../../utils/format'
 
 export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'yaml'
@@ -215,6 +215,10 @@ interface WorkloadViewProps {
    *  Operational Issues). Optional + additive — consumers that don't pass it are
    *  unaffected. */
   renderOverviewLead?: (props: { kind: string; namespace: string; name: string }) => ReactNode
+  /** When true, renderers suppress their own status-derived problem displays
+   *  because a dedicated Operational Issues section is shown (the host fetched
+   *  live issues for this resource). Avoids showing the same failure twice. */
+  hasOperationalIssues?: boolean
 
   // ── Duplicate ────────────────────────────────────────────────────────────
   /** Duplicate handler — opens create dialog with this resource's YAML */
@@ -287,6 +291,7 @@ export function WorkloadView({
   onDownload,
   renderOverviewExtra,
   renderOverviewLead,
+  hasOperationalIssues,
   // Actions bar
   actionsBarProps,
   // Renderer overrides
@@ -659,7 +664,7 @@ export function WorkloadView({
               onDownload={onDownload}
             />
           ) : (
-            <>
+            <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues}>
               {renderOverviewLead && (
                 <div className="px-4 pt-4">
                   {renderOverviewLead({ kind, namespace, name })}
@@ -691,7 +696,7 @@ export function WorkloadView({
                   {renderOverviewExtra({ kind, namespace, name })}
                 </div>
               )}
-            </>
+            </OperationalIssuesShownContext.Provider>
           )}
         </div>
       </div>
@@ -700,6 +705,7 @@ export function WorkloadView({
 
   // ── Expanded (full) mode ─────────────────────────────────────────────────
   return (
+    <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues}>
     <DetailShell
       breadcrumb={breadcrumb}
       nav={
@@ -914,6 +920,7 @@ export function WorkloadView({
           </div>
         )}
     </DetailShell>
+    </OperationalIssuesShownContext.Provider>
   )
 }
 

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Server, ExternalLink, Scale, Minus, Plus, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner, ResourceLink, ResourceRefBadge } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner, ResourceLink, ResourceRefBadge, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { DialogPortal } from '../../ui/DialogPortal'
 import { Tooltip } from '../../ui/Tooltip'
 import { Badge, type BadgeSeverity } from '../../ui/Badge'
@@ -165,8 +165,11 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
     }
   }, [spec.replicas, scaledTo])
 
-  // Check for problems and progress
-  const problems = getWorkloadProblems(status, spec, kind)
+  // Check for problems and progress. Suppressed when the dedicated Operational
+  // Issues section is shown — it carries the workload's own issues plus its pods'
+  // (richer, with cause/action), so the workload-status problems would duplicate.
+  const operationalIssuesShown = useOperationalIssuesShown()
+  const problems = operationalIssuesShown ? [] : getWorkloadProblems(status, spec, kind)
   const hasProblems = problems.length > 0
   const progressMessage = getWorkloadProgress(status, spec, kind)
 

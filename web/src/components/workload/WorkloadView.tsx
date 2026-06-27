@@ -421,6 +421,10 @@ export function WorkloadView({
     () => (resource?.apiVersion ? apiVersionToGroup(resource.apiVersion) : undefined),
     [resource?.apiVersion],
   )
+  // Live Operational Issues for this resource. Fetched here (not inside the lead
+  // render-prop) so the count also gates `hasOperationalIssues` — which tells the
+  // renderers to suppress their own status-derived problems and avoid duplicates.
+  const { data: liveIssues } = useResourceIssues(resource?.kind || kindProp, rest.group || resourceGroup, namespace, name)
   const { onCompareTo, onCompareAcrossClusters, picker: comparePicker } = useCompareLauncher({
     kind: kindProp,
     namespace,
@@ -527,9 +531,8 @@ export function WorkloadView({
           <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
         </>
       )}
-      renderOverviewLead={({ namespace: ns, name: n }) => (
-        <LiveIssuesSection kind={resource?.kind || kindProp} group={rest.group || resourceGroup} namespace={ns} name={n} />
-      )}
+      renderOverviewLead={() => <ResourceIssuesSection issues={liveIssues} />}
+      hasOperationalIssues={!!liveIssues?.length}
       onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
       resolvedGitOpsOwner={gitopsOwner}
       gitOpsOwnerVerified={gitOpsOwnerVerified}
@@ -823,14 +826,6 @@ function AuditSection({ kind, namespace, name }: { kind: string; namespace: stri
   const { data: findings } = useResourceAudit(kind, namespace, name)
   if (!findings || findings.length === 0) return null
   return <AuditAlerts findings={findings} onViewAll={() => navigate('/checks')} />
-}
-
-// Live Operational Issues for this resource (its own + owned-pod rollup),
-// rendered above the renderer. The diagnosed, remediation-bearing counterpart to
-// the renderer's own status-derived problem alerts.
-function LiveIssuesSection({ kind, group, namespace, name }: { kind: string; group?: string; namespace: string; name: string }) {
-  const { data: issues } = useResourceIssues(kind, group, namespace, name)
-  return <ResourceIssuesSection issues={issues} />
 }
 
 // FluxSourceConsumersSection lists the reconcilers (Kustomization, HelmRelease)

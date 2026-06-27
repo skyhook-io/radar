@@ -1,7 +1,7 @@
 import { useState, type ReactNode, type JSX } from 'react'
 import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BADGE_BORDERED } from '../../../utils/badge-colors'
 import {
@@ -274,9 +274,12 @@ export function PodRenderer({
   const podName = data.metadata?.name
   const isRunning = data.status?.phase === 'Running'
 
-  // Check for problems
+  // Check for problems. Suppressed when the detail already shows the dedicated
+  // Operational Issues section (the Issues pipeline covers the same pod failures,
+  // richer) — avoids showing the same crashloop twice.
+  const operationalIssuesShown = useOperationalIssuesShown()
   const podProblems = getPodProblems(data)
-  const hasProblems = podProblems.length > 0
+  const hasProblems = podProblems.length > 0 && !operationalIssuesShown
 
   // Image filesystem modal state
   const [selectedImage, setSelectedImage] = useState<string | null>(null)

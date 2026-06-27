@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, createContext, useContext } from 'react'
 import { ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatAge, formatDuration, formatResources } from '../resources/resource-utils'
@@ -446,8 +446,18 @@ export interface Problem {
 }
 
 /** Displays a list of problem alerts (warnings and errors) */
+// True when the resource detail is already rendering a dedicated, authoritative
+// "Operational Issues" section (the Issues pipeline — richer cause/action and
+// comprehensive for the kinds it covers). Self-problem displays (ProblemAlerts,
+// PodRenderer's inline problems, WorkloadRenderer's) read this and suppress, so
+// the same failure isn't shown twice. A renderer-only problem the pipeline
+// missed is the rare exception — fix the pipeline, don't reinstate the dupe.
+export const OperationalIssuesShownContext = createContext(false)
+export const useOperationalIssuesShown = () => useContext(OperationalIssuesShownContext)
+
 export function ProblemAlerts({ problems }: { problems: Problem[] }) {
-  if (problems.length === 0) return null
+  const suppressed = useOperationalIssuesShown()
+  if (suppressed || problems.length === 0) return null
 
   return (
     <>
