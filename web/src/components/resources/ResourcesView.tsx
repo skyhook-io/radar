@@ -138,6 +138,17 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return match?.isCrd ?? (!!selectedKind.group) // default: has group = likely CRD
   }, [selectedKind, apiResources])
 
+  // The canonical Kind for the selected resource. selectedKind.kind is the plural
+  // URL segment for CRDs/grouped kinds (e.g. "ingressroutes", "ingresses") — only
+  // core no-group kinds resolve to the real Kind there — so resolve it via
+  // discovery to match audit findings, which key by the real Kind ("IngressRoute").
+  const selectedKindCanonical = useMemo(() => {
+    if (!selectedKind) return undefined
+    const match = apiResources?.find(r => r.name === selectedKind.name && r.group === selectedKind.group)
+      ?? CORE_RESOURCES.find(r => r.name === selectedKind.name && r.group === selectedKind.group)
+    return match?.kind ?? selectedKind.kind
+  }, [selectedKind, apiResources])
+
   // Cluster Audit findings for the selected kind, keyed by "namespace/name" for
   // the resource list. The list shows ONE kind at a time, so ns/name is enough;
   // we still match the finding's group (built-ins → real group, CRDs → "") so a
@@ -150,7 +161,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     const wantGroup = isSelectedCrd ? '' : selectedKind.group
     const map: Record<string, { danger: number; warning: number }> = {}
     for (const f of audit.data.findings) {
-      if (f.kind !== selectedKind.kind || (f.group ?? '') !== wantGroup) continue
+      if (f.kind !== selectedKindCanonical || (f.group ?? '') !== wantGroup) continue
       if (!isBadgeWorthy(f, audit.data.checks)) continue
       const k = `${f.namespace || ''}/${f.name}`
       const cur = map[k] ?? { danger: 0, warning: 0 }
@@ -159,7 +170,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       map[k] = cur
     }
     return map
-  }, [audit.data?.findings, audit.data?.checks, selectedKind, isSelectedCrd])
+  }, [audit.data?.findings, audit.data?.checks, selectedKind, selectedKindCanonical, isSelectedCrd])
 
   const selectedCountKey = selectedKind ? resourceCountKey(selectedKind) : ''
   const selectedCount = selectedCountKey ? countsData?.counts[selectedCountKey] : undefined
