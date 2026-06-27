@@ -7,7 +7,7 @@ import { apiFetch } from '../../api/client'
 import { apiUrl } from '../../api/config'
 import { Tooltip } from '../ui/Tooltip'
 
-// A port is "probe-able" only if it plausibly speaks HTTP — probing a raw TCP
+// A port is "curl-able" only if it plausibly speaks HTTP — probing a raw TCP
 // port (Postgres, Redis) with a GET returns noise, so we don't offer it there
 // (that's the local-client TCP path's job). Heuristic over name/appProtocol/number.
 const HTTP_PORT_NUMBERS = new Set([80, 443, 8080, 8443, 8000, 8081, 3000, 5000, 9090, 9091, 9093, 9100, 15000, 15090])
@@ -52,7 +52,7 @@ export function defaultScheme(port: number, name?: string, appProtocol?: string)
   return 'http'
 }
 
-interface ProbeResult {
+interface CurlResult {
   status: number
   statusText: string
   durationMs: number
@@ -79,7 +79,7 @@ function statusDotTone(status: number): string {
 
 // Make the body readable per content type: pretty-print JSON, label everything
 // else (HTML / Prometheus / XML / …) so the operator knows what they're looking at.
-function formatBody(result: ProbeResult): { text: string; label: string } {
+function formatBody(result: CurlResult): { text: string; label: string } {
   const body = result.body
   const ct = (result.headers['Content-Type'] || result.headers['content-type'] || '').toLowerCase()
   const looksJson = ct.includes('json') || /^\s*[[{]/.test(body)
@@ -120,8 +120,8 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 }
 
 // Small toggle button rendered in a port row's action slot. The panel itself
-// renders inline within the port card (see ProbePanel), not as an overlay.
-export function ProbeButton({ active, onClick }: { active: boolean; onClick: () => void }) {
+// renders inline within the port card (see CurlPanel), not as an overlay.
+export function CurlButton({ active, onClick }: { active: boolean; onClick: () => void }) {
   return (
     <Tooltip content="Curl this endpoint — GET from inside the cluster">
       <button
@@ -145,7 +145,7 @@ function VerdictLine({
   showHeaders,
   onToggleHeaders,
 }: {
-  result: ProbeResult
+  result: CurlResult
   showHeaders: boolean
   onToggleHeaders: () => void
 }) {
@@ -173,7 +173,7 @@ function VerdictLine({
 // dialog — wide, tall, monospace, no-wrap with its own scroll (decoupled from the
 // drawer, so there's no nested-scroll). Triggered on demand; the request + verdict
 // stay inline in the port card. Matches the kubectl copy-command dialog pattern.
-function ProbeResponseDialog({
+function CurlResponseDialog({
   serviceName,
   port,
   scheme,
@@ -185,7 +185,7 @@ function ProbeResponseDialog({
   port: number
   scheme: string
   path: string
-  result: ProbeResult
+  result: CurlResult
   onClose: () => void
 }) {
   const [showHeaders, setShowHeaders] = useState(false)
@@ -252,10 +252,10 @@ function ProbeResponseDialog({
   )
 }
 
-// Inline probe: request form + verdict + a short body peek, rendered in the
-// drawer flow (inside the port card). The full body opens in ProbeResponseDialog
+// Inline curl: request form + verdict + a short body peek, rendered in the
+// drawer flow (inside the port card). The full body opens in CurlResponseDialog
 // so a large response never bloats the drawer.
-export function ProbePanel({
+export function CurlPanel({
   namespace,
   serviceName,
   port,
@@ -288,21 +288,21 @@ export function ProbePanel({
   const [mounted, setMounted] = useState(false)
   useEffect(() => { setMounted(true) }, [])
 
-  const probe = useMutation<ProbeResult, Error, { scheme: 'http' | 'https'; path: string }>({
+  const curl = useMutation<CurlResult, Error, { scheme: 'http' | 'https'; path: string }>({
     mutationFn: async (vars) => {
       setSent(vars)
-      const res = await apiFetch(apiUrl('/probe/service'), {
+      const res = await apiFetch(apiUrl('/curl/service'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ namespace, name: serviceName, port: String(port), scheme: vars.scheme, path: vars.path }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`)
-      return data as ProbeResult
+      return data as CurlResult
     },
   })
 
-  const result = probe.data
+  const result = curl.data
   const peek = result && !result.error ? formatBody(result) : null
 
   // Only fade + offer "View full response" when the body actually overflows the
@@ -333,7 +333,7 @@ export function ProbePanel({
         </button>
       </div>
 
-      <form className="flex items-stretch gap-2" onSubmit={(e) => { e.preventDefault(); probe.mutate({ scheme, path: fullPath }) }}>
+      <form className="flex items-stretch gap-2" onSubmit={(e) => { e.preventDefault(); curl.mutate({ scheme, path: fullPath }) }}>
         <select
           value={scheme}
           onChange={(e) => setScheme(e.target.value as 'http' | 'https')}
@@ -356,17 +356,17 @@ export function ProbePanel({
         </div>
         <button
           type="submit"
-          disabled={probe.isPending}
+          disabled={curl.isPending}
           className="shrink-0 px-3 py-1 btn-brand text-xs rounded-lg flex items-center gap-1.5 disabled:opacity-50"
         >
-          {probe.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+          {curl.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
           Send
         </button>
       </form>
 
-      {probe.isError && (
+      {curl.isError && (
         <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded px-2 py-1.5">
-          {(probe.error as Error).message}
+          {(curl.error as Error).message}
         </div>
       )}
 
@@ -429,7 +429,7 @@ export function ProbePanel({
       </div>
 
       {sheetOpen && result && (
-        <ProbeResponseDialog
+        <CurlResponseDialog
           serviceName={serviceName}
           port={port}
           scheme={sent.scheme}

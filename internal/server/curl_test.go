@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// A probed Service must not be able to bounce the probe to a redirect target —
-// don't chase a Service-controlled 3xx. probeDialClient must not follow redirects.
-func TestProbeDialClientDoesNotFollowRedirects(t *testing.T) {
+// A curld Service must not be able to bounce the curl to a redirect target —
+// don't chase a Service-controlled 3xx. curlDialClient must not follow redirects.
+func TestCurlDialClientDoesNotFollowRedirects(t *testing.T) {
 	var downstreamHits int32
 	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&downstreamHits, 1)
@@ -22,7 +22,7 @@ func TestProbeDialClientDoesNotFollowRedirects(t *testing.T) {
 	}))
 	defer proxy.Close()
 
-	resp, err := probeDialClient().Get(proxy.URL + "/x")
+	resp, err := curlDialClient().Get(proxy.URL + "/x")
 	if err != nil {
 		t.Fatalf("unexpected request error: %v", err)
 	}
@@ -36,25 +36,25 @@ func TestProbeDialClientDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
-func TestProbeNameValidation(t *testing.T) {
+func TestCurlNameValidation(t *testing.T) {
 	valid := []string{"kube-system", "kube-dns", "my-svc", "a", "svc.with.dots", "argocd-server"}
 	for _, s := range valid {
-		if !probeNameRe.MatchString(s) {
+		if !curlNameRe.MatchString(s) {
 			t.Errorf("expected %q to be a valid name", s)
 		}
 	}
 	invalid := []string{"", "x/../../etc", "a:b", "UPPER", "-leading", "trailing-", "has space", "name/sub", "a%2f"}
 	for _, s := range invalid {
-		if probeNameRe.MatchString(s) {
+		if curlNameRe.MatchString(s) {
 			t.Errorf("expected %q to be rejected as a name", s)
 		}
 	}
 }
 
-func TestProbePortValidation(t *testing.T) {
+func TestCurlPortValidation(t *testing.T) {
 	valid := []string{"80", "9153", "443", "1", "65535"}
 	for _, s := range valid {
-		if !probePortRe.MatchString(s) {
+		if !curlPortRe.MatchString(s) {
 			t.Errorf("expected %q to be a valid port", s)
 		}
 	}
@@ -62,7 +62,7 @@ func TestProbePortValidation(t *testing.T) {
 	// alter the dial target must be rejected.
 	invalid := []string{"", "http", "web-ui", "80:proxy", "a/b", "8080a", "12.34", "123456"}
 	for _, s := range invalid {
-		if probePortRe.MatchString(s) {
+		if curlPortRe.MatchString(s) {
 			t.Errorf("expected %q to be rejected as a port", s)
 		}
 	}

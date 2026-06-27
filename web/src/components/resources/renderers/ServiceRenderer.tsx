@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback } from 'react'
 import { ServiceRenderer as BaseServiceRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
-import { ProbeButton, ProbePanel, isHttpishPort, defaultScheme, defaultPathForPort } from '../../probe/ServiceProbeButton'
+import { CurlButton, CurlPanel, isHttpishPort, defaultScheme, defaultPathForPort } from '../../curl/ServiceCurlButton'
 import { useResources } from '../../../api/client'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
 import type { ResourceRef } from '../../../types'
@@ -25,12 +25,12 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
   // Curl dials the Service directly from in-cluster, so it's only available when
   // Radar runs in-cluster/Cloud — locally you'd port-forward instead.
   const showCurl = !isLocal
-  // Which port's inline probe panel is open (one at a time). `closing` keeps the
+  // Which port's inline curl panel is open (one at a time). `closing` keeps the
   // panel mounted through its collapse animation before we drop it.
-  const [probe, setProbe] = useState<{ port: number; closing: boolean } | null>(null)
-  const closeProbe = useCallback(() => {
-    setProbe((p) => (p ? { ...p, closing: true } : null))
-    window.setTimeout(() => setProbe(null), 220)
+  const [curl, setCurl] = useState<{ port: number; closing: boolean } | null>(null)
+  const closeCurl = useCallback(() => {
+    setCurl((p) => (p ? { ...p, closing: true } : null))
+    window.setTimeout(() => setCurl(null), 220)
   }, [])
   const spec = data.spec || {}
   const shouldLoadEndpointSlices = Boolean(
@@ -61,11 +61,11 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
       renderPortAction={({ port, name, appProtocol, protocol }) => (
         <>
           {showCurl && isHttpishPort(port, name, appProtocol, protocol) && (
-            <ProbeButton
-              active={probe?.port === port && !probe.closing}
+            <CurlButton
+              active={curl?.port === port && !curl.closing}
               onClick={() => {
-                if (probe?.port === port && !probe.closing) closeProbe()
-                else setProbe({ port, closing: false })
+                if (curl?.port === port && !curl.closing) closeCurl()
+                else setCurl({ port, closing: false })
               }}
             />
           )}
@@ -80,15 +80,15 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
         </>
       )}
       renderPortPanel={({ port, name, appProtocol }) =>
-        probe?.port === port ? (
-          <ProbePanel
+        curl?.port === port ? (
+          <CurlPanel
             namespace={namespace}
             serviceName={serviceName}
             port={port}
             initialScheme={defaultScheme(port, name, appProtocol)}
             initialPath={defaultPathForPort(port, name, appProtocol)}
-            open={!probe.closing}
-            onClose={closeProbe}
+            open={!curl.closing}
+            onClose={closeCurl}
           />
         ) : null
       }

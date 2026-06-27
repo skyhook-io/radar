@@ -20,19 +20,19 @@ import (
 )
 
 const (
-	probeTimeout      = 10 * time.Second
-	probeMaxBodyBytes = 512 * 1024 // cap the previewed response body at 512 KiB
+	curlTimeout      = 10 * time.Second
+	curlMaxBodyBytes = 512 * 1024 // cap the previewed response body at 512 KiB
 )
 
 // namespace/service names are DNS-1123 subdomains; the port must be numeric (we
 // dial host:port directly). Both are validated before being spliced into the
 // cluster-DNS target so a crafted value can't change what we connect to.
 var (
-	probeNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
-	probePortRe = regexp.MustCompile(`^[0-9]{1,5}$`)
+	curlNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
+	curlPortRe = regexp.MustCompile(`^[0-9]{1,5}$`)
 )
 
-type probeRequest struct {
+type curlRequest struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`   // Service name
 	Port      string `json:"port"`   // numeric port
@@ -40,7 +40,7 @@ type probeRequest struct {
 	Path      string `json:"path"`   // request path, defaults to "/"
 }
 
-type probeResponse struct {
+type curlResponse struct {
 	Status     int               `json:"status"`
 	StatusText string            `json:"statusText"` // canonical reason phrase, e.g. "OK", "Service Unavailable"
 	DurationMs int64             `json:"durationMs"`
@@ -54,21 +54,21 @@ type probeResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// probeDialClient builds the client used to dial a Service directly. It sends no
+// curlDialClient builds the client used to dial a Service directly. It sends no
 // Kubernetes credentials (a plain HTTP client, unlike the apiserver services/proxy
 // which forwards the caller's Authorization/Impersonate headers to the backend),
 // disables redirect-following (don't chase a Service-controlled 3xx), and skips
 // TLS verification (internal Services routinely serve self-signed/internal-CA
 // certs and we're inspecting the response, not establishing trust — and nothing
 // sensitive is sent).
-func probeDialClient() *http.Client {
+func curlDialClient() *http.Client {
 	return &http.Client{
-		Timeout: probeTimeout,
+		Timeout: curlTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 		Transport: &http.Transport{
-			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // diagnostic probe; no creds sent
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // diagnostic curl; no creds sent
 			DisableKeepAlives: true,
 		},
 	}
@@ -79,7 +79,7 @@ func friendlyDialError(err error) string {
 	msg := err.Error()
 	switch {
 	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "Client.Timeout"):
-		return fmt.Sprintf("No response within %s — the Service may be down or not listening on this port.", probeTimeout)
+		return fmt.Sprintf("No response within %s — the Service may be down or not listening on this port.", curlTimeout)
 	case strings.Contains(msg, "no such host"):
 		return "Could not resolve the Service — check the name/namespace, or it may not exist."
 	case strings.Contains(msg, "connection refused"):
@@ -89,11 +89,11 @@ func friendlyDialError(err error) string {
 	}
 }
 
-// authorizeProbe checks the caller may reach the Service. Direct-dial bypasses the
+// authorizeCurl checks the caller may reach the Service. Direct-dial bypasses the
 // apiserver, so we re-create the authorization it would have enforced for
 // services/proxy via a SubjectAccessReview as the calling user. No auth (local
 // self-host) means a single trusted operator — allow.
-func (s *Server) authorizeProbe(ctx context.Context, r *http.Request, namespace, name string) (bool, error) {
+func (s *Server) authorizeCurl(ctx context.Context, r *http.Request, namespace, name string) (bool, error) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
 		return true, nil
@@ -122,23 +122,23 @@ func (s *Server) authorizeProbe(ctx context.Context, r *http.Request, namespace,
 	return result.Status.Allowed, nil
 }
 
-// handleProbeService issues a single server-side GET to an in-cluster Service by
+// handleCurlService issues a single server-side GET to an in-cluster Service by
 // dialing it directly over cluster DNS. This is the Cloud-safe stand-in for
 // port-forward when the question is "what does this endpoint return": the request
 // originates in-cluster and the response flows back to the browser. Critically it
 // dials the Service directly rather than via the apiserver services/proxy — the
 // latter forwards the caller's Kubernetes credentials to the workload, which would
-// leak Radar's token to anything you probe. Authorization is re-created with an
+// leak Radar's token to anything you curl. Authorization is re-created with an
 // explicit SubjectAccessReview.
-func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCurlService(w http.ResponseWriter, r *http.Request) {
 	// Direct dial only works from inside the cluster network (Cloud / in-cluster).
 	// Locally you'd port-forward instead.
 	if !k8s.IsInCluster() {
-		s.writeError(w, http.StatusBadRequest, "Service probe is only available when Radar runs in-cluster")
+		s.writeError(w, http.StatusBadRequest, "Service curl is only available when Radar runs in-cluster")
 		return
 	}
 
-	var req probeRequest
+	var req curlRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
@@ -147,15 +147,15 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 	req.Namespace = strings.TrimSpace(req.Namespace)
 	req.Name = strings.TrimSpace(req.Name)
 	req.Port = strings.TrimSpace(req.Port)
-	if !probeNameRe.MatchString(req.Namespace) {
+	if !curlNameRe.MatchString(req.Namespace) {
 		s.writeError(w, http.StatusBadRequest, "invalid namespace")
 		return
 	}
-	if !probeNameRe.MatchString(req.Name) {
+	if !curlNameRe.MatchString(req.Name) {
 		s.writeError(w, http.StatusBadRequest, "invalid service name")
 		return
 	}
-	if !probePortRe.MatchString(req.Port) {
+	if !curlPortRe.MatchString(req.Port) {
 		s.writeError(w, http.StatusBadRequest, "invalid port")
 		return
 	}
@@ -181,7 +181,7 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if allowed, err := s.authorizeProbe(r.Context(), r, req.Namespace, req.Name); err != nil {
+	if allowed, err := s.authorizeCurl(r.Context(), r, req.Namespace, req.Name); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "authorization check failed")
 		return
 	} else if !allowed {
@@ -221,7 +221,7 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 	// to the workload. Host and port come from the cache object, not the request.
 	target := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d%s", scheme, svc.Name, svc.Namespace, matchedPort, path)
 
-	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), curlTimeout)
 	defer cancel()
 
 	preq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
@@ -231,7 +231,7 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	resp, err := probeDialClient().Do(preq)
+	resp, err := curlDialClient().Do(preq)
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, friendlyDialError(err))
 		return
@@ -239,22 +239,22 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	// Read one byte past the cap so we can flag truncation without loading a huge body.
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, probeMaxBodyBytes+1))
-	truncated := len(body) > probeMaxBodyBytes
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, curlMaxBodyBytes+1))
+	truncated := len(body) > curlMaxBodyBytes
 	if truncated {
-		body = body[:probeMaxBodyBytes]
+		body = body[:curlMaxBodyBytes]
 	}
 	dur := time.Since(start).Milliseconds()
 
 	// A read error after headers arrived means the target stalled or reset
 	// mid-body. Surface it rather than passing off a partial body as a clean
-	// response — diagnosing that stall is the whole point of the probe.
-	var probeErr string
+	// response — diagnosing that stall is the whole point of the curl.
+	var curlErr string
 	if readErr != nil {
 		if ctx.Err() != nil {
-			probeErr = fmt.Sprintf("response timed out after %s (headers received, body incomplete)", probeTimeout)
+			curlErr = fmt.Sprintf("response timed out after %s (headers received, body incomplete)", curlTimeout)
 		} else {
-			probeErr = fmt.Sprintf("error reading response body: %v", readErr)
+			curlErr = fmt.Sprintf("error reading response body: %v", readErr)
 		}
 	}
 
@@ -263,7 +263,7 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 		headers[k] = resp.Header.Get(k)
 	}
 
-	s.writeJSON(w, probeResponse{
+	s.writeJSON(w, curlResponse{
 		Status:     resp.StatusCode,
 		StatusText: http.StatusText(resp.StatusCode),
 		DurationMs: dur,
@@ -271,6 +271,6 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 		Body:       string(body),
 		Truncated:  truncated,
 		BodyBytes:  len(body),
-		Error:      probeErr,
+		Error:      curlErr,
 	})
 }
