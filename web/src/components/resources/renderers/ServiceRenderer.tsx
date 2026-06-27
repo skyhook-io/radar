@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useCallback } from 'react'
 import { ServiceRenderer as BaseServiceRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { ProbeButton, ProbePanel, isHttpishPort, defaultScheme, defaultPathForPort } from '../../probe/ServiceProbeButton'
@@ -25,8 +25,13 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
   // Curl dials the Service directly from in-cluster, so it's only available when
   // Radar runs in-cluster/Cloud — locally you'd port-forward instead.
   const showCurl = !isLocal
-  // Which port's inline probe panel is open (one at a time). Keyed by port number.
-  const [activeProbePort, setActiveProbePort] = useState<number | null>(null)
+  // Which port's inline probe panel is open (one at a time). `closing` keeps the
+  // panel mounted through its collapse animation before we drop it.
+  const [probe, setProbe] = useState<{ port: number; closing: boolean } | null>(null)
+  const closeProbe = useCallback(() => {
+    setProbe((p) => (p ? { ...p, closing: true } : null))
+    window.setTimeout(() => setProbe(null), 220)
+  }, [])
   const spec = data.spec || {}
   const shouldLoadEndpointSlices = Boolean(
     namespace &&
@@ -57,8 +62,11 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
         <>
           {showCurl && isHttpishPort(port, name, appProtocol, protocol) && (
             <ProbeButton
-              active={activeProbePort === port}
-              onClick={() => setActiveProbePort((cur) => (cur === port ? null : port))}
+              active={probe?.port === port && !probe.closing}
+              onClick={() => {
+                if (probe?.port === port && !probe.closing) closeProbe()
+                else setProbe({ port, closing: false })
+              }}
             />
           )}
           {showPortForward && (
@@ -72,14 +80,15 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
         </>
       )}
       renderPortPanel={({ port, name, appProtocol }) =>
-        activeProbePort === port ? (
+        probe?.port === port ? (
           <ProbePanel
             namespace={namespace}
             serviceName={serviceName}
             port={port}
             initialScheme={defaultScheme(port, name, appProtocol)}
             initialPath={defaultPathForPort(port, name, appProtocol)}
-            onClose={() => setActiveProbePort(null)}
+            open={!probe.closing}
+            onClose={closeProbe}
           />
         ) : null
       }

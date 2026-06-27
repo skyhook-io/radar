@@ -258,6 +258,7 @@ export function ProbePanel({
   port,
   initialScheme,
   initialPath,
+  open,
   onClose,
 }: {
   namespace: string
@@ -265,6 +266,8 @@ export function ProbePanel({
   port: number
   initialScheme: 'http' | 'https'
   initialPath: string
+  // Host-controlled: false triggers the collapse animation before the host unmounts.
+  open: boolean
   onClose: () => void
 }) {
   const [scheme, setScheme] = useState<'http' | 'https'>(initialScheme)
@@ -273,9 +276,11 @@ export function ProbePanel({
   const [sheetOpen, setSheetOpen] = useState(false)
   // What was actually sent — so the sheet header / re-renders reflect the response.
   const [sent, setSent] = useState<{ scheme: 'http' | 'https'; path: string }>({ scheme: initialScheme, path: initialPath })
-  // Smooth reveal on open, using radar's standard grid 0fr↔1fr height transition.
-  const [open, setOpen] = useState(false)
-  useEffect(() => { setOpen(true) }, [])
+  // Enter animation: mount collapsed, then expand next tick (radar's grid 0fr↔1fr).
+  // Combined with the host-controlled `open` prop this gives a symmetric reveal:
+  // expand on mount, collapse when the host sets open=false (before it unmounts).
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
 
   const probe = useMutation<ProbeResult, Error, { scheme: 'http' | 'https'; path: string }>({
     mutationFn: async (vars) => {
@@ -295,7 +300,7 @@ export function ProbePanel({
   const peek = result && !result.error ? formatBody(result) : null
 
   return (
-    <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: open ? '1fr' : '0fr' }}>
+    <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: mounted && open ? '1fr' : '0fr' }}>
       <div className="overflow-hidden">
       <div className="mt-3 pt-3 border-t border-theme-border space-y-2" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center justify-between">
@@ -346,8 +351,11 @@ export function ProbePanel({
         </div>
       )}
 
+      {/* Reveal the response with the same grid transition as the panel itself. */}
+      <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: result ? '1fr' : '0fr' }}>
+        <div className="overflow-hidden">
       {result && (
-        <div className="space-y-2">
+        <div className="space-y-2 pt-0.5">
           <VerdictLine result={result} showHeaders={showHeaders} onToggleHeaders={() => setShowHeaders((v) => !v)} />
 
           {result.error && (
@@ -390,6 +398,8 @@ export function ProbePanel({
           )}
         </div>
       )}
+        </div>
+      </div>
 
       {sheetOpen && result && (
         <ProbeResponseDialog
