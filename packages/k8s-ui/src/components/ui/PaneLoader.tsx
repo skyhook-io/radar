@@ -26,7 +26,11 @@ export function PaneLoader({
           label is absolutely positioned below the icon and so never shifts it. */}
       <span className="relative">
         <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
-        <span className="absolute left-1/2 top-full mt-3 -translate-x-1/2 whitespace-nowrap text-sm text-theme-text-tertiary">
+        {/* Label style matches the splash surfaces (17px semibold tracking-tight,
+            primary) so the whole loading family — boot splash, connect splash,
+            PaneLoader — reads as one continuous state, not a font change at the
+            hand-off. */}
+        <span className="absolute left-1/2 top-full mt-3 -translate-x-1/2 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
           {label}
         </span>
       </span>
