@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode, getBasename } from '../../api/config'
 import { useAPIResources } from '../../api/apiResources'
 import { initNavigationMap } from '@skyhook-io/k8s-ui'
@@ -136,6 +136,26 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       ?? CORE_RESOURCES.find(r => r.name === selectedKind.name && r.group === selectedKind.group)
     return match?.isCrd ?? (!!selectedKind.group) // default: has group = likely CRD
   }, [selectedKind, apiResources])
+
+  // Cluster Audit findings for the selected kind, keyed by "namespace/name" for
+  // the resource list. The list shows ONE kind at a time, so ns/name is enough;
+  // we still match the finding's group (built-ins → real group, CRDs → "") so a
+  // kind shared across groups doesn't bleed findings across the two lists.
+  const audit = useAudit(namespaces)
+  const auditBadges = useMemo(() => {
+    if (!selectedKind || !audit.data?.findings) return undefined
+    const wantGroup = isSelectedCrd ? '' : selectedKind.group
+    const map: Record<string, { danger: number; warning: number }> = {}
+    for (const f of audit.data.findings) {
+      if (f.kind !== selectedKind.kind || (f.group ?? '') !== wantGroup) continue
+      const k = `${f.namespace || ''}/${f.name}`
+      const cur = map[k] ?? { danger: 0, warning: 0 }
+      if (f.severity === 'danger') cur.danger++
+      else if (f.severity === 'warning') cur.warning++
+      map[k] = cur
+    }
+    return map
+  }, [audit.data?.findings, selectedKind, isSelectedCrd])
 
   const selectedCountKey = selectedKind ? resourceCountKey(selectedKind) : ''
   const selectedCount = selectedCountKey ? countsData?.counts[selectedCountKey] : undefined
@@ -294,6 +314,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       topNodeMetrics={topNodeMetrics}
       certExpiry={certExpiry}
       certExpiryError={certExpiryError}
+      auditBadges={auditBadges}
       // Pinned kinds
       pinned={pinned}
       togglePin={togglePin}

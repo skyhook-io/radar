@@ -3,11 +3,12 @@ import { Handle, Position } from '@xyflow/react'
 import {
   ChevronDown,
   ChevronUp,
+  TriangleAlert,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { NodeKind, HealthStatus, PodSummary } from '../../types'
 import { displayKind } from '../../types'
-import { healthToSeverity, SEVERITY_DOT } from '../../utils/badge-colors'
+import { healthToSeverity, SEVERITY_DOT, SEVERITY_TEXT } from '../../utils/badge-colors'
 import { workloadHue } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
 import { midTruncate } from '../../utils/format'
@@ -376,6 +377,10 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   id,
 }: K8sResourceNodeProps) {
   const { kind, name, status, nodeData, selected, dimmed, onExpand, onCollapse, isExpanded } = data
+  // Cluster Audit findings joined onto this node by the host (web/ enriches each
+  // node's data by auditKey). Topology surfaces DANGER only — warnings would turn
+  // a dense graph into a heatmap; they live in the list + the resource drawer.
+  const auditDanger = typeof nodeData.auditDanger === 'number' ? nodeData.auditDanger : 0
   // Workload tint (application graph): a node owned by exactly one workload
   // carries that workload's hue. Only on healthy/unknown cards — degraded/
   // unhealthy already own the card background for health, which must win.
@@ -505,6 +510,14 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                 >
                   <ChevronUp className="w-3.5 h-3.5 text-theme-text-secondary" />
                 </button>
+              )}
+              {auditDanger > 0 && (
+                <Tooltip
+                  content={`${auditDanger} audit ${auditDanger === 1 ? 'finding' : 'findings'} — open to review`}
+                  position="right"
+                >
+                  <TriangleAlert className={clsx('w-3 h-3 cursor-help', SEVERITY_TEXT.error)} />
+                </Tooltip>
               )}
               {issueTooltip ? (
                 <Tooltip content={issueTooltip} position="right">

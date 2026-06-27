@@ -166,17 +166,22 @@ func (s *Server) handleAuditResource(w http.ResponseWriter, r *http.Request) {
 	}
 	index := bp.IndexByResource(results.Findings)
 
-	// Try exact kind first, then map API resource name (e.g. "deployments") to Go kind (e.g. "Deployment").
-	// This handler is the UI's per-resource audit drill-down — group isn't on
-	// the URL today (the UI doesn't list grouped CRDs here yet), so we look
-	// up with group="" which matches the built-ins the audit suite scans.
-	// When CRD audit lands (#35 follow-up), thread group through the URL.
-	findings := index[bp.ResourceKey("", kind, namespace, name)]
-	if findings == nil {
-		goKind := apiResourceToKind(kind)
-		if goKind != kind {
-			findings = index[bp.ResourceKey("", goKind, namespace, name)]
-		}
+	// Resolve to the Go kind (built-in plural "deployments" → "Deployment"), then
+	// look up with the audit's keying convention. Findings carry group backfilled
+	// from the builtin table (built-ins → their group e.g. "apps"; CRDs → ""), so
+	// a bare group="" lookup missed every built-in finding keyed under a real
+	// group (Deployment under "apps", Job under "batch", …) — the drawer showed
+	// nothing for them. Group still resolves to "" for CRDs, so those keep working.
+	goKind := kind
+	if mapped := apiResourceToKind(kind); mapped != kind {
+		goKind = mapped
+	}
+	group := bp.GroupForBuiltinKind(goKind)
+	findings := index[bp.ResourceKey(group, goKind, namespace, name)]
+	if findings == nil && group != "" {
+		// Defensive: resolve even if a finding for this kind was emitted with an
+		// empty group despite the builtin table classifying it under a real one.
+		findings = index[bp.ResourceKey("", goKind, namespace, name)]
 	}
 	if findings == nil {
 		findings = []bp.Finding{}

@@ -44,7 +44,8 @@ import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe } from './api/client'
+import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
+import { buildAuditSeverityMap } from './utils/auditBadges'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
@@ -1263,6 +1264,26 @@ function AppInner() {
     }
   }, [displayedTopology, visibleKinds, namespaces, topologyMode])
 
+  // Cluster Audit findings, joined onto topology nodes by the audit key the
+  // backend stamps on each node (data.auditKey). The graph surfaces DANGER only
+  // (warnings would turn a dense graph into a heatmap); the node component reads
+  // data.auditDanger. Re-runs only when findings change, and copies nodes only
+  // when there are findings to attach — no overhead on clusters with none.
+  const audit = useAudit(namespaces)
+  const auditSeverityMap = useMemo(() => buildAuditSeverityMap(audit.data?.findings), [audit.data?.findings])
+  const topologyWithAudit = useMemo((): Topology | null => {
+    if (!filteredTopology) return null
+    if (auditSeverityMap.size === 0) return filteredTopology
+    return {
+      ...filteredTopology,
+      nodes: filteredTopology.nodes.map(node => {
+        const counts = auditSeverityMap.get(node.data.auditKey as string)
+        if (!counts) return node
+        return { ...node, data: { ...node.data, auditDanger: counts.danger, auditWarning: counts.warning } }
+      }),
+    }
+  }, [filteredTopology, auditSeverityMap])
+
   // The graph node id of the currently open resource, used to highlight it on
   // the canvas. Looked up from the topology (not reconstructed) because node
   // ids are `<lowercaseKind>/<ns>/<name>` with special prefixes for CRD
@@ -1773,7 +1794,7 @@ function AppInner() {
 
                 <div className="flex-1 relative">
                   <TopologyGraph
-                    topology={filteredTopology}
+                    topology={topologyWithAudit}
                     viewMode={topologyMode}
                     groupingMode={effectiveGroupingMode}
                     hideGroupHeader={hideGroupHeader}

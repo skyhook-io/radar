@@ -13,6 +13,13 @@ func ResourceKey(group, kind, namespace, name string) string {
 	return resourceid.ResourceKey(group, kind, namespace, name)
 }
 
+// GroupForBuiltinKind re-exports the builtin Kind→group table from pkg/resourceid
+// so callers resolving a finding's key (which backfills group the same way) don't
+// need a second import.
+func GroupForBuiltinKind(kind string) string {
+	return resourceid.GroupForBuiltinKind(kind)
+}
+
 // IndexByResource builds a lookup map from ResourceKey → []Finding.
 func IndexByResource(findings []Finding) map[string][]Finding {
 	m := make(map[string][]Finding)
