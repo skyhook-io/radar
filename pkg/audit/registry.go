@@ -294,6 +294,7 @@ var CheckRegistry = map[string]CheckMeta{
 	// ── Cross-resource / lifecycle (emit under Reliability) ────────────
 	"deprecatedAPIVersion": {
 		ID:          "deprecatedAPIVersion",
+		BadgeWorthy: true,
 		Title:       "Deprecated API version",
 		Category:    CategoryReliability,
 		Description: "This cluster still serves a deprecated API version. Resources using this API will break after a Kubernetes upgrade that removes it.",
@@ -302,6 +303,7 @@ var CheckRegistry = map[string]CheckMeta{
 	},
 	"serviceNoMatchingPods": {
 		ID:          "serviceNoMatchingPods",
+		BadgeWorthy: true,
 		Title:       "Service has no matching pods",
 		Category:    CategoryReliability,
 		Description: "The service selector does not match any running pods — traffic sent to this service will fail.",
@@ -310,6 +312,7 @@ var CheckRegistry = map[string]CheckMeta{
 	},
 	"ingressNoMatchingService": {
 		ID:          "ingressNoMatchingService",
+		BadgeWorthy: true,
 		Title:       "Ingress references missing service",
 		Category:    CategoryReliability,
 		Description: "The ingress backend references a service that does not exist, so incoming traffic will get 503 errors.",
@@ -318,6 +321,7 @@ var CheckRegistry = map[string]CheckMeta{
 	},
 	"traefikRouteMissingService": {
 		ID:          "traefikRouteMissingService",
+		BadgeWorthy: true,
 		Title:       "Traefik router references missing service",
 		Category:    CategoryReliability,
 		Description: "A Traefik IngressRoute references a Service or TraefikService that does not exist. Traefik ships no admission webhook, so the bad reference is accepted silently and requests to that route fail until someone reads the controller logs.",
@@ -326,6 +330,7 @@ var CheckRegistry = map[string]CheckMeta{
 	},
 	"traefikRouteMissingMiddleware": {
 		ID:          "traefikRouteMissingMiddleware",
+		BadgeWorthy: true,
 		Title:       "Traefik router references missing middleware",
 		Category:    CategoryReliability,
 		Description: "A Traefik IngressRoute references a Middleware that does not exist in the resolved namespace. Traefik accepts the route but skips the missing middleware, so auth, rate-limit, or header rules you expect to apply silently do not.",
@@ -334,6 +339,7 @@ var CheckRegistry = map[string]CheckMeta{
 	},
 	"traefikChainMissingMiddleware": {
 		ID:          "traefikChainMissingMiddleware",
+		BadgeWorthy: true,
 		Title:       "Traefik chain references missing middleware",
 		Category:    CategoryReliability,
 		Description: "A Traefik chain Middleware lists a Middleware in spec.chain.middlewares that does not exist in the resolved namespace. Traefik accepts the chain but skips the missing link, so part of the intended middleware pipeline silently does not run.",
@@ -342,6 +348,7 @@ var CheckRegistry = map[string]CheckMeta{
 	},
 	"traefikErrorsMissingService": {
 		ID:          "traefikErrorsMissingService",
+		BadgeWorthy: true,
 		Title:       "Traefik errors middleware references missing service",
 		Category:    CategoryReliability,
 		Description: "A Traefik errors Middleware references a Service in spec.errors.service that does not exist. Traefik accepts the middleware, but when an error page is needed the backend isn't there, so users get the default error instead of the custom one.",
@@ -350,6 +357,7 @@ var CheckRegistry = map[string]CheckMeta{
 	},
 	"stuckTerminating": {
 		ID:          "stuckTerminating",
+		BadgeWorthy: true,
 		Title:       "Stuck terminating resource",
 		Category:    CategoryReliability,
 		Description: "This resource has metadata.deletionTimestamp set but is still alive past the cleanup window. Most controllers finish cleanup within seconds; minutes-long delays usually mean a finalizer's owning controller is unhealthy or unable to reach a dependent service. Common causes: the controller pod is CrashLoopBackOff, DNS resolution is broken, the finalizer logic depends on a webhook or external API that's unavailable.",
@@ -358,6 +366,7 @@ var CheckRegistry = map[string]CheckMeta{
 	},
 	"crossplaneStuck": {
 		ID:          "crossplaneStuck",
+		BadgeWorthy: true,
 		Title:       "Stuck Crossplane resource",
 		Category:    CategoryReliability,
 		Description: "A Crossplane Managed Resource, Composite Resource, or Claim has been reporting Ready=False or Synced=False past the reconciliation window. Synced=False usually means a configuration error (bad ProviderConfig, malformed forProvider spec, missing IAM permissions, quota exceeded, schema mismatch). Ready=False usually means the provider accepted the spec but can't reach a desired state (target cloud API rejected, dependency missing, eventual-consistency lag past the threshold).",

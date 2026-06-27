@@ -27,6 +27,10 @@ export interface CheckMeta {
   remediation: string
   frameworks?: string[]
   references?: CheckReference[]
+  /** Finding means the specific resource is broken (reference-integrity /
+   *  lifecycle), worth a per-resource topology/list badge — vs posture /
+   *  best-practice checks that fire near-universally. Set by the backend registry. */
+  badgeWorthy?: boolean
 }
 
 /** An authoritative link for a check (K8s docs, CIS, NSA/CISA, …). */

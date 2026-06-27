@@ -378,9 +378,13 @@ export const K8sResourceNode = memo(function K8sResourceNode({
 }: K8sResourceNodeProps) {
   const { kind, name, status, nodeData, selected, dimmed, onExpand, onCollapse, isExpanded } = data
   // Cluster Audit findings joined onto this node by the host (web/ enriches each
-  // node's data by auditKey). Topology surfaces DANGER only — warnings would turn
-  // a dense graph into a heatmap; they live in the list + the resource drawer.
+  // node's data by auditKey). The host only counts "badge-worthy" findings —
+  // reference-integrity / lifecycle, "this resource is actually broken" — not the
+  // posture/best-practice nags that fire near-universally, so the indicator stays
+  // a signal. Colored by worst severity (danger red, else warning amber).
   const auditDanger = typeof nodeData.auditDanger === 'number' ? nodeData.auditDanger : 0
+  const auditWarning = typeof nodeData.auditWarning === 'number' ? nodeData.auditWarning : 0
+  const auditTotal = auditDanger + auditWarning
   // Workload tint (application graph): a node owned by exactly one workload
   // carries that workload's hue. Only on healthy/unknown cards — degraded/
   // unhealthy already own the card background for health, which must win.
@@ -511,12 +515,12 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                   <ChevronUp className="w-3.5 h-3.5 text-theme-text-secondary" />
                 </button>
               )}
-              {auditDanger > 0 && (
+              {auditTotal > 0 && (
                 <Tooltip
-                  content={`${auditDanger} audit ${auditDanger === 1 ? 'finding' : 'findings'} — open to review`}
+                  content={`${auditTotal} audit ${auditTotal === 1 ? 'finding' : 'findings'}${auditDanger > 0 ? ` · ${auditDanger} danger` : ''} — open to review`}
                   position="right"
                 >
-                  <TriangleAlert className={clsx('w-3 h-3 cursor-help', SEVERITY_TEXT.error)} />
+                  <TriangleAlert className={clsx('w-3 h-3 cursor-help', auditDanger > 0 ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning)} />
                 </Tooltip>
               )}
               {issueTooltip ? (

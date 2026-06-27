@@ -1270,7 +1270,10 @@ function AppInner() {
   // data.auditDanger. Re-runs only when findings change, and copies nodes only
   // when there are findings to attach — no overhead on clusters with none.
   const audit = useAudit(namespaces)
-  const auditSeverityMap = useMemo(() => buildAuditSeverityMap(audit.data?.findings), [audit.data?.findings])
+  const auditSeverityMap = useMemo(
+    () => buildAuditSeverityMap(audit.data?.findings, audit.data?.checks),
+    [audit.data?.findings, audit.data?.checks],
+  )
   const topologyWithAudit = useMemo((): Topology | null => {
     if (!filteredTopology) return null
     if (auditSeverityMap.size === 0) return filteredTopology

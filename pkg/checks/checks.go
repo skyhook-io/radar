@@ -92,6 +92,13 @@ type CheckMeta struct {
 	Remediation     string      `json:"remediation"`
 	Frameworks      []string    `json:"frameworks,omitempty"`
 	References      []Reference `json:"references,omitempty"`
+	// BadgeWorthy marks a check whose finding means the specific resource is
+	// actually broken (reference-integrity, lifecycle, will-break-on-upgrade) —
+	// worth a per-resource badge on the topology graph and resource list.
+	// Deliberately FALSE for security-posture and best-practice checks (runAsRoot,
+	// missing limits, single-replica…) that fire on nearly every resource and
+	// would turn the badges into noise; those stay in the Checks/Audit views.
+	BadgeWorthy bool `json:"badgeWorthy,omitempty"`
 }
 
 // Reference is an authoritative link for a check (Kubernetes docs, CIS,

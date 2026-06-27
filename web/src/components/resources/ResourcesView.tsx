@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
+import { isBadgeWorthy } from '../../utils/auditBadges'
 import { apiUrl, getAuthHeaders, getCredentialsMode, getBasename } from '../../api/config'
 import { useAPIResources } from '../../api/apiResources'
 import { initNavigationMap } from '@skyhook-io/k8s-ui'
@@ -140,7 +141,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // Cluster Audit findings for the selected kind, keyed by "namespace/name" for
   // the resource list. The list shows ONE kind at a time, so ns/name is enough;
   // we still match the finding's group (built-ins → real group, CRDs → "") so a
-  // kind shared across groups doesn't bleed findings across the two lists.
+  // kind shared across groups doesn't bleed findings across the two lists. Only
+  // "badge-worthy" findings count (reference-integrity / lifecycle) — posture
+  // and best-practice nags fire near-universally and would just be noise.
   const audit = useAudit(namespaces)
   const auditBadges = useMemo(() => {
     if (!selectedKind || !audit.data?.findings) return undefined
@@ -148,6 +151,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     const map: Record<string, { danger: number; warning: number }> = {}
     for (const f of audit.data.findings) {
       if (f.kind !== selectedKind.kind || (f.group ?? '') !== wantGroup) continue
+      if (!isBadgeWorthy(f, audit.data.checks)) continue
       const k = `${f.namespace || ''}/${f.name}`
       const cur = map[k] ?? { danger: 0, warning: 0 }
       if (f.severity === 'danger') cur.danger++
@@ -155,7 +159,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       map[k] = cur
     }
     return map
-  }, [audit.data?.findings, selectedKind, isSelectedCrd])
+  }, [audit.data?.findings, audit.data?.checks, selectedKind, isSelectedCrd])
 
   const selectedCountKey = selectedKind ? resourceCountKey(selectedKind) : ''
   const selectedCount = selectedCountKey ? countsData?.counts[selectedCountKey] : undefined
