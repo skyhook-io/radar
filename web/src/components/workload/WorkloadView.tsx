@@ -161,7 +161,8 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
   const { canExec, canViewLogs, canPortForward } = useNamespacedCapabilities(namespace)
   // Live forward when local+RBAC; otherwise (in-cluster/Cloud) still surface the
   // copy-paste kubectl command. The button picks live vs. copy by deployment mode.
-  const showPortForward = canPortForward || !useIsLocalDeployment()
+  const isLocal = useIsLocalDeployment()
+  const showPortForward = canPortForward || !isLocal
 
   const deleteMutation = useDeleteResource()
   const restartWorkloadMutation = useRestartWorkload()

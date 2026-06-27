@@ -30,7 +30,8 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   // Show the port-forward affordance for a live forward (local + RBAC) OR when
   // not local — in-cluster/Cloud surfaces a copy-paste kubectl command instead.
   // The button itself picks live vs. copy-command based on deployment mode.
-  const showPortForward = canPortForward || !useIsLocalDeployment()
+  const isLocal = useIsLocalDeployment()
+  const showPortForward = canPortForward || !isLocal
 
   // Metrics
   const { data: metrics } = usePodMetrics(namespace, podName)

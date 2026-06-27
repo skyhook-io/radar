@@ -318,7 +318,8 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
   const { canExec, canViewLogs, canPortForward } = useNamespacedCapabilities(namespace)
   // Live forward (local + RBAC) or the kubectl copy-command (in-cluster/Cloud);
   // PortForwardInlineButton picks which by deployment mode.
-  const showPortForward = canPortForward || !useIsLocalDeployment()
+  const isLocal = useIsLocalDeployment()
+  const showPortForward = canPortForward || !isLocal
 
   const [isLoadingAction, setIsLoadingAction] = useState(false)
 
@@ -425,7 +426,8 @@ interface ServiceQuickActionsProps {
 function ServiceQuickActions({ namespace, serviceName }: ServiceQuickActionsProps) {
   const { data: portsData, isLoading: portsLoading } = useAvailablePorts('service', namespace, serviceName)
   const { canPortForward } = useNamespacedCapabilities(namespace)
-  const showPortForward = canPortForward || !useIsLocalDeployment()
+  const isLocal = useIsLocalDeployment()
+  const showPortForward = canPortForward || !isLocal
 
   const ports = portsData?.ports || []
 
