@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,9 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/client-go/rest"
+	authv1 "k8s.io/api/authorization/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 const (
@@ -20,19 +24,18 @@ const (
 	probeMaxBodyBytes = 512 * 1024 // cap the previewed response body at 512 KiB
 )
 
-// dnsName matches a DNS-1123 subdomain (namespace/service names). Port accepts a
-// numeric port or a DNS-1123 port name. Both are validated before being spliced
-// into the apiserver proxy URL so a crafted value can't escape the
-// services/{target}/proxy path structure.
+// namespace/service names are DNS-1123 subdomains; the port must be numeric (we
+// dial host:port directly). Both are validated before being spliced into the
+// cluster-DNS target so a crafted value can't change what we connect to.
 var (
 	probeNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
-	probePortRe = regexp.MustCompile(`^[a-zA-Z0-9]([-a-zA-Z0-9]{0,14})?$`)
+	probePortRe = regexp.MustCompile(`^[0-9]{1,5}$`)
 )
 
 type probeRequest struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`   // Service name
-	Port      string `json:"port"`   // port number or named port
+	Port      string `json:"port"`   // numeric port
 	Scheme    string `json:"scheme"` // "http" (default) or "https"
 	Path      string `json:"path"`   // request path, defaults to "/"
 }
@@ -51,57 +54,90 @@ type probeResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// probeHTTPClient builds the client used for a probe. Critically it disables
-// redirect-following: the client-go transport re-attaches the cluster bearer
-// token and Impersonate-* headers to every request it makes, so following a
-// Service-controlled 3xx to another host would leak those credentials to an
-// attacker-chosen endpoint (SSRF). Instead we surface the 3xx + Location to the
-// caller as the probe result.
-func probeHTTPClient(cfg *rest.Config) (*http.Client, error) {
-	client, err := rest.HTTPClientFor(cfg)
-	if err != nil {
-		return nil, err
+// probeDialClient builds the client used to dial a Service directly. It sends no
+// Kubernetes credentials (a plain HTTP client, unlike the apiserver services/proxy
+// which forwards the caller's Authorization/Impersonate headers to the backend),
+// disables redirect-following (don't chase a Service-controlled 3xx), and skips
+// TLS verification (internal Services routinely serve self-signed/internal-CA
+// certs and we're inspecting the response, not establishing trust — and nothing
+// sensitive is sent).
+func probeDialClient() *http.Client {
+	return &http.Client{
+		Timeout: probeTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: &http.Transport{
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // diagnostic probe; no creds sent
+			DisableKeepAlives: true,
+		},
 	}
-	client.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-	return client, nil
 }
 
-// proxyStatusError recognizes a Kubernetes Status object — what the apiserver's
-// services/proxy returns when it can't deliver the request to a backend (no ready
-// endpoints, connection refused) — and maps it to a plain-English message. The
-// Service never saw the request in these cases, so the raw Status JSON shouldn't
-// be shown as if it were the Service's response. Returns ok=false for a normal
-// app response (apps don't emit kind:"Status" objects).
-func proxyStatusError(body []byte) (string, bool) {
-	var st struct {
-		Kind    string `json:"kind"`
-		Status  string `json:"status"`
-		Reason  string `json:"reason"`
-		Message string `json:"message"`
-	}
-	if json.Unmarshal(body, &st) != nil || st.Kind != "Status" || st.Status != "Failure" {
-		return "", false
-	}
+// friendlyDialError turns a Go dial/transport error into operator-readable text.
+func friendlyDialError(err error) string {
+	msg := err.Error()
 	switch {
-	case strings.Contains(st.Message, "no endpoints available"):
-		return "No ready endpoints — this Service has no running pods behind it.", true
-	case st.Message != "":
-		return "The cluster could not reach this Service: " + st.Message, true
+	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "Client.Timeout"):
+		return fmt.Sprintf("No response within %s — the Service may be down or not listening on this port.", probeTimeout)
+	case strings.Contains(msg, "no such host"):
+		return "Could not resolve the Service — check the name/namespace, or it may not exist."
+	case strings.Contains(msg, "connection refused"):
+		return "Connection refused — no pod is accepting connections on this port (the Service may have no ready endpoints)."
 	default:
-		return "The cluster could not reach this Service.", true
+		return "Could not reach the Service: " + msg
 	}
 }
 
-// handleProbeService issues a single server-side GET to an in-cluster Service via
-// the apiserver's services/proxy subresource, impersonating the caller so the
-// apiserver enforces RBAC (get services/proxy). This is the Cloud-safe stand-in
-// for port-forward when the question is "what does this endpoint return": the
-// request originates in-cluster and the response flows back to the browser — no
-// local listener, and the target is constrained to the named Service (not
-// arbitrary egress).
+// authorizeProbe checks the caller may reach the Service. Direct-dial bypasses the
+// apiserver, so we re-create the authorization it would have enforced for
+// services/proxy via a SubjectAccessReview as the calling user. No auth (local
+// self-host) means a single trusted operator — allow.
+func (s *Server) authorizeProbe(ctx context.Context, r *http.Request, namespace, name string) (bool, error) {
+	user := auth.UserFromContext(r.Context())
+	if user == nil {
+		return true, nil
+	}
+	client := k8s.GetClient()
+	if client == nil {
+		return false, fmt.Errorf("k8s client not initialized")
+	}
+	review := &authv1.SubjectAccessReview{
+		Spec: authv1.SubjectAccessReviewSpec{
+			User:   user.Username,
+			Groups: user.Groups,
+			ResourceAttributes: &authv1.ResourceAttributes{
+				Namespace:   namespace,
+				Verb:        "get",
+				Resource:    "services",
+				Subresource: "proxy",
+				Name:        name,
+			},
+		},
+	}
+	result, err := client.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+	if err != nil {
+		return false, err
+	}
+	return result.Status.Allowed, nil
+}
+
+// handleProbeService issues a single server-side GET to an in-cluster Service by
+// dialing it directly over cluster DNS. This is the Cloud-safe stand-in for
+// port-forward when the question is "what does this endpoint return": the request
+// originates in-cluster and the response flows back to the browser. Critically it
+// dials the Service directly rather than via the apiserver services/proxy — the
+// latter forwards the caller's Kubernetes credentials to the workload, which would
+// leak Radar's token to anything you probe. Authorization is re-created with an
+// explicit SubjectAccessReview.
 func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
+	// Direct dial only works from inside the cluster network (Cloud / in-cluster).
+	// Locally you'd port-forward instead.
+	if !k8s.IsInCluster() {
+		s.writeError(w, http.StatusBadRequest, "Service probe is only available when Radar runs in-cluster")
+		return
+	}
+
 	var req probeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid request body")
@@ -133,9 +169,6 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The proxy suffix is the path the backend Service sees. Keep it as a rooted,
-	// single-line path; the apiserver only proxies it to the target so the blast
-	// radius stays within the (RBAC-gated) Service.
 	path := req.Path
 	if path == "" {
 		path = "/"
@@ -148,38 +181,33 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := s.getConfigForRequest(r)
-	if cfg == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "K8s client not initialized")
+	if allowed, err := s.authorizeProbe(r.Context(), r, req.Namespace, req.Name); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "authorization check failed")
+		return
+	} else if !allowed {
+		s.writeError(w, http.StatusForbidden, "You don't have permission to reach this Service (requires get services/proxy).")
 		return
 	}
+
 	auth.AuditLog(r, req.Namespace, req.Name)
 
-	httpClient, err := probeHTTPClient(cfg)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "failed to build cluster client")
-		return
-	}
-
-	// services/proxy target encodes [scheme:]name:port; the apiserver authorizes
-	// "get services/proxy" for the impersonated user before reaching the Service.
-	target := fmt.Sprintf("%s:%s:%s", scheme, req.Name, req.Port)
-	proxyURL := strings.TrimRight(cfg.Host, "/") +
-		"/api/v1/namespaces/" + req.Namespace + "/services/" + target + "/proxy" + path
+	// Dial the Service directly over cluster DNS — sends NO Kubernetes credentials
+	// to the workload. Validated name/namespace/port can't escape this template.
+	target := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%s%s", scheme, req.Name, req.Namespace, req.Port, path)
 
 	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
 
-	preq, err := http.NewRequestWithContext(ctx, http.MethodGet, proxyURL, nil)
+	preq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
 
 	start := time.Now()
-	resp, err := httpClient.Do(preq)
+	resp, err := probeDialClient().Do(preq)
 	if err != nil {
-		s.writeError(w, http.StatusBadGateway, fmt.Sprintf("probe failed: %v", err))
+		s.writeError(w, http.StatusBadGateway, friendlyDialError(err))
 		return
 	}
 	defer resp.Body.Close()
@@ -204,19 +232,6 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	respBody := string(body)
-	// A failure that the Service itself never produced — the apiserver proxy
-	// couldn't deliver the request (no ready endpoints, connection refused) and
-	// returned a Kubernetes Status object. Surface that as plain English instead
-	// of dumping a raw k8s API error at the operator, and drop the body since it
-	// isn't the Service's response.
-	if probeErr == "" {
-		if friendly, ok := proxyStatusError(body); ok {
-			probeErr = friendly
-			respBody = ""
-		}
-	}
-
 	headers := make(map[string]string, len(resp.Header))
 	for k := range resp.Header {
 		headers[k] = resp.Header.Get(k)
@@ -227,7 +242,7 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 		StatusText: http.StatusText(resp.StatusCode),
 		DurationMs: dur,
 		Headers:    headers,
-		Body:       respBody,
+		Body:       string(body),
 		Truncated:  truncated,
 		BodyBytes:  len(body),
 		Error:      probeErr,
