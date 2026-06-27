@@ -220,11 +220,13 @@ function ProbeResponseDialog({
           <VerdictLine result={result} showHeaders={showHeaders} onToggleHeaders={() => setShowHeaders((v) => !v)} />
         </div>
 
-        {showHeaders && (
-          <pre className="text-xs bg-theme-base m-4 mb-0 rounded p-3 overflow-auto max-h-48 text-theme-text-secondary font-mono whitespace-pre">
-            {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
-          </pre>
-        )}
+        <div className="grid transition-[grid-template-rows] duration-200 ease-out mx-4" style={{ gridTemplateRows: showHeaders ? '1fr' : '0fr' }}>
+          <div className="overflow-hidden">
+            <pre className="text-xs bg-theme-base mt-4 rounded p-3 overflow-auto max-h-48 text-theme-text-secondary font-mono whitespace-pre">
+              {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
+            </pre>
+          </div>
+        </div>
 
         {result.error ? (
           <div className="m-4 text-sm text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2">
@@ -271,6 +273,9 @@ export function ProbePanel({
   const [sheetOpen, setSheetOpen] = useState(false)
   // What was actually sent — so the sheet header / re-renders reflect the response.
   const [sent, setSent] = useState<{ scheme: 'http' | 'https'; path: string }>({ scheme: initialScheme, path: initialPath })
+  // Smooth reveal on open, using radar's standard grid 0fr↔1fr height transition.
+  const [open, setOpen] = useState(false)
+  useEffect(() => { setOpen(true) }, [])
 
   const probe = useMutation<ProbeResult, Error, { scheme: 'http' | 'https'; path: string }>({
     mutationFn: async (vars) => {
@@ -290,7 +295,9 @@ export function ProbePanel({
   const peek = result && !result.error ? formatBody(result) : null
 
   return (
-    <div className="mt-3 pt-3 border-t border-theme-border space-y-2" onClick={(e) => e.stopPropagation()}>
+    <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: open ? '1fr' : '0fr' }}>
+      <div className="overflow-hidden">
+      <div className="mt-3 pt-3 border-t border-theme-border space-y-2" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center justify-between">
         <span className="flex items-center gap-1.5 text-xs font-medium text-theme-text-secondary">
           <Activity className="w-3.5 h-3.5 text-blue-400" />
@@ -349,11 +356,13 @@ export function ProbePanel({
             </div>
           )}
 
-          {showHeaders && (
-            <pre className="text-xs bg-theme-base rounded p-2 overflow-auto max-h-32 text-theme-text-secondary font-mono whitespace-pre">
-              {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
-            </pre>
-          )}
+          <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: showHeaders ? '1fr' : '0fr' }}>
+            <div className="overflow-hidden">
+              <pre className="text-xs bg-theme-base rounded p-2 overflow-auto max-h-32 text-theme-text-secondary font-mono whitespace-pre">
+                {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
+              </pre>
+            </div>
+          </div>
 
           {peek && (
             <>
@@ -392,6 +401,8 @@ export function ProbePanel({
           onClose={() => setSheetOpen(false)}
         />
       )}
+      </div>
+      </div>
     </div>
   )
 }
