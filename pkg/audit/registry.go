@@ -356,9 +356,12 @@ var CheckRegistry = map[string]CheckMeta{
 		References:  []Reference{refTraefikCRD},
 	},
 	"stuckTerminating": {
-		ID:          "stuckTerminating",
-		BadgeWorthy: true,
-		Title:       "Stuck terminating resource",
+		ID: "stuckTerminating",
+		// Not BadgeWorthy: stuck-terminating is already surfaced by the live health
+		// pipeline (pkg/health renders the node degraded) and the "Terminating" chip
+		// in the resource-list name cell — a badge here would be a third redundant
+		// signal. It stays in the Checks/Audit views with its deletion-age ramp.
+		Title: "Stuck terminating resource",
 		Category:    CategoryReliability,
 		Description: "This resource has metadata.deletionTimestamp set but is still alive past the cleanup window. Most controllers finish cleanup within seconds; minutes-long delays usually mean a finalizer's owning controller is unhealthy or unable to reach a dependent service. Common causes: the controller pod is CrashLoopBackOff, DNS resolution is broken, the finalizer logic depends on a webhook or external API that's unavailable.",
 		Remediation: "Check the controller responsible for each finalizer key (kubectl describe will show finalizers under metadata). For Argo CD, look at argocd-application-controller in the argocd namespace. For Flux, look at the matching controller (kustomize-controller, helm-controller, source-controller) in flux-system. Once the controller is healthy, deletion will resume automatically. If you must remove a stuck resource and accept the orphaned cleanup, manually clear the finalizers field — but only as a last resort.",
