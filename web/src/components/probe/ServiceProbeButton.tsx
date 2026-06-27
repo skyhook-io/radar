@@ -274,7 +274,10 @@ export function ProbePanel({
   onClose: () => void
 }) {
   const [scheme, setScheme] = useState<'http' | 'https'>(initialScheme)
-  const [path, setPath] = useState(initialPath)
+  // Stored WITHOUT the leading slash — the "/" is a fixed, non-deletable prefix
+  // glued to the input. Typed/pasted leading slashes are swallowed on change.
+  const [path, setPath] = useState(() => initialPath.replace(/^\/+/, ''))
+  const fullPath = '/' + path
   const [showHeaders, setShowHeaders] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   // What was actually sent — so the sheet header / re-renders reflect the response.
@@ -320,7 +323,7 @@ export function ProbePanel({
         </button>
       </div>
 
-      <form className="flex items-stretch gap-2" onSubmit={(e) => { e.preventDefault(); probe.mutate({ scheme, path }) }}>
+      <form className="flex items-stretch gap-2" onSubmit={(e) => { e.preventDefault(); probe.mutate({ scheme, path: fullPath }) }}>
         <select
           value={scheme}
           onChange={(e) => setScheme(e.target.value as 'http' | 'https')}
@@ -330,14 +333,17 @@ export function ProbePanel({
           <option value="http">http</option>
           <option value="https">https</option>
         </select>
-        <input
-          type="text"
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          placeholder="/healthz"
-          aria-label="Request path"
-          className="flex-1 min-w-0 bg-theme-base border border-theme-border rounded px-2 py-1 text-xs text-theme-text-primary font-mono"
-        />
+        <div className="flex-1 min-w-0 flex items-center bg-theme-base border border-theme-border rounded px-2 focus-within:border-blue-500">
+          <span className="text-xs text-theme-text-tertiary font-mono select-none pointer-events-none">/</span>
+          <input
+            type="text"
+            value={path}
+            onChange={(e) => setPath(e.target.value.replace(/^\/+/, ''))}
+            placeholder="healthz"
+            aria-label="Request path"
+            className="flex-1 min-w-0 bg-transparent border-0 outline-none pl-0.5 py-1 text-xs text-theme-text-primary font-mono"
+          />
+        </div>
         <button
           type="submit"
           disabled={probe.isPending}
@@ -383,10 +389,17 @@ export function ProbePanel({
                   <CopyButton text={peek.text} />
                 </div>
               )}
-              {/* Short peek — bounded + no-wrap so a big body never takes over the drawer. */}
-              <pre className="text-xs bg-theme-base rounded p-2 overflow-hidden max-h-24 text-theme-text-primary font-mono whitespace-pre">
-                {peek.text || '(empty response body)'}
-              </pre>
+              {/* Short peek — a bounded teaser, not a scroll surface (the full body
+                  has its own scrollable dialog). A bottom fade signals "more below"
+                  so the crop reads as intentional rather than broken. */}
+              <div className="relative">
+                <pre className="text-xs bg-theme-base rounded p-2 overflow-hidden max-h-24 text-theme-text-primary font-mono whitespace-pre-wrap break-words">
+                  {peek.text || '(empty response body)'}
+                </pre>
+                {result.body && (
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 rounded-b bg-gradient-to-t from-theme-base to-transparent" />
+                )}
+              </div>
               {result.body && (
                 <button
                   type="button"
