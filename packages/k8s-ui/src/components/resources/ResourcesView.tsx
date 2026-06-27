@@ -6040,6 +6040,7 @@ function ReplicaSetCell({ resource, column }: { resource: any; column: string })
 }
 
 function ServiceCell({ resource, column }: { resource: any; column: string }) {
+  const { auditBadges } = useContext(ResourcesViewDataContext)
   switch (column) {
     case 'type': {
       const status = getServiceStatus(resource)
@@ -6060,6 +6061,20 @@ function ServiceCell({ resource, column }: { resource: any; column: string }) {
       )
     }
     case 'endpoints': {
+      // getServiceEndpointsStatus can't see live pods, so it optimistically
+      // reports "Active" for any service with a selector. The audit's
+      // serviceNoMatchingPods check DOES resolve the selector against live pods —
+      // the only badge-worthy finding a Service can carry — so when it fired,
+      // trust it over the guess instead of showing a false-green "Active".
+      const meta = resource.metadata || {}
+      const flagged = auditBadges?.[`${meta.namespace || ''}/${meta.name}`]
+      if (flagged && flagged.danger + flagged.warning > 0) {
+        return (
+          <span className={clsx('badge', flagged.danger > 0 ? 'status-unhealthy' : 'status-degraded')}>
+            No endpoints
+          </span>
+        )
+      }
       const { status, color } = getServiceEndpointsStatus(resource)
       return (
         <span className={clsx('badge', color)}>
