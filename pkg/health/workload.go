@@ -15,7 +15,7 @@ import (
 // back. This subsumes the four divergent replica/job/pvc classifiers that lived
 // in pkg/topology, pkg/packages, pkg/resourcecontext, and internal/k8s.
 //
-// The semantics align with the frontend's post-#1013 status badges (the most
+// The semantics align with the frontend's status badges (the most
 // operator-considered surface): intentional/lifecycle states are neutral, not
 // degraded or unknown. Notable reconciliations vs the old backend copies:
 //   - desired==0 (scaled to zero) → neutral (was unknown/healthy, depending on copy)
@@ -89,10 +89,12 @@ func jobVerdict(j *batchv1.Job) Verdict {
 }
 
 // jobDesiredCompletions is the number of successful completions a Job needs.
-// Defaults to 1 when completions is unset or non-positive — a zero target would
-// make Succeeded>=0 trivially true and mark a still-running Job as completed.
+// Only a nil completions defaults to 1 (the K8s default for non-indexed Jobs); an
+// explicit 0 is preserved — Kubernetes treats a zero-completion Job as already
+// complete (the controller never schedules pods for it), so Succeeded>=0 reading
+// complete is correct, not a false positive.
 func jobDesiredCompletions(j *batchv1.Job) int {
-	if j.Spec.Completions != nil && *j.Spec.Completions > 0 {
+	if j.Spec.Completions != nil {
 		return int(*j.Spec.Completions)
 	}
 	return 1

@@ -122,14 +122,15 @@ func deriveHealth(obj runtime.Object) string {
 }
 
 // levelToString maps a canonical health.Level onto the string vocabulary the AI
-// summary emits. Unknown/unrecognized derives to "" so we don't assert a status
-// for a resource whose shape we don't understand.
+// summary emits. The summary wire stays at the established healthy/degraded/
+// unhealthy set in this change, so neutral (intentional/lifecycle states) and
+// unknown both derive to "" — the field is omitted rather than asserting a status
+// for an intentionally-off or unobservable resource. The dedicated neutral value
+// lands with the frontend follow-up.
 func levelToString(l health.Level) string {
 	switch l {
 	case health.LevelHealthy:
 		return "healthy"
-	case health.LevelNeutral:
-		return "neutral"
 	case health.LevelDegraded:
 		return "degraded"
 	case health.LevelUnhealthy:

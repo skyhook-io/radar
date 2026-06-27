@@ -604,7 +604,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				noteErr("Deployment", ns, err)
 				for _, d := range items {
 					add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
-						packages.Health(health.Workload(d, time.Now()).Level))
+						levelToPackagesHealth(health.Workload(d, time.Now()).Level))
 				}
 				return
 			}
@@ -612,7 +612,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			noteErr("Deployment", ns, err)
 			for _, d := range items {
 				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
-					packages.Health(health.Workload(d, time.Now()).Level))
+					levelToPackagesHealth(health.Workload(d, time.Now()).Level))
 			}
 		})
 	}
@@ -623,7 +623,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				noteErr("DaemonSet", ns, err)
 				for _, d := range items {
 					add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
-						packages.Health(health.Workload(d, time.Now()).Level))
+						levelToPackagesHealth(health.Workload(d, time.Now()).Level))
 				}
 				return
 			}
@@ -631,7 +631,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			noteErr("DaemonSet", ns, err)
 			for _, d := range items {
 				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
-					packages.Health(health.Workload(d, time.Now()).Level))
+					levelToPackagesHealth(health.Workload(d, time.Now()).Level))
 			}
 		})
 	}
@@ -642,7 +642,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				noteErr("StatefulSet", ns, err)
 				for _, ss := range items {
 					add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
-						packages.Health(health.Workload(ss, time.Now()).Level))
+						levelToPackagesHealth(health.Workload(ss, time.Now()).Level))
 				}
 				return
 			}
@@ -650,7 +650,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			noteErr("StatefulSet", ns, err)
 			for _, ss := range items {
 				add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
-					packages.Health(health.Workload(ss, time.Now()).Level))
+					levelToPackagesHealth(health.Workload(ss, time.Now()).Level))
 			}
 		})
 	}

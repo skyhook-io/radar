@@ -30,7 +30,8 @@ func TestGetPodStatusInspectsContainers(t *testing.T) {
 		t.Errorf("ready pod node color = %q, want healthy", got)
 	}
 
-	// Completed pod is neutral → renders gray (unknown) until PR3's neutral tier.
+	// Completed pod is neutral → renders gray (unknown) until topology gains a
+	// dedicated neutral tier.
 	completed := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
 	if got := getPodStatus(completed); got != StatusUnknown {
 		t.Errorf("completed pod node color = %q, want unknown (interim neutral)", got)

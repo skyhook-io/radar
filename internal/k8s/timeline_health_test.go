@@ -19,9 +19,9 @@ func TestClassifyTimelineHealthPod(t *testing.T) {
 		want timeline.HealthState
 	}{
 		{
-			name: "succeeded pod is neutral (completed lifecycle)",
+			name: "succeeded pod is healthy (completed; neutral collapses on the wire)",
 			pod:  &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodSucceeded}},
-			want: timeline.HealthNeutral,
+			want: timeline.HealthHealthy,
 		},
 		{
 			// The reported bug: a Job pod completing — phase still Running, container
@@ -92,16 +92,16 @@ func TestClassifyTimelineHealthWorkloads(t *testing.T) {
 		want timeline.HealthState
 	}{
 		{
-			name: "deployment scaled to zero is neutral",
+			name: "deployment scaled to zero is healthy (neutral collapses on the wire)",
 			kind: "Deployment",
 			obj:  &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Replicas: ptr32(0)}},
-			want: timeline.HealthNeutral,
+			want: timeline.HealthHealthy,
 		},
 		{
-			name: "daemonset matching no nodes (0/0) is neutral",
+			name: "daemonset matching no nodes (0/0) is healthy (neutral collapses on the wire)",
 			kind: "DaemonSet",
 			obj:  &appsv1.DaemonSet{Status: appsv1.DaemonSetStatus{DesiredNumberScheduled: 0, NumberReady: 0}},
-			want: timeline.HealthNeutral,
+			want: timeline.HealthHealthy,
 		},
 		{
 			name: "deployment fully ready is healthy",

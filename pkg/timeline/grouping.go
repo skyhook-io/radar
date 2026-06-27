@@ -74,7 +74,11 @@ func groupByOwner(events []TimelineEvent) []EventGroup {
 
 	var groups []EventGroup
 	for _, group := range groupMap {
-		worstHealth := HealthUnknown
+		// Seed with "no opinion" (empty) rather than HealthUnknown: unknown
+		// outranks healthy, so seeding it would pin an all-healthy owner group at
+		// unknown forever. worseHealth treats "" as no-opinion and the first real
+		// event wins.
+		worstHealth := HealthState("")
 		group.EventCount = len(group.Events)
 		for _, event := range group.Events {
 			worstHealth = worseHealth(worstHealth, event.HealthState)
@@ -84,6 +88,9 @@ func groupByOwner(events []TimelineEvent) []EventGroup {
 			for _, event := range group.Children[i].Events {
 				worstHealth = worseHealth(worstHealth, event.HealthState)
 			}
+		}
+		if worstHealth == "" {
+			worstHealth = HealthUnknown
 		}
 		group.HealthState = worstHealth
 		groups = append(groups, *group)

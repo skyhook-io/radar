@@ -132,8 +132,9 @@ func TestBuildSummary_DeploymentReplicasHealth(t *testing.T) {
 		{"all_ready", 3, 3, []byte(`{"health":"healthy"}`)},
 		{"none_ready", 0, 3, []byte(`{"health":"unhealthy"}`)},
 		{"partial", 1, 3, []byte(`{"health":"degraded"}`)},
-		// Scaled to zero is an intentional/lifecycle state — neutral, not omitted.
-		{"scaled_to_zero", 0, 0, []byte(`{"health":"neutral"}`)},
+		// Scaled to zero is intentional — health omitted (neutral collapses to ""
+		// on the summary wire until the dedicated tier lands).
+		{"scaled_to_zero", 0, 0, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

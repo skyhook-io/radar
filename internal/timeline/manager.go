@@ -61,7 +61,6 @@ const (
 
 	// HealthState constants
 	HealthHealthy   = pkgtimeline.HealthHealthy
-	HealthNeutral   = pkgtimeline.HealthNeutral
 	HealthDegraded  = pkgtimeline.HealthDegraded
 	HealthUnhealthy = pkgtimeline.HealthUnhealthy
 	HealthUnknown   = pkgtimeline.HealthUnknown

@@ -84,6 +84,10 @@ func TestWorkloadGoldenVectors(t *testing.T) {
 			Spec:   batchv1.JobSpec{Completions: ptr32(1)},
 			Status: batchv1.JobStatus{Succeeded: 1},
 		}, LevelNeutral, "Completed"},
+		{"explicit zero-completions job is complete (K8s semantics)", &batchv1.Job{
+			Spec:   batchv1.JobSpec{Completions: ptr32(0)},
+			Status: batchv1.JobStatus{Succeeded: 0},
+		}, LevelNeutral, "Completed"},
 		{"job failed with nothing active/succeeded is unhealthy", &batchv1.Job{
 			Status: batchv1.JobStatus{Failed: 3},
 		}, LevelUnhealthy, "Failed"},

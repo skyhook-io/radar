@@ -164,7 +164,7 @@ func TestPodCrashLoopDiagnosisOrdersCandidates(t *testing.T) {
 // durations (no per-replica duration leaks into the message).
 func TestPodCrashLoopDiagnosisShortRunStableAcrossReplicas(t *testing.T) {
 	now := time.Now()
-	mkPod := func(name string, runFor time.Duration) *corev1.Pod {
+	mkPod := func(runFor time.Duration) *corev1.Pod {
 		finished := metav1.NewTime(now.Add(-1 * time.Second))
 		started := metav1.NewTime(finished.Time.Add(-runFor))
 		return &corev1.Pod{Status: corev1.PodStatus{
@@ -176,8 +176,8 @@ func TestPodCrashLoopDiagnosisShortRunStableAcrossReplicas(t *testing.T) {
 			}},
 		}}
 	}
-	fastCause, _ := PodCrashLoopDiagnosis(mkPod("a", 2*time.Second), now)
-	slowerCause, _ := PodCrashLoopDiagnosis(mkPod("b", 4*time.Second), now)
+	fastCause, _ := PodCrashLoopDiagnosis(mkPod(2*time.Second), now)
+	slowerCause, _ := PodCrashLoopDiagnosis(mkPod(4*time.Second), now)
 	if fastCause == "" || fastCause != slowerCause {
 		t.Fatalf("short-run causes should be identical across replicas: %q vs %q", fastCause, slowerCause)
 	}

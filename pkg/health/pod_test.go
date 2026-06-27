@@ -11,9 +11,9 @@ import (
 
 // TestPodGoldenVectors is the canonical, clock-injected health contract for
 // pods. Every case fixes an explicit `now` and uses timestamps relative to it,
-// so the table is reproducible and portable (PR4 mirrors it in vitest to keep
-// the TS classifier from drifting). It asserts both the Level and, for problem
-// pods, the Reason token.
+// so the table is reproducible and portable (the frontend mirrors it in vitest to
+// keep the TS classifier from drifting). It asserts both the Level and, for
+// problem pods, the Reason token.
 func TestPodGoldenVectors(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
 	old := metav1.NewTime(now.Add(-10 * time.Minute))

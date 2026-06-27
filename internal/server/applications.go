@@ -482,7 +482,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 			for _, d := range items {
 				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
-					packages.Health(health.Workload(d, time.Now()).Level),
+					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
 					int(d.Status.AvailableReplicas), int(d.Status.Replicas), d.Spec.Selector)
 			}
 		})
@@ -498,7 +498,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 			for _, d := range items {
 				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
-					packages.Health(health.Workload(d, time.Now()).Level),
+					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
 					int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled), d.Spec.Selector)
 			}
 		})
@@ -514,7 +514,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 			for _, d := range items {
 				add("StatefulSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
-					packages.Health(health.Workload(d, time.Now()).Level),
+					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
 					int(d.Status.ReadyReplicas), int(d.Status.Replicas), d.Spec.Selector)
 			}
 		})
@@ -533,7 +533,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				}
 				add("Job", j.Namespace, j.Name, j.Labels, j.Annotations,
 					primaryImage(j.Spec.Template.Spec.Containers),
-					packages.Health(health.Workload(j, time.Now()).Level),
+					levelToPackagesHealth(health.Workload(j, time.Now()).Level),
 					int(j.Status.Succeeded), jobDesired(j), j.Spec.Selector)
 			}
 		})
@@ -549,7 +549,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 			for _, cj := range items {
 				add("CronJob", cj.Namespace, cj.Name, cj.Labels, cj.Annotations,
 					primaryImage(cj.Spec.JobTemplate.Spec.Template.Spec.Containers),
-					packages.Health(health.Workload(cj, time.Now()).Level),
+					levelToPackagesHealth(health.Workload(cj, time.Now()).Level),
 					0, 0, nil)
 			}
 		})
@@ -1205,6 +1205,19 @@ func jobDesired(j *batchv1.Job) int {
 		return int(*j.Spec.Completions)
 	}
 	return 1
+}
+
+// levelToPackagesHealth projects a canonical health.Level onto the package wire
+// vocabulary. The package/app wire stays four-valued in this change, so neutral
+// (intentional/lifecycle states) collapses to healthy — benign, and it keeps a
+// running-Job or scaled-to-zero workload from regressing to Unknown in the
+// Applications UI. The dedicated neutral tier lands with the frontend follow-up
+// that owns the wire + rendering together.
+func levelToPackagesHealth(l health.Level) packages.Health {
+	if l == health.LevelNeutral {
+		return packages.HealthHealthy
+	}
+	return packages.Health(l)
 }
 
 func appNameFromKey(key string) string {

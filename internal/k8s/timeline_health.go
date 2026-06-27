@@ -41,18 +41,16 @@ func classifyTimelineHealth(kind string, obj any, now time.Time) timeline.Health
 	return timeline.HealthUnknown
 }
 
-// levelToTimeline projects a canonical health.Level onto the timeline's
-// HealthState vocabulary. Each value maps 1:1 — neutral is a real timeline tier
-// too, so intentional/lifecycle states (scaled-to-zero, completed) record as
-// neutral rather than being flattened into healthy, consistent with the package
-// rollup. (The timeline's Unhealthy filter keys off unhealthy/degraded, so a
-// neutral event correctly stays out of it.)
+// levelToTimeline projects a canonical health.Level onto the timeline's wire
+// HealthState vocabulary. The timeline wire stays four-valued in this change, so
+// neutral (intentional/lifecycle states — scaled-to-zero, completed) collapses to
+// healthy, preserving the pre-consolidation behavior where those were recorded
+// healthy. The dedicated neutral tier — and the frontend rendering for it — lands
+// in the follow-up that owns the wire + UI together.
 func levelToTimeline(l health.Level) timeline.HealthState {
 	switch l {
-	case health.LevelHealthy:
+	case health.LevelHealthy, health.LevelNeutral:
 		return timeline.HealthHealthy
-	case health.LevelNeutral:
-		return timeline.HealthNeutral
 	case health.LevelDegraded:
 		return timeline.HealthDegraded
 	case health.LevelUnhealthy:
