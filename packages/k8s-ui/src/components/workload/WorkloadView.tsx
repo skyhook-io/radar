@@ -211,6 +211,10 @@ interface WorkloadViewProps {
   isMetricsAvailable?: (kind: string, resource: any) => boolean
   /** Render extra content at the bottom of the overview tab (e.g. audit findings) */
   renderOverviewExtra?: (props: { kind: string; namespace: string; name: string }) => ReactNode
+  /** Render content at the TOP of the overview tab, above the renderer (e.g. live
+   *  Operational Issues). Optional + additive — consumers that don't pass it are
+   *  unaffected. */
+  renderOverviewLead?: (props: { kind: string; namespace: string; name: string }) => ReactNode
 
   // ── Duplicate ────────────────────────────────────────────────────────────
   /** Duplicate handler — opens create dialog with this resource's YAML */
@@ -282,6 +286,7 @@ export function WorkloadView({
   onDuplicate,
   onDownload,
   renderOverviewExtra,
+  renderOverviewLead,
   // Actions bar
   actionsBarProps,
   // Renderer overrides
@@ -655,6 +660,11 @@ export function WorkloadView({
             />
           ) : (
             <>
+              {renderOverviewLead && (
+                <div className="px-4 pt-4">
+                  {renderOverviewLead({ kind, namespace, name })}
+                </div>
+              )}
               <ResourceRendererDispatch
                 resource={selectedResource}
                 data={resource}
@@ -804,6 +814,7 @@ export function WorkloadView({
               eventsError={overviewEventsError}
               updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
+              leadContent={renderOverviewLead && renderOverviewLead({ kind, namespace, name })}
             />
         )}
         {effectiveTab === 'topology' && (
@@ -1337,6 +1348,7 @@ function InfoTab({
   eventsError,
   updatesError,
   extraContent,
+  leadContent,
 }: {
   resource: any
   selectedResource: SelectedResource
@@ -1360,6 +1372,7 @@ function InfoTab({
   eventsError?: Error | null
   updatesError?: Error | null
   extraContent?: ReactNode
+  leadContent?: ReactNode
 }) {
   if (!resource) {
     return <FetchResult loading={isLoading} error={error} className="h-full" />
@@ -1367,6 +1380,11 @@ function InfoTab({
 
   return (
     <div className="h-full overflow-auto">
+      {leadContent && (
+        <div className="px-4 pt-4">
+          {leadContent}
+        </div>
+      )}
       <ResourceRendererDispatch
         resource={selectedResource}
         data={resource}

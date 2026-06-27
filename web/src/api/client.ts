@@ -380,6 +380,28 @@ export function useResourceAudit(kind: string, namespace: string, name: string) 
   })
 }
 
+// Live Issues that touch ONE resource — its own issues plus, for a workload, its
+// owned pods' issues (server-side owner rollup via issues.RelatedIssues). Backs
+// the "Operational Issues" section in the resource detail. Cluster-scoped
+// resources pass "_" for namespace; namespaced ones also scope the scan via
+// ?namespaces= for a cheap, bounded Compose.
+export function useResourceIssues(kind: string, group: string | undefined, namespace: string, name: string, enabled = true) {
+  const clusterScoped = !namespace
+  const pathNs = clusterScoped ? '_' : encodeURIComponent(namespace)
+  const params = new URLSearchParams()
+  if (group) params.set('group', group)
+  const path = `/issues/resource/${encodeURIComponent(kind)}/${pathNs}/${encodeURIComponent(name)}`
+  const qs = params.toString()
+  return useQuery<Issue[]>({
+    queryKey: ['issues', 'resource', kind, group ?? '', namespace, name],
+    queryFn: () => fetchJSON(`${path}${qs ? `?${qs}` : ''}`),
+    // No refetchInterval: a drawer doesn't need to poll; staleTime keeps it fresh
+    // on reopen without re-running an uncapped Compose every 30s.
+    staleTime: 30000,
+    enabled: enabled && !!kind && !!name,
+  })
+}
+
 // Audit settings
 export interface AuditSettings {
   ignoredNamespaces: string[]

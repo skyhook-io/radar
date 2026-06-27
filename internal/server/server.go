@@ -330,6 +330,7 @@ func (s *Server) setupRoutes() {
 			// fallback into one normalized list. Used by the hub
 			// fan-out for cross-cluster issues.
 			r.Get("/issues", s.handleIssues)
+			r.Get("/issues/resource/{kind}/{namespace}/{name}", s.handleResourceIssues)
 			r.Get("/settings/audit", s.handleGetAuditSettings)
 			r.Put("/settings/audit", s.handlePutAuditSettings)
 			r.Get("/events", s.handleEvents)

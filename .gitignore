@@ -45,3 +45,7 @@ tmp/
 /radar-amd64
 /*.png
 /AGENTS.md
+
+# Local visual-test screenshot artifacts (never commit)
+vt-shots/
+vt-audit-shots/

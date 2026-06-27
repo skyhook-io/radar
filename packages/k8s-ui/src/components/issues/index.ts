@@ -4,6 +4,7 @@
 // names are safe to surface.
 export { IssueRow, IssuesView } from './IssuesView';
 export type { IssueRowProps, IssueRowSlotContext, IssuesViewProps } from './IssuesView';
+export { ResourceIssuesSection } from './ResourceIssuesSection';
 export {
   ISSUE_SEVERITIES,
   ISSUE_SEVERITY_RANK,

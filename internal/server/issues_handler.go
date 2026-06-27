@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -155,6 +156,60 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 		return nil
 	}
 	return issues.NativeHelmReleaseIssues(releases, time.Now())
+}
+
+// handleResourceIssues serves GET /api/issues/resource/{kind}/{namespace}/{name}
+// — the live Issues that touch ONE resource: its own issues plus, for a workload,
+// the issues on its owned pods (owner rollup). Backs the "Operational Issues"
+// section in the resource detail. Namespace "_" denotes a cluster-scoped resource;
+// optional ?group= disambiguates a CRD whose kind collides with a core kind.
+//
+// RBAC: namespaced targets are gated by the namespace auth-filter (the frontend
+// passes ?namespaces=<ns> to scope the scan); cluster-scoped targets are gated by
+// the same list permission /api/issues uses, so this can't surface a node's
+// issues to a user who can't list nodes.
+func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	provider := issues.NewCacheProvider()
+	if provider == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+		return
+	}
+	rawKind := chi.URLParam(r, "kind")
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+	if namespace == "_" { // cluster-scoped sentinel
+		namespace = ""
+	}
+	group := r.URL.Query().Get("group")
+
+	// Authorize exactly like the resource drawer's GET (preflightResourceGet):
+	// cluster-scoped get-SAR (fails closed), namespace access, and the
+	// per-namespace Secret get-SAR — so this can't surface issues for a resource
+	// the caller couldn't open in the drawer.
+	if status, msg, ok := s.preflightResourceGet(r, normalizeKind(rawKind), namespace, name, group); !ok {
+		s.writeError(w, status, msg)
+		return
+	}
+
+	// RelatedIssues matches by canonical Kind (EqualFold) — resolve plural route
+	// names ("deployments" → "Deployment"); canonical input passes through.
+	kind := apiResourceToKind(rawKind)
+
+	// Scope the scan to the resource's namespace (a workload's owned pods live
+	// there too); cluster-scoped resources scan all namespaces (nil).
+	var namespaces []string
+	if namespace != "" {
+		namespaces = []string{namespace}
+	}
+
+	related := issues.RelatedIssues(provider, namespaces, group, kind, namespace, name)
+	if related == nil {
+		related = []issues.Issue{}
+	}
+	s.writeJSON(w, related)
 }
 
 func parseSeverities(v string) ([]issues.Severity, error) {

@@ -35,8 +35,8 @@ import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusC
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { RestartEventLane } from '../resource/RestartChart'
 import { RightsizingStrip } from '../resource/RightsizingStrip'
-import { useResourceAudit, useResources } from '../../api/client'
-import { AuditAlerts } from '@skyhook-io/k8s-ui'
+import { useResourceAudit, useResourceIssues, useResources } from '../../api/client'
+import { AuditAlerts, ResourceIssuesSection } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
 import { useCanUpdateSecrets, useCanNodeWrite, useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
@@ -527,6 +527,9 @@ export function WorkloadView({
           <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
         </>
       )}
+      renderOverviewLead={({ namespace: ns, name: n }) => (
+        <LiveIssuesSection kind={resource?.kind || kindProp} group={rest.group || resourceGroup} namespace={ns} name={n} />
+      )}
       onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
       resolvedGitOpsOwner={gitopsOwner}
       gitOpsOwnerVerified={gitOpsOwnerVerified}
@@ -820,6 +823,14 @@ function AuditSection({ kind, namespace, name }: { kind: string; namespace: stri
   const { data: findings } = useResourceAudit(kind, namespace, name)
   if (!findings || findings.length === 0) return null
   return <AuditAlerts findings={findings} onViewAll={() => navigate('/checks')} />
+}
+
+// Live Operational Issues for this resource (its own + owned-pod rollup),
+// rendered above the renderer. The diagnosed, remediation-bearing counterpart to
+// the renderer's own status-derived problem alerts.
+function LiveIssuesSection({ kind, group, namespace, name }: { kind: string; group?: string; namespace: string; name: string }) {
+  const { data: issues } = useResourceIssues(kind, group, namespace, name)
+  return <ResourceIssuesSection issues={issues} />
 }
 
 // FluxSourceConsumersSection lists the reconcilers (Kustomization, HelmRelease)
