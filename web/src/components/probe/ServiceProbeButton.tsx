@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation } from '@tanstack/react-query'
 import { Activity, Loader2, X, ChevronDown, Maximize2, Copy, Check } from 'lucide-react'
@@ -305,6 +305,16 @@ export function ProbePanel({
   const result = probe.data
   const peek = result && !result.error ? formatBody(result) : null
 
+  // Only fade + offer "View full response" when the body actually overflows the
+  // peek box — a small body that fits has nothing more to show, and a fade over
+  // it reads as a rendering glitch.
+  const peekRef = useRef<HTMLPreElement>(null)
+  const [peekOverflows, setPeekOverflows] = useState(false)
+  useLayoutEffect(() => {
+    const el = peekRef.current
+    setPeekOverflows(!!el && el.scrollHeight > el.clientHeight + 1)
+  }, [peek?.text, open])
+
   return (
     <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: mounted && open ? '1fr' : '0fr' }}>
       <div className="overflow-hidden">
@@ -390,17 +400,18 @@ export function ProbePanel({
                 </div>
               )}
               {/* Short peek — a bounded teaser, not a scroll surface (the full body
-                  has its own scrollable dialog). A bottom fade signals "more below"
-                  so the crop reads as intentional rather than broken. */}
+                  has its own scrollable dialog). When the body overflows, a bottom
+                  fade signals "more below"; when it fits, no fade and no "view full"
+                  (there's nothing more to see). */}
               <div className="relative">
-                <pre className="text-xs bg-theme-base rounded p-2 overflow-hidden max-h-24 text-theme-text-primary font-mono whitespace-pre-wrap break-words">
+                <pre ref={peekRef} className="text-xs bg-theme-base rounded p-2 overflow-hidden max-h-24 text-theme-text-primary font-mono whitespace-pre-wrap break-words">
                   {peek.text || '(empty response body)'}
                 </pre>
-                {result.body && (
+                {result.body && peekOverflows && (
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 rounded-b bg-gradient-to-t from-theme-base to-transparent" />
                 )}
               </div>
-              {result.body && (
+              {result.body && peekOverflows && (
                 <button
                   type="button"
                   onClick={() => setSheetOpen(true)}
