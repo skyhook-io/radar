@@ -23,6 +23,13 @@ interface KubectlDialogInfo {
   port: number
 }
 
+// kubectl port-forward (and the live forward, which uses the same transport) is
+// TCP-only — UDP/SCTP can't be forwarded (kubernetes/kubernetes#47862). Treat an
+// unset protocol as TCP.
+export function isPortForwardable(protocol?: string): boolean {
+  return (protocol || 'TCP').toUpperCase() === 'TCP'
+}
+
 function buildKubectlCommand(type: 'pod' | 'service', namespace: string, name: string, localPort: number, remotePort: number) {
   const resource = type === 'pod' ? `pod/${name}` : `svc/${name}`
   const portArg = localPort === remotePort ? `${remotePort}` : `${localPort}:${remotePort}`
@@ -212,10 +219,15 @@ export function PortForwardButton({
   }
 
   function renderButton() {
-    // If no ports available, show disabled button
-    if (!isLoading && ports.length === 0) {
+    // kubectl port-forward is TCP-only — never offer UDP/SCTP ports as targets.
+    const forwardable = ports.filter((p) => isPortForwardable(p.protocol))
+
+    // No forwardable ports: disabled button. Distinguish "no ports at all" from
+    // "ports exist but are all UDP" so the operator isn't left guessing.
+    if (!isLoading && forwardable.length === 0) {
+      const udpOnly = ports.length > 0
       return (
-        <Tooltip content="No ports available">
+        <Tooltip content={udpOnly ? "kubectl port-forward doesn't support UDP" : 'No ports available'}>
         <button
           disabled
           className={clsx(
@@ -224,18 +236,18 @@ export function PortForwardButton({
           )}
         >
           <Plug className="w-4 h-4" />
-          No Ports
+          {udpOnly ? 'No TCP Ports' : 'No Ports'}
         </button>
         </Tooltip>
       )
     }
 
-    // If only one port, forward directly on click (most common case)
-    if (ports.length === 1) {
+    // If only one forwardable port, forward directly on click (most common case)
+    if (forwardable.length === 1) {
       return (
-        <Tooltip content={`Port forward to ${ports[0].port}`}>
+        <Tooltip content={`Port forward to ${forwardable[0].port}`}>
         <button
-          onClick={() => handlePortSelect(ports[0])}
+          onClick={() => handlePortSelect(forwardable[0])}
           disabled={isPending}
           className={clsx(
             'flex items-center gap-2 px-3 py-2 bg-theme-elevated text-theme-text-primary text-sm rounded-lg hover:bg-theme-hover transition-colors disabled:opacity-50 disabled:pointer-events-none',
@@ -247,7 +259,7 @@ export function PortForwardButton({
           ) : (
             <Plug className="w-4 h-4" />
           )}
-          Forward :{ports[0].port}
+          Forward :{forwardable[0].port}
         </button>
         </Tooltip>
       )
@@ -314,7 +326,7 @@ export function PortForwardButton({
             <div className="px-2 py-1.5 text-xs text-theme-text-disabled border-b border-theme-border">
               Select port to forward
             </div>
-            {ports.map((port, i) => (
+            {forwardable.map((port, i) => (
               <button
                 key={i}
                 onClick={() => handlePortSelect(port)}
@@ -384,6 +396,19 @@ export function PortForwardInlineButton({
         podPort: port,
       })
     }
+  }
+
+  // UDP/SCTP can't be port-forwarded — show a muted, non-interactive hint that
+  // explains why rather than a button that would copy a command that can't work.
+  if (!isPortForwardable(protocol)) {
+    return (
+      <Tooltip content="kubectl port-forward doesn't support UDP">
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-tertiary opacity-60 cursor-default">
+          {port}/{protocol}
+          <Plug className="w-3 h-3" />
+        </span>
+      </Tooltip>
+    )
   }
 
   return (
