@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation } from '@tanstack/react-query'
 import { Activity, Loader2, X, ChevronDown, Maximize2, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -193,7 +194,10 @@ function ProbeResponseDialog({
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
-  return (
+  // Portal to <body>: the drawer is a transformed ancestor, which would otherwise
+  // trap this position:fixed dialog inside the drawer instead of centering it on
+  // the viewport.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative dialog w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col outline-none">
@@ -238,7 +242,8 @@ function ProbeResponseDialog({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

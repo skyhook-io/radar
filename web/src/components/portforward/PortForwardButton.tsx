@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Plug, ChevronDown, Loader2, Globe, Monitor, Copy, Check, X, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAvailablePorts, useClusterInfo, AvailablePort } from '../../api/client'
@@ -80,7 +81,9 @@ function KubectlCommandDialog({
     dialogRef.current?.focus()
   }, [])
 
-  return (
+  // Portal to <body>: the drawer is a transformed ancestor that would otherwise
+  // trap this position:fixed dialog inside the drawer instead of centering it.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
@@ -152,7 +155,8 @@ function KubectlCommandDialog({
           </p>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
