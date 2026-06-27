@@ -170,6 +170,8 @@ func AuditLog(r *http.Request, namespace, name string) {
 	if user == nil {
 		return
 	}
-	log.Printf("[audit] user=%s groups=%v %s %s ns=%s name=%s",
+	// %q escapes any control characters (e.g. CR/LF) so a crafted path or name
+	// can't forge or split audit log lines.
+	log.Printf("[audit] user=%q groups=%q %s path=%q ns=%q name=%q",
 		user.Username, user.Groups, r.Method, r.URL.Path, namespace, name)
 }

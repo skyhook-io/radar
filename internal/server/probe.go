@@ -191,9 +191,35 @@ func (s *Server) handleProbeService(w http.ResponseWriter, r *http.Request) {
 
 	auth.AuditLog(r, req.Namespace, req.Name)
 
+	// Resolve the Service from cache before dialing: this confirms it exists, that
+	// the requested port is real, and — critically — lets us build the dial target
+	// from the trusted cache object's fields rather than the raw request, so a
+	// crafted name/namespace/port can never steer where we connect.
+	cache := k8s.GetResourceCache()
+	if cache == nil || cache.Services() == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Service cache not ready")
+		return
+	}
+	svc, err := cache.Services().Services(req.Namespace).Get(req.Name)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, "Service not found")
+		return
+	}
+	matchedPort := int32(-1)
+	for _, p := range svc.Spec.Ports {
+		if fmt.Sprintf("%d", p.Port) == req.Port {
+			matchedPort = p.Port
+			break
+		}
+	}
+	if matchedPort < 0 {
+		s.writeError(w, http.StatusBadRequest, "Service has no such port")
+		return
+	}
+
 	// Dial the Service directly over cluster DNS — sends NO Kubernetes credentials
-	// to the workload. Validated name/namespace/port can't escape this template.
-	target := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%s%s", scheme, req.Name, req.Namespace, req.Port, path)
+	// to the workload. Host and port come from the cache object, not the request.
+	target := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d%s", scheme, svc.Name, svc.Namespace, matchedPort, path)
 
 	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
