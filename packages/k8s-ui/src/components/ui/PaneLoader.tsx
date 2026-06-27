@@ -1,4 +1,9 @@
-import radarLoadingIcon from '../../assets/radar/radar-icon-loading.svg'
+import { assetUrl } from '../../utils/asset-url'
+import radarLoadingIconAsset from '../../assets/radar/radar-icon-loading.svg'
+
+// assetUrl normalizes the bundler-specific asset-import type (string under Vite,
+// StaticImageData under webpack/Next) to a URL string usable in `<img src>`.
+const radarLoadingIcon = assetUrl(radarLoadingIconAsset)
 
 // PaneLoader — center-of-pane loading state. Animated radar icon stacked
 // above a label so swapping the label across the loading chain doesn't

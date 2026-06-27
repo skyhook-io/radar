@@ -3,10 +3,18 @@ import { MiddleEllipsis } from './MiddleEllipsis'
 import { Tooltip } from './Tooltip'
 import { parseContextName } from '../../utils/context-name'
 import type { ParsedContextName } from '../../utils/context-name'
-import awsLogo from './provider-logos/aws.png'
-import awsLogoDark from './provider-logos/aws-dark.png'
-import gcpLogo from './provider-logos/gcp.png'
-import azureLogo from './provider-logos/azure.svg'
+import { assetUrl } from '../../utils/asset-url'
+import awsLogoAsset from './provider-logos/aws.png'
+import awsLogoDarkAsset from './provider-logos/aws-dark.png'
+import gcpLogoAsset from './provider-logos/gcp.png'
+import azureLogoAsset from './provider-logos/azure.svg'
+
+// assetUrl normalizes the bundler-specific asset-import type (string under Vite,
+// StaticImageData under webpack/Next) to a URL string usable in `<img src>`.
+const awsLogo = assetUrl(awsLogoAsset)
+const awsLogoDark = assetUrl(awsLogoDarkAsset)
+const gcpLogo = assetUrl(gcpLogoAsset)
+const azureLogo = assetUrl(azureLogoAsset)
 
 // ClusterName renders a kubectl context string with the meaningful
 // cluster identity surfaced as primary text and provider/region pushed
