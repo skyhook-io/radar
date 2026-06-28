@@ -691,15 +691,16 @@ func (c *Client) getResourceDiff(namespace, name string, revision1, revision2 in
 	if err != nil {
 		return nil, fmt.Errorf("failed to get release revision %d: %w", revision2, err)
 	}
-	removed, added, unchanged := diffResourceRefs(
-		resourceRefs(parseManifestResources(rel1.Manifest, rel1.Namespace)),
-		resourceRefs(parseManifestResources(rel2.Manifest, rel2.Namespace)),
-	)
+	leftResources := parseManifestResourceObjects(rel1.Manifest, rel1.Namespace)
+	rightResources := parseManifestResourceObjects(rel2.Manifest, rel2.Namespace)
+	removed, added, common := diffResourceRefs(resourceRefsFromRendered(leftResources), resourceRefsFromRendered(rightResources))
+	modified, unchanged := diffRenderedResourceObjects(common, leftResources, rightResources)
 	return &ResourceDiff{
 		Revision1: revision1,
 		Revision2: revision2,
 		Added:     nonNilResourceRefs(added),
 		Removed:   nonNilResourceRefs(removed),
+		Modified:  nonNilResourceChanges(modified),
 		Unchanged: nonNilResourceRefs(unchanged),
 	}, nil
 }
@@ -709,6 +710,13 @@ func nonNilResourceRefs(refs []ResourceRef) []ResourceRef {
 		return []ResourceRef{}
 	}
 	return refs
+}
+
+func nonNilResourceChanges(changes []ResourceChange) []ResourceChange {
+	if changes == nil {
+		return []ResourceChange{}
+	}
+	return changes
 }
 
 func (c *Client) getReleaseRevisionAsUser(namespace, name string, revision int, username string, groups []string) (*release.Release, error) {
@@ -780,6 +788,15 @@ func resourceRefs(resources []OwnedResource) []ResourceRef {
 	return refs
 }
 
+func resourceRefsFromRendered(resources []renderedResource) []ResourceRef {
+	refs := make([]ResourceRef, 0, len(resources))
+	for _, r := range resources {
+		refs = append(refs, r.Ref)
+	}
+	sortResourceRefs(refs)
+	return refs
+}
+
 func diffResourceRefs(left, right []ResourceRef) (removed, added, unchanged []ResourceRef) {
 	leftMap := make(map[string]ResourceRef, len(left))
 	rightMap := make(map[string]ResourceRef, len(right))
@@ -816,6 +833,47 @@ func sortResourceRefs(refs []ResourceRef) {
 
 func resourceRefKey(ref ResourceRef) string {
 	return ref.APIVersion + "/" + ref.Kind + "/" + ref.Namespace + "/" + ref.Name
+}
+
+func diffRenderedResourceObjects(common []ResourceRef, leftResources, rightResources []renderedResource) (modified []ResourceChange, unchanged []ResourceRef) {
+	leftMap := renderedResourceMap(leftResources)
+	rightMap := renderedResourceMap(rightResources)
+	for _, ref := range common {
+		oldResource, oldOK := leftMap[resourceRefKey(ref)]
+		newResource, newOK := rightMap[resourceRefKey(ref)]
+		if !oldOK || !newOK {
+			unchanged = append(unchanged, ref)
+			continue
+		}
+		diff := k8s.ComputeDiffFromUnstructured(ref.Kind, oldResource.Object, newResource.Object)
+		if diff == nil || len(diff.Fields) == 0 {
+			unchanged = append(unchanged, ref)
+			continue
+		}
+		modified = append(modified, ResourceChange{
+			ResourceRef: ref,
+			Summary:     diff.Summary,
+			FieldCount:  len(diff.Fields),
+			Fields:      diff.Fields,
+		})
+	}
+	sortResourceChanges(modified)
+	sortResourceRefs(unchanged)
+	return modified, unchanged
+}
+
+func renderedResourceMap(resources []renderedResource) map[string]renderedResource {
+	out := make(map[string]renderedResource, len(resources))
+	for _, resource := range resources {
+		out[resourceRefKey(resource.Ref)] = resource
+	}
+	return out
+}
+
+func sortResourceChanges(changes []ResourceChange) {
+	sort.Slice(changes, func(i, j int) bool {
+		return resourceRefKey(changes[i].ResourceRef) < resourceRefKey(changes[j].ResourceRef)
+	})
 }
 
 // releaseStorageKey identifies a release independent of where Helm stored the
@@ -1164,45 +1222,68 @@ func toHelmHistoryRevisions(revisions []HelmRevision) []helmhistory.Revision {
 	return out
 }
 
-// parseManifestResources extracts K8s resources from a rendered manifest
-func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
-	var resources []OwnedResource
+type renderedResource struct {
+	Ref    ResourceRef
+	Object *unstructured.Unstructured
+}
 
-	// Split manifest into individual documents
+func parseManifestResourceObjects(manifest, defaultNamespace string) []renderedResource {
+	resources := []renderedResource{}
 	manifests := releaseutil.SplitManifests(manifest)
 
 	for _, m := range manifests {
-		lines := strings.Split(m, "\n")
-		var kind, apiVersion, name, namespace string
-
-		// Take the first occurrence of each top-level field; nested specs
-		// (e.g. spec.template) can repeat the same keys with different values.
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if after, ok := strings.CutPrefix(line, "kind:"); ok && kind == "" {
-				kind = strings.Trim(strings.TrimSpace(after), `"'`)
-			} else if after, ok := strings.CutPrefix(line, "apiVersion:"); ok && apiVersion == "" {
-				apiVersion = strings.Trim(strings.TrimSpace(after), `"'`)
-			} else if strings.HasPrefix(line, "name:") && name == "" {
-				name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
-				name = strings.Trim(name, `"'`)
-			} else if strings.HasPrefix(line, "namespace:") && namespace == "" {
-				namespace = strings.TrimSpace(strings.TrimPrefix(line, "namespace:"))
-				namespace = strings.Trim(namespace, `"'`)
-			}
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
 		}
-
-		if kind != "" && name != "" {
-			if namespace == "" {
-				namespace = defaultNamespace
-			}
-			resources = append(resources, OwnedResource{
-				Kind:       kind,
-				APIVersion: apiVersion,
-				Name:       name,
-				Namespace:  namespace,
-			})
+		jsonBytes, err := yaml.YAMLToJSON([]byte(m))
+		if err != nil {
+			continue
 		}
+		var obj unstructured.Unstructured
+		if err := json.Unmarshal(jsonBytes, &obj.Object); err != nil {
+			continue
+		}
+		if obj.GetKind() == "" || obj.GetName() == "" {
+			continue
+		}
+		apiGroup := ""
+		if group, _, ok := strings.Cut(obj.GetAPIVersion(), "/"); ok {
+			apiGroup = group
+		}
+		clusterScoped, _, _ := k8s.ClassifyKindScope(obj.GetKind(), apiGroup)
+		if obj.GetNamespace() == "" && !clusterScoped {
+			obj.SetNamespace(defaultNamespace)
+		}
+		resources = append(resources, renderedResource{
+			Ref: ResourceRef{
+				Kind:       obj.GetKind(),
+				APIVersion: obj.GetAPIVersion(),
+				Name:       obj.GetName(),
+				Namespace:  obj.GetNamespace(),
+			},
+			Object: &obj,
+		})
+	}
+
+	sort.Slice(resources, func(i, j int) bool {
+		return resourceRefKey(resources[i].Ref) < resourceRefKey(resources[j].Ref)
+	})
+
+	return resources
+}
+
+// parseManifestResources extracts K8s resources from a rendered manifest
+func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
+	rendered := parseManifestResourceObjects(manifest, defaultNamespace)
+	resources := make([]OwnedResource, 0, len(rendered))
+	for _, resource := range rendered {
+		resources = append(resources, OwnedResource{
+			Kind:       resource.Ref.Kind,
+			APIVersion: resource.Ref.APIVersion,
+			Name:       resource.Ref.Name,
+			Namespace:  resource.Ref.Namespace,
+		})
 	}
 
 	// Sort by kind, then name

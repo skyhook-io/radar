@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/helmhistory"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 type HelmOperation = helmhistory.Operation
@@ -226,13 +227,23 @@ type ResourceRef struct {
 	Namespace  string `json:"namespace"`
 }
 
-// ResourceDiff represents added/removed resource identities between revisions.
+// ResourceChange describes a rendered resource that exists in both revisions but
+// changed in place.
+type ResourceChange struct {
+	ResourceRef
+	Summary    string                `json:"summary,omitempty"`
+	FieldCount int                   `json:"fieldCount"`
+	Fields     []k8score.FieldChange `json:"fields"`
+}
+
+// ResourceDiff represents rendered resource changes between revisions.
 type ResourceDiff struct {
-	Revision1 int           `json:"revision1"`
-	Revision2 int           `json:"revision2"`
-	Added     []ResourceRef `json:"added"`
-	Removed   []ResourceRef `json:"removed"`
-	Unchanged []ResourceRef `json:"unchanged"`
+	Revision1 int              `json:"revision1"`
+	Revision2 int              `json:"revision2"`
+	Added     []ResourceRef    `json:"added"`
+	Removed   []ResourceRef    `json:"removed"`
+	Modified  []ResourceChange `json:"modified"`
+	Unchanged []ResourceRef    `json:"unchanged"`
 }
 
 // UpgradeInfo contains information about available upgrades

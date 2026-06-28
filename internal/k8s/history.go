@@ -19,6 +19,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
 )
 
@@ -91,6 +92,56 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 	}
 
 	return buildDiff(changes, summaryParts)
+}
+
+func ComputeDiffFromUnstructured(kind string, oldU, newU *unstructured.Unstructured) *DiffInfo {
+	if oldU == nil || newU == nil {
+		return nil
+	}
+	return ComputeDiff(kind, diffInputForUnstructured(kind, oldU), diffInputForUnstructured(kind, newU))
+}
+
+func diffInputForUnstructured(kind string, u *unstructured.Unstructured) any {
+	switch kind {
+	case "Deployment":
+		return typedOrUnstructured[appsv1.Deployment](u)
+	case "Pod":
+		return typedOrUnstructured[corev1.Pod](u)
+	case "Service":
+		return typedOrUnstructured[corev1.Service](u)
+	case "ConfigMap":
+		return typedOrUnstructured[corev1.ConfigMap](u)
+	case "Ingress":
+		return typedOrUnstructured[networkingv1.Ingress](u)
+	case "ReplicaSet":
+		return typedOrUnstructured[appsv1.ReplicaSet](u)
+	case "DaemonSet":
+		return typedOrUnstructured[appsv1.DaemonSet](u)
+	case "StatefulSet":
+		return typedOrUnstructured[appsv1.StatefulSet](u)
+	case "HorizontalPodAutoscaler":
+		return typedOrUnstructured[autoscalingv2.HorizontalPodAutoscaler](u)
+	case "Job":
+		return typedOrUnstructured[batchv1.Job](u)
+	case "Node":
+		return typedOrUnstructured[corev1.Node](u)
+	case "PersistentVolumeClaim":
+		return typedOrUnstructured[corev1.PersistentVolumeClaim](u)
+	case "ResourceQuota":
+		return typedOrUnstructured[corev1.ResourceQuota](u)
+	case "LimitRange":
+		return typedOrUnstructured[corev1.LimitRange](u)
+	default:
+		return u.DeepCopy()
+	}
+}
+
+func typedOrUnstructured[T any](u *unstructured.Unstructured) any {
+	var out T
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &out); err != nil {
+		return u.DeepCopy()
+	}
+	return &out
 }
 
 func buildDiff(changes []FieldChange, summaryParts []string) *DiffInfo {

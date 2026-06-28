@@ -4,7 +4,7 @@ import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, Plus, Minus, Equal, ExternalLink } from 'lucide-react'
+import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, Plus, Minus, Equal, ExternalLink, ArrowRight } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, useHelmValuesDiff, useHelmNotesDiff, useHelmResourceDiff, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress } from '../../api/client'
@@ -34,7 +34,7 @@ interface HelmReleaseDrawerProps {
 }
 
 type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks' | 'diff'
-type CompareMode = 'summary' | 'values' | 'manifest' | 'notes' | 'resources'
+type CompareMode = 'changes' | 'values' | 'manifest' | 'notes' | 'resources'
 
 const MIN_WIDTH = 500
 const MAX_WIDTH_PERCENT = 0.8
@@ -50,7 +50,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [selectedRevision, setSelectedRevision] = useState<number | undefined>(undefined)
   const [showAllValues, setShowAllValues] = useState(false)
   const [diffRevisions, setDiffRevisions] = useState<{ rev1: number; rev2: number } | null>(null)
-  const [compareMode, setCompareMode] = useState<CompareMode>('summary')
+  const [compareMode, setCompareMode] = useState<CompareMode>('changes')
   const [rollbackRevision, setRollbackRevision] = useState<number | null>(null)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false)
@@ -118,7 +118,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     release.name,
     diffRevisions?.rev1 || 0,
     diffRevisions?.rev2 || 0,
-    canViewSensitive && compareMode === 'resources',
+    canViewSensitive && (compareMode === 'changes' || compareMode === 'resources'),
   )
 
   // Lazy check for upgrade availability
@@ -215,7 +215,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
   const handleCompareRevisions = (rev1: number, rev2: number) => {
     setDiffRevisions({ rev1, rev2 })
-    setCompareMode('summary')
+    setCompareMode('changes')
     switchTab('diff')
   }
 
@@ -631,7 +631,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   resourceLoading={resourceDiffLoading}
                   onClose={() => {
                     setDiffRevisions(null)
-                    setCompareMode('summary')
+                    setCompareMode('changes')
                     setActiveTab('history')
                   }}
                 />
@@ -824,11 +824,11 @@ function HelmRevisionCompareView({
   const left = revisions.find((r) => r.revision === revision1)
   const right = revisions.find((r) => r.revision === revision2)
   const modes: Array<{ id: CompareMode; label: string; icon: typeof GitCompare }> = [
-    { id: 'summary', label: 'Summary', icon: GitCompare },
+    { id: 'changes', label: 'Changes', icon: GitCompare },
+    { id: 'resources', label: 'All resources', icon: Link2 },
     { id: 'values', label: 'Values', icon: Settings },
     { id: 'manifest', label: 'Manifest', icon: Code },
     { id: 'notes', label: 'Notes', icon: FileText },
-    { id: 'resources', label: 'Resources', icon: Link2 },
   ]
 
   return (
@@ -840,7 +840,7 @@ function HelmRevisionCompareView({
             <span className="text-sm font-medium text-theme-text-primary">Revision {revision1} -&gt; {revision2}</span>
           </div>
           <p className="mt-1 text-xs text-theme-text-tertiary">
-            Compare rendered output and release metadata between two Helm revisions.
+            Compare rendered Kubernetes resources and release metadata between two Helm revisions.
           </p>
         </div>
         <button
@@ -870,7 +870,17 @@ function HelmRevisionCompareView({
         ))}
       </div>
 
-      {mode === 'summary' && <RevisionCompareSummary left={left} right={right} revision1={revision1} revision2={revision2} />}
+      {mode === 'changes' && (
+        <RevisionCompareChanges
+          left={left}
+          right={right}
+          revision1={revision1}
+          revision2={revision2}
+          resourceDiff={resourceDiff}
+          resourceLoading={resourceLoading}
+          onModeChange={onModeChange}
+        />
+      )}
       {mode === 'values' && (
         <ManifestDiffViewer
           diff={valuesDiff}
@@ -910,26 +920,82 @@ function HelmRevisionCompareView({
   )
 }
 
-function RevisionCompareSummary({
+function RevisionCompareChanges({
   left,
   right,
   revision1,
   revision2,
+  resourceDiff,
+  resourceLoading,
+  onModeChange,
 }: {
   left?: HelmRevision
   right?: HelmRevision
   revision1: number
   revision2: number
+  resourceDiff?: ResourceDiff
+  resourceLoading: boolean
+  onModeChange: (mode: CompareMode) => void
 }) {
+  const addedCount = resourceDiff ? resourceDiff.added.length : 0
+  const removedCount = resourceDiff ? resourceDiff.removed.length : 0
+  const modifiedCount = resourceDiff ? resourceDiff.modified.length : 0
+  const totalChanged = addedCount + removedCount + modifiedCount
+
   return (
     <div className="space-y-4">
+      <div className="card-inner-lg">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-medium text-theme-text-primary">Changed rendered resources</h3>
+            <p className="mt-1 text-xs text-theme-text-tertiary">
+              Shows resources added, removed, or changed in place. Use Manifest for the full YAML diff.
+            </p>
+          </div>
+          {resourceDiff && (
+            <div className="flex flex-wrap gap-1.5">
+              <span className={clsx('badge-sm', modifiedCount ? SEVERITY_BADGE.info : SEVERITY_BADGE.neutral)}>
+                {modifiedCount} modified
+              </span>
+              <span className={clsx('badge-sm', addedCount ? SEVERITY_BADGE.success : SEVERITY_BADGE.neutral)}>
+                {addedCount} added
+              </span>
+              <span className={clsx('badge-sm', removedCount ? SEVERITY_BADGE.error : SEVERITY_BADGE.neutral)}>
+                {removedCount} removed
+              </span>
+            </div>
+          )}
+        </div>
+
+        {resourceLoading ? (
+          <FetchResult loading className="h-24" />
+        ) : !resourceDiff ? (
+          <FetchResult loading={false} notFoundMessage="Resource changes are not available" className="h-24" />
+        ) : totalChanged === 0 ? (
+          <div className="rounded-md bg-theme-base/40 px-3 py-2 text-sm text-theme-text-secondary">
+            No rendered Kubernetes resources changed. Check Values or Notes for release-only changes.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <ModifiedResourceChanges changes={resourceDiff.modified} onShowManifest={() => onModeChange('manifest')} />
+            <ResourceRefChangeGroup title="Added resources" tone="success" icon={Plus} resources={resourceDiff.added} />
+            <ResourceRefChangeGroup title="Removed resources" tone="error" icon={Minus} resources={resourceDiff.removed} />
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium text-theme-text-secondary">Release metadata</h3>
+        <span className="badge-sm bg-theme-hover/50 text-theme-text-secondary">
+          rev {revision1} -&gt; {revision2}
+        </span>
+      </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <RevisionSummaryCard revision={left} fallbackRevision={revision1} label="From" />
         <RevisionSummaryCard revision={right} fallbackRevision={revision2} label="To" />
       </div>
       <div className="card-inner-lg">
-        <h3 className="text-sm font-medium text-theme-text-secondary">Changed fields</h3>
-        <div className="mt-3 grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <RevisionFieldDelta label="Chart" left={left?.chart} right={right?.chart} />
           <RevisionFieldDelta label="App version" left={left?.appVersion || '-'} right={right?.appVersion || '-'} />
           <RevisionFieldDelta label="Status" left={left?.status} right={right?.status} />
@@ -938,6 +1004,247 @@ function RevisionCompareSummary({
       </div>
     </div>
   )
+}
+
+function ModifiedResourceChanges({
+  changes,
+  onShowManifest,
+}: {
+  changes: ResourceDiff['modified']
+  onShowManifest?: () => void
+}) {
+  if (changes.length === 0) return null
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-sm font-medium text-theme-text-primary">
+        <GitCompare className="h-4 w-4 text-theme-text-secondary" />
+        Modified resources
+      </div>
+      {changes.map((change) => (
+        <ModifiedResourceChangeCard key={resourceKey(change)} change={change} onShowManifest={onShowManifest} />
+      ))}
+    </div>
+  )
+}
+
+function ModifiedResourceChangeCard({
+  change,
+  onShowManifest,
+}: {
+  change: ResourceDiff['modified'][number]
+  onShowManifest?: () => void
+}) {
+  const fields = change.fields
+  const visibleFields = fields.slice(0, 5)
+  const totalFields = change.fieldCount
+  const hiddenCount = Math.max(0, totalFields - visibleFields.length)
+  return (
+    <div className="rounded-lg border border-theme-border bg-theme-base/40 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <ResourceIdentityBadge resource={change} />
+        <span className={clsx('badge-sm', SEVERITY_BADGE.info)}>
+          {totalFields} field{totalFields === 1 ? '' : 's'}
+        </span>
+      </div>
+      {change.summary && visibleFields.length === 0 && (
+        <div className="mt-2 break-words text-xs text-theme-text-secondary">{change.summary}</div>
+      )}
+      {visibleFields.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {visibleFields.map((field, idx) => (
+            <div key={`${field.path}-${idx}`} className="grid grid-cols-1 gap-1.5 rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs sm:grid-cols-[minmax(160px,0.8fr)_1fr] sm:gap-3">
+              <code className="min-w-0 break-words font-mono text-theme-text-tertiary sm:truncate" title={field.path}>
+                {formatFieldPathLabel(field.path)}
+              </code>
+              <div className="min-w-0 flex flex-wrap items-center gap-1.5 text-theme-text-secondary sm:flex-nowrap">
+                <span className="min-w-0 break-words sm:truncate">{formatDiffValue(field.oldValue, field.path)}</span>
+                <ArrowRight className="h-3 w-3 shrink-0 text-theme-text-tertiary" />
+                <span className="min-w-0 break-words text-theme-text-primary sm:truncate">{formatDiffValue(field.newValue, field.path)}</span>
+              </div>
+            </div>
+          ))}
+          {hiddenCount > 0 && (
+            onShowManifest ? (
+              <button
+                type="button"
+                onClick={onShowManifest}
+                className="text-xs text-accent hover:underline"
+              >
+                +{hiddenCount} more changed fields in Manifest
+              </button>
+            ) : (
+              <div className="text-xs text-theme-text-tertiary">
+                +{hiddenCount} more changed fields
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ResourceRefChangeGroup({
+  title,
+  icon: Icon,
+  tone,
+  resources,
+}: {
+  title: string
+  icon: typeof Plus
+  tone: keyof typeof SEVERITY_BADGE
+  resources: ResourceDiff['added']
+}) {
+  if (resources.length === 0) return null
+  const visible = resources.slice(0, 8)
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-medium text-theme-text-primary">
+          <Icon className="h-4 w-4 text-theme-text-secondary" />
+          {title}
+        </div>
+        <span className={clsx('badge-sm', SEVERITY_BADGE[tone])}>{resources.length}</span>
+      </div>
+      <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
+        {visible.map((resource) => (
+          <ResourceIdentityBadge key={resourceKey(resource)} resource={resource} />
+        ))}
+      </div>
+      {visible.length < resources.length && (
+        <div className="text-xs text-theme-text-tertiary">+{resources.length - visible.length} more resources</div>
+      )}
+    </div>
+  )
+}
+
+function ResourceIdentityBadge({ resource }: { resource: ResourceDiff['added'][number] }) {
+  return (
+    <div className="min-w-0 inline-flex max-w-full items-center gap-1.5 rounded-md border border-theme-border bg-theme-surface/70 px-2 py-1 text-xs">
+      <span className={clsx('badge-sm shrink-0', getKindBadgeColor(resource.kind))}>{resource.kind}</span>
+      <span className="min-w-0 truncate text-theme-text-primary">
+        {resource.namespace ? `${resource.namespace}/` : ''}{resource.name}
+      </span>
+    </div>
+  )
+}
+
+function resourceKey(resource: ResourceDiff['added'][number]): string {
+  return `${resource.apiVersion || ''}/${resource.kind}/${resource.namespace || ''}/${resource.name}`
+}
+
+function formatFieldPathLabel(path: string): string {
+  const containerMatch = path.match(/^spec\.template\.spec\.containers\[([^\]]+)\]\.(.+)$/)
+  if (containerMatch) {
+    return `Container ${containerMatch[1]} ${formatPathTail(containerMatch[2])}`
+  }
+  return formatPathTail(path)
+}
+
+function formatPathTail(path: string): string {
+  return path
+    .replace(/\[\*\]/g, '')
+    .replace(/\[([^\]]+)\]/g, ' $1')
+    .split('.')
+    .map((part) => part.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase())
+    .join(' ')
+}
+
+function formatDiffValue(value: unknown, path?: string): string {
+  if (value === null || value === undefined) return 'none'
+  if (typeof value === 'string') return truncateDiffValue(value)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  const structured = formatStructuredDiffValue(value, path)
+  if (structured) return truncateDiffValue(structured)
+  try {
+    return truncateDiffValue(JSON.stringify(value))
+  } catch {
+    return truncateDiffValue(String(value))
+  }
+}
+
+function formatStructuredDiffValue(value: unknown, path?: string): string | undefined {
+  if (!isRecord(value)) return undefined
+  if (path?.includes('Probe')) return formatProbeValue(value)
+  return undefined
+}
+
+function formatProbeValue(value: Record<string, unknown>): string | undefined {
+  const handler = formatProbeHandler(value)
+  if (!handler) return undefined
+  const details: string[] = []
+  const periodSeconds = numberField(value, 'periodSeconds')
+  const timeoutSeconds = numberField(value, 'timeoutSeconds')
+  const failureThreshold = numberField(value, 'failureThreshold')
+  if (periodSeconds && periodSeconds > 0) details.push(`period ${periodSeconds}s`)
+  if (timeoutSeconds && timeoutSeconds > 0) details.push(`timeout ${timeoutSeconds}s`)
+  if (failureThreshold && failureThreshold > 0) details.push(`failure threshold ${failureThreshold}`)
+  return details.length ? `${handler} (${details.join(', ')})` : handler
+}
+
+function formatProbeHandler(value: Record<string, unknown>): string | undefined {
+  const normalizedHandler = stringField(value, 'handler')
+  if (normalizedHandler) return formatNormalizedProbeHandler(normalizedHandler)
+  if (isRecord(value.httpGet)) {
+    const method = stringField(value.httpGet, 'scheme') || 'HTTP'
+    const path = stringField(value.httpGet, 'path') || '/'
+    const port = value.httpGet.port
+    return `${method} GET ${path}${port !== undefined ? ` on ${String(port)}` : ''}`
+  }
+  if (isRecord(value.tcpSocket)) {
+    const port = value.tcpSocket.port
+    return `TCP socket${port !== undefined ? ` on ${String(port)}` : ''}`
+  }
+  if (isRecord(value.grpc)) {
+    const port = value.grpc.port
+    const service = stringField(value.grpc, 'service')
+    return `gRPC${service ? ` ${service}` : ''}${port !== undefined ? ` on ${String(port)}` : ''}`
+  }
+  if (isRecord(value.exec) && Array.isArray(value.exec.command)) {
+    return `exec ${value.exec.command.map(String).join(' ')}`
+  }
+  return undefined
+}
+
+function formatNormalizedProbeHandler(handler: string): string {
+  if (handler.startsWith('httpGet:')) {
+    const rest = handler.slice('httpGet:'.length)
+    const schemeSeparator = rest.indexOf(':')
+    const scheme = schemeSeparator >= 0 ? rest.slice(0, schemeSeparator) : ''
+    const target = schemeSeparator >= 0 ? rest.slice(schemeSeparator + 1) : rest
+    const slashIndex = target.indexOf('/')
+    const port = slashIndex >= 0 ? target.slice(0, slashIndex) : target
+    const path = slashIndex >= 0 ? target.slice(slashIndex) : '/'
+    return `${scheme || 'HTTP'} GET ${path}${port ? ` on ${port}` : ''}`
+  }
+  if (handler.startsWith('tcpSocket:')) {
+    const port = handler.slice('tcpSocket:'.length)
+    return `TCP socket${port ? ` on ${port}` : ''}`
+  }
+  if (handler.startsWith('grpc:')) {
+    const target = handler.slice('grpc:'.length)
+    const [port, service] = target.split('/', 2)
+    return `gRPC${service ? ` ${service}` : ''}${port ? ` on ${port}` : ''}`
+  }
+  return handler
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function stringField(value: Record<string, unknown>, field: string): string | undefined {
+  const raw = value[field]
+  return typeof raw === 'string' ? raw : undefined
+}
+
+function numberField(value: Record<string, unknown>, field: string): number | undefined {
+  const raw = value[field]
+  return typeof raw === 'number' ? raw : undefined
+}
+
+function truncateDiffValue(value: string): string {
+  return value.length > 80 ? `${value.slice(0, 77)}...` : value
 }
 
 function RevisionSummaryCard({ revision, fallbackRevision, label }: { revision?: HelmRevision; fallbackRevision: number; label: string }) {
@@ -1008,6 +1315,7 @@ function ResourceDiffView({
       <div className="text-sm font-medium text-theme-text-secondary">
         Resource set diff: Revision {revision1} -&gt; {revision2}
       </div>
+      <ModifiedResourceChanges changes={diff.modified} />
       <ResourceDiffGroup title="Added" icon={Plus} tone="success" resources={diff.added} />
       <ResourceDiffGroup title="Removed" icon={Minus} tone="error" resources={diff.removed} />
       <ResourceDiffGroup title="Unchanged" icon={Equal} tone="neutral" resources={diff.unchanged} collapsed />

@@ -573,6 +573,173 @@ func TestDiffResourceRefs(t *testing.T) {
 	}
 }
 
+func TestDiffRenderedResourceObjectsDetectsModifiedDeploymentFields(t *testing.T) {
+	oldManifest := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+  namespace: demo
+spec:
+  selector:
+    matchLabels:
+      app: cart
+  template:
+    metadata:
+      labels:
+        app: cart
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.25
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+`
+	newManifest := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+  namespace: demo
+spec:
+  selector:
+    matchLabels:
+      app: cart
+  template:
+    metadata:
+      labels:
+        app: cart
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.26
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+`
+
+	left := parseManifestResourceObjects(oldManifest, "demo")
+	right := parseManifestResourceObjects(newManifest, "demo")
+	removed, added, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
+	modified, unchanged := diffRenderedResourceObjects(common, left, right)
+
+	if len(removed) != 0 || len(added) != 0 || len(unchanged) != 0 {
+		t.Fatalf("removed=%#v added=%#v unchanged=%#v, want only modified", removed, added, unchanged)
+	}
+	if len(modified) != 1 {
+		t.Fatalf("modified = %#v, want one Deployment", modified)
+	}
+	gotPaths := map[string]bool{}
+	for _, field := range modified[0].Fields {
+		gotPaths[field.Path] = true
+	}
+	for _, want := range []string{
+		"spec.template.spec.containers[app].image",
+		"spec.template.spec.containers[app].readinessProbe",
+	} {
+		if !gotPaths[want] {
+			t.Fatalf("modified paths = %#v, missing %s", gotPaths, want)
+		}
+	}
+}
+
+func TestDiffRenderedResourceObjectsIgnoresDeploymentMetadataOnlyChanges(t *testing.T) {
+	oldManifest := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+  namespace: demo
+  labels:
+    helm.sh/chart: cart-1.0.0
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cart
+  template:
+    metadata:
+      labels:
+        app: cart
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.25
+`
+	newManifest := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+  namespace: demo
+  labels:
+    helm.sh/chart: cart-1.0.1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cart
+  template:
+    metadata:
+      labels:
+        app: cart
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.25
+`
+
+	left := parseManifestResourceObjects(oldManifest, "demo")
+	right := parseManifestResourceObjects(newManifest, "demo")
+	_, _, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
+	modified, unchanged := diffRenderedResourceObjects(common, left, right)
+
+	if len(modified) != 0 {
+		t.Fatalf("modified = %#v, want metadata-only change ignored", modified)
+	}
+	if len(unchanged) != 1 {
+		t.Fatalf("unchanged = %#v, want one unchanged Deployment", unchanged)
+	}
+}
+
+func TestParseManifestResourceObjectsUsesMetadataName(t *testing.T) {
+	resources := parseManifestResourceObjects(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+spec:
+  template:
+    spec:
+      containers:
+      - name: app
+        image: nginx
+`, "demo")
+
+	if len(resources) != 1 {
+		t.Fatalf("resources = %#v, want one resource", resources)
+	}
+	ref := resources[0].Ref
+	if ref.Name != "cart" || ref.Namespace != "demo" || ref.Kind != "Deployment" || ref.APIVersion != "apps/v1" {
+		t.Fatalf("ref = %#v, want apps/v1 Deployment demo/cart", ref)
+	}
+}
+
+func TestParseManifestResourceObjectsKeepsClusterScopedNamespaceEmpty(t *testing.T) {
+	resources := parseManifestResourceObjects(`apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: chart-reader
+rules: []
+`, "demo")
+
+	if len(resources) != 1 {
+		t.Fatalf("resources = %#v, want one resource", resources)
+	}
+	ref := resources[0].Ref
+	if ref.Name != "chart-reader" || ref.Namespace != "" || ref.Kind != "ClusterRole" || ref.APIVersion != "rbac.authorization.k8s.io/v1" {
+		t.Fatalf("ref = %#v, want rbac.authorization.k8s.io/v1 ClusterRole chart-reader with empty namespace", ref)
+	}
+}
+
 type failSecondReadDriver struct {
 	inner *storagedriver.Memory
 	reads int

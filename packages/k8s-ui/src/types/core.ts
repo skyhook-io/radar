@@ -770,11 +770,24 @@ export interface HelmResourceRef {
   namespace: string
 }
 
+export interface HelmResourceFieldChange {
+  path: string
+  oldValue: unknown
+  newValue: unknown
+}
+
+export interface HelmResourceChange extends HelmResourceRef {
+  summary?: string
+  fieldCount: number
+  fields: HelmResourceFieldChange[]
+}
+
 export interface ResourceDiff {
   revision1: number
   revision2: number
   added: HelmResourceRef[]
   removed: HelmResourceRef[]
+  modified: HelmResourceChange[]
   unchanged: HelmResourceRef[]
 }
 
