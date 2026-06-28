@@ -365,6 +365,13 @@ function RevisionSelect({
     if (open) setActiveIndex(selectedIndex)
   }, [open, selectedIndex])
 
+  useEffect(() => {
+    if (!open) return
+    const revision = revisions[activeIndex]
+    if (!revision) return
+    document.getElementById(`${listboxId}-${revision.revision}`)?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex, listboxId, open, revisions])
+
   const selectRevision = (revision: number) => {
     setOpen(false)
     if (revision !== value) onChange(revision)
@@ -832,7 +839,7 @@ function ResourceInventoryDiffSection({
       <SectionHeader
         icon={Link2}
         title="Rendered resource inventory"
-        description="Inventory shows object identities added, removed, or changed in place. It is supporting evidence, not a replacement for the manifest diff."
+        description="Inventory groups rendered object identities and meaningful in-place changes. Use the manifest diff for the full YAML, including Helm bookkeeping labels."
       >
         {!isLoading && !error && diff && (
           <div className="flex flex-wrap gap-1.5">
@@ -873,7 +880,7 @@ function ResourceInventoryDiffSection({
           <ModifiedResourceGroup changes={diff.modified} />
           <ResourceGroup title="Added resources" tone="success" resources={diff.added} />
           <ResourceGroup title="Removed resources" tone="error" resources={diff.removed} />
-          <ResourceGroup title="Unchanged resources" tone="neutral" resources={diff.unchanged} collapsed />
+          <ResourceGroup title="Present in both revisions" tone="neutral" resources={diff.unchanged} collapsed />
         </div>
       )}
     </section>
