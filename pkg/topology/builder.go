@@ -231,6 +231,29 @@ func (b *Builder) detectLargeClusterAndOptimize(opts *BuildOptions) (bool, []str
 	return true, hiddenKinds, estimatedNodes
 }
 
+// workloadRefKey identifies a referenced ConfigMap/Secret/PVC by namespace and
+// name — the key for inverting the workload→names ref maps into a consumer index.
+type workloadRefKey struct {
+	namespace string
+	name      string
+}
+
+// buildConsumerIndex inverts a workload→referenced-names map into a
+// (namespace,name)→workloadIDs index. Building it once lets each
+// ConfigMap/Secret/PVC node look up its referencing workloads directly instead
+// of scanning every workload per node (O(workloads+refs) total vs O(nodes×workloads)).
+func buildConsumerIndex(refs map[string]map[string]bool, workloadNamespaces map[string]string) map[workloadRefKey][]string {
+	idx := make(map[workloadRefKey][]string)
+	for workloadID, names := range refs {
+		ns := workloadNamespaces[workloadID]
+		for name := range names {
+			key := workloadRefKey{namespace: ns, name: name}
+			idx[key] = append(idx[key], workloadID)
+		}
+	}
+	return idx
+}
+
 // buildResourcesTopology creates a comprehensive resource view
 func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	nodes := make([]Node, 0)
@@ -3109,6 +3132,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			log.Printf("WARNING [topology] Failed to list ConfigMaps: %v", cmErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list ConfigMaps: %v", cmErr))
 		}
+		cmConsumers := buildConsumerIndex(workloadConfigMapRefs, workloadNamespaces)
 		for _, cm := range configmaps {
 			if !opts.MatchesNamespaceFilter(cm.Namespace) {
 				continue
@@ -3116,25 +3140,18 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Only include ConfigMaps that are referenced by workloads in the same namespace
 			cmID := fmt.Sprintf("configmap/%s/%s", cm.Namespace, cm.Name)
-			isReferenced := false
+			consumers := cmConsumers[workloadRefKey{namespace: cm.Namespace, name: cm.Name}]
 
-			for workloadID, refs := range workloadConfigMapRefs {
-				// Only match if workload is in the same namespace as the ConfigMap
-				if workloadNamespaces[workloadID] != cm.Namespace {
-					continue
-				}
-				if refs[cm.Name] {
-					isReferenced = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", cmID, workloadID),
-						Source: cmID,
-						Target: workloadID,
-						Type:   EdgeConfigures,
-					})
-				}
+			for _, workloadID := range consumers {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", cmID, workloadID),
+					Source: cmID,
+					Target: workloadID,
+					Type:   EdgeConfigures,
+				})
 			}
 
-			if isReferenced {
+			if len(consumers) > 0 {
 				nodes = append(nodes, Node{
 					ID:     cmID,
 					Kind:   KindConfigMap,
@@ -3157,6 +3174,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			log.Printf("WARNING [topology] Failed to list Secrets: %v", secretsErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list Secrets: %v", secretsErr))
 		}
+		secretConsumers := buildConsumerIndex(workloadSecretRefs, workloadNamespaces)
 		for _, secret := range secrets {
 			if !opts.MatchesNamespaceFilter(secret.Namespace) {
 				continue
@@ -3164,25 +3182,18 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Only include Secrets that are referenced by workloads in the same namespace
 			secretID := fmt.Sprintf("secret/%s/%s", secret.Namespace, secret.Name)
-			isReferenced := false
+			consumers := secretConsumers[workloadRefKey{namespace: secret.Namespace, name: secret.Name}]
 
-			for workloadID, refs := range workloadSecretRefs {
-				// Only match if workload is in the same namespace as the Secret
-				if workloadNamespaces[workloadID] != secret.Namespace {
-					continue
-				}
-				if refs[secret.Name] {
-					isReferenced = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", secretID, workloadID),
-						Source: secretID,
-						Target: workloadID,
-						Type:   EdgeConfigures,
-					})
-				}
+			for _, workloadID := range consumers {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", secretID, workloadID),
+					Source: secretID,
+					Target: workloadID,
+					Type:   EdgeConfigures,
+				})
 			}
 
-			if isReferenced {
+			if len(consumers) > 0 {
 				nodes = append(nodes, Node{
 					ID:     secretID,
 					Kind:   KindSecret,
@@ -3206,6 +3217,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			log.Printf("WARNING [topology] Failed to list PersistentVolumeClaims: %v", pvcErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list PersistentVolumeClaims: %v", pvcErr))
 		}
+		pvcConsumers := buildConsumerIndex(workloadPVCRefs, workloadNamespaces)
 		for _, pvc := range pvcs {
 			if !opts.MatchesNamespaceFilter(pvc.Namespace) {
 				continue
@@ -3213,25 +3225,18 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Only include PVCs that are referenced by workloads in the same namespace
 			pvcID := fmt.Sprintf("persistentvolumeclaim/%s/%s", pvc.Namespace, pvc.Name)
-			isReferenced := false
+			consumers := pvcConsumers[workloadRefKey{namespace: pvc.Namespace, name: pvc.Name}]
 
-			for workloadID, refs := range workloadPVCRefs {
-				// Only match if workload is in the same namespace as the PVC
-				if workloadNamespaces[workloadID] != pvc.Namespace {
-					continue
-				}
-				if refs[pvc.Name] {
-					isReferenced = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", pvcID, workloadID),
-						Source: pvcID,
-						Target: workloadID,
-						Type:   EdgeUses,
-					})
-				}
+			for _, workloadID := range consumers {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", pvcID, workloadID),
+					Source: pvcID,
+					Target: workloadID,
+					Type:   EdgeUses,
+				})
 			}
 
-			if isReferenced {
+			if len(consumers) > 0 {
 				// Get storage info
 				var storageSize string
 				if pvc.Spec.Resources.Requests != nil {
