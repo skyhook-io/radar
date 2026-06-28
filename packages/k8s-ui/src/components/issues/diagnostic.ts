@@ -3,37 +3,41 @@
 // per-resource Operational Issues block (ResourceIssuesSection) so the two
 // can't drift on wording.
 
+// Operator-facing — describes the issue's place in the causal picture in plain
+// language, not Radar's internal role taxonomy.
 export function diagnosticRoleLabel(role: string): string {
   switch (role) {
     case 'candidate':
-      return 'Candidate signal';
+      return 'Possible cause';
     case 'affected':
-      return 'Affected signal';
+      return 'Affected';
     case 'rollup':
-      return 'Rollup';
+      return 'Grouped';
     default:
       return 'Context';
   }
 }
 
+// Operator-facing fact labels — plain language over the implementation-shaped
+// internal type names.
 export function diagnosticFactLabel(type: string): string {
   switch (type) {
     case 'explicit_reference':
-      return 'Explicit reference';
+      return 'Missing reference';
     case 'owner_rollup':
-      return 'Owner rollup';
+      return 'Grouped from pods';
     case 'selected_backend_issue':
-      return 'Selected backend';
+      return 'Backend pods';
     case 'service_config_mismatch':
       return 'Service config';
     case 'service_env_reference':
-      return 'Service env';
+      return 'Referenced service';
     case 'probe_target_mismatch':
       return 'Probe target';
     case 'blocked_init_container':
       return 'Init container';
     case 'restart_cause':
-      return 'Restart cause';
+      return 'Restart evidence';
     case 'node_blast_radius':
       return 'Affected workloads';
     case 'pvc_blast_radius':

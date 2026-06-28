@@ -536,7 +536,22 @@ export function WorkloadView({
           <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
         </>
       )}
-      renderOverviewLead={() => <ResourceIssuesSection issues={liveIssues} />}
+      renderOverviewLead={() => (
+        <ResourceIssuesSection
+          issues={liveIssues}
+          onResourceClick={
+            rest.onNavigateToResource
+              ? (ref) =>
+                  rest.onNavigateToResource?.({
+                    kind: kindToPlural(ref.kind),
+                    namespace: ref.namespace ?? '',
+                    name: ref.name,
+                    group: ref.group ?? '',
+                  })
+              : undefined
+          }
+        />
+      )}
       hasOperationalIssues={!!liveIssues?.length}
       onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
       resolvedGitOpsOwner={gitopsOwner}

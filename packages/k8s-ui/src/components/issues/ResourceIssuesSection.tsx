@@ -1,7 +1,7 @@
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, ExternalLink } from 'lucide-react'
 import { Section } from '../ui/drawer-components'
 import { Badge } from '../ui/Badge'
-import type { Issue } from './types'
+import type { Issue, IssueResourceRef } from './types'
 import { categoryLabel } from './severity'
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle } from './diagnostic'
 
@@ -21,7 +21,14 @@ import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle } from './dia
  * so it's omitted to keep the card scannable. (`message` is the body fallback
  * only for categories that don't yet emit a `cause`.)
  */
-export function ResourceIssuesSection({ issues }: { issues: Issue[] | undefined }) {
+export function ResourceIssuesSection({
+  issues,
+  onResourceClick,
+}: {
+  issues: Issue[] | undefined
+  /** When provided, related resources in a causal link become clickable. */
+  onResourceClick?: (ref: IssueResourceRef) => void
+}) {
   if (!issues || issues.length === 0) return null
   return (
     <Section title={`Operational Issues (${issues.length})`} icon={AlertTriangle} defaultExpanded>
@@ -58,7 +65,7 @@ export function ResourceIssuesSection({ issues }: { issues: Issue[] | undefined 
                   <code className="rounded bg-theme-elevated px-1 font-mono">{issue.remediation_target}</code> — apply it from the GitOps detail page.
                 </p>
               ) : null}
-              <CausalContext issue={issue} />
+              <CausalContext issue={issue} onResourceClick={onResourceClick} />
             </div>
           )
         })}
@@ -74,7 +81,7 @@ export function ResourceIssuesSection({ issues }: { issues: Issue[] | undefined 
  * renders the fuller context with clickable resource navigation; here the related
  * resources are shown as plain identifiers to keep the resource panel scannable.
  */
-function CausalContext({ issue }: { issue: Issue }) {
+function CausalContext({ issue, onResourceClick }: { issue: Issue; onResourceClick?: (ref: IssueResourceRef) => void }) {
   const ctx = issue.diagnostic_context
   const links = ctx?.facts?.filter((f) => f.confidence || (f.related_issues && f.related_issues.length > 0)) ?? []
   if (!ctx || links.length === 0) return null
@@ -98,15 +105,33 @@ function CausalContext({ issue }: { issue: Issue }) {
             </div>
             {fact.related_issues && fact.related_issues.length > 0 ? (
               <ul className="mt-0.5 space-y-0.5 pl-3">
-                {fact.related_issues.map((rel, ri) => (
-                  <li key={ri} className="text-theme-text-tertiary">
-                    <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{rel.ref.kind}</span>{' '}
-                    <span className="font-mono">
-                      {rel.ref.namespace ? `${rel.ref.namespace} / ` : ''}
-                      {rel.ref.name}
-                    </span>
-                  </li>
-                ))}
+                {fact.related_issues.map((rel, ri) => {
+                  const label = (
+                    <>
+                      <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{rel.ref.kind}</span>{' '}
+                      <span className="font-mono">
+                        {rel.ref.namespace ? `${rel.ref.namespace} / ` : ''}
+                        {rel.ref.name}
+                      </span>
+                    </>
+                  )
+                  return (
+                    <li key={ri} className="text-theme-text-tertiary">
+                      {onResourceClick ? (
+                        <button
+                          type="button"
+                          onClick={() => onResourceClick(rel.ref)}
+                          className="group inline-flex items-center gap-1 text-left hover:text-theme-text-secondary"
+                        >
+                          {label}
+                          <ExternalLink className="h-3 w-3 opacity-0 group-hover:opacity-100" />
+                        </button>
+                      ) : (
+                        label
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             ) : null}
           </li>
