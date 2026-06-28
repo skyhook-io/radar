@@ -73,9 +73,13 @@ export interface IssueDiagnosticIssueRef {
   severity?: IssueSeverity;
 }
 
+export type IssueDiagnosticConfidence = 'high' | 'medium' | 'low';
+
 export interface IssueDiagnosticFact {
   type: string;
   message?: string;
+  /** How certain a cross-subject causal link is. Absent for non-causal facts. */
+  confidence?: IssueDiagnosticConfidence;
   refs?: IssueResourceRef[];
   related_issues?: IssueDiagnosticIssueRef[];
 }

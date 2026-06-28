@@ -366,6 +366,14 @@ function DiagnosticContext({
           <li key={`${fact.type}-${idx}`} className="flex flex-col gap-1.5 rounded-md border border-theme-border/70 px-2.5 py-2">
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="shrink-0 text-xs font-medium text-theme-text-secondary">{diagnosticFactLabel(fact.type)}</span>
+              {fact.confidence ? (
+                <span
+                  className="shrink-0 badge-sm text-[10px] text-theme-text-tertiary"
+                  title={confidenceTitle(fact.confidence)}
+                >
+                  {fact.confidence} confidence
+                </span>
+              ) : null}
               {fact.message ? <span className="min-w-0 break-words text-xs leading-relaxed text-theme-text-tertiary">{fact.message}</span> : null}
             </div>
             {fact.related_issues?.length ? (
@@ -433,8 +441,28 @@ function diagnosticFactLabel(type: string): string {
       return 'Init container';
     case 'restart_cause':
       return 'Restart cause';
+    case 'node_blast_radius':
+      return 'Affected workloads';
+    case 'pvc_blast_radius':
+      return 'Blocked pods';
     default:
       return type.replace(/_/g, ' ');
+  }
+}
+
+// Plain-language gloss for the confidence chip's tooltip — the operator should
+// know a medium link is "these are co-located, the node may be the cause", not a
+// proven fact.
+function confidenceTitle(confidence: string): string {
+  switch (confidence) {
+    case 'high':
+      return 'High confidence: a declared structural link (selector, owner, or claim reference).';
+    case 'medium':
+      return 'Medium confidence: these resources are related, but causation is inferred — verify before acting.';
+    case 'low':
+      return 'Low confidence: a heuristic match.';
+    default:
+      return '';
   }
 }
 
