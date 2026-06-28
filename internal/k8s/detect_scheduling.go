@@ -470,6 +470,7 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 				Name:            pod.Name,
 				Severity:        schedulingSeverity(dur),
 				Reason:          "Unschedulable",
+				Action:          "Read the scheduler message above — free or add capacity, or fix the pod's nodeSelector / affinity / tolerations so it matches an available node.",
 				Message:         describeUnschedulable(pod, cond.Message, nodes),
 				Age:             FormatAge(ageDur),
 				AgeSeconds:      int64(ageDur.Seconds()),

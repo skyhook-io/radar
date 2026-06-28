@@ -168,8 +168,10 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 		// conditions below so a Degraded app stays critical-Degraded rather than
 		// reframed as a lower-information condition row.
 		if strings.EqualFold(health, "Degraded") {
-			out = append(out, gitopsProblem("Application", argoGroup, ns, name, "critical",
-				"HealthDegraded", orMsg("Application health is Degraded (managed resources are unhealthy)"), age))
+			dd := gitopsProblem("Application", argoGroup, ns, name, "critical",
+				"HealthDegraded", orMsg("Application health is Degraded (managed resources are unhealthy)"), age)
+			dd.Action = "Open the resource tree and inspect the unhealthy managed resource(s)."
+			out = append(out, dd)
 			continue
 		}
 		// ComparisonError / InvalidSpecError are source/spec failures that occur
@@ -186,8 +188,10 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 		if strings.EqualFold(health, "Missing") && automated {
 			// Auto-synced app whose managed resources are GONE is critical — the
 			// declared state isn't running at all.
-			out = append(out, gitopsProblem("Application", argoGroup, ns, name, "critical",
-				"HealthMissing", orMsg("auto-synced Application's managed resources are missing from the cluster"), age))
+			dd := gitopsProblem("Application", argoGroup, ns, name, "critical",
+				"HealthMissing", orMsg("auto-synced Application's managed resources are missing from the cluster"), age)
+			dd.Action = "Sync the Application to recreate its managed resources."
+			out = append(out, dd)
 			continue
 		}
 		if strings.EqualFold(sync, "OutOfSync") && automated {
@@ -204,8 +208,10 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 				d.Action = "Open Changes to see the per-resource drift, then match it against your Git manifest, the resource's controller, and any mutating webhooks."
 				out = append(out, d)
 			} else {
-				out = append(out, gitopsProblem("Application", argoGroup, ns, name, "high",
-					"OutOfSync", "auto-synced Application has drifted from the desired manifests", age))
+				dd := gitopsProblem("Application", argoGroup, ns, name, "high",
+					"OutOfSync", "auto-synced Application has drifted from the desired manifests", age)
+				dd.Action = "Review the diff, then fix Git (or ignoreDifferences / the mutating controller) and refresh; check Argo events if it keeps drifting."
+				out = append(out, dd)
 			}
 		}
 	}

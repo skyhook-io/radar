@@ -521,7 +521,7 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 					"Missing TLS Secret",
 					fmt.Sprintf("tls[].secretName references Secret %q which does not exist", tls.SecretName),
 					age),
-					fmt.Sprintf("TLS Secret %q doesn't exist, so the controller serves its default/self-signed cert and HTTPS clients see warnings.", tls.SecretName),
+					fmt.Sprintf("TLS Secret %q doesn't exist, so the controller may serve its default/self-signed cert and HTTPS clients see warnings.", tls.SecretName),
 					fmt.Sprintf("Create TLS Secret %q (type kubernetes.io/tls) in namespace %q, or remove the tls entry.", tls.SecretName, ing.Namespace))
 				p.Severity = "warning"
 				out = append(out, p)
@@ -569,13 +569,15 @@ func detectStatefulSetMissingService(cache *ResourceCache, namespace string, now
 			}
 			severity := "info"
 			message := fmt.Sprintf("spec.serviceName references Service %q which does not exist; single-replica StatefulSet has no peers, so per-pod DNS is inert", sts.Spec.ServiceName)
+			cause := fmt.Sprintf("Headless Service %q doesn't exist. With one replica there are no peers, so per-pod DNS is inert today — but scaling up will silently break peer discovery.", sts.Spec.ServiceName)
 			if replicas > 1 {
 				severity = "warning"
 				message = fmt.Sprintf("spec.serviceName references Service %q which does not exist (pods will schedule but per-pod DNS records won't be created; peer discovery silently broken)", sts.Spec.ServiceName)
+				cause = fmt.Sprintf("Headless Service %q doesn't exist, so per-pod DNS records aren't created and peer discovery is broken across the replicas.", sts.Spec.ServiceName)
 			}
 			out = append(out, withFix(missingRefProblemSev("StatefulSet", "apps", sts.Namespace, sts.Name,
 				severity, "Missing headless Service", message, age),
-				fmt.Sprintf("Headless Service %q doesn't exist, so per-pod DNS records aren't created and peer discovery is broken.", sts.Spec.ServiceName),
+				cause,
 				fmt.Sprintf("Create headless Service %q in namespace %q (clusterIP: None) selecting the StatefulSet's pods, or fix spec.serviceName.", sts.Spec.ServiceName, sts.Namespace)))
 		}
 	}
