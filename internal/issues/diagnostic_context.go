@@ -53,18 +53,30 @@ var pvcAttributableCategories = map[issuesapi.Category]bool{
 	issuesapi.CategoryVolumeMountFailed: true,
 }
 
-// nodeAttributableCategories are pod-issue categories a NotReady / resource-
-// pressured node can plausibly cause. Node-independent causes are deliberately
-// excluded — an image-pull failure (registry/auth), a missing config reference,
-// or an admission rejection has nothing to do with the node, so linking it under
-// a node incident would be a false causal claim even as a hint.
-var nodeAttributableCategories = map[issuesapi.Category]bool{
-	issuesapi.CategoryCrashLoop:         true,
-	issuesapi.CategoryOOMKilled:         true,
-	issuesapi.CategoryHighRestart:       true,
-	issuesapi.CategoryContainerWaiting:  true,
-	issuesapi.CategoryReadinessFailed:   true,
-	issuesapi.CategoryLivenessProbeFail: true,
+// nodeReasonAttributable maps a node problem reason to the pod-issue categories
+// that reason can plausibly CAUSE — keyed on the reason because the cases are not
+// equivalent. Resource pressure produces specific, live symptoms (memory → OOM /
+// OOM-restart loops; disk or PID exhaustion → containers that can't be created).
+//
+// A fully NotReady (dead-kubelet) node is DELIBERATELY ABSENT: once the kubelet
+// stops reporting, a pod's status is stale, so its crashloop / OOM rows are
+// pre-existing application problems that merely happen to sit on the node — not
+// node-caused. Linking them would tell the operator "the node may be the cause"
+// when it isn't. The genuine dead-node blast radius (terminating / evicted pods,
+// unschedulable replacements) isn't captured by these runtime categories and is
+// left to a future, reason-aware detector. App-dominant categories (crashloop,
+// probe failures, image pull, missing config) are excluded for the same reason.
+var nodeReasonAttributable = map[string]map[issuesapi.Category]bool{
+	"MemoryPressure": {
+		issuesapi.CategoryOOMKilled:   true,
+		issuesapi.CategoryHighRestart: true,
+	},
+	"DiskPressure": {
+		issuesapi.CategoryContainerWaiting: true,
+	},
+	"PIDPressure": {
+		issuesapi.CategoryContainerWaiting: true,
+	},
 }
 
 type changeContextProvider interface {
@@ -282,19 +294,24 @@ func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[i
 	})
 }
 
-// addNodeBlastRadiusContext links a NotReady / pressured node to the
-// node-attributable issues of the pods running on it (spec.nodeName). The node is
-// the candidate root; the pod issues are its blast radius. Confidence is medium,
-// not high: spec.nodeName proves a pod is ON the node, not that the node caused
-// its problem. Correctness rests on the category filter (node-independent causes
-// like image pull / config refs are excluded) plus the honest medium label — NOT
-// on a timestamp guard, because pod-issue onset isn't reliably recorded (FirstSeen
-// tracks pod age, not failure onset), so any such guard would drop legitimate
-// long-running pods newly hit by the node while still admitting unrelated ones.
+// addNodeBlastRadiusContext links a resource-pressured node to the pod issues
+// that pressure plausibly caused (matched by spec.nodeName, gated by the
+// reason→category map). The node is the candidate root; the pod issues are its
+// blast radius. Confidence is medium, not high: spec.nodeName proves a pod is ON
+// the node, and the category is consistent with the pressure, but co-located is
+// not proof of cause — hence the "may be the cause / verify" framing. A node whose
+// reason has no attributable categories (a dead-kubelet NotReady node, or an
+// unrecognized reason) links nothing. No timestamp guard: pod-issue onset isn't
+// reliably recorded (FirstSeen tracks pod age, not failure onset), so a guard
+// would drop legitimate long-running pods while still admitting unrelated ones.
 func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
-	linkBlastRadius(b, np.PodsOnNode(node.Name), nodeAttributableCategories, flatByResource, groupedByID,
+	attributable := nodeReasonAttributable[node.Reason]
+	if len(attributable) == 0 {
+		return
+	}
+	linkBlastRadius(b, np.PodsOnNode(node.Name), attributable, flatByResource, groupedByID,
 		factNodeBlastRadius, issuesapi.ConfidenceMedium,
-		"Pods on this node have active issues — the node may be the cause.", nil)
+		fmt.Sprintf("Pods on this node show problems consistent with its %s — the node may be the cause.", node.Reason), nil)
 }
 
 // addPVCBlastRadiusContext links a broken PVC (pending / lost / resize-failed) to

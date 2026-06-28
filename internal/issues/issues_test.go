@@ -1542,16 +1542,21 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 }
 
 func TestNodeBlastRadiusContext(t *testing.T) {
-	node := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "NotReady"}
-	crash := Issue{ID: "crash-1", Kind: "Pod", Namespace: "prod", Name: "web-abc", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical}
-	pull := Issue{ID: "pull-1", Kind: "Pod", Namespace: "prod", Name: "api-xyz", Category: issuesapi.CategoryImagePullFailed, Severity: SeverityWarning}
+	// A MemoryPressure node: OOM is the attributable symptom; a crashloop on the
+	// same node is app-dominant and must NOT be attributed to memory pressure, and
+	// an image-pull failure is node-independent.
+	node := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
+	oom := Issue{ID: "oom-1", Kind: "Pod", Namespace: "prod", Name: "web-abc", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical}
+	crash := Issue{ID: "crash-1", Kind: "Pod", Namespace: "prod", Name: "api-xyz", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical}
+	pull := Issue{ID: "pull-1", Kind: "Pod", Namespace: "prod", Name: "cache-9", Category: issuesapi.CategoryImagePullFailed, Severity: SeverityWarning}
 
 	p := &fakeProvider{podsOnNode: map[string][]Ref{"node-1": {
 		{Kind: "Pod", Namespace: "prod", Name: "web-abc"},
 		{Kind: "Pod", Namespace: "prod", Name: "api-xyz"},
+		{Kind: "Pod", Namespace: "prod", Name: "cache-9"},
 	}}}
 
-	out := enrichDiagnosticContext([]Issue{node}, []Issue{node, crash, pull}, nil, p)
+	out := enrichDiagnosticContext([]Issue{node}, []Issue{node, oom, crash, pull}, nil, p)
 	ctx := out[0].DiagnosticContext
 	if ctx == nil {
 		t.Fatal("node issue got no diagnostic context")
@@ -1571,15 +1576,27 @@ func TestNodeBlastRadiusContext(t *testing.T) {
 	if ctx.Role != issuesapi.DiagnosticRoleCandidate {
 		t.Errorf("role = %q, want candidate", ctx.Role)
 	}
-	// The node-attributable crashloop links; the node-independent image-pull
-	// failure must NOT be attributed to the node.
-	if len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Category != issuesapi.CategoryCrashLoop || fact.RelatedIssues[0].Ref.Name != "web-abc" {
-		t.Fatalf("expected only the on-node crashloop linked (not the node-independent image pull), got %+v", fact.RelatedIssues)
+	// Only the OOM (attributable to MemoryPressure) links — not the app-dominant
+	// crashloop, not the node-independent image pull.
+	if len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Category != issuesapi.CategoryOOMKilled || fact.RelatedIssues[0].Ref.Name != "web-abc" {
+		t.Fatalf("expected only the OOM linked under MemoryPressure, got %+v", fact.RelatedIssues)
+	}
+}
+
+func TestNodeBlastRadiusContext_NotReadyLinksNothing(t *testing.T) {
+	// A dead-kubelet NotReady node: pod statuses are stale, so crashloop/OOM rows
+	// are pre-existing app problems, not node-caused — nothing should link.
+	node := Issue{Kind: "Node", Name: "dead", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "NotReady"}
+	oom := Issue{ID: "oom-9", Kind: "Pod", Namespace: "prod", Name: "p1", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical}
+	p := &fakeProvider{podsOnNode: map[string][]Ref{"dead": {{Kind: "Pod", Namespace: "prod", Name: "p1"}}}}
+	out := enrichDiagnosticContext([]Issue{node}, []Issue{node, oom}, nil, p)
+	if out[0].DiagnosticContext != nil {
+		t.Fatalf("a NotReady (dead-kubelet) node must not attribute pod issues, got %+v", out[0].DiagnosticContext)
 	}
 }
 
 func TestNodeBlastRadiusContext_NoPodsNoFact(t *testing.T) {
-	node := Issue{Kind: "Node", Name: "lonely", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical}
+	node := Issue{Kind: "Node", Name: "lonely", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
 	p := &fakeProvider{}
 	out := enrichDiagnosticContext([]Issue{node}, []Issue{node}, nil, p)
 	if out[0].DiagnosticContext != nil {
