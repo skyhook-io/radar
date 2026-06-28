@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -881,6 +882,7 @@ func diffHooks(left, right []HelmHook) (removed, added, modified, unchanged []He
 			unchanged = append(unchanged, next)
 			continue
 		}
+		next.ManifestChanged = hook.ManifestDigest != next.ManifestDigest
 		modified = append(modified, next)
 	}
 	for key, hook := range rightMap {
@@ -909,12 +911,14 @@ func helmHookKey(hook HelmHook) string {
 func helmHookSignature(hook HelmHook) string {
 	stable := struct {
 		Path              string
+		ManifestDigest    string
 		Events            []string
 		Weight            int
 		DeletePolicies    []string
 		OutputLogPolicies []string
 	}{
 		Path:              hook.Path,
+		ManifestDigest:    hook.ManifestDigest,
 		Events:            sortedStrings(hook.Events),
 		Weight:            hook.Weight,
 		DeletePolicies:    sortedStrings(hook.DeletePolicies),
@@ -1608,6 +1612,7 @@ func extractHooks(rel *release.Release) []HelmHook {
 			Namespace:         namespace,
 			Kind:              h.Kind,
 			Path:              h.Path,
+			ManifestDigest:    manifestDigest(h.Manifest),
 			Events:            events,
 			Weight:            h.Weight,
 			DeletePolicies:    deletePolicies,
@@ -1631,6 +1636,15 @@ func extractHooks(rel *release.Release) []HelmHook {
 	}
 
 	return hooks
+}
+
+func manifestDigest(manifest string) string {
+	trimmed := strings.TrimSpace(manifest)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return fmt.Sprintf("%x", sum)
 }
 
 func extractHookDiagnostics(hooks []HelmHook) []HookDiagnostic {

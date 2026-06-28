@@ -96,6 +96,8 @@ type HelmHook struct {
 	Namespace         string     `json:"namespace,omitempty"`
 	Kind              string     `json:"kind"`
 	Path              string     `json:"path,omitempty"`
+	ManifestDigest    string     `json:"-"`
+	ManifestChanged   bool       `json:"manifestChanged,omitempty"`
 	Events            []string   `json:"events"`
 	Weight            int        `json:"weight"`
 	Status            string     `json:"status,omitempty"`

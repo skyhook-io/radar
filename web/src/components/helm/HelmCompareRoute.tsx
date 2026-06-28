@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo } from 'react'
-import type { MouseEvent, ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import {
@@ -7,7 +7,9 @@ import {
   Anchor,
   ArrowLeft,
   ArrowLeftRight,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Code,
   FileText,
   GitCompare,
@@ -111,10 +113,20 @@ export function HelmCompareRoute() {
   useEffect(() => {
     if (!location.hash) return
     const sectionId = decodeURIComponent(location.hash.slice(1))
-    const timeout = window.setTimeout(() => {
+    let cancelled = false
+    let attempts = 0
+    let timeout: number | undefined
+    const scroll = () => {
+      if (cancelled) return
       document.getElementById(sectionId)?.scrollIntoView({ block: 'start' })
-    }, 0)
-    return () => window.clearTimeout(timeout)
+      attempts += 1
+      if (attempts < 8) timeout = window.setTimeout(scroll, 75)
+    }
+    timeout = window.setTimeout(scroll, 0)
+    return () => {
+      cancelled = true
+      if (timeout) window.clearTimeout(timeout)
+    }
   }, [location.hash, releaseName, revision1, revision2])
 
   if (!releaseRef) {
@@ -246,14 +258,19 @@ export function HelmCompareRoute() {
                   revision2={revision2}
                   manifestDiff={manifestDiff.data?.diff}
                   manifestLoading={manifestDiff.isLoading}
+                  manifestError={manifestDiff.error}
                   valuesDiff={valuesDiff.data?.diff}
                   valuesLoading={valuesDiff.isLoading}
+                  valuesError={valuesDiff.error}
                   notesDiff={notesDiff.data?.diff}
                   notesLoading={notesDiff.isLoading}
+                  notesError={notesDiff.error}
                   hooksDiff={hooksDiff.data}
                   hooksLoading={hooksDiff.isLoading}
+                  hooksError={hooksDiff.error}
                   resourceDiff={resourceDiff.data}
                   resourceLoading={resourceDiff.isLoading}
+                  resourceError={resourceDiff.error}
                 />
               </section>
 
@@ -318,22 +335,134 @@ function RevisionSelect({
   revisions: HelmRevision[]
   onChange: (revision: number) => void
 }) {
+  const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const listboxId = useId()
+  const selected = revisions.find((revision) => revision.revision === value)
+  const selectedIndex = Math.max(0, revisions.findIndex((revision) => revision.revision === value))
+
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    const onDown = (event: globalThis.MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) close()
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', close)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', close)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (open) setActiveIndex(selectedIndex)
+  }, [open, selectedIndex])
+
+  const selectRevision = (revision: number) => {
+    setOpen(false)
+    if (revision !== value) onChange(revision)
+  }
+
+  const moveActive = (delta: number) => {
+    if (revisions.length === 0) return
+    setActiveIndex((current) => {
+      const next = current + delta
+      if (next < 0) return revisions.length - 1
+      if (next >= revisions.length) return 0
+      return next
+    })
+  }
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (revisions.length === 0) return
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (!open) {
+        setOpen(true)
+        setActiveIndex(selectedIndex)
+      } else {
+        moveActive(1)
+      }
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (!open) {
+        setOpen(true)
+        setActiveIndex(selectedIndex)
+      } else {
+        moveActive(-1)
+      }
+    } else if (event.key === 'Enter' && open) {
+      event.preventDefault()
+      selectRevision(revisions[activeIndex]?.revision || value)
+    }
+  }
+
   return (
-    <label className="flex items-center gap-2 text-xs text-theme-text-tertiary">
+    <div ref={rootRef} className="relative flex items-center gap-2 text-xs text-theme-text-tertiary">
       <span>{label}</span>
-      <select
-        value={value || ''}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="rounded-md border border-theme-border bg-theme-elevated px-2 py-1.5 text-sm font-medium text-theme-text-primary"
+      <button
+        type="button"
+        onClick={() => setOpen((next) => !next)}
+        onKeyDown={onKeyDown}
+        disabled={revisions.length === 0}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-activedescendant={open ? `${listboxId}-${revisions[activeIndex]?.revision || value}` : undefined}
+        aria-label={`${label} revision`}
+        className={clsx(
+          'inline-flex max-w-[34rem] items-center gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5 py-1.5 text-left text-sm font-medium text-theme-text-primary shadow-theme-sm transition-colors',
+          revisions.length === 0 ? 'cursor-not-allowed opacity-60' : 'hover:bg-theme-hover',
+        )}
       >
-        {revisions.map((revision) => (
-          <option key={revision.revision} value={revision.revision}>
-            rev {revision.revision} - {revision.status} - {revision.chart}
-          </option>
-        ))}
-      </select>
-    </label>
+        <span className="min-w-0 truncate">{selected ? formatRevisionOption(selected) : 'No revisions'}</span>
+        <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div
+          id={listboxId}
+          role="listbox"
+          className="absolute right-0 top-full z-50 mt-1 max-h-80 w-[min(36rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-theme-border bg-theme-surface p-1 shadow-theme-lg"
+        >
+          {revisions.map((revision, index) => {
+            const selectedRevision = revision.revision === value
+            const activeRevision = index === activeIndex
+            return (
+              <button
+                key={revision.revision}
+                id={`${listboxId}-${revision.revision}`}
+                type="button"
+                role="option"
+                aria-selected={selectedRevision}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => selectRevision(revision.revision)}
+                className={clsx(
+                  'flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors',
+                  selectedRevision ? 'selection selection-ring' : activeRevision ? 'bg-theme-hover' : 'hover:bg-theme-hover',
+                )}
+              >
+                <span className="w-14 shrink-0 font-medium text-theme-text-primary">rev {revision.revision}</span>
+                <span className={clsx('badge-sm shrink-0', getHelmStatusColor(revision.status))}>{revision.status}</span>
+                <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{revision.chart}</span>
+                {selectedRevision && <Check className="h-4 w-4 shrink-0 text-accent" />}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
+}
+
+function formatRevisionOption(revision: HelmRevision): string {
+  return `rev ${revision.revision} - ${revision.status} - ${revision.chart}`
 }
 
 function CompareSummary({
@@ -343,14 +472,19 @@ function CompareSummary({
   revision2,
   manifestDiff,
   manifestLoading,
+  manifestError,
   valuesDiff,
   valuesLoading,
+  valuesError,
   notesDiff,
   notesLoading,
+  notesError,
   hooksDiff,
   hooksLoading,
+  hooksError,
   resourceDiff,
   resourceLoading,
+  resourceError,
 }: {
   left?: HelmRevision
   right?: HelmRevision
@@ -358,27 +492,29 @@ function CompareSummary({
   revision2: number
   manifestDiff?: string
   manifestLoading: boolean
+  manifestError: unknown
   valuesDiff?: string
   valuesLoading: boolean
+  valuesError: unknown
   notesDiff?: string
   notesLoading: boolean
+  notesError: unknown
   hooksDiff?: HooksDiff
   hooksLoading: boolean
+  hooksError: unknown
   resourceDiff?: ResourceDiff
   resourceLoading: boolean
+  resourceError: unknown
 }) {
   const manifestStats = diffStats(manifestDiff || '')
   const valuesStats = diffStats(valuesDiff || '')
   const notesStats = diffStats(notesDiff || '')
   const hookChanged = hooksDiff ? hooksDiff.added.length + hooksDiff.removed.length + hooksDiff.modified.length : 0
   const resourceChanged = resourceDiff ? resourceDiff.added.length + resourceDiff.removed.length + resourceDiff.modified.length : 0
-  const chartChanged = Boolean(left && right && left.chart !== right.chart)
-  const statusChanged = Boolean(left && right && left.status !== right.status)
-  const descriptionChanged = Boolean(left && right && (left.description || '') !== (right.description || ''))
 
   return (
     <div className="card-inner-lg">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="mb-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <GitCompare className="h-4 w-4 text-theme-text-secondary" />
@@ -388,122 +524,158 @@ function CompareSummary({
             Start with the rendered manifest diff below, then use values, hooks, notes, and inventory as supporting evidence.
           </p>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {chartChanged && <span className={clsx('badge-sm', SEVERITY_BADGE.info)}>chart changed</span>}
-          {statusChanged && <span className={clsx('badge-sm', SEVERITY_BADGE.warning)}>status changed</span>}
-          {descriptionChanged && <span className={clsx('badge-sm', SEVERITY_BADGE.neutral)}>description changed</span>}
-        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-2 min-[1180px]:grid-cols-4">
-        <MetadataDelta label="Chart" left={left?.chart} right={right?.chart} />
-        <MetadataDelta label="Status" left={left?.status} right={right?.status} status />
-        <MetadataDelta label="App version" left={left?.appVersion} right={right?.appVersion} />
-        <MetadataDelta
-          label="Updated"
-          left={left?.updated ? formatDate(left.updated) : undefined}
-          right={right?.updated ? formatDate(right.updated) : undefined}
-        />
-      </div>
-
-      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 min-[1180px]:grid-cols-5">
-        <SignalCard
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium uppercase text-theme-text-tertiary">Evidence</span>
+        <SignalPill
           label="Manifest"
           loading={manifestLoading}
+          error={manifestError}
           tone={manifestStats.changed ? 'info' : 'neutral'}
           value={manifestStats.changed ? `${manifestStats.additions} add / ${manifestStats.removals} remove` : 'same'}
           sectionId="manifest"
         />
-        <SignalCard
+        <SignalPill
           label="Values"
           loading={valuesLoading}
+          error={valuesError}
           tone={valuesStats.changed ? 'info' : 'neutral'}
           value={valuesStats.changed ? `${valuesStats.additions} add / ${valuesStats.removals} remove` : 'same'}
           sectionId="values"
         />
-        <SignalCard
+        <SignalPill
           label="Hooks"
           loading={hooksLoading}
+          error={hooksError}
           tone={hookChanged > 0 ? 'warning' : 'neutral'}
           value={hooksDiff ? `${hookChanged} changed` : 'same'}
           sectionId="hooks"
         />
-        <SignalCard
+        <SignalPill
           label="Notes"
           loading={notesLoading}
+          error={notesError}
           tone={notesStats.changed ? 'info' : 'neutral'}
           value={notesStats.changed ? `${notesStats.additions} add / ${notesStats.removals} remove` : 'same'}
           sectionId="notes"
         />
-        <SignalCard
+        <SignalPill
           label="Inventory"
           loading={resourceLoading}
+          error={resourceError}
           tone={resourceChanged > 0 ? 'warning' : 'neutral'}
           value={resourceDiff ? `${resourceChanged} changed` : 'same'}
           sectionId="resources"
         />
       </div>
+
+      <div className="mt-4">
+        <div className="mb-2 text-xs font-medium uppercase text-theme-text-tertiary">Release metadata</div>
+        <MetadataDiffTable
+          revision1={revision1}
+          revision2={revision2}
+          rows={[
+            { label: 'Chart', left: left?.chart, right: right?.chart },
+            { label: 'Status', left: left?.status, right: right?.status, status: true },
+            { label: 'App version', left: left?.appVersion, right: right?.appVersion },
+            {
+              label: 'Updated',
+              left: left?.updated ? formatDate(left.updated) : undefined,
+              right: right?.updated ? formatDate(right.updated) : undefined,
+            },
+          ]}
+        />
+      </div>
     </div>
   )
 }
 
-function MetadataDelta({ label, left, right, status = false }: { label: string; left?: string; right?: string; status?: boolean }) {
-  const changed = (left || '') !== (right || '')
+interface MetadataDiffRow {
+  label: string
+  left?: string
+  right?: string
+  status?: boolean
+}
+
+function MetadataDiffTable({ revision1, revision2, rows }: { revision1: number; revision2: number; rows: MetadataDiffRow[] }) {
   return (
-    <div className="min-w-0 rounded-lg border border-theme-border bg-theme-base/50 p-2">
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <div className="text-xs text-theme-text-tertiary">{label}</div>
+    <div className="overflow-hidden rounded-lg border border-theme-border bg-theme-base/50">
+      <div className="hidden grid-cols-[7.5rem_minmax(0,1fr)_1.5rem_minmax(0,1fr)_5rem] items-center gap-3 border-b border-theme-border bg-theme-surface/70 px-3 py-2 text-xs font-medium text-theme-text-tertiary md:grid">
+        <span>Field</span>
+        <span>Rev {revision1}</span>
+        <span />
+        <span>Rev {revision2}</span>
+        <span className="text-right">Diff</span>
+      </div>
+      {rows.map((row) => <MetadataDiffTableRow key={row.label} row={row} />)}
+    </div>
+  )
+}
+
+function MetadataDiffTableRow({ row }: { row: MetadataDiffRow }) {
+  const changed = (row.left || '') !== (row.right || '')
+  return (
+    <div
+      className={clsx(
+        'grid grid-cols-1 gap-1 border-t border-theme-border px-3 py-2.5 text-sm first:border-t-0 md:grid-cols-[7.5rem_minmax(0,1fr)_1.5rem_minmax(0,1fr)_5rem] md:items-center md:gap-3',
+        changed && 'bg-accent-muted/30',
+      )}
+    >
+      <div className="font-medium text-theme-text-tertiary md:text-theme-text-secondary">{row.label}</div>
+      <MetadataValue value={row.left} status={row.status} muted />
+      <div className="hidden text-center text-theme-text-tertiary md:block">-&gt;</div>
+      <MetadataValue value={row.right} status={row.status} />
+      <div className="pt-1 md:pt-0 md:text-right">
         <span className={clsx('badge-sm', changed ? SEVERITY_BADGE.info : SEVERITY_BADGE.neutral)}>
           {changed ? 'changed' : 'same'}
         </span>
       </div>
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5 text-xs">
-        <Tooltip content={left || '-'} wrapperClassName="min-w-0">
-          <span className={clsx(status && left ? ['badge-sm', getHelmStatusColor(left)] : ['min-w-0 truncate text-theme-text-secondary'])}>
-            {left || '-'}
-          </span>
-        </Tooltip>
-        <span className="text-theme-text-tertiary">-&gt;</span>
-        <Tooltip content={right || '-'} wrapperClassName="min-w-0">
-          <span className={clsx(status && right ? ['badge-sm', getHelmStatusColor(right)] : ['min-w-0 truncate text-theme-text-primary'])}>
-            {right || '-'}
-          </span>
-        </Tooltip>
-      </div>
     </div>
   )
 }
 
-function SignalCard({
+function MetadataValue({ value, status = false, muted = false }: { value?: string; status?: boolean; muted?: boolean }) {
+  if (status && value) {
+    return <span className={clsx('badge-sm w-fit', getHelmStatusColor(value))}>{value}</span>
+  }
+  return (
+    <div className={clsx('min-w-0 whitespace-normal break-words', muted ? 'text-theme-text-secondary' : 'text-theme-text-primary')}>
+      {value || '-'}
+    </div>
+  )
+}
+
+function SignalPill({
   label,
   value,
   tone,
   loading,
+  error,
   sectionId,
 }: {
   label: string
   value: string
   tone: DiffTone
   loading: boolean
+  error: unknown
   sectionId: string
 }) {
+  const displayTone: DiffTone = error ? 'warning' : loading ? 'neutral' : tone
+  const displayValue = error ? 'failed' : loading ? 'loading' : value
   return (
     <a
       href={`#${sectionId}`}
       onClick={(event) => scrollCompareSection(event, sectionId)}
-      className="rounded-lg border border-theme-border bg-theme-surface p-3 transition-colors hover:bg-theme-elevated"
+      className="inline-flex items-center gap-2 rounded-md border border-theme-border bg-theme-surface px-2.5 py-1.5 text-sm transition-colors hover:bg-theme-elevated"
     >
-      <div className="text-xs text-theme-text-tertiary">{label}</div>
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <span className={clsx('badge-sm', loading ? SEVERITY_BADGE.neutral : SEVERITY_BADGE[tone])}>
-          {loading ? 'loading' : value}
-        </span>
-      </div>
+      <span className="font-medium text-theme-text-secondary">{label}</span>
+      <span className={clsx('badge-sm', SEVERITY_BADGE[displayTone])}>{displayValue}</span>
     </a>
   )
 }
 
-function scrollCompareSection(event: MouseEvent<HTMLAnchorElement>, sectionId: string) {
+function scrollCompareSection(event: ReactMouseEvent<HTMLAnchorElement>, sectionId: string) {
   event.preventDefault()
   document.getElementById(sectionId)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   const nextUrl = `${window.location.pathname}${window.location.search}#${encodeURIComponent(sectionId)}`
@@ -623,6 +795,7 @@ function HookGroup({ title, tone, hooks }: { title: string; tone: DiffTone; hook
               <span className={clsx('badge-sm', getKindBadgeColor(hook.kind))}>{hook.kind}</span>
               <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{hook.name}</span>
               {hook.status && <span className={clsx('badge-sm', getHelmStatusColor(hook.status))}>{hook.status}</span>}
+              {hook.manifestChanged && <span className={clsx('badge-sm', SEVERITY_BADGE.info)}>manifest changed</span>}
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-theme-text-tertiary">
               {hook.namespace && <span>{hook.namespace}</span>}
@@ -737,6 +910,14 @@ function ModifiedResourceGroup({ changes }: { changes: ResourceDiff['modified'] 
 function ModifiedFieldRow({ field }: { field: ResourceDiff['modified'][number]['fields'][number] }) {
   const oldValue = formatDiffValue(field.oldValue, field.path)
   const newValue = formatDiffValue(field.newValue, field.path)
+  if (isGenericContentChange(field, oldValue, newValue)) {
+    return (
+      <div className="grid grid-cols-1 gap-1 rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs lg:grid-cols-[260px_minmax(0,1fr)]">
+        <code className="block min-w-0 font-mono text-theme-text-tertiary">contents</code>
+        <div className="min-w-0 text-theme-text-secondary">changed in rendered manifest</div>
+      </div>
+    )
+  }
   return (
     <div className="grid grid-cols-1 gap-1 rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs lg:grid-cols-[260px_minmax(0,1fr)]">
       <Tooltip content={field.path} wrapperClassName="min-w-0">
@@ -749,6 +930,14 @@ function ModifiedFieldRow({ field }: { field: ResourceDiff['modified'][number]['
       </Tooltip>
     </div>
   )
+}
+
+function isGenericContentChange(
+  field: ResourceDiff['modified'][number]['fields'][number],
+  oldValue: string,
+  newValue: string,
+): boolean {
+  return field.path === 'resource' && oldValue === 'changed' && newValue === 'changed'
 }
 
 function ResourceGroup({

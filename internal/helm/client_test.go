@@ -580,10 +580,12 @@ func TestDiffHooks(t *testing.T) {
 		{Name: "migrate", Namespace: "demo", Kind: "Job", Events: []string{"pre-upgrade"}, Weight: 0, Status: "Succeeded", StartedAt: &now, CompletedAt: &now},
 		{Name: "cleanup", Namespace: "demo", Kind: "Job", Events: []string{"post-delete"}, Weight: 0, Status: "Succeeded"},
 		{Name: "seed", Namespace: "demo", Kind: "Job", Events: []string{"post-install", "post-upgrade"}, DeletePolicies: []string{"hook-succeeded", "before-hook-creation"}, Weight: 0, Status: "Succeeded"},
+		{Name: "schema", Namespace: "demo", Kind: "Job", Events: []string{"pre-upgrade"}, Weight: 0, ManifestDigest: "old-body"},
 	}
 	right := []HelmHook{
 		{Name: "migrate", Namespace: "demo", Kind: "Job", Events: []string{"pre-upgrade"}, Weight: 10, Status: "Succeeded"},
 		{Name: "seed", Namespace: "demo", Kind: "Job", Events: []string{"post-upgrade", "post-install"}, DeletePolicies: []string{"before-hook-creation", "hook-succeeded"}, Weight: 0, Status: "Failed", StartedAt: &later, CompletedAt: &later},
+		{Name: "schema", Namespace: "demo", Kind: "Job", Events: []string{"pre-upgrade"}, Weight: 0, ManifestDigest: "new-body"},
 		{Name: "verify", Namespace: "demo", Kind: "Job", Events: []string{"post-upgrade"}, Weight: 0, Status: "Succeeded"},
 	}
 
@@ -595,8 +597,18 @@ func TestDiffHooks(t *testing.T) {
 	if len(added) != 1 || added[0].Name != "verify" {
 		t.Fatalf("added = %#v, want verify", added)
 	}
-	if len(modified) != 1 || modified[0].Name != "migrate" || modified[0].Weight != 10 {
+	if len(modified) != 2 {
+		t.Fatalf("modified = %#v, want migrate and schema", modified)
+	}
+	modifiedByName := map[string]HelmHook{}
+	for _, hook := range modified {
+		modifiedByName[hook.Name] = hook
+	}
+	if modifiedByName["migrate"].Weight != 10 {
 		t.Fatalf("modified = %#v, want updated migrate hook", modified)
+	}
+	if modifiedByName["schema"].ManifestDigest != "new-body" || !modifiedByName["schema"].ManifestChanged {
+		t.Fatalf("modified = %#v, want hook body change", modified)
 	}
 	if len(unchanged) != 1 || unchanged[0].Name != "seed" {
 		t.Fatalf("unchanged = %#v, want seed", unchanged)

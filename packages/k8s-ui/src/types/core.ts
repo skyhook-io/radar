@@ -648,6 +648,7 @@ export interface HelmHook {
   namespace?: string
   kind: string
   path?: string
+  manifestChanged?: boolean
   events: string[]
   weight: number
   status?: string
