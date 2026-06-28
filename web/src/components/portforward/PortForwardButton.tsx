@@ -2,8 +2,9 @@ import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Plug, ChevronDown, Loader2, Globe, Monitor, Copy, Check, X, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useAvailablePorts, useClusterInfo, AvailablePort } from '../../api/client'
+import { useAvailablePorts, AvailablePort } from '../../api/client'
 import { useStartPortForward } from './PortForwardManager'
+import { useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
 import { validatePort } from '@skyhook-io/k8s-ui/utils/validators'
 import { Tooltip } from '../ui/Tooltip'
 
@@ -183,12 +184,16 @@ export function PortForwardButton({
   const [listenAddress, setListenAddress] = useState<'127.0.0.1' | '0.0.0.0'>('127.0.0.1')
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  const { data: clusterInfo } = useClusterInfo()
+  const isLocal = useIsLocalDeployment()
   const { data, isLoading } = useAvailablePorts(type, namespace, name)
   const startPortForward = useStartPortForward()
 
   const ports = data?.ports || []
-  const inCluster = clusterInfo?.inCluster ?? false
+  // Decide copy-command vs live forward from the SAME deployment signal that
+  // gates whether the button shows at all — so the two can't disagree (and we
+  // don't race a separate /cluster-info fetch that defaults to "not in-cluster").
+  // Cloud runs in-cluster too, so anything not-local uses the copy command.
+  const inCluster = !isLocal
   const isPending = !inCluster && startPortForward.isPending
   const resourceName = type === 'service' ? (serviceName || name) : name
 
@@ -375,11 +380,15 @@ export function PortForwardInlineButton({
   protocol = 'TCP',
   disabled = false,
 }: PortForwardInlineButtonProps) {
-  const { data: clusterInfo } = useClusterInfo()
+  const isLocal = useIsLocalDeployment()
   const startPortForward = useStartPortForward()
   const [dialogInfo, setDialogInfo] = useState<KubectlDialogInfo | null>(null)
 
-  const inCluster = clusterInfo?.inCluster ?? false
+  // Decide copy-command vs live forward from the SAME deployment signal that
+  // gates whether the button shows at all — so the two can't disagree (and we
+  // don't race a separate /cluster-info fetch that defaults to "not in-cluster").
+  // Cloud runs in-cluster too, so anything not-local uses the copy command.
+  const inCluster = !isLocal
   const isPending = !inCluster && startPortForward.isPending
 
   const handleClick = (e: React.MouseEvent) => {
