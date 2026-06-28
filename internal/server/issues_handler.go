@@ -195,12 +195,12 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// RelatedIssues matches by canonical Kind (EqualFold). Resolve the route's
-	// plural name to the canonical Kind via discovery — this covers every kind
-	// (jobs, cronjobs, nodes, pvcs, hpas, pdbs, CRD plurals), not just the audit
-	// set the static map knows, so a direct API consumer passing a plural can't
-	// silently get an empty result. Fall back to the static map, then the raw
-	// value, when discovery can't resolve it.
-	kind := apiResourceToKind(rawKind)
+	// plural name to the canonical Kind via discovery — covers every kind + CRDs
+	// (jobs, cronjobs, nodes, pvcs, hpas, pdbs, …), so a direct API consumer
+	// passing a plural can't silently get an empty result. Canonical (PascalCase)
+	// input passes straight through the rawKind fallback when discovery can't
+	// resolve it (e.g. not yet connected).
+	kind := rawKind
 	if disc := k8s.GetResourceDiscovery(); disc != nil {
 		if gvr, ok := disc.GetGVRWithGroup(rawKind, group); ok {
 			if canonical := disc.GetKindForGVR(gvr); canonical != "" {
