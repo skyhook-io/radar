@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // flatPod builds a flat pod issue the way Compose would — classified +
@@ -310,5 +311,23 @@ func TestRelatedIssues_UncappedMembers(t *testing.T) {
 	}
 	if got := RelatedIssues(p, nil, "apps", "Deployment", "prod", "web"); len(got) != 1 {
 		t.Errorf("owning Deployment = %d related issues, want 1", len(got))
+	}
+}
+
+func TestGroupIssuesPreservesDiagnosticContext(t *testing.T) {
+	flat := []Issue{{
+		ID: "pvc-x", Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "data",
+		Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical,
+		DiagnosticContext: &issuesapi.DiagnosticContext{
+			Role:  issuesapi.DiagnosticRoleCandidate,
+			Facts: []issuesapi.DiagnosticFact{{Type: "pvc_blast_radius", Confidence: issuesapi.ConfidenceHigh}},
+		},
+	}}
+	grouped := GroupIssues(flat)
+	if len(grouped) != 1 || grouped[0].DiagnosticContext == nil || len(grouped[0].DiagnosticContext.Facts) != 1 {
+		t.Fatalf("GroupIssues must carry the representative's diagnostic_context through the regroup (the per-resource RelatedIssues path depends on it), got %+v", grouped[0].DiagnosticContext)
+	}
+	if grouped[0].DiagnosticContext.Facts[0].Confidence != issuesapi.ConfidenceHigh {
+		t.Fatalf("confidence lost in regroup")
 	}
 }
