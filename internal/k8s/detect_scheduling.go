@@ -828,6 +828,11 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 		c := latest[key]
 		obj := c.ev.InvolvedObject
 		ageDur := now.Sub(eventFirstTime(c.ev))
+		// FailedCreate fires on the controller that couldn't create the pod —
+		// usually the ReplicaSet. Stamp its owning Deployment so the admission row
+		// rolls up to the same subject as the workload_degraded/rollout_stalled
+		// rollup it explains; otherwise the rollup-over-cause fold misses the match.
+		ownerGroup, ownerKind, ownerName := workloadControllerOwner(cache, obj.Kind, obj.Namespace, obj.Name)
 		problems = append(problems, Detection{
 			Kind:            obj.Kind,
 			Namespace:       obj.Namespace,
@@ -839,6 +844,9 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 			AgeSeconds:      int64(ageDur.Seconds()),
 			Duration:        FormatAge(ageDur),
 			DurationSeconds: int64(ageDur.Seconds()),
+			OwnerGroup:      ownerGroup,
+			OwnerKind:       ownerKind,
+			OwnerName:       ownerName,
 		})
 	}
 	seen := make(map[string]bool, len(problems))
@@ -968,6 +976,9 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 					continue
 				}
 				if p, ok := admissionConditionProblem("ReplicaSet", rs.Namespace, rs.Name, c.Message, c.LastTransitionTime.Time, now); ok {
+					// Roll the ReplicaSet's admission failure up to its Deployment,
+					// the same subject as the rollout_stalled rollup it explains.
+					p.OwnerGroup, p.OwnerKind, p.OwnerName = controllerTopOwner(rs.OwnerReferences)
 					out = append(out, p)
 					seen[key] = true
 					break

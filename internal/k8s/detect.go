@@ -999,6 +999,12 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				continue
 			}
 			ageDur := now.Sub(job.CreationTimestamp.Time)
+			// Stamp the controller owner (a CronJob, when this Job is one of its
+			// runs) so a failed Job rolls up to the same subject its pods do — the
+			// pods resolve their top owner to the CronJob, so job_failed must too
+			// or the rollup-over-pod-cause fold misses the match. A standalone Job
+			// has no controller owner and stays its own subject.
+			jobOwnerGroup, jobOwnerKind, jobOwnerName := controllerTopOwner(job.OwnerReferences)
 			if cond := failedJobCondition(job); cond != nil {
 				durDur := ageDur
 				if !cond.LastTransitionTime.IsZero() {
@@ -1020,6 +1026,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(durDur),
 					DurationSeconds: int64(durDur.Seconds()),
+					OwnerGroup:      jobOwnerGroup,
+					OwnerKind:       jobOwnerKind,
+					OwnerName:       jobOwnerName,
 				})
 				continue
 			}
@@ -1036,6 +1045,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						AgeSeconds:      int64(ageDur.Seconds()),
 						Duration:        FormatAge(ageDur),
 						DurationSeconds: int64(ageDur.Seconds()),
+						OwnerGroup:      jobOwnerGroup,
+						OwnerKind:       jobOwnerKind,
+						OwnerName:       jobOwnerName,
 					})
 				}
 			}

@@ -264,11 +264,17 @@ var missingConfigCausesWaiting = map[string]bool{
 // row and always wins. Keyed on the resource itself (not the owner subject):
 // both rows describe the same Pod/HPA, emitted by different detectors.
 //
-// The surviving root is promoted to the highest severity among the symptoms it
-// absorbs, so folding a symptom can never lower the displayed incident severity
-// (the same floor dedupeWorkloadDegradedOverChild enforces, here preserved by
-// promotion rather than a keep-the-parent gate, since here the root is the
-// survivor).
+// Two evidence properties of the dropped symptom are donated to the surviving
+// root so the fold loses nothing the operator needs:
+//   - Severity: the root is promoted to the highest severity among the symptoms
+//     it absorbs, so folding can never lower the displayed incident severity (the
+//     floor dedupeWorkloadDegradedOverChild enforces, here via promotion since the
+//     root is the survivor). A by-name root is stamped from resource age and has
+//     no timing of its own.
+//   - Timing: the root inherits the symptom's issue_timing when it has none. The
+//     symptom (e.g. an HPA cannot-scale derived from the ScalingActive condition)
+//     can carry the only accurate "started after the resource was healthy" signal;
+//     disagreeing symptoms donate nothing, mirroring the rollup pass.
 func structuralRootOverSymptom(in []Issue, isRoot, isSymptom func(Issue) bool) []Issue {
 	rootExists := map[string]bool{}
 	for _, i := range in {
@@ -280,12 +286,23 @@ func structuralRootOverSymptom(in []Issue, isRoot, isSymptom func(Issue) bool) [
 		return in
 	}
 	foldedSev := map[string]int{}
+	foldedTiming := map[string]string{}
+	foldedBasis := map[string]string{}
+	timingConflict := map[string]bool{}
 	out := in[:0]
 	for _, i := range in {
 		if isSymptom(i) && rootExists[issueResourceKey(i)] {
 			k := issueResourceKey(i)
 			if r := SeverityRank(i.Severity); r > foldedSev[k] {
 				foldedSev[k] = r
+			}
+			if i.IssueTiming != "" && !timingConflict[k] {
+				if prev, ok := foldedTiming[k]; ok && prev != i.IssueTiming {
+					timingConflict[k] = true
+				} else if !ok {
+					foldedTiming[k] = i.IssueTiming
+					foldedBasis[k] = i.IssueTimingBasis
+				}
 			}
 			continue
 		}
@@ -296,8 +313,15 @@ func structuralRootOverSymptom(in []Issue, isRoot, isSymptom func(Issue) bool) [
 		if !isRoot(*i) {
 			continue
 		}
-		if r, ok := foldedSev[issueResourceKey(*i)]; ok && r > SeverityRank(i.Severity) {
+		k := issueResourceKey(*i)
+		if r, ok := foldedSev[k]; ok && r > SeverityRank(i.Severity) {
 			i.Severity = severityForRank(r)
+		}
+		if i.IssueTiming == "" && !timingConflict[k] {
+			if t := foldedTiming[k]; t != "" {
+				i.IssueTiming = t
+				i.IssueTimingBasis = foldedBasis[k]
+			}
 		}
 	}
 	return out
@@ -314,8 +338,12 @@ func dedupeContainerWaitingOverMissingRef(in []Issue) []Issue {
 				i.Category == issuesapi.CategoryMissingConfigRef && missingConfigCausesWaiting[i.Reason]
 		},
 		func(i Issue) bool {
+			// Only the config-stage waiting reason is caused by a missing
+			// CM/Secret/SA — a multi-container pod can carry a different waiting
+			// reason (RunContainerError, ContainerCreating) from an unrelated
+			// container, which must not be folded away.
 			return i.Source == SourceProblem && i.Kind == "Pod" &&
-				i.Category == issuesapi.CategoryContainerWaiting
+				i.Category == issuesapi.CategoryContainerWaiting && i.Reason == "CreateContainerConfigError"
 		})
 }
 

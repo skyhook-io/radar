@@ -509,6 +509,44 @@ func controllerOwnerRef(refs []metav1.OwnerReference) *metav1.OwnerReference {
 	return nil
 }
 
+// controllerTopOwner returns the (group, kind, name) of a resource's controller
+// owner, or empty strings when it has none (it is its own top owner). Used to
+// stamp the owning controller onto workload-level Detections — a failed Job's
+// CronJob, a ReplicaSet's Deployment — so their issues roll up to the same
+// subject their pods do.
+func controllerTopOwner(refs []metav1.OwnerReference) (group, kind, name string) {
+	if o := controllerOwnerRef(refs); o != nil {
+		return schema.FromAPIVersionAndKind(o.APIVersion, o.Kind).Group, o.Kind, o.Name
+	}
+	return "", "", ""
+}
+
+// workloadControllerOwner resolves a workload object's controller owner from the
+// cache by kind+namespace+name (ReplicaSet→Deployment, Job→CronJob). For callers
+// that only hold an object reference (e.g. an Event's InvolvedObject) rather than
+// the object itself. Returns empty strings when there is no controller owner or
+// the object can't be resolved.
+func workloadControllerOwner(cache *ResourceCache, kind, namespace, name string) (group, ownerKind, ownerName string) {
+	if cache == nil {
+		return "", "", ""
+	}
+	switch kind {
+	case "ReplicaSet":
+		if l := cache.ReplicaSets(); l != nil {
+			if rs, err := l.ReplicaSets(namespace).Get(name); err == nil && rs != nil {
+				return controllerTopOwner(rs.OwnerReferences)
+			}
+		}
+	case "Job":
+		if l := cache.Jobs(); l != nil {
+			if job, err := l.Jobs(namespace).Get(name); err == nil && job != nil {
+				return controllerTopOwner(job.OwnerReferences)
+			}
+		}
+	}
+	return "", "", ""
+}
+
 func topOwnerForPod(pod *corev1.Pod) *TopOwnerInfo {
 	for _, ref := range pod.OwnerReferences {
 		if ref.Controller != nil && *ref.Controller {
