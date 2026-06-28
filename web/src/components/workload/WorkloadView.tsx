@@ -424,7 +424,12 @@ export function WorkloadView({
   // Live Operational Issues for this resource. Fetched here (not inside the lead
   // render-prop) so the count also gates `hasOperationalIssues` — which tells the
   // renderers to suppress their own status-derived problems and avoid duplicates.
-  const { data: liveIssues } = useResourceIssues(resource?.kind || kindProp, rest.group || resourceGroup, namespace, name)
+  // Keyed on the STABLE prop kind+group (same inputs as the resource fetch above),
+  // NOT the manifest-derived ones: deriving kind/group from the loaded resource
+  // would flip the query key when the manifest arrives, drop liveIssues, and flash
+  // the renderer banners. The backend canonicalizes a plural kind via discovery,
+  // so passing the route's plural kindProp resolves correctly.
+  const { data: liveIssues } = useResourceIssues(kindProp, rest.group, namespace, name)
   const { onCompareTo, onCompareAcrossClusters, picker: comparePicker } = useCompareLauncher({
     kind: kindProp,
     namespace,
