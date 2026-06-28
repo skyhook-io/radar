@@ -213,11 +213,14 @@ interface WorkloadViewProps {
   renderOverviewExtra?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render content at the TOP of the overview tab, above the renderer (e.g. live
    *  Operational Issues). Optional + additive — consumers that don't pass it are
-   *  unaffected. */
+   *  unaffected. Only rendered when `hasOperationalIssues` is true: the lead
+   *  component returns null when empty, but its padded wrapper can't tell, so
+   *  gating on the flag avoids an empty top gap on healthy resources. */
   renderOverviewLead?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** When true, renderers suppress their own status-derived problem displays
    *  because a dedicated Operational Issues section is shown (the host fetched
-   *  live issues for this resource). Avoids showing the same failure twice. */
+   *  live issues for this resource). Avoids showing the same failure twice.
+   *  Also gates the `renderOverviewLead` wrapper (see above). */
   hasOperationalIssues?: boolean
 
   // ── Duplicate ────────────────────────────────────────────────────────────
@@ -665,7 +668,7 @@ export function WorkloadView({
             />
           ) : (
             <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues}>
-              {renderOverviewLead && (
+              {renderOverviewLead && hasOperationalIssues && (
                 <div className="px-4 pt-4">
                   {renderOverviewLead({ kind, namespace, name })}
                 </div>
@@ -820,7 +823,7 @@ export function WorkloadView({
               eventsError={overviewEventsError}
               updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
-              leadContent={renderOverviewLead && renderOverviewLead({ kind, namespace, name })}
+              leadContent={hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined}
             />
         )}
         {effectiveTab === 'topology' && (
