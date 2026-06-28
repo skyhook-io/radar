@@ -1935,10 +1935,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// resource so ManagedBy synthesis disambiguates by group (avoids
 		// kind/plural collisions like Knative Service vs core Service).
 		var relationships *topology.Relationships
-		if cachedTopo := s.broadcaster.GetCachedTopology(); cachedTopo != nil {
+		if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
 			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
 				k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), nil)
+				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
 		}
 
 		s.writeJSON(w, topology.ResourceWithRelationships{
@@ -2150,10 +2150,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// resource so ManagedBy synthesis uses the authoritative object instead
 	// of a group-blind kind/name lookup.
 	var relationships *topology.Relationships
-	if cachedTopo := s.broadcaster.GetCachedTopology(); cachedTopo != nil {
+	if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
 		relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
 			k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-			k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), nil)
+			k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
 	}
 
 	// Return resource with relationships

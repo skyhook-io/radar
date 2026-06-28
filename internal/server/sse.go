@@ -47,6 +47,11 @@ type SSEBroadcaster struct {
 	cachedTopology      *topology.Topology
 	cachedTopologyMu    sync.RWMutex
 	cachedTopologyDirty bool // true when changes occurred but topology not yet rebuilt
+	// cachedTopologyIndex is the inverted edge index over cachedTopology, built
+	// lazily on first relationship lookup and reused across drawer opens until
+	// the topology is replaced. Nil whenever cachedTopology changes (set under
+	// cachedTopologyMu alongside it). Guarded by cachedTopologyMu.
+	cachedTopologyIndex *topology.RelationshipsIndex
 
 	// warmupDone is closed when deferred informers finish syncing. During warmup,
 	// topology broadcasts use longer debounce and skip the expensive full-topology
@@ -294,6 +299,7 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 		// Clear cached topology and dirty flag for the old context
 		b.cachedTopologyMu.Lock()
 		b.cachedTopology = nil
+		b.cachedTopologyIndex = nil
 		b.cachedTopologyDirty = false
 		b.cachedTopologyMu.Unlock()
 
@@ -870,6 +876,39 @@ func (b *SSEBroadcaster) GetCachedTopology() *topology.Topology {
 	return topo
 }
 
+// GetCachedTopologyWithIndex returns the cached topology together with its
+// inverted edge index, building (and memoizing) the index on first use after a
+// topology refresh. Relationship lookups that pass the index skip the O(edges)
+// scan that edgesForNode/walkTopmostOwner otherwise do per call, so reusing one
+// index across drawer opens turns repeated O(E) work into O(in-degree) per lookup.
+//
+// The returned (topo, index) pair is always consistent: the index is built from
+// the exact topo returned. When the topology is replaced between the two reads,
+// a fresh index is built for the returned topo without polluting the cache.
+func (b *SSEBroadcaster) GetCachedTopologyWithIndex() (*topology.Topology, *topology.RelationshipsIndex) {
+	topo := b.GetCachedTopology() // handles lazy rebuild when dirty
+	if topo == nil {
+		return nil, nil
+	}
+
+	b.cachedTopologyMu.RLock()
+	idx := b.cachedTopologyIndex
+	current := b.cachedTopology
+	b.cachedTopologyMu.RUnlock()
+	if idx != nil && current == topo {
+		return topo, idx
+	}
+
+	// Build outside the lock — IndexByResource is O(edges).
+	built := topology.IndexByResource(topo)
+	b.cachedTopologyMu.Lock()
+	if b.cachedTopology == topo {
+		b.cachedTopologyIndex = built
+	}
+	b.cachedTopologyMu.Unlock()
+	return topo, built
+}
+
 // rebuildCachedTopology rebuilds the full topology for relationship lookups.
 // Returns true if the rebuild succeeded, false otherwise.
 func (b *SSEBroadcaster) rebuildCachedTopology() bool {
@@ -891,6 +930,7 @@ func (b *SSEBroadcaster) updateCachedTopology(topo *topology.Topology) {
 	b.cachedTopologyMu.Lock()
 	defer b.cachedTopologyMu.Unlock()
 	b.cachedTopology = topo
+	b.cachedTopologyIndex = nil // rebuilt lazily on next relationship lookup
 	b.cachedTopologyDirty = false
 }
 
