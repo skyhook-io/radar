@@ -724,8 +724,27 @@ func (b *SSEBroadcaster) heartbeat() {
 	}
 }
 
+// premarshalEventData serializes event.Data to json.RawMessage once, before
+// fan-out, so the per-client SSE writer emits the same bytes to every connected
+// client instead of reflection-marshaling the identical payload N times (once
+// per tab). Frames whose Data is already json.RawMessage (the topology path)
+// pass through untouched. A marshal error leaves Data as-is — the per-client
+// writer then surfaces it via its existing error path.
+func premarshalEventData(event SSEEvent) SSEEvent {
+	if _, ok := event.Data.(json.RawMessage); ok {
+		return event
+	}
+	data, err := json.Marshal(event.Data)
+	if err != nil {
+		return event
+	}
+	event.Data = json.RawMessage(data)
+	return event
+}
+
 // Broadcast sends an event to all connected clients
 func (b *SSEBroadcaster) Broadcast(event SSEEvent) {
+	event = premarshalEventData(event)
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -752,6 +771,7 @@ func (b *SSEBroadcaster) Broadcast(event SSEEvent) {
 // The complete fix carries the exact GVR on ResourceChange and authorizes each
 // client via the cached per-user canRead — tracked separately.
 func (b *SSEBroadcaster) broadcastResourceChange(event SSEEvent, namespace, kind string) {
+	event = premarshalEventData(event)
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -961,7 +981,18 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 			if !ok {
 				return
 			}
-			data, err := json.Marshal(event.Data)
+			// Frames are pre-marshaled to json.RawMessage once before fan-out
+			// (premarshalEventData), so for the common case write the shared
+			// bytes directly — re-marshaling here would re-serialize the same
+			// payload for every connected client. Fall back to marshaling for
+			// any frame that wasn't pre-marshaled.
+			var data []byte
+			var err error
+			if raw, ok := event.Data.(json.RawMessage); ok {
+				data = raw
+			} else {
+				data, err = json.Marshal(event.Data)
+			}
 			if err != nil {
 				// Log the error and notify client instead of silently dropping
 				log.Printf("SSE: failed to marshal event %q: %v", event.Event, err)
