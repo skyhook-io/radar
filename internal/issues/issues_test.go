@@ -1612,9 +1612,11 @@ func TestPVCBlastRadiusContext(t *testing.T) {
 	// Unrelated crashloop on the same pod → never PVC-attributable.
 	crashing := Issue{ID: "crash-2", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical}
 	// A DIFFERENT pod that also mounts the PVC but is unschedulable for CPU →
-	// must NOT be attributed to the PVC (no volume evidence in its message).
+	// must NOT be attributed to the PVC. Its message even contains the bare claim
+	// name "data" (unquoted) to guard against a substring false-match — only the
+	// QUOTED name or volume-binding phrasing counts as evidence.
 	cpuBlocked := Issue{ID: "unsched-2", Kind: "Pod", Namespace: "prod", Name: "db-1", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical,
-		Message: "0/3 nodes are available: 3 Insufficient cpu"}
+		Message: "0/3 nodes are available: 3 Insufficient cpu for the data tier"}
 
 	p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": {
 		{Kind: "Pod", Namespace: "prod", Name: "db-0"},

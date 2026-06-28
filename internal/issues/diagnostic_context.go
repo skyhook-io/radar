@@ -257,9 +257,16 @@ func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[i
 	if len(pods) == 0 {
 		return
 	}
+	// Keep each linked issue paired with the pod it came from, so ranking and
+	// capping act on the pair — otherwise the displayed pods (Refs) and the
+	// displayed issues (RelatedIssues) are sorted/capped independently and the
+	// two lists diverge past the cap.
+	type linked struct {
+		ref Ref
+		rel issuesapi.IssueRef
+	}
 	seenIDs := make(map[string]bool)
-	var related []issuesapi.IssueRef
-	var refs []Ref
+	var links []linked
 	for _, pod := range pods {
 		key := resourceKey(pod.Group, pod.Kind, pod.Namespace, pod.Name)
 		for _, flatIssue := range flatByResource[key] {
@@ -273,24 +280,31 @@ func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[i
 			if !ok {
 				grouped = flatIssue
 			}
-			related = append(related, issueRef(grouped))
-			refs = append(refs, pod)
+			links = append(links, linked{ref: pod, rel: issueRef(grouped)})
 			seenIDs[flatIssue.ID] = true
 		}
 	}
-	if len(related) == 0 {
+	if len(links) == 0 {
 		return
 	}
-	// Rank by severity BEFORE capping, so the cap keeps the worst issues, not the
-	// first pods in iteration order.
-	sortIssueRefs(related)
-	sortRefs(refs)
+	// Rank by the linked issue's severity BEFORE capping, so the cap keeps the
+	// worst issues (and their pods), not whatever came first in iteration order.
+	sort.SliceStable(links, func(i, j int) bool { return lessIssueRef(links[i].rel, links[j].rel) })
+	if len(links) > maxDiagnosticIssueRefs {
+		links = links[:maxDiagnosticIssueRefs]
+	}
+	related := make([]issuesapi.IssueRef, 0, len(links))
+	refs := make([]Ref, 0, len(links))
+	for _, l := range links {
+		related = append(related, l.rel)
+		refs = append(refs, l.ref)
+	}
 	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
 		Type:          factType,
 		Message:       message,
 		Confidence:    conf,
 		Refs:          limitRefs(dedupeRefs(refs), maxDiagnosticRefs),
-		RelatedIssues: limitIssueRefs(related, maxDiagnosticIssueRefs),
+		RelatedIssues: related,
 	})
 }
 
@@ -339,7 +353,10 @@ func addPVCBlastRadiusContext(b *diagnosticContextBuilder, pvc Issue, pp pvcBlas
 // mounts the claim isn't attributed to it.
 func symptomMentionsVolume(symptom Issue, pvcName string) bool {
 	text := strings.ToLower(symptom.Message + " " + symptom.Reason)
-	if pvcName != "" && strings.Contains(text, strings.ToLower(pvcName)) {
+	// Match the PVC name only when QUOTED, the way Kubernetes prints it
+	// (persistentvolumeclaim "name" not found). A bare substring match would fire
+	// on any text that happens to contain a short claim name like "data".
+	if pvcName != "" && strings.Contains(text, `"`+strings.ToLower(pvcName)+`"`) {
 		return true
 	}
 	return strings.Contains(text, "persistentvolumeclaim") || strings.Contains(text, "unbound") || strings.Contains(text, "volume node affinity")
@@ -497,23 +514,27 @@ func dedupeRefs(refs []Ref) []Ref {
 	return out
 }
 
+// lessIssueRef orders issue refs worst-first: severity desc, then a stable total
+// order over the identity fields.
+func lessIssueRef(a, b issuesapi.IssueRef) bool {
+	if a.Severity != b.Severity {
+		return SeverityRank(a.Severity) > SeverityRank(b.Severity)
+	}
+	if a.Ref.Namespace != b.Ref.Namespace {
+		return a.Ref.Namespace < b.Ref.Namespace
+	}
+	if a.Ref.Name != b.Ref.Name {
+		return a.Ref.Name < b.Ref.Name
+	}
+	if a.Ref.Kind != b.Ref.Kind {
+		return a.Ref.Kind < b.Ref.Kind
+	}
+	if a.Ref.Group != b.Ref.Group {
+		return a.Ref.Group < b.Ref.Group
+	}
+	return a.Reason < b.Reason
+}
+
 func sortIssueRefs(refs []issuesapi.IssueRef) {
-	sort.SliceStable(refs, func(i, j int) bool {
-		if refs[i].Severity != refs[j].Severity {
-			return SeverityRank(refs[i].Severity) > SeverityRank(refs[j].Severity)
-		}
-		if refs[i].Ref.Namespace != refs[j].Ref.Namespace {
-			return refs[i].Ref.Namespace < refs[j].Ref.Namespace
-		}
-		if refs[i].Ref.Name != refs[j].Ref.Name {
-			return refs[i].Ref.Name < refs[j].Ref.Name
-		}
-		if refs[i].Ref.Kind != refs[j].Ref.Kind {
-			return refs[i].Ref.Kind < refs[j].Ref.Kind
-		}
-		if refs[i].Ref.Group != refs[j].Ref.Group {
-			return refs[i].Ref.Group < refs[j].Ref.Group
-		}
-		return refs[i].Reason < refs[j].Reason
-	})
+	sort.SliceStable(refs, func(i, j int) bool { return lessIssueRef(refs[i], refs[j]) })
 }
