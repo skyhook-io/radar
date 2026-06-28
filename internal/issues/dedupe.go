@@ -48,30 +48,48 @@ func subjectRef(i Issue) Ref {
 
 // childCategories are the specific, root-cause symptoms that, when present for a
 // subject, make the parent workload-level rollup (workload_degraded /
-// rollout_stalled) redundant. A degraded Deployment with crashlooping pods is
-// ONE incident — the crashloop — not two; keeping both is the inverse of
-// "50 pods = 1 row".
+// rollout_stalled / job_failed) redundant. A degraded Deployment with
+// crashlooping pods is ONE incident — the crashloop — not two; keeping both is
+// the inverse of "50 pods = 1 row".
+//
+// The admission-rejection categories belong here because a workload that can't
+// create its pods reports ReplicaFailure → the rollup, while the scheduling
+// source names the actual rejection (no Pod exists yet). They are emitted on the
+// same owner subject via the same path as quota_exceeded, so they fold the same way.
 var childCategories = map[issuesapi.Category]bool{
-	issuesapi.CategoryCrashLoop:           true,
-	issuesapi.CategoryHighRestart:         true,
-	issuesapi.CategoryImagePullFailed:     true,
-	issuesapi.CategoryOOMKilled:           true,
-	issuesapi.CategoryContainerWaiting:    true,
-	issuesapi.CategoryInitContainerFailed: true,
-	issuesapi.CategoryLivenessProbeFail:   true,
-	issuesapi.CategoryReadinessFailed:     true,
-	issuesapi.CategoryUnschedulable:       true,
-	issuesapi.CategoryQuotaExceeded:       true,
-	issuesapi.CategoryMissingConfigRef:    true,
-	issuesapi.CategoryVolumeMountFailed:   true,
-	issuesapi.CategoryPVCPending:          true,
+	issuesapi.CategoryCrashLoop:                true,
+	issuesapi.CategoryHighRestart:              true,
+	issuesapi.CategoryImagePullFailed:          true,
+	issuesapi.CategoryOOMKilled:                true,
+	issuesapi.CategoryContainerWaiting:         true,
+	issuesapi.CategoryInitContainerFailed:      true,
+	issuesapi.CategoryLivenessProbeFail:        true,
+	issuesapi.CategoryReadinessFailed:          true,
+	issuesapi.CategoryUnschedulable:            true,
+	issuesapi.CategoryQuotaExceeded:            true,
+	issuesapi.CategoryAdmissionWebhookBlocking: true,
+	issuesapi.CategoryPodSecurityViolation:     true,
+	issuesapi.CategoryRBACForbidden:            true,
+	issuesapi.CategoryMissingConfigRef:         true,
+	issuesapi.CategoryVolumeMountFailed:        true,
+	issuesapi.CategoryPVCPending:               true,
 }
 
 // parentRollupCategories are the workload-level summaries that should be
 // suppressed when a more-specific child symptom exists for the same subject.
+//
+// job_failed is a rollup too: a failed Job's pods resolve their top owner to the
+// Job, so a BackoffLimitExceeded Job whose pods crashloop/OOM/can't-pull is one
+// incident — the pod cause is the root. A DeadlineExceeded job (the controller
+// killed a slow-but-not-crashing pod) has no qualifying child, so the severity
+// gate keeps its row. cronjob_failed is deliberately NOT here: "stale" /
+// "never-scheduled" means no Jobs were produced at all — an orthogonal failure
+// with no symptom children to fold into (a failed child Job surfaces as
+// job_failed on that Job, which already resolves to the CronJob subject).
 var parentRollupCategories = map[issuesapi.Category]bool{
 	issuesapi.CategoryWorkloadDegraded: true,
 	issuesapi.CategoryRolloutStalled:   true,
+	issuesapi.CategoryJobFailed:        true,
 }
 
 // dedupeWorkloadDegradedOverChild drops the parent workload rollup row
