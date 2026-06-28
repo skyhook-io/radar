@@ -303,6 +303,21 @@ func TestDetectMissingRefs(t *testing.T) {
 			t.Errorf("reason %q: severity = %q, want %q: %+v", p.Reason, p.Severity, wantSev, p)
 		}
 	}
+
+	// Every dangling-ref finding must carry a structured cause + next-step action
+	// (the operator-facing fix). Pin it so a new ref detector can't regress to a
+	// bare message with no remediation.
+	for _, p := range problems {
+		if !hasPrefix(p.Reason, "Missing") {
+			continue
+		}
+		if p.Cause == "" {
+			t.Errorf("missing-ref %q (%s/%s) has empty Cause", p.Reason, p.Kind, p.Name)
+		}
+		if p.Action == "" {
+			t.Errorf("missing-ref %q (%s/%s) has empty Action", p.Reason, p.Kind, p.Name)
+		}
+	}
 }
 
 func TestScaleTargetLookupResultDistinguishesErrors(t *testing.T) {
@@ -895,4 +910,28 @@ func hasSubstr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestRefDiagHelpers(t *testing.T) {
+	r, m, c, a := cmRefDiag("volume", "app-config", "prod")
+	if r != "Missing ConfigMap" {
+		t.Errorf("reason = %q, want Missing ConfigMap", r)
+	}
+	if !hasSubstr(m, "app-config") || !hasSubstr(m, "volume") {
+		t.Errorf("message should name the site + ConfigMap: %q", m)
+	}
+	if !hasSubstr(c, "app-config") {
+		t.Errorf("cause should name the ConfigMap: %q", c)
+	}
+	if !hasSubstr(a, "app-config") || !hasSubstr(a, "prod") {
+		t.Errorf("action should name target + namespace: %q", a)
+	}
+
+	r2, _, _, a2 := secretRefDiag("envFrom", "db-creds", "prod")
+	if r2 != "Missing Secret" {
+		t.Errorf("reason = %q, want Missing Secret", r2)
+	}
+	if !hasSubstr(a2, "db-creds") || !hasSubstr(a2, "prod") {
+		t.Errorf("secret action should name target + namespace: %q", a2)
+	}
 }

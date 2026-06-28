@@ -52,10 +52,12 @@ func detectRolloutMissingServices(cache *ResourceCache, dynamicCache *DynamicRes
 			if !checked || exists {
 				continue
 			}
-			out = append(out, missingRefProblemSev("Rollout", "argoproj.io", ro.GetNamespace(), ro.GetName(),
+			out = append(out, withFix(missingRefProblemSev("Rollout", "argoproj.io", ro.GetNamespace(), ro.GetName(),
 				"warning", "Missing Rollout Service",
-				fmt.Sprintf("%s references Service %q which does not exist; the Rollout controller cannot update traffic through that Service", ref.path, ref.name),
-				age))
+				fmt.Sprintf("%s references Service %q which does not exist", ref.path, ref.name),
+				age),
+				fmt.Sprintf("Service %q doesn't exist, so the Rollout controller can't shift traffic during a rollout.", ref.name),
+				fmt.Sprintf("Create Service %q in namespace %q, or point the Rollout's service ref at an existing Service.", ref.name, ro.GetNamespace())))
 		}
 	}
 	return out
@@ -113,10 +115,12 @@ func detectKEDAMissingScaleTargets(cache *ResourceCache, dynamicCache *DynamicRe
 			continue
 		}
 		age := now.Sub(so.GetCreationTimestamp().Time)
-		out = append(out, missingRefProblemSev("ScaledObject", "keda.sh", so.GetNamespace(), so.GetName(),
+		out = append(out, withFix(missingRefProblemSev("ScaledObject", "keda.sh", so.GetNamespace(), so.GetName(),
 			"warning", "Missing scaleTargetRef",
-			fmt.Sprintf("spec.scaleTargetRef references %s %q which does not exist; KEDA cannot scale the target", ref.kind, ref.name),
-			age))
+			fmt.Sprintf("spec.scaleTargetRef references %s %q which does not exist", ref.kind, ref.name),
+			age),
+			fmt.Sprintf("%s %q doesn't exist, so KEDA has nothing to scale.", ref.kind, ref.name),
+			fmt.Sprintf("Create %s %q in namespace %q, or point spec.scaleTargetRef at an existing workload.", ref.kind, ref.name, so.GetNamespace())))
 	}
 	return out
 }
