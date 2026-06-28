@@ -13,9 +13,12 @@ import { categoryLabel } from './severity'
  *
  * Header mirrors the queue: the plain `categoryLabel` is the operator-facing
  * headline and the raw `reason` rides alongside as a muted signal (so the K8s
- * jargon is available but not the lead). Body shows the plain `cause`, then the
- * raw `message` as de-emphasized evidence (the precise ref/path/host that `cause`
- * summarizes), then the `Next step`.
+ * jargon is available but not the lead). Body is intentionally just the plain
+ * `cause` (which names the offending object) + the `Next step` — the diagnosis
+ * and the fix. The raw `message`/evidence stays in the queue + MCP where the
+ * locator detail is wanted; inline it mostly restated the cause or the category,
+ * so it's omitted to keep the card scannable. (`message` is the body fallback
+ * only for categories that don't yet emit a `cause`.)
  */
 export function ResourceIssuesSection({ issues }: { issues: Issue[] | undefined }) {
   if (!issues || issues.length === 0) return null
@@ -23,9 +26,6 @@ export function ResourceIssuesSection({ issues }: { issues: Issue[] | undefined 
     <Section title={`Operational Issues (${issues.length})`} icon={AlertTriangle} defaultExpanded>
       <div className="space-y-3">
         {issues.map((issue) => {
-          // Show the raw message as "evidence" only when a plain cause leads and
-          // the message adds detail beyond it — otherwise the message IS the body.
-          const showEvidence = !!issue.cause && !!issue.message && issue.message !== issue.cause
           return (
             <div key={issue.id} className="card-inner">
               <div className="mb-1 flex min-w-0 items-baseline gap-2">
@@ -44,12 +44,6 @@ export function ResourceIssuesSection({ issues }: { issues: Issue[] | undefined 
                 <p className="text-sm leading-relaxed text-theme-text-secondary">{issue.cause}</p>
               ) : issue.message ? (
                 <p className="text-sm leading-relaxed text-theme-text-secondary">{issue.message}</p>
-              ) : null}
-              {showEvidence ? (
-                <p className="mt-1 text-xs leading-relaxed text-theme-text-tertiary">
-                  <span className="font-medium">Evidence: </span>
-                  {issue.message}
-                </p>
               ) : null}
               {issue.action ? (
                 <p className="mt-1 text-sm leading-relaxed text-theme-text-secondary">
