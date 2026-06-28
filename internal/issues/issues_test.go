@@ -1542,19 +1542,16 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 }
 
 func TestNodeBlastRadiusContext(t *testing.T) {
-	now := time.Now()
-	node := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "NotReady", FirstSeen: now}
-	crash := Issue{ID: "crash-1", Kind: "Pod", Namespace: "prod", Name: "web-abc", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical, FirstSeen: now}
-	pull := Issue{ID: "pull-1", Kind: "Pod", Namespace: "prod", Name: "api-xyz", Category: issuesapi.CategoryImagePullFailed, Severity: SeverityWarning, FirstSeen: now}
-	old := Issue{ID: "old-1", Kind: "Pod", Namespace: "prod", Name: "old-pod", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical, FirstSeen: now.Add(-time.Hour)}
+	node := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "NotReady"}
+	crash := Issue{ID: "crash-1", Kind: "Pod", Namespace: "prod", Name: "web-abc", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical}
+	pull := Issue{ID: "pull-1", Kind: "Pod", Namespace: "prod", Name: "api-xyz", Category: issuesapi.CategoryImagePullFailed, Severity: SeverityWarning}
 
 	p := &fakeProvider{podsOnNode: map[string][]Ref{"node-1": {
 		{Kind: "Pod", Namespace: "prod", Name: "web-abc"},
 		{Kind: "Pod", Namespace: "prod", Name: "api-xyz"},
-		{Kind: "Pod", Namespace: "prod", Name: "old-pod"},
 	}}}
 
-	out := enrichDiagnosticContext([]Issue{node}, []Issue{node, crash, pull, old}, nil, p)
+	out := enrichDiagnosticContext([]Issue{node}, []Issue{node, crash, pull}, nil, p)
 	ctx := out[0].DiagnosticContext
 	if ctx == nil {
 		t.Fatal("node issue got no diagnostic context")
@@ -1574,8 +1571,10 @@ func TestNodeBlastRadiusContext(t *testing.T) {
 	if ctx.Role != issuesapi.DiagnosticRoleCandidate {
 		t.Errorf("role = %q, want candidate", ctx.Role)
 	}
+	// The node-attributable crashloop links; the node-independent image-pull
+	// failure must NOT be attributed to the node.
 	if len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Category != issuesapi.CategoryCrashLoop || fact.RelatedIssues[0].Ref.Name != "web-abc" {
-		t.Fatalf("expected only the on-node crashloop linked (not the node-independent image pull, not the pre-existing crashloop), got %+v", fact.RelatedIssues)
+		t.Fatalf("expected only the on-node crashloop linked (not the node-independent image pull), got %+v", fact.RelatedIssues)
 	}
 }
 
@@ -1590,14 +1589,22 @@ func TestNodeBlastRadiusContext_NoPodsNoFact(t *testing.T) {
 
 func TestPVCBlastRadiusContext(t *testing.T) {
 	pvc := Issue{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical, Reason: "Pending"}
-	blocked := Issue{ID: "unsched-1", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical}
+	// Unschedulable WITH volume-binding evidence in the message → linked.
+	blocked := Issue{ID: "unsched-1", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical,
+		Message: "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims"}
+	// Unrelated crashloop on the same pod → never PVC-attributable.
 	crashing := Issue{ID: "crash-2", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical}
+	// A DIFFERENT pod that also mounts the PVC but is unschedulable for CPU →
+	// must NOT be attributed to the PVC (no volume evidence in its message).
+	cpuBlocked := Issue{ID: "unsched-2", Kind: "Pod", Namespace: "prod", Name: "db-1", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical,
+		Message: "0/3 nodes are available: 3 Insufficient cpu"}
 
 	p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": {
 		{Kind: "Pod", Namespace: "prod", Name: "db-0"},
+		{Kind: "Pod", Namespace: "prod", Name: "db-1"},
 	}}}
 
-	out := enrichDiagnosticContext([]Issue{pvc}, []Issue{pvc, blocked, crashing}, nil, p)
+	out := enrichDiagnosticContext([]Issue{pvc}, []Issue{pvc, blocked, crashing, cpuBlocked}, nil, p)
 	ctx := out[0].DiagnosticContext
 	if ctx == nil {
 		t.Fatal("PVC issue got no diagnostic context")
@@ -1614,9 +1621,9 @@ func TestPVCBlastRadiusContext(t *testing.T) {
 	if fact.Confidence != issuesapi.ConfidenceHigh {
 		t.Errorf("confidence = %q, want high (declared claimName edge)", fact.Confidence)
 	}
-	// Only the storage-attributable unschedulable links; the unrelated crashloop
-	// on the same pod must not be attributed to the PVC.
-	if len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Category != issuesapi.CategoryUnschedulable {
-		t.Fatalf("expected only the unschedulable linked, got %+v", fact.RelatedIssues)
+	// Only the volume-evidenced unschedulable links; the unrelated crashloop and
+	// the CPU-unschedulable pod (no volume evidence) must not be attributed.
+	if len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != "db-0" || fact.RelatedIssues[0].Category != issuesapi.CategoryUnschedulable {
+		t.Fatalf("expected only the volume-evidenced unschedulable (db-0) linked, got %+v", fact.RelatedIssues)
 	}
 }

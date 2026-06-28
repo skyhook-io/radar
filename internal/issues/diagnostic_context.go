@@ -4,17 +4,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
-
-// nodeEvictionGrace is the slack allowed when deciding whether a pod symptom
-// predates its node going NotReady. The node-lifecycle controller waits ~5m
-// (default tolerationSeconds) before evicting pods off a NotReady node, so a
-// symptom can legitimately appear up to that long after — or just before — the
-// node's recorded transition and still be node-caused.
-const nodeEvictionGrace = 5 * time.Minute
 
 const (
 	maxDiagnosticRefs       = 5
@@ -272,17 +264,13 @@ func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[i
 			related = append(related, issueRef(grouped))
 			refs = append(refs, pod)
 			seenIDs[flatIssue.ID] = true
-			if len(related) >= maxDiagnosticIssueRefs {
-				break
-			}
-		}
-		if len(related) >= maxDiagnosticIssueRefs {
-			break
 		}
 	}
 	if len(related) == 0 {
 		return
 	}
+	// Rank by severity BEFORE capping, so the cap keeps the worst issues, not the
+	// first pods in iteration order.
 	sortIssueRefs(related)
 	sortRefs(refs)
 	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
@@ -298,36 +286,46 @@ func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[i
 // node-attributable issues of the pods running on it (spec.nodeName). The node is
 // the candidate root; the pod issues are its blast radius. Confidence is medium,
 // not high: spec.nodeName proves a pod is ON the node, not that the node caused
-// its problem — so node-independent categories are excluded up front, and a pod
-// whose issue clearly predates the node going bad (a pre-existing app failure
-// that merely happens to sit here) is filtered out.
+// its problem. Correctness rests on the category filter (node-independent causes
+// like image pull / config refs are excluded) plus the honest medium label — NOT
+// on a timestamp guard, because pod-issue onset isn't reliably recorded (FirstSeen
+// tracks pod age, not failure onset), so any such guard would drop legitimate
+// long-running pods newly hit by the node while still admitting unrelated ones.
 func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
 	linkBlastRadius(b, np.PodsOnNode(node.Name), nodeAttributableCategories, flatByResource, groupedByID,
 		factNodeBlastRadius, issuesapi.ConfidenceMedium,
-		"Pods on this node have active issues — the node may be the cause.",
-		func(symptom Issue) bool { return !symptomPredatesNode(symptom, node) })
+		"Pods on this node have active issues — the node may be the cause.", nil)
 }
 
 // addPVCBlastRadiusContext links a broken PVC (pending / lost / resize-failed) to
-// the storage-attributable issues of the pods that mount it. The edge is the
-// declared claimName, so confidence is high; an unrelated crashloop on a mounting
-// pod is excluded by the category filter.
+// the storage issues of the pods that mount it. The mount edge is the declared
+// claimName, so a volume_mount_failed is unambiguously this PVC's fault (high
+// confidence). An unschedulable / container-waiting pod that mounts the claim is
+// only linked when its own message confirms a volume cause — a pod can mount the
+// PVC yet be unschedulable for CPU or waiting on unrelated config, which must not
+// be attributed to the PVC.
 func addPVCBlastRadiusContext(b *diagnosticContextBuilder, pvc Issue, pp pvcBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
 	linkBlastRadius(b, pp.PodsMountingPVC(pvc.Namespace, pvc.Name), pvcAttributableCategories, flatByResource, groupedByID,
 		factPVCBlastRadius, issuesapi.ConfidenceHigh,
-		"Pods mounting this PVC are blocked by it.", nil)
+		"Pods mounting this PVC are blocked by it.",
+		func(symptom Issue) bool {
+			if symptom.Category == issuesapi.CategoryVolumeMountFailed {
+				return true
+			}
+			return symptomMentionsVolume(symptom, pvc.Name)
+		})
 }
 
-// symptomPredatesNode reports whether a pod symptom clearly began before the node
-// went bad — a pre-existing, independent failure that merely shares the node, not
-// one the node caused. Only applied when both timestamps are reliable; the node's
-// eviction grace (~5m) is allowed as slack so a symptom appearing just before the
-// node's recorded transition isn't wrongly excluded.
-func symptomPredatesNode(symptom, node Issue) bool {
-	if symptom.FirstSeen.IsZero() || node.FirstSeen.IsZero() {
-		return false
+// symptomMentionsVolume reports whether a scheduling / waiting symptom's text
+// confirms a volume cause — it names the PVC, or carries the scheduler's
+// volume-binding language — so an unrelated CPU-unschedulable pod that merely
+// mounts the claim isn't attributed to it.
+func symptomMentionsVolume(symptom Issue, pvcName string) bool {
+	text := strings.ToLower(symptom.Message + " " + symptom.Reason)
+	if pvcName != "" && strings.Contains(text, strings.ToLower(pvcName)) {
+		return true
 	}
-	return symptom.FirstSeen.Before(node.FirstSeen.Add(-nodeEvictionGrace))
+	return strings.Contains(text, "persistentvolumeclaim") || strings.Contains(text, "unbound") || strings.Contains(text, "volume node affinity")
 }
 
 func isServiceBackendContextCandidate(issue Issue) bool {
