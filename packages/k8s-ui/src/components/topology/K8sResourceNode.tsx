@@ -13,6 +13,7 @@ import { workloadHue } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
 import { midTruncate } from '../../utils/format'
 import { Tooltip } from '../ui/Tooltip'
+import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 
 // Get actionable tooltip content for health issues
 function getIssueTooltip(issue: string | undefined): React.ReactNode {
@@ -385,6 +386,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const auditDanger = typeof nodeData.auditDanger === 'number' ? nodeData.auditDanger : 0
   const auditWarning = typeof nodeData.auditWarning === 'number' ? nodeData.auditWarning : 0
   const auditTotal = auditDanger + auditWarning
+  const auditMessages = Array.isArray(nodeData.auditMessages) ? (nodeData.auditMessages as AuditBadgeMessage[]) : []
   // Workload tint (application graph): a node owned by exactly one workload
   // carries that workload's hue. Only on healthy/unknown cards — degraded/
   // unhealthy already own the card background for health, which must win.
@@ -517,7 +519,9 @@ export const K8sResourceNode = memo(function K8sResourceNode({
               )}
               {auditTotal > 0 && (
                 <Tooltip
-                  content={`${auditTotal} audit ${auditTotal === 1 ? 'finding' : 'findings'}${auditDanger > 0 ? ` · ${auditDanger} danger` : ''} — open to review`}
+                  content={auditMessages.length > 0
+                    ? <AuditBadgeTooltip messages={auditMessages} clickHint={false} />
+                    : `${auditTotal} audit ${auditTotal === 1 ? 'finding' : 'findings'}${auditDanger > 0 ? ` · ${auditDanger} danger` : ''}`}
                   position="right"
                 >
                   <TriangleAlert className={clsx('w-3 h-3 cursor-help', auditDanger > 0 ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning)} />

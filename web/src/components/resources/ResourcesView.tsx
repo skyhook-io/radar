@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
+import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, getBasename } from '../../api/config'
 import { useAPIResources } from '../../api/apiResources'
 import { initNavigationMap } from '@skyhook-io/k8s-ui'
@@ -159,15 +160,19 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const auditBadges = useMemo(() => {
     if (!selectedKind || !audit.data?.findings) return undefined
     const wantGroup = isSelectedCrd ? '' : selectedKind.group
-    const map: Record<string, { danger: number; warning: number }> = {}
+    const map: Record<string, { danger: number; warning: number; messages: AuditBadgeMessage[] }> = {}
     for (const f of audit.data.findings) {
       if (f.kind !== selectedKindCanonical || (f.group ?? '') !== wantGroup) continue
       if (!isBadgeWorthy(f, audit.data.checks)) continue
       const k = `${f.namespace || ''}/${f.name}`
-      const cur = map[k] ?? { danger: 0, warning: 0 }
+      const cur = map[k] ?? { danger: 0, warning: 0, messages: [] }
       if (f.severity === 'danger') cur.danger++
       else if (f.severity === 'warning') cur.warning++
+      cur.messages.push({ severity: f.severity, message: f.message })
       map[k] = cur
+    }
+    for (const cur of Object.values(map)) {
+      cur.messages.sort((a, b) => (a.severity === 'danger' ? 0 : 1) - (b.severity === 'danger' ? 0 : 1))
     }
     return map
   }, [audit.data?.findings, audit.data?.checks, selectedKind, selectedKindCanonical, isSelectedCrd])

@@ -134,6 +134,7 @@ import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
 import { Tooltip } from '../ui/Tooltip'
+import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 // CRD-specific cell components (extracted)
 import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
 import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
@@ -1802,7 +1803,7 @@ interface ResourcesViewData {
   certExpiryError?: boolean
   // Cluster Audit findings for the listed kind, keyed by "namespace/name" (the
   // list shows one kind at a time, so ns/name is unambiguous). Host-injected.
-  auditBadges?: Record<string, { danger: number; warning: number }>
+  auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
 }
@@ -1856,7 +1857,7 @@ interface ResourcesViewProps {
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
   certExpiryError?: boolean
   // Cluster Audit findings for the selected kind, keyed by "namespace/name".
-  auditBadges?: Record<string, { danger: number; warning: number }>
+  auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
   // Pinned kinds
   pinned?: Array<{ name: string; kind: string; group: string }>
   togglePin?: (kind: { name: string; kind: string; group: string }) => void
@@ -5195,7 +5196,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
         </Tooltip>
         <CopyNameButton name={meta.name} />
         {auditTotal > 0 && audit && (
-          <Tooltip content={`${auditTotal} audit ${auditTotal === 1 ? 'finding' : 'findings'}${audit.danger > 0 ? ` · ${audit.danger} danger` : ''} — open to review`}>
+          <Tooltip content={audit.messages && audit.messages.length > 0
+            ? <AuditBadgeTooltip messages={audit.messages} />
+            : `${auditTotal} audit ${auditTotal === 1 ? 'finding' : 'findings'}${audit.danger > 0 ? ` · ${audit.danger} danger` : ''}`}>
             <span className={clsx('shrink-0 inline-flex items-center gap-0.5 text-[10px] font-medium cursor-help', audit.danger > 0 ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning)}>
               <AlertTriangle className="w-3 h-3" />
               {auditTotal}

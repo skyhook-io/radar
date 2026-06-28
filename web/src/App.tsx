@@ -1282,7 +1282,7 @@ function AppInner() {
       nodes: filteredTopology.nodes.map(node => {
         const counts = auditSeverityMap.get(node.data.auditKey as string)
         if (!counts) return node
-        return { ...node, data: { ...node.data, auditDanger: counts.danger, auditWarning: counts.warning } }
+        return { ...node, data: { ...node.data, auditDanger: counts.danger, auditWarning: counts.warning, auditMessages: counts.messages } }
       }),
     }
   }, [filteredTopology, auditSeverityMap])

@@ -1,8 +1,16 @@
 import { resourceKey, type AuditFinding, type CheckMeta } from '@skyhook-io/k8s-ui'
 
+export interface AuditBadgeMessage {
+  severity: string
+  message: string
+}
+
 export interface AuditSeverityCounts {
   danger: number
   warning: number
+  /** The finding messages behind the counts, danger-first, for inline tooltips.
+   *  Lets a badge say WHAT is wrong on hover instead of just a count. */
+  messages: AuditBadgeMessage[]
 }
 
 /**
@@ -32,10 +40,14 @@ export function buildAuditSeverityMap(
   for (const f of findings ?? []) {
     if (!isBadgeWorthy(f, checks)) continue
     const key = resourceKey(f.group ?? '', f.kind, f.namespace ?? '', f.name)
-    const cur = map.get(key) ?? { danger: 0, warning: 0 }
+    const cur = map.get(key) ?? { danger: 0, warning: 0, messages: [] }
     if (f.severity === 'danger') cur.danger++
     else if (f.severity === 'warning') cur.warning++
+    cur.messages.push({ severity: f.severity, message: f.message })
     map.set(key, cur)
+  }
+  for (const cur of map.values()) {
+    cur.messages.sort((a, b) => (a.severity === 'danger' ? 0 : 1) - (b.severity === 'danger' ? 0 : 1))
   }
   return map
 }
