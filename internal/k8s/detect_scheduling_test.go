@@ -346,3 +346,63 @@ func TestParseTaintPayload(t *testing.T) {
 		}
 	}
 }
+
+func TestUnschedulableAction(t *testing.T) {
+	cases := []struct {
+		name    string
+		reasons []SchedulingReason
+		want    string // substring; "" means expect empty (caller falls back)
+	}{
+		{"empty falls back", nil, ""},
+		{"other falls back", []SchedulingReason{{Class: SchedOther}}, ""},
+		{"insufficient cpu names the resource", []SchedulingReason{{Class: SchedInsufficientResource, Resource: "cpu", NodeCount: 3}}, "lower the pod's cpu request"},
+		{"max-pods is not a request problem", []SchedulingReason{{Class: SchedInsufficientResource, Resource: "pods", NodeCount: 3}}, "max-pods"},
+		{"untolerated taint names the key", []SchedulingReason{{Class: SchedUntoleratedTaint, TaintKey: "dedicated", NodeCount: 2}}, `taint "dedicated"`},
+		{"volume binding distinct from node affinity", []SchedulingReason{{Class: SchedVolumeBinding, NodeCount: 1}}, "StorageClass/provisioner"},
+		{"dominant reason wins by node count", []SchedulingReason{
+			{Class: SchedUntoleratedTaint, TaintKey: "a", NodeCount: 1},
+			{Class: SchedInsufficientResource, Resource: "memory", NodeCount: 5},
+		}, "memory"},
+		{"multiple classes are acknowledged", []SchedulingReason{
+			{Class: SchedInsufficientResource, Resource: "memory", NodeCount: 5},
+			{Class: SchedUntoleratedTaint, TaintKey: "a", NodeCount: 1},
+		}, "More than one constraint"},
+		{"high-count Other doesn't bury a low-count actionable reason", []SchedulingReason{
+			{Class: SchedOther, NodeCount: 9},
+			{Class: SchedVolumeBinding, NodeCount: 1},
+		}, "StorageClass/provisioner"},
+	}
+	for _, c := range cases {
+		got := unschedulableAction(c.reasons)
+		if c.want == "" {
+			if got != "" {
+				t.Errorf("%s: want empty, got %q", c.name, got)
+			}
+			continue
+		}
+		if !hasSubstr(got, c.want) {
+			t.Errorf("%s: action %q missing %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestDiagnoseUnschedulableSharesOneParse(t *testing.T) {
+	// Message + Action must come from the same verdict: a taint verdict yields a
+	// taint message AND a taint action, never a generic fallback action.
+	msg, action := diagnoseUnschedulable(&corev1.Pod{},
+		"0/3 nodes are available: 3 node(s) had untolerated taint {dedicated: gpu}.", nil)
+	if !hasSubstr(action, "toleration") {
+		t.Errorf("taint verdict should yield a taint action, got %q", action)
+	}
+	if action == genericUnschedulableAction {
+		t.Errorf("expected a targeted action, got the generic fallback")
+	}
+	if msg == "" {
+		t.Errorf("expected a non-empty message")
+	}
+	// Unparseable verdict → generic fallback action, still non-empty.
+	_, fallback := diagnoseUnschedulable(&corev1.Pod{}, "something the parser doesn't recognize", nil)
+	if fallback != genericUnschedulableAction {
+		t.Errorf("unrecognized verdict should fall back to generic action, got %q", fallback)
+	}
+}

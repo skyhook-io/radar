@@ -973,7 +973,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:        "critical",
 				Reason:          "Failed",
 				Message:         pv.Status.Message,
-				Action:          "Check the volume's status message and the storage backend / CSI driver, then recycle or recreate the PV.",
+				Action:          "Check the volume's status message and the storage backend / CSI driver events; replace the PV only after confirming the data and its reclaim policy.",
 				Age:             FormatAge(ageDur),
 				AgeSeconds:      int64(ageDur.Seconds()),
 				Duration:        FormatAge(ageDur),

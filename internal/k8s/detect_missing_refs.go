@@ -317,7 +317,7 @@ func detectPodMissingRefs(cache *ResourceCache, namespace string, now time.Time)
 				if _, err := saLister.ServiceAccounts(p.Namespace).Get(sa); err != nil {
 					emit("Missing ServiceAccount",
 						fmt.Sprintf("references ServiceAccount %q which does not exist", sa),
-						fmt.Sprintf("ServiceAccount %q doesn't exist, so the pod can't be admitted.", sa),
+						fmt.Sprintf("ServiceAccount %q doesn't exist, so the pod can't start (or restart) with its expected identity/token.", sa),
 						fmt.Sprintf("Create ServiceAccount %q in namespace %q, or remove spec.serviceAccountName.", sa, p.Namespace))
 				}
 			}

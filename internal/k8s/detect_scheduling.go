@@ -464,14 +464,15 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 				dur = now.Sub(cond.LastTransitionTime.Time)
 			}
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
+			schedMessage, schedAction := diagnoseUnschedulable(pod, cond.Message, nodes)
 			problems = append(problems, Detection{
 				Kind:            "Pod",
 				Namespace:       pod.Namespace,
 				Name:            pod.Name,
 				Severity:        schedulingSeverity(dur),
 				Reason:          "Unschedulable",
-				Action:          "Read the scheduler message above — free or add capacity, or fix the pod's nodeSelector / affinity / tolerations so it matches an available node.",
-				Message:         describeUnschedulable(pod, cond.Message, nodes),
+				Action:          schedAction,
+				Message:         schedMessage,
 				Age:             FormatAge(ageDur),
 				AgeSeconds:      int64(ageDur.Seconds()),
 				Duration:        FormatAge(dur),
@@ -512,13 +513,32 @@ func schedulingSeverity(d time.Duration) string {
 	}
 }
 
+// genericUnschedulableAction is the fallback next step when no reason class is
+// confidently actionable (Other / unparseable verdict).
+const genericUnschedulableAction = "Use the scheduler message to decide: free or add capacity, or fix the pod's nodeSelector / affinity / tolerations so it matches an available node."
+
+// diagnoseUnschedulable parses the scheduler verdict ONCE and returns both the
+// operator-facing message and a targeted next-step action, so the two can't be
+// derived from different parses. Pure over its inputs.
+func diagnoseUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) (message, action string) {
+	total, reasons := parseSchedulerMessage(schedMsg)
+	message = renderUnschedulableMessage(pod, schedMsg, total, reasons, nodes)
+	action = unschedulableAction(reasons)
+	if action == "" {
+		action = genericUnschedulableAction
+	}
+	return message, action
+}
+
 // describeUnschedulable builds the operator-facing message: lead with the
 // resolved offending constraint (the value the bare scheduler verdict hides)
 // when we can name it, then summarize the scheduler's per-predicate counts.
-// Pure over its inputs (pod spec + verdict string + node facts).
 func describeUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) string {
-	total, reasons := parseSchedulerMessage(schedMsg)
+	msg, _ := diagnoseUnschedulable(pod, schedMsg, nodes)
+	return msg
+}
 
+func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts) string {
 	var parts []string
 	resolvedAffinity := false
 	for _, r := range reasons {
@@ -544,6 +564,76 @@ func describeUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) 
 		msg = fmt.Sprintf("%s (0/%d nodes available)", msg, total)
 	}
 	return msg
+}
+
+// unschedulableAction turns the parsed scheduler reasons into a concrete next
+// step. Leads with the dominant reason (the one that rejected the most nodes —
+// "start here"), but when more than one class blocks placement it says so rather
+// than implying the single fix is sufficient. Returns "" when nothing is
+// confidently actionable so the caller can fall back to the generic action.
+func unschedulableAction(reasons []SchedulingReason) string {
+	// Lead with the dominant reason that is ALSO actionable — picking the
+	// highest-NodeCount overall would fall back to generic when an unparsed
+	// (SchedOther) clause happens to reject the most nodes, even though a
+	// smaller, actionable clause (e.g. VolumeBinding) is present.
+	base := ""
+	bestCount := -1
+	distinct := map[SchedReasonClass]bool{}
+	for _, r := range reasons {
+		distinct[r.Class] = true
+		if a := actionForSchedClass(r); a != "" && r.NodeCount > bestCount {
+			base, bestCount = a, r.NodeCount
+		}
+	}
+	if base == "" {
+		return ""
+	}
+	if len(distinct) > 1 {
+		base += " More than one constraint blocks scheduling — the message lists them all."
+	}
+	return base
+}
+
+// actionForSchedClass maps one reason class to its targeted next step. Text is
+// deliberately non-absolute (the verdict counts a candidate set, not provably
+// every node) and class-accurate (max-pods isn't fixed by lowering CPU; node-
+// role taints aren't broken nodes; volume binding ≠ volume node-affinity).
+func actionForSchedClass(r SchedulingReason) string {
+	switch r.Class {
+	case SchedInsufficientResource:
+		switch {
+		case r.Resource == "pods":
+			return "Candidate nodes have hit their max-pods limit — add nodes (or raise the kubelet's max-pods), or pack fewer pods per node."
+		case r.Resource != "":
+			return fmt.Sprintf("Candidate nodes don't have enough %s — lower the pod's %s request, free capacity, or add nodes.", r.Resource, r.Resource)
+		default:
+			return "Candidate nodes don't have enough capacity — lower the pod's requests, free capacity, or add nodes."
+		}
+	case SchedUntoleratedTaint:
+		if r.TaintKey != "" {
+			return fmt.Sprintf("Add a toleration for taint %q, or remove it from the target nodes.", r.TaintKey)
+		}
+		return "Add a toleration for the blocking taint(s), or remove them from the target nodes."
+	case SchedNodeAffinitySelector:
+		return "No node matches the pod's nodeSelector/affinity — relax it, or label (or add) a matching node."
+	case SchedPodAffinity:
+		return "The pod-affinity rule can't be satisfied — make sure matching pods run in the required topology, or relax the rule."
+	case SchedPodAntiAffinity:
+		return "The pod-anti-affinity rule can't be satisfied — relax it, or add nodes in the required topology."
+	case SchedTopologySpread:
+		return "The topology-spread constraint can't be satisfied — relax it, or add capacity in the under-filled topology."
+	case SchedVolumeBinding:
+		return "The pod's volume can't be provisioned or bound — check the PVC, its StorageClass/provisioner, and storage quota."
+	case SchedVolumeNodeAffinity:
+		return "The pod's bound volume can't be placed on any candidate node (its zone/topology doesn't match where the pod can run) — align the pod's placement with the volume's topology, free capacity there, or use a volume that can move."
+	case SchedVolumeCount:
+		return "Candidate nodes have hit their volume-attachment limit — attach fewer volumes per node, or add nodes."
+	case SchedNoPorts:
+		return "The requested hostPort is taken on every candidate node — change the port, or free it."
+	case SchedNodeUnschedulable:
+		return "Candidate nodes are unavailable (cordoned, not-ready, or reserved by a taint) — uncordon/recover a node, or tolerate the reservation taint."
+	}
+	return ""
 }
 
 // summarizeReasons renders the parsed predicate counts into a compact phrase.
