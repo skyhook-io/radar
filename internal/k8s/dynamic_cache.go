@@ -89,6 +89,8 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 					change.Operation,
 					oldObj,
 					obj,
+					change.Diff,
+					true,
 				)
 			},
 			OnDrop: func(kind, ns, name, reason, op string) {

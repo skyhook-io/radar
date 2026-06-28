@@ -175,7 +175,7 @@ func InitResourceCache(ctx context.Context) error {
 				}
 
 				// Record to timeline store
-				recordToTimelineStore(change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj)
+				recordToTimelineStore(change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
 			},
 
 			OnEventChange: func(obj any, op string) {
@@ -368,8 +368,13 @@ func getGeneration(obj any) int64 {
 	return m.GetGeneration()
 }
 
-// recordToTimelineStore records an event to the timeline store
-func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj any) {
+// recordToTimelineStore records a resource change to the timeline. When the
+// caller has already computed the update diff (the cache layer does, before
+// firing OnChange), it passes it via precomputedDiff + diffPrecomputed=true so
+// we don't recompute the identical diff on the hottest per-update path. Callers
+// without a precomputed diff (tests, non-cache paths) pass nil + false and the
+// diff is computed here as before.
+func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
 	store := timeline.GetStore()
 	if store == nil {
 		return
@@ -413,7 +418,13 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 
 	var diff *timeline.DiffInfo
 	if op == "update" && oldObj != nil && newObj != nil {
-		if localDiff := ComputeDiff(kind, oldObj, newObj); localDiff != nil {
+		// Reuse the cache layer's already-computed diff on the hot path; only
+		// recompute for callers (tests / non-cache) that didn't precompute it.
+		localDiff := precomputedDiff
+		if !diffPrecomputed {
+			localDiff = ComputeDiff(kind, oldObj, newObj)
+		}
+		if localDiff != nil {
 			diff = &timeline.DiffInfo{
 				Fields:  make([]timeline.FieldChange, len(localDiff.Fields)),
 				Summary: localDiff.Summary,

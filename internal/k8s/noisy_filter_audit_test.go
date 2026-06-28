@@ -173,7 +173,7 @@ func TestRecordToTimelineStore_SyncAddMarksResourceSeen(t *testing.T) {
 		},
 	}
 
-	recordToTimelineStore("Pod", "default", "p", "pod-uid", "add", nil, pod)
+	recordToTimelineStore("Pod", "default", "p", "pod-uid", "add", nil, pod, nil, false)
 
 	store := timeline.GetStore()
 	if store == nil {
