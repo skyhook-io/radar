@@ -255,8 +255,9 @@ func registerTools(server *mcp.Server) {
 		Description: "Get detailed information about a specific Helm release including owned resources " +
 			"and their status. The namespace parameter is the Helm storage namespace: use storageNamespace " +
 			"from list_helm_releases when present, otherwise use namespace. The default response includes " +
-			"storageNamespace, managedByFluxHelmRelease, resource health, and lastOperation when Helm history " +
+			"storageNamespace, managedByFluxHelmRelease, resource health, operationInsight, and lastOperation when Helm history " +
 			"indicates a current failed upgrade, rollback-after-failure, rollback, or stuck pending operation, " +
+				"where operationInsight gives active-vs-recovered state, the likely resource to inspect, and suggested revision comparison when available, " +
 			"plus hooks and failed/running hookDiagnostics with live Job/Pod/Event/redacted-log evidence when available. " +
 			"Optionally include values, revision history, operation history, manifest diff, values diff, " +
 			"notes diff, or rendered-resource set diff between revisions using the 'include' parameter. " +

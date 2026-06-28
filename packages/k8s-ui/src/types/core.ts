@@ -597,6 +597,22 @@ export interface HelmOperation {
   updated?: string
 }
 
+export type HelmOperationInsightState = 'active' | 'recovered'
+
+export interface HelmSuggestedCompare {
+  revision1: number
+  revision2: number
+  reason?: string
+}
+
+export interface HelmOperationInsight {
+  state: HelmOperationInsightState
+  primaryResource?: HelmOwnedResource
+  relatedResources?: HelmOwnedResource[]
+  signalCount?: number
+  suggestedCompare?: HelmSuggestedCompare
+}
+
 export interface HelmReleaseDetail {
   name: string
   namespace: string
@@ -621,6 +637,7 @@ export interface HelmReleaseDetail {
   dependencies?: ChartDependency[]
   lastOperation?: HelmOperation
   operations?: HelmOperation[]
+  operationInsight?: HelmOperationInsight
   // When set, this release was installed by Flux's helm-controller — see
   // HelmRelease.managedByFluxHelmRelease for context. Format: "namespace/name".
   managedByFluxHelmRelease?: string

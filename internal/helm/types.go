@@ -50,28 +50,43 @@ type HelmReleaseDetail struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	// Empty means Helm stores release metadata in Namespace.
-	StorageNamespace string            `json:"storageNamespace,omitempty"`
-	Chart            string            `json:"chart"`
-	ChartVersion     string            `json:"chartVersion"`
-	AppVersion       string            `json:"appVersion"`
-	Status           string            `json:"status"`
-	Revision         int               `json:"revision"`
-	Updated          time.Time         `json:"updated"`
-	Description      string            `json:"description"`
-	Notes            string            `json:"notes"`
-	History          []HelmRevision    `json:"history"`
-	Resources        []OwnedResource   `json:"resources"`
-	ResourceHealth   string            `json:"resourceHealth,omitempty"`
-	HealthIssue      string            `json:"healthIssue,omitempty"`
-	HealthSummary    string            `json:"healthSummary,omitempty"`
-	Hooks            []HelmHook        `json:"hooks,omitempty"`
-	HookDiagnostics  []HookDiagnostic  `json:"hookDiagnostics,omitempty"`
-	Readme           string            `json:"readme,omitempty"`
-	Dependencies     []ChartDependency `json:"dependencies,omitempty"`
-	LastOperation    *HelmOperation    `json:"lastOperation,omitempty"`
-	Operations       []HelmOperation   `json:"operations,omitempty"`
+	StorageNamespace string                `json:"storageNamespace,omitempty"`
+	Chart            string                `json:"chart"`
+	ChartVersion     string                `json:"chartVersion"`
+	AppVersion       string                `json:"appVersion"`
+	Status           string                `json:"status"`
+	Revision         int                   `json:"revision"`
+	Updated          time.Time             `json:"updated"`
+	Description      string                `json:"description"`
+	Notes            string                `json:"notes"`
+	History          []HelmRevision        `json:"history"`
+	Resources        []OwnedResource       `json:"resources"`
+	ResourceHealth   string                `json:"resourceHealth,omitempty"`
+	HealthIssue      string                `json:"healthIssue,omitempty"`
+	HealthSummary    string                `json:"healthSummary,omitempty"`
+	Hooks            []HelmHook            `json:"hooks,omitempty"`
+	HookDiagnostics  []HookDiagnostic      `json:"hookDiagnostics,omitempty"`
+	Readme           string                `json:"readme,omitempty"`
+	Dependencies     []ChartDependency     `json:"dependencies,omitempty"`
+	LastOperation    *HelmOperation        `json:"lastOperation,omitempty"`
+	Operations       []HelmOperation       `json:"operations,omitempty"`
+	OperationInsight *HelmOperationInsight `json:"operationInsight,omitempty"`
 	// See HelmRelease.ManagedByFluxHelmRelease.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
+}
+
+type HelmOperationInsight struct {
+	State            string                `json:"state"`
+	PrimaryResource  *OwnedResource        `json:"primaryResource,omitempty"`
+	RelatedResources []OwnedResource       `json:"relatedResources,omitempty"`
+	SignalCount      int                   `json:"signalCount,omitempty"`
+	SuggestedCompare *HelmSuggestedCompare `json:"suggestedCompare,omitempty"`
+}
+
+type HelmSuggestedCompare struct {
+	Revision1 int    `json:"revision1"`
+	Revision2 int    `json:"revision2"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // HelmHook represents a Helm hook (pre/post install, upgrade, etc.)

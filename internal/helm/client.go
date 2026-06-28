@@ -476,6 +476,7 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 		LastOperation:    analysis.LastOperation,
 		Operations:       analysis.Operations,
 	}
+	detail.OperationInsight = buildOperationInsight(detail)
 	if detail.StorageNamespace == detail.Namespace {
 		detail.StorageNamespace = ""
 	}

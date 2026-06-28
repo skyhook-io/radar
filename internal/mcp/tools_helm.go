@@ -124,6 +124,9 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	if detail.LastOperation != nil {
 		result["lastOperation"] = detail.LastOperation
 	}
+	if detail.OperationInsight != nil {
+		result["operationInsight"] = detail.OperationInsight
+	}
 	if detail.ManagedByFluxHelmRelease != "" {
 		result["managedByFluxHelmRelease"] = detail.ManagedByFluxHelmRelease
 	}

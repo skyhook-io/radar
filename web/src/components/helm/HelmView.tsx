@@ -7,7 +7,7 @@ import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
 import type { HelmOperation, HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
 import { getStatusColor, formatAge, isHelmReleaseActionable } from './helm-utils'
-import { SEVERITY_BADGE } from '../../utils/badge-colors'
+import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { ChartBrowser } from './ChartBrowser'
 import { InstallWizard } from './InstallWizard'
@@ -392,7 +392,7 @@ function getActionableTooltip(issue: string | undefined, summary: string | undef
     <div className="max-w-xs">
       <div className={clsx(
         'font-medium',
-        health === 'unhealthy' ? 'text-red-400' : 'text-yellow-400'
+        health === 'unhealthy' ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning
       )}>
         {summary || issue || health}
       </div>
@@ -483,10 +483,10 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
   const getHealthBadge = () => {
     if (!release.resourceHealth || release.resourceHealth === 'unknown') return null
 
-    const healthStyles: Record<string, { bg: string; text: string; dot: string }> = {
-      healthy: { bg: 'bg-green-500/10', text: 'text-green-400', dot: 'bg-green-500' },
-      degraded: { bg: 'bg-yellow-500/10', text: 'text-yellow-400', dot: 'bg-yellow-500' },
-      unhealthy: { bg: 'bg-red-500/10', text: 'text-red-400', dot: 'bg-red-500' },
+    const healthStyles: Record<string, { badge: string; dot: string }> = {
+      healthy: { badge: SEVERITY_BADGE.success, dot: SEVERITY_DOT.success },
+      degraded: { badge: SEVERITY_BADGE.warning, dot: SEVERITY_DOT.warning },
+      unhealthy: { badge: SEVERITY_BADGE.error, dot: SEVERITY_DOT.error },
     }
 
     const style = healthStyles[release.resourceHealth] || healthStyles.healthy
@@ -495,8 +495,8 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
     return (
       <Tooltip content={tooltipContent}>
         <span className={clsx(
-          'flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded shrink-0',
-          style.bg, style.text
+          'badge-sm shrink-0',
+          style.badge
         )}>
           <span className={clsx('w-1.5 h-1.5 rounded-full', style.dot)} />
           {release.healthIssue || (release.resourceHealth !== 'healthy' ? release.healthSummary : null)}

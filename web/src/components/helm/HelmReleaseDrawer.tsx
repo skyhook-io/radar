@@ -4,7 +4,7 @@ import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, Plus, Minus, Equal } from 'lucide-react'
+import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, Plus, Minus, Equal, ExternalLink } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, useHelmValuesDiff, useHelmNotesDiff, useHelmResourceDiff, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress } from '../../api/client'
@@ -12,10 +12,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
-import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmRevision, ResourceDiff, HookDiagnostic, HookLogEvidence } from '../../types'
-import type { NavigateToResource } from '../../utils/navigation'
+import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HelmRevision, ResourceDiff, HookDiagnostic, HookLogEvidence } from '../../types'
+import { apiVersionToGroup, kindToPlural, type NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
-import { getHelmStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
+import { getHelmStatusColor, getKindBadgeColor, getResourceStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
 import { useCanHelmAct, useCloudRole } from '../../api/client'
 import { RoleGatedPanel } from './RoleGatedPanel'
 import { RevisionHistory } from './RevisionHistory'
@@ -555,8 +555,13 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
           <>
             <HelmOperationBanner
               operation={releaseDetail.lastOperation}
+              operationInsight={releaseDetail.operationInsight}
+              releaseNamespace={releaseDetail.namespace}
               managedByFluxHelmRelease={releaseDetail.managedByFluxHelmRelease}
               hookDiagnostics={releaseDetail.hookDiagnostics}
+              canCompare={canViewSensitive}
+              onCompare={handleCompareRevisions}
+              onNavigateToResource={onNavigateToResource}
             />
             {activeTab === 'overview' && (
               <OverviewTab release={releaseDetail} onCopy={copyToClipboard} copied={copied} />
@@ -1068,12 +1073,22 @@ function helmOperationKey(operation: HelmOperation): string {
 
 function HelmOperationBanner({
   operation,
+  operationInsight,
+  releaseNamespace,
   managedByFluxHelmRelease,
   hookDiagnostics,
+  canCompare,
+  onCompare,
+  onNavigateToResource,
 }: {
   operation?: HelmOperation
+  operationInsight?: HelmOperationInsight
+  releaseNamespace: string
   managedByFluxHelmRelease?: string
   hookDiagnostics?: HookDiagnostic[]
+  canCompare?: boolean
+  onCompare?: (rev1: number, rev2: number) => void
+  onNavigateToResource?: NavigateToResource
 }) {
   const primaryHookDiagnostic = hookDiagnostics?.[0]
   if ((!operation || !shouldShowOperationBanner(operation)) && !primaryHookDiagnostic) {
@@ -1119,15 +1134,24 @@ function HelmOperationBanner({
           </div>
           <p className="mt-1 text-sm text-theme-text-secondary">{operation.message}</p>
           {operation.failureDescription && (
-            <p className="mt-1 text-xs text-theme-text-tertiary truncate">
-              {operation.failureDescription}
-            </p>
+            <Tooltip content={operation.failureDescription} wrapperClassName="mt-1 flex">
+              <span className="line-clamp-2 text-xs text-theme-text-tertiary">
+                {operation.failureDescription}
+              </span>
+            </Tooltip>
           )}
           {operation.kind === 'upgrade_rolled_back' && (
             <p className="mt-1 text-xs text-theme-text-tertiary">
               Helm history does not record whether <code className="inline-code text-[11px]">--atomic</code> was set; the rollback is inferred from adjacent release revisions.
             </p>
           )}
+          <OperationInsightSignals
+            insight={operationInsight}
+            releaseNamespace={releaseNamespace}
+            canCompare={Boolean(canCompare)}
+            onCompare={onCompare}
+            onNavigateToResource={onNavigateToResource}
+          />
           {primaryHookDiagnostic && <HookSignal diagnostic={primaryHookDiagnostic} />}
           {managedByFluxHelmRelease && (
             <p className="mt-1 text-xs text-theme-text-tertiary">
@@ -1136,6 +1160,125 @@ function HelmOperationBanner({
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function OperationInsightSignals({
+  insight,
+  releaseNamespace,
+  canCompare,
+  onCompare,
+  onNavigateToResource,
+}: {
+  insight?: HelmOperationInsight
+  releaseNamespace: string
+  canCompare: boolean
+  onCompare?: (rev1: number, rev2: number) => void
+  onNavigateToResource?: NavigateToResource
+}) {
+  const compare = insight?.suggestedCompare
+  const primaryResource = insight?.primaryResource
+  const relatedCount = primaryResource
+    ? Math.max(0, (insight?.signalCount ?? 0) - 1)
+    : insight?.relatedResources?.length ?? 0
+  const showCompare = Boolean(compare && canCompare && onCompare)
+  if (!primaryResource && !showCompare) {
+    return null
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      {primaryResource && (
+        <PrimaryOperationResourceSignal
+          resource={primaryResource}
+          releaseNamespace={releaseNamespace}
+          relatedCount={relatedCount}
+          onNavigateToResource={onNavigateToResource}
+        />
+      )}
+      {showCompare && compare && (
+        <Tooltip content={compare.reason || 'Compare the two Helm revisions'}>
+          <button
+            type="button"
+            onClick={() => onCompare?.(compare.revision1, compare.revision2)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-theme-border-light bg-theme-elevated px-2.5 py-1.5 text-xs font-medium text-theme-text-primary shadow-theme-sm transition-colors hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <GitCompare className="h-3.5 w-3.5" />
+            Compare rev {compare.revision1} to {compare.revision2}
+          </button>
+        </Tooltip>
+      )}
+    </div>
+  )
+}
+
+function PrimaryOperationResourceSignal({
+  resource,
+  releaseNamespace,
+  relatedCount,
+  onNavigateToResource,
+}: {
+  resource: HelmOwnedResource
+  releaseNamespace: string
+  relatedCount: number
+  onNavigateToResource?: NavigateToResource
+}) {
+  const canNavigate = Boolean(onNavigateToResource)
+  const resourceLabel = `${resource.kind}/${resource.name}`
+  const resourceTarget = resource.namespace ? `${resource.namespace}/${resource.name}` : resource.name
+  const showNamespace = Boolean(resource.namespace && resource.namespace !== releaseNamespace)
+  const resourceTooltip = `Open ${resource.kind} ${resourceTarget}`
+  const showInlineReady = Boolean(resource.ready && !resource.summary)
+  const openResource = () => {
+    onNavigateToResource?.({
+      kind: kindToPlural(resource.kind),
+      namespace: resource.namespace,
+      name: resource.name,
+      group: apiVersionToGroup(resource.apiVersion),
+    })
+  }
+
+  return (
+    <div className="rounded-md bg-theme-base/50 p-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-theme-text-secondary">Likely resource to inspect</span>
+        {canNavigate ? (
+          <Tooltip content={resourceTooltip}>
+            <button
+              type="button"
+              onClick={openResource}
+              aria-label={resourceTooltip}
+              className={clsx(
+                'badge-sm max-w-full min-w-0 transition-colors hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-theme-base',
+                getKindBadgeColor(resource.kind)
+              )}
+            >
+              <span className="min-w-0 truncate">{resourceLabel}</span>
+              <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+            </button>
+          </Tooltip>
+        ) : (
+          <span className={clsx('badge-sm max-w-full min-w-0', getKindBadgeColor(resource.kind))}>
+            <span className="min-w-0 truncate">{resourceLabel}</span>
+          </span>
+        )}
+        {showNamespace && <span className="text-theme-text-tertiary">ns/{resource.namespace}</span>}
+        {showInlineReady && <span className="font-mono text-theme-text-secondary">{resource.ready}</span>}
+        {resource.status && (
+          <span className={clsx('badge-sm', getResourceStatusColor(resource.status))}>{resource.status}</span>
+        )}
+      </div>
+      {(resource.issue || resource.summary || resource.message || relatedCount > 0) && (
+        <div className="mt-1 text-theme-text-tertiary">
+          {[
+            resource.issue || resource.summary || resource.message,
+            relatedCount > 0 ? `${relatedCount} more affected resource${relatedCount === 1 ? '' : 's'} in Resources tab` : null,
+          ]
+            .filter(Boolean)
+            .join(' - ')}
+        </div>
+      )}
     </div>
   )
 }
