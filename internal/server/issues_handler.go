@@ -194,9 +194,20 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// RelatedIssues matches by canonical Kind (EqualFold) — resolve plural route
-	// names ("deployments" → "Deployment"); canonical input passes through.
+	// RelatedIssues matches by canonical Kind (EqualFold). Resolve the route's
+	// plural name to the canonical Kind via discovery — this covers every kind
+	// (jobs, cronjobs, nodes, pvcs, hpas, pdbs, CRD plurals), not just the audit
+	// set the static map knows, so a direct API consumer passing a plural can't
+	// silently get an empty result. Fall back to the static map, then the raw
+	// value, when discovery can't resolve it.
 	kind := apiResourceToKind(rawKind)
+	if disc := k8s.GetResourceDiscovery(); disc != nil {
+		if gvr, ok := disc.GetGVRWithGroup(rawKind, group); ok {
+			if canonical := disc.GetKindForGVR(gvr); canonical != "" {
+				kind = canonical
+			}
+		}
+	}
 
 	// Scope the scan to the resource's namespace (a workload's owned pods live
 	// there too); cluster-scoped resources scan all namespaces (nil).
