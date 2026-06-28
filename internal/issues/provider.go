@@ -180,6 +180,31 @@ func (p *CacheProvider) PodsOnNode(nodeName string) []Ref {
 	return refs
 }
 
+// PodsMountingPVC returns the pods that mount the named PersistentVolumeClaim
+// (spec.volumes[].persistentVolumeClaim.claimName) — the declared edge from a
+// PVC to the workloads it blocks. As with PodsOnNode, the caller intersects
+// against the request-scoped issue set, so visibility is enforced there.
+func (p *CacheProvider) PodsMountingPVC(namespace, pvcName string) []Ref {
+	if p == nil || p.cache == nil || p.cache.Pods() == nil || namespace == "" || pvcName == "" {
+		return nil
+	}
+	pods, err := p.cache.Pods().Pods(namespace).List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	refs := make([]Ref, 0)
+	for _, pod := range pods {
+		for _, v := range pod.Spec.Volumes {
+			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == pvcName {
+				refs = append(refs, Ref{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
+				break
+			}
+		}
+	}
+	sortRefs(refs)
+	return refs
+}
+
 func (p *CacheProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext {
 	if p == nil || p.cache == nil {
 		return nil

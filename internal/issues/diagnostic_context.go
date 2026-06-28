@@ -29,6 +29,7 @@ const (
 	factBlockedInit         = "blocked_init_container"
 	factRestartCause        = "restart_cause"
 	factNodeBlastRadius     = "node_blast_radius"
+	factPVCBlastRadius      = "pvc_blast_radius"
 )
 
 type serviceBackendIssueProvider interface {
@@ -37,6 +38,27 @@ type serviceBackendIssueProvider interface {
 
 type nodeBlastRadiusProvider interface {
 	PodsOnNode(nodeName string) []Ref
+}
+
+type pvcBlastRadiusProvider interface {
+	PodsMountingPVC(namespace, pvcName string) []Ref
+}
+
+// pvcRootCategories are PVC-level problems that block the pods mounting the claim.
+var pvcRootCategories = map[issuesapi.Category]bool{
+	issuesapi.CategoryPVCPending:      true,
+	issuesapi.CategoryPVCLost:         true,
+	issuesapi.CategoryPVCResizeFailed: true,
+}
+
+// pvcAttributableCategories are the pod-side manifestations of a broken PVC: the
+// pod can't schedule (volume binding), can't mount, or is stuck creating. An
+// unrelated crashloop on a pod that merely happens to mount the claim is not
+// PVC-caused and is excluded.
+var pvcAttributableCategories = map[issuesapi.Category]bool{
+	issuesapi.CategoryUnschedulable:     true,
+	issuesapi.CategoryContainerWaiting:  true,
+	issuesapi.CategoryVolumeMountFailed: true,
 }
 
 // nodeAttributableCategories are pod-issue categories a NotReady / resource-
@@ -83,6 +105,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 	var nodeProvider nodeBlastRadiusProvider
 	if np, ok := p.(nodeBlastRadiusProvider); ok {
 		nodeProvider = np
+	}
+	var pvcProvider pvcBlastRadiusProvider
+	if pp, ok := p.(pvcBlastRadiusProvider); ok {
+		pvcProvider = pp
 	}
 	var changeProvider changeContextProvider
 	if cp, ok := p.(changeContextProvider); ok {
@@ -157,6 +183,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 			addNodeBlastRadiusContext(&b, *i, nodeProvider, flatByResource, groupedByID)
 		}
 
+		if pvcProvider != nil && i.Kind == "PersistentVolumeClaim" && pvcRootCategories[i.Category] {
+			addPVCBlastRadiusContext(&b, *i, pvcProvider, flatByResource, groupedByID)
+		}
+
 		if ctx := b.build(); ctx != nil {
 			i.DiagnosticContext = ctx
 		}
@@ -215,16 +245,11 @@ func addServiceBackendContext(b *diagnosticContextBuilder, issue Issue, serviceP
 	})
 }
 
-// addNodeBlastRadiusContext links a NotReady / pressured node to the
-// node-attributable issues of the pods running on it (spec.nodeName). The node is
-// the candidate root; the pod issues are its blast radius. Confidence is medium,
-// not high: spec.nodeName proves a pod is ON the node, not that the node caused
-// its problem — so node-independent categories are excluded up front, and a pod
-// whose issue clearly predates the node going bad (a pre-existing app failure
-// that merely happens to sit here) is filtered out. This is a non-destructive
-// hint: every pod issue keeps its own row.
-func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
-	pods := np.PodsOnNode(node.Name)
+// linkBlastRadius adds a candidate-role fact linking a root issue to the
+// category-attributable issues of a set of affected pods (each flat pod issue
+// mapped to its grouped form). Non-destructive — it only annotates the root.
+// `accept` is an optional per-symptom guard beyond the category filter.
+func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[issuesapi.Category]bool, flatByResource map[string][]Issue, groupedByID map[string]Issue, factType string, conf issuesapi.Confidence, message string, accept func(Issue) bool) {
 	if len(pods) == 0 {
 		return
 	}
@@ -234,10 +259,10 @@ func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeB
 	for _, pod := range pods {
 		key := resourceKey(pod.Group, pod.Kind, pod.Namespace, pod.Name)
 		for _, flatIssue := range flatByResource[key] {
-			if !nodeAttributableCategories[flatIssue.Category] || seenIDs[flatIssue.ID] {
+			if !attributable[flatIssue.Category] || seenIDs[flatIssue.ID] {
 				continue
 			}
-			if symptomPredatesNode(flatIssue, node) {
+			if accept != nil && !accept(flatIssue) {
 				continue
 			}
 			grouped, ok := groupedByID[flatIssue.ID]
@@ -261,12 +286,36 @@ func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeB
 	sortIssueRefs(related)
 	sortRefs(refs)
 	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
-		Type:          factNodeBlastRadius,
-		Message:       "Pods on this node have active issues — the node may be the cause.",
-		Confidence:    issuesapi.ConfidenceMedium,
+		Type:          factType,
+		Message:       message,
+		Confidence:    conf,
 		Refs:          limitRefs(dedupeRefs(refs), maxDiagnosticRefs),
 		RelatedIssues: limitIssueRefs(related, maxDiagnosticIssueRefs),
 	})
+}
+
+// addNodeBlastRadiusContext links a NotReady / pressured node to the
+// node-attributable issues of the pods running on it (spec.nodeName). The node is
+// the candidate root; the pod issues are its blast radius. Confidence is medium,
+// not high: spec.nodeName proves a pod is ON the node, not that the node caused
+// its problem — so node-independent categories are excluded up front, and a pod
+// whose issue clearly predates the node going bad (a pre-existing app failure
+// that merely happens to sit here) is filtered out.
+func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
+	linkBlastRadius(b, np.PodsOnNode(node.Name), nodeAttributableCategories, flatByResource, groupedByID,
+		factNodeBlastRadius, issuesapi.ConfidenceMedium,
+		"Pods on this node have active issues — the node may be the cause.",
+		func(symptom Issue) bool { return !symptomPredatesNode(symptom, node) })
+}
+
+// addPVCBlastRadiusContext links a broken PVC (pending / lost / resize-failed) to
+// the storage-attributable issues of the pods that mount it. The edge is the
+// declared claimName, so confidence is high; an unrelated crashloop on a mounting
+// pod is excluded by the category filter.
+func addPVCBlastRadiusContext(b *diagnosticContextBuilder, pvc Issue, pp pvcBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
+	linkBlastRadius(b, pp.PodsMountingPVC(pvc.Namespace, pvc.Name), pvcAttributableCategories, flatByResource, groupedByID,
+		factPVCBlastRadius, issuesapi.ConfidenceHigh,
+		"Pods mounting this PVC are blocked by it.", nil)
 }
 
 // symptomPredatesNode reports whether a pod symptom clearly began before the node

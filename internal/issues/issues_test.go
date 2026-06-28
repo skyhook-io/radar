@@ -21,17 +21,18 @@ import (
 // pre-stages what the corresponding method returns. Test cases assemble
 // one of these and pass it to Compose.
 type fakeProvider struct {
-	problems       []k8s.Detection
-	missingRefs    []k8s.Detection
-	scheduling     []k8s.Detection
-	capiProblems   []k8s.Detection
-	gitopsProblems []k8s.Detection
-	dynamic        map[schema.GroupVersionResource][]*unstructured.Unstructured
-	kinds          map[schema.GroupVersionResource]string
-	namespaced     map[schema.GroupVersionResource]bool
-	selectedPods   map[string][]Ref
-	podsOnNode     map[string][]Ref
-	change         map[string]*issuesapi.ChangeContext
+	problems        []k8s.Detection
+	missingRefs     []k8s.Detection
+	scheduling      []k8s.Detection
+	capiProblems    []k8s.Detection
+	gitopsProblems  []k8s.Detection
+	dynamic         map[schema.GroupVersionResource][]*unstructured.Unstructured
+	kinds           map[schema.GroupVersionResource]string
+	namespaced      map[schema.GroupVersionResource]bool
+	selectedPods    map[string][]Ref
+	podsOnNode      map[string][]Ref
+	podsMountingPVC map[string][]Ref
+	change          map[string]*issuesapi.ChangeContext
 }
 
 func (f *fakeProvider) DetectProblems(_ []string) []k8s.Detection       { return f.problems }
@@ -61,6 +62,9 @@ func (f *fakeProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, 
 }
 func (f *fakeProvider) SelectedPodsForService(namespace, name string) []Ref {
 	return f.selectedPods[namespace+"/"+name]
+}
+func (f *fakeProvider) PodsMountingPVC(namespace, pvcName string) []Ref {
+	return f.podsMountingPVC[namespace+"/"+pvcName]
 }
 func (f *fakeProvider) PodsOnNode(nodeName string) []Ref {
 	return f.podsOnNode[nodeName]
@@ -1581,5 +1585,38 @@ func TestNodeBlastRadiusContext_NoPodsNoFact(t *testing.T) {
 	out := enrichDiagnosticContext([]Issue{node}, []Issue{node}, nil, p)
 	if out[0].DiagnosticContext != nil {
 		t.Fatalf("a node with no on-node issues should get no context, got %+v", out[0].DiagnosticContext)
+	}
+}
+
+func TestPVCBlastRadiusContext(t *testing.T) {
+	pvc := Issue{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical, Reason: "Pending"}
+	blocked := Issue{ID: "unsched-1", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical}
+	crashing := Issue{ID: "crash-2", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical}
+
+	p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": {
+		{Kind: "Pod", Namespace: "prod", Name: "db-0"},
+	}}}
+
+	out := enrichDiagnosticContext([]Issue{pvc}, []Issue{pvc, blocked, crashing}, nil, p)
+	ctx := out[0].DiagnosticContext
+	if ctx == nil {
+		t.Fatal("PVC issue got no diagnostic context")
+	}
+	var fact *issuesapi.DiagnosticFact
+	for i := range ctx.Facts {
+		if ctx.Facts[i].Type == factPVCBlastRadius {
+			fact = &ctx.Facts[i]
+		}
+	}
+	if fact == nil {
+		t.Fatalf("no pvc_blast_radius fact, got %+v", ctx.Facts)
+	}
+	if fact.Confidence != issuesapi.ConfidenceHigh {
+		t.Errorf("confidence = %q, want high (declared claimName edge)", fact.Confidence)
+	}
+	// Only the storage-attributable unschedulable links; the unrelated crashloop
+	// on the same pod must not be attributed to the PVC.
+	if len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Category != issuesapi.CategoryUnschedulable {
+		t.Fatalf("expected only the unschedulable linked, got %+v", fact.RelatedIssues)
 	}
 }
