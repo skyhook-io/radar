@@ -30,6 +30,7 @@ import { getHelmStatusColor, getKindBadgeColor, SEVERITY_BADGE } from '../../uti
 import { formatDate } from './helm-utils'
 import { DiffLine, hasDiffBodyChange } from './ManifestDiffViewer'
 import { RoleGatedPanel } from './RoleGatedPanel'
+import { Tooltip } from '../ui/Tooltip'
 
 type DiffTone = 'success' | 'warning' | 'error' | 'info' | 'neutral'
 
@@ -179,15 +180,17 @@ export function HelmCompareRoute() {
               revisions={revisions}
               onChange={(rev) => updateRevision('revision1', rev)}
             />
-            <button
-              type="button"
-              onClick={swapRevisions}
-              disabled={!pairReady}
-              className="rounded-md border border-theme-border bg-theme-elevated p-1.5 text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-              title="Swap revisions"
-            >
-              <ArrowLeftRight className="h-4 w-4" />
-            </button>
+            <Tooltip content="Swap revisions" position="bottom">
+              <button
+                type="button"
+                onClick={swapRevisions}
+                disabled={!pairReady}
+                aria-label="Swap revisions"
+                className="rounded-md border border-theme-border bg-theme-elevated p-1.5 text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ArrowLeftRight className="h-4 w-4" />
+              </button>
+            </Tooltip>
             <RevisionSelect
               label="To"
               value={revision2}
@@ -455,13 +458,17 @@ function MetadataDelta({ label, left, right, status = false }: { label: string; 
         </span>
       </div>
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5 text-xs">
-        <span className={clsx(status && left ? ['badge-sm', getHelmStatusColor(left)] : ['min-w-0 truncate text-theme-text-secondary'])} title={left || '-'}>
-          {left || '-'}
-        </span>
+        <Tooltip content={left || '-'} wrapperClassName="min-w-0">
+          <span className={clsx(status && left ? ['badge-sm', getHelmStatusColor(left)] : ['min-w-0 truncate text-theme-text-secondary'])}>
+            {left || '-'}
+          </span>
+        </Tooltip>
         <span className="text-theme-text-tertiary">-&gt;</span>
-        <span className={clsx(status && right ? ['badge-sm', getHelmStatusColor(right)] : ['min-w-0 truncate text-theme-text-primary'])} title={right || '-'}>
-          {right || '-'}
-        </span>
+        <Tooltip content={right || '-'} wrapperClassName="min-w-0">
+          <span className={clsx(status && right ? ['badge-sm', getHelmStatusColor(right)] : ['min-w-0 truncate text-theme-text-primary'])}>
+            {right || '-'}
+          </span>
+        </Tooltip>
       </div>
     </div>
   )
@@ -714,12 +721,7 @@ function ModifiedResourceGroup({ changes }: { changes: ResourceDiff['modified'] 
             <ResourceChip resource={change} />
             <div className="mt-2 space-y-1">
               {change.fields.slice(0, 6).map((field, index) => (
-                <div key={`${field.path}-${index}`} className="grid grid-cols-1 gap-1 rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs lg:grid-cols-[260px_minmax(0,1fr)]">
-                  <code className="truncate font-mono text-theme-text-tertiary" title={field.path}>{formatPathLabel(field.path)}</code>
-                  <div className="min-w-0 truncate text-theme-text-secondary" title={`${formatDiffValue(field.oldValue, field.path)} -> ${formatDiffValue(field.newValue, field.path)}`}>
-                    {formatDiffValue(field.oldValue, field.path)} <span className="text-theme-text-tertiary">-&gt;</span> <span className="text-theme-text-primary">{formatDiffValue(field.newValue, field.path)}</span>
-                  </div>
-                </div>
+                <ModifiedFieldRow key={`${field.path}-${index}`} field={field} />
               ))}
               {change.fieldCount > 6 && (
                 <div className="text-xs text-theme-text-tertiary">+{change.fieldCount - 6} more changed fields in the manifest diff</div>
@@ -728,6 +730,23 @@ function ModifiedResourceGroup({ changes }: { changes: ResourceDiff['modified'] 
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+function ModifiedFieldRow({ field }: { field: ResourceDiff['modified'][number]['fields'][number] }) {
+  const oldValue = formatDiffValue(field.oldValue, field.path)
+  const newValue = formatDiffValue(field.newValue, field.path)
+  return (
+    <div className="grid grid-cols-1 gap-1 rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs lg:grid-cols-[260px_minmax(0,1fr)]">
+      <Tooltip content={field.path} wrapperClassName="min-w-0">
+        <code className="block min-w-0 truncate font-mono text-theme-text-tertiary">{formatPathLabel(field.path)}</code>
+      </Tooltip>
+      <Tooltip content={`${oldValue} -> ${newValue}`} wrapperClassName="min-w-0">
+        <div className="min-w-0 truncate text-theme-text-secondary">
+          {oldValue} <span className="text-theme-text-tertiary">-&gt;</span> <span className="text-theme-text-primary">{newValue}</span>
+        </div>
+      </Tooltip>
     </div>
   )
 }
