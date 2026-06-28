@@ -153,7 +153,6 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// missing target. Runs before the workload-rollup pass so the single richest
 	// child (the missing-ref root) is what reaches rollup suppression.
 	out = dedupeContainerWaitingOverMissingRef(out)
-	out = dedupeImagePullOverMissingPullSecret(out)
 	out = dedupeHPAOverMissingTarget(out)
 	out = dedupeWorkloadDegradedOverChild(out)
 	out = dedupeConditionOverMissingRef(out)

@@ -347,21 +347,12 @@ func dedupeContainerWaitingOverMissingRef(in []Issue) []Issue {
 		})
 }
 
-// dedupeImagePullOverMissingPullSecret drops the image_pull_failed pod row when
-// the missing imagePullSecret was structurally detected for the same pod. Gated
-// tightly to the pull-secret reason: an unrelated image_pull_failed (wrong tag,
-// rate-limit) on the same pod has a different root and must survive.
-func dedupeImagePullOverMissingPullSecret(in []Issue) []Issue {
-	return structuralRootOverSymptom(in,
-		func(i Issue) bool {
-			return i.Source == SourceMissingRef && i.Kind == "Pod" &&
-				i.Category == issuesapi.CategoryMissingConfigRef && i.Reason == "Missing imagePullSecret"
-		},
-		func(i Issue) bool {
-			return i.Source == SourceProblem && i.Kind == "Pod" &&
-				i.Category == issuesapi.CategoryImagePullFailed
-		})
-}
+// (No image_pull_failed → missing-imagePullSecret fold: a *missing* pull-secret
+// object surfaces as CreateContainerConfigError, already covered by the
+// container_waiting fold above. A pod showing ImagePullBackOff while a pull
+// secret is missing is more often an unrelated failure — wrong tag, not-found,
+// rate-limit — so folding every image_pull_failed under the missing secret would
+// hide real, independent pull errors. Left out deliberately.)
 
 // dedupeHPAOverMissingTarget drops the hpa_limited_or_failed row when the
 // autoscaler's scaleTargetRef points at a workload that doesn't exist. When the

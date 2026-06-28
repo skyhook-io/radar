@@ -164,25 +164,30 @@ func TestStructuralRootOverSymptom_Phase1(t *testing.T) {
 		}
 	})
 
-	t.Run("missing Secret does NOT fold an unrelated image_pull on same pod", func(t *testing.T) {
-		missing := Issue{Source: SourceMissingRef, Kind: "Pod", Namespace: "ns", Name: "web-abc",
-			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing Secret", Severity: SeverityCritical}
-		imgPull := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc",
-			Category: issuesapi.CategoryImagePullFailed, Reason: "ErrImagePull", Severity: SeverityWarning}
-		out := dedupeImagePullOverMissingPullSecret([]Issue{missing, imgPull})
-		if !has(out, SourceProblem, issuesapi.CategoryImagePullFailed, "web-abc") {
-			t.Fatalf("image_pull_failed must survive when the root is a Secret (not a pull secret), got %+v", out)
-		}
-	})
-
-	t.Run("missing imagePullSecret folds image_pull on same pod", func(t *testing.T) {
+	t.Run("image_pull_failed is NOT folded under a missing imagePullSecret", func(t *testing.T) {
+		// We deliberately don't fold image_pull_failed: an ImagePullBackOff
+		// alongside a missing pull secret is usually an unrelated pull error
+		// (wrong tag / not-found / rate-limit) that must survive.
 		missing := Issue{Source: SourceMissingRef, Kind: "Pod", Namespace: "ns", Name: "web-abc",
 			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing imagePullSecret", Severity: SeverityCritical}
 		imgPull := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc",
 			Category: issuesapi.CategoryImagePullFailed, Reason: "ImagePullBackOff", Severity: SeverityWarning}
-		out := dedupeImagePullOverMissingPullSecret([]Issue{missing, imgPull})
-		if has(out, SourceProblem, issuesapi.CategoryImagePullFailed, "web-abc") {
-			t.Fatalf("image_pull_failed should fold into the missing-imagePullSecret root, got %+v", out)
+		out := dedupeContainerWaitingOverMissingRef([]Issue{missing, imgPull})
+		if !has(out, SourceProblem, issuesapi.CategoryImagePullFailed, "web-abc") {
+			t.Fatalf("image_pull_failed must survive — it is not folded by the missing-ref passes, got %+v", out)
+		}
+	})
+
+	t.Run("missing imagePullSecret folds the pod's CreateContainerConfigError", func(t *testing.T) {
+		// A *missing* pull-secret object manifests as CreateContainerConfigError;
+		// that container_waiting row folds into the missing-ref root.
+		missing := Issue{Source: SourceMissingRef, Kind: "Pod", Namespace: "ns", Name: "web-abc",
+			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing imagePullSecret", Severity: SeverityCritical}
+		waiting := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc",
+			Category: issuesapi.CategoryContainerWaiting, Reason: "CreateContainerConfigError", Severity: SeverityWarning}
+		out := dedupeContainerWaitingOverMissingRef([]Issue{missing, waiting})
+		if has(out, SourceProblem, issuesapi.CategoryContainerWaiting, "web-abc") {
+			t.Fatalf("container_waiting should fold into the missing-imagePullSecret root, got %+v", out)
 		}
 	})
 

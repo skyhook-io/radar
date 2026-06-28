@@ -2164,7 +2164,11 @@ func TestDetectProblems_PodIssueTimingCreationProximity(t *testing.T) {
 // carries its CronJob as the resolved owner, so job_failed rolls up to the same
 // subject its pods do (their top owner is the CronJob) and the coalescing pass
 // can match them.
-func TestJobDetectionStampsControllerOwner(t *testing.T) {
+// TestJobDetectionStaysOwnSubject pins that a failed Job is NOT rolled up to its
+// CronJob owner — it stays its own subject so a failing Job's detail page keeps
+// showing the issue (the pods skip the Job in the owner chain, so rolling
+// job_failed up to the CronJob would fold it away from the Job).
+func TestJobDetectionStaysOwnSubject(t *testing.T) {
 	now := time.Now()
 	controller := true
 	client := fake.NewClientset(
@@ -2183,33 +2187,18 @@ func TestJobDetectionStampsControllerOwner(t *testing.T) {
 				}},
 			},
 		},
-		// Standalone Job (no controller owner) — must stay its own subject.
-		&batchv1.Job{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:              "oneoff",
-				Namespace:         "prod",
-				CreationTimestamp: metav1.NewTime(now.Add(-10 * time.Minute)),
-			},
-			Status: batchv1.JobStatus{
-				Conditions: []batchv1.JobCondition{{
-					Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded",
-				}},
-			},
-		},
 	)
 	if err := InitTestResourceCache(client); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 	cache := GetResourceCache()
 
-	var owned, standalone Detection
-	var okOwned, okStandalone bool
+	var owned Detection
+	var okOwned bool
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		problems := DetectProblems(cache, "prod")
-		owned, okOwned = lookupProblem(problems, "Job", "nightly-run", "BackoffLimitExceeded")
-		standalone, okStandalone = lookupProblem(problems, "Job", "oneoff", "BackoffLimitExceeded")
-		if okOwned && okStandalone {
+		owned, okOwned = lookupProblem(DetectProblems(cache, "prod"), "Job", "nightly-run", "BackoffLimitExceeded")
+		if okOwned {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -2217,13 +2206,7 @@ func TestJobDetectionStampsControllerOwner(t *testing.T) {
 	if !okOwned {
 		t.Fatal("CronJob-owned failed Job not detected")
 	}
-	if owned.OwnerKind != "CronJob" || owned.OwnerName != "nightly" {
-		t.Errorf("CronJob-owned Job owner = (%q, %q), want (CronJob, nightly)", owned.OwnerKind, owned.OwnerName)
-	}
-	if !okStandalone {
-		t.Fatal("standalone failed Job not detected")
-	}
-	if standalone.OwnerKind != "" {
-		t.Errorf("standalone Job should have no controller owner, got %q", standalone.OwnerKind)
+	if owned.OwnerKind != "" {
+		t.Errorf("a CronJob-owned failed Job must stay its own subject (no owner stamp), got owner kind %q", owned.OwnerKind)
 	}
 }
