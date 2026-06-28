@@ -127,14 +127,14 @@ func withFix(d Detection, cause, action string) Detection {
 func cmRefDiag(where, name, ns string) (reason, message, cause, action string) {
 	return "Missing ConfigMap",
 		fmt.Sprintf("%s references ConfigMap %q which does not exist", where, name),
-		fmt.Sprintf("ConfigMap %q doesn't exist, so the pod can't start.", name),
+		fmt.Sprintf("ConfigMap %q, referenced by the pod's %s, doesn't exist — so the pod can't start.", name, where),
 		fmt.Sprintf("Create ConfigMap %q in namespace %q, mark the reference optional, or remove it.", name, ns)
 }
 
 func secretRefDiag(where, name, ns string) (reason, message, cause, action string) {
 	return "Missing Secret",
 		fmt.Sprintf("%s references Secret %q which does not exist", where, name),
-		fmt.Sprintf("Secret %q doesn't exist, so the pod can't start.", name),
+		fmt.Sprintf("Secret %q, referenced by the pod's %s, doesn't exist — so the pod can't start.", name, where),
 		fmt.Sprintf("Create Secret %q in namespace %q, mark the reference optional, or remove it.", name, ns)
 }
 
