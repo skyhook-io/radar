@@ -4,9 +4,17 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
+
+// nodeEvictionGrace is the slack allowed when deciding whether a pod symptom
+// predates its node going NotReady. The node-lifecycle controller waits ~5m
+// (default tolerationSeconds) before evicting pods off a NotReady node, so a
+// symptom can legitimately appear up to that long after — or just before — the
+// node's recorded transition and still be node-caused.
+const nodeEvictionGrace = 5 * time.Minute
 
 const (
 	maxDiagnosticRefs       = 5
@@ -20,10 +28,29 @@ const (
 	factProbeTarget         = "probe_target_mismatch"
 	factBlockedInit         = "blocked_init_container"
 	factRestartCause        = "restart_cause"
+	factNodeBlastRadius     = "node_blast_radius"
 )
 
 type serviceBackendIssueProvider interface {
 	SelectedPodsForService(namespace, name string) []Ref
+}
+
+type nodeBlastRadiusProvider interface {
+	PodsOnNode(nodeName string) []Ref
+}
+
+// nodeAttributableCategories are pod-issue categories a NotReady / resource-
+// pressured node can plausibly cause. Node-independent causes are deliberately
+// excluded — an image-pull failure (registry/auth), a missing config reference,
+// or an admission rejection has nothing to do with the node, so linking it under
+// a node incident would be a false causal claim even as a hint.
+var nodeAttributableCategories = map[issuesapi.Category]bool{
+	issuesapi.CategoryCrashLoop:         true,
+	issuesapi.CategoryOOMKilled:         true,
+	issuesapi.CategoryHighRestart:       true,
+	issuesapi.CategoryContainerWaiting:  true,
+	issuesapi.CategoryReadinessFailed:   true,
+	issuesapi.CategoryLivenessProbeFail: true,
 }
 
 type changeContextProvider interface {
@@ -52,6 +79,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 	var serviceProvider serviceBackendIssueProvider
 	if sp, ok := p.(serviceBackendIssueProvider); ok {
 		serviceProvider = sp
+	}
+	var nodeProvider nodeBlastRadiusProvider
+	if np, ok := p.(nodeBlastRadiusProvider); ok {
+		nodeProvider = np
 	}
 	var changeProvider changeContextProvider
 	if cp, ok := p.(changeContextProvider); ok {
@@ -122,6 +153,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 			addServiceBackendContext(&b, *i, serviceProvider, flatByResource, groupedByID)
 		}
 
+		if nodeProvider != nil && i.Kind == "Node" && i.Category == issuesapi.CategoryNodeNotReady {
+			addNodeBlastRadiusContext(&b, *i, nodeProvider, flatByResource, groupedByID)
+		}
+
 		if ctx := b.build(); ctx != nil {
 			i.DiagnosticContext = ctx
 		}
@@ -174,9 +209,76 @@ func addServiceBackendContext(b *diagnosticContextBuilder, issue Issue, serviceP
 	b.add(issuesapi.DiagnosticRoleAffected, issuesapi.DiagnosticFact{
 		Type:          factSelectedBackend,
 		Message:       "Selected backend pod(s) already have active issues.",
+		Confidence:    issuesapi.ConfidenceHigh, // declared selector edge Service→Pod
 		Refs:          limitRefs(dedupeRefs(refs), maxDiagnosticRefs),
 		RelatedIssues: limitIssueRefs(related, maxDiagnosticIssueRefs),
 	})
+}
+
+// addNodeBlastRadiusContext links a NotReady / pressured node to the
+// node-attributable issues of the pods running on it (spec.nodeName). The node is
+// the candidate root; the pod issues are its blast radius. Confidence is medium,
+// not high: spec.nodeName proves a pod is ON the node, not that the node caused
+// its problem — so node-independent categories are excluded up front, and a pod
+// whose issue clearly predates the node going bad (a pre-existing app failure
+// that merely happens to sit here) is filtered out. This is a non-destructive
+// hint: every pod issue keeps its own row.
+func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
+	pods := np.PodsOnNode(node.Name)
+	if len(pods) == 0 {
+		return
+	}
+	seenIDs := make(map[string]bool)
+	var related []issuesapi.IssueRef
+	var refs []Ref
+	for _, pod := range pods {
+		key := resourceKey(pod.Group, pod.Kind, pod.Namespace, pod.Name)
+		for _, flatIssue := range flatByResource[key] {
+			if !nodeAttributableCategories[flatIssue.Category] || seenIDs[flatIssue.ID] {
+				continue
+			}
+			if symptomPredatesNode(flatIssue, node) {
+				continue
+			}
+			grouped, ok := groupedByID[flatIssue.ID]
+			if !ok {
+				grouped = flatIssue
+			}
+			related = append(related, issueRef(grouped))
+			refs = append(refs, pod)
+			seenIDs[flatIssue.ID] = true
+			if len(related) >= maxDiagnosticIssueRefs {
+				break
+			}
+		}
+		if len(related) >= maxDiagnosticIssueRefs {
+			break
+		}
+	}
+	if len(related) == 0 {
+		return
+	}
+	sortIssueRefs(related)
+	sortRefs(refs)
+	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
+		Type:          factNodeBlastRadius,
+		Message:       "Pods on this node have active issues — the node may be the cause.",
+		Confidence:    issuesapi.ConfidenceMedium,
+		Refs:          limitRefs(dedupeRefs(refs), maxDiagnosticRefs),
+		RelatedIssues: limitIssueRefs(related, maxDiagnosticIssueRefs),
+	})
+}
+
+// symptomPredatesNode reports whether a pod symptom clearly began before the node
+// went bad — a pre-existing, independent failure that merely shares the node, not
+// one the node caused. Only applied when both timestamps are reliable; the node's
+// eviction grace (~5m) is allowed as slack so a symptom appearing just before the
+// node's recorded transition isn't wrongly excluded.
+func symptomPredatesNode(symptom, node Issue) bool {
+	if symptom.FirstSeen.IsZero() || node.FirstSeen.IsZero() {
+		return false
+	}
+	return symptom.FirstSeen.Before(node.FirstSeen.Add(-nodeEvictionGrace))
 }
 
 func isServiceBackendContextCandidate(issue Issue) bool {

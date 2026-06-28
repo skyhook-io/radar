@@ -158,6 +158,28 @@ func (p *CacheProvider) SelectedPodsForService(namespace, name string) []Ref {
 	return refs
 }
 
+// PodsOnNode returns every pod scheduled onto the named node (spec.nodeName).
+// The caller intersects these against the request-scoped issue set, so a pod the
+// user can't see contributes no link — RBAC/namespace scoping is preserved by the
+// intersection, not by this lister.
+func (p *CacheProvider) PodsOnNode(nodeName string) []Ref {
+	if p == nil || p.cache == nil || p.cache.Pods() == nil || nodeName == "" {
+		return nil
+	}
+	pods, err := p.cache.Pods().List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	refs := make([]Ref, 0)
+	for _, pod := range pods {
+		if pod.Spec.NodeName == nodeName {
+			refs = append(refs, Ref{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
+		}
+	}
+	sortRefs(refs)
+	return refs
+}
+
 func (p *CacheProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext {
 	if p == nil || p.cache == nil {
 		return nil

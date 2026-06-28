@@ -210,11 +210,29 @@ type DiagnosticContext struct {
 }
 
 type DiagnosticFact struct {
-	Type          string     `json:"type"`
-	Message       string     `json:"message,omitempty"`
+	Type    string `json:"type"`
+	Message string `json:"message,omitempty"`
+	// Confidence rates how certain a cross-subject causal link is, so the UI can
+	// present a high-certainty structural edge differently from a heuristic one.
+	// Empty for non-causal facts (rollup, restart evidence).
+	Confidence    Confidence `json:"confidence,omitempty"`
 	Refs          []Ref      `json:"refs,omitempty"`
 	RelatedIssues []IssueRef `json:"related_issues,omitempty"`
 }
+
+// Confidence tiers a causal link by how deterministic the edge is:
+//   - high: a declared structural edge (selector, ownerRef, claimName) — the link
+//     is a fact, not an inference.
+//   - medium: a direct field match whose causation needs a guard (pod.spec.nodeName
+//     locates a pod on a failing node, but co-located ≠ caused-by).
+//   - low: a heuristic/message-pattern match.
+type Confidence string
+
+const (
+	ConfidenceHigh   Confidence = "high"
+	ConfidenceMedium Confidence = "medium"
+	ConfidenceLow    Confidence = "low"
+)
 
 type IssueRef struct {
 	Ref      Ref      `json:"ref"`

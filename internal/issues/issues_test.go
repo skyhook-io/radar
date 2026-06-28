@@ -30,6 +30,7 @@ type fakeProvider struct {
 	kinds          map[schema.GroupVersionResource]string
 	namespaced     map[schema.GroupVersionResource]bool
 	selectedPods   map[string][]Ref
+	podsOnNode     map[string][]Ref
 	change         map[string]*issuesapi.ChangeContext
 }
 
@@ -60,6 +61,9 @@ func (f *fakeProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, 
 }
 func (f *fakeProvider) SelectedPodsForService(namespace, name string) []Ref {
 	return f.selectedPods[namespace+"/"+name]
+}
+func (f *fakeProvider) PodsOnNode(nodeName string) []Ref {
+	return f.podsOnNode[nodeName]
 }
 
 func (f *fakeProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext {
@@ -1530,5 +1534,52 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 		if got := p.listCalls[gvr] > 0; got != want {
 			t.Errorf("no kind filter: GVR %s called=%v, want %v", gvr.Resource, got, want)
 		}
+	}
+}
+
+func TestNodeBlastRadiusContext(t *testing.T) {
+	now := time.Now()
+	node := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "NotReady", FirstSeen: now}
+	crash := Issue{ID: "crash-1", Kind: "Pod", Namespace: "prod", Name: "web-abc", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical, FirstSeen: now}
+	pull := Issue{ID: "pull-1", Kind: "Pod", Namespace: "prod", Name: "api-xyz", Category: issuesapi.CategoryImagePullFailed, Severity: SeverityWarning, FirstSeen: now}
+	old := Issue{ID: "old-1", Kind: "Pod", Namespace: "prod", Name: "old-pod", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical, FirstSeen: now.Add(-time.Hour)}
+
+	p := &fakeProvider{podsOnNode: map[string][]Ref{"node-1": {
+		{Kind: "Pod", Namespace: "prod", Name: "web-abc"},
+		{Kind: "Pod", Namespace: "prod", Name: "api-xyz"},
+		{Kind: "Pod", Namespace: "prod", Name: "old-pod"},
+	}}}
+
+	out := enrichDiagnosticContext([]Issue{node}, []Issue{node, crash, pull, old}, nil, p)
+	ctx := out[0].DiagnosticContext
+	if ctx == nil {
+		t.Fatal("node issue got no diagnostic context")
+	}
+	var fact *issuesapi.DiagnosticFact
+	for i := range ctx.Facts {
+		if ctx.Facts[i].Type == factNodeBlastRadius {
+			fact = &ctx.Facts[i]
+		}
+	}
+	if fact == nil {
+		t.Fatalf("no node_blast_radius fact, got %+v", ctx.Facts)
+	}
+	if fact.Confidence != issuesapi.ConfidenceMedium {
+		t.Errorf("confidence = %q, want medium", fact.Confidence)
+	}
+	if ctx.Role != issuesapi.DiagnosticRoleCandidate {
+		t.Errorf("role = %q, want candidate", ctx.Role)
+	}
+	if len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Category != issuesapi.CategoryCrashLoop || fact.RelatedIssues[0].Ref.Name != "web-abc" {
+		t.Fatalf("expected only the on-node crashloop linked (not the node-independent image pull, not the pre-existing crashloop), got %+v", fact.RelatedIssues)
+	}
+}
+
+func TestNodeBlastRadiusContext_NoPodsNoFact(t *testing.T) {
+	node := Issue{Kind: "Node", Name: "lonely", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical}
+	p := &fakeProvider{}
+	out := enrichDiagnosticContext([]Issue{node}, []Issue{node}, nil, p)
+	if out[0].DiagnosticContext != nil {
+		t.Fatalf("a node with no on-node issues should get no context, got %+v", out[0].DiagnosticContext)
 	}
 }
