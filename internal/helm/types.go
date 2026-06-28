@@ -219,6 +219,16 @@ type NotesDiff struct {
 	Diff      string `json:"diff"`
 }
 
+// HooksDiff represents hook metadata changes between two revisions.
+type HooksDiff struct {
+	Revision1 int        `json:"revision1"`
+	Revision2 int        `json:"revision2"`
+	Added     []HelmHook `json:"added"`
+	Removed   []HelmHook `json:"removed"`
+	Modified  []HelmHook `json:"modified"`
+	Unchanged []HelmHook `json:"unchanged"`
+}
+
 // ResourceRef identifies a rendered resource in a Helm revision.
 type ResourceRef struct {
 	Kind       string `json:"kind"`

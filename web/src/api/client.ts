@@ -17,6 +17,7 @@ import type {
   HelmValues,
   ManifestDiff,
   NotesDiff,
+  HooksDiff,
   ResourceDiff,
   UpgradeInfo,
   BatchUpgradeInfo,
@@ -2425,6 +2426,22 @@ export function useHelmNotesDiff(
     queryKey: ['helm-notes-diff', namespace, name, revision1, revision2],
     queryFn: () =>
       fetchJSON(`/helm/releases/${namespace}/${name}/notes/diff?revision1=${revision1}&revision2=${revision2}`),
+    enabled: Boolean(namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled),
+    staleTime: 60000,
+  })
+}
+
+export function useHelmHooksDiff(
+  namespace: string,
+  name: string,
+  revision1: number,
+  revision2: number,
+  enabled = true,
+) {
+  return useQuery<HooksDiff>({
+    queryKey: ['helm-hooks-diff', namespace, name, revision1, revision2],
+    queryFn: () =>
+      fetchJSON(`/helm/releases/${namespace}/${name}/hooks/diff?revision1=${revision1}&revision2=${revision2}`),
     enabled: Boolean(namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled),
     staleTime: 60000,
   })

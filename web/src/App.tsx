@@ -16,6 +16,7 @@ import { ResourceDetailDrawer } from './components/resources/ResourceDetailDrawe
 import { WorkloadViewRoute } from './components/workload/WorkloadView'
 import { CompareViewRoute } from './components/compare/CompareViewRoute'
 import { HelmView } from './components/helm/HelmView'
+import { HelmCompareRoute } from './components/helm/HelmCompareRoute'
 import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
 import { AuditView } from './components/audit/AuditView'
@@ -103,10 +104,11 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'workload' | 'checks' | 'gitops' | 'compare' | 'issues' | 'applications'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
+  if (pathname.replace(/\/+$/, '') === '/helm/compare') return 'helmCompare'
   const path = pathname.replace(/^\//, '').split('/')[0]
   if (path === '' || path === 'home') return 'home'
   if (path === 'topology') return 'topology'
@@ -603,7 +605,7 @@ function AppInner() {
     gitops: 'g o', checks: 'g u', cost: 'g c',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '',
+    workload: '', compare: '', helmCompare: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1221,7 +1223,7 @@ function AppInner() {
     }
 
     const navigatingToResources = mainView === 'resources' && prevMainView.current !== 'resources'
-    const navigatingToHelm = mainView === 'helm' && prevMainView.current !== 'helm'
+    const navigatingToHelm = (mainView === 'helm' || mainView === 'helmCompare') && prevMainView.current !== 'helm'
     prevMainView.current = mainView
 
     // The URL is the source of truth for what's selected. A deep link
@@ -1352,6 +1354,8 @@ function AppInner() {
     setVisibleKinds(new Set())
   }, [])
 
+  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView
+
   return (
     <PortForwardProvider>
     {/* Preserve the ~800px content floor: the rail is a fixed-width sibling, so
@@ -1364,7 +1368,7 @@ function AppInner() {
     >
       {showNavRail && (
         <PrimaryNavRail
-          activeView={mainView}
+          activeView={navActiveView}
           onNavigate={setMainView}
           pinned={navRailEffectivePinned}
           onTogglePinned={toggleNavRailPinned}
@@ -1475,7 +1479,7 @@ function AppInner() {
               <button
                 onClick={() => setMainView(view)}
                 className={`flex items-center gap-1 px-2 py-1 text-[13px] rounded-full transition-colors ${
-                  mainView === view
+                  mainView === view || (mainView === 'helmCompare' && view === 'helm')
                     ? 'bg-skyhook-600 dark:bg-skyhook-500 text-white shadow-glow-brand-sm'
                     : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
                 }`}
@@ -1906,6 +1910,10 @@ function AppInner() {
             selectedRelease={selectedHelmRelease}
             onReleaseClick={navigateToHelmRelease}
           />
+        )}
+
+        {mainView === 'helmCompare' && (
+          <HelmCompareRoute />
         )}
 
         {/* GitOps view (inline only when the host hasn't taken it over — see

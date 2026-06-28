@@ -763,6 +763,15 @@ export interface NotesDiff {
   diff: string
 }
 
+export interface HooksDiff {
+  revision1: number
+  revision2: number
+  added: HelmHook[]
+  removed: HelmHook[]
+  modified: HelmHook[]
+  unchanged: HelmHook[]
+}
+
 export interface HelmResourceRef {
   kind: string
   apiVersion?: string

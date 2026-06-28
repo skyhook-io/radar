@@ -672,6 +672,43 @@ func releaseNotes(rel *release.Release) string {
 	return rel.Info.Notes
 }
 
+// GetHooksDiff returns a hook metadata diff between two revisions.
+func (c *Client) GetHooksDiff(namespace, name string, revision1, revision2 int) (*HooksDiff, error) {
+	return c.getHooksDiff(namespace, name, revision1, revision2, "", nil)
+}
+
+// GetHooksDiffAsUser is GetHooksDiff with K8s impersonation.
+func (c *Client) GetHooksDiffAsUser(namespace, name string, revision1, revision2 int, username string, groups []string) (*HooksDiff, error) {
+	return c.getHooksDiff(namespace, name, revision1, revision2, username, groups)
+}
+
+func (c *Client) getHooksDiff(namespace, name string, revision1, revision2 int, username string, groups []string) (*HooksDiff, error) {
+	rel1, err := c.getReleaseRevisionAsUser(namespace, name, revision1, username, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get release revision %d: %w", revision1, err)
+	}
+	rel2, err := c.getReleaseRevisionAsUser(namespace, name, revision2, username, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get release revision %d: %w", revision2, err)
+	}
+	removed, added, modified, unchanged := diffHooks(extractHooks(rel1), extractHooks(rel2))
+	return &HooksDiff{
+		Revision1: revision1,
+		Revision2: revision2,
+		Added:     nonNilHelmHooks(added),
+		Removed:   nonNilHelmHooks(removed),
+		Modified:  nonNilHelmHooks(modified),
+		Unchanged: nonNilHelmHooks(unchanged),
+	}, nil
+}
+
+func nonNilHelmHooks(hooks []HelmHook) []HelmHook {
+	if hooks == nil {
+		return []HelmHook{}
+	}
+	return hooks
+}
+
 // GetResourceDiff returns added/removed rendered resources between two revisions.
 func (c *Client) GetResourceDiff(namespace, name string, revision1, revision2 int) (*ResourceDiff, error) {
 	return c.getResourceDiff(namespace, name, revision1, revision2, "", nil)
@@ -823,6 +860,77 @@ func diffResourceRefs(left, right []ResourceRef) (removed, added, unchanged []Re
 	sortResourceRefs(added)
 	sortResourceRefs(unchanged)
 	return removed, added, unchanged
+}
+
+func diffHooks(left, right []HelmHook) (removed, added, modified, unchanged []HelmHook) {
+	leftMap := make(map[string]HelmHook, len(left))
+	rightMap := make(map[string]HelmHook, len(right))
+	for _, hook := range left {
+		leftMap[helmHookKey(hook)] = hook
+	}
+	for _, hook := range right {
+		rightMap[helmHookKey(hook)] = hook
+	}
+	for key, hook := range leftMap {
+		next, ok := rightMap[key]
+		if !ok {
+			removed = append(removed, hook)
+			continue
+		}
+		if helmHookSignature(hook) == helmHookSignature(next) {
+			unchanged = append(unchanged, next)
+			continue
+		}
+		modified = append(modified, next)
+	}
+	for key, hook := range rightMap {
+		if _, ok := leftMap[key]; ok {
+			continue
+		}
+		added = append(added, hook)
+	}
+	sortHelmHooks(removed)
+	sortHelmHooks(added)
+	sortHelmHooks(modified)
+	sortHelmHooks(unchanged)
+	return removed, added, modified, unchanged
+}
+
+func sortHelmHooks(hooks []HelmHook) {
+	sort.Slice(hooks, func(i, j int) bool {
+		return helmHookKey(hooks[i]) < helmHookKey(hooks[j])
+	})
+}
+
+func helmHookKey(hook HelmHook) string {
+	return hook.Namespace + "/" + hook.Kind + "/" + hook.Name
+}
+
+func helmHookSignature(hook HelmHook) string {
+	stable := struct {
+		Path              string
+		Events            []string
+		Weight            int
+		DeletePolicies    []string
+		OutputLogPolicies []string
+	}{
+		Path:              hook.Path,
+		Events:            sortedStrings(hook.Events),
+		Weight:            hook.Weight,
+		DeletePolicies:    sortedStrings(hook.DeletePolicies),
+		OutputLogPolicies: sortedStrings(hook.OutputLogPolicies),
+	}
+	b, err := json.Marshal(stable)
+	if err != nil {
+		return fmt.Sprintf("%#v", stable)
+	}
+	return string(b)
+}
+
+func sortedStrings(values []string) []string {
+	out := append([]string(nil), values...)
+	sort.Strings(out)
+	return out
 }
 
 func sortResourceRefs(refs []ResourceRef) {

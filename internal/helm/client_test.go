@@ -573,6 +573,36 @@ func TestDiffResourceRefs(t *testing.T) {
 	}
 }
 
+func TestDiffHooks(t *testing.T) {
+	now := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	later := now.Add(time.Minute)
+	left := []HelmHook{
+		{Name: "migrate", Namespace: "demo", Kind: "Job", Events: []string{"pre-upgrade"}, Weight: 0, Status: "Succeeded", StartedAt: &now, CompletedAt: &now},
+		{Name: "cleanup", Namespace: "demo", Kind: "Job", Events: []string{"post-delete"}, Weight: 0, Status: "Succeeded"},
+		{Name: "seed", Namespace: "demo", Kind: "Job", Events: []string{"post-install", "post-upgrade"}, DeletePolicies: []string{"hook-succeeded", "before-hook-creation"}, Weight: 0, Status: "Succeeded"},
+	}
+	right := []HelmHook{
+		{Name: "migrate", Namespace: "demo", Kind: "Job", Events: []string{"pre-upgrade"}, Weight: 10, Status: "Succeeded"},
+		{Name: "seed", Namespace: "demo", Kind: "Job", Events: []string{"post-upgrade", "post-install"}, DeletePolicies: []string{"before-hook-creation", "hook-succeeded"}, Weight: 0, Status: "Failed", StartedAt: &later, CompletedAt: &later},
+		{Name: "verify", Namespace: "demo", Kind: "Job", Events: []string{"post-upgrade"}, Weight: 0, Status: "Succeeded"},
+	}
+
+	removed, added, modified, unchanged := diffHooks(left, right)
+
+	if len(removed) != 1 || removed[0].Name != "cleanup" {
+		t.Fatalf("removed = %#v, want cleanup", removed)
+	}
+	if len(added) != 1 || added[0].Name != "verify" {
+		t.Fatalf("added = %#v, want verify", added)
+	}
+	if len(modified) != 1 || modified[0].Name != "migrate" || modified[0].Weight != 10 {
+		t.Fatalf("modified = %#v, want updated migrate hook", modified)
+	}
+	if len(unchanged) != 1 || unchanged[0].Name != "seed" {
+		t.Fatalf("unchanged = %#v, want seed", unchanged)
+	}
+}
+
 func TestDiffRenderedResourceObjectsDetectsModifiedDeploymentFields(t *testing.T) {
 	oldManifest := `apiVersion: apps/v1
 kind: Deployment

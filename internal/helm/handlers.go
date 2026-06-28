@@ -72,6 +72,7 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/releases/{namespace}/{name}/values", h.handleGetValues)
 		r.Get("/releases/{namespace}/{name}/diff", h.handleGetDiff)
 		r.Get("/releases/{namespace}/{name}/notes/diff", h.handleGetNotesDiff)
+		r.Get("/releases/{namespace}/{name}/hooks/diff", h.handleGetHooksDiff)
 		r.Get("/releases/{namespace}/{name}/resources/diff", h.handleGetResourceDiff)
 		r.Get("/releases/{namespace}/{name}/upgrade-info", h.handleCheckUpgrade)
 		r.Get("/releases/{namespace}/{name}/versions", h.handleAvailableVersions)
@@ -312,6 +313,31 @@ func (h *Handlers) handleGetNotesDiff(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	username, groups := userCreds(r)
 	diff, err := client.GetNotesDiffAsUser(namespace, name, rev1, rev2, username, groups)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, diff)
+}
+
+// handleGetHooksDiff returns a release hook metadata diff between two revisions.
+func (h *Handlers) handleGetHooksDiff(w http.ResponseWriter, r *http.Request) {
+	if !requireCloudRole(w, r, auth.RoleMember, "diff Helm release hooks") {
+		return
+	}
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	rev1, rev2, ok := parseRevisionPair(w, r)
+	if !ok {
+		return
+	}
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+	username, groups := userCreds(r)
+	diff, err := client.GetHooksDiffAsUser(namespace, name, rev1, rev2, username, groups)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
