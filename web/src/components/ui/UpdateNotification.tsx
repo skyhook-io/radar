@@ -27,21 +27,16 @@ export function UpdateNotification() {
 
   const isDesktop = versionInfo?.installMethod === 'desktop'
 
-  // Listen for "Check for Updates" menu item in desktop app (Wails runtime event).
-  // Un-dismisses the notification and invalidates the version check cache.
+  // Listen for "Check for Updates" menu item in desktop app.
   useEffect(() => {
-    const wailsRuntime = (window as unknown as Record<string, unknown>).runtime as
-      | { EventsOn?: (event: string, callback: () => void) => () => void }
-      | undefined
-    if (!wailsRuntime?.EventsOn) return
-
-    const cleanup = wailsRuntime.EventsOn('check-for-updates', () => {
+    const handler = () => {
       setDismissed(false)
       try { localStorage.removeItem(DISMISSED_KEY) } catch { /* ignore */ }
       queryClient.invalidateQueries({ queryKey: ['version-check'] })
-    })
+    }
 
-    return cleanup
+    window.addEventListener('radar:check-for-updates', handler)
+    return () => window.removeEventListener('radar:check-for-updates', handler)
   }, [queryClient])
 
   // Log version check errors for debugging

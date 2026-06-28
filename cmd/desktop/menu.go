@@ -11,12 +11,8 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 
 	// File menu
 	fileMenu := appMenu.AddSubmenu("File")
-	fileMenu.AddText("New Window", keys.CmdOrCtrl("n"), func(_ *menu.CallbackData) {
-		// Future: open a new window with a different context
-	})
-	fileMenu.AddSeparator()
 	fileMenu.AddText("Settings...", keys.CmdOrCtrl(","), func(_ *menu.CallbackData) {
-		runtime.EventsEmit(desktopApp.ctx, "open-settings")
+		runtime.WindowExecJS(desktopApp.ctx, `window.dispatchEvent(new Event('radar:open-settings'))`)
 	})
 	fileMenu.AddSeparator()
 	fileMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
@@ -97,8 +93,7 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 	// Help menu
 	helpMenu := appMenu.AddSubmenu("Help")
 	helpMenu.AddText("Check for Updates...", nil, func(_ *menu.CallbackData) {
-		// Emit an event that the frontend listens for to trigger a version check
-		runtime.EventsEmit(desktopApp.ctx, "check-for-updates")
+		runtime.WindowExecJS(desktopApp.ctx, `window.dispatchEvent(new Event('radar:check-for-updates'))`)
 	})
 	helpMenu.AddSeparator()
 	helpMenu.AddText("About Radar", nil, func(_ *menu.CallbackData) {

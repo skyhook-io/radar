@@ -388,15 +388,6 @@ function AppInner() {
   const [showSettings, setShowSettings] = useState(false)
   const [showMyPermissions, setShowMyPermissions] = useState(false)
 
-  // Listen for desktop "open-settings" event from native menu
-  useEffect(() => {
-    const wailsRuntime = (window as unknown as Record<string, unknown>).runtime as
-      | { EventsOn?: (event: string, callback: () => void) => () => void }
-      | undefined
-    if (!wailsRuntime?.EventsOn) return
-    return wailsRuntime.EventsOn('open-settings', () => setShowSettings(true))
-  }, [])
-
   // Listen for "open-settings" DOM event (used by MCPSetupDialog etc.)
   useEffect(() => {
     const handler = () => setShowSettings(true)

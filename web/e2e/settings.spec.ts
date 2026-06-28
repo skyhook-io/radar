@@ -2,13 +2,13 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Settings dialog', () => {
 
-  test('gear icon opens settings dialog', async ({ page }) => {
+  test('settings nav action opens settings dialog', async ({ page }) => {
     await page.goto('/')
     // Wait for the app to load
     await page.waitForSelector('header', { timeout: 10000 })
 
-    // Click the settings gear icon
-    const settingsBtn = page.locator('button[title="Settings"]')
+    // Click the Settings action in the primary nav rail
+    const settingsBtn = page.getByRole('button', { name: 'Settings' })
     await expect(settingsBtn).toBeVisible()
     await settingsBtn.click()
 
@@ -20,11 +20,20 @@ test.describe('Settings dialog', () => {
     await expect(page.getByText('Kubeconfig', { exact: true })).toBeVisible()
   })
 
+  test('desktop menu event opens settings dialog', async ({ page }) => {
+    await page.goto('/')
+    await page.waitForSelector('header', { timeout: 10000 })
+
+    await page.evaluate(() => window.dispatchEvent(new Event('radar:open-settings')))
+
+    await expect(page.getByText('Kubeconfig', { exact: true })).toBeVisible()
+  })
+
   test('Configuration fields are visible', async ({ page }) => {
     await page.goto('/')
     await page.waitForSelector('header', { timeout: 10000 })
 
-    await page.locator('button[title="Settings"]').click()
+    await page.getByRole('button', { name: 'Settings' }).click()
 
     // Should show the Configuration content
     await expect(page.locator('text=Changes require a restart')).toBeVisible()
@@ -37,7 +46,7 @@ test.describe('Settings dialog', () => {
     await page.goto('/')
     await page.waitForSelector('header', { timeout: 10000 })
 
-    await page.locator('button[title="Settings"]').click()
+    await page.getByRole('button', { name: 'Settings' }).click()
     await expect(page.getByText('Kubeconfig', { exact: true })).toBeVisible()
 
     await page.keyboard.press('Escape')
@@ -49,7 +58,7 @@ test.describe('Settings dialog', () => {
     await page.goto('/')
     await page.waitForSelector('header', { timeout: 10000 })
 
-    await page.locator('button[title="Settings"]').click()
+    await page.getByRole('button', { name: 'Settings' }).click()
     await expect(page.getByText('Kubeconfig', { exact: true })).toBeVisible()
 
     // Click the backdrop (outside the dialog)
