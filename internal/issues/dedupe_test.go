@@ -130,6 +130,87 @@ func TestDedupeWorkloadDegradedOverChild_Phase0(t *testing.T) {
 	})
 }
 
+func TestStructuralRootOverSymptom_Phase1(t *testing.T) {
+	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
+
+	has := func(out []Issue, src Source, c issuesapi.Category, name string) bool {
+		for _, i := range out {
+			if i.Source == src && i.Category == c && i.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	sevOf := func(out []Issue, c issuesapi.Category, name string) Severity {
+		for _, i := range out {
+			if i.Category == c && i.Name == name {
+				return i.Severity
+			}
+		}
+		return ""
+	}
+
+	t.Run("missing Secret folds container_waiting on same pod", func(t *testing.T) {
+		missing := Issue{Source: SourceMissingRef, Kind: "Pod", Namespace: "ns", Name: "web-abc", Owner: dep,
+			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing Secret", Severity: SeverityCritical}
+		waiting := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc", Owner: dep,
+			Category: issuesapi.CategoryContainerWaiting, Reason: "CreateContainerConfigError", Severity: SeverityWarning}
+		out := dedupeContainerWaitingOverMissingRef([]Issue{missing, waiting})
+		if has(out, SourceProblem, issuesapi.CategoryContainerWaiting, "web-abc") {
+			t.Fatalf("container_waiting should fold into the missing-Secret root, got %+v", out)
+		}
+		if !has(out, SourceMissingRef, issuesapi.CategoryMissingConfigRef, "web-abc") {
+			t.Fatalf("missing-ref root should survive, got %+v", out)
+		}
+	})
+
+	t.Run("missing Secret does NOT fold an unrelated image_pull on same pod", func(t *testing.T) {
+		missing := Issue{Source: SourceMissingRef, Kind: "Pod", Namespace: "ns", Name: "web-abc",
+			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing Secret", Severity: SeverityCritical}
+		imgPull := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc",
+			Category: issuesapi.CategoryImagePullFailed, Reason: "ErrImagePull", Severity: SeverityWarning}
+		out := dedupeImagePullOverMissingPullSecret([]Issue{missing, imgPull})
+		if !has(out, SourceProblem, issuesapi.CategoryImagePullFailed, "web-abc") {
+			t.Fatalf("image_pull_failed must survive when the root is a Secret (not a pull secret), got %+v", out)
+		}
+	})
+
+	t.Run("missing imagePullSecret folds image_pull on same pod", func(t *testing.T) {
+		missing := Issue{Source: SourceMissingRef, Kind: "Pod", Namespace: "ns", Name: "web-abc",
+			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing imagePullSecret", Severity: SeverityCritical}
+		imgPull := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc",
+			Category: issuesapi.CategoryImagePullFailed, Reason: "ImagePullBackOff", Severity: SeverityWarning}
+		out := dedupeImagePullOverMissingPullSecret([]Issue{missing, imgPull})
+		if has(out, SourceProblem, issuesapi.CategoryImagePullFailed, "web-abc") {
+			t.Fatalf("image_pull_failed should fold into the missing-imagePullSecret root, got %+v", out)
+		}
+	})
+
+	t.Run("HPA missing target folds the hpa condition row and promotes severity", func(t *testing.T) {
+		missing := Issue{Source: SourceMissingRef, Kind: "HorizontalPodAutoscaler", Group: "autoscaling", Namespace: "ns", Name: "web-hpa",
+			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing scaleTargetRef", Severity: SeverityWarning}
+		cond := Issue{Source: SourceProblem, Kind: "HorizontalPodAutoscaler", Group: "autoscaling", Namespace: "ns", Name: "web-hpa",
+			Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityCritical}
+		out := dedupeHPAOverMissingTarget([]Issue{missing, cond})
+		if has(out, SourceProblem, issuesapi.CategoryHPALimitedOrFailed, "web-hpa") {
+			t.Fatalf("hpa condition should fold into the missing-target root, got %+v", out)
+		}
+		// Floor preserved: warning root absorbing a critical symptom is promoted.
+		if sevOf(out, issuesapi.CategoryMissingConfigRef, "web-hpa") != SeverityCritical {
+			t.Fatalf("surviving root must be promoted to critical so folding doesn't downgrade, got %s", sevOf(out, issuesapi.CategoryMissingConfigRef, "web-hpa"))
+		}
+	})
+
+	t.Run("no missing-ref root is a no-op", func(t *testing.T) {
+		waiting := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "lonely",
+			Category: issuesapi.CategoryContainerWaiting, Severity: SeverityWarning}
+		out := dedupeContainerWaitingOverMissingRef([]Issue{waiting})
+		if len(out) != 1 {
+			t.Fatalf("expected the lone container_waiting to survive, got %+v", out)
+		}
+	})
+}
+
 func TestDedupeConditionOverMissingRef(t *testing.T) {
 	missing := Issue{
 		Source:    SourceMissingRef,

@@ -245,6 +245,115 @@ func dedupePVCPendingOverMissingRef(in []Issue) []Issue {
 	return out
 }
 
+// missingConfigCausesWaiting are the by-name dangling references whose failure
+// surfaces as a container stuck in Waiting (CreateContainerConfigError): the
+// referenced ConfigMap/Secret/ServiceAccount/imagePullSecret doesn't exist, so
+// the kubelet can't build the container config. "Missing PVC" is excluded — it
+// blocks scheduling (unschedulable), not container creation.
+var missingConfigCausesWaiting = map[string]bool{
+	"Missing ConfigMap":       true,
+	"Missing Secret":          true,
+	"Missing ServiceAccount":  true,
+	"Missing imagePullSecret": true,
+}
+
+// structuralRootOverSymptom drops a runtime SYMPTOM row for a resource when a
+// structural root row — a by-name dangling reference the detector resolved —
+// exists for the SAME resource. The structural row names the exact broken object
+// and the concrete fix and is the reason the symptom exists, so it is the richer
+// row and always wins. Keyed on the resource itself (not the owner subject):
+// both rows describe the same Pod/HPA, emitted by different detectors.
+//
+// The surviving root is promoted to the highest severity among the symptoms it
+// absorbs, so folding a symptom can never lower the displayed incident severity
+// (the same floor dedupeWorkloadDegradedOverChild enforces, here preserved by
+// promotion rather than a keep-the-parent gate, since here the root is the
+// survivor).
+func structuralRootOverSymptom(in []Issue, isRoot, isSymptom func(Issue) bool) []Issue {
+	rootExists := map[string]bool{}
+	for _, i := range in {
+		if isRoot(i) {
+			rootExists[issueResourceKey(i)] = true
+		}
+	}
+	if len(rootExists) == 0 {
+		return in
+	}
+	foldedSev := map[string]int{}
+	out := in[:0]
+	for _, i := range in {
+		if isSymptom(i) && rootExists[issueResourceKey(i)] {
+			k := issueResourceKey(i)
+			if r := SeverityRank(i.Severity); r > foldedSev[k] {
+				foldedSev[k] = r
+			}
+			continue
+		}
+		out = append(out, i)
+	}
+	for idx := range out {
+		i := &out[idx]
+		if !isRoot(*i) {
+			continue
+		}
+		if r, ok := foldedSev[issueResourceKey(*i)]; ok && r > SeverityRank(i.Severity) {
+			i.Severity = severityForRank(r)
+		}
+	}
+	return out
+}
+
+// dedupeContainerWaitingOverMissingRef drops the generic container_waiting pod
+// row when a missing ConfigMap/Secret/ServiceAccount/imagePullSecret was
+// structurally detected for the same pod: the dangling ref IS why the container
+// can't start, and the missing-ref row names the exact object + fix.
+func dedupeContainerWaitingOverMissingRef(in []Issue) []Issue {
+	return structuralRootOverSymptom(in,
+		func(i Issue) bool {
+			return i.Source == SourceMissingRef && i.Kind == "Pod" &&
+				i.Category == issuesapi.CategoryMissingConfigRef && missingConfigCausesWaiting[i.Reason]
+		},
+		func(i Issue) bool {
+			return i.Source == SourceProblem && i.Kind == "Pod" &&
+				i.Category == issuesapi.CategoryContainerWaiting
+		})
+}
+
+// dedupeImagePullOverMissingPullSecret drops the image_pull_failed pod row when
+// the missing imagePullSecret was structurally detected for the same pod. Gated
+// tightly to the pull-secret reason: an unrelated image_pull_failed (wrong tag,
+// rate-limit) on the same pod has a different root and must survive.
+func dedupeImagePullOverMissingPullSecret(in []Issue) []Issue {
+	return structuralRootOverSymptom(in,
+		func(i Issue) bool {
+			return i.Source == SourceMissingRef && i.Kind == "Pod" &&
+				i.Category == issuesapi.CategoryMissingConfigRef && i.Reason == "Missing imagePullSecret"
+		},
+		func(i Issue) bool {
+			return i.Source == SourceProblem && i.Kind == "Pod" &&
+				i.Category == issuesapi.CategoryImagePullFailed
+		})
+}
+
+// dedupeHPAOverMissingTarget drops the hpa_limited_or_failed row when the
+// autoscaler's scaleTargetRef points at a workload that doesn't exist. When the
+// target is missing, every HPA/KEDA condition (can't-scale, no-metrics) is
+// downstream of that one fact — there is no target to scale or read metrics for —
+// so the missing-ref row is the single root. (When the target EXISTS there is no
+// missing-ref row, so a genuine maxed/metrics problem is never touched.)
+func dedupeHPAOverMissingTarget(in []Issue) []Issue {
+	isAutoscaler := func(kind string) bool {
+		return kind == "HorizontalPodAutoscaler" || kind == "ScaledObject"
+	}
+	return structuralRootOverSymptom(in,
+		func(i Issue) bool {
+			return i.Source == SourceMissingRef && isAutoscaler(i.Kind) && i.Reason == "Missing scaleTargetRef"
+		},
+		func(i Issue) bool {
+			return i.Category == issuesapi.CategoryHPALimitedOrFailed && isAutoscaler(i.Kind)
+		})
+}
+
 func isMissingRefEchoCondition(i Issue) bool {
 	if i.Group != "gateway.networking.k8s.io" {
 		return false
@@ -259,6 +368,21 @@ func isMissingRefEchoCondition(i Issue) bool {
 
 func issueResourceCategoryKey(i Issue) string {
 	return resourceKey(i.Group, i.Kind, i.Namespace, i.Name) + "\x00" + string(i.Category)
+}
+
+// issueResourceKey is the canonical key for the issue's OWN resource (not its
+// owner subject) — used by same-resource cross-detector dedup where two
+// detectors describe the same Pod/HPA.
+func issueResourceKey(i Issue) string {
+	return resourceKey(i.Group, i.Kind, i.Namespace, i.Name)
+}
+
+// severityForRank inverts SeverityRank for the two issue-layer severities.
+func severityForRank(r int) Severity {
+	if r >= 3 {
+		return SeverityCritical
+	}
+	return SeverityWarning
 }
 
 // subjectKeyOf is the canonical string key for a subject Ref — the same

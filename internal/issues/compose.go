@@ -148,6 +148,13 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// rows, so they run BEFORE grouping and BEFORE the public filters.
 	out = applyClusterScopedAccess(out, f)
 	out = dedupePodSchedulingOverProblem(out)
+	// Same-resource structural-root → symptom: fold a pod's runtime symptom into
+	// the dangling-ref that caused it, and an autoscaler's condition into its
+	// missing target. Runs before the workload-rollup pass so the single richest
+	// child (the missing-ref root) is what reaches rollup suppression.
+	out = dedupeContainerWaitingOverMissingRef(out)
+	out = dedupeImagePullOverMissingPullSecret(out)
+	out = dedupeHPAOverMissingTarget(out)
 	out = dedupeWorkloadDegradedOverChild(out)
 	out = dedupeConditionOverMissingRef(out)
 	out = dedupePVCPendingOverMissingRef(out)
