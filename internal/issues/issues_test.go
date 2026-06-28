@@ -1595,6 +1595,40 @@ func TestNodeBlastRadiusContext_NotReadyLinksNothing(t *testing.T) {
 	}
 }
 
+func TestNodeBlastRadiusContext_MultiPressure(t *testing.T) {
+	// A node with BOTH MemoryPressure and DiskPressure groups into one issue that
+	// keeps a single representative Reason — the link must still cover BOTH
+	// pressures' pod categories (OOM under memory, container_waiting under disk).
+	grouped := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
+	flatMem := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
+	flatDisk := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "DiskPressure"}
+	oom := Issue{ID: "oom-1", Kind: "Pod", Namespace: "prod", Name: "a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical}
+	waiting := Issue{ID: "wait-1", Kind: "Pod", Namespace: "prod", Name: "b", Category: issuesapi.CategoryContainerWaiting, Severity: SeverityWarning, Reason: "ContainerCreating"}
+
+	p := &fakeProvider{podsOnNode: map[string][]Ref{"node-1": {
+		{Kind: "Pod", Namespace: "prod", Name: "a"},
+		{Kind: "Pod", Namespace: "prod", Name: "b"},
+	}}}
+
+	out := enrichDiagnosticContext([]Issue{grouped}, []Issue{flatMem, flatDisk, oom, waiting}, nil, p)
+	var fact *issuesapi.DiagnosticFact
+	for i := range out[0].DiagnosticContext.Facts {
+		if out[0].DiagnosticContext.Facts[i].Type == factNodeBlastRadius {
+			fact = &out[0].DiagnosticContext.Facts[i]
+		}
+	}
+	if fact == nil {
+		t.Fatal("no node_blast_radius fact for the multi-pressure node")
+	}
+	gotCats := map[issuesapi.Category]bool{}
+	for _, r := range fact.RelatedIssues {
+		gotCats[r.Category] = true
+	}
+	if !gotCats[issuesapi.CategoryOOMKilled] || !gotCats[issuesapi.CategoryContainerWaiting] {
+		t.Fatalf("multi-pressure node must link BOTH memory (OOM) and disk (container_waiting) pods, got %+v", fact.RelatedIssues)
+	}
+}
+
 func TestNodeBlastRadiusContext_NoPodsNoFact(t *testing.T) {
 	node := Issue{Kind: "Node", Name: "lonely", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
 	p := &fakeProvider{}

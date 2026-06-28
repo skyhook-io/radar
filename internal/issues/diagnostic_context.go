@@ -319,13 +319,34 @@ func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[i
 // reliably recorded (FirstSeen tracks pod age, not failure onset), so a guard
 // would drop legitimate long-running pods while still admitting unrelated ones.
 func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
-	attributable := nodeReasonAttributable[node.Reason]
+	// A node can hit several pressures at once (memory + disk + PID); those
+	// detections share the node_not_ready ID and group into one issue that keeps
+	// only one representative Reason. Union the attributable categories across ALL
+	// of the node's detected reasons so a multi-pressure node links every pressure's
+	// pods (OOM under memory, stuck-creation under disk/PID), not just the
+	// representative's. (The flat node rows for both pressures sit under the node's
+	// resource key whether we were handed the grouped issue or a flat one.)
+	attributable := map[issuesapi.Category]bool{}
+	for _, f := range flatByResource[issueResourceKey(node)] {
+		if f.Kind == "Node" && f.Category == issuesapi.CategoryNodeNotReady {
+			for c := range nodeReasonAttributable[f.Reason] {
+				attributable[c] = true
+			}
+		}
+	}
+	// Fallback to the issue's own reason if no flat node rows are indexed under
+	// this key (defensive — normally the detections are present).
+	if len(attributable) == 0 {
+		for c := range nodeReasonAttributable[node.Reason] {
+			attributable[c] = true
+		}
+	}
 	if len(attributable) == 0 {
 		return
 	}
 	linkBlastRadius(b, np.PodsOnNode(node.Name), attributable, flatByResource, groupedByID,
 		factNodeBlastRadius, issuesapi.ConfidenceMedium,
-		fmt.Sprintf("Pods on this node show problems consistent with its %s — the node may be the cause.", node.Reason), nil)
+		"Pods on this node show problems consistent with its resource pressure — the node may be the cause.", nil)
 }
 
 // addPVCBlastRadiusContext links a broken PVC (pending / lost / resize-failed) to
