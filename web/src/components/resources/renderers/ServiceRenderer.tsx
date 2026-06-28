@@ -30,7 +30,9 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
   const [curl, setCurl] = useState<{ port: number; closing: boolean } | null>(null)
   const closeCurl = useCallback(() => {
     setCurl((p) => (p ? { ...p, closing: true } : null))
-    window.setTimeout(() => setCurl(null), 220)
+    // Only drop the panel if it's still the one closing. Opening another port
+    // (which sets closing:false) before this fires must not clear the new panel.
+    window.setTimeout(() => setCurl((p) => (p?.closing ? null : p)), 220)
   }, [])
   const spec = data.spec || {}
   const shouldLoadEndpointSlices = Boolean(
