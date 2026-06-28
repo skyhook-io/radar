@@ -636,7 +636,9 @@ export function WorkloadView({
         {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element */}
         <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
           {!resource ? (
-            <FetchResult loading={resourceLoading} error={resourceError} className="h-32" />
+            // Fill the drawer body so the loading logo centers in it, not in a
+            // 128px box pinned to the top (matches the splash/PaneLoader centering).
+            <FetchResult loading={resourceLoading} error={resourceError} className="h-full" />
           ) : showYaml ? (
             <EditableYamlView
               resource={selectedResource}
@@ -881,7 +883,7 @@ export function WorkloadView({
               {yamlObject && !yamlObject.primary && renderRelatedYaml ? (
                 renderRelatedYaml(yamlObject)
               ) : !resource ? (
-                <FetchResult loading={resourceLoading} error={resourceError} className="h-32" />
+                <FetchResult loading={resourceLoading} error={resourceError} className="h-full" />
               ) : (
                 <EditableYamlView
                   resource={selectedResource}
