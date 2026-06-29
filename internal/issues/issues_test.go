@@ -1902,6 +1902,33 @@ func TestIncidentParent_PVCHighPointer(t *testing.T) {
 	}
 }
 
+func TestIncidentParent_CoverageGate(t *testing.T) {
+	// A grouped Deployment unschedulable issue (3 member pods) gets the pointer
+	// only when ALL 3 are explained by the PVC; if only 2 mount it, the row is
+	// mixed-cause and the pointer is omitted (whole-row coverage).
+	mk := func(podsMounting int) []Issue {
+		pvc := Issue{ID: "pvc-1", Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical, Reason: "Pending"}
+		dep := Issue{ID: "g", Kind: "Deployment", Namespace: "prod", Name: "web", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical, Count: 3}
+		flat := []Issue{pvc}
+		var mounting []Ref
+		for n, name := range []string{"web-a", "web-b", "web-c"} {
+			flat = append(flat, Issue{ID: "g", Kind: "Pod", Namespace: "prod", Name: name, Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical,
+				Message: "pod has unbound immediate PersistentVolumeClaims"})
+			if n < podsMounting {
+				mounting = append(mounting, Ref{Kind: "Pod", Namespace: "prod", Name: name})
+			}
+		}
+		p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": mounting}}
+		return enrichDiagnosticContext([]Issue{pvc, dep}, flat, []Issue{dep}, p)
+	}
+	if got := findByID(mk(3), "g").IncidentParent; got == nil || got.ID != "pvc-1" {
+		t.Errorf("full coverage (3/3) should link, got %+v", got)
+	}
+	if got := findByID(mk(2), "g").IncidentParent; got != nil {
+		t.Errorf("partial coverage (2/3) must omit the pointer, got %+v", *got)
+	}
+}
+
 func TestIncidentParent_NodeMediumPointer(t *testing.T) {
 	node := Issue{ID: "node-1", Kind: "Node", Name: "n1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
 	sym := Issue{ID: "oom-1", Kind: "Pod", Namespace: "prod", Name: "web-a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical}
@@ -1957,60 +1984,5 @@ func TestSecretProducerContext(t *testing.T) {
 	}
 	if got := findByID(out, "cw-1"); got.IncidentParent != nil {
 		t.Fatalf("unrelated container-waiting pod must not be attributed, got %+v", *got.IncidentParent)
-	}
-}
-
-func TestProvisioningContext(t *testing.T) {
-	// A failed provisioner links pods stuck for capacity ("didn't trigger
-	// scale-up"), but NOT a pod unschedulable for a taint the provisioner can't fix.
-	prov := Issue{ID: "np-1", Kind: "NodeClaim", Group: "karpenter.sh", Name: "default-abc", Category: issuesapi.CategoryNodeProvisioningFail, Severity: SeverityCritical, Reason: "Launch failed"}
-	capacity := Issue{ID: "u-1", Kind: "Pod", Namespace: "prod", Name: "web-a", Category: issuesapi.CategoryUnschedulable, Severity: SeverityWarning,
-		Message: "0/3 nodes are available; pod didn't trigger scale-up: max node group size reached"}
-	taint := Issue{ID: "u-2", Kind: "Pod", Namespace: "prod", Name: "web-b", Category: issuesapi.CategoryUnschedulable, Severity: SeverityWarning,
-		Message: "0/3 nodes are available: 3 node(s) had untolerated taint {dedicated: gpu}"}
-
-	out := enrichDiagnosticContext([]Issue{prov, capacity, taint}, []Issue{prov, capacity, taint}, nil, &fakeProvider{})
-	// Forward fact on the provisioner root.
-	root := findByID(out, "np-1")
-	if root.DiagnosticContext == nil {
-		t.Fatal("provisioner root got no diagnostic context")
-	}
-	var fact *issuesapi.DiagnosticFact
-	for i := range root.DiagnosticContext.Facts {
-		if root.DiagnosticContext.Facts[i].Type == factProvisioning {
-			fact = &root.DiagnosticContext.Facts[i]
-		}
-	}
-	if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != "web-a" {
-		t.Fatalf("expected only the scale-up pod linked, got %+v", fact)
-	}
-	// Reverse pointer on the capacity pod; none on the taint pod.
-	if got := findByID(out, "u-1"); got.IncidentParent == nil || got.IncidentParent.ID != "np-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceMedium {
-		t.Fatalf("capacity pod should point to the provisioner (medium), got %+v", got.IncidentParent)
-	}
-	if got := findByID(out, "u-2"); got.IncidentParent != nil {
-		t.Fatalf("taint-unschedulable pod must not be attributed to the provisioner, got %+v", *got.IncidentParent)
-	}
-}
-
-func TestIncidentParent_FoldGroupAgreement(t *testing.T) {
-	// Two pod members of one grouped issue resolve to DIFFERENT node parents →
-	// the grouped row must omit IncidentParent (no honest single root).
-	nodeA := hi("node-A")
-	nodeB := hi("node-B")
-	mixed := GroupIssues([]Issue{
-		{ID: "g1", Kind: "Pod", Namespace: "p", Name: "a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical, IncidentParent: &nodeA},
-		{ID: "g1", Kind: "Pod", Namespace: "p", Name: "b", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical, IncidentParent: &nodeB},
-	})
-	if len(mixed) != 1 || mixed[0].IncidentParent != nil {
-		t.Fatalf("disagreeing members must omit IncidentParent, got %+v", mixed[0].IncidentParent)
-	}
-	// Agreeing members → carried.
-	same := GroupIssues([]Issue{
-		{ID: "g2", Kind: "Pod", Namespace: "p", Name: "a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical, IncidentParent: &nodeA},
-		{ID: "g2", Kind: "Pod", Namespace: "p", Name: "b", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical, IncidentParent: &nodeA},
-	})
-	if same[0].IncidentParent == nil || same[0].IncidentParent.ID != "node-A" {
-		t.Fatalf("agreeing members must carry IncidentParent, got %+v", same[0].IncidentParent)
 	}
 }

@@ -187,30 +187,12 @@ func foldGroup(members []Issue) Issue {
 	g.IssueTiming = groupIssueTiming
 	g.IssueTimingBasis = groupBasis
 
-	// IncidentParent (symptom→root pointer): carry only if every member that has
-	// one agrees on the SAME parent — mirrors the IssueTiming agreement rule above.
-	// A grouped symptom whose members resolve to DIFFERENT roots (one Deployment's
-	// pods spread across two pressured nodes, or a pod mounting two broken PVCs)
-	// has no single honest root, so omit rather than credit the representative's.
-	// (The cluster-wide path assigns IncidentParent after grouping, so this only
-	// fires on the per-resource RelatedIssues regroup, where members were enriched
-	// while still flat.)
-	var groupParent *issuesapi.IncidentParent
-	parentDisagree := false
-	for _, m := range members {
-		if m.IncidentParent == nil {
-			continue
-		}
-		if groupParent == nil {
-			groupParent = m.IncidentParent
-		} else if groupParent.ID != m.IncidentParent.ID {
-			parentDisagree = true
-			break
-		}
-	}
-	if !parentDisagree {
-		g.IncidentParent = groupParent
-	}
+	// IncidentParent is deliberately NOT carried through foldGroup: members of one
+	// grouped symptom share an issue ID, so the per-resource regroup can't tell
+	// which members the root actually covers (the whole-row coverage check that the
+	// cluster-wide path does after grouping isn't reconstructable here). The reverse
+	// pointer therefore ships on the cluster Issues view + MCP only; the per-resource
+	// path leaves it unset rather than over-claim a mixed-cause row.
 
 	// Count is the affected-resource fan-out — the non-subject members under
 	// this subject (the subject is shown separately as the header, not under

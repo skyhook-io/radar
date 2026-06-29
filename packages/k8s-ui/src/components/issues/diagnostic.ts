@@ -44,8 +44,6 @@ export function diagnosticFactLabel(type: string): string {
       return 'Blocked pods';
     case 'apiservice_hpa':
       return 'Stalled autoscalers';
-    case 'node_provisioning':
-      return 'Pods awaiting capacity';
     case 'secret_not_ready':
       return 'Dependent pods';
     default:
@@ -63,7 +61,6 @@ export function incidentParentLabel(factType?: string, confidence?: string): str
     case 'secret_not_ready':
       return 'Caused by';
     case 'apiservice_hpa':
-    case 'node_provisioning':
       return 'Likely cause';
     case 'node_blast_radius':
       return 'Related';

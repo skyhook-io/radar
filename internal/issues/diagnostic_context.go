@@ -23,7 +23,6 @@ const (
 	factNodeBlastRadius     = "node_blast_radius"
 	factPVCBlastRadius      = "pvc_blast_radius"
 	factAPIServiceHPA       = "apiservice_hpa"
-	factProvisioning        = "node_provisioning"
 	factSecretNotReady      = "secret_not_ready"
 )
 
@@ -229,10 +228,6 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 			addAPIServiceHPAContext(&b, *i, &incidentEdges, flat, groupedByID)
 		}
 
-		if i.Category == issuesapi.CategoryNodeProvisioningFail {
-			addProvisioningContext(&b, *i, &incidentEdges, flat, groupedByID)
-		}
-
 		if secretProvider != nil && secretProducerRootCategories[i.Category] {
 			addSecretProducerContext(&b, *i, &incidentEdges, secretProvider, flatByResource, groupedByID)
 		}
@@ -256,7 +251,7 @@ type incidentEdge struct {
 // recordIncidentEdges proposes a reverse pointer from each linked downstream
 // symptom to this root, capturing the root's subject ref + the link's confidence.
 // Self-edges are skipped. Only called for causal-direction-correct links (node /
-// pvc / apiservice / secret-producer / provisioning); selected_backend never
+// pvc / apiservice / secret-producer); selected_backend never
 // records edges because its related issues are the cause, not the symptom.
 func recordIncidentEdges(edges *[]incidentEdge, root Issue, factType string, conf issuesapi.Confidence, symptomIDs []string) {
 	if edges == nil {
@@ -284,7 +279,7 @@ func recordIncidentEdges(edges *[]incidentEdge, root Issue, factType string, con
 // DISTINCT roots at the SAME tier the pointer is left UNSET. Severity is NOT
 // causal evidence, so we never use it to choose between equally-confident roots;
 // an honest "no single root" beats a guessed one. (Cycles can't form with the
-// current link set — node/pvc/apiservice/secret-producer/provisioning roots are
+// current link set — node/pvc/apiservice/secret-producer roots are
 // never themselves downstream symptoms — so only the self-edge guard is needed.)
 func assignIncidentParents(out []Issue, edges []incidentEdge) {
 	if len(edges) == 0 {
@@ -450,15 +445,21 @@ func withTruncationNote(message string, shown, total int) string {
 // issue, and because folded members all share one issue ID, N pods of one
 // workload collapse to a single related row carrying Count = the distinct
 // affected resources (NOT deduping on the shared issue ID, which would drop pods
-// b..N and leave count=1). Groups are ranked worst-first, then capped; the
-// returned Refs are the affected resources backing the kept groups, so the
-// displayed Refs and RelatedIssues stay consistent past the cap. The emit closure
-// calls yield once per candidate pairing.
+// b..N and leave count=1). Groups are ranked worst-first; the DISPLAY (related +
+// refs) is capped to maxDiagnosticIssueRefs, but `edgeIDs` (for the reverse
+// incident_parent pointer) is returned UNCAPPED — capping it would both drop
+// pointers past the cap and let the cap hide same-tier ambiguity. edgeIDs holds
+// only WHOLLY-COVERED groups: a grouped symptom is attributed to this root only
+// when every one of its members is in the affected set (affected ≥ grouped
+// fan-out). A Deployment whose pods are only partly explained by this root — a
+// subset mounting the PVC, or split across two pressured nodes — is omitted, so
+// the pointer never over-claims a mixed-cause row.
 func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected Ref, symptom Issue))) ([]issuesapi.IssueRef, []Ref, int, []string) {
 	type group struct {
-		id   string
-		rel  issuesapi.IssueRef
-		pods []Ref
+		id         string
+		rel        issuesapi.IssueRef
+		memberSpan int // grouped issue's fan-out (members excl. subject); 0 = single resource
+		pods       []Ref
 	}
 	byGroup := map[string]*group{}
 	var order []string
@@ -469,7 +470,7 @@ func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected 
 		}
 		g := byGroup[grouped.ID]
 		if g == nil {
-			g = &group{id: grouped.ID, rel: issueRef(grouped)}
+			g = &group{id: grouped.ID, rel: issueRef(grouped), memberSpan: grouped.Count}
 			byGroup[grouped.ID] = g
 			order = append(order, grouped.ID)
 		}
@@ -486,11 +487,20 @@ func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected 
 	// Rank by the linked issue's severity BEFORE capping, so the cap keeps the
 	// worst issues (and their resources), not iteration order.
 	sort.SliceStable(groups, func(i, j int) bool { return lessIssueRef(groups[i].rel, groups[j].rel) })
+
+	// edgeIDs: uncapped, wholly-covered groups only — the basis for incident_parent.
+	var edgeIDs []string
+	for _, g := range groups {
+		affected := len(dedupeRefs(g.pods))
+		if affected >= g.memberSpan { // memberSpan 0 (single resource) ⇒ covered
+			edgeIDs = append(edgeIDs, g.id)
+		}
+	}
+
 	if len(groups) > maxDiagnosticIssueRefs {
 		groups = groups[:maxDiagnosticIssueRefs]
 	}
 	related := make([]issuesapi.IssueRef, 0, len(groups))
-	relatedIDs := make([]string, 0, len(groups))
 	var refs []Ref
 	for _, g := range groups {
 		rel := g.rel
@@ -499,10 +509,9 @@ func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected 
 			rel.Count = len(distinct)
 		}
 		related = append(related, rel)
-		relatedIDs = append(relatedIDs, g.id)
 		refs = append(refs, distinct...)
 	}
-	return related, dedupeRefs(refs), total, relatedIDs
+	return related, dedupeRefs(refs), total, edgeIDs
 }
 
 // addAPIServiceHPAContext links an unavailable metrics APIService to the HPAs that
@@ -535,54 +544,6 @@ func addAPIServiceHPAContext(b *diagnosticContextBuilder, apisvc Issue, edges *[
 		Confidence:    issuesapi.ConfidenceMedium,
 		RelatedIssues: related,
 	})
-}
-
-// addProvisioningContext links a failed node provisioner (Karpenter NodeClaim/
-// NodePool, CAPI Machine — anything classified node_provisioning_failed) to the
-// pods stuck Pending because capacity could not be added. Like the APIService→HPA
-// fan-in there is no declared edge (an unschedulable pod doesn't name the
-// provisioner), so it's a cluster-wide fan-in gated on the pod's OWN scheduler
-// message naming a scale-up/capacity failure — NOT taint/affinity/CPU-on-existing,
-// which the provisioner can't fix. Confidence medium: the scale-up signal ties the
-// pod to autoscaling, but co-incidence isn't proof this provisioner is the one.
-func addProvisioningContext(b *diagnosticContextBuilder, root Issue, edges *[]incidentEdge, flat []Issue, groupedByID map[string]Issue) {
-	related, _, total, relatedIDs := collectRelated(groupedByID, func(yield func(Ref, Issue)) {
-		for _, f := range flat {
-			if unschedulableOnCapacity(f) {
-				yield(Ref{Group: f.Group, Kind: f.Kind, Namespace: f.Namespace, Name: f.Name}, f)
-			}
-		}
-	})
-	if len(related) == 0 {
-		return
-	}
-	recordIncidentEdges(edges, root, factProvisioning, issuesapi.ConfidenceMedium, relatedIDs)
-	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
-		Type:          factProvisioning,
-		Message:       withTruncationNote("Pods stuck Pending for capacity may be blocked by this failed provisioner.", len(related), total),
-		Confidence:    issuesapi.ConfidenceMedium,
-		RelatedIssues: related,
-	})
-}
-
-// unschedulableOnCapacity reports whether an unschedulable issue's scheduler text
-// blames a scale-up / capacity-provisioning failure (cluster-autoscaler's "pod
-// didn't trigger scale-up", Karpenter's incompatible-nodepool / "did not tolerate",
-// max-size-reached), as opposed to a taint/affinity/insufficient-on-existing-node
-// placement problem the provisioner can't resolve.
-func unschedulableOnCapacity(i Issue) bool {
-	if i.Category != issuesapi.CategoryUnschedulable {
-		return false
-	}
-	text := strings.ToLower(i.Reason + " " + i.Message)
-	return strings.Contains(text, "didn't trigger scale-up") ||
-		strings.Contains(text, "didn't trigger scaleup") ||
-		strings.Contains(text, "scale up") ||
-		strings.Contains(text, "scale-up") ||
-		strings.Contains(text, "max node group size reached") ||
-		strings.Contains(text, "max-node-group-size-reached") ||
-		strings.Contains(text, "incompatible with nodepool") ||
-		strings.Contains(text, "no instance type satisfied")
 }
 
 // metricsAPIFamily classifies an apiservice_unavailable issue by which metrics
@@ -722,10 +683,11 @@ func addSecretProducerContext(b *diagnosticContextBuilder, root Issue, edges *[]
 	linkBlastRadius(b, root, edges, pods, secretAttributableCategories, flatByResource, groupedByID,
 		factSecretNotReady, issuesapi.ConfidenceHigh,
 		"Pods referencing the Secret this resource manages are blocked by it.",
+		// The symptom must NAME the Secret — a pod can reference the Secret via env/
+		// envFrom/imagePullSecrets yet have a volume_mount_failed on an unrelated
+		// PVC/CSI volume, so (unlike PVC's mount edge) volume_mount_failed is NOT
+		// accepted unconditionally here.
 		func(symptom Issue) bool {
-			if symptom.Category == issuesapi.CategoryVolumeMountFailed {
-				return true
-			}
 			return mentionsQuotedName(symptom, secretName)
 		})
 }
