@@ -108,15 +108,27 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
     const parent = el?.offsetParent as HTMLElement | null
     const measured = parent ? parent.clientWidth - leftOffset : el?.clientWidth
     if (measured && measured > 0) setFullWidthPx(measured)
+    // Pre-mount: render both layers (incoming invisible, frame held at its start
+    // width) for a couple of frames so the heavy incoming WorkloadView pays its
+    // mount + first-paint cost BEFORE the motion starts — otherwise that work
+    // lands as dropped frames in the first third of the animation. Only after it
+    // has painted (double rAF) do we arm the width + crossfade.
     setCrossfadeArmed(false)
-    const raf = requestAnimationFrame(() => setCrossfadeArmed(true))
-    const timer = setTimeout(() => {
-      settledExpanded.current = !!expanded
-      setCrossfadeArmed(false)
-      forceSettle()
-    }, DURATION_NORMAL)
+    let raf2 = 0
+    let timer = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        setCrossfadeArmed(true)
+        timer = window.setTimeout(() => {
+          settledExpanded.current = !!expanded
+          setCrossfadeArmed(false)
+          forceSettle()
+        }, DURATION_NORMAL)
+      })
+    })
     return () => {
-      cancelAnimationFrame(raf)
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
       clearTimeout(timer)
     }
   }, [expanded, prefersReducedMotion, leftOffset])
@@ -174,6 +186,14 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   // when the user prefers reduced motion.
   const animateWidth = !isResizing && !prefersReducedMotion
 
+  // During the pre-mount frames (transitioning but not yet armed) hold the frame
+  // at its START width so the width transition fires only once the incoming
+  // layer has painted; otherwise it snaps to the target.
+  const fullW = `calc(100% - ${leftOffset}px)`
+  const startWidth = settledExpanded.current ? fullW : drawerWidth
+  const targetWidth = expanded ? fullW : drawerWidth
+  const containerWidth = transitioning && !crossfadeArmed ? startWidth : targetWidth
+
   const renderLayer = (layerExpanded: boolean, active: boolean) =>
     children({
       resource,
@@ -208,7 +228,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
         expanded && '!border-l-0',
       )}
       style={{
-        width: expanded ? `calc(100% - ${leftOffset}px)` : drawerWidth,
+        width: containerWidth,
         top: headerHeight,
         height: `calc(100% - ${headerHeight}px - ${dockInset}px)`,
       }}
@@ -244,6 +264,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
               width: layerExpanded ? (fullWidthPx ?? `calc(100% - ${leftOffset}px)`) : drawerWidth,
               opacity: isIncoming ? (crossfadeArmed ? 1 : 0) : (crossfadeArmed ? 0 : 1),
               transition: `opacity ${DURATION_NORMAL}ms ${CSS_EASE}`,
+              willChange: 'opacity',
             }}
             aria-hidden={!isIncoming}
           >
