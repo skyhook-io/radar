@@ -43,7 +43,9 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 				// Check if the session has been revoked (backchannel logout)
 				if cfg.Revoker != nil && cfg.Revoker.IsRevoked(session.SID) {
 					log.Printf("[auth] Revoked session rejected: user=%s sid=%s", session.User.Username, session.SID)
-					http.SetCookie(w, ClearSessionCookie())
+					for _, c := range ClearSessionCookie(r) {
+						http.SetCookie(w, c)
+					}
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusUnauthorized)
 					json.NewEncoder(w).Encode(map[string]string{

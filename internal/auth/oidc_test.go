@@ -99,7 +99,7 @@ func TestHandleLogout_WithEndSessionEndpoint(t *testing.T) {
 
 	// Create a session cookie with an ID token
 	user := &User{Username: "alice"}
-	cookie := CreateSessionCookie(user, NewSessionID(), "my-id-token", h.cfg.Secret, 1*time.Hour, false)
+	cookie := CreateSessionCookie(user, NewSessionID(), "my-id-token", h.cfg.Secret, 1*time.Hour, false)[0]
 
 	r := httptest.NewRequest("GET", "/auth/logout", nil)
 	r.AddCookie(cookie)
@@ -167,7 +167,7 @@ func TestHandleLogout_NoIDTokenInCookie(t *testing.T) {
 
 	// Session cookie without ID token (old session from before upgrade)
 	user := &User{Username: "alice"}
-	cookie := CreateSessionCookie(user, NewSessionID(), "", h.cfg.Secret, 1*time.Hour, false)
+	cookie := CreateSessionCookie(user, NewSessionID(), "", h.cfg.Secret, 1*time.Hour, false)[0]
 
 	r := httptest.NewRequest("GET", "/auth/logout", nil)
 	r.AddCookie(cookie)

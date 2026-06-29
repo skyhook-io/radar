@@ -304,7 +304,9 @@ func (h *OIDCHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		idToken = session.IDToken
 	}
 
-	http.SetCookie(w, ClearSessionCookie())
+	for _, c := range ClearSessionCookie(r) {
+		http.SetCookie(w, c)
+	}
 
 	// Set force-login cookie so the next auth request uses prompt=login,
 	// preventing silent re-authentication with an existing IdP session.
