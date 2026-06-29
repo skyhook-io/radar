@@ -1829,3 +1829,110 @@ func TestMetricsAPIFamily_ExactGroupMatch(t *testing.T) {
 		}
 	}
 }
+
+func hi(id string) issuesapi.IncidentParent {
+	return issuesapi.IncidentParent{ID: id, Confidence: issuesapi.ConfidenceHigh}
+}
+func med(id string) issuesapi.IncidentParent {
+	return issuesapi.IncidentParent{ID: id, Confidence: issuesapi.ConfidenceMedium}
+}
+
+func TestBestIncidentParent(t *testing.T) {
+	cases := []struct {
+		name   string
+		ps     []issuesapi.IncidentParent
+		wantID string // "" = expect omit
+	}{
+		{"single high", []issuesapi.IncidentParent{hi("A")}, "A"},
+		{"high beats medium", []issuesapi.IncidentParent{med("B"), hi("A")}, "A"},
+		{"same root twice collapses", []issuesapi.IncidentParent{med("A"), med("A")}, "A"},
+		{"distinct same-tier omit (no severity tiebreak)", []issuesapi.IncidentParent{med("A"), med("B")}, ""},
+		{"distinct high tie omit", []issuesapi.IncidentParent{hi("A"), hi("B")}, ""},
+		{"empty omit", nil, ""},
+	}
+	for _, tc := range cases {
+		got, ok := bestIncidentParent(tc.ps)
+		if tc.wantID == "" {
+			if ok {
+				t.Errorf("%s: expected omit, got %q", tc.name, got.ID)
+			}
+			continue
+		}
+		if !ok || got.ID != tc.wantID {
+			t.Errorf("%s: got (%q, %v), want %q", tc.name, got.ID, ok, tc.wantID)
+		}
+	}
+}
+
+func findByID(out []Issue, id string) *Issue {
+	for i := range out {
+		if out[i].ID == id {
+			return &out[i]
+		}
+	}
+	return nil
+}
+
+func TestIncidentParent_PVCHighPointer(t *testing.T) {
+	pvc := Issue{ID: "pvc-1", Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical, Reason: "Pending"}
+	sym := Issue{ID: "sym-1", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical,
+		Message: "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims"}
+	p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": {{Kind: "Pod", Namespace: "prod", Name: "db-0"}}}}
+	out := enrichDiagnosticContext([]Issue{pvc, sym}, []Issue{pvc, sym}, nil, p)
+	got := findByID(out, "sym-1")
+	if got.IncidentParent == nil {
+		t.Fatal("symptom pod got no IncidentParent")
+	}
+	if got.IncidentParent.ID != "pvc-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceHigh || got.IncidentParent.FactType != factPVCBlastRadius {
+		t.Errorf("IncidentParent = %+v, want pvc-1/high/pvc_blast_radius", *got.IncidentParent)
+	}
+	// The root itself must NOT get a parent.
+	if findByID(out, "pvc-1").IncidentParent != nil {
+		t.Error("the PVC root must not get an IncidentParent")
+	}
+}
+
+func TestIncidentParent_NodeMediumPointer(t *testing.T) {
+	node := Issue{ID: "node-1", Kind: "Node", Name: "n1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
+	sym := Issue{ID: "oom-1", Kind: "Pod", Namespace: "prod", Name: "web-a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical}
+	p := &fakeProvider{podsOnNode: map[string][]Ref{"n1": {{Kind: "Pod", Namespace: "prod", Name: "web-a"}}}}
+	out := enrichDiagnosticContext([]Issue{node, sym}, []Issue{node, sym}, nil, p)
+	got := findByID(out, "oom-1")
+	if got.IncidentParent == nil || got.IncidentParent.ID != "node-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceMedium {
+		t.Fatalf("expected medium IncidentParent → node-1, got %+v", got.IncidentParent)
+	}
+}
+
+func TestIncidentParent_SelectedBackendNoPointer(t *testing.T) {
+	// A Service with no endpoints because its backend pods crashloop — the pods
+	// are the CAUSE, not a symptom of the Service, so NO reverse pointer.
+	svc := Issue{ID: "svc-1", Kind: "Service", Namespace: "prod", Name: "api", Category: issuesapi.CategoryServiceNoEndpoints, Severity: SeverityCritical, Reason: "0/2 selected pods ready"}
+	pod := Issue{ID: "crash-1", Kind: "Pod", Namespace: "prod", Name: "api-x", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical}
+	p := &fakeProvider{selectedPods: map[string][]Ref{"prod/api": {{Kind: "Pod", Namespace: "prod", Name: "api-x"}}}}
+	out := enrichDiagnosticContext([]Issue{svc, pod}, []Issue{svc, pod}, nil, p)
+	if got := findByID(out, "crash-1"); got.IncidentParent != nil {
+		t.Fatalf("selected_backend must not create a reverse pointer (inverted direction), got %+v", *got.IncidentParent)
+	}
+}
+
+func TestIncidentParent_FoldGroupAgreement(t *testing.T) {
+	// Two pod members of one grouped issue resolve to DIFFERENT node parents →
+	// the grouped row must omit IncidentParent (no honest single root).
+	nodeA := hi("node-A")
+	nodeB := hi("node-B")
+	mixed := GroupIssues([]Issue{
+		{ID: "g1", Kind: "Pod", Namespace: "p", Name: "a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical, IncidentParent: &nodeA},
+		{ID: "g1", Kind: "Pod", Namespace: "p", Name: "b", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical, IncidentParent: &nodeB},
+	})
+	if len(mixed) != 1 || mixed[0].IncidentParent != nil {
+		t.Fatalf("disagreeing members must omit IncidentParent, got %+v", mixed[0].IncidentParent)
+	}
+	// Agreeing members → carried.
+	same := GroupIssues([]Issue{
+		{ID: "g2", Kind: "Pod", Namespace: "p", Name: "a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical, IncidentParent: &nodeA},
+		{ID: "g2", Kind: "Pod", Namespace: "p", Name: "b", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical, IncidentParent: &nodeA},
+	})
+	if same[0].IncidentParent == nil || same[0].IncidentParent.ID != "node-A" {
+		t.Fatalf("agreeing members must carry IncidentParent, got %+v", same[0].IncidentParent)
+	}
+}

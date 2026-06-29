@@ -121,6 +121,7 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 	}
 
 	out := append([]Issue(nil), shaped...)
+	var incidentEdges []incidentEdge
 	for idx := range out {
 		var b diagnosticContextBuilder
 		i := &out[idx]
@@ -185,15 +186,15 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 		}
 
 		if nodeProvider != nil && i.Kind == "Node" && i.Category == issuesapi.CategoryNodeNotReady {
-			addNodeBlastRadiusContext(&b, *i, nodeProvider, flatByResource, groupedByID)
+			addNodeBlastRadiusContext(&b, *i, &incidentEdges, nodeProvider, flatByResource, groupedByID)
 		}
 
 		if pvcProvider != nil && i.Kind == "PersistentVolumeClaim" && pvcRootCategories[i.Category] {
-			addPVCBlastRadiusContext(&b, *i, pvcProvider, flatByResource, groupedByID)
+			addPVCBlastRadiusContext(&b, *i, &incidentEdges, pvcProvider, flatByResource, groupedByID)
 		}
 
 		if metricsAPIFamily(*i) != "" {
-			addAPIServiceHPAContext(&b, *i, flat, groupedByID)
+			addAPIServiceHPAContext(&b, *i, &incidentEdges, flat, groupedByID)
 		}
 
 		if ctx := b.build(); ctx != nil {
@@ -201,7 +202,109 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 		}
 	}
 
+	assignIncidentParents(out, incidentEdges)
 	return out
+}
+
+// incidentEdge is a proposed reverse pointer from a downstream symptom (its
+// grouped-issue ID) to a candidate root issue.
+type incidentEdge struct {
+	symptomID string
+	parent    issuesapi.IncidentParent
+}
+
+// recordIncidentEdges proposes a reverse pointer from each linked downstream
+// symptom to this root, capturing the root's subject ref + the link's confidence.
+// Self-edges are skipped. Only called for causal-direction-correct links (node /
+// pvc / apiservice / secret-producer / provisioning); selected_backend never
+// records edges because its related issues are the cause, not the symptom.
+func recordIncidentEdges(edges *[]incidentEdge, root Issue, factType string, conf issuesapi.Confidence, symptomIDs []string) {
+	if edges == nil {
+		return
+	}
+	parent := issuesapi.IncidentParent{
+		ID:         root.ID,
+		Ref:        Ref{Group: root.Group, Kind: root.Kind, Namespace: root.Namespace, Name: root.Name},
+		Category:   root.Category,
+		Confidence: conf,
+		FactType:   factType,
+	}
+	for _, sid := range symptomIDs {
+		if sid == "" || sid == root.ID {
+			continue // self-edge guard
+		}
+		*edges = append(*edges, incidentEdge{symptomID: sid, parent: parent})
+	}
+}
+
+// assignIncidentParents writes the single best IncidentParent onto each symptom
+// issue in `out`, reversing the root→symptom causal links. The rule is
+// deliberately conservative — mis-parenting is the cardinal sin: a higher
+// confidence tier wins (a declared PVC edge beats a co-located node), but among
+// DISTINCT roots at the SAME tier the pointer is left UNSET. Severity is NOT
+// causal evidence, so we never use it to choose between equally-confident roots;
+// an honest "no single root" beats a guessed one. (Cycles can't form with the
+// current link set — node/pvc/apiservice/secret-producer/provisioning roots are
+// never themselves downstream symptoms — so only the self-edge guard is needed.)
+func assignIncidentParents(out []Issue, edges []incidentEdge) {
+	if len(edges) == 0 {
+		return
+	}
+	idx := make(map[string]int, len(out))
+	for i := range out {
+		idx[out[i].ID] = i
+	}
+	cands := make(map[string][]issuesapi.IncidentParent)
+	for _, e := range edges {
+		if _, ok := idx[e.symptomID]; !ok {
+			continue // symptom not in the shaped set (filtered out / not present)
+		}
+		cands[e.symptomID] = append(cands[e.symptomID], e.parent)
+	}
+	for sid, ps := range cands {
+		if best, ok := bestIncidentParent(ps); ok {
+			best := best
+			out[idx[sid]].IncidentParent = &best
+		}
+	}
+}
+
+// bestIncidentParent returns the unique best root by confidence tier. Distinct
+// roots tied at the top tier → no winner (ok=false → omit). The same root
+// proposed by multiple facts collapses to one.
+func bestIncidentParent(ps []issuesapi.IncidentParent) (issuesapi.IncidentParent, bool) {
+	topRank := -1
+	for _, p := range ps {
+		if r := confidenceRank(p.Confidence); r > topRank {
+			topRank = r
+		}
+	}
+	atTop := map[string]issuesapi.IncidentParent{}
+	for _, p := range ps {
+		if confidenceRank(p.Confidence) == topRank {
+			atTop[p.ID] = p
+		}
+	}
+	if len(atTop) != 1 {
+		return issuesapi.IncidentParent{}, false
+	}
+	for _, p := range atTop {
+		return p, true
+	}
+	return issuesapi.IncidentParent{}, false
+}
+
+func confidenceRank(c issuesapi.Confidence) int {
+	switch c {
+	case issuesapi.ConfidenceHigh:
+		return 3
+	case issuesapi.ConfidenceMedium:
+		return 2
+	case issuesapi.ConfidenceLow:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func addServiceBackendContext(b *diagnosticContextBuilder, issue Issue, serviceProvider serviceBackendIssueProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
@@ -261,11 +364,11 @@ func addServiceBackendContext(b *diagnosticContextBuilder, issue Issue, serviceP
 // than repeating the same grouped issue per pod. Non-destructive — it only
 // annotates the root. `accept` is an optional per-symptom guard beyond the
 // category filter.
-func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[issuesapi.Category]bool, flatByResource map[string][]Issue, groupedByID map[string]Issue, factType string, conf issuesapi.Confidence, message string, accept func(Issue) bool) {
+func linkBlastRadius(b *diagnosticContextBuilder, root Issue, edges *[]incidentEdge, pods []Ref, attributable map[issuesapi.Category]bool, flatByResource map[string][]Issue, groupedByID map[string]Issue, factType string, conf issuesapi.Confidence, message string, accept func(Issue) bool) {
 	if len(pods) == 0 {
 		return
 	}
-	related, refs, total := collectRelated(groupedByID, func(yield func(Ref, Issue)) {
+	related, refs, total, relatedIDs := collectRelated(groupedByID, func(yield func(Ref, Issue)) {
 		for _, pod := range pods {
 			key := resourceKey(pod.Group, pod.Kind, pod.Namespace, pod.Name)
 			for _, flatIssue := range flatByResource[key] {
@@ -282,6 +385,7 @@ func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[i
 	if len(related) == 0 {
 		return
 	}
+	recordIncidentEdges(edges, root, factType, conf, relatedIDs)
 	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
 		Type:          factType,
 		Message:       withTruncationNote(message, len(related), total),
@@ -310,8 +414,9 @@ func withTruncationNote(message string, shown, total int) string {
 // returned Refs are the affected resources backing the kept groups, so the
 // displayed Refs and RelatedIssues stay consistent past the cap. The emit closure
 // calls yield once per candidate pairing.
-func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected Ref, symptom Issue))) ([]issuesapi.IssueRef, []Ref, int) {
+func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected Ref, symptom Issue))) ([]issuesapi.IssueRef, []Ref, int, []string) {
 	type group struct {
+		id   string
 		rel  issuesapi.IssueRef
 		pods []Ref
 	}
@@ -324,14 +429,14 @@ func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected 
 		}
 		g := byGroup[grouped.ID]
 		if g == nil {
-			g = &group{rel: issueRef(grouped)}
+			g = &group{id: grouped.ID, rel: issueRef(grouped)}
 			byGroup[grouped.ID] = g
 			order = append(order, grouped.ID)
 		}
 		g.pods = append(g.pods, affected)
 	})
 	if len(order) == 0 {
-		return nil, nil, 0
+		return nil, nil, 0, nil
 	}
 	total := len(order)
 	groups := make([]*group, 0, len(order))
@@ -345,6 +450,7 @@ func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected 
 		groups = groups[:maxDiagnosticIssueRefs]
 	}
 	related := make([]issuesapi.IssueRef, 0, len(groups))
+	relatedIDs := make([]string, 0, len(groups))
 	var refs []Ref
 	for _, g := range groups {
 		rel := g.rel
@@ -353,9 +459,10 @@ func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected 
 			rel.Count = len(distinct)
 		}
 		related = append(related, rel)
+		relatedIDs = append(relatedIDs, g.id)
 		refs = append(refs, distinct...)
 	}
-	return related, dedupeRefs(refs), total
+	return related, dedupeRefs(refs), total, relatedIDs
 }
 
 // addAPIServiceHPAContext links an unavailable metrics APIService to the HPAs that
@@ -366,12 +473,12 @@ func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected 
 // naming a metrics-fetch cause (a maxReplicas-capped HPA is excluded). Confidence
 // is medium: the categories and "can't fetch metrics" symptom line up, but we
 // can't prove a specific HPA consumed this exact API server.
-func addAPIServiceHPAContext(b *diagnosticContextBuilder, apisvc Issue, flat []Issue, groupedByID map[string]Issue) {
+func addAPIServiceHPAContext(b *diagnosticContextBuilder, apisvc Issue, edges *[]incidentEdge, flat []Issue, groupedByID map[string]Issue) {
 	family := metricsAPIFamily(apisvc)
 	if family == "" {
 		return
 	}
-	related, _, total := collectRelated(groupedByID, func(yield func(Ref, Issue)) {
+	related, _, total, relatedIDs := collectRelated(groupedByID, func(yield func(Ref, Issue)) {
 		for _, f := range flat {
 			if hpaBlockedOnMetricFamily(f, family) {
 				yield(Ref{Group: f.Group, Kind: f.Kind, Namespace: f.Namespace, Name: f.Name}, f)
@@ -381,6 +488,7 @@ func addAPIServiceHPAContext(b *diagnosticContextBuilder, apisvc Issue, flat []I
 	if len(related) == 0 {
 		return
 	}
+	recordIncidentEdges(edges, apisvc, factAPIServiceHPA, issuesapi.ConfidenceMedium, relatedIDs)
 	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
 		Type:          factAPIServiceHPA,
 		Message:       withTruncationNote("Autoscalers that can't read "+family+" metrics may be blocked by this unavailable metrics API.", len(related), total),
@@ -461,7 +569,7 @@ func hpaBlockedOnMetricFamily(i Issue, family string) bool {
 // unrecognized reason) links nothing. No timestamp guard: pod-issue onset isn't
 // reliably recorded (FirstSeen tracks pod age, not failure onset), so a guard
 // would drop legitimate long-running pods while still admitting unrelated ones.
-func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
+func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, edges *[]incidentEdge, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
 	// A node can hit several pressures at once (memory + disk + PID); those
 	// detections share the node_not_ready ID and group into one issue that keeps
 	// only one representative Reason. Union the attributable categories across ALL
@@ -487,7 +595,7 @@ func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeB
 	if len(attributable) == 0 {
 		return
 	}
-	linkBlastRadius(b, np.PodsOnNode(node.Name), attributable, flatByResource, groupedByID,
+	linkBlastRadius(b, node, edges, np.PodsOnNode(node.Name), attributable, flatByResource, groupedByID,
 		factNodeBlastRadius, issuesapi.ConfidenceMedium,
 		"Pods on this node show problems consistent with its resource pressure — the node may be the cause.", nil)
 }
@@ -499,8 +607,8 @@ func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, np nodeB
 // only linked when its own message confirms a volume cause — a pod can mount the
 // PVC yet be unschedulable for CPU or waiting on unrelated config, which must not
 // be attributed to the PVC.
-func addPVCBlastRadiusContext(b *diagnosticContextBuilder, pvc Issue, pp pvcBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
-	linkBlastRadius(b, pp.PodsMountingPVC(pvc.Namespace, pvc.Name), pvcAttributableCategories, flatByResource, groupedByID,
+func addPVCBlastRadiusContext(b *diagnosticContextBuilder, pvc Issue, edges *[]incidentEdge, pp pvcBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
+	linkBlastRadius(b, pvc, edges, pp.PodsMountingPVC(pvc.Namespace, pvc.Name), pvcAttributableCategories, flatByResource, groupedByID,
 		factPVCBlastRadius, issuesapi.ConfidenceHigh,
 		"Pods mounting this PVC are blocked by it.",
 		func(symptom Issue) bool {
