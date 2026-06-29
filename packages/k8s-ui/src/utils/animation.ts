@@ -22,23 +22,21 @@ export const DURATION_DOCK = 150
 /** Toast exit animation */
 export const DURATION_TOAST_EXIT = 200
 
+/** Drawer ↔ fullscreen expand/collapse morph. Longer than DURATION_NORMAL so a
+ *  large width change advances in small per-frame steps (reads as fluid, not
+ *  abrupt). Drives the frame width, the content crossfade, and the JS window
+ *  together — keep them in lockstep. */
+export const DURATION_DRAWER_MORPH = 360
+/** Gentle ease for the morph — eased at both ends so the big size change doesn't
+ *  lurch at the start the way the front-loaded iOS curve does. */
+export const EASE_DRAWER_MORPH = 'cubic-bezier(0.4, 0, 0.2, 1)'
+
 // -- Tailwind class presets ---------------------------------------------------
 // Reusable class fragments — import and spread into clsx() calls.
 
 /** Drawer slide from right — use with translate-x-0/translate-x-full + opacity.
  *  Also handles expand/collapse (width) so a single transition covers both. */
 export const TRANSITION_DRAWER =
-  `transition-[translate,opacity,width] duration-300 ${TW_EASE} will-change-[transform,width]`
-
-/** Resource drawer when its width must NOT animate (manual resize, reduced motion).
- *  Only the slide-in/out (translate + opacity) transitions. */
-export const TRANSITION_DRAWER_SLIDE =
-  `transition-[translate,opacity] duration-300 ${TW_EASE} will-change-transform`
-
-/** Resource drawer expand/collapse — slide + an animated width (frame morph).
- *  Tailwind can't compose two `transition-[…]` utilities (both set
- *  transition-property), so width lives in this single combined preset. */
-export const TRANSITION_DRAWER_EXPAND =
   `transition-[translate,opacity,width] duration-300 ${TW_EASE} will-change-[transform,width]`
 
 

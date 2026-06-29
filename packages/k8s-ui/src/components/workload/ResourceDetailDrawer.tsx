@@ -1,9 +1,7 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useReducer, useRef, type ReactNode } from 'react'
 import {
-  TRANSITION_DRAWER_SLIDE,
-  TRANSITION_DRAWER_EXPAND,
-  CSS_EASE,
-  DURATION_NORMAL,
+  DURATION_DRAWER_MORPH,
+  EASE_DRAWER_MORPH,
 } from '../../utils/animation'
 import { clsx } from 'clsx'
 import type { SelectedResource } from '../../types'
@@ -123,7 +121,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
           settledExpanded.current = !!expanded
           setCrossfadeArmed(false)
           forceSettle()
-        }, DURATION_NORMAL)
+        }, DURATION_DRAWER_MORPH)
       })
     })
     return () => {
@@ -221,7 +219,6 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
         // Clip the wider layer only while morphing; keep overflow visible at idle
         // so drawer popovers/tooltips aren't clipped.
         transitioning && 'overflow-hidden',
-        animateWidth ? TRANSITION_DRAWER_EXPAND : TRANSITION_DRAWER_SLIDE,
         isOpen
           ? 'translate-x-0 opacity-100'
           : 'translate-x-full opacity-0',
@@ -231,6 +228,11 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
         width: containerWidth,
         top: headerHeight,
         height: `calc(100% - ${headerHeight}px - ${dockInset}px)`,
+        // Inline so the morph duration/easing is controlled precisely (and stays
+        // in lockstep with the crossfade + JS window). Width only animates when
+        // not resizing / reduced-motion.
+        transition: `translate ${DURATION_DRAWER_MORPH}ms ${EASE_DRAWER_MORPH}, opacity ${DURATION_DRAWER_MORPH}ms ${EASE_DRAWER_MORPH}${animateWidth ? `, width ${DURATION_DRAWER_MORPH}ms ${EASE_DRAWER_MORPH}` : ''}`,
+        willChange: 'transform, width',
       }}
     >
       {/* Resize handle — hidden when expanded or mid-transition or on mobile */}
@@ -263,7 +265,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
             style={{
               width: layerExpanded ? (fullWidthPx ?? `calc(100% - ${leftOffset}px)`) : drawerWidth,
               opacity: isIncoming ? (crossfadeArmed ? 1 : 0) : (crossfadeArmed ? 0 : 1),
-              transition: `opacity ${DURATION_NORMAL}ms ${CSS_EASE}`,
+              transition: `opacity ${DURATION_DRAWER_MORPH}ms ${EASE_DRAWER_MORPH}`,
               willChange: 'opacity',
             }}
             aria-hidden={!isIncoming}

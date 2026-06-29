@@ -26,7 +26,7 @@ import { ApplicationsView } from './components/applications/ApplicationsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalTerminal } from './components/dock'
-import { DURATION_DOCK, DURATION_NORMAL } from '@skyhook-io/k8s-ui/utils/animation'
+import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { useNavCustomization } from './context/NavCustomization'
@@ -460,25 +460,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   // Diagnostics overlay state
   const [showDiagnostics, setShowDiagnostics] = useState(false)
 
-  // Drawer expanded state (drawer grows to full width and renders WorkloadView)
-  const [drawerExpanded, setDrawerExpanded] = useState(false)
-
-  // True for the duration of an expand/collapse animation. Gates the standalone
-  // WorkloadViewRoute so it can't flash behind the shrinking drawer during the
-  // async navigate(-1) pop on collapse (drawerExpanded flips before the URL does).
-  const [drawerTransitioning, setDrawerTransitioning] = useState(false)
-  const drawerTransitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const beginDrawerTransition = useCallback(() => {
-    setDrawerTransitioning(true)
-    if (drawerTransitionTimer.current) clearTimeout(drawerTransitionTimer.current)
-    // Outlast the drawer's own crossfade window (which starts a frame later, in a
-    // layout effect) so the standalone route can't flash behind the last frames.
-    drawerTransitionTimer.current = setTimeout(() => setDrawerTransitioning(false), DURATION_NORMAL + 100)
-  }, [])
-  useEffect(() => () => { if (drawerTransitionTimer.current) clearTimeout(drawerTransitionTimer.current) }, [])
-
-  // Suppress the mainView-change clear effect during controlled expand/collapse transitions.
-  const suppressViewClearRef = useRef(false)
+  // Drawer "expanded" (grows to full width over the retained list) is URL-derived:
+  // ?full=1 on the resources route with a selected resource. Single source of truth
+  // so browser Back/Forward and refresh restore it with no parallel state to desync.
+  // Standalone fullscreen for non-list surfaces stays on the /workload route.
+  const drawerExpanded = mainView === 'resources' && !!selectedResource && searchParams.get('full') === '1'
 
   // On a history Pop (back/forward) the URL is authoritative. The URL-write
   // effect, running with not-yet-synced state, would otherwise write the stale
@@ -511,9 +497,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   // URL backing, so the only signal that the page beneath it has navigated is
   // that its owner-key (pathname + ?app) no longer matches where it was opened.
   // Hiding it here, at render time, closes the orphan on Back without adding
-  // another clearing effect that would race the `suppressViewClearRef` lifecycle.
-  // The /resources case is URL-backed and handled above; an expanded drawer
-  // (drawerExpanded) legitimately lives at /workload and must stay open there.
+  // another clearing effect. The /resources case is URL-backed and handled above;
+  // an expanded drawer (drawerExpanded) only exists on /resources (?full=1), so it
+  // is excluded here and never treated as an orphan.
   const peekRouteOrphaned = !!selectedResource && !drawerExpanded && mainView !== 'resources' &&
     peekOwnerKeyRef.current !== null &&
     peekOwnerKeyRef.current !== peekOwnerKey(location.pathname, location.search)
@@ -540,7 +526,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
 
     if (prev !== null && prev !== key && selectedResourceRouteMismatch) {
       setSelectedResource(null)
-      setDrawerExpanded(false)
     }
   }, [mainView, currentResourceKindSlug, currentResourceGroup, selectedResourceRouteMismatch])
 
@@ -641,13 +626,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
     navigateToResourceList(resource)
   }, [navigate, navigateToHelmRelease, navigateToResourceList])
 
-  // Collapse from expanded WorkloadView back to drawer
+  // Collapse the over-list fullscreen back to the drawer = drop ?full=1 (and the
+  // resource-scoped ?tab) in place. The button means "collapse THIS to a drawer"
+  // regardless of how we got here (expand, deep link, or a drill trail), so it
+  // scrubs rather than walking history — `navigate(-1)` would leave the app on a
+  // deep link, or step back to the previous resource after a drill. Browser Back
+  // keeps its own natural history walk (it pops the ?full=1 entry → collapse).
   const handleCollapseFromExpanded = useCallback(() => {
-    suppressViewClearRef.current = true
-    beginDrawerTransition()
-    setDrawerExpanded(false)
-    navigate(-1)
-  }, [navigate, beginDrawerTransition])
+    const p = new URLSearchParams(searchParams)
+    p.delete('full')
+    p.delete('tab')
+    setSearchParams(p, { replace: true })
+  }, [searchParams, setSearchParams])
 
   // Theme toggle for keyboard shortcut
   const { toggleTheme } = useTheme()
@@ -933,8 +923,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
       slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
 
       // Close any open drawers/overlays — old cluster's resources don't exist on the new one
+      // (?full=1 is cleared by the URL reset below).
       setSelectedResource(null)
-      setDrawerExpanded(false)
       setSelectedHelmRelease(null)
 
       // Reset URL to current view with no resource-specific params.
@@ -1299,13 +1289,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   // But preserve selectedResource when navigating TO resources view (e.g., from Helm deep link)
   const prevMainView = useRef(mainView)
   useEffect(() => {
-    // Skip clearing during controlled expand/collapse transitions
-    if (suppressViewClearRef.current) {
-      suppressViewClearRef.current = false
-      prevMainView.current = mainView
-      return
-    }
-
     const navigatingToResources = mainView === 'resources' && prevMainView.current !== 'resources'
     const navigatingToHelm = mainView === 'helm' && prevMainView.current !== 'helm'
     prevMainView.current = mainView
@@ -1316,6 +1299,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
     // asserts. (On a real view switch the URL no longer carries the param, so
     // the clear proceeds.) Without this, deep-linking straight to a Helm
     // release lands on the release list with no drawer.
+    // (drawerExpanded is URL-derived from ?full=1, so leaving /resources drops it
+    // automatically — no explicit reset needed.)
     const params = new URLSearchParams(window.location.search)
     if (!navigatingToResources && !params.has('resource')) {
       setSelectedResource(null)
@@ -1323,7 +1308,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
     if (!navigatingToHelm && !params.has('release')) {
       setSelectedHelmRelease(null)
     }
-    setDrawerExpanded(false)
   }, [mainView])
 
   // Clear resource selection when namespaces change — but keep a selection the
@@ -1333,7 +1317,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
     const params = new URLSearchParams(window.location.search)
     if (!params.has('resource')) setSelectedResource(null)
     if (!params.has('release')) setSelectedHelmRelease(null)
-    setDrawerExpanded(false)
   }, [namespacesKey])
 
   // Filter topology based on visible kinds (uses displayedTopology which respects pause)
@@ -2089,8 +2072,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           />
         )}
 
-        {/* Workload full view (direct URL only — expand from drawer uses drawer's expanded state) */}
-        {mainView === 'workload' && !drawerExpanded && !drawerTransitioning && (
+        {/* Workload full view — the standalone fullscreen route for non-list
+            surfaces and deep links. Expand-from-drawer is the ?full=1 overlay on
+            /resources instead, so it never routes here. */}
+        {mainView === 'workload' && (
           <WorkloadViewRoute
             onNavigateToResource={(resource) => {
               navigate(buildWorkloadPath(resource))
@@ -2116,18 +2101,35 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           headerHeight={chromeless ? 0 : undefined}
           isOpen={resourceDrawer.isOpen}
           expanded={drawerExpanded}
-          onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail'); setDrawerExpanded(false) }}
+          onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail') }}
           onNavigate={(res) => navigateToResource(res)}
           onExpand={(res) => {
-            suppressViewClearRef.current = true
-            beginDrawerTransition()
-            setDrawerExpanded(true)
-            navigate(buildWorkloadPath(res))
+            // Over a resource list → grow into the over-list fullscreen overlay
+            // (?full=1, pushed so Back collapses) and keep the list mounted
+            // underneath. Over any other surface there's nothing to retain, so
+            // open the standalone fullscreen page.
+            if (mainView === 'resources') {
+              const p = new URLSearchParams(searchParams)
+              p.set('full', '1')
+              setSearchParams(p)
+            } else {
+              navigate(buildWorkloadPath(res))
+            }
           }}
           onCollapse={handleCollapseFromExpanded}
           onNavigateToResource={(resource) => {
-            setSelectedResource(resource)
-            navigate(buildWorkloadPath(resource), { replace: true })
+            // Drill into a related resource while expanded: stay in the over-list
+            // overlay for the new resource (pushed, so Back walks resource→resource
+            // still expanded). The backdrop list follows to the new kind.
+            const pluralKind = kindToPlural(resource.kind)
+            setSelectedResource({ ...resource, kind: pluralKind })
+            const p = new URLSearchParams()
+            const ns = searchParams.get('namespaces')
+            if (ns) p.set('namespaces', ns)
+            p.set('resource', resource.namespace ? `${resource.namespace}/${resource.name}` : resource.name)
+            if (resource.group) p.set('apiGroup', resource.group)
+            p.set('full', '1')
+            navigate({ pathname: `/resources/${pluralKind}`, search: p.toString() })
           }}
         />
       )}

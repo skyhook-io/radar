@@ -2951,6 +2951,11 @@ export function ResourcesView({
       params.set('resource', resourceNs ? `${resourceNs}/${resourceName}` : resourceName)
     } else {
       params.delete('resource')
+      // `full` (over-list fullscreen) and `tab` are resource-scoped — when no
+      // resource is selected they're stale; drop them so they can't leak onto a
+      // later selection (e.g. after a kind switch or closing the drawer).
+      params.delete('full')
+      params.delete('tab')
     }
 
     const newPath = `${basePath}/${kindInfo.name}`
