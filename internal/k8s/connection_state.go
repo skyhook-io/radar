@@ -218,7 +218,13 @@ func ClassifyError(err error) string {
 	if strings.Contains(errLower, "unauthorized") ||
 		strings.Contains(errLower, "authentication required") ||
 		strings.Contains(errLower, "token has expired") ||
-		strings.Contains(errLower, "credentials") ||
+		strings.Contains(errLower, "expired token") ||
+		strings.Contains(errLower, "sso session") ||
+		strings.Contains(errLower, "sso token") ||
+		strings.Contains(errLower, "ssoproviderinvalidtoken") ||
+		strings.Contains(errLower, "aws sso login") ||
+		strings.Contains(errLower, "credential") ||
+		strings.Contains(errLower, "auth plugin timeout") ||
 		strings.Contains(errLower, "exec plugin") ||
 		strings.Contains(errLower, "gke-gcloud-auth-plugin") ||
 		strings.Contains(errLower, "unable to connect to the server") && strings.Contains(errLower, "oauth2") {
@@ -235,14 +241,17 @@ func ClassifyError(err error) string {
 		return "network"
 	}
 
-	// Timeout errors — but when an exec credential plugin is configured,
-	// timeouts almost always mean expired credentials (the plugin hangs
-	// trying to refresh), not actual network timeouts.
-	// Exception: "cluster unreachable" means the connectivity test ran
-	// (exec plugin didn't block), so the cluster itself is down/offline.
+	// Timeout errors — but when an exec credential plugin is configured, an
+	// unwrapped deadline exceeded often means the plugin hung while refreshing
+	// expired credentials. Keep transport timeouts in the timeout bucket so an
+	// offline or stalled cluster still points at connectivity instead of
+	// credentials.
 	if strings.Contains(errLower, "i/o timeout") ||
 		strings.Contains(errLower, "context deadline exceeded") ||
 		strings.Contains(errLower, "timeout") {
+		if strings.Contains(errLower, "i/o timeout") {
+			return "timeout"
+		}
 		if UsesExecAuth() && !strings.Contains(errLower, "cluster unreachable") {
 			return "auth"
 		}

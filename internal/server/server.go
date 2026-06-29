@@ -3553,14 +3553,18 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		// Set disconnected state with error
+		errorType := k8s.ClassifyError(err)
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   ctx,
 			Error:     err.Error(),
-			ErrorType: k8s.ClassifyError(err),
+			ErrorType: errorType,
 		})
-		s.writeError(w, http.StatusServiceUnavailable, err.Error())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if encodeErr := json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "errorType": errorType}); encodeErr != nil {
+			log.Printf("Failed to encode connection retry error response: %v", encodeErr)
+		}
 		return
 	}
 

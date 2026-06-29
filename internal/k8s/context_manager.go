@@ -18,9 +18,11 @@ import (
 // so operators can override it via flag/env without recompiling. The default
 // value (30 * time.Second) is preserved for backwards compatibility.
 
-// ConnectionTestTimeout is the maximum time allowed for initial connection test
-// This is a short timeout for quick fail detection
+// ConnectionTestTimeout is the maximum time allowed for non-exec-auth
+// connection tests. This is a short timeout for quick fail detection.
 const ConnectionTestTimeout = 5 * time.Second
+const execAuthConnectionProbeHTTPTimeout = 10 * time.Second
+const connectionProbeTimeoutHeadroom = time.Second
 
 // ContextSwitchCallback is called when the context is switched
 type ContextSwitchCallback func(newContext string)
@@ -245,7 +247,7 @@ func TestClusterConnection(ctx context.Context) error {
 	// Create a copy of the config with a short timeout
 	// rest.CopyConfig properly copies all fields including TLS settings
 	testConfig := rest.CopyConfig(config)
-	testConfig.Timeout = ConnectionTestTimeout
+	testConfig.Timeout = connectionProbeHTTPTimeout(ctx)
 
 	// Create a temporary client with the short-timeout config
 	testClient, err := kubernetes.NewForConfig(testConfig)
@@ -269,8 +271,34 @@ func TestClusterConnection(ctx context.Context) error {
 		}
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("cluster unreachable: %w", ctx.Err())
+		if !UsesExecAuth() {
+			return fmt.Errorf("cluster unreachable: %w", ctx.Err())
+		}
+		return fmt.Errorf("auth plugin timeout: %w", ctx.Err())
 	}
+}
+
+func connectionTestOperationTimeout() time.Duration {
+	if UsesExecAuth() {
+		return execAuthConnectionProbeHTTPTimeout + connectionProbeTimeoutHeadroom
+	}
+	return ConnectionTestTimeout
+}
+
+func connectionProbeHTTPTimeout(ctx context.Context) time.Duration {
+	timeout := ConnectionTestTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > connectionProbeTimeoutHeadroom {
+			timeout = remaining - connectionProbeTimeoutHeadroom
+		} else if remaining > 0 {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		return ConnectionTestTimeout
+	}
+	return timeout
 }
 
 // PerformContextSwitch orchestrates a full context switch:
@@ -347,7 +375,7 @@ func PerformContextSwitch(newContext string) error {
 	reportProgress("Testing cluster connectivity...")
 	t = time.Now()
 	log.Println("Testing cluster connectivity...")
-	connCtx, connCancel := NewOperationContext(ConnectionTestTimeout)
+	connCtx, connCancel := NewOperationContext(connectionTestOperationTimeout())
 	defer connCancel()
 	if err := TestClusterConnection(connCtx); err != nil {
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
@@ -422,7 +450,7 @@ func PerformNamespaceRescope(namespace string) error {
 	myGen := currentOperationGen()
 	reportProgress("Testing cluster connectivity...")
 	t := time.Now()
-	connCtx, connCancel := NewOperationContext(ConnectionTestTimeout)
+	connCtx, connCancel := NewOperationContext(connectionTestOperationTimeout())
 	defer connCancel()
 	if err := TestClusterConnection(connCtx); err != nil {
 		elapsed := time.Since(rescopeStart).Truncate(time.Millisecond)

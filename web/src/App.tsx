@@ -53,7 +53,7 @@ import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import type { ClusterLoadState } from './types/clusterLoadState'
 import { useClusterLoadState } from './hooks/useClusterLoadState'
-import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, HelpCircle, Loader2 } from 'lucide-react'
+import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -995,7 +995,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // forceNamespaceFilter is only set for large clusters that require server-side filtering.
   // Fleet mode uses 'resources' topology on the backend — filtering is client-side
   const sseMode = topologyMode === 'fleet' ? 'resources' : topologyMode
-  const { topology } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
+  const { topology, connected: eventStreamConnected, connecting: eventStreamConnecting, reconnect: reconnectEventStream } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
     onContextChanged: () => {
@@ -1032,8 +1032,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     },
     onK8sEvent: handleK8sEvent,
   }, forceNamespaceFilter, showPolicyEffect)
-  const clusterConnected = connection.state === 'connected'
-
   // On large clusters (where the server requires namespace filtering), keep
   // SSE's server-side filter in lockstep with the user's namespace pick.
   // Without this, header switches and deep-link loads can leave SSE filtered
@@ -1078,6 +1076,28 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Track CRD discovery status from topology (more direct than cluster-info)
   // When discovery completes, topology will auto-update via SSE with new CRD nodes
   const crdDiscoveryStatus = topology?.crdDiscoveryStatus
+  const clusterConnectionState = connection.state
+  const clusterConnected = clusterConnectionState === 'connected'
+  const liveUpdatesDisconnected = clusterConnected && !eventStreamConnected && !eventStreamConnecting
+  const headerConnectionLabel =
+    clusterConnectionState === 'disconnected' ? 'Disconnected' :
+    clusterConnectionState === 'connecting' ? 'Connecting' :
+    liveUpdatesDisconnected ? 'Live updates disconnected' :
+    clusterLoadState.loading ? `Connected — ${clusterLoadState.message}` :
+    crdDiscoveryStatus === 'discovering' ? 'Connected — discovering Custom Resources...' :
+    'Connected'
+  const headerConnectionDisplayLabel =
+    clusterConnectionState === 'disconnected' ? 'Disconnected' :
+    clusterConnectionState === 'connecting' ? 'Connecting' :
+    liveUpdatesDisconnected ? 'Live updates disconnected' :
+    showClusterWarmupLabel ? clusterLoadState.message :
+    crdDiscoveryStatus === 'discovering' ? 'Discovering Custom Resources…' :
+    ''
+  const showHeaderReconnect =
+    clusterConnectionState === 'disconnected' ||
+    liveUpdatesDisconnected
+  const headerReconnect = clusterConnectionState === 'disconnected' ? retryConnection : reconnectEventStream
+  const headerReconnectPending = clusterConnectionState === 'disconnected' ? isRetrying : false
 
   // Debug: log discovery status changes
   useEffect(() => {
@@ -1578,58 +1598,49 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                 />
               </ScopePill>
             )}
-            {/* Connection status — a fixed-size dot (state in the tooltip; the
-                dot is the reconnect control when disconnected) plus, when the
-                header is wide enough (xl+), a label. The label is nowrap and
-                unbounded: it overflows the fixed left column into the empty gap
-                before the centered search box rather than shifting anything (the
-                dot + pill are shrink-0, so layout stays put — the search box
-                never moves). Where the gap is smaller than the label, its tail
-                tucks under the omnibar's solid background. Below xl it's the dot
-                alone. */}
+            {/* Connection status — a fixed-size dot (state in the tooltip), an
+                optional reconnect button, and when the header is wide enough
+                (xl+), a label. The label is nowrap and unbounded: it overflows
+                the fixed left column into the empty gap before the centered
+                search box rather than shifting anything (the dot + pill are
+                shrink-0, so layout stays put — the search box never moves).
+                Where the gap is smaller than the label, its tail tucks under
+                the omnibar's solid background. Below xl it's the dot alone
+                unless reconnect is available. */}
             <div className="ml-1 flex items-center gap-1.5 shrink-0">
               <Tooltip
-                content={
-                  !clusterConnected
-                    ? 'Cluster disconnected — click to reconnect'
-                    : clusterLoadState.loading
-                      ? `Connected — ${clusterLoadState.message}`
-                    : crdDiscoveryStatus === 'discovering'
-                      ? 'Connected — discovering Custom Resources...'
-                      : 'Connected'
-                }
+                content={headerConnectionLabel}
                 delay={100}
                 position="bottom"
               >
-                {clusterConnected ? (
-                  <span
-                    className={`block w-2.5 h-2.5 shrink-0 rounded-full ${
-                      crdDiscoveryStatus === 'discovering' || clusterLoadState.loading
+                <span
+                  className={`block w-2.5 h-2.5 shrink-0 rounded-full ${
+                    clusterConnectionState === 'disconnected' || liveUpdatesDisconnected
+                      ? 'bg-red-500'
+                      : clusterConnectionState === 'connecting' || crdDiscoveryStatus === 'discovering' || clusterLoadState.loading
                         ? 'bg-amber-400 animate-pulse'
                         : 'bg-green-500'
-                    }`}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={retryConnection}
-                    disabled={isRetrying}
-                    aria-label="Cluster disconnected — reconnect"
-                    className="block shrink-0 disabled:cursor-default"
-                  >
-                    <span className={`block w-2.5 h-2.5 rounded-full bg-red-500 ${isRetrying ? 'animate-pulse' : ''}`} />
-                  </button>
-                )}
+                  }`}
+                />
               </Tooltip>
-              {(showClusterWarmupLabel || (showNavRail && (!clusterConnected || crdDiscoveryStatus === 'discovering'))) && (
+              {showNavRail && headerConnectionDisplayLabel && (
                 <span className="hidden xl:flex items-center gap-1.5 whitespace-nowrap text-[11px] text-theme-text-tertiary">
                   {showClusterWarmupLabel && <Loader2 className="w-3 h-3 animate-spin" />}
-                  {!clusterConnected
-                    ? 'Disconnected'
-                    : showClusterWarmupLabel
-                      ? clusterLoadState.message
-                      : 'Discovering Custom Resources…'}
+                  {headerConnectionDisplayLabel}
                 </span>
+              )}
+              {showHeaderReconnect && (
+                <Tooltip content="Reconnect" delay={100} position="bottom">
+                  <button
+                    type="button"
+                    onClick={headerReconnect}
+                    disabled={headerReconnectPending}
+                    aria-label={clusterConnectionState === 'disconnected' ? 'Reconnect cluster' : 'Reconnect live updates'}
+                    className="p-1 text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-50 disabled:pointer-events-none"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${headerReconnectPending ? 'animate-spin' : ''}`} />
+                  </button>
+                </Tooltip>
               )}
             </div>
             {/* Port forwards indicator — shown only when sessions exist */}

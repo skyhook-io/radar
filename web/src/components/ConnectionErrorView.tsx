@@ -29,8 +29,8 @@ function getAuthHints(context: string): AuthHints {
     case 'GKE': {
       const result: AuthHints = {
         title: 'GKE Authentication Failed',
-        hints: ['Your Google Cloud credentials have expired.'],
-        authCommand: { label: 'Re-authenticate with Google Cloud:', command: 'gcloud auth login' },
+        hints: ['Radar could not get Google Cloud credentials for this context.'],
+        authCommand: { label: 'Refresh Google Cloud credentials:', command: 'gcloud auth login' },
       }
       if (parsed.region && parsed.account) {
         const isZone = /^[a-z]+-[a-z]+\d+-[a-z]$/.test(parsed.region)
@@ -45,8 +45,11 @@ function getAuthHints(context: string): AuthHints {
     case 'EKS': {
       const result: AuthHints = {
         title: 'EKS Authentication Failed',
-        hints: ['Your AWS credentials have expired.'],
-        authCommand: { label: 'Re-authenticate with AWS:', command: 'aws sso login' },
+        hints: [
+          'Radar could not get AWS credentials for this context.',
+          'For AWS SSO contexts, the SSO session may need login.',
+        ],
+        authCommand: { label: 'If this context uses AWS SSO, refresh credentials:', command: 'aws sso login' },
       }
       if (parsed.region) {
         result.fallbackCommand = {
@@ -59,15 +62,15 @@ function getAuthHints(context: string): AuthHints {
     case 'AKS':
       return {
         title: 'AKS Authentication Failed',
-        hints: ['Your Azure credentials have expired.'],
-        authCommand: { label: 'Re-authenticate with Azure:', command: 'az login' },
+        hints: ['Radar could not get Azure credentials for this context.'],
+        authCommand: { label: 'Refresh Azure credentials:', command: 'az login' },
         fallbackCommand: { label: 'If that doesn\'t work, refresh cluster credentials:', command: 'az aks get-credentials --name <cluster> --resource-group <rg>' },
       }
     default:
       return {
         title: 'Authentication Failed',
         hints: [
-          'Your credentials may have expired',
+          'Radar could not get Kubernetes credentials for this context',
           'Re-authenticate with your cloud provider and try again',
         ],
       }
@@ -281,6 +284,12 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
 
             {connection.errorType !== 'config' && <ContextSwitcher />}
           </div>
+
+          {isAuth && (
+            <p className="mt-4 text-xs text-theme-text-tertiary">
+              Radar will keep retrying after credentials are refreshed.
+            </p>
+          )}
         </div>
       </div>
     </div>
