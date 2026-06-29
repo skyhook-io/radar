@@ -23,6 +23,7 @@ const (
 	factNodeBlastRadius     = "node_blast_radius"
 	factPVCBlastRadius      = "pvc_blast_radius"
 	factAPIServiceHPA       = "apiservice_hpa"
+	factProvisioning        = "node_provisioning"
 )
 
 type serviceBackendIssueProvider interface {
@@ -195,6 +196,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 
 		if metricsAPIFamily(*i) != "" {
 			addAPIServiceHPAContext(&b, *i, &incidentEdges, flat, groupedByID)
+		}
+
+		if i.Category == issuesapi.CategoryNodeProvisioningFail {
+			addProvisioningContext(&b, *i, &incidentEdges, flat, groupedByID)
 		}
 
 		if ctx := b.build(); ctx != nil {
@@ -495,6 +500,54 @@ func addAPIServiceHPAContext(b *diagnosticContextBuilder, apisvc Issue, edges *[
 		Confidence:    issuesapi.ConfidenceMedium,
 		RelatedIssues: related,
 	})
+}
+
+// addProvisioningContext links a failed node provisioner (Karpenter NodeClaim/
+// NodePool, CAPI Machine — anything classified node_provisioning_failed) to the
+// pods stuck Pending because capacity could not be added. Like the APIService→HPA
+// fan-in there is no declared edge (an unschedulable pod doesn't name the
+// provisioner), so it's a cluster-wide fan-in gated on the pod's OWN scheduler
+// message naming a scale-up/capacity failure — NOT taint/affinity/CPU-on-existing,
+// which the provisioner can't fix. Confidence medium: the scale-up signal ties the
+// pod to autoscaling, but co-incidence isn't proof this provisioner is the one.
+func addProvisioningContext(b *diagnosticContextBuilder, root Issue, edges *[]incidentEdge, flat []Issue, groupedByID map[string]Issue) {
+	related, _, total, relatedIDs := collectRelated(groupedByID, func(yield func(Ref, Issue)) {
+		for _, f := range flat {
+			if unschedulableOnCapacity(f) {
+				yield(Ref{Group: f.Group, Kind: f.Kind, Namespace: f.Namespace, Name: f.Name}, f)
+			}
+		}
+	})
+	if len(related) == 0 {
+		return
+	}
+	recordIncidentEdges(edges, root, factProvisioning, issuesapi.ConfidenceMedium, relatedIDs)
+	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
+		Type:          factProvisioning,
+		Message:       withTruncationNote("Pods stuck Pending for capacity may be blocked by this failed provisioner.", len(related), total),
+		Confidence:    issuesapi.ConfidenceMedium,
+		RelatedIssues: related,
+	})
+}
+
+// unschedulableOnCapacity reports whether an unschedulable issue's scheduler text
+// blames a scale-up / capacity-provisioning failure (cluster-autoscaler's "pod
+// didn't trigger scale-up", Karpenter's incompatible-nodepool / "did not tolerate",
+// max-size-reached), as opposed to a taint/affinity/insufficient-on-existing-node
+// placement problem the provisioner can't resolve.
+func unschedulableOnCapacity(i Issue) bool {
+	if i.Category != issuesapi.CategoryUnschedulable {
+		return false
+	}
+	text := strings.ToLower(i.Reason + " " + i.Message)
+	return strings.Contains(text, "didn't trigger scale-up") ||
+		strings.Contains(text, "didn't trigger scaleup") ||
+		strings.Contains(text, "scale up") ||
+		strings.Contains(text, "scale-up") ||
+		strings.Contains(text, "max node group size reached") ||
+		strings.Contains(text, "max-node-group-size-reached") ||
+		strings.Contains(text, "incompatible with nodepool") ||
+		strings.Contains(text, "no instance type satisfied")
 }
 
 // metricsAPIFamily classifies an apiservice_unavailable issue by which metrics

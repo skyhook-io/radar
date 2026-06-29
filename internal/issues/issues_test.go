@@ -1915,6 +1915,39 @@ func TestIncidentParent_SelectedBackendNoPointer(t *testing.T) {
 	}
 }
 
+func TestProvisioningContext(t *testing.T) {
+	// A failed provisioner links pods stuck for capacity ("didn't trigger
+	// scale-up"), but NOT a pod unschedulable for a taint the provisioner can't fix.
+	prov := Issue{ID: "np-1", Kind: "NodeClaim", Group: "karpenter.sh", Name: "default-abc", Category: issuesapi.CategoryNodeProvisioningFail, Severity: SeverityCritical, Reason: "Launch failed"}
+	capacity := Issue{ID: "u-1", Kind: "Pod", Namespace: "prod", Name: "web-a", Category: issuesapi.CategoryUnschedulable, Severity: SeverityWarning,
+		Message: "0/3 nodes are available; pod didn't trigger scale-up: max node group size reached"}
+	taint := Issue{ID: "u-2", Kind: "Pod", Namespace: "prod", Name: "web-b", Category: issuesapi.CategoryUnschedulable, Severity: SeverityWarning,
+		Message: "0/3 nodes are available: 3 node(s) had untolerated taint {dedicated: gpu}"}
+
+	out := enrichDiagnosticContext([]Issue{prov, capacity, taint}, []Issue{prov, capacity, taint}, nil, &fakeProvider{})
+	// Forward fact on the provisioner root.
+	root := findByID(out, "np-1")
+	if root.DiagnosticContext == nil {
+		t.Fatal("provisioner root got no diagnostic context")
+	}
+	var fact *issuesapi.DiagnosticFact
+	for i := range root.DiagnosticContext.Facts {
+		if root.DiagnosticContext.Facts[i].Type == factProvisioning {
+			fact = &root.DiagnosticContext.Facts[i]
+		}
+	}
+	if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != "web-a" {
+		t.Fatalf("expected only the scale-up pod linked, got %+v", fact)
+	}
+	// Reverse pointer on the capacity pod; none on the taint pod.
+	if got := findByID(out, "u-1"); got.IncidentParent == nil || got.IncidentParent.ID != "np-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceMedium {
+		t.Fatalf("capacity pod should point to the provisioner (medium), got %+v", got.IncidentParent)
+	}
+	if got := findByID(out, "u-2"); got.IncidentParent != nil {
+		t.Fatalf("taint-unschedulable pod must not be attributed to the provisioner, got %+v", *got.IncidentParent)
+	}
+}
+
 func TestIncidentParent_FoldGroupAgreement(t *testing.T) {
 	// Two pod members of one grouped issue resolve to DIFFERENT node parents →
 	// the grouped row must omit IncidentParent (no honest single root).

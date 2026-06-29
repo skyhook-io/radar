@@ -44,6 +44,8 @@ export function diagnosticFactLabel(type: string): string {
       return 'Blocked pods';
     case 'apiservice_hpa':
       return 'Stalled autoscalers';
+    case 'node_provisioning':
+      return 'Pods awaiting capacity';
     default:
       return type.replace(/_/g, ' ');
   }
