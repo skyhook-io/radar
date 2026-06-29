@@ -384,6 +384,7 @@ function DiagnosticContext({
                     key={`${related.ref.group ?? ''}/${related.ref.kind}/${related.ref.namespace ?? ''}/${related.ref.name}#${relIdx}`}
                     label="Related"
                     refForLink={memberRef(issue, related.ref)}
+                    count={related.count}
                     resourceHref={resourceHref}
                     onResourceClick={onResourceClick}
                     ResourceLinkIcon={ResourceLinkIcon}
@@ -478,12 +479,14 @@ function AffectedResources({
 function ResourceLine({
   label,
   refForLink,
+  count,
   resourceHref,
   onResourceClick,
   ResourceLinkIcon,
 }: {
   label?: string;
   refForLink: IssueResourceRef;
+  count?: number;
   resourceHref?: (ref: IssueResourceRef) => string;
   onResourceClick?: (ref: IssueResourceRef) => void;
   ResourceLinkIcon: ComponentType<{ className?: string }>;
@@ -498,6 +501,9 @@ function ResourceLine({
         {r.namespace ? `${r.namespace} / ` : ''}
         {r.name}
       </span>
+      {count && count > 1 ? (
+        <span className="shrink-0 text-[10px] text-theme-text-tertiary tabular-nums" title={`${count} affected resources grouped under this issue`}>{count} affected</span>
+      ) : null}
       {linkable && <ResourceLinkIcon className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover/r:opacity-100" />}
     </>
   );

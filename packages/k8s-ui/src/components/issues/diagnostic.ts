@@ -42,6 +42,8 @@ export function diagnosticFactLabel(type: string): string {
       return 'Affected workloads';
     case 'pvc_blast_radius':
       return 'Blocked pods';
+    case 'apiservice_hpa':
+      return 'Stalled autoscalers';
     default:
       return type.replace(/_/g, ' ');
   }
