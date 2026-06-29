@@ -89,8 +89,8 @@ func CreateSessionCookie(user *User, sid, idToken, secret string, ttl time.Durat
 	value := buildCookieValue(payload, secret)
 
 	if len(value) > maxCookieSize && payload.IDToken != "" {
-		log.Printf("[auth] Session cookie for %s exceeds %d bytes (%d), dropping ID token to fit",
-			user.Username, maxCookieSize, len(value))
+		log.Printf("[auth] Session cookie exceeds %d bytes (%d), dropping ID token to fit",
+			maxCookieSize, len(value))
 		payload.IDToken = ""
 		value = buildCookieValue(payload, secret)
 	}
@@ -106,8 +106,8 @@ func CreateSessionCookie(user *User, sid, idToken, secret string, ttl time.Durat
 		}
 	}
 
-	log.Printf("[auth] Session cookie for %s is %d bytes (limit %d) — splitting into chunked cookies",
-		user.Username, len(value), maxCookieSize)
+	log.Printf("[auth] Session cookie is %d bytes (limit %d) — splitting into chunked cookies",
+		len(value), maxCookieSize)
 	return createChunkedCookies(DefaultCookieName, value, ttl, secure)
 }
 
@@ -212,7 +212,7 @@ func parseCookieValue(cookieValue, secret, remoteAddr string) *Session {
 	// Verify HMAC signature
 	expected := signData(encoded, secret)
 	if !hmac.Equal([]byte(sig), []byte(expected)) {
-		log.Printf("[auth] Session cookie HMAC verification failed — possible tampered cookie from %s", remoteAddr)
+		log.Printf("[auth] Session cookie HMAC verification failed — possible tampered cookie from %q", remoteAddr)
 		return nil
 	}
 
@@ -248,7 +248,7 @@ func parseCookieValue(cookieValue, secret, remoteAddr string) *Session {
 func buildCookieValue(p cookiePayload, secret string) string {
 	data, err := json.Marshal(p)
 	if err != nil {
-		log.Fatalf("[auth] Failed to marshal session cookie payload for user %s: %v", p.Username, err)
+		log.Fatalf("[auth] Failed to marshal session cookie payload for user %q: %v", p.Username, err)
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(data)
 	return encoded + "." + signData(encoded, secret)
