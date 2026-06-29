@@ -1902,6 +1902,22 @@ func TestIncidentParent_PVCHighPointer(t *testing.T) {
 	}
 }
 
+func TestIncidentParent_FlatViewNoPointer(t *testing.T) {
+	// Ungrouped mode (?view=flat, per-resource regroup): grouped is nil, so the
+	// whole-row coverage gate can't be evaluated (members share an ID, Count 0).
+	// incident_parent must NOT be assigned — it's a grouped-model property.
+	pvc := Issue{ID: "pvc-1", Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical, Reason: "Pending"}
+	pod1 := Issue{ID: "g", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical, Message: "pod has unbound immediate PersistentVolumeClaims"}
+	pod2 := Issue{ID: "g", Kind: "Pod", Namespace: "prod", Name: "db-1", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical, Message: "pod has unbound immediate PersistentVolumeClaims"}
+	p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": {{Kind: "Pod", Namespace: "prod", Name: "db-0"}, {Kind: "Pod", Namespace: "prod", Name: "db-1"}}}}
+	out := enrichDiagnosticContext([]Issue{pvc, pod1, pod2}, []Issue{pvc, pod1, pod2}, nil, p) // grouped == nil → ungrouped path
+	for _, i := range out {
+		if i.IncidentParent != nil {
+			t.Fatalf("ungrouped mode must not assign incident_parent, got one on %s/%s", i.Kind, i.Name)
+		}
+	}
+}
+
 func TestIncidentParent_CoverageGate(t *testing.T) {
 	// A grouped Deployment unschedulable issue (3 member pods) gets the pointer
 	// only when ALL 3 are explained by the PVC; if only 2 mount it, the row is
