@@ -1888,7 +1888,7 @@ func TestIncidentParent_PVCHighPointer(t *testing.T) {
 	sym := Issue{ID: "sym-1", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical,
 		Message: "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims"}
 	p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": {{Kind: "Pod", Namespace: "prod", Name: "db-0"}}}}
-	out := enrichDiagnosticContext([]Issue{pvc, sym}, []Issue{pvc, sym}, nil, p)
+	out := enrichDiagnosticContext([]Issue{pvc, sym}, []Issue{pvc, sym}, []Issue{pvc, sym}, p)
 	got := findByID(out, "sym-1")
 	if got.IncidentParent == nil {
 		t.Fatal("symptom pod got no IncidentParent")
@@ -1933,7 +1933,7 @@ func TestIncidentParent_NodeMediumPointer(t *testing.T) {
 	node := Issue{ID: "node-1", Kind: "Node", Name: "n1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
 	sym := Issue{ID: "oom-1", Kind: "Pod", Namespace: "prod", Name: "web-a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical}
 	p := &fakeProvider{podsOnNode: map[string][]Ref{"n1": {{Kind: "Pod", Namespace: "prod", Name: "web-a"}}}}
-	out := enrichDiagnosticContext([]Issue{node, sym}, []Issue{node, sym}, nil, p)
+	out := enrichDiagnosticContext([]Issue{node, sym}, []Issue{node, sym}, []Issue{node, sym}, p)
 	got := findByID(out, "oom-1")
 	if got.IncidentParent == nil || got.IncidentParent.ID != "node-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceMedium {
 		t.Fatalf("expected medium IncidentParent → node-1, got %+v", got.IncidentParent)
@@ -1973,7 +1973,7 @@ func TestSecretProducerContext(t *testing.T) {
 			{Kind: "Pod", Namespace: "prod", Name: "web-c"},
 		}},
 	}}
-	out := enrichDiagnosticContext([]Issue{cert, blocked, unrelated, sameName}, []Issue{cert, blocked, unrelated, sameName}, nil, p)
+	out := enrichDiagnosticContext([]Issue{cert, blocked, unrelated, sameName}, []Issue{cert, blocked, unrelated, sameName}, []Issue{cert, blocked, unrelated, sameName}, p)
 
 	root := findByID(out, "cert-1")
 	var fact *issuesapi.DiagnosticFact
