@@ -466,6 +466,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   // Standalone fullscreen for non-list surfaces stays on the /workload route.
   const drawerExpanded = mainView === 'resources' && !!selectedResource && searchParams.get('full') === '1'
 
+  // On mobile there's no room for the side drawer — a resource detail is always
+  // shown full-screen. `expandedView` is the effective fullscreen state (URL flag
+  // OR forced on mobile); it drives the drawer, the background-suppression gate,
+  // and the inert backdrop. `drawerExpanded` stays the URL truth for routing.
+  const isMobile = useMediaQuery('(max-width: 639px)')
+  const expandedView = drawerExpanded || (isMobile && !!selectedResource)
+
   // On a history Pop (back/forward) the URL is authoritative. The URL-write
   // effect, running with not-yet-synced state, would otherwise write the stale
   // state back and revert the Pop — and oscillate with the URL→state read
@@ -579,6 +586,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
     newParams.delete('kind')
     newParams.delete('mode')
     newParams.delete('group')
+    // Open as a normal drawer — never inherit a stale ?full=1/tab from an
+    // expanded view we're navigating away from (only expand/drill set those).
+    newParams.delete('full')
+    newParams.delete('tab')
     newParams.set('resource', resource.namespace ? `${resource.namespace}/${resource.name}` : resource.name)
     if (resource.group) {
       newParams.set('apiGroup', resource.group)
@@ -1579,6 +1590,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
                 params.delete('kind')
                 if (group) params.set('apiGroup', group); else params.delete('apiGroup')
                 params.delete('resource')
+                params.delete('full')
+                params.delete('tab')
                 navigate({ pathname: `/resources/${kind}`, search: params.toString() })
               }}
               onSwitchContext={(name) => switchContext.mutate({ name }, { onSettled: () => setNamespaces([]) })}
@@ -1789,7 +1802,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
       )}
 
       {/* Main content - only show when connected and authenticated */}
-      {contentReady && <div className="flex-1 flex overflow-hidden">
+      {/* inert while a fullscreen detail overlay covers the views — keeps the
+          retained background list out of the focus order + a11y tree (the visual
+          cover already blocks pointer events). */}
+      {contentReady && <div className="flex-1 flex overflow-hidden" inert={expandedView}>
         <ErrorBoundary>
         {/* Home dashboard */}
         {mainView === 'home' && (
@@ -1804,6 +1820,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
               newParams.delete('kind') // kind is now in the path
               newParams.delete('mode')
               newParams.delete('resource')
+              newParams.delete('full') // don't carry an expanded-overlay flag onto a fresh kind list
+              newParams.delete('tab')
               newParams.delete('group') // Clear topology grouping param to avoid leaking into resources view
               if (apiGroup) {
                 newParams.set('apiGroup', apiGroup)
@@ -1947,10 +1965,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
             onClearNamespaces={clearAllNamespaces}
-            // While the fullscreen overlay (?full=1) covers the list, suppress its
-            // row-nav / Escape / action shortcuts so they don't fire on the hidden
-            // background list underneath.
-            shortcutsActive={!drawerExpanded}
+            // While a fullscreen overlay covers the list, suppress its row-nav /
+            // Escape / action shortcuts so they don't fire on the hidden background.
+            shortcutsActive={!expandedView}
           />
         )}
 
@@ -2104,7 +2121,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           // to the top of the content area instead of leaving a 49px gap.
           headerHeight={chromeless ? 0 : undefined}
           isOpen={resourceDrawer.isOpen}
-          expanded={drawerExpanded}
+          expanded={expandedView}
           onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail') }}
           onNavigate={(res) => navigateToResource(res)}
           onExpand={(res) => {
@@ -2120,7 +2137,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
               navigate(buildWorkloadPath(res))
             }
           }}
-          onCollapse={handleCollapseFromExpanded}
+          // On mobile there's no drawer to collapse back to, so the collapse/back
+          // control closes the resource (returns to the list) instead.
+          onCollapse={isMobile ? (() => { setSelectedResource(null); setDrawerInitialTab('detail') }) : handleCollapseFromExpanded}
           onNavigateToResource={(resource) => {
             // Drill into a related resource while expanded: stay in the over-list
             // overlay for the new resource (pushed, so Back walks resource→resource
@@ -2196,6 +2215,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
             if (group) params.set('apiGroup', group)
             else params.delete('apiGroup')
             params.delete('resource')
+            params.delete('full')
+            params.delete('tab')
             navigate({ pathname: `/resources/${kind}`, search: params.toString() })
             // Focus the table search after navigation — the user came from ⌘K
             // (keyboard flow) and expects to type a resource name immediately.
