@@ -48,7 +48,7 @@ import { useEventSource } from './hooks/useEventSource'
 import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
-import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
+import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
@@ -464,14 +464,20 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   // ?full=1 on the resources route with a selected resource. Single source of truth
   // so browser Back/Forward and refresh restore it with no parallel state to desync.
   // Standalone fullscreen for non-list surfaces stays on the /workload route.
-  const drawerExpanded = mainView === 'resources' && !!selectedResource && searchParams.get('full') === '1'
+  // Expanded = ?full=1 with a selected resource, on ANY view. The peek drawer (over
+  // the resources list, the topology graph, GitOps, Applications…) grows to
+  // fullscreen over whatever view is underneath, which stays mounted. URL-derived
+  // so Back/Forward/refresh behave (on non-list views the peek isn't URL-backed, so
+  // refresh drops the overlay gracefully — that's an accepted asymmetry).
+  const drawerExpanded = !!selectedResource && searchParams.get('full') === '1'
 
   // On mobile there's no room for the side drawer — a resource detail is always
   // shown full-screen. `expandedView` is the effective fullscreen state (URL flag
-  // OR forced on mobile); it drives the drawer, the background-suppression gate,
-  // and the inert backdrop. `drawerExpanded` stays the URL truth for routing.
+  // OR forced on mobile); it drives the drawer, the inert backdrop, and the
+  // view-level keyboard-shortcut suppression so the hidden page's keys don't fire.
   const isMobile = useMediaQuery('(max-width: 639px)')
   const expandedView = drawerExpanded || (isMobile && !!selectedResource)
+  useSuppressBaseShortcuts(expandedView)
 
   // On a history Pop (back/forward) the URL is authoritative. The URL-write
   // effect, running with not-yet-synced state, would otherwise write the stale
@@ -1965,9 +1971,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
             onClearNamespaces={clearAllNamespaces}
-            // While a fullscreen overlay covers the list, suppress its row-nav /
-            // Escape / action shortcuts so they don't fire on the hidden background.
-            shortcutsActive={!expandedView}
           />
         )}
 
@@ -2125,22 +2128,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail') }}
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
-          onExpand={(res, opts) => {
-            // Over a resource list → grow into the over-list fullscreen overlay
-            // (?full=1, pushed so Back collapses) and keep the list mounted
-            // underneath. Over any other surface there's nothing to retain, so
-            // open the standalone fullscreen page. Carry the YAML tab when
+          onExpand={(_res, opts) => {
+            // Grow the peek into a fullscreen overlay (?full=1, pushed so Back
+            // collapses) over whatever view is underneath — list, topology graph,
+            // GitOps, Applications — which stays mounted. Carry the YAML tab when
             // expanding from the drawer's YAML view so the editor (and its
             // session-persisted draft) is right there, not behind the Overview tab.
-            if (mainView === 'resources') {
-              const p = new URLSearchParams(searchParams)
-              p.set('full', '1')
-              if (opts?.yaml) p.set('tab', 'yaml')
-              setSearchParams(p)
-            } else {
-              const base = buildWorkloadPath(res)
-              navigate(opts?.yaml ? `${base}${base.includes('?') ? '&' : '?'}tab=yaml` : base)
-            }
+            const p = new URLSearchParams(searchParams)
+            p.set('full', '1')
+            if (opts?.yaml) p.set('tab', 'yaml')
+            setSearchParams(p)
           }}
           // On mobile there's no drawer to collapse back to, so the collapse/back
           // control closes the resource (returns to the list) instead.

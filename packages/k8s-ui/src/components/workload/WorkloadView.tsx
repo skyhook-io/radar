@@ -529,7 +529,10 @@ export function WorkloadView({
       keys: 'Escape',
       description: expanded ? 'Go back' : 'Close drawer',
       category: expanded ? 'Navigation' as const : 'Drawer' as const,
-      scope: expanded ? 'global' as const : 'drawer' as const,
+      // 'drawer' (top priority) in both modes so when this is the fullscreen
+      // overlay its Escape unambiguously wins over any background view's Escape
+      // (incl. another 'global'-scope WorkloadView mounted underneath).
+      scope: 'drawer' as const,
       handler: expanded ? onBack : () => onClose?.(),
       enabled: active,
     },
