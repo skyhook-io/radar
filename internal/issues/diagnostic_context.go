@@ -239,10 +239,11 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 
 	// incident_parent is a property of the GROUPED issue model: the whole-row
 	// coverage gate needs the grouped fan-out (Count), and a grouped subject has a
-	// unique ID. Only assign on the cluster grouped path (grouped != nil). The
-	// ungrouped paths — ?view=flat (raw evidence) and the per-resource regroup —
-	// share issue IDs across members and have Count 0, so coverage can't be checked
-	// and the pointer would attach arbitrarily; they deliberately leave it unset.
+	// unique ID. Only assign when called in grouped mode (grouped != nil) — the
+	// cluster Issues path, and the per-resource RelatedIssues path which re-runs
+	// this enrichment over its grouped set. The ungrouped ?view=flat call passes
+	// grouped == nil (members share issue IDs, Count 0, so coverage can't be
+	// checked and the pointer would attach arbitrarily) and leaves it unset.
 	if len(grouped) > 0 {
 		assignIncidentParents(out, incidentEdges)
 	}

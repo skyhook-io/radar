@@ -192,11 +192,10 @@ func foldGroup(members []Issue) Issue {
 	g.IssueTimingBasis = groupBasis
 
 	// IncidentParent is deliberately NOT carried through foldGroup: members of one
-	// grouped symptom share an issue ID, so the per-resource regroup can't tell
-	// which members the root actually covers (the whole-row coverage check that the
-	// cluster-wide path does after grouping isn't reconstructable here). The reverse
-	// pointer therefore ships on the cluster Issues view + MCP only; the per-resource
-	// path leaves it unset rather than over-claim a mixed-cause row.
+	// grouped symptom share an issue ID, so carrying a member's pointer can't honor
+	// the whole-row coverage check. Both paths instead assign it AFTER grouping, in
+	// enrichDiagnosticContext's grouped mode — the cluster path inline, the
+	// per-resource RelatedIssues path via a second enrichment over its grouped set.
 
 	// Count is the affected-resource fan-out — the non-subject members under
 	// this subject (the subject is shown separately as the header, not under
