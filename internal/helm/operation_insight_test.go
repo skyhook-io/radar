@@ -42,6 +42,28 @@ func TestBuildOperationInsightActiveUpgradePicksWorkloadAndCompare(t *testing.T)
 	}
 }
 
+func TestBuildOperationInsightSuppressesFluxOwnedReleases(t *testing.T) {
+	detail := &HelmReleaseDetail{
+		ManagedByFluxHelmRelease: "flux-system/api",
+		LastOperation: &HelmOperation{
+			Kind:     helmhistory.KindUpgradeFailed,
+			Status:   helmhistory.StatusFailed,
+			Revision: 2,
+		},
+		History: []HelmRevision{
+			{Revision: 2, Status: "failed"},
+			{Revision: 1, Status: "deployed"},
+		},
+		Resources: []OwnedResource{
+			{Kind: "Deployment", Name: "api", Namespace: "default", Status: "Progressing", Ready: "0/1"},
+		},
+	}
+
+	if got := buildOperationInsight(detail); got != nil {
+		t.Fatalf("buildOperationInsight = %#v, want nil for Flux-owned release", got)
+	}
+}
+
 func TestBuildOperationInsightWorkloadBeatsServiceSymptom(t *testing.T) {
 	detail := &HelmReleaseDetail{
 		LastOperation: &HelmOperation{

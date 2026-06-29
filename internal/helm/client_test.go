@@ -661,8 +661,8 @@ spec:
             port: 8080
 `
 
-	left := parseManifestResourceObjects(oldManifest, "demo")
-	right := parseManifestResourceObjects(newManifest, "demo")
+	left, _ := parseManifestResourceObjects(oldManifest, "demo")
+	right, _ := parseManifestResourceObjects(newManifest, "demo")
 	removed, added, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
 	modified, unchanged := diffRenderedResourceObjects(common, left, right)
 
@@ -730,8 +730,8 @@ spec:
         image: nginx:1.25
 `
 
-	left := parseManifestResourceObjects(oldManifest, "demo")
-	right := parseManifestResourceObjects(newManifest, "demo")
+	left, _ := parseManifestResourceObjects(oldManifest, "demo")
+	right, _ := parseManifestResourceObjects(newManifest, "demo")
 	_, _, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
 	modified, unchanged := diffRenderedResourceObjects(common, left, right)
 
@@ -743,8 +743,76 @@ spec:
 	}
 }
 
+func TestDiffRenderedResourceObjectsIgnoresGenericHelmChartLabelOnlyChanges(t *testing.T) {
+	oldManifest := `apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: cart
+  namespace: demo
+  labels:
+    helm.sh/chart: cart-1.0.0
+spec:
+  size: medium
+`
+	newManifest := `apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: cart
+  namespace: demo
+  labels:
+    helm.sh/chart: cart-1.0.1
+spec:
+  size: medium
+`
+
+	left, _ := parseManifestResourceObjects(oldManifest, "demo")
+	right, _ := parseManifestResourceObjects(newManifest, "demo")
+	_, _, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
+	modified, unchanged := diffRenderedResourceObjects(common, left, right)
+
+	if len(modified) != 0 {
+		t.Fatalf("modified = %#v, want Helm chart label-only change ignored", modified)
+	}
+	if len(unchanged) != 1 {
+		t.Fatalf("unchanged = %#v, want one unchanged custom resource", unchanged)
+	}
+}
+
+func TestDiffRenderedResourceObjectsIgnoresGenericHelmChartLabelAdded(t *testing.T) {
+	oldManifest := `apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: cart
+  namespace: demo
+spec:
+  size: medium
+`
+	newManifest := `apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: cart
+  namespace: demo
+  labels:
+    helm.sh/chart: cart-1.0.1
+spec:
+  size: medium
+`
+
+	left, _ := parseManifestResourceObjects(oldManifest, "demo")
+	right, _ := parseManifestResourceObjects(newManifest, "demo")
+	_, _, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
+	modified, unchanged := diffRenderedResourceObjects(common, left, right)
+
+	if len(modified) != 0 {
+		t.Fatalf("modified = %#v, want Helm chart label add ignored", modified)
+	}
+	if len(unchanged) != 1 {
+		t.Fatalf("unchanged = %#v, want one unchanged custom resource", unchanged)
+	}
+}
+
 func TestParseManifestResourceObjectsUsesMetadataName(t *testing.T) {
-	resources := parseManifestResourceObjects(`apiVersion: apps/v1
+	resources, parseErrors := parseManifestResourceObjects(`apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cart
@@ -756,6 +824,9 @@ spec:
         image: nginx
 `, "demo")
 
+	if parseErrors != 0 {
+		t.Fatalf("parseErrors = %d, want 0", parseErrors)
+	}
 	if len(resources) != 1 {
 		t.Fatalf("resources = %#v, want one resource", resources)
 	}
@@ -766,19 +837,52 @@ spec:
 }
 
 func TestParseManifestResourceObjectsKeepsClusterScopedNamespaceEmpty(t *testing.T) {
-	resources := parseManifestResourceObjects(`apiVersion: rbac.authorization.k8s.io/v1
+	resources, parseErrors := parseManifestResourceObjects(`apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: chart-reader
 rules: []
 `, "demo")
 
+	if parseErrors != 0 {
+		t.Fatalf("parseErrors = %d, want 0", parseErrors)
+	}
 	if len(resources) != 1 {
 		t.Fatalf("resources = %#v, want one resource", resources)
 	}
 	ref := resources[0].Ref
 	if ref.Name != "chart-reader" || ref.Namespace != "" || ref.Kind != "ClusterRole" || ref.APIVersion != "rbac.authorization.k8s.io/v1" {
 		t.Fatalf("ref = %#v, want rbac.authorization.k8s.io/v1 ClusterRole chart-reader with empty namespace", ref)
+	}
+}
+
+func TestParseManifestResourceObjectsReportsParseErrors(t *testing.T) {
+	resources, parseErrors := parseManifestResourceObjects(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: good
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bad
+  labels:
+    broken: [
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ok
+spec:
+  ports:
+  - port: 80
+`, "demo")
+
+	if parseErrors != 1 {
+		t.Fatalf("parseErrors = %d, want 1", parseErrors)
+	}
+	if len(resources) != 2 {
+		t.Fatalf("resources = %#v, want two parsed resources", resources)
 	}
 }
 

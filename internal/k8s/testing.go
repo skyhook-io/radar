@@ -155,6 +155,7 @@ func ResetTestState() {
 	// Reset connection state
 	connectionStatusMu.Lock()
 	connectionStatus = ConnectionStatus{}
+	clusterLivenessProbe = defaultClusterLivenessProbe
 	connectionStatusMu.Unlock()
 
 	// Reset connection callbacks

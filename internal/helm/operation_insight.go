@@ -19,6 +19,9 @@ func buildOperationInsight(detail *HelmReleaseDetail) *HelmOperationInsight {
 	if detail == nil || detail.LastOperation == nil {
 		return nil
 	}
+	if detail.ManagedByFluxHelmRelease != "" {
+		return nil
+	}
 
 	operation := *detail.LastOperation
 	insight := &HelmOperationInsight{

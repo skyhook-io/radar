@@ -250,12 +250,13 @@ type ResourceChange struct {
 
 // ResourceDiff represents rendered resource changes between revisions.
 type ResourceDiff struct {
-	Revision1 int              `json:"revision1"`
-	Revision2 int              `json:"revision2"`
-	Added     []ResourceRef    `json:"added"`
-	Removed   []ResourceRef    `json:"removed"`
-	Modified  []ResourceChange `json:"modified"`
-	Unchanged []ResourceRef    `json:"unchanged"`
+	Revision1       int              `json:"revision1"`
+	Revision2       int              `json:"revision2"`
+	Added           []ResourceRef    `json:"added"`
+	Removed         []ResourceRef    `json:"removed"`
+	Modified        []ResourceChange `json:"modified"`
+	Unchanged       []ResourceRef    `json:"unchanged"`
+	ParseErrorCount int              `json:"parseErrorCount,omitempty"`
 }
 
 // UpgradeInfo contains information about available upgrades

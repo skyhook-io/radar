@@ -799,6 +799,7 @@ export interface ResourceDiff {
   removed: HelmResourceRef[]
   modified: HelmResourceChange[]
   unchanged: HelmResourceRef[]
+  parseErrorCount?: number
 }
 
 // Selected Helm release (for drawer state)

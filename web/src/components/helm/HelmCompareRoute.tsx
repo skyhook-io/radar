@@ -215,32 +215,34 @@ export function HelmCompareRoute() {
 
       <RoleGatedPanel min="member" feature="release revision comparison">
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="grid w-full grid-cols-1 gap-4 px-4 py-4 xl:grid-cols-[220px_minmax(0,1fr)]">
-            <nav className="hidden xl:block">
-              <div className="sticky top-4 rounded-xl border border-theme-border bg-theme-surface p-2 shadow-theme-sm">
-                <div className="px-2 pb-2 text-[11px] font-medium uppercase text-theme-text-tertiary">Compare</div>
-                {[
-                  ['summary', 'Summary'],
-                  ['manifest', 'Manifest'],
-                  ['values', 'Values'],
-                  ['hooks', 'Hooks'],
-                  ['notes', 'Notes'],
-                  ['resources', 'Resources'],
-                ].map(([id, label]) => (
-                  <a
-                    key={id}
-                    href={`#${id}`}
-                    onClick={(event) => scrollCompareSection(event, id)}
-                    className="block rounded-md px-2 py-1.5 text-xs text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
-                  >
-                    {label}
-                  </a>
-                ))}
-              </div>
-            </nav>
+          <div className={clsx('grid w-full grid-cols-1 gap-4 px-4 py-4', pairReady && 'xl:grid-cols-[220px_minmax(0,1fr)]')}>
+            {pairReady && (
+              <nav className="hidden xl:block">
+                <div className="sticky top-4 rounded-xl border border-theme-border bg-theme-surface p-2 shadow-theme-sm">
+                  <div className="px-2 pb-2 text-[11px] font-medium uppercase text-theme-text-tertiary">Compare</div>
+                  {[
+                    ['summary', 'Summary'],
+                    ['manifest', 'Manifest'],
+                    ['values', 'Values'],
+                    ['hooks', 'Hooks'],
+                    ['notes', 'Notes'],
+                    ['resources', 'Resources'],
+                  ].map(([id, label]) => (
+                    <a
+                      key={id}
+                      href={`#${id}`}
+                      onClick={(event) => scrollCompareSection(event, id)}
+                      className="block rounded-md px-2 py-1.5 text-xs text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
+                    >
+                      {label}
+                    </a>
+                  ))}
+                </div>
+              </nav>
+            )}
 
             <main className="min-w-0 space-y-4">
-              {!pairReady && (
+              {!pairReady ? (
                 <div className="card-inner-lg flex items-start gap-3">
                   <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
                   <div>
@@ -248,74 +250,76 @@ export function HelmCompareRoute() {
                     <div className="mt-1 text-sm text-theme-text-secondary">Use the revision selectors above to choose a source and target revision.</div>
                   </div>
                 </div>
+              ) : (
+                <>
+                  <section id="summary" className="scroll-mt-4 space-y-4">
+                    <CompareSummary
+                      left={left}
+                      right={right}
+                      revision1={revision1}
+                      revision2={revision2}
+                      manifestDiff={manifestDiff.data?.diff}
+                      manifestLoading={manifestDiff.isLoading}
+                      manifestError={manifestDiff.error}
+                      valuesDiff={valuesDiff.data?.diff}
+                      valuesLoading={valuesDiff.isLoading}
+                      valuesError={valuesDiff.error}
+                      notesDiff={notesDiff.data?.diff}
+                      notesLoading={notesDiff.isLoading}
+                      notesError={notesDiff.error}
+                      hooksDiff={hooksDiff.data}
+                      hooksLoading={hooksDiff.isLoading}
+                      hooksError={hooksDiff.error}
+                      resourceDiff={resourceDiff.data}
+                      resourceLoading={resourceDiff.isLoading}
+                      resourceError={resourceDiff.error}
+                    />
+                  </section>
+
+                  <DiffSection
+                    id="manifest"
+                    icon={Code}
+                    title="Rendered manifest diff"
+                    description="Rendered Kubernetes YAML is the ground truth for what Helm would apply between these revisions."
+                    diff={manifestDiff.data?.diff || ''}
+                    isLoading={manifestDiff.isLoading}
+                    error={manifestDiff.error}
+                    emptyLabel="No rendered manifest changes found."
+                  />
+
+                  <DiffSection
+                    id="values"
+                    icon={Settings}
+                    title="User-supplied values diff"
+                    description="Only values explicitly supplied to the release are compared here; computed chart defaults can still affect the rendered manifest."
+                    diff={valuesDiff.data?.diff || ''}
+                    isLoading={valuesDiff.isLoading}
+                    error={valuesDiff.error}
+                    emptyLabel="No user-supplied value changes found."
+                  />
+
+                  <HooksDiffSection diff={hooksDiff.data} isLoading={hooksDiff.isLoading} error={hooksDiff.error} />
+
+                  <DiffSection
+                    id="notes"
+                    icon={FileText}
+                    title="Release notes diff"
+                    description="NOTES.txt output can reveal chart-level instructions that changed without changing live Kubernetes objects."
+                    diff={notesDiff.data?.diff || ''}
+                    isLoading={notesDiff.isLoading}
+                    error={notesDiff.error}
+                    emptyLabel="No release notes changes found."
+                  />
+
+                  <ResourceInventoryDiffSection
+                    diff={resourceDiff.data}
+                    isLoading={resourceDiff.isLoading}
+                    error={resourceDiff.error}
+                    left={left}
+                    right={right}
+                  />
+                </>
               )}
-
-              <section id="summary" className="scroll-mt-4 space-y-4">
-                <CompareSummary
-                  left={left}
-                  right={right}
-                  revision1={revision1}
-                  revision2={revision2}
-                  manifestDiff={manifestDiff.data?.diff}
-                  manifestLoading={manifestDiff.isLoading}
-                  manifestError={manifestDiff.error}
-                  valuesDiff={valuesDiff.data?.diff}
-                  valuesLoading={valuesDiff.isLoading}
-                  valuesError={valuesDiff.error}
-                  notesDiff={notesDiff.data?.diff}
-                  notesLoading={notesDiff.isLoading}
-                  notesError={notesDiff.error}
-                  hooksDiff={hooksDiff.data}
-                  hooksLoading={hooksDiff.isLoading}
-                  hooksError={hooksDiff.error}
-                  resourceDiff={resourceDiff.data}
-                  resourceLoading={resourceDiff.isLoading}
-                  resourceError={resourceDiff.error}
-                />
-              </section>
-
-              <DiffSection
-                id="manifest"
-                icon={Code}
-                title="Rendered manifest diff"
-                description="Rendered Kubernetes YAML is the ground truth for what Helm would apply between these revisions."
-                diff={manifestDiff.data?.diff || ''}
-                isLoading={manifestDiff.isLoading}
-                error={manifestDiff.error}
-                emptyLabel="No rendered manifest changes found."
-              />
-
-              <DiffSection
-                id="values"
-                icon={Settings}
-                title="User-supplied values diff"
-                description="Only values explicitly supplied to the release are compared here; computed chart defaults can still affect the rendered manifest."
-                diff={valuesDiff.data?.diff || ''}
-                isLoading={valuesDiff.isLoading}
-                error={valuesDiff.error}
-                emptyLabel="No user-supplied value changes found."
-              />
-
-              <HooksDiffSection diff={hooksDiff.data} isLoading={hooksDiff.isLoading} error={hooksDiff.error} />
-
-              <DiffSection
-                id="notes"
-                icon={FileText}
-                title="Release notes diff"
-                description="NOTES.txt output can reveal chart-level instructions that changed without changing live Kubernetes objects."
-                diff={notesDiff.data?.diff || ''}
-                isLoading={notesDiff.isLoading}
-                error={notesDiff.error}
-                emptyLabel="No release notes changes found."
-              />
-
-              <ResourceInventoryDiffSection
-                diff={resourceDiff.data}
-                isLoading={resourceDiff.isLoading}
-                error={resourceDiff.error}
-                left={left}
-                right={right}
-              />
             </main>
           </div>
         </div>
@@ -518,6 +522,7 @@ function CompareSummary({
   const notesStats = diffStats(notesDiff || '')
   const hookChanged = hooksDiff ? hooksDiff.added.length + hooksDiff.removed.length + hooksDiff.modified.length : 0
   const resourceChanged = resourceDiff ? resourceDiff.added.length + resourceDiff.removed.length + resourceDiff.modified.length : 0
+  const resourceParseErrors = resourceDiff?.parseErrorCount || 0
 
   return (
     <div className="card-inner-lg">
@@ -571,8 +576,8 @@ function CompareSummary({
           label="Inventory"
           loading={resourceLoading}
           error={resourceError}
-          tone={resourceChanged > 0 ? 'warning' : 'neutral'}
-          value={resourceDiff ? `${resourceChanged} changed` : 'same'}
+          tone={resourceParseErrors > 0 ? 'warning' : resourceChanged > 0 ? 'warning' : 'neutral'}
+          value={resourceDiff ? (resourceParseErrors > 0 ? `partial, ${resourceChanged} changed` : resourceChanged > 0 ? `${resourceChanged} changed` : 'same') : 'same'}
           sectionId="resources"
         />
       </div>
@@ -833,6 +838,7 @@ function ResourceInventoryDiffSection({
   const identityOverlap = diff ? diff.modified.length + diff.unchanged.length : 0
   const chartChanged = Boolean(left && right && left.chart !== right.chart)
   const lowPairingConfidence = Boolean(diff && chartChanged && changed > 0 && identityOverlap === 0)
+  const parseWarning = Boolean(diff?.parseErrorCount)
 
   return (
     <section id="resources" className="card-inner-lg scroll-mt-4">
@@ -852,6 +858,11 @@ function ResourceInventoryDiffSection({
             <span className={clsx('badge-sm', diff.removed.length ? SEVERITY_BADGE.error : SEVERITY_BADGE.neutral)}>
               {diff.removed.length} removed
             </span>
+            {parseWarning && (
+              <span className={clsx('badge-sm', SEVERITY_BADGE.warning)}>
+                {diff.parseErrorCount} unparsed
+              </span>
+            )}
           </div>
         )}
       </SectionHeader>
@@ -860,10 +871,23 @@ function ResourceInventoryDiffSection({
         <PaneLoader label="Comparing resource inventory..." className="h-32" />
       ) : error ? (
         <ErrorState error={error} />
-      ) : !diff || changed === 0 ? (
+      ) : !diff ? (
         <EmptyDiffState label="No rendered resource identity changes found." />
       ) : (
         <div className="mt-3 space-y-3">
+          {parseWarning && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-theme-text-secondary">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <div>
+                  <div className="font-medium text-theme-text-primary">Inventory may be incomplete.</div>
+                  <div className="mt-1">
+                    Radar could not parse {diff.parseErrorCount} rendered manifest document{diff.parseErrorCount === 1 ? '' : 's'} for inventory grouping. Use the rendered manifest diff above as the source of truth.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           {lowPairingConfidence && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-theme-text-secondary">
               <div className="flex items-start gap-2">
@@ -877,10 +901,16 @@ function ResourceInventoryDiffSection({
               </div>
             </div>
           )}
-          <ModifiedResourceGroup changes={diff.modified} />
-          <ResourceGroup title="Added resources" tone="success" resources={diff.added} />
-          <ResourceGroup title="Removed resources" tone="error" resources={diff.removed} />
-          <ResourceGroup title="Present in both revisions" tone="neutral" resources={diff.unchanged} collapsed />
+          {changed === 0 ? (
+            <EmptyDiffState label={parseWarning ? 'No rendered resource identity changes found in parsed documents.' : 'No rendered resource identity changes found.'} />
+          ) : (
+            <>
+              <ModifiedResourceGroup changes={diff.modified} />
+              <ResourceGroup title="Added resources" tone="success" resources={diff.added} />
+              <ResourceGroup title="Removed resources" tone="error" resources={diff.removed} />
+              <ResourceGroup title="Present in both revisions" tone="neutral" resources={diff.unchanged} collapsed />
+            </>
+          )}
         </div>
       )}
     </section>

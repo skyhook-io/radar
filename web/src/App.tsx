@@ -1222,7 +1222,6 @@ function AppInner() {
     }
 
     const navigatingToResources = mainView === 'resources' && prevMainView.current !== 'resources'
-    const navigatingToHelm = (mainView === 'helm' || mainView === 'helmCompare') && prevMainView.current !== 'helm'
     prevMainView.current = mainView
 
     // The URL is the source of truth for what's selected. A deep link
@@ -1235,7 +1234,7 @@ function AppInner() {
     if (!navigatingToResources && !params.has('resource')) {
       setSelectedResource(null)
     }
-    if (!navigatingToHelm && !params.has('release')) {
+    if (!params.has('release')) {
       setSelectedHelmRelease(null)
     }
     setDrawerExpanded(false)

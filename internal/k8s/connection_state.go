@@ -1,9 +1,11 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ConnectionState represents the current connection status to the cluster
@@ -33,6 +35,7 @@ var (
 	connectionStatusMu    sync.RWMutex
 	connectionCallbacks   []ConnectionChangeCallback
 	connectionCallbacksMu sync.RWMutex
+	clusterLivenessProbe  = defaultClusterLivenessProbe
 )
 
 // GetConnectionStatus returns the current connection status
@@ -45,6 +48,10 @@ func GetConnectionStatus() ConnectionStatus {
 // SetConnectionStatus updates the connection status and notifies callbacks
 func SetConnectionStatus(status ConnectionStatus) {
 	connectionStatusMu.Lock()
+	if connectionStatus == status {
+		connectionStatusMu.Unlock()
+		return
+	}
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 
@@ -65,10 +72,12 @@ func MarkDisconnectedIfClusterUnreachable(message string) bool {
 	if !isClusterUnreachableMessage(message) {
 		return false
 	}
-
 	current := GetConnectionStatus()
 	if current.State == StateDisconnected && current.Error == message {
 		return true
+	}
+	if clusterReachableNow(2 * time.Second) {
+		return false
 	}
 
 	status := ConnectionStatus{
@@ -82,10 +91,84 @@ func MarkDisconnectedIfClusterUnreachable(message string) bool {
 	return true
 }
 
+func clusterReachableNow(timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return clusterLivenessProbe(ctx) == nil
+}
+
+func defaultClusterLivenessProbe(ctx context.Context) error {
+	client := GetClient()
+	if client == nil {
+		return errors.New("kubernetes client is not initialized")
+	}
+	restClient := client.Discovery().RESTClient()
+	if restClient == nil {
+		return errors.New("kubernetes discovery client is not initialized")
+	}
+	_, err := restClient.Get().AbsPath("/version").Do(ctx).Raw()
+	return err
+}
+
 func isClusterUnreachableMessage(message string) bool {
 	lower := strings.ToLower(message)
-	return strings.Contains(lower, "kubernetes cluster unreachable") ||
-		strings.Contains(lower, "cluster unreachable")
+	if strings.Contains(lower, "kubernetes cluster unreachable") ||
+		strings.Contains(lower, "cluster unreachable") {
+		return true
+	}
+	return isHelmKubernetesOperationError(lower) && isTransportConnectivityError(lower)
+}
+
+func isHelmKubernetesOperationError(lower string) bool {
+	kubernetesOperationPrefixes := []string{
+		"failed to build helm restclientgetter",
+		"failed to initialize helm action config",
+		"failed to build helm action config",
+		"failed to list helm releases",
+		"failed to get helm release",
+		"failed to get release",
+		"failed to get current release",
+		"failed to get current values",
+		"failed to get helm release history",
+		"failed to get helm release manifest",
+		"failed to get helm release values",
+		"failed to get manifest for revision",
+		"failed to get values for revision",
+		"failed to get release revision",
+		"failed to inspect release storage namespaces",
+		"failed to inspect existing release",
+		"failed to preview values change",
+		"failed to apply values",
+		"rollback failed",
+		"uninstall failed",
+		"upgrade failed",
+		"install failed",
+	}
+	for _, prefix := range kubernetesOperationPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTransportConnectivityError(lower string) bool {
+	transportMarkers := []string{
+		"connection refused",
+		"no such host",
+		"dial tcp",
+		"i/o timeout",
+		"context deadline exceeded",
+		"no route to host",
+		"connection reset by peer",
+		"tls handshake timeout",
+	}
+	for _, marker := range transportMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateConnectionProgress updates the progress message while connecting
