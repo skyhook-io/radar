@@ -247,7 +247,9 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
             }}
             aria-hidden={!isIncoming}
           >
-            {renderLayer(layerExpanded, isIncoming)}
+            {/* Both layers inactive mid-crossfade — shortcuts shouldn't dispatch
+                during the animation; the settled layer owns them once idle. */}
+            {renderLayer(layerExpanded, false)}
           </div>
         )
       })}
