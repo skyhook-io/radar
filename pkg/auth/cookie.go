@@ -102,7 +102,7 @@ func CreateSessionCookie(user *User, sid, idToken, secret string, ttl time.Durat
 		// neutralizes any stale chunks (they expire on their own TTL).
 		return []*http.Cookie{
 			newSessionCookie(DefaultCookieName, value, ttl, secure),
-			expireCookie(DefaultCookieName + cookieChunkCountSuffix),
+			expireCookie(DefaultCookieName+cookieChunkCountSuffix, secure),
 		}
 	}
 
@@ -131,16 +131,21 @@ func createChunkedCookies(name, value string, ttl time.Duration, secure bool) []
 	chunks := splitString(value, maxCookieSize-100)
 	if len(chunks) > maxCookieChunks {
 		// Parse rejects counts above maxCookieChunks, so a session this large
-		// can't round-trip. Surface it instead of silently issuing cookies the
-		// browser sends back but the server then refuses.
-		log.Printf("[auth] WARNING: session value needs %d chunks (max %d) — login will fail; reduce the number of OIDC groups/claims",
+		// can't round-trip. Don't issue chunks the server will then refuse
+		// (that would loop login → 401); clear any prior representation and
+		// surface the misconfiguration instead.
+		log.Printf("[auth] ERROR: session value needs %d chunks (max %d) — cannot issue a usable session; reduce the number of OIDC groups/claims",
 			len(chunks), maxCookieChunks)
+		return []*http.Cookie{
+			expireCookie(name, secure),
+			expireCookie(name+cookieChunkCountSuffix, secure),
+		}
 	}
 	cookies := make([]*http.Cookie, 0, len(chunks)+2)
 
 	// Clear any stale single main cookie so the chunked session is authoritative
 	// (parse prefers a non-empty main cookie over chunks).
-	cookies = append(cookies, expireCookie(name))
+	cookies = append(cookies, expireCookie(name, secure))
 	for i, chunk := range chunks {
 		cookies = append(cookies, newSessionCookie(fmt.Sprintf("%s%s%d", name, cookieChunkSuffix, i), chunk, ttl, secure))
 	}
@@ -254,31 +259,37 @@ func buildCookieValue(p cookiePayload, secret string) string {
 // also clears each chunk and the meta-cookie, so a chunked session can't
 // survive logout by being reassembled on the next request.
 func ClearSessionCookie(r *http.Request) []*http.Cookie {
-	cookies := []*http.Cookie{expireCookie(DefaultCookieName)}
+	// Match the Secure attribute of the session cookies being cleared: a
+	// non-Secure deletion cookie may not reliably evict a Secure one in every
+	// browser. OIDC issues Secure cookies, so over HTTPS we must clear Secure.
+	secure := r != nil && (r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https")
+	cookies := []*http.Cookie{expireCookie(DefaultCookieName, secure)}
 
 	if r == nil {
 		return cookies
 	}
-	chunksCookie, err := r.Cookie(DefaultCookieName + cookieChunkCountSuffix)
-	if err != nil {
-		return cookies
-	}
-	cookies = append(cookies, expireCookie(DefaultCookieName+cookieChunkCountSuffix))
-	if numChunks, err := strconv.Atoi(chunksCookie.Value); err == nil && numChunks > 0 && numChunks <= maxCookieChunks {
-		for i := range numChunks {
-			cookies = append(cookies, expireCookie(fmt.Sprintf("%s%s%d", DefaultCookieName, cookieChunkSuffix, i)))
+	// If the session was chunked, clear the meta-cookie and every possible
+	// chunk index — not just the advertised count — so no chunk residue
+	// survives logout even if the count is stale (after a shrink) or corrupted.
+	if _, err := r.Cookie(DefaultCookieName + cookieChunkCountSuffix); err == nil {
+		cookies = append(cookies, expireCookie(DefaultCookieName+cookieChunkCountSuffix, secure))
+		for i := range maxCookieChunks {
+			cookies = append(cookies, expireCookie(fmt.Sprintf("%s%s%d", DefaultCookieName, cookieChunkSuffix, i), secure))
 		}
 	}
 	return cookies
 }
 
-// expireCookie returns a cookie that immediately clears the named cookie.
-func expireCookie(name string) *http.Cookie {
+// expireCookie returns a cookie that immediately clears the named cookie. It
+// mirrors the Secure attribute of the cookie it replaces so the deletion is
+// honored regardless of the original's Secure flag.
+func expireCookie(name string, secure bool) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   secure,
 		MaxAge:   -1,
 	}
 }

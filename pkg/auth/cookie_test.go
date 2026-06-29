@@ -625,3 +625,29 @@ func TestRepresentationSwitchDoesNotResurrectStaleSession(t *testing.T) {
 		t.Error("stale chunks resurrected a session after the main cookie was removed")
 	}
 }
+
+// TestCreateSessionCookie_RefusesOversizedSession verifies that a session too
+// large to round-trip (more than maxCookieChunks pieces) is not issued as a
+// chunk set the parser would reject; only clearing cookies are returned.
+func TestCreateSessionCookie_RefusesOversizedSession(t *testing.T) {
+	secret := "test-secret"
+	groups := make([]string, 2000)
+	for i := range groups {
+		groups[i] = "org:engineering:platform:team-" + strings.Repeat("x", 16)
+	}
+	cookies := CreateSessionCookie(&User{Username: "alice", Groups: groups}, NewSessionID(), "", secret, time.Hour, true)
+
+	for _, c := range cookies {
+		if c.Value != "" {
+			t.Errorf("oversized session should issue only clearing cookies, but %q carries a value (len %d)", c.Name, len(c.Value))
+		}
+		if c.MaxAge != -1 {
+			t.Errorf("clearing cookie %q should have MaxAge=-1, got %d", c.Name, c.MaxAge)
+		}
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	addCookies(req, cookies)
+	if ParseSessionCookie(req, secret) != nil {
+		t.Error("oversized session unexpectedly parsed to a valid session")
+	}
+}
