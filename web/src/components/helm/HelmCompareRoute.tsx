@@ -223,10 +223,10 @@ export function HelmCompareRoute() {
                   {[
                     ['summary', 'Summary'],
                     ['manifest', 'Manifest'],
+                    ['resources', 'Resources'],
                     ['values', 'Values'],
                     ['hooks', 'Hooks'],
                     ['notes', 'Notes'],
-                    ['resources', 'Resources'],
                   ].map(([id, label]) => (
                     <a
                       key={id}
@@ -287,6 +287,16 @@ export function HelmCompareRoute() {
                     emptyLabel="No rendered manifest changes found."
                   />
 
+                  <ResourceInventoryDiffSection
+                    diff={resourceDiff.data}
+                    isLoading={resourceDiff.isLoading}
+                    error={resourceDiff.error}
+                    left={left}
+                    right={right}
+                    revision1={revision1}
+                    revision2={revision2}
+                  />
+
                   <DiffSection
                     id="values"
                     icon={Settings}
@@ -311,13 +321,6 @@ export function HelmCompareRoute() {
                     emptyLabel="No release notes changes found."
                   />
 
-                  <ResourceInventoryDiffSection
-                    diff={resourceDiff.data}
-                    isLoading={resourceDiff.isLoading}
-                    error={resourceDiff.error}
-                    left={left}
-                    right={right}
-                  />
                 </>
               )}
             </main>
@@ -533,7 +536,7 @@ function CompareSummary({
             <h2 className="text-base font-semibold text-theme-text-primary">Revision {revision1} -&gt; {revision2}</h2>
           </div>
           <p className="mt-1 text-sm text-theme-text-secondary">
-            Start with the rendered manifest diff below, then use values, hooks, notes, and inventory as supporting evidence.
+            Start with the rendered manifest diff below, then use resources, values, hooks, and notes as supporting evidence.
           </p>
         </div>
       </div>
@@ -547,6 +550,14 @@ function CompareSummary({
           tone={manifestStats.changed ? 'info' : 'neutral'}
           value={manifestStats.changed ? `${manifestStats.additions} add / ${manifestStats.removals} remove` : 'same'}
           sectionId="manifest"
+        />
+        <SignalPill
+          label="Resources"
+          loading={resourceLoading}
+          error={resourceError}
+          tone={resourceParseErrors > 0 ? 'warning' : resourceChanged > 0 ? 'warning' : 'neutral'}
+          value={resourceDiff ? (resourceParseErrors > 0 ? `partial, ${resourceChanged} changed` : resourceChanged > 0 ? `${resourceChanged} changed` : 'same') : 'same'}
+          sectionId="resources"
         />
         <SignalPill
           label="Values"
@@ -571,14 +582,6 @@ function CompareSummary({
           tone={notesStats.changed ? 'info' : 'neutral'}
           value={notesStats.changed ? `${notesStats.additions} add / ${notesStats.removals} remove` : 'same'}
           sectionId="notes"
-        />
-        <SignalPill
-          label="Inventory"
-          loading={resourceLoading}
-          error={resourceError}
-          tone={resourceParseErrors > 0 ? 'warning' : resourceChanged > 0 ? 'warning' : 'neutral'}
-          value={resourceDiff ? (resourceParseErrors > 0 ? `partial, ${resourceChanged} changed` : resourceChanged > 0 ? `${resourceChanged} changed` : 'same') : 'same'}
-          sectionId="resources"
         />
       </div>
 
@@ -827,12 +830,16 @@ function ResourceInventoryDiffSection({
   error,
   left,
   right,
+  revision1,
+  revision2,
 }: {
   diff?: ResourceDiff
   isLoading: boolean
   error: unknown
   left?: HelmRevision
   right?: HelmRevision
+  revision1: number
+  revision2: number
 }) {
   const changed = diff ? diff.added.length + diff.removed.length + diff.modified.length : 0
   const identityOverlap = diff ? diff.modified.length + diff.unchanged.length : 0
@@ -844,8 +851,8 @@ function ResourceInventoryDiffSection({
     <section id="resources" className="card-inner-lg scroll-mt-4">
       <SectionHeader
         icon={Link2}
-        title="Rendered resource inventory"
-        description="Inventory groups rendered object identities and meaningful in-place changes. Use the manifest diff for the full YAML, including Helm bookkeeping labels."
+        title="Rendered resources"
+        description="Compact index of rendered Kubernetes objects. Use the manifest diff for exact YAML."
       >
         {!isLoading && !error && diff && (
           <div className="flex flex-wrap gap-1.5">
@@ -868,11 +875,11 @@ function ResourceInventoryDiffSection({
       </SectionHeader>
 
       {isLoading ? (
-        <PaneLoader label="Comparing resource inventory..." className="h-32" />
+        <PaneLoader label="Comparing rendered resources..." className="h-32" />
       ) : error ? (
         <ErrorState error={error} />
       ) : !diff ? (
-        <EmptyDiffState label="No rendered resource identity changes found." />
+        <EmptyDiffState label="No rendered resource changes found." />
       ) : (
         <div className="mt-3 space-y-3">
           {parseWarning && (
@@ -880,35 +887,30 @@ function ResourceInventoryDiffSection({
               <div className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
                 <div>
-                  <div className="font-medium text-theme-text-primary">Inventory may be incomplete.</div>
+                  <div className="font-medium text-theme-text-primary">Rendered resource list may be incomplete.</div>
                   <div className="mt-1">
-                    Radar could not parse {diff.parseErrorCount} rendered manifest document{diff.parseErrorCount === 1 ? '' : 's'} for inventory grouping. Use the rendered manifest diff above as the source of truth.
+                    Radar could not parse {diff.parseErrorCount} rendered manifest document{diff.parseErrorCount === 1 ? '' : 's'} for
+                    resource grouping. Use the rendered manifest diff above as the source of truth.
                   </div>
                 </div>
               </div>
             </div>
           )}
           {lowPairingConfidence && (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-theme-text-secondary">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                <div>
-                  <div className="font-medium text-theme-text-primary">Resource identities do not overlap.</div>
-                  <div className="mt-1">
-                    The chart changed and Radar cannot pair old and new resources by name. Treat these added/removed counts as inventory context; use the rendered manifest diff above to see the actual cause.
-                  </div>
-                </div>
-              </div>
-            </div>
+            <LowPairingConfidenceNotice added={diff.added} removed={diff.removed} />
           )}
           {changed === 0 ? (
-            <EmptyDiffState label={parseWarning ? 'No rendered resource identity changes found in parsed documents.' : 'No rendered resource identity changes found.'} />
+            <EmptyDiffState label={parseWarning ? 'No rendered resource changes found in parsed documents.' : 'No rendered resource changes found.'} />
+          ) : lowPairingConfidence ? (
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+              <ResourceChangeList title="Added" tone="success" resources={diff.added} initialLimit={8} />
+              <ResourceChangeList title="Removed" tone="error" resources={diff.removed} initialLimit={8} />
+            </div>
           ) : (
             <>
-              <ModifiedResourceGroup changes={diff.modified} />
-              <ResourceGroup title="Added resources" tone="success" resources={diff.added} />
-              <ResourceGroup title="Removed resources" tone="error" resources={diff.removed} />
-              <ResourceGroup title="Present in both revisions" tone="neutral" resources={diff.unchanged} collapsed />
+              <ModifiedResourceTable changes={diff.modified} revision1={revision1} revision2={revision2} />
+              <ResourceChangeList title="Added" tone="success" resources={diff.added} />
+              <ResourceChangeList title="Removed" tone="error" resources={diff.removed} />
             </>
           )}
         </div>
@@ -917,7 +919,15 @@ function ResourceInventoryDiffSection({
   )
 }
 
-function ModifiedResourceGroup({ changes }: { changes: ResourceDiff['modified'] }) {
+function ModifiedResourceTable({
+  changes,
+  revision1,
+  revision2,
+}: {
+  changes: ResourceDiff['modified']
+  revision1: number
+  revision2: number
+}) {
   if (changes.length === 0) return null
   return (
     <div>
@@ -925,21 +935,73 @@ function ModifiedResourceGroup({ changes }: { changes: ResourceDiff['modified'] 
         <span className={clsx('badge-sm', SEVERITY_BADGE.info)}>{changes.length}</span>
         Modified in place
       </div>
-      <div className="space-y-2">
+      <div className="space-y-3">
         {changes.map((change) => (
-          <div key={resourceKey(change)} className="rounded-lg border border-theme-border bg-theme-base/50 p-3">
-            <ResourceChip resource={change} />
-            <div className="mt-2 space-y-1">
-              {change.fields.slice(0, 6).map((field, index) => (
-                <ModifiedFieldRow key={`${field.path}-${index}`} field={field} />
-              ))}
-              {change.fieldCount > 6 && (
-                <div className="text-xs text-theme-text-tertiary">+{change.fieldCount - 6} more changed fields in the manifest diff</div>
-              )}
-            </div>
-          </div>
+          <ModifiedResourceRows key={resourceKey(change)} change={change} revision1={revision1} revision2={revision2} />
         ))}
       </div>
+    </div>
+  )
+}
+
+function ModifiedResourceRows({
+  change,
+  revision1,
+  revision2,
+}: {
+  change: ResourceDiff['modified'][number]
+  revision1: number
+  revision2: number
+}) {
+  const explicitFields = change.fields.filter((field) => {
+    const oldValue = formatDiffValue(field.oldValue, field.path)
+    const newValue = formatDiffValue(field.newValue, field.path)
+    return !isGenericContentChange(field, oldValue, newValue)
+  })
+  const visibleFields = explicitFields.slice(0, 8)
+  const hiddenCount = Math.max(0, explicitFields.length - visibleFields.length) + Math.max(0, change.fieldCount - change.fields.length)
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-theme-border bg-theme-base/50">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-theme-border px-3 py-2">
+        <span className={clsx('badge-sm shrink-0', getKindBadgeColor(change.kind))}>{change.kind}</span>
+        <ResourceName resource={change} />
+      </div>
+      {visibleFields.length === 0 ? (
+        <div className="px-3 py-2 text-xs text-theme-text-secondary">
+          {change.summary && change.summary !== 'resource changed'
+            ? change.summary
+            : 'Rendered manifest changed; field-level summary unavailable.'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] border-collapse text-left text-xs">
+            <thead className="bg-theme-surface text-theme-text-tertiary">
+              <tr>
+                <th scope="col" className="w-[42%] px-3 py-2 font-medium">
+                  Field
+                </th>
+                <th scope="col" className="w-[29%] px-3 py-2 font-medium">
+                  Rev {revision1}
+                </th>
+                <th scope="col" className="w-[29%] px-3 py-2 font-medium">
+                  Rev {revision2}
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-theme-border">
+              {visibleFields.map((field, index) => (
+                <ModifiedFieldRow key={`${field.path}-${index}`} field={field} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {hiddenCount > 0 && (
+        <div className="border-t border-theme-border px-3 py-2 text-xs text-theme-text-tertiary">
+          +{hiddenCount} more changed field{hiddenCount === 1 ? '' : 's'} in the manifest diff
+        </div>
+      )}
     </div>
   )
 }
@@ -947,29 +1009,114 @@ function ModifiedResourceGroup({ changes }: { changes: ResourceDiff['modified'] 
 function ModifiedFieldRow({ field }: { field: ResourceDiff['modified'][number]['fields'][number] }) {
   const oldValue = formatDiffValue(field.oldValue, field.path)
   const newValue = formatDiffValue(field.newValue, field.path)
-  if (isGenericContentChange(field, oldValue, newValue)) {
-    return (
-      <div className="rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-          <code className="font-mono text-theme-text-tertiary">contents</code>
-          <div className="min-w-0 text-theme-text-secondary">changed in rendered manifest</div>
+  const oldTooltip = formatFullDiffValue(field.oldValue, field.path)
+  const newTooltip = formatFullDiffValue(field.newValue, field.path)
+  return (
+    <tr className="align-top">
+      <td className="px-3 py-2">
+        <Tooltip content={field.path} wrapperClassName="min-w-0 max-w-full">
+          <code className="break-words font-mono text-theme-text-secondary">{formatPathLabel(field.path)}</code>
+        </Tooltip>
+      </td>
+      <td className="px-3 py-2 text-theme-text-secondary">
+        <Tooltip content={oldTooltip} wrapperClassName="min-w-0 max-w-full">
+          <span className="block break-words">{oldValue}</span>
+        </Tooltip>
+      </td>
+      <td className="px-3 py-2 font-medium text-theme-text-primary">
+        <Tooltip content={newTooltip} wrapperClassName="min-w-0 max-w-full">
+          <span className="block break-words">{newValue}</span>
+        </Tooltip>
+      </td>
+    </tr>
+  )
+}
+
+function LowPairingConfidenceNotice({
+  added,
+  removed,
+}: {
+  added: ResourceDiff['added']
+  removed: ResourceDiff['removed']
+}) {
+  return (
+    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-theme-text-secondary">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+        <div className="min-w-0">
+          <div className="font-medium text-theme-text-primary">Resource identities do not overlap.</div>
+          <div className="mt-1">
+            The chart changed and Radar cannot pair old and new resources by name. Use the manifest diff above for the cause; the rows below are
+            identity context.
+          </div>
+          <div className="mt-2 grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
+            <div>
+              <span className="font-medium text-theme-text-primary">Added:</span>{' '}
+              <span>{summarizeResourceKinds(added)}</span>
+            </div>
+            <div>
+              <span className="font-medium text-theme-text-primary">Removed:</span>{' '}
+              <span>{summarizeResourceKinds(removed)}</span>
+            </div>
+          </div>
         </div>
       </div>
-    )
-  }
+    </div>
+  )
+}
+
+function ResourceChangeList({
+  title,
+  tone,
+  resources,
+  initialLimit = 12,
+}: {
+  title: string
+  tone: DiffTone
+  resources: ResourceDiff['added']
+  initialLimit?: number
+}) {
+  const [expanded, setExpanded] = useState(false)
+  if (resources.length === 0) return null
+  const visible = expanded ? resources : resources.slice(0, initialLimit)
   return (
-    <div className="rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs">
-      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-        <Tooltip content={field.path} wrapperClassName="min-w-0 max-w-full">
-          <code className="whitespace-normal break-words font-mono text-theme-text-tertiary">{formatPathLabel(field.path)}</code>
-        </Tooltip>
-        <Tooltip content={`${oldValue} -> ${newValue}`} wrapperClassName="min-w-0 max-w-full">
-          <div className="min-w-0 whitespace-normal break-words text-theme-text-secondary">
-            <span className="text-theme-text-tertiary">changed</span>{' '}
-            {oldValue} <span className="text-theme-text-tertiary">-&gt;</span> <span className="text-theme-text-primary">{newValue}</span>
-          </div>
-        </Tooltip>
+    <div>
+      <div className="mb-2 flex items-center gap-2 text-sm font-medium text-theme-text-primary">
+        <span className={clsx('badge-sm', SEVERITY_BADGE[tone])}>{resources.length}</span>
+        {title}
       </div>
+      <div className="grid grid-cols-1 gap-1.5 2xl:grid-cols-2">
+        {visible.map((resource) => (
+          <ResourceChangeRow key={resourceKey(resource)} resource={resource} />
+        ))}
+      </div>
+      {resources.length > initialLimit && (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-2 rounded-md px-2 py-1 text-xs font-medium text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
+        >
+          {expanded ? 'Show fewer' : `Show ${resources.length - visible.length} more`}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function ResourceChangeRow({ resource }: { resource: ResourceDiff['added'][number] }) {
+  return (
+    <div className="flex min-w-0 items-start gap-2 rounded-md border border-theme-border bg-theme-base/50 px-2 py-1.5">
+      <span className={clsx('badge-sm shrink-0', getKindBadgeColor(resource.kind))}>{resource.kind}</span>
+      <ResourceName resource={resource} />
+    </div>
+  )
+}
+
+function ResourceName({ resource }: { resource: ResourceDiff['added'][number] }) {
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="break-words text-sm font-medium leading-snug text-theme-text-primary">{resource.name}</div>
+      {resource.namespace && <div className="mt-0.5 text-xs text-theme-text-tertiary">{resource.namespace}</div>}
     </div>
   )
 }
@@ -982,49 +1129,16 @@ function isGenericContentChange(
   return field.path === 'resource' && oldValue === 'changed' && newValue === 'changed'
 }
 
-function ResourceGroup({
-  title,
-  tone,
-  resources,
-  collapsed = false,
-}: {
-  title: string
-  tone: DiffTone
-  resources: ResourceDiff['added']
-  collapsed?: boolean
-}) {
-  if (resources.length === 0) return null
-  const visible = collapsed ? resources.slice(0, 16) : resources
-  return (
-    <div>
-      <div className="mb-2 flex items-center gap-2 text-sm font-medium text-theme-text-primary">
-        <span className={clsx('badge-sm', SEVERITY_BADGE[tone])}>{resources.length}</span>
-        {title}
-      </div>
-      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-        {visible.map((resource) => <ResourceChip key={resourceKey(resource)} resource={resource} />)}
-      </div>
-      {visible.length < resources.length && (
-        <div className="mt-2 text-xs text-theme-text-tertiary">+{resources.length - visible.length} more resources</div>
-      )}
-    </div>
-  )
-}
-
-function ResourceChip({ resource }: { resource: ResourceDiff['added'][number] }) {
-  return (
-    <div className="min-w-0 rounded-lg border border-theme-border bg-theme-base/50 px-3 py-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className={clsx('badge-sm shrink-0', getKindBadgeColor(resource.kind))}>{resource.kind}</span>
-        <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">
-          {resource.name}
-        </span>
-      </div>
-      {resource.namespace && (
-        <div className="mt-1 truncate text-xs text-theme-text-tertiary">{resource.namespace}</div>
-      )}
-    </div>
-  )
+function summarizeResourceKinds(resources: ResourceDiff['added']): string {
+  if (resources.length === 0) return 'none'
+  const counts = new Map<string, number>()
+  for (const resource of resources) {
+    counts.set(resource.kind, (counts.get(resource.kind) || 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([kind, count]) => `${count} ${kind}`)
+    .join(', ')
 }
 
 function SectionHeader({
@@ -1114,7 +1228,6 @@ function hookKey(hook: HelmHook): string {
 function formatPathLabel(path: string): string {
   return path
     .replace(/\[\*\]/g, '')
-    .replace(/\[([^\]]+)\]/g, ' $1')
     .replace(/\./g, ' / ')
 }
 
@@ -1128,6 +1241,19 @@ function formatDiffValue(value: unknown, path?: string): string {
     return truncate(JSON.stringify(value))
   } catch {
     return truncate(String(value))
+  }
+}
+
+function formatFullDiffValue(value: unknown, path?: string): string {
+  if (value === null || value === undefined) return 'none'
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  const structured = formatStructuredDiffValue(value, path)
+  if (structured) return structured
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
   }
 }
 
