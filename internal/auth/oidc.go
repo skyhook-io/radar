@@ -280,8 +280,12 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[oidc] Generated local session ID (IdP did not provide sid claim)")
 	}
 
-	// Create session cookie (include raw ID token for RP-Initiated Logout)
-	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	// Create session cookie (include raw ID token for RP-Initiated Logout).
+	// OIDC runs over HTTPS in practice; mark the cookie Secure unconditionally
+	// to match the middleware invariant (which forces Secure in OIDC mode). The
+	// callback is auth-exempt, so middleware never re-issues to fix a cookie
+	// that was issued non-Secure here.
+	secure := true
 	cookies := CreateSessionCookie(user, sid, rawIDToken, h.cfg.Secret, h.cfg.CookieTTL, secure)
 	for _, c := range cookies {
 		http.SetCookie(w, c)

@@ -96,7 +96,14 @@ func CreateSessionCookie(user *User, sid, idToken, secret string, ttl time.Durat
 	}
 
 	if len(value) <= maxCookieSize {
-		return []*http.Cookie{newSessionCookie(DefaultCookieName, value, ttl, secure)}
+		// Single cookie. Clear the chunk meta-cookie so a previous chunked
+		// representation (if any) can't be reassembled: parse only follows
+		// the chunk path when the meta-cookie is present, so dropping it
+		// neutralizes any stale chunks (they expire on their own TTL).
+		return []*http.Cookie{
+			newSessionCookie(DefaultCookieName, value, ttl, secure),
+			expireCookie(DefaultCookieName + cookieChunkCountSuffix),
+		}
 	}
 
 	log.Printf("[auth] Session cookie for %s is %d bytes (limit %d) — splitting into chunked cookies",
@@ -122,8 +129,18 @@ func newSessionCookie(name, value string, ttl time.Duration, secure bool) *http.
 // maxCookieSize for the (longer) chunk cookie names + attributes.
 func createChunkedCookies(name, value string, ttl time.Duration, secure bool) []*http.Cookie {
 	chunks := splitString(value, maxCookieSize-100)
-	cookies := make([]*http.Cookie, 0, len(chunks)+1)
+	if len(chunks) > maxCookieChunks {
+		// Parse rejects counts above maxCookieChunks, so a session this large
+		// can't round-trip. Surface it instead of silently issuing cookies the
+		// browser sends back but the server then refuses.
+		log.Printf("[auth] WARNING: session value needs %d chunks (max %d) — login will fail; reduce the number of OIDC groups/claims",
+			len(chunks), maxCookieChunks)
+	}
+	cookies := make([]*http.Cookie, 0, len(chunks)+2)
 
+	// Clear any stale single main cookie so the chunked session is authoritative
+	// (parse prefers a non-empty main cookie over chunks).
+	cookies = append(cookies, expireCookie(name))
 	for i, chunk := range chunks {
 		cookies = append(cookies, newSessionCookie(fmt.Sprintf("%s%s%d", name, cookieChunkSuffix, i), chunk, ttl, secure))
 	}

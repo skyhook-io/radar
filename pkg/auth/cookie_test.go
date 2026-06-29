@@ -10,14 +10,18 @@ import (
 	"time"
 )
 
-// singleCookie asserts that CreateSessionCookie returned exactly one cookie
-// (the common, non-chunked case) and returns it.
-func singleCookie(t *testing.T, cookies []*http.Cookie) *http.Cookie {
+// mainCookie returns the primary radar_session cookie from a returned set,
+// ignoring housekeeping cookies (e.g. a chunk meta-cookie cleared on the
+// single-cookie path).
+func mainCookie(t *testing.T, cookies []*http.Cookie) *http.Cookie {
 	t.Helper()
-	if len(cookies) != 1 {
-		t.Fatalf("expected 1 cookie, got %d", len(cookies))
+	for _, c := range cookies {
+		if c.Name == DefaultCookieName {
+			return c
+		}
 	}
-	return cookies[0]
+	t.Fatalf("no %s cookie in returned set of %d", DefaultCookieName, len(cookies))
+	return nil
 }
 
 // addCookies attaches every cookie to the request, mimicking a browser sending
@@ -34,7 +38,7 @@ func TestCreateAndParseSessionCookie(t *testing.T) {
 	sid := NewSessionID()
 	ttl := 1 * time.Hour
 
-	cookie := singleCookie(t, CreateSessionCookie(user, sid, "", secret, ttl, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, sid, "", secret, ttl, false))
 
 	// Verify cookie properties
 	if cookie.Name != DefaultCookieName {
@@ -74,7 +78,7 @@ func TestCreateAndParseSessionCookie(t *testing.T) {
 
 func TestParseSessionCookie_WrongSecret(t *testing.T) {
 	user := &User{Username: "alice"}
-	cookie := singleCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret-1", 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret-1", 1*time.Hour, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -88,7 +92,7 @@ func TestParseSessionCookie_WrongSecret(t *testing.T) {
 func TestParseSessionCookie_Expired(t *testing.T) {
 	user := &User{Username: "alice"}
 	// TTL of -1 second = already expired
-	cookie := singleCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", -1*time.Second, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", -1*time.Second, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -109,7 +113,7 @@ func TestParseSessionCookie_NoCookie(t *testing.T) {
 
 func TestParseSessionCookie_TamperedPayload(t *testing.T) {
 	user := &User{Username: "alice"}
-	cookie := singleCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", 1*time.Hour, false))
 
 	// Tamper with the payload (change first char)
 	val := cookie.Value
@@ -140,7 +144,7 @@ func TestParseSessionCookie_MalformedValue(t *testing.T) {
 
 func TestCreateSessionCookie_Secure(t *testing.T) {
 	user := &User{Username: "alice"}
-	cookie := singleCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", 1*time.Hour, true))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", 1*time.Hour, true))
 	if !cookie.Secure {
 		t.Error("cookie should be Secure when secure=true")
 	}
@@ -148,7 +152,7 @@ func TestCreateSessionCookie_Secure(t *testing.T) {
 
 func TestCreateSessionCookie_NoGroups(t *testing.T) {
 	user := &User{Username: "bob"}
-	cookie := singleCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", 1*time.Hour, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -166,7 +170,7 @@ func TestCreateSessionCookie_NoGroups(t *testing.T) {
 }
 
 func TestClearSessionCookie(t *testing.T) {
-	cookie := singleCookie(t, ClearSessionCookie(nil))
+	cookie := mainCookie(t, ClearSessionCookie(nil))
 	if cookie.Name != DefaultCookieName {
 		t.Errorf("cookie name = %q, want %q", cookie.Name, DefaultCookieName)
 	}
@@ -205,7 +209,7 @@ func TestCreateSessionCookie_WithIDToken(t *testing.T) {
 	sid := NewSessionID()
 	idToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test-payload.test-sig"
 
-	cookie := singleCookie(t, CreateSessionCookie(user, sid, idToken, secret, 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, sid, idToken, secret, 1*time.Hour, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -229,7 +233,7 @@ func TestSessionIDToken_NoIDToken(t *testing.T) {
 	secret := "test-secret"
 	user := &User{Username: "alice"}
 
-	cookie := singleCookie(t, CreateSessionCookie(user, NewSessionID(), "", secret, 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", secret, 1*time.Hour, false))
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
 
@@ -247,7 +251,7 @@ func TestCreateSessionCookie_WithSID(t *testing.T) {
 	user := &User{Username: "alice"}
 	sid := "abcdef0123456789abcdef0123456789"
 
-	cookie := singleCookie(t, CreateSessionCookie(user, sid, "", secret, 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, sid, "", secret, 1*time.Hour, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -320,7 +324,7 @@ func TestParseSessionCookie_ExpiresAt(t *testing.T) {
 	user := &User{Username: "alice"}
 	ttl := 2 * time.Hour
 
-	cookie := singleCookie(t, CreateSessionCookie(user, NewSessionID(), "", secret, ttl, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", secret, ttl, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -350,13 +354,13 @@ func TestCreateSessionCookie_DropsIDTokenWhenTooLarge(t *testing.T) {
 	largeIDToken := strings.Repeat("x", 2000)
 
 	// First verify the cookie WITHOUT ID token fits in a single cookie
-	smallCookie := singleCookie(t, CreateSessionCookie(user, sid, "", secret, 1*time.Hour, false))
+	smallCookie := mainCookie(t, CreateSessionCookie(user, sid, "", secret, 1*time.Hour, false))
 	if len(smallCookie.Value) > maxCookieSize {
 		t.Skipf("groups alone exceed %d bytes (%d) — can't test ID token drop", maxCookieSize, len(smallCookie.Value))
 	}
 
 	// Now create with the large ID token — should trigger the drop and still fit one cookie
-	cookie := singleCookie(t, CreateSessionCookie(user, sid, largeIDToken, secret, 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, sid, largeIDToken, secret, 1*time.Hour, false))
 
 	// Parse and verify the cookie is still valid
 	req := httptest.NewRequest("GET", "/", nil)
@@ -400,6 +404,9 @@ func TestCreateSessionCookie_ChunksWhenTooLarge(t *testing.T) {
 
 	var sawMeta bool
 	for _, c := range cookies {
+		if c.MaxAge < 0 {
+			continue // housekeeping deletion cookie (stale main)
+		}
 		if len(c.Value) > maxCookieSize {
 			t.Errorf("chunk %q is %d bytes, exceeds limit %d", c.Name, len(c.Value), maxCookieSize)
 		}
@@ -486,7 +493,7 @@ func TestParseSessionCookie_ChunkCountCapped(t *testing.T) {
 func TestParseSessionCookie_PrefersMainCookieOverStaleChunks(t *testing.T) {
 	secret := "test-secret"
 	// A valid single cookie for a shrunk session...
-	main := singleCookie(t, CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), "", secret, 1*time.Hour, false))
+	main := mainCookie(t, CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), "", secret, 1*time.Hour, false))
 	// ...with stale chunk cookies from a previous larger session still in the browser.
 	stale := CreateSessionCookie(hugeUser(), NewSessionID(), "", secret, 1*time.Hour, false)
 
@@ -538,5 +545,83 @@ func TestClearSessionCookie_ClearsChunks(t *testing.T) {
 	addCookies(logoutReq, cleared)
 	if ParseSessionCookie(logoutReq, secret) != nil {
 		t.Error("session still parses after logout cleared the chunk cookies")
+	}
+}
+
+func TestCreateSessionCookie_ChunkedExpiresStaleMain(t *testing.T) {
+	secret := "test-secret"
+	cookies := CreateSessionCookie(hugeUser(), NewSessionID(), "", secret, time.Hour, false)
+
+	var clearedMain bool
+	for _, c := range cookies {
+		if c.Name == DefaultCookieName {
+			if c.MaxAge != -1 || c.Value != "" {
+				t.Errorf("chunked set should expire the main cookie, got MaxAge=%d valueLen=%d", c.MaxAge, len(c.Value))
+			}
+			clearedMain = true
+		}
+	}
+	if !clearedMain {
+		t.Error("chunked set does not expire the stale main cookie — an old single session would win on parse")
+	}
+}
+
+func TestCreateSessionCookie_SingleClearsStaleChunkMeta(t *testing.T) {
+	secret := "test-secret"
+	cookies := CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), "", secret, time.Hour, false)
+
+	var clearedMeta bool
+	for _, c := range cookies {
+		if c.Name == DefaultCookieName+"_chunks" {
+			if c.MaxAge != -1 {
+				t.Errorf("single-cookie set should expire the _chunks meta-cookie, got MaxAge=%d", c.MaxAge)
+			}
+			clearedMeta = true
+		}
+	}
+	if !clearedMeta {
+		t.Error("single-cookie set does not clear the _chunks meta-cookie — stale chunks could resurrect")
+	}
+}
+
+// TestRepresentationSwitchDoesNotResurrectStaleSession models a browser cookie
+// jar across a chunked→single transition: applying the fresh single-cookie set
+// must clear the chunk representation so an older chunked session can't be
+// reassembled even if the new main cookie is later removed.
+func TestRepresentationSwitchDoesNotResurrectStaleSession(t *testing.T) {
+	secret := "test-secret"
+	stale := CreateSessionCookie(hugeUser(), NewSessionID(), "", secret, time.Hour, false)             // chunked
+	fresh := CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), "", secret, time.Hour, false) // single
+
+	jar := map[string]string{}
+	apply := func(cs []*http.Cookie) {
+		for _, c := range cs {
+			if c.MaxAge < 0 {
+				delete(jar, c.Name)
+			} else {
+				jar[c.Name] = c.Value
+			}
+		}
+	}
+	reqFromJar := func() *http.Request {
+		req := httptest.NewRequest("GET", "/", nil)
+		for name, val := range jar {
+			req.AddCookie(&http.Cookie{Name: name, Value: val})
+		}
+		return req
+	}
+
+	apply(stale)
+	apply(fresh)
+
+	parsed := ParseSessionCookie(reqFromJar(), secret)
+	if parsed == nil || parsed.User.Username != "bob" {
+		t.Fatalf("expected fresh single session for bob, got %+v", parsed)
+	}
+
+	// Main cookie removed out-of-band; stale chunks must not resurrect a session.
+	delete(jar, DefaultCookieName)
+	if ParseSessionCookie(reqFromJar(), secret) != nil {
+		t.Error("stale chunks resurrected a session after the main cookie was removed")
 	}
 }
