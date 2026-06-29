@@ -702,7 +702,18 @@ func symptomNamesSecret(symptom Issue, name string) bool {
 	if name == "" {
 		return false
 	}
-	return strings.Contains(strings.ToLower(symptom.Message+" "+symptom.Reason), `secret "`+strings.ToLower(name)+`"`)
+	text := strings.ToLower(symptom.Message + " " + symptom.Reason)
+	n := strings.ToLower(name)
+	// Quoted forms — the missing-ref detector + common kubelet text:
+	// `references Secret "foo"`, `secret "foo" not found`, `secrets "foo" not found`.
+	if strings.Contains(text, `secret "`+n+`"`) || strings.Contains(text, `secrets "`+n+`"`) {
+		return true
+	}
+	// Namespaced path form — kubelet's missing-key text `... in Secret <ns>/foo`.
+	if ns := strings.ToLower(symptom.Namespace); ns != "" && strings.Contains(text, "secret "+ns+"/"+n) {
+		return true
+	}
+	return false
 }
 
 // symptomMentionsVolume reports whether a scheduling / waiting symptom's text

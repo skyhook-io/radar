@@ -1995,3 +1995,23 @@ func TestSecretProducerContext(t *testing.T) {
 		t.Fatalf("same-named ConfigMap failure must not be attributed to the Secret, got %+v", *got.IncidentParent)
 	}
 }
+
+func TestSymptomNamesSecret(t *testing.T) {
+	mk := func(msg, ns string) Issue { return Issue{Namespace: ns, Message: msg} }
+	cases := []struct {
+		msg, ns string
+		want    bool
+	}{
+		{`references Secret "foo" which does not exist`, "prod", true},
+		{`MountVolume.SetUp failed: secret "foo" not found`, "prod", true},
+		{`secrets "foo" not found`, "prod", true},                  // plural kubelet path
+		{`couldn't find key tls.crt in Secret prod/foo`, "prod", true}, // namespaced missing-key
+		{`references ConfigMap "foo" which does not exist`, "prod", false}, // same name, wrong kind
+		{`waiting on something else`, "prod", false},
+	}
+	for _, c := range cases {
+		if got := symptomNamesSecret(mk(c.msg, c.ns), "foo"); got != c.want {
+			t.Errorf("symptomNamesSecret(%q) = %v, want %v", c.msg, got, c.want)
+		}
+	}
+}
