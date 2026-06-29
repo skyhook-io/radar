@@ -71,6 +71,9 @@ interface WorkloadViewProps {
   onCollapseToDrawer?: () => void
   /** false = collapsed drawer mode, true (default) = full expanded mode */
   expanded?: boolean
+  /** false on the outgoing layer during an expand/collapse crossfade — suspend
+   *  keyboard shortcuts so the invisible layer doesn't capture them (default true) */
+  active?: boolean
   /** Close the drawer (collapsed mode) */
   onClose?: () => void
   /** Expand from drawer to full view */
@@ -248,6 +251,7 @@ export function WorkloadView({
   onNavigateToResource,
   onCollapseToDrawer,
   expanded = true,
+  active = true,
   onClose,
   onExpand,
   initialTab,
@@ -526,7 +530,7 @@ export function WorkloadView({
       category: expanded ? 'Navigation' as const : 'Drawer' as const,
       scope: expanded ? 'global' as const : 'drawer' as const,
       handler: expanded ? onBack : () => onClose?.(),
-      enabled: true,
+      enabled: active,
     },
     {
       id: 'drawer-yaml',
@@ -535,7 +539,7 @@ export function WorkloadView({
       category: 'Drawer' as const,
       scope: 'drawer' as const,
       handler: () => switchView(true),
-      enabled: !expanded,
+      enabled: active && !expanded,
     },
     {
       id: 'drawer-detail',
@@ -544,9 +548,9 @@ export function WorkloadView({
       category: 'Drawer' as const,
       scope: 'drawer' as const,
       handler: () => switchView(false),
-      enabled: !expanded,
+      enabled: active && !expanded,
     },
-  ], [expanded, onBack, onClose, switchView]))
+  ], [active, expanded, onBack, onClose, switchView]))
 
   const status = getResourceStatus(apiKind, resource)
 

@@ -26,7 +26,7 @@ import { ApplicationsView } from './components/applications/ApplicationsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalTerminal } from './components/dock'
-import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
+import { DURATION_DOCK, DURATION_NORMAL } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { useNavCustomization } from './context/NavCustomization'
@@ -463,6 +463,20 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   // Drawer expanded state (drawer grows to full width and renders WorkloadView)
   const [drawerExpanded, setDrawerExpanded] = useState(false)
 
+  // True for the duration of an expand/collapse animation. Gates the standalone
+  // WorkloadViewRoute so it can't flash behind the shrinking drawer during the
+  // async navigate(-1) pop on collapse (drawerExpanded flips before the URL does).
+  const [drawerTransitioning, setDrawerTransitioning] = useState(false)
+  const drawerTransitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const beginDrawerTransition = useCallback(() => {
+    setDrawerTransitioning(true)
+    if (drawerTransitionTimer.current) clearTimeout(drawerTransitionTimer.current)
+    // Outlast the drawer's own crossfade window (which starts a frame later, in a
+    // layout effect) so the standalone route can't flash behind the last frames.
+    drawerTransitionTimer.current = setTimeout(() => setDrawerTransitioning(false), DURATION_NORMAL + 100)
+  }, [])
+  useEffect(() => () => { if (drawerTransitionTimer.current) clearTimeout(drawerTransitionTimer.current) }, [])
+
   // Suppress the mainView-change clear effect during controlled expand/collapse transitions.
   const suppressViewClearRef = useRef(false)
 
@@ -630,9 +644,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   // Collapse from expanded WorkloadView back to drawer
   const handleCollapseFromExpanded = useCallback(() => {
     suppressViewClearRef.current = true
+    beginDrawerTransition()
     setDrawerExpanded(false)
     navigate(-1)
-  }, [navigate])
+  }, [navigate, beginDrawerTransition])
 
   // Theme toggle for keyboard shortcut
   const { toggleTheme } = useTheme()
@@ -2075,7 +2090,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
         )}
 
         {/* Workload full view (direct URL only — expand from drawer uses drawer's expanded state) */}
-        {mainView === 'workload' && !drawerExpanded && (
+        {mainView === 'workload' && !drawerExpanded && !drawerTransitioning && (
           <WorkloadViewRoute
             onNavigateToResource={(resource) => {
               navigate(buildWorkloadPath(resource))
@@ -2105,6 +2120,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           onNavigate={(res) => navigateToResource(res)}
           onExpand={(res) => {
             suppressViewClearRef.current = true
+            beginDrawerTransition()
             setDrawerExpanded(true)
             navigate(buildWorkloadPath(res))
           }}

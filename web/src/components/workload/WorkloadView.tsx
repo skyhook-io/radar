@@ -161,6 +161,8 @@ interface WorkloadViewProps {
   onNavigateToResource?: NavigateToResource
   onCollapseToDrawer?: () => void
   expanded?: boolean
+  /** false on the outgoing layer during an expand/collapse crossfade (default true) */
+  active?: boolean
   onClose?: () => void
   onExpand?: () => void
   initialTab?: 'detail' | 'yaml'

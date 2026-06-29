@@ -30,6 +30,17 @@ export const DURATION_TOAST_EXIT = 200
 export const TRANSITION_DRAWER =
   `transition-[translate,opacity,width] duration-300 ${TW_EASE} will-change-[transform,width]`
 
+/** Resource drawer when its width must NOT animate (manual resize, reduced motion).
+ *  Only the slide-in/out (translate + opacity) transitions. */
+export const TRANSITION_DRAWER_SLIDE =
+  `transition-[translate,opacity] duration-300 ${TW_EASE} will-change-transform`
+
+/** Resource drawer expand/collapse — slide + an animated width (frame morph).
+ *  Tailwind can't compose two `transition-[…]` utilities (both set
+ *  transition-property), so width lives in this single combined preset. */
+export const TRANSITION_DRAWER_EXPAND =
+  `transition-[translate,opacity,width] duration-300 ${TW_EASE} will-change-[transform,width]`
+
 
 /** Overlay backdrop fade */
 export const TRANSITION_BACKDROP =

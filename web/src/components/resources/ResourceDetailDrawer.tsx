@@ -26,13 +26,14 @@ interface ResourceDetailDrawerProps {
 export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {
   return (
     <BaseResourceDetailDrawer {...props}>
-      {({ resource, expanded, initialTab, onClose, onExpand, onBack, onNavigateToResource, onCollapseToDrawer }) => (
+      {({ resource, expanded, active, initialTab, onClose, onExpand, onBack, onNavigateToResource, onCollapseToDrawer }) => (
         <WorkloadView
           kind={resource.kind}
           namespace={resource.namespace}
           name={resource.name}
           group={resource.group}
           expanded={expanded}
+          active={active}
           initialTab={initialTab}
           onClose={onClose}
           onExpand={onExpand}

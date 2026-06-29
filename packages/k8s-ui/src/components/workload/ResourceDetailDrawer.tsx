@@ -1,5 +1,10 @@
-import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
-import { TRANSITION_DRAWER } from '../../utils/animation'
+import { useState, useCallback, useEffect, useLayoutEffect, useReducer, useRef, type ReactNode } from 'react'
+import {
+  TRANSITION_DRAWER_SLIDE,
+  TRANSITION_DRAWER_EXPAND,
+  CSS_EASE,
+  DURATION_NORMAL,
+} from '../../utils/animation'
 import { clsx } from 'clsx'
 import type { SelectedResource } from '../../types'
 import { useDockReservedHeight } from '../dock/DockContext'
@@ -28,6 +33,8 @@ interface ResourceDetailDrawerProps {
   children: (props: {
     resource: SelectedResource
     expanded: boolean
+    /** false on the outgoing layer mid-transition — suspend shortcuts/interaction */
+    active: boolean
     initialTab?: 'detail' | 'yaml'
     onClose: () => void
     onExpand?: () => void
@@ -52,18 +59,67 @@ function getDefaultWidth(kind: string): number {
   return WIDE_KINDS.has(kind.toLowerCase()) ? WIDE_WIDTH : DEFAULT_WIDTH
 }
 
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)')
+    if (!mq) return
+    const onChange = () => setReduced(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return reduced
+}
+
 export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, children }: ResourceDetailDrawerProps) {
   const [drawerWidth, setDrawerWidth] = useState(() => getDefaultWidth(resource.kind))
   const [isResizing, setIsResizing] = useState(false)
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(getDefaultWidth(resource.kind))
+  const containerRef = useRef<HTMLDivElement>(null)
+  const prefersReducedMotion = usePrefersReducedMotion()
 
-  // Detect collapse direction: was expanded last render, now not.
-  // Width snaps instantly on collapse (0ms) so content and size match.
-  // Expand keeps the nice 300ms width animation via TRANSITION_DRAWER.
-  const wasExpanded = useRef(!!expanded)
-  const isCollapsing = wasExpanded.current && !expanded
-  wasExpanded.current = !!expanded
+  // Expand/collapse crossfade. During the window we mount BOTH the drawer and
+  // full-screen layouts, each pinned to its own width (so neither reflows or
+  // squashes), and crossfade opacity while the container width (the frame)
+  // animates between them.
+  //
+  // `settledExpanded` is the last finished state. While it differs from the
+  // incoming `expanded` prop we're mid-transition: render both layers, fade
+  // `crossfadeArmed` 0→1 once a start frame has painted, then settle.
+  const settledExpanded = useRef(!!expanded)
+  const [crossfadeArmed, setCrossfadeArmed] = useState(false)
+  const [fullWidthPx, setFullWidthPx] = useState<number | null>(null)
+  const [, forceSettle] = useReducer((c: number) => c + 1, 0)
+  const transitioning = settledExpanded.current !== !!expanded
+
+  useLayoutEffect(() => {
+    if (settledExpanded.current === !!expanded) return
+    if (prefersReducedMotion) {
+      settledExpanded.current = !!expanded
+      forceSettle()
+      return
+    }
+    // Pin the full-screen layer to the measured expanded width so its content
+    // lays out at its final width from the first frame (no live reflow).
+    const el = containerRef.current
+    const parent = el?.offsetParent as HTMLElement | null
+    const measured = parent ? parent.clientWidth - leftOffset : el?.clientWidth
+    if (measured && measured > 0) setFullWidthPx(measured)
+    setCrossfadeArmed(false)
+    const raf = requestAnimationFrame(() => setCrossfadeArmed(true))
+    const timer = setTimeout(() => {
+      settledExpanded.current = !!expanded
+      setCrossfadeArmed(false)
+      forceSettle()
+    }, DURATION_NORMAL)
+    return () => {
+      cancelAnimationFrame(raf)
+      clearTimeout(timer)
+    }
+  }, [expanded, prefersReducedMotion, leftOffset])
 
   // Reset drawer width when resource kind changes
   useEffect(() => {
@@ -72,14 +128,14 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
     resizeStartWidth.current = w
   }, [resource.kind])
 
-  // Resize handlers (disabled when expanded)
+  // Resize handlers (disabled when expanded or mid-transition)
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    if (expanded) return
+    if (expanded || transitioning) return
     e.preventDefault()
     setIsResizing(true)
     resizeStartX.current = e.clientX
     resizeStartWidth.current = drawerWidth
-  }, [drawerWidth, expanded])
+  }, [drawerWidth, expanded, transitioning])
 
   useEffect(() => {
     if (!isResizing) return
@@ -114,11 +170,38 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   const headerHeight = headerHeightProp ?? 49
   const dockInset = useDockReservedHeight()
 
+  // Width animates during expand/collapse, but snaps during manual resize and
+  // when the user prefers reduced motion.
+  const animateWidth = !isResizing && !prefersReducedMotion
+
+  const renderLayer = (layerExpanded: boolean, active: boolean) =>
+    children({
+      resource,
+      expanded: layerExpanded,
+      active,
+      initialTab,
+      onClose,
+      onExpand: onExpand ? () => onExpand(resource) : undefined,
+      onBack: onCollapse ? () => onCollapse() : undefined,
+      onNavigateToResource: handleNavigate,
+      onCollapseToDrawer: onCollapse ? () => onCollapse() : undefined,
+    })
+
+  // While transitioning render both layers (outgoing = settled state, incoming
+  // = target). Keying by expanded-ness keeps the incoming layer's React
+  // identity stable into idle, so it survives (state intact) while only the
+  // outgoing layer unmounts when the window ends.
+  const layerExpandedValues = transitioning ? [true, false] : [!!expanded]
+
   return (
     <div
+      ref={containerRef}
       className={clsx(
         'absolute right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-drawer z-40',
-        TRANSITION_DRAWER,
+        // Clip the wider layer only while morphing; keep overflow visible at idle
+        // so drawer popovers/tooltips aren't clipped.
+        transitioning && 'overflow-hidden',
+        animateWidth ? TRANSITION_DRAWER_EXPAND : TRANSITION_DRAWER_SLIDE,
         isOpen
           ? 'translate-x-0 opacity-100'
           : 'translate-x-full opacity-0',
@@ -128,13 +211,10 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
         width: expanded ? `calc(100% - ${leftOffset}px)` : drawerWidth,
         top: headerHeight,
         height: `calc(100% - ${headerHeight}px - ${dockInset}px)`,
-        // Collapse is instant — no animation, content and width snap together.
-        // Expand + slide-in/out animate via TRANSITION_DRAWER class.
-        ...(isCollapsing && { transition: 'none' }),
       }}
     >
-      {/* Resize handle — hidden when expanded or on mobile */}
-      {!expanded && (
+      {/* Resize handle — hidden when expanded or mid-transition or on mobile */}
+      {!expanded && !transitioning && (
         <div
           onMouseDown={handleResizeStart}
           className={clsx(
@@ -145,15 +225,31 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
         />
       )}
 
-      {children({
-        resource,
-        expanded: !!expanded,
-        initialTab,
-        onClose,
-        onExpand: onExpand ? () => onExpand(resource) : undefined,
-        onBack: onCollapse ? () => onCollapse() : undefined,
-        onNavigateToResource: handleNavigate,
-        onCollapseToDrawer: onCollapse ? () => onCollapse() : undefined,
+      {layerExpandedValues.map((layerExpanded) => {
+        if (!transitioning) {
+          // Idle: a single layer fills the container (width tracks the frame so
+          // manual resize works).
+          return (
+            <div key={layerExpanded ? 'expanded' : 'collapsed'} className="absolute inset-0">
+              {renderLayer(layerExpanded, true)}
+            </div>
+          )
+        }
+        const isIncoming = layerExpanded === !!expanded
+        return (
+          <div
+            key={layerExpanded ? 'expanded' : 'collapsed'}
+            className="absolute top-0 bottom-0 right-0 overflow-hidden pointer-events-none"
+            style={{
+              width: layerExpanded ? (fullWidthPx ?? `calc(100% - ${leftOffset}px)`) : drawerWidth,
+              opacity: isIncoming ? (crossfadeArmed ? 1 : 0) : (crossfadeArmed ? 0 : 1),
+              transition: `opacity ${DURATION_NORMAL}ms ${CSS_EASE}`,
+            }}
+            aria-hidden={!isIncoming}
+          >
+            {renderLayer(layerExpanded, isIncoming)}
+          </div>
+        )
       })}
     </div>
   )
