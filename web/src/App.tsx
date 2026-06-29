@@ -661,6 +661,21 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
     setSearchParams(p, { replace: true })
   }, [searchParams, setSearchParams])
 
+  // Close the peek and drop any expand flags. Outside /resources the drawer isn't
+  // URL-backed, so a lingering ?full=1/tab would make the next peek reopen
+  // fullscreen instead of as a side drawer. (On /resources, ResourcesView's own
+  // updateURL also scrubs these — deleting them here too is idempotent.)
+  const closeDrawer = useCallback(() => {
+    setSelectedResource(null)
+    setDrawerInitialTab('detail')
+    if (searchParams.has('full') || searchParams.has('tab')) {
+      const p = new URLSearchParams(searchParams)
+      p.delete('full')
+      p.delete('tab')
+      setSearchParams(p, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
+
   // Theme toggle for keyboard shortcut
   const { toggleTheme } = useTheme()
 
@@ -2130,7 +2145,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           headerHeight={chromeless ? 0 : undefined}
           isOpen={resourceDrawer.isOpen}
           expanded={drawerExpandedProp}
-          onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail') }}
+          onClose={closeDrawer}
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
           onExpand={(_res, opts) => {
@@ -2146,7 +2161,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           }}
           // On mobile there's no drawer to collapse back to, so the collapse/back
           // control closes the resource (returns to the list) instead.
-          onCollapse={isMobile ? (() => { setSelectedResource(null); setDrawerInitialTab('detail') }) : handleCollapseFromExpanded}
+          onCollapse={isMobile ? closeDrawer : handleCollapseFromExpanded}
           onNavigateToResource={(resource) => {
             // Drill into a related resource while expanded: stay in the over-list
             // overlay for the new resource (pushed, so Back walks resource→resource
