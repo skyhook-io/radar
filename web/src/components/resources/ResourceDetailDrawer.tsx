@@ -28,7 +28,7 @@ interface ResourceDetailDrawerProps {
 export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {
   return (
     <BaseResourceDetailDrawer {...props}>
-      {({ resource, expanded, active, initialTab, onClose, onExpand, onBack, onNavigateToResource, onCollapseToDrawer }) => (
+      {({ resource, expanded, active, initialTab, onClose, onExpand, onExpandIntent, onCancelExpandIntent, onBack, onNavigateToResource, onCollapseToDrawer }) => (
         <WorkloadView
           kind={resource.kind}
           namespace={resource.namespace}
@@ -39,6 +39,8 @@ export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {
           initialTab={initialTab}
           onClose={onClose}
           onExpand={onExpand}
+          onExpandIntent={onExpandIntent}
+          onCancelExpandIntent={onCancelExpandIntent}
           onBack={onBack ?? (() => {})}
           onNavigateToResource={onNavigateToResource}
           onCollapseToDrawer={onCollapseToDrawer}

@@ -26,10 +26,11 @@ export const DURATION_TOAST_EXIT = 200
  *  large width change advances in small per-frame steps (reads as fluid, not
  *  abrupt). Drives the frame width, the content crossfade, and the JS window
  *  together — keep them in lockstep. */
-export const DURATION_DRAWER_MORPH = 360
-/** Gentle ease for the morph — eased at both ends so the big size change doesn't
- *  lurch at the start the way the front-loaded iOS curve does. */
-export const EASE_DRAWER_MORPH = 'cubic-bezier(0.4, 0, 0.2, 1)'
+export const DURATION_DRAWER_MORPH = 260
+/** Decelerate curve — fast start, gentle settle. Reads as snappy/responsive (the
+ *  earlier ease-in-out's slow start felt sluggish). Safe now that the pinned-layer
+ *  crossfade fixed the reflow that originally needed the gentle start. */
+export const EASE_DRAWER_MORPH = 'cubic-bezier(0.2, 0.8, 0.2, 1)'
 
 // -- Tailwind class presets ---------------------------------------------------
 // Reusable class fragments — import and spread into clsx() calls.

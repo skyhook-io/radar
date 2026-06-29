@@ -79,6 +79,9 @@ interface WorkloadViewProps {
   /** Expand from drawer to full view. `opts.yaml` true when expanding from the
    *  drawer's YAML view so the full view opens on the YAML tab (edits carry over). */
   onExpand?: (opts?: { yaml?: boolean }) => void
+  /** Hover/press the expand control = likely expand → pre-mount the full view. */
+  onExpandIntent?: () => void
+  onCancelExpandIntent?: () => void
   /** Initial view tab — 'yaml' opens YAML directly */
   initialTab?: 'detail' | 'yaml'
   /** API group for CRD resources */
@@ -255,6 +258,8 @@ export function WorkloadView({
   active = true,
   onClose,
   onExpand,
+  onExpandIntent,
+  onCancelExpandIntent,
   initialTab,
   group,
   breadcrumb,
@@ -595,6 +600,11 @@ export function WorkloadView({
               {onExpand && (
                 <button
                   onClick={() => onExpand({ yaml: showYaml })}
+                  // Pre-mount the fullscreen view on hover/press so the click starts
+                  // the morph instantly (its heavy mount is already paid for).
+                  onPointerEnter={onExpandIntent}
+                  onPointerDown={onExpandIntent}
+                  onPointerLeave={onCancelExpandIntent}
                   className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
                   title="Open full view"
                 >

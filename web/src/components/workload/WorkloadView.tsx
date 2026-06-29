@@ -165,6 +165,8 @@ interface WorkloadViewProps {
   active?: boolean
   onClose?: () => void
   onExpand?: (opts?: { yaml?: boolean }) => void
+  onExpandIntent?: () => void
+  onCancelExpandIntent?: () => void
   initialTab?: 'detail' | 'yaml'
   group?: string
 }

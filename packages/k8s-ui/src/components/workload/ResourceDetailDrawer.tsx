@@ -41,6 +41,11 @@ interface ResourceDetailDrawerProps {
     initialTab?: 'detail' | 'yaml'
     onClose: () => void
     onExpand?: (opts?: { yaml?: boolean }) => void
+    /** Signal (hover/press the expand control) that expand is likely — pre-mounts
+     *  the heavy fullscreen layer invisibly so the click starts the morph instantly. */
+    onExpandIntent?: () => void
+    /** Intent withdrawn (pointer left the expand control) — discard the pre-mount. */
+    onCancelExpandIntent?: () => void
     onBack?: () => void
     onNavigateToResource?: (resource: SelectedResource) => void
     onCollapseToDrawer?: () => void
@@ -98,6 +103,33 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   const [, forceSettle] = useReducer((c: number) => c + 1, 0)
   const transitioning = settledExpanded.current !== !!expanded
 
+  // Pre-mount: hovering/pressing the expand control mounts the heavy fullscreen
+  // layer invisibly ahead of the click, so the click arms the morph immediately
+  // (its mount cost is already paid). `wasPrewarmedRef` lets the transition skip a
+  // frame of pre-mount waiting since the layer has already painted.
+  const [prewarmExpand, setPrewarmExpand] = useState(false)
+  const wasPrewarmedRef = useRef(false)
+
+  const measureFullWidth = useCallback(() => {
+    const el = containerRef.current
+    const parent = el?.offsetParent as HTMLElement | null
+    const measured = parent ? parent.clientWidth - leftOffset : el?.clientWidth
+    if (measured && measured > 0) setFullWidthPx(measured)
+  }, [leftOffset])
+
+  const handleExpandIntent = useCallback(() => {
+    if (expanded || transitioning) return
+    measureFullWidth()
+    wasPrewarmedRef.current = true
+    setPrewarmExpand(true)
+  }, [expanded, transitioning, measureFullWidth])
+
+  const handleCancelExpandIntent = useCallback(() => {
+    if (transitioning || expanded) return
+    wasPrewarmedRef.current = false
+    setPrewarmExpand(false)
+  }, [transitioning, expanded])
+
   useLayoutEffect(() => {
     if (settledExpanded.current === !!expanded) return
     if (prefersReducedMotion) {
@@ -107,34 +139,35 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
     }
     // Pin the full-screen layer to the measured expanded width so its content
     // lays out at its final width from the first frame (no live reflow).
-    const el = containerRef.current
-    const parent = el?.offsetParent as HTMLElement | null
-    const measured = parent ? parent.clientWidth - leftOffset : el?.clientWidth
-    if (measured && measured > 0) setFullWidthPx(measured)
-    // Pre-mount: render both layers (incoming invisible, frame held at its start
-    // width) for a couple of frames so the heavy incoming WorkloadView pays its
-    // mount + first-paint cost BEFORE the motion starts — otherwise that work
-    // lands as dropped frames in the first third of the animation. Only after it
-    // has painted (double rAF) do we arm the width + crossfade.
+    measureFullWidth()
+    // The prewarm layer (if any) becomes the real transition layer now.
+    const prewarmed = wasPrewarmedRef.current && !!expanded
+    setPrewarmExpand(false)
+    // If the incoming layer was prewarmed it's already mounted + painted, so arm
+    // after a single frame. Otherwise double-rAF so its mount+paint lands BEFORE
+    // the motion starts (else it drops frames in the first third of the animation).
     setCrossfadeArmed(false)
     let raf2 = 0
     let timer = 0
+    const arm = () => {
+      setCrossfadeArmed(true)
+      timer = window.setTimeout(() => {
+        settledExpanded.current = !!expanded
+        setCrossfadeArmed(false)
+        wasPrewarmedRef.current = false
+        forceSettle()
+      }, DURATION_DRAWER_MORPH)
+    }
     const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
-        setCrossfadeArmed(true)
-        timer = window.setTimeout(() => {
-          settledExpanded.current = !!expanded
-          setCrossfadeArmed(false)
-          forceSettle()
-        }, DURATION_DRAWER_MORPH)
-      })
+      if (prewarmed) arm()
+      else raf2 = requestAnimationFrame(arm)
     })
     return () => {
       cancelAnimationFrame(raf1)
       cancelAnimationFrame(raf2)
       clearTimeout(timer)
     }
-  }, [expanded, prefersReducedMotion, leftOffset])
+  }, [expanded, prefersReducedMotion, measureFullWidth])
 
   // Reset drawer width when resource kind changes
   useEffect(() => {
@@ -205,6 +238,8 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       initialTab,
       onClose,
       onExpand: onExpand ? (opts) => onExpand(resource, opts) : undefined,
+      onExpandIntent: onExpand ? handleExpandIntent : undefined,
+      onCancelExpandIntent: onExpand ? handleCancelExpandIntent : undefined,
       onBack: onCollapse ? () => onCollapse() : undefined,
       onNavigateToResource: handleNavigate,
       // Hidden on mobile (no drawer to collapse to) — the host routes the
@@ -215,8 +250,11 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   // While transitioning render both layers (outgoing = settled state, incoming
   // = target). Keying by expanded-ness keeps the incoming layer's React
   // identity stable into idle, so it survives (state intact) while only the
-  // outgoing layer unmounts when the window ends.
-  const layerExpandedValues = transitioning ? [true, false] : [!!expanded]
+  // outgoing layer unmounts when the window ends. While prewarming (collapsed,
+  // intent signalled) also mount the expanded layer invisibly — keyed 'expanded'
+  // so it's reused (not remounted) when the real expand starts.
+  const showPrewarmLayer = prewarmExpand && !transitioning && !expanded
+  const layerExpandedValues = transitioning ? [true, false] : showPrewarmLayer ? [false, true] : [!!expanded]
 
   return (
     <div
@@ -258,8 +296,23 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
 
       {layerExpandedValues.map((layerExpanded) => {
         if (!transitioning) {
-          // Idle: a single layer fills the container (width tracks the frame so
-          // manual resize works).
+          // Prewarm: the expanded layer mounted invisibly ahead of the click.
+          // Pinned at full width + inert + opacity 0 so its mount cost is paid now,
+          // off-screen, and it's reused (same key) when the morph actually starts.
+          if (showPrewarmLayer && layerExpanded) {
+            return (
+              <div
+                key="expanded"
+                aria-hidden
+                inert
+                className="absolute top-0 bottom-0 right-0 overflow-hidden pointer-events-none opacity-0"
+                style={{ width: fullWidthPx ?? `calc(100% - ${leftOffset}px)` }}
+              >
+                {renderLayer(true, false)}
+              </div>
+            )
+          }
+          // Idle (or the visible collapsed layer during prewarm): fills the container.
           return (
             <div key={layerExpanded ? 'expanded' : 'collapsed'} className="absolute inset-0">
               {renderLayer(layerExpanded, true)}
