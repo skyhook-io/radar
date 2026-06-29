@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,12 +19,14 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	pfpkg "github.com/skyhook-io/radar/pkg/portforward"
 )
 
 // PortForwardSession represents an active port forward
@@ -35,16 +36,18 @@ type PortForwardSession struct {
 	PodName       string    `json:"podName"`
 	PodPort       int       `json:"podPort"`
 	LocalPort     int       `json:"localPort"`
-	ListenAddress string    `json:"listenAddress"` // "127.0.0.1" or "0.0.0.0"
+	ListenAddress string    `json:"listenAddress"`         // "127.0.0.1" or "0.0.0.0"
 	ServiceName   string    `json:"serviceName,omitempty"` // If forwarding to a service
+	ServicePort   int       `json:"servicePort,omitempty"` // Original service port the user picked, when service-resolved (PodPort holds the resolved container port)
+	Scheme        string    `json:"scheme,omitempty"`      // "https", "http", or "" if unknown
 	StartedAt     time.Time `json:"startedAt"`
 	Status        string    `json:"status"` // "running", "stopped", "error"
 	Error         string    `json:"error,omitempty"`
 
 	cancel     context.CancelFunc
 	stopCh     chan struct{}
-	restConfig *rest.Config          // impersonated or shared config
-	k8sClient  kubernetes.Interface  // impersonated or shared client
+	restConfig *rest.Config         // impersonated or shared config
+	k8sClient  kubernetes.Interface // impersonated or shared client
 }
 
 // PortForwardManager manages active port forward sessions
@@ -105,6 +108,16 @@ type PortForwardRequest struct {
 
 // handleStartPortForward creates a new port forward session
 func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) {
+	// Port-forward opens a local TCP listener on the radar host. In-cluster the
+	// listener lives on the radar pod, unreachable from the user's browser, so
+	// the feature can't work — refuse rather than create a session that proxies
+	// to nowhere. The capability is reported false here too, so the UI never
+	// offers this; this guards direct/stale callers.
+	if k8s.IsInCluster() {
+		s.writeError(w, http.StatusBadRequest, "Port forwarding is unavailable when Radar runs in-cluster")
+		return
+	}
+
 	var req PortForwardRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid request body")
@@ -134,25 +147,31 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 	// If service name provided, find a pod backing it and resolve the target port
 	podName := req.PodName
 	podPort := req.PodPort
+	scheme := ""
+	servicePort := 0
 	serviceResolved := false
 	if req.ServiceName != "" && podName == "" {
-		foundPod, containerPort, err := findPodForService(r.Context(), client, req.Namespace, req.ServiceName, req.PodPort)
+		foundPod, containerPort, svcScheme, err := findPodForService(r.Context(), client, req.Namespace, req.ServiceName, req.PodPort)
 		if err != nil {
 			s.writeError(w, http.StatusNotFound, fmt.Sprintf("No pod found for service %s: %v", req.ServiceName, err))
 			return
 		}
+		servicePort = req.PodPort
 		podName = foundPod
 		podPort = containerPort
+		scheme = svcScheme
 		serviceResolved = true
 	}
 
 	// Validate that the pod actually exposes this port (skip for service-resolved ports
 	// since the service spec is authoritative and containers may not declare ports)
 	if !serviceResolved {
-		if err := validatePodPort(r.Context(), client, req.Namespace, podName, podPort); err != nil {
+		podScheme, err := validatePodPort(r.Context(), client, req.Namespace, podName, podPort)
+		if err != nil {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		scheme = podScheme
 	}
 
 	// Find available local port if not specified
@@ -196,6 +215,8 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 		LocalPort:     localPort,
 		ListenAddress: listenAddr,
 		ServiceName:   req.ServiceName,
+		ServicePort:   servicePort,
+		Scheme:        scheme,
 		StartedAt:     time.Now(),
 		Status:        "starting",
 		cancel:        cancel,
@@ -280,12 +301,10 @@ func runPortForward(ctx context.Context, session *PortForwardSession) error {
 			Ports: []int32{int32(session.PodPort)},
 		}, scheme.ParameterCodec)
 
-	transport, upgrader, err := spdy.RoundTripperFor(config)
+	dialer, err := pfpkg.NewDialer(config, req.URL())
 	if err != nil {
-		return fmt.Errorf("failed to create round tripper: %w", err)
+		return err
 	}
-
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", req.URL())
 
 	ports := []string{fmt.Sprintf("%d:%d", session.LocalPort, session.PodPort)}
 	addresses := []string{session.ListenAddress}
@@ -330,7 +349,9 @@ func runPortForward(ctx context.Context, session *PortForwardSession) error {
 }
 
 // findPodForService resolves a service port to a backing pod and the container target port.
-// It returns the pod name and the resolved container port to forward to.
+// It returns the pod name, the resolved container port to forward to, and the
+// inferred URL scheme ("https"/"http"/"") guessed from the matching service
+// port's appProtocol/name/number.
 // This follows the same resolution logic as kubectl port-forward:
 //   - Headless services (ClusterIP=None): use the service port directly
 //   - Integer targetPort: use the targetPort value (defaults to service port if unset)
@@ -338,33 +359,39 @@ func runPortForward(ctx context.Context, session *PortForwardSession) error {
 //
 // Callers pass the impersonated client from getClientForRequest so the
 // service/pod reads are subject to the user's K8s RBAC.
-func findPodForService(ctx context.Context, client kubernetes.Interface, namespace, serviceName string, servicePort int) (string, int, error) {
+func findPodForService(ctx context.Context, client kubernetes.Interface, namespace, serviceName string, servicePort int) (string, int, string, error) {
 	if client == nil {
-		return "", 0, fmt.Errorf("cluster client not available")
+		return "", 0, "", fmt.Errorf("cluster client not available")
 	}
 
 	// Get service
 	svc, err := client.CoreV1().Services(namespace).Get(ctx, serviceName, metav1.GetOptions{})
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to get service: %w", err)
+		return "", 0, "", fmt.Errorf("failed to get service: %w", err)
 	}
 
 	if len(svc.Spec.Selector) == 0 {
-		return "", 0, fmt.Errorf("service has no selector")
+		return "", 0, "", fmt.Errorf("service has no selector")
 	}
 
 	// Find the matching service port entry
 	var targetPort intstr.IntOrString
+	var scheme string
 	found := false
 	for _, port := range svc.Spec.Ports {
 		if int(port.Port) == servicePort {
 			targetPort = port.TargetPort
+			appProto := ""
+			if port.AppProtocol != nil {
+				appProto = *port.AppProtocol
+			}
+			scheme = k8score.InferPortScheme(port.Name, appProto, port.Port)
 			found = true
 			break
 		}
 	}
 	if !found {
-		return "", 0, fmt.Errorf("service does not expose port %d", servicePort)
+		return "", 0, "", fmt.Errorf("service does not expose port %d", servicePort)
 	}
 
 	// Find pods matching selector
@@ -372,21 +399,21 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		LabelSelector: labels.Set(svc.Spec.Selector).String(),
 	})
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to list pods: %w", err)
+		return "", 0, "", fmt.Errorf("failed to list pods: %w", err)
 	}
 
 	if len(pods.Items) == 0 {
-		return "", 0, fmt.Errorf("no pods found matching selector")
+		return "", 0, "", fmt.Errorf("no pods found matching selector")
 	}
 
 	// Headless services (ClusterIP=None) skip targetPort resolution (matches kubectl behavior)
 	if svc.Spec.ClusterIP == corev1.ClusterIPNone {
 		for _, pod := range pods.Items {
 			if pod.Status.Phase == corev1.PodRunning {
-				return pod.Name, servicePort, nil
+				return pod.Name, servicePort, scheme, nil
 			}
 		}
-		return "", 0, fmt.Errorf("no running pod found")
+		return "", 0, "", fmt.Errorf("no running pod found")
 	}
 
 	// Named targetPort: resolve against running pods by looking up container port names
@@ -394,11 +421,11 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		for _, pod := range pods.Items {
 			if pod.Status.Phase == corev1.PodRunning {
 				if resolved, ok := resolveNamedPort(&pod, targetPort.StrVal); ok {
-					return pod.Name, resolved, nil
+					return pod.Name, resolved, scheme, nil
 				}
 			}
 		}
-		return "", 0, fmt.Errorf("no running pod found with named port %q", targetPort.StrVal)
+		return "", 0, "", fmt.Errorf("no running pod found with named port %q", targetPort.StrVal)
 	}
 
 	// Numeric targetPort: use the value, or default to the service port if unset
@@ -411,11 +438,11 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 	// and containers can listen on ports without declaring them in the pod spec.
 	for _, pod := range pods.Items {
 		if pod.Status.Phase == corev1.PodRunning {
-			return pod.Name, containerPort, nil
+			return pod.Name, containerPort, scheme, nil
 		}
 	}
 
-	return "", 0, fmt.Errorf("no running pod found")
+	return "", 0, "", fmt.Errorf("no running pod found")
 }
 
 // resolveNamedPort looks up a named port in a pod's containers and returns the container port number.
@@ -430,24 +457,26 @@ func resolveNamedPort(pod *corev1.Pod, portName string) (int, bool) {
 	return 0, false
 }
 
-// validatePodPort checks if the pod actually exposes the requested port.
+// validatePodPort checks if the pod actually exposes the requested port and
+// returns the URL scheme inferred from the matching container port.
 // Uses the caller-supplied impersonated client so the pod read is subject
 // to the user's K8s RBAC.
-func validatePodPort(ctx context.Context, client kubernetes.Interface, namespace, podName string, port int) error {
+func validatePodPort(ctx context.Context, client kubernetes.Interface, namespace, podName string, port int) (string, error) {
 	if client == nil {
-		return fmt.Errorf("cluster client not available")
+		return "", fmt.Errorf("cluster client not available")
 	}
 
 	pod, err := client.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to get pod: %w", err)
+		return "", fmt.Errorf("failed to get pod: %w", err)
 	}
 
 	if pod.Status.Phase != corev1.PodRunning {
-		return fmt.Errorf("pod is not running (status: %s)", pod.Status.Phase)
+		return "", fmt.Errorf("pod is not running (status: %s)", pod.Status.Phase)
 	}
 
-	if !podHasPort(pod, port) {
+	scheme, ok := podPortScheme(pod, port)
+	if !ok {
 		// List available ports for better error message
 		var availablePorts []string
 		for _, container := range pod.Spec.Containers {
@@ -456,24 +485,27 @@ func validatePodPort(ctx context.Context, client kubernetes.Interface, namespace
 			}
 		}
 		if len(availablePorts) == 0 {
-			return fmt.Errorf("pod does not expose any ports")
+			return "", fmt.Errorf("pod does not expose any ports")
 		}
-		return fmt.Errorf("pod does not expose port %d. Available ports: %s", port, strings.Join(availablePorts, ", "))
+		return "", fmt.Errorf("pod does not expose port %d. Available ports: %s", port, strings.Join(availablePorts, ", "))
 	}
 
-	return nil
+	return scheme, nil
 }
 
-// podHasPort checks if a pod has a container exposing the given port
-func podHasPort(pod *corev1.Pod, port int) bool {
+// podPortScheme finds the container port matching `port` and returns the
+// inferred URL scheme. Second return is false if no container exposes the port.
+// ContainerPort has no AppProtocol field (unlike ServicePort), so we infer
+// from name + number only.
+func podPortScheme(pod *corev1.Pod, port int) (string, bool) {
 	for _, container := range pod.Spec.Containers {
 		for _, p := range container.Ports {
 			if int(p.ContainerPort) == port {
-				return true
+				return k8score.InferPortScheme(p.Name, "", p.ContainerPort), true
 			}
 		}
 	}
-	return false
+	return "", false
 }
 
 func findFreePort() (int, error) {
@@ -491,17 +523,13 @@ func findFreePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// GetPortForwardURL returns a helper to format port forward URLs
-func GetPortForwardURL(localPort int) string {
-	return "http://localhost:" + strconv.Itoa(localPort)
-}
-
 // AvailablePort represents a port that can be forwarded
 type AvailablePort struct {
 	Port          int    `json:"port"`
 	Protocol      string `json:"protocol"`
 	ContainerName string `json:"containerName"`
-	Name          string `json:"name,omitempty"` // Named port
+	Name          string `json:"name,omitempty"`   // Named port
+	Scheme        string `json:"scheme,omitempty"` // "https", "http", or "" if unknown
 }
 
 // AvailablePortsResponse is the response for the available ports endpoint
@@ -538,6 +566,7 @@ func (s *Server) handleGetAvailablePorts(w http.ResponseWriter, r *http.Request)
 					Protocol:      string(p.Protocol),
 					ContainerName: container.Name,
 					Name:          p.Name,
+					Scheme:        k8score.InferPortScheme(p.Name, "", p.ContainerPort),
 				})
 			}
 		}
@@ -550,10 +579,15 @@ func (s *Server) handleGetAvailablePorts(w http.ResponseWriter, r *http.Request)
 		}
 
 		for _, p := range svc.Spec.Ports {
+			appProto := ""
+			if p.AppProtocol != nil {
+				appProto = *p.AppProtocol
+			}
 			port := AvailablePort{
 				Port:     int(p.Port),
 				Protocol: string(p.Protocol),
 				Name:     p.Name,
+				Scheme:   k8score.InferPortScheme(p.Name, appProto, p.Port),
 			}
 			// If targetPort is different, note it
 			if p.TargetPort.Type == intstr.String && p.TargetPort.StrVal != "" {

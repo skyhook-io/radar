@@ -33,6 +33,7 @@ func minifyCompact(obj runtime.Object) (map[string]any, error) {
 // minifyCompactUnstructured applies Compact-level pruning to an unstructured resource.
 func minifyCompactUnstructured(obj map[string]any) map[string]any {
 	pruneMapCompact(obj)
+	redactUnstructuredSecrets(obj)
 	return obj
 }
 

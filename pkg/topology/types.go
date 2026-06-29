@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/hpadiag"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -25,6 +26,11 @@ import (
 // - dashboard.go: resource counting (if applicable)
 // - capabilities.go: ResourcePermissions struct + permCheck array (if needs RBAC)
 // - dynamic_cache.go: warmup list (if CRD)
+// - if the kind is cluster-scoped: add an entry to topology.ClusterScopedKinds
+//   in pkg/topology/cluster_scoped_kinds.go so the topology strip helpers
+//   AND neighborhood per-node gates can SAR-check it. Missing the entry
+//   leaks the cluster-scoped node to namespace-restricted users via
+//   /api/topology, get_topology MCP, AND get_neighborhood MCP/REST.
 type NodeKind string
 
 const (
@@ -115,7 +121,10 @@ const (
 	StatusHealthy   HealthStatus = "healthy"
 	StatusDegraded  HealthStatus = "degraded"
 	StatusUnhealthy HealthStatus = "unhealthy"
-	StatusUnknown   HealthStatus = "unknown"
+	// StatusNeutral = intentional/idle (suspended, scaled-to-0, completed) —
+	// renders sky on the frontend, distinct from StatusUnknown (gray).
+	StatusNeutral HealthStatus = "neutral"
+	StatusUnknown HealthStatus = "unknown"
 )
 
 // EdgeType represents the type of connection between nodes
@@ -166,6 +175,40 @@ type Topology struct {
 	HiddenKinds             []string `json:"hiddenKinds,omitempty"`             // Resource kinds auto-hidden for performance
 	RequiresNamespaceFilter bool     `json:"requiresNamespaceFilter,omitempty"` // True if cluster is too large for all-namespace topology
 	CRDDiscoveryStatus      string   `json:"crdDiscoveryStatus,omitempty"`      // CRD discovery status: idle, discovering, ready
+	EstimatedNodes          int      `json:"estimatedNodes,omitempty"`          // Pre-build node count estimate from the large-cluster optimizer; exposed so SSE / UI can tune debounce + render mode off the same signal
+	SummaryMode             bool     `json:"summaryMode,omitempty"`             // True when the pod tier was collapsed into per-workload/service counts (see SummaryModeThreshold)
+}
+
+// StripNodeKinds removes nodes whose Kind is in deny, plus every edge that
+// references one of the dropped node IDs. Used to hide cluster-scoped
+// resources (Nodes, Karpenter NodePool, GatewayClass, …) from users who
+// lack the per-kind RBAC to list them — the topology builder pulls those
+// from the SA-populated cache regardless of the caller's namespace scope.
+func (t *Topology) StripNodeKinds(deny map[NodeKind]bool) {
+	if t == nil || len(deny) == 0 {
+		return
+	}
+	dropped := make(map[string]bool)
+	kept := t.Nodes[:0]
+	for _, n := range t.Nodes {
+		if deny[n.Kind] {
+			dropped[n.ID] = true
+			continue
+		}
+		kept = append(kept, n)
+	}
+	t.Nodes = kept
+	if len(dropped) == 0 {
+		return
+	}
+	keptEdges := t.Edges[:0]
+	for _, e := range t.Edges {
+		if dropped[e.Source] || dropped[e.Target] {
+			continue
+		}
+		keptEdges = append(keptEdges, e)
+	}
+	t.Edges = keptEdges
 }
 
 // ViewMode determines how the topology is built
@@ -177,7 +220,28 @@ const (
 )
 
 // Large cluster threshold - when pre-grouped node count exceeds this, apply optimizations
+// (aggressive pod grouping + auto-hide ConfigMaps/PVCs).
 const LargeClusterThreshold = 1000
+
+// Summary mode threshold - a second, higher tier above LargeClusterThreshold.
+// When a namespace-filtered build's estimated node count crosses this, the
+// builder drops the entire pod tier (no Pod / PodGroup nodes) and instead
+// rolls pod health up onto the owning workload (resources view) or routing
+// Service (traffic view) as a PodSummary. This bounds rendered nodes to
+// workloads + networking regardless of pod count — the fix for tabs hanging
+// on namespaces with thousands of pods.
+const SummaryModeThreshold = 2000
+
+// PodSummary aggregates pod health for a workload or service in summary mode,
+// stamped onto the owning node's Data as "podSummary". Invariant maintained by
+// addPodHealth: Total == Healthy + Degraded + Unhealthy. Unknown-phase pods are
+// counted as Unhealthy (matching the bucketing GroupPods uses for PodGroups).
+type PodSummary struct {
+	Total     int `json:"total"`
+	Healthy   int `json:"healthy"`
+	Degraded  int `json:"degraded"`
+	Unhealthy int `json:"unhealthy"`
+}
 
 // BuildOptions configures topology building
 type BuildOptions struct {
@@ -191,6 +255,7 @@ type BuildOptions struct {
 	IncludeGenericCRDs     bool // Include CRDs with owner refs to topology nodes (default: true)
 	ForRelationshipCache   bool // Skip large cluster guard — used for internal relationship cache builds
 	ShowPolicyEffect       bool // Evaluate NetworkPolicies and annotate edges with allow/block/unprotected
+	SummaryMode            bool // Collapse the pod tier into per-workload/service counts (set by Build when estimate ≥ SummaryModeThreshold)
 }
 
 // MatchesNamespace returns true if ns is in the allowed list.
@@ -207,16 +272,6 @@ func MatchesNamespace(namespaces []string, ns string) bool {
 // An empty filter means all namespaces match.
 func (opts BuildOptions) MatchesNamespaceFilter(ns string) bool {
 	return MatchesNamespace(opts.Namespaces, ns)
-}
-
-// NamespaceFilter returns the namespace to use for API queries.
-// If exactly one namespace is filtered, return it (for efficient API filtering).
-// Otherwise return empty string (query all, filter client-side).
-func (opts BuildOptions) NamespaceFilter() string {
-	if len(opts.Namespaces) == 1 {
-		return opts.Namespaces[0]
-	}
-	return ""
 }
 
 // DefaultBuildOptions returns sensible defaults
@@ -254,8 +309,25 @@ type Relationships struct {
 	Consumers   []ResourceRef `json:"consumers,omitempty"`   // For ConfigMap/Secret: workloads that reference this
 	Scalers     []ResourceRef `json:"scalers,omitempty"`     // HPA/ScaledObject/ScaledJob scaling this
 	ScaleTarget *ResourceRef  `json:"scaleTarget,omitempty"` // For HPA/ScaledObject: what it scales
-	Policies    []ResourceRef `json:"policies,omitempty"`    // PDBs protecting this workload
-	Pods        []ResourceRef `json:"pods,omitempty"`        // For Service: pods it routes to
+	PDBs            []ResourceRef `json:"pdbs,omitempty"`            // PodDisruptionBudgets protecting this workload
+	NetworkPolicies []ResourceRef `json:"networkPolicies,omitempty"` // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy / CiliumClusterwideNetworkPolicy selecting this workload
+	Pods            []ResourceRef `json:"pods,omitempty"`            // For Service: pods it routes to
+
+	// ServiceAccount is the ServiceAccount bound to this Pod (Pod-only field,
+	// derived from pod.Spec.ServiceAccountName). Omitted when the SA name is empty.
+	ServiceAccount *ResourceRef `json:"serviceAccount,omitempty"`
+	// Node is the Node this Pod is scheduled on (Pod-only field, derived from
+	// pod.Spec.NodeName). Omitted when the Pod is unscheduled.
+	Node *ResourceRef `json:"node,omitempty"`
+	// ResourceClaims are the DRA ResourceClaims this Pod references (Pod-only
+	// field). Direct claims come from pod.Spec.ResourceClaims; template-generated
+	// claim names resolve via pod.Status.ResourceClaimStatuses.
+	ResourceClaims []ResourceRef `json:"resourceClaims,omitempty"`
+	// ManagedBy walks the owner-ref chain up to the topmost meaningful manager
+	// — ArgoCD Application > Flux Kustomization/HelmRelease > Helm release >
+	// topmost K8s owner (Deployment > ReplicaSet > Pod). Empty when no
+	// meaningful manager is detectable.
+	ManagedBy []ResourceRef `json:"managedBy,omitempty"`
 }
 
 // CertificateInfo holds parsed X.509 certificate metadata for a single certificate.
@@ -290,6 +362,7 @@ type ResourceWithRelationships struct {
 	Resource        any                    `json:"resource"`
 	Relationships   *Relationships         `json:"relationships,omitempty"`
 	CertificateInfo *SecretCertificateInfo `json:"certificateInfo,omitempty"`
+	HPADiagnosis    *hpadiag.Diagnosis     `json:"hpaDiagnosis,omitempty"`
 }
 
 // ResourceStatus holds computed status for a resource.
@@ -329,6 +402,11 @@ type ResourceProvider interface {
 // It combines DynamicResourceCache + ResourceDiscovery methods.
 type DynamicProvider interface {
 	List(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
+	// ListNamespaces unions a GVR across an explicit namespace set (or reads
+	// cluster-wide for an empty set / cluster-scoped resource). Topology uses
+	// this instead of List(gvr, "") so namespace-restricted users with several
+	// allowed namespaces still see CRD nodes from all of them.
+	ListNamespaces(gvr schema.GroupVersionResource, namespaces []string) ([]*unstructured.Unstructured, error)
 	Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error)
 	GetWatchedResources() []schema.GroupVersionResource
 	GetDiscoveryStatus() k8score.CRDDiscoveryStatus

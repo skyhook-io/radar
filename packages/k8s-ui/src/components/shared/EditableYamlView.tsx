@@ -9,11 +9,14 @@ import {
   XCircle,
   AlertTriangle,
 } from 'lucide-react'
+import { Download } from 'lucide-react'
 import { stringify as yamlStringify } from 'yaml'
 import { CodeViewer } from '../ui/CodeViewer'
 import { YamlEditor } from '../ui/YamlEditor'
 import { Tooltip } from '../ui/Tooltip'
 import type { SelectedResource } from '../../types'
+import { resourceToYaml } from '../../utils/yaml'
+import { triggerDownload } from '../../utils/download'
 
 // ============================================================================
 // SUCCESS ANIMATION
@@ -63,19 +66,27 @@ function formatSaveError(error: string): { summary: string; details?: string } {
     const errorPart = parts[1]?.trim() || ''
 
     if (errorPart.includes('Forbidden:')) {
-      const forbiddenMatch = errorPart.match(/([^:]+):\s*Forbidden:\s*([^.{]+)/)
-      if (forbiddenMatch) {
+      const forbiddenAt = errorPart.indexOf(': Forbidden:')
+      if (forbiddenAt > 0) {
+        const target = errorPart.slice(0, forbiddenAt).trim()
+        const messageStart = forbiddenAt + ': Forbidden:'.length
+        const dotAt = errorPart.indexOf('.', messageStart)
+        const braceAt = errorPart.indexOf('{', messageStart)
+        const endCandidates = [dotAt, braceAt].filter((i) => i >= 0)
+        const messageEnd = endCandidates.length ? Math.min(...endCandidates) : errorPart.length
+        const message = errorPart.slice(messageStart, messageEnd).trim()
         return {
-          summary: `Cannot update ${forbiddenMatch[1]}: ${forbiddenMatch[2].trim()}`,
+          summary: `Cannot update ${target}: ${message}`,
           details: error.length > 200 ? error : undefined
         }
       }
     }
 
-    const summaryMatch = errorPart.match(/^([^{]+)/)
-    if (summaryMatch) {
+    const braceAt = errorPart.indexOf('{')
+    const summary = (braceAt >= 0 ? errorPart.slice(0, braceAt) : errorPart).trim()
+    if (summary) {
       return {
-        summary: summaryMatch[1].trim(),
+        summary,
         details: error.length > 200 ? error : undefined
       }
     }
@@ -108,29 +119,39 @@ interface EditableYamlViewProps {
   data: any
   onCopy: (text: string) => void
   copied: boolean
+  /** Hide edit affordances when the host surface is read-only. */
+  readOnly?: boolean
   /** Called after a successful save so the parent can refetch */
   onSaved?: () => void
   /** Save handler — injected by the platform wrapper */
-  onSave?: (params: { kind: string; namespace: string; name: string; yaml: string }) => Promise<void>
+  onSave?: (params: { kind: string; namespace: string; name: string; yaml: string; force: boolean }) => Promise<void>
   /** Whether a save is in progress */
   isSaving?: boolean
   /** Error message from the last save attempt */
   saveError?: string | null
   /** Duplicate handler — opens create dialog with this resource's YAML */
   onDuplicate?: (params: { kind: string; namespace: string; name: string; yaml: string }) => void
+  /**
+   * Optional override for the download trigger — desktop builds inject a native save dialog here.
+   * Falls back to a browser blob download when omitted.
+   */
+  onDownload?: (content: string, mime: string, filename: string) => void
 }
 
-export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSave, isSaving, saveError, onDuplicate }: EditableYamlViewProps) {
+export function EditableYamlView({ resource, data, onCopy, copied, readOnly = false, onSaved, onSave, isSaving, saveError, onDuplicate, onDownload }: EditableYamlViewProps) {
   const draftKey = `radar_yaml_draft:${resource.kind}/${resource.namespace}/${resource.name}`
 
   // Restore draft from sessionStorage (e.g., after session-expiry redirect).
   // All sessionStorage calls are wrapped in try-catch — storage can throw
   // QuotaExceededError or be blocked by browser security policies.
-  const savedDraft = useRef(safeSessionGet(draftKey))
+  const savedDraft = useRef(readOnly ? null : safeSessionGet(draftKey))
   const [isEditing, setIsEditing] = useState(savedDraft.current !== null)
   const [editedYaml, setEditedYaml] = useState(savedDraft.current ?? '')
   const [yamlErrors, setYamlErrors] = useState<string[]>([])
   const [showErrorDetails, setShowErrorDetails] = useState(false)
+  // Default on: the editor resubmits the full live manifest, so an unforced
+  // save would conflict on every field owned by Helm/Flux/Argo/a controller.
+  const [force, setForce] = useState(true)
 
   // Clean up restored draft flag
   useEffect(() => {
@@ -142,33 +163,35 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
 
   // Autosave draft to sessionStorage while editing (best-effort)
   useEffect(() => {
+    if (readOnly) {
+      setIsEditing(false)
+      setEditedYaml('')
+      setYamlErrors([])
+      safeSessionRemove(draftKey)
+      return
+    }
     if (isEditing && editedYaml) {
       safeSessionSet(draftKey, editedYaml)
     } else {
       safeSessionRemove(draftKey)
     }
-  }, [isEditing, editedYaml, draftKey])
+  }, [isEditing, editedYaml, draftKey, readOnly])
 
-  // Convert resource to YAML for editing
-  const convertToYaml = useCallback((d: any) => {
-    if (!d) return ''
-    const cleaned = { ...d }
-    delete cleaned.status
-    if (cleaned.metadata) {
-      delete cleaned.metadata.managedFields
-      delete cleaned.metadata.resourceVersion
-      delete cleaned.metadata.uid
-      delete cleaned.metadata.creationTimestamp
-      delete cleaned.metadata.generation
-    }
-    return yamlStringify(cleaned, { lineWidth: 0, indent: 2 })
-  }, [])
+  const handleDownload = useCallback(() => {
+    const yaml = resourceToYaml(data)
+    if (!yaml) return
+    // Prefer the canonical singular Kind from the manifest (e.g. "Pod") over the URL plural ("pods").
+    const kindForFile = (data?.kind || resource.kind || 'resource').toLowerCase()
+    const slug = `${kindForFile}-${resource.name}`.replace(/[^a-z0-9._-]+/g, '-')
+    triggerDownload(yaml, 'application/yaml', `${slug}.yaml`, onDownload)
+  }, [data, resource.kind, resource.name, onDownload])
 
   const handleStartEdit = useCallback(() => {
-    setEditedYaml(convertToYaml(data))
+    if (readOnly) return
+    setEditedYaml(resourceToYaml(data))
     setYamlErrors([])
     setIsEditing(true)
-  }, [data, convertToYaml])
+  }, [data, readOnly])
 
   const handleCancelEdit = useCallback(() => {
     setIsEditing(false)
@@ -185,6 +208,7 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
         namespace: resource.namespace,
         name: resource.name,
         yaml: editedYaml,
+        force,
       })
       setIsEditing(false)
       setEditedYaml('')
@@ -192,7 +216,7 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
     } catch {
       // Error handled by caller via saveError prop
     }
-  }, [onSave, resource, editedYaml, yamlErrors, onSaved])
+  }, [onSave, resource, editedYaml, yamlErrors, onSaved, force])
 
   const handleYamlValidate = useCallback((_isValid: boolean, errors: string[]) => {
     setYamlErrors(errors)
@@ -220,6 +244,31 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
               <XCircle className="w-3.5 h-3.5" />
               Cancel
             </button>
+            <Tooltip
+              content={
+                <div className="space-y-1.5 max-w-[19rem]">
+                  <p>Override field ownership (server-side apply).</p>
+                  <p>
+                    <span className="font-medium text-theme-text-primary">On (default):</span> your edits overwrite fields owned by Helm/Flux/Argo/kubectl — but an active controller may reconcile them back on its next sync.
+                  </p>
+                  <p>
+                    <span className="font-medium text-theme-text-primary">Off:</span> if another manager owns a field you changed, the whole save is rejected with a conflict (nothing is applied).
+                  </p>
+                </div>
+              }
+              position="bottom"
+            >
+              <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={force}
+                  disabled={isPending}
+                  onChange={(e) => setForce(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-theme-border bg-theme-base"
+                />
+                Force
+              </label>
+            </Tooltip>
             <button
               onClick={handleSaveEdit}
               disabled={isPending || yamlErrors.length > 0}
@@ -314,13 +363,15 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-theme-text-secondary">YAML</span>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleStartEdit}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-theme-elevated rounded"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-            Edit
-          </button>
+          {!readOnly && (
+            <button
+              onClick={handleStartEdit}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-theme-elevated rounded"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              Edit
+            </button>
+          )}
           <button
             onClick={() => onCopy(yamlContent)}
             className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
@@ -328,6 +379,15 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
             {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
             Copy
           </button>
+          <Tooltip content="Download manifest as YAML (server-generated fields stripped)">
+            <button
+              onClick={handleDownload}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download
+            </button>
+          </Tooltip>
           {onDuplicate && (
             <Tooltip content="Duplicate as new resource">
               <button

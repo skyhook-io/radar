@@ -2,12 +2,15 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // newAuthServer creates a minimal Server with the given auth config for testing.
@@ -86,15 +89,37 @@ func TestHandleAuthMe_AuthEnabled_WithUser(t *testing.T) {
 	if len(groups) != 2 {
 		t.Errorf("groups = %v, want 2 groups", groups)
 	}
+	// Non-Cloud user — cloudRole must be absent so the frontend's
+	// useCloudRole hook treats them as "not under Cloud."
+	if _, has := body["cloudRole"]; has {
+		t.Errorf("cloudRole should not be present for non-Cloud user (groups=%v)", groups)
+	}
+}
+
+func TestHandleAuthMe_CloudUser_ExposesCloudRole(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	w := httptest.NewRecorder()
+	r := requestWithUser("GET", "/api/auth/me", &auth.User{
+		Username: "bob",
+		Groups:   []string{"cloud:viewer", "cloud:org:abc"},
+	})
+	s.handleAuthMe(w, r)
+
+	var body map[string]any
+	json.NewDecoder(w.Body).Decode(&body)
+
+	if body["cloudRole"] != "viewer" {
+		t.Errorf("cloudRole = %v, want viewer", body["cloudRole"])
+	}
 }
 
 // --- parseNamespaces ---
 
 func TestParseNamespaces(t *testing.T) {
 	tests := []struct {
-		name   string
-		query  string
-		want   []string
+		name    string
+		query   string
+		want    []string
 		wantNil bool
 	}{
 		{"no params", "", nil, true},
@@ -103,6 +128,7 @@ func TestParseNamespaces(t *testing.T) {
 		{"plural takes precedence", "namespaces=dev&namespace=prod", []string{"dev"}, false},
 		{"trims whitespace", "namespaces= dev , staging ", []string{"dev", "staging"}, false},
 		{"filters empty segments", "namespaces=dev,,staging,", []string{"dev", "staging"}, false},
+		{"dedupes namespaces preserving order", "namespaces=dev,staging,dev,prod,staging", []string{"dev", "staging", "prod"}, false},
 	}
 
 	for _, tt := range tests {
@@ -279,6 +305,22 @@ func newAuthTestServer(t *testing.T) *authTestEnv {
 	return &authTestEnv{ts: ts, srv: srv}
 }
 
+// authPost sends a POST with proxy auth headers and a JSON body.
+func (e *authTestEnv) authPost(t *testing.T, path, user, groups, body string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest("POST", e.ts.URL+path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-User", user)
+	if groups != "" {
+		req.Header.Set("X-Forwarded-Groups", groups)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	return resp
+}
+
 // authGet sends a GET with proxy auth headers to the test server.
 func (e *authTestEnv) authGet(t *testing.T, path, user, groups string) *http.Response {
 	t.Helper()
@@ -305,7 +347,11 @@ func TestProxyAuth_UnauthenticatedBlocked(t *testing.T) {
 		"/api/events",
 		"/api/changes",
 		"/api/dashboard",
+		"/api/connection",
 		"/mcp",
+		// pprof is mounted on non-cloud builds; the auth middleware must
+		// still gate it (leaks the in-memory K8s cache otherwise).
+		"/debug/pprof/heap",
 	}
 
 	for _, path := range endpoints {
@@ -320,6 +366,19 @@ func TestProxyAuth_UnauthenticatedBlocked(t *testing.T) {
 			}
 		})
 	}
+
+	// POST /api/connection/retry is the reported state-changing endpoint —
+	// assert the mutating verb is gated, not just the GET surface.
+	t.Run("POST /api/connection/retry", func(t *testing.T) {
+		resp, err := http.Post(env.ts.URL+"/api/connection/retry", "application/json", nil)
+		if err != nil {
+			t.Fatalf("POST /api/connection/retry: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("expected 401, got %d", resp.StatusCode)
+		}
+	})
 }
 
 func TestProxyAuth_ExemptPaths(t *testing.T) {
@@ -505,6 +564,253 @@ func TestProxyAuth_NamespaceFiltering_ClusterAdmin(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&deps)
 	if len(deps) == 0 {
 		t.Error("cluster admin should see all deployments")
+	}
+}
+
+func TestProxyAuth_DashboardClusterScopedCountsRequireClusterScopedRBAC(t *testing.T) {
+	env := newAuthTestServer(t)
+
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "nodes", "", false)
+	perms.SetCanI("list", "", "namespaces", "", false)
+	env.srv.permCache.Set("broad-reader", perms)
+
+	resp := env.authGet(t, "/api/dashboard", "broad-reader", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body DashboardResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode dashboard: %v", err)
+	}
+	if body.ResourceCounts.Namespaces != 0 {
+		t.Fatalf("namespace count leaked without namespace read RBAC: %d", body.ResourceCounts.Namespaces)
+	}
+	if body.ResourceCounts.Nodes.Total != 0 {
+		t.Fatalf("node count leaked without node read RBAC: %+v", body.ResourceCounts.Nodes)
+	}
+	if body.NodeVersionSkew != nil {
+		t.Fatalf("node version skew leaked without node read RBAC: %+v", body.NodeVersionSkew)
+	}
+}
+
+func TestProxyAuth_ClusterScopedReadsRequireClusterScopedRBAC(t *testing.T) {
+	env := newAuthTestServer(t)
+
+	// Cluster-wide pod visibility (sentinel nil) is NOT a license to read
+	// cluster-scoped kinds — those need their own SAR. Pin that distinction
+	// for /api/resources/{cluster-only-kind}: a regression that drops the
+	// ClassifyKindScope guard would surface here.
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "nodes", "", false)
+	perms.SetCanI("list", "rbac.authorization.k8s.io", "clusterroles", "", false)
+	env.srv.permCache.Set("broad-reader", perms)
+
+	for _, kind := range []string{"nodes", "clusterroles"} {
+		resp := env.authGet(t, "/api/resources/"+kind, "broad-reader", "")
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			t.Fatalf("%s: expected 200, got %d", kind, resp.StatusCode)
+		}
+		var items []any
+		json.NewDecoder(resp.Body).Decode(&items)
+		resp.Body.Close()
+		if len(items) != 0 {
+			t.Errorf("%s leaked without cluster-scoped read RBAC: %d items", kind, len(items))
+		}
+	}
+
+	// Top nodes is the metrics-table sibling and was missed by the original
+	// cached-read sweep — pin its gate too.
+	resp := env.authGet(t, "/api/metrics/top/nodes", "broad-reader", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/api/metrics/top/nodes: expected 200, got %d", resp.StatusCode)
+	}
+	var top []any
+	json.NewDecoder(resp.Body).Decode(&top)
+	if len(top) != 0 {
+		t.Errorf("top/nodes leaked without node RBAC: %d entries", len(top))
+	}
+}
+
+func TestProxyAuth_NamespacesResource_RequiresListNamespacesSAR(t *testing.T) {
+	// /api/resources/namespaces returns full Namespace objects (labels,
+	// annotations, spec). Cluster-wide pod RBAC alone (AllowedNamespaces
+	// nil sentinel from DiscoverNamespaces' list-pods probe) does NOT
+	// license that — pin the strict SAR gate so a regression that lets
+	// nil-sentinel users see Namespace metadata surfaces here.
+	env := newAuthTestServer(t)
+
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "namespaces", "", false)
+	env.srv.permCache.Set("broad-reader", perms)
+
+	resp := env.authGet(t, "/api/resources/namespaces", "broad-reader", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var items []any
+	json.NewDecoder(resp.Body).Decode(&items)
+	if len(items) != 0 {
+		t.Errorf("namespaces leaked without list-namespaces RBAC: %d items", len(items))
+	}
+}
+
+func TestProxyAuth_NamespacesResource_GetRequiresGetNamespacesSAR(t *testing.T) {
+	// /api/resources/namespaces/_/{name} returns a full Namespace object.
+	// Read access to resources IN a namespace is not the same RBAC tuple
+	// as get-namespace — pin the strict gate. The 403 keeps a restricted
+	// user from learning labels/annotations of namespaces they only have
+	// pod-list access to.
+	env := newAuthTestServer(t)
+
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"alpha"}}
+	perms.SetCanI("get", "", "namespaces", "", false)
+	env.srv.permCache.Set("alice", perms)
+
+	resp := env.authGet(t, "/api/resources/namespaces/_/alpha", "alice", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 without get-namespaces SAR, got %d", resp.StatusCode)
+	}
+}
+
+func TestProxyAuth_CanI_CacheIsPerUser(t *testing.T) {
+	// Pin the load-bearing isolation claim: canI cache results MUST be per
+	// user. Alice's cached allow on /nodes must NOT authorize Bob's request.
+	// A regression that moved canI to a process-wide map (or keyed by verb
+	// alone) would surface here.
+	env := newAuthTestServer(t)
+
+	alicePerms := &auth.UserPermissions{AllowedNamespaces: nil}
+	alicePerms.SetCanI("list", "", "nodes", "", true)
+	env.srv.permCache.Set("alice", alicePerms)
+
+	// Bob has the same namespace ceiling but no cached node allow. He must
+	// not inherit alice's grant from the canI cache.
+	bobPerms := &auth.UserPermissions{AllowedNamespaces: nil}
+	bobPerms.SetCanI("list", "", "nodes", "", false)
+	env.srv.permCache.Set("bob", bobPerms)
+
+	// Sanity: alice's grant works (she can see nodes — the SA has them).
+	aliceResp := env.authGet(t, "/api/resources/nodes", "alice", "")
+	defer aliceResp.Body.Close()
+	if aliceResp.StatusCode != http.StatusOK {
+		t.Fatalf("alice: expected 200, got %d", aliceResp.StatusCode)
+	}
+
+	// Bob hits the same endpoint. canI says deny → empty result, not the
+	// list alice saw.
+	bobResp := env.authGet(t, "/api/resources/nodes", "bob", "")
+	defer bobResp.Body.Close()
+	var bobItems []any
+	json.NewDecoder(bobResp.Body).Decode(&bobItems)
+	if len(bobItems) != 0 {
+		t.Errorf("bob's nodes leaked via cross-user canI cache: %d items", len(bobItems))
+	}
+}
+
+func TestHandleSetActiveNamespace_RejectsDeniedNamespace(t *testing.T) {
+	// Picking a namespace the user can't see must 403, not silently store —
+	// otherwise a restricted user could probe namespace existence by
+	// observing 200 vs 403. Pin the info-leak guard.
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", &auth.UserPermissions{
+		AllowedNamespaces: []string{"alpha"},
+	})
+
+	resp := env.authPost(t, "/api/cluster/namespace", "alice", "", `{"namespaces":["forbidden-ns"]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for denied pick, got %d", resp.StatusCode)
+	}
+
+	// And the server must not have stored anything — re-fetch the scope.
+	scopeResp := env.authGet(t, "/api/cluster/namespace-scope", "alice", "")
+	defer scopeResp.Body.Close()
+	var scope NamespaceScopeResponse
+	if err := json.NewDecoder(scopeResp.Body).Decode(&scope); err != nil {
+		t.Fatalf("decode scope: %v", err)
+	}
+	if len(scope.Actives) != 0 {
+		t.Errorf("denied pick was stored: Actives=%v", scope.Actives)
+	}
+}
+
+func TestHandleSetActiveNamespace_RejectsLegacyShape(t *testing.T) {
+	// Older clients used to POST {"namespace":"x"}. After the rename to
+	// {"namespaces":[…]}, the legacy shape must 400, not silently clear the
+	// user's saved pick — Go's default JSON decoder ignores unknown fields,
+	// so without DisallowUnknownFields the legacy body would leave
+	// Namespaces nil and run the "empty = clear" path.
+	prev := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prev) })
+
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", &auth.UserPermissions{
+		AllowedNamespaces: []string{"alpha"},
+	})
+
+	// Pre-seed alice's in-memory pick so we can verify the rejected POST
+	// doesn't perturb it. Going through the handler would hit
+	// handleGetNamespaceScope's eviction in this fake (which has no real
+	// namespaces in the cache), so we set the pick directly.
+	aliceReq := requestWithUser("GET", "/api/cluster/namespace", &auth.User{Username: "alice"})
+	env.srv.setActiveNamespaceForUser(aliceReq, []string{"alpha"})
+
+	resp := env.authPost(t, "/api/cluster/namespace", "alice", "", `{"namespace":"alpha"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for legacy {namespace} body, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "unknown field") {
+		t.Errorf("expected error to mention unknown field, got: %s", body)
+	}
+
+	// The rejected request must not have touched the stored pick. Asserting
+	// directly on the in-memory map sidesteps the test fake's namespace
+	// eviction path that would shrink the pick on a round-trip GET.
+	got := env.srv.getActiveNamespaceForUser(aliceReq)
+	if len(got) != 1 || got[0] != "alpha" {
+		t.Errorf("rejected legacy POST mutated stored pick: got %v, want [alpha]", got)
+	}
+}
+
+func TestHandleGetNamespaceScope_NoPick_EmitsEmptySliceNotNull(t *testing.T) {
+	// Pin the wire contract: actives and accessibleNamespaces must serialize
+	// as [] (non-nil empty), not null. Without the nil-coercion in
+	// handleGetNamespaceScope the frontend crashed on `scope.actives.slice()`
+	// — caught by /visual-test. The defensive code is small and easy to
+	// regress in a refactor, so pin the byte-level wire shape here.
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", &auth.UserPermissions{
+		AllowedNamespaces: []string{"alpha"},
+	})
+
+	resp := env.authGet(t, "/api/cluster/namespace-scope", "alice", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+
+	if strings.Contains(string(body), `"actives":null`) {
+		t.Errorf("actives marshalled as null (frontend crashes on .slice()): %s", body)
+	}
+	if !strings.Contains(string(body), `"actives":[`) {
+		t.Errorf("expected actives:[…] in body, got: %s", body)
+	}
+	if strings.Contains(string(body), `"accessibleNamespaces":null`) {
+		t.Errorf("accessibleNamespaces marshalled as null: %s", body)
+	}
+	if !strings.Contains(string(body), `"accessibleNamespaces":[`) {
+		t.Errorf("expected accessibleNamespaces:[…] in body, got: %s", body)
 	}
 }
 

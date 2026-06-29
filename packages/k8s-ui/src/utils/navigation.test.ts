@@ -25,6 +25,18 @@ describe('kindToPlural', () => {
     expect(kindToPlural('NetworkPolicy')).toBe('networkpolicies')
   })
 
+  test('handles already-plural kind names (Endpoints)', () => {
+    // The Kind "Endpoints" IS its resource name; englishPlural would wrongly
+    // yield "endpointses" (ends in s → +es) without the builtin map entry.
+    expect(kindToPlural('Endpoints')).toBe('endpoints')
+    expect(pluralToKind('endpoints')).toBe('Endpoints')
+  })
+
+  test('handles EndpointSlice before discovery loads', () => {
+    expect(kindToPlural('EndpointSlice')).toBe('endpointslices')
+    expect(pluralToKind('endpointslices')).toBe('EndpointSlice')
+  })
+
   test('handles kinds ending in ss (Class-suffix)', () => {
     expect(kindToPlural('StorageClass')).toBe('storageclasses')
     expect(kindToPlural('IngressClass')).toBe('ingressclasses')
@@ -134,6 +146,17 @@ describe('initNavigationMap', () => {
     ])
     // Passing an already-plural kind should be idempotent
     expect(kindToPlural('secretstores')).toBe('secretstores')
+  })
+
+  test('builtin core mappings win over colliding discovered resources', () => {
+    // metrics.k8s.io exposes a resource named "pods" with kind "PodMetrics".
+    // Without first-wins on builtins, this clobbers core "pods" → "Pod" and
+    // every Pod-keyed lookup (timeline kind filter, badge color, etc.) breaks.
+    initNavigationMap([
+      { group: '', version: 'v1', kind: 'Pod', name: 'pods', namespaced: true, isCrd: false, verbs: ['get'] },
+      { group: 'metrics.k8s.io', version: 'v1beta1', kind: 'PodMetrics', name: 'pods', namespaced: true, isCrd: false, verbs: ['get'] },
+    ])
+    expect(pluralToKind('pods')).toBe('Pod')
   })
 })
 

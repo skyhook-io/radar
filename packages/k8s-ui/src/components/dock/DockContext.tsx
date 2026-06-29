@@ -29,12 +29,18 @@ export interface DockContextValue {
   activeTabId: string | null
   isExpanded: boolean
   leftOffset: number
+  height: number
+  isMaximized: boolean
+  isResizing: boolean
   addTab: (tab: Omit<DockTab, 'id'>) => string
   removeTab: (id: string) => void
   setActiveTab: (id: string) => void
   toggleExpanded: () => void
   setExpanded: (expanded: boolean) => void
   setLeftOffset: (offset: number) => void
+  setHeight: (height: number) => void
+  setMaximized: (maximized: boolean) => void
+  setResizing: (resizing: boolean) => void
   closeAll: () => void
 }
 
@@ -42,11 +48,17 @@ const DockContext = createContext<DockContextValue | null>(null)
 
 let tabIdCounter = 0
 
+const DOCK_DEFAULT_HEIGHT = 400
+const DOCK_COLLAPSED_HEIGHT = 36
+
 export function DockProvider({ children }: { children: ReactNode }) {
   const [tabs, setTabs] = useState<DockTab[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [isExpanded, setIsExpanded] = useState(false)
   const [leftOffset, setLeftOffset] = useState(0)
+  const [height, setHeight] = useState(DOCK_DEFAULT_HEIGHT)
+  const [isMaximized, setIsMaximized] = useState(false)
+  const [isResizing, setIsResizing] = useState(false)
   // Keep a ref to the latest tabs for deduplication without stale-closure issues
   const tabsRef = useRef<DockTab[]>(tabs)
   useEffect(() => { tabsRef.current = tabs }, [tabs])
@@ -126,12 +138,18 @@ export function DockProvider({ children }: { children: ReactNode }) {
       activeTabId,
       isExpanded,
       leftOffset,
+      height,
+      isMaximized,
+      isResizing,
       addTab,
       removeTab,
       setActiveTab,
       toggleExpanded,
       setExpanded: setIsExpanded,
       setLeftOffset,
+      setHeight,
+      setMaximized: setIsMaximized,
+      setResizing: setIsResizing,
       closeAll,
     }}>
       {children}
@@ -145,6 +163,27 @@ export function useDock() {
     throw new Error('useDock must be used within a DockProvider')
   }
   return context
+}
+
+/**
+ * Reserved vertical space at the bottom of the viewport for the dock, in px.
+ * Drawers and main-content spacers subtract this so they don't sit behind the dock.
+ * Maximized returns 0 — the dock covers everything by design.
+ *
+ * Safe to call without a DockProvider ancestor (returns 0) — the shared
+ * @skyhook/k8s-ui package exports drawers that may be consumed without a dock.
+ */
+export function useDockReservedHeight(): number {
+  const context = useContext(DockContext)
+  if (!context) return 0
+  const { tabs, isExpanded, isMaximized, height } = context
+  if (tabs.length === 0) return 0
+  // Order matches BottomDock's effectiveHeight: collapsed tab bar wins over
+  // maximized so the (maximized=true, expanded=false) state — reachable by
+  // Cmd+J / Ctrl+` while maximized — still reserves the 36px tab bar height.
+  if (!isExpanded) return DOCK_COLLAPSED_HEIGHT
+  if (isMaximized) return 0
+  return height
 }
 
 // Convenience hooks for adding specific tab types

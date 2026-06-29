@@ -1,2 +1,6 @@
 export * from './core'
+export * from './fetch-error'
 export * from './gitops'
+export * from './gitops-tree'
+export * from './gitops-insights'
+export * from './rbac'

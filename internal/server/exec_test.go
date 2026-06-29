@@ -1,54 +1,244 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
-// TestDefaultExecCommand covers the precedence rules for building the argv
-// passed to the pod exec subresource:
-//   - ?shell= override always wins and is passed verbatim as a single argv element
-//   - --pod-shell-default fallback is used when no override is present
-//   - the built-in defaultShellScript is used when neither is set
+// TestDefaultExecCommand pins the argv precedence: ?shell= override wins
+// over everything; Windows pods route to cmd.exe ahead of the POSIX-only
+// --pod-shell-default fallback; built-in script is the floor.
 func TestDefaultExecCommand(t *testing.T) {
 	tests := []struct {
 		name     string
 		override string
 		fallback string
+		podOS    string
 		want     []string
 	}{
 		{
 			name:     "no override and no fallback uses built-in script",
 			override: "",
 			fallback: "",
+			podOS:    "",
 			want:     []string{"sh", "-c", defaultShellScript},
 		},
 		{
 			name:     "fallback configured, no override, wraps in sh -c",
 			override: "",
 			fallback: "exec zsh",
+			podOS:    "",
 			want:     []string{"sh", "-c", "exec zsh"},
 		},
 		{
 			name:     "explicit override without fallback is passed verbatim",
 			override: "/bin/bash",
 			fallback: "",
+			podOS:    "",
 			want:     []string{"/bin/bash"},
 		},
 		{
 			name:     "explicit override wins over configured fallback",
 			override: "/bin/dash",
 			fallback: "exec zsh",
+			podOS:    "",
 			want:     []string{"/bin/dash"},
+		},
+		{
+			name:     "windows pod with no override uses cmd.exe + windows script",
+			override: "",
+			fallback: "",
+			podOS:    "windows",
+			want:     []string{"cmd.exe", "/c", windowsDefaultShellScript},
+		},
+		{
+			name:     "windows pod ignores POSIX-only --pod-shell-default fallback",
+			override: "",
+			fallback: "exec zsh",
+			podOS:    "windows",
+			want:     []string{"cmd.exe", "/c", windowsDefaultShellScript},
+		},
+		{
+			name:     "windows pod still honours explicit override (operator escape hatch)",
+			override: "powershell.exe",
+			fallback: "",
+			podOS:    "windows",
+			want:     []string{"powershell.exe"},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := defaultExecCommand(tc.override, tc.fallback)
+			got := defaultExecCommand(tc.override, tc.fallback, tc.podOS)
 			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("defaultExecCommand(%q, %q) = %v, want %v", tc.override, tc.fallback, got, tc.want)
+				t.Errorf("defaultExecCommand(%q, %q, %q) = %v, want %v", tc.override, tc.fallback, tc.podOS, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWindowsDefaultShellScript is a tripwire — if you edit the script,
+// manually verify against both Nano Server (no PowerShell) and Server Core
+// (PowerShell present) before merging.
+// TestDefaultExecContainer pins the container-selection precedence: a valid
+// kubectl.kubernetes.io/default-container annotation wins, otherwise the first
+// container. This is what keeps mesh-injected pods (sidecar at containers[0])
+// from execing into a shell-less proxy.
+func TestDefaultExecContainer(t *testing.T) {
+	podWith := func(annotation string, containers ...string) *corev1.Pod {
+		pod := &corev1.Pod{}
+		if annotation != "" {
+			pod.Annotations = map[string]string{defaultContainerAnnotation: annotation}
+		}
+		for _, name := range containers {
+			pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: name})
+		}
+		return pod
+	}
+
+	tests := []struct {
+		name string
+		pod  *corev1.Pod
+		want string
+	}{
+		{"annotation honored over first container", podWith("app", "istio-proxy", "app"), "app"},
+		{"no annotation falls back to first", podWith("", "istio-proxy", "app"), "istio-proxy"},
+		{"annotation naming missing container ignored", podWith("ghost", "istio-proxy", "app"), "istio-proxy"},
+		{"single container", podWith("", "app"), "app"},
+		{"no containers", podWith(""), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := defaultExecContainer(tt.pod); got != tt.want {
+				t.Errorf("defaultExecContainer() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWindowsDefaultShellScript(t *testing.T) {
+	const expected = `where powershell >nul 2>&1 && powershell || cmd`
+	if windowsDefaultShellScript != expected {
+		t.Errorf("windowsDefaultShellScript changed:\n  got:  %q\n  want: %q", windowsDefaultShellScript, expected)
+	}
+	if !strings.Contains(windowsDefaultShellScript, "where powershell") {
+		t.Error("windowsDefaultShellScript must probe for PowerShell with `where` before invoking it — Nano Server ships without PowerShell and would otherwise fail")
+	}
+	if !strings.Contains(windowsDefaultShellScript, "|| cmd") {
+		t.Error("windowsDefaultShellScript must fall back to cmd.exe when PowerShell is missing — cmd.exe is the only shell guaranteed present on every Windows container image")
+	}
+}
+
+// TestDetectPodOS pins the three-tier authority order and the
+// degrade-to-empty contract for tier-3 lookup failures.
+func TestDetectPodOS(t *testing.T) {
+	tests := []struct {
+		name       string
+		pod        *corev1.Pod
+		nodeLabels map[string]string
+		nodeErr    error
+		want       string
+	}{
+		{
+			name: "tier 1: pod.spec.os.name=windows is authoritative",
+			pod: &corev1.Pod{Spec: corev1.PodSpec{
+				OS:           &corev1.PodOS{Name: corev1.Windows},
+				NodeSelector: map[string]string{"kubernetes.io/os": "linux"},
+				NodeName:     "n1",
+			}},
+			nodeLabels: map[string]string{"kubernetes.io/os": "linux"},
+			want:       "windows",
+		},
+		{
+			name: "tier 1: pod.spec.os.name=linux is authoritative",
+			pod: &corev1.Pod{Spec: corev1.PodSpec{
+				OS: &corev1.PodOS{Name: corev1.Linux},
+			}},
+			want: "linux",
+		},
+		{
+			name: "tier 2: nodeSelector kubernetes.io/os when spec.os is unset",
+			pod: &corev1.Pod{Spec: corev1.PodSpec{
+				NodeSelector: map[string]string{"kubernetes.io/os": "windows"},
+				NodeName:     "n1",
+			}},
+			nodeLabels: map[string]string{"kubernetes.io/os": "linux"},
+			want:       "windows",
+		},
+		{
+			name: "tier 2: kubernetes.io/os wins over beta.kubernetes.io/os",
+			pod: &corev1.Pod{Spec: corev1.PodSpec{
+				NodeSelector: map[string]string{
+					"kubernetes.io/os":      "linux",
+					"beta.kubernetes.io/os": "windows",
+				},
+			}},
+			want: "linux",
+		},
+		{
+			name: "tier 2: beta.kubernetes.io/os is read when kubernetes.io/os is missing",
+			pod: &corev1.Pod{Spec: corev1.PodSpec{
+				NodeSelector: map[string]string{"beta.kubernetes.io/os": "windows"},
+			}},
+			want: "windows",
+		},
+		{
+			// Guards against a "simplify the `v != \"\"` check" refactor.
+			// Some admission webhooks emit an empty-string label rather than
+			// omitting the key; treating empty as absent lets the beta
+			// fallback (or tier 3) take over instead of returning "" as a
+			// valid OS and routing Windows pods to sh -c.
+			name: "tier 2: empty kubernetes.io/os value falls through to beta label",
+			pod: &corev1.Pod{Spec: corev1.PodSpec{
+				NodeSelector: map[string]string{
+					"kubernetes.io/os":      "",
+					"beta.kubernetes.io/os": "windows",
+				},
+			}},
+			want: "windows",
+		},
+		{
+			name: "tier 3: node label fetched when pod has no selector",
+			pod: &corev1.Pod{Spec: corev1.PodSpec{
+				NodeName: "n1",
+			}},
+			nodeLabels: map[string]string{"kubernetes.io/os": "windows"},
+			want:       "windows",
+		},
+		{
+			name: "tier 3 skipped when nodeName is empty (unscheduled pod)",
+			pod:  &corev1.Pod{Spec: corev1.PodSpec{}},
+			want: "",
+		},
+		{
+			name: "node fetch error degrades to unknown, not panic",
+			pod: &corev1.Pod{Spec: corev1.PodSpec{
+				NodeName: "n1",
+			}},
+			nodeErr: errors.New("forbidden: cannot get nodes"),
+			want:    "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var lookup osNodeLabelsLookup
+			if tc.nodeLabels != nil || tc.nodeErr != nil {
+				lookup = func(ctx context.Context, name string) (map[string]string, error) {
+					if tc.nodeErr != nil {
+						return nil, tc.nodeErr
+					}
+					return tc.nodeLabels, nil
+				}
+			}
+			got := detectPodOS(context.Background(), tc.pod, lookup)
+			if got != tc.want {
+				t.Errorf("detectPodOS = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -128,6 +318,20 @@ func TestIsShellNotFoundError(t *testing.T) {
 			name:   "permission denied is not shell-missing",
 			errMsg: `forbidden: pods "foo" is forbidden: User cannot exec`,
 			want:   false,
+		},
+		{
+			// Verbatim hcs error surface — full kubectl-style wrapping
+			// around the inner CreateProcess failure.
+			name:   "windows: hcs CreateProcess + 'the system cannot find the file'",
+			errMsg: `Internal error occurred: error executing command in container: failed to exec in container: failed to start exec "abc": hcs::System::CreateProcess: sh -c "..." def: The system cannot find the file specified.: unknown`,
+			want:   true,
+		},
+		{
+			// Non-English Windows surfaces the same hcs prefix but localizes
+			// the tail; prefix match alone must be enough.
+			name:   "windows: hcs CreateProcess prefix alone (non-English locale)",
+			errMsg: `hcs::System::CreateProcess: cmd.exe /c "..." ghi: <localized message>: unknown`,
+			want:   true,
 		},
 	}
 

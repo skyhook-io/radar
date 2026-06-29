@@ -103,24 +103,39 @@ Standard Tailwind type scale. No custom sizes or tracking. Use Tailwind utilitie
 Hover/disabled states are built into the classes. For non-brand buttons, use shadcn/ui `<Button>` variants.
 
 ### Badges
-Use the `<Badge>` component from `@skyhook-io/k8s-ui` — never hand-write badge color strings.
+Use the `<Badge>` component from `@skyhook-io/k8s-ui` — **never hand-write badge
+color strings** (`bg-<color>-NN/NN text-<color>-NN …`). Those bypass the theme
+(they're dark-tuned and wash out in light mode) and, worse, *overload hues across
+intents* — a green `bg-green-500/20` "HTTPS" chip becomes indistinguishable from a
+green "success" chip, so retuning "success" silently recolors every HTTPS tag.
+
+**Pick the prop by what the badge MEANS, not by the color you want** (tokens are
+named by intent so a future retune moves exactly the right ones):
+
+| The badge represents… | Use | Example |
+|---|---|---|
+| a status / outcome | `severity=` (`success`/`warning`/`alert`/`error`/`info`/`neutral`) | `<Badge severity="error">Failed</Badge>` |
+| resource health | `severity=` via `mapHealthToTone` / `getHealthBadgeColor` | health tone |
+| a K8s/CRD **resource kind** | `kind=` | `<Badge kind="Middleware">Middleware</Badge>` |
+| a transport **protocol/scheme** | `protocol=` (http/https/tls/tcp/udp/grpc/h2) | `<Badge protocol="HTTPS">HTTPS</Badge>` |
+| a neutral **attention/FYI** marker (cross-namespace, wildcard, default, immutable) | `tone="note"` | `<Badge tone="note">cross-namespace</Badge>` |
+| **local** categorical distinction (rw/ro, spot/on-demand, control-plane/worker) — hue has no global meaning, just "tell siblings apart" | `tone="accent1"`/`"accent2"`/`"accent3"` | `<Badge tone="accent1">rw</Badge>` |
+| a **structural** data fragment (port, path, host, weight, name, count) | `tone="structural"` | `<Badge tone="structural" size="sm">:8080</Badge>` |
+| genuinely one-off (last resort) | `colorClass=` | `<Badge colorClass="…">Custom</Badge>` |
 
 ```tsx
-// Status badge
 <Badge severity="success">Running</Badge>
-<Badge severity="warning">Pending</Badge>
-<Badge severity="error">Failed</Badge>
-
-// Resource kind badge
-<Badge kind="Deployment">Deployment</Badge>
 <Badge kind="Pod">my-pod</Badge>
-
-// Custom color (rare — prefer severity/kind)
-<Badge colorClass="...">Custom</Badge>
-
-// Small variant
-<Badge severity="info" size="sm">Info</Badge>
+<Badge protocol="TCP">TCP</Badge>      {/* protocol ≠ severity: TCP is indigo, not orange/success */}
+<Badge tone="note">wildcard</Badge>
+<Badge tone="structural" size="sm">:443</Badge>
 ```
+
+If you reach for `colorClass`, first ask whether you're inventing an intent that
+should be a named token here instead — if two places want "the same accent",
+that's a token, not two literals. A ratchet test
+(`badge-no-handrolled.test.tsx`) fails CI if a renderer **adds** a hand-rolled
+chip; the existing baseline shrinks over time, never grows.
 
 For programmatic color lookup (e.g., dynamic table cells):
 - `getKindColorClass(kind)` — returns Tailwind classes for a K8s resource kind

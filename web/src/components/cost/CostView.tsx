@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react'
 import { useOpenCostSummary, useOpenCostWorkloads, useOpenCostNodes } from '../../api/client'
 import type { OpenCostNamespaceCost, OpenCostWorkloadCost, OpenCostNodeCost } from '../../api/client'
 import { ArrowLeft, ChevronDown, ChevronRight, DollarSign, HelpCircle, Loader2, Server, X } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { CostTrendChart } from './CostTrendChart'
+import { Tooltip } from '../ui/Tooltip'
 
 interface CostViewProps {
   onBack: () => void
@@ -14,14 +16,7 @@ export function CostView({ onBack }: CostViewProps) {
   const [showHelp, setShowHelp] = useState(false)
 
   if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-theme-text-tertiary" />
-          <span className="text-sm text-theme-text-tertiary">Loading cost data...</span>
-        </div>
-      </div>
-    )
+    return <PaneLoader label="Loading cost data…" className="flex-1" />
   }
 
   if (!data || !data.available) {
@@ -183,8 +178,12 @@ export function CostView({ onBack }: CostViewProps) {
           <div className="grid grid-cols-[minmax(180px,1fr)_90px_90px_80px_minmax(160px,1fr)_120px] gap-2 px-4 py-2 border-b border-theme-border text-[11px] font-medium text-theme-text-tertiary uppercase tracking-wider">
             <span>Namespace</span>
             <span className="text-right">Hourly</span>
-            <span className="text-right cursor-help" title="Projected from current hourly rate — not historical spend">Monthly*</span>
-            <span className="text-right cursor-help" title="% of reserved resources actually being used, weighted by cost">Efficiency</span>
+            <Tooltip content="Projected from current hourly rate — not historical spend" wrapperClassName="!block text-right">
+            <span className="cursor-help">Monthly*</span>
+            </Tooltip>
+            <Tooltip content="% of reserved resources actually being used, weighted by cost" wrapperClassName="!block text-right">
+            <span className="cursor-help">Efficiency</span>
+            </Tooltip>
             <span>CPU / Memory</span>
             <span className="text-right">Cost Split</span>
           </div>
@@ -283,7 +282,7 @@ function WorkloadRows({ namespace }: { namespace: string }) {
     return (
       <div className="px-4 py-3 flex items-center gap-2 text-xs text-theme-text-tertiary bg-theme-elevated/30">
         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-        Loading workloads...
+        Loading workloads…
       </div>
     )
   }
@@ -374,7 +373,9 @@ function NodeCostTable({ nodes }: { nodes: OpenCostNodeCost[] }) {
         <span>Node</span>
         <span>Instance Type</span>
         <span className="text-right">Hourly</span>
-        <span className="text-right cursor-help" title="Projected from current hourly rate — not historical spend">Monthly*</span>
+        <Tooltip content="Projected from current hourly rate — not historical spend" wrapperClassName="!block text-right">
+        <span className="cursor-help">Monthly*</span>
+        </Tooltip>
         <span className="text-right">CPU / Memory</span>
       </div>
 
@@ -393,9 +394,11 @@ function NodeCostRow({ node }: { node: OpenCostNodeCost }) {
 
   return (
     <div className="grid grid-cols-[minmax(200px,1fr)_minmax(120px,1fr)_90px_100px_140px] gap-2 px-4 py-2.5">
-      <span className="text-sm text-theme-text-primary truncate font-medium" title={node.name}>
+      <Tooltip content={node.name} wrapperClassName="!block min-w-0">
+      <span className="text-sm text-theme-text-primary truncate font-medium block">
         {node.name}
       </span>
+      </Tooltip>
       <span className="text-xs text-theme-text-secondary truncate">
         {node.instanceType || '-'}
         {node.region && <span className="text-theme-text-quaternary ml-1.5">({node.region})</span>}
@@ -423,7 +426,7 @@ function CostHelpDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative dialog max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto">
+      <div className="relative dialog max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-theme-border sticky top-0 bg-theme-surface rounded-t-lg">
           <div className="flex items-center gap-2">

@@ -67,7 +67,10 @@ function getStatusIcon(status: GitOpsStatus) {
 }
 
 function getStatusColorClass(status: GitOpsStatus): string {
-  if (status.suspended) return SEVERITY_BADGE_BORDERED.warning
+  // Suspended sync (manual-sync mode) is an intentional operating mode many teams
+  // run by default — sky (info), not amber. Real drift surfaces separately as
+  // OutOfSync (still amber); the Pause icon + "Suspended" label signal it's manual.
+  if (status.suspended) return SEVERITY_BADGE_BORDERED.info
   if (status.sync === 'Synced' && status.health === 'Healthy') return SEVERITY_BADGE_BORDERED.success
   if (status.health === 'Degraded') return SEVERITY_BADGE_BORDERED.error
   if (status.sync === 'OutOfSync') return SEVERITY_BADGE_BORDERED.warning
@@ -112,7 +115,9 @@ function getHealthInfo(health: GitOpsHealthStatus) {
     case 'Degraded':
       return { icon: XCircle, color: SEVERITY_BADGE.error, label: 'Degraded' }
     case 'Suspended':
-      return { icon: Pause, color: SEVERITY_BADGE.warning, label: 'Suspended' }
+      // Intentional pause, not a degradation — sky (info), matching the resource
+      // table + app rollup. The Pause icon already signals it's deliberate.
+      return { icon: Pause, color: SEVERITY_BADGE.info, label: 'Suspended' }
     case 'Missing':
       return { icon: AlertCircle, color: SEVERITY_BADGE.warning, label: 'Missing' }
     default:
@@ -125,8 +130,9 @@ function getHealthInfo(health: GitOpsHealthStatus) {
  */
 export function SyncStatusBadge({ sync, suspended }: { sync: SyncStatus; suspended?: boolean }) {
   if (suspended) {
+    // Manual-sync mode is intentional — sky (info), not amber. See getStatusColorClass.
     return (
-      <span className={clsx('badge', SEVERITY_BADGE_BORDERED.warning)}>
+      <span className={clsx('badge', SEVERITY_BADGE_BORDERED.info)}>
         <Pause className="w-3 h-3" />
         Suspended
       </span>

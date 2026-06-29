@@ -6,6 +6,7 @@ import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-co
 import { ConfirmDialog } from '../../ui/ConfirmDialog'
 import type { SecretCertificateInfo, CertificateInfo } from '../../../types'
 import { pluralize } from '../../../utils/pluralize'
+import { cleanResourceForYaml } from '../../../utils/yaml'
 
 interface SecretRendererProps {
   data: any
@@ -34,7 +35,11 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
   function toggleReveal(key: string) {
     setRevealed(prev => {
       const next = new Set(prev)
-      next.has(key) ? next.delete(key) : next.add(key)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
       return next
     })
   }
@@ -70,16 +75,9 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
 
   const handleSave = useCallback(async (key: string, newValue: string) => {
     if (!onSaveSecretValue || !resourceData) return
-    const cleaned = structuredClone(resourceData)
-    delete cleaned.status
-    if (cleaned.metadata) {
-      delete cleaned.metadata.managedFields
-      delete cleaned.metadata.resourceVersion
-      delete cleaned.metadata.uid
-      delete cleaned.metadata.creationTimestamp
-      delete cleaned.metadata.generation
-    }
-    // Encode with UTF-8 support
+    const cleaned = cleanResourceForYaml(resourceData)
+    if (!cleaned.data) cleaned.data = {}
+    // btoa is byte-only; round-trip through encodeURIComponent/unescape so non-ASCII secret values survive base64 encoding.
     cleaned.data[key] = btoa(unescape(encodeURIComponent(newValue)))
     const yaml = yamlStringify(cleaned, { lineWidth: 0, indent: 2 })
     try {
@@ -151,6 +149,16 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
             />
           ))}
         </>
+      )}
+
+      {dataKeys.length > 0 && (
+        <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>
+            Secret values are sensitive. Reveal carefully — anyone who can see your
+            screen will see the plaintext.
+          </span>
+        </div>
       )}
 
       <Section title="Data" defaultExpanded>
@@ -249,11 +257,6 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
           )}
         </div>
       </Section>
-
-      <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-sm">
-        <AlertTriangle className="w-4 h-4" />
-        Secret values are sensitive. Be careful when revealing.
-      </div>
 
       {editingKey && (
         <ConfirmDialog

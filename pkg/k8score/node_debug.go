@@ -56,7 +56,7 @@ func CreateNodeDebugPod(ctx context.Context, client kubernetes.Interface, nodeNa
 	}
 
 	if image == "" {
-		image = "busybox:latest"
+		image = DefaultDebugImage
 	}
 
 	containerName := "debug"
@@ -74,11 +74,11 @@ func CreateNodeDebugPod(ctx context.Context, client kubernetes.Interface, nodeNa
 			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName:      nodeName,
-			HostPID:       true,
-			HostNetwork:   true,
-			HostIPC:       true,
-			RestartPolicy:       corev1.RestartPolicyNever,
+			NodeName:              nodeName,
+			HostPID:               true,
+			HostNetwork:           true,
+			HostIPC:               true,
+			RestartPolicy:         corev1.RestartPolicyNever,
 			ActiveDeadlineSeconds: func() *int64 { d := int64(3600); return &d }(),
 			Containers: []corev1.Container{{
 				Name:    containerName,
@@ -176,4 +176,3 @@ func DeleteNodeDebugPods(ctx context.Context, client kubernetes.Interface, nodeN
 	}
 	return errors.Join(errs...)
 }
-

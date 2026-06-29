@@ -6,19 +6,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // NewInformerEvent creates a TimelineEvent from an informer callback
 // createdAt is the resource's metadata.creationTimestamp (when K8s actually created it)
-func NewInformerEvent(kind, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
+// apiVersion (e.g. "apps/v1", "cluster.x-k8s.io/v1beta1") disambiguates CRD kind
+// collisions on navigation; pass "" if unknown (older callers).
+func NewInformerEvent(kind, apiVersion, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
 	return TimelineEvent{
 		ID:          uuid.New().String(),
 		Timestamp:   time.Now(),
 		Source:      SourceInformer,
 		Kind:        kind,
+		APIVersion:  apiVersion,
 		Namespace:   namespace,
 		Name:        name,
 		UID:         uid,
@@ -48,23 +50,26 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 	}
 
 	return TimelineEvent{
-		ID:        string(event.UID),
-		Timestamp: ts,
-		Source:    SourceK8sEvent,
-		Kind:      event.InvolvedObject.Kind,
-		Namespace: event.Namespace,
-		Name:      event.InvolvedObject.Name,
-		EventType: evtType,
-		Reason:    event.Reason,
-		Message:   event.Message,
-		Owner:     owner,
-		Count:     event.Count,
+		ID:         string(event.UID),
+		Timestamp:  ts,
+		Source:     SourceK8sEvent,
+		Kind:       event.InvolvedObject.Kind,
+		APIVersion: event.InvolvedObject.APIVersion,
+		Namespace:  event.Namespace,
+		Name:       event.InvolvedObject.Name,
+		EventType:  evtType,
+		Reason:     event.Reason,
+		Message:    event.Message,
+		Owner:      owner,
+		Count:      event.Count,
 	}
 }
 
 // NewHistoricalEvent creates a historical TimelineEvent
 // The ID is deterministic based on the event content to avoid duplicates on restart
-func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
+// apiVersion (e.g. "apps/v1", "cluster.x-k8s.io/v1beta1") disambiguates CRD kind
+// collisions on navigation; pass "" if unknown.
+func NewHistoricalEvent(kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
 	// Create deterministic ID from event attributes to avoid duplicates
 	hashInput := fmt.Sprintf("historical:%s/%s/%s:%d:%s", kind, namespace, name, ts.UnixNano(), reason)
 	hash := sha256.Sum256([]byte(hashInput))
@@ -75,6 +80,7 @@ func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, mess
 		Timestamp:   ts,
 		Source:      SourceHistorical,
 		Kind:        kind,
+		APIVersion:  apiVersion,
 		Namespace:   namespace,
 		Name:        name,
 		EventType:   EventTypeUpdate, // Historical events are shown as updates
@@ -163,82 +169,11 @@ func ExtractLabels(obj any) map[string]string {
 	return relevant
 }
 
-// DetermineHealthState determines health state from an object
-func DetermineHealthState(kind string, obj any) HealthState {
-	switch kind {
-	case "Pod":
-		if pod, ok := obj.(*corev1.Pod); ok {
-			switch pod.Status.Phase {
-			case corev1.PodRunning:
-				for _, cs := range pod.Status.ContainerStatuses {
-					if !cs.Ready {
-						return HealthDegraded
-					}
-				}
-				return HealthHealthy
-			case corev1.PodSucceeded:
-				return HealthHealthy
-			case corev1.PodFailed:
-				return HealthUnhealthy
-			case corev1.PodPending:
-				return HealthDegraded
-			}
-		}
-	case "Deployment":
-		if dep, ok := obj.(*appsv1.Deployment); ok {
-			desired := int32(1)
-			if dep.Spec.Replicas != nil {
-				desired = *dep.Spec.Replicas
-			}
-			if dep.Status.ReadyReplicas == desired && dep.Status.AvailableReplicas == desired {
-				return HealthHealthy
-			}
-			if dep.Status.ReadyReplicas > 0 {
-				return HealthDegraded
-			}
-			return HealthUnhealthy
-		}
-	case "ReplicaSet":
-		if rs, ok := obj.(*appsv1.ReplicaSet); ok {
-			desired := int32(1)
-			if rs.Spec.Replicas != nil {
-				desired = *rs.Spec.Replicas
-			}
-			if rs.Status.ReadyReplicas == desired {
-				return HealthHealthy
-			}
-			if rs.Status.ReadyReplicas > 0 {
-				return HealthDegraded
-			}
-			return HealthUnhealthy
-		}
-	case "DaemonSet":
-		if ds, ok := obj.(*appsv1.DaemonSet); ok {
-			if ds.Status.NumberReady == ds.Status.DesiredNumberScheduled && ds.Status.DesiredNumberScheduled > 0 {
-				return HealthHealthy
-			}
-			if ds.Status.NumberReady > 0 {
-				return HealthDegraded
-			}
-			return HealthUnhealthy
-		}
-	case "StatefulSet":
-		if sts, ok := obj.(*appsv1.StatefulSet); ok {
-			desired := int32(1)
-			if sts.Spec.Replicas != nil {
-				desired = *sts.Spec.Replicas
-			}
-			if sts.Status.ReadyReplicas == desired {
-				return HealthHealthy
-			}
-			if sts.Status.ReadyReplicas > 0 {
-				return HealthDegraded
-			}
-			return HealthUnhealthy
-		}
-	}
-	return HealthUnknown
-}
+// Resource health classification for timeline events lives with the canonical
+// classifiers in internal/k8s (classifyTimelineHealth → ClassifyPodHealth), not
+// here: the timeline package can't reach that logic across the module boundary,
+// so the caller computes health and the event just stores it. A duplicate copy
+// here previously drifted and misclassified completing Job pods as degraded.
 
 // OperationToEventType converts an operation string to EventType
 func OperationToEventType(op string) EventType {

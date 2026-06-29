@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, createContext, useContext } from 'react'
 import { ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { formatAge, formatDuration } from '../resources/resource-utils'
+import { formatAge, formatDuration, formatResources } from '../resources/resource-utils'
+import { getEffectiveResources } from '../../utils/extended-resources'
 import { Tooltip } from './Tooltip'
 import { getKindColorClass } from '../ui/Badge'
 
@@ -165,7 +166,7 @@ export function Property({ label, value, copyable, onCopy, copied }: PropertyPro
   return (
     <div className="flex items-start gap-2 text-sm">
       <span className="text-theme-text-tertiary w-40 shrink-0">{label}</span>
-      <span className="text-theme-text-primary break-all flex-1">{displayValue}</span>
+      <span className={clsx('text-theme-text-primary flex-1 min-w-0', isReactElement(value) ? 'break-normal' : 'break-all')}>{displayValue}</span>
       {copyable && onCopy && !isReactElement(value) && (
         <button
           onClick={() => onCopy(strValue, labelKey)}
@@ -282,7 +283,20 @@ function isConditionHealthy(cond: { type?: string; status?: string }): boolean {
   return inverted ? cond.status === 'False' : cond.status === 'True'
 }
 
-export function ConditionsSection({ conditions }: { conditions?: any[] }) {
+export type ConditionTone = 'ok' | 'warning' | 'fail' | 'unknown'
+
+function defaultConditionTone(cond: { type?: string; status?: string }): ConditionTone {
+  if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
+  return isConditionHealthy(cond) ? 'ok' : 'fail'
+}
+
+export function ConditionsSection({
+  conditions,
+  getConditionTone,
+}: {
+  conditions?: any[]
+  getConditionTone?: (condition: any) => ConditionTone | undefined
+}) {
   if (!conditions || conditions.length === 0) return null
 
   // Sort by lastTransitionTime (most recent first), then alphabetically for ties
@@ -293,7 +307,8 @@ export function ConditionsSection({ conditions }: { conditions?: any[] }) {
     return (a.type || '').localeCompare(b.type || '')
   })
 
-  const failCount = sorted.filter((c: any) => (c.status === 'True' || c.status === 'False') && !isConditionHealthy(c)).length
+  const conditionTone = (cond: any) => getConditionTone?.(cond) ?? defaultConditionTone(cond)
+  const failCount = sorted.filter((c: any) => conditionTone(c) === 'fail').length
 
   return (
     <Section
@@ -306,13 +321,15 @@ export function ConditionsSection({ conditions }: { conditions?: any[] }) {
 
         <div className="space-y-0.5">
           {sorted.map((cond: any) => {
-            const isUnknown = cond.status !== 'True' && cond.status !== 'False'
-            const isOk = !isUnknown && isConditionHealthy(cond)
-            const isFail = !isOk && !isUnknown
+            const tone = conditionTone(cond)
+            const isOk = tone === 'ok'
+            const isWarning = tone === 'warning'
+            const isFail = tone === 'fail'
             return (
               <div key={cond.type} className={clsx(
                 'flex items-start py-1.5 pr-1 text-sm relative',
-                isFail && 'border-l-2 border-red-400/60 dark:border-red-500/40'
+                isFail && 'border-l-2 border-red-400/60 dark:border-red-500/40',
+                isWarning && 'border-l-2 border-amber-400/60 dark:border-amber-500/40'
               )}>
                 {/* Timestamp column — fixed width on the left */}
                 <div className="w-[48px] shrink-0 text-[10px] text-theme-text-tertiary text-right pr-2 pt-0.5">
@@ -322,16 +339,24 @@ export function ConditionsSection({ conditions }: { conditions?: any[] }) {
                 <span className={clsx(
                   'w-3 h-3 rounded-full flex items-center justify-center shrink-0 mt-1 z-10 ring-2 ring-theme-surface',
                   isOk ? 'bg-emerald-500/20 text-emerald-500 dark:bg-emerald-500/30'
-                    : isUnknown ? 'bg-gray-400/20 text-gray-400 dark:bg-gray-400/30'
+                    : tone === 'unknown' ? 'bg-gray-400/20 text-gray-400 dark:bg-gray-400/30'
+                    : isWarning ? 'bg-amber-500/25 text-amber-600 dark:text-amber-400 dark:bg-amber-500/35'
                     : 'bg-red-500/25 text-red-500 dark:bg-red-500/35'
                 )}>
                   {isOk ? <Check className="w-2 h-2" strokeWidth={4} />
-                    : isUnknown ? <Minus className="w-2 h-2" strokeWidth={4} />
+                    : tone === 'unknown' ? <Minus className="w-2 h-2" strokeWidth={4} />
+                    : isWarning ? <AlertTriangle className="w-2 h-2" strokeWidth={4} />
                     : <X className="w-2 h-2" strokeWidth={4} />}
                 </span>
                 {/* Content */}
                 <div className="min-w-0 flex-1 pl-2">
-                  <span className={clsx('font-medium text-[13px]', isOk ? 'text-theme-text-primary' : isUnknown ? 'text-theme-text-secondary' : 'text-red-600 dark:text-red-400')}>{cond.type}</span>
+                  <span className={clsx(
+                    'font-medium text-[13px]',
+                    isOk ? 'text-theme-text-primary'
+                      : tone === 'unknown' ? 'text-theme-text-secondary'
+                        : isWarning ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-red-600 dark:text-red-400'
+                  )}>{cond.type}</span>
                   {cond.reason && cond.reason !== cond.type && (
                     <div className="text-[10px] text-theme-text-secondary">{cond.reason}</div>
                   )}
@@ -421,6 +446,18 @@ export interface Problem {
 }
 
 /** Displays a list of problem alerts (warnings and errors) */
+// True when the resource detail is already rendering a dedicated, authoritative
+// "Operational Issues" section (the Issues pipeline — richer cause/action). Only
+// renderers whose problems the pipeline COMPREHENSIVELY covers read this and drop
+// their own problem array so the same failure isn't shown twice — today that's
+// PodRenderer and WorkloadRenderer (workload + pod runtime). It is deliberately
+// NOT wired into ProblemAlerts: that component is used only by GitOps renderers
+// (Argo/Flux), whose Degraded/OutOfSync/revision-mismatch banners the pipeline
+// does not fully emit (e.g. OutOfSync only for automated Argo apps) — suppressing
+// them would hide real problems, which is worse than an occasional duplicate.
+export const OperationalIssuesShownContext = createContext(false)
+export const useOperationalIssuesShown = () => useContext(OperationalIssuesShownContext)
+
 export function ProblemAlerts({ problems }: { problems: Problem[] }) {
   if (problems.length === 0) return null
 
@@ -489,6 +526,18 @@ export function MetadataSection({ data }: { data: any }) {
   )
 }
 
+// Templates never get apiserver request-defaulting, so render the effective
+// view (requests, falling back to limits) — limits-only GPU specs included.
+function ContainerResourcesLine({ resources }: { resources: any }) {
+  const effective = getEffectiveResources(resources)
+  if (Object.keys(effective).length === 0) return null
+  return (
+    <div className="text-xs text-theme-text-tertiary mt-1" title="Effective requests (requests, falling back to limits)">
+      Resources: {formatResources(effective)}
+    </div>
+  )
+}
+
 export function PodTemplateSection({ template }: { template: any }) {
   if (!template) return null
   const initContainers = template.spec?.initContainers || []
@@ -508,6 +557,7 @@ export function PodTemplateSection({ template }: { template: any }) {
                   $ {[...(c.command || []), ...(c.args || [])].join(' ')}
                 </div>
               )}
+              <ContainerResourcesLine resources={c.resources} />
             </div>
           ))}
           <div className="text-xs text-theme-text-tertiary font-medium uppercase tracking-wide mt-3">Containers</div>
@@ -519,9 +569,10 @@ export function PodTemplateSection({ template }: { template: any }) {
           <div className="text-xs text-theme-text-secondary truncate" title={c.image}>{c.image}</div>
           {c.ports && (
             <div className="text-xs text-theme-text-tertiary mt-1">
-              Ports: {c.ports.map((p: any) => `${p.containerPort}/${p.protocol || 'TCP'}`).join(', ')}
+              Ports: {c.ports.map((p: any) => `${p.name ? `${p.name}: ` : ''}${p.containerPort}/${p.protocol || 'TCP'}`).join(', ')}
             </div>
           )}
+          <ContainerResourcesLine resources={c.resources} />
         </div>
       ))}
     </div>
@@ -657,13 +708,16 @@ export function formatKindName(kind: string): string {
   const k = kind.toLowerCase()
   const names: Record<string, string> = {
     pods: 'Pod', deployments: 'Deployment', daemonsets: 'DaemonSet', statefulsets: 'StatefulSet',
-    replicasets: 'ReplicaSet', services: 'Service', ingresses: 'Ingress',
+    replicasets: 'ReplicaSet', services: 'Service', endpointslices: 'EndpointSlice', ingresses: 'Ingress',
     gateways: 'Gateway', httproutes: 'HTTPRoute', grpcroutes: 'GRPCRoute',
     tcproutes: 'TCPRoute', tlsroutes: 'TLSRoute', configmaps: 'ConfigMap',
     secrets: 'Secret', jobs: 'Job', cronjobs: 'CronJob', hpas: 'HPA',
     horizontalpodautoscalers: 'HPA', nodes: 'Node', namespaces: 'Namespace',
     persistentvolumeclaims: 'PVC', persistentvolumes: 'PV',
     httpproxies: 'HTTPProxy',
+    resourceclaims: 'ResourceClaim', resourceclaimtemplates: 'ResourceClaimTemplate',
+    deviceclasses: 'DeviceClass', resourceslices: 'ResourceSlice',
+    clusterpolicies: 'ClusterPolicy', nvidiadrivers: 'NVIDIADriver',
   }
   if (names[k]) return names[k]
 
@@ -681,6 +735,14 @@ export function formatKindName(kind: string): string {
     return singular.charAt(0).toUpperCase() + singular.slice(1)
   }
   return kind
+}
+
+// Resolve the display label for a kind chip. The fetched resource's `dataKind`
+// is the authoritative PascalCase kind and is correct for every CRD; prefer it.
+// Before data loads, fall back to deriving from the URL plural — which is only
+// reliable for the core kinds in formatKindName's map.
+export function displayKindName(urlPlural: string, dataKind?: string): string {
+  return dataKind || formatKindName(urlPlural)
 }
 
 // Type for copy handler
@@ -724,7 +786,9 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.configRefs && relationships.configRefs.length > 0) ||
     (relationships.consumers && relationships.consumers.length > 0) ||
     (relationships.scalers && relationships.scalers.length > 0) ||
-    (relationships.policies && relationships.policies.length > 0) ||
+    (relationships.pdbs && relationships.pdbs.length > 0) ||
+    (relationships.networkPolicies && relationships.networkPolicies.length > 0) ||
+    (relationships.resourceClaims && relationships.resourceClaims.length > 0) ||
     relationships.scaleTarget
 
   if (!hasRelationships) return null
@@ -765,25 +829,15 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         {relationships.scalers && relationships.scalers.length > 0 && (
           <RelationshipGroup label="Autoscaler" refs={dedupeRefs(relationships.scalers)} onNavigate={onNavigate} />
         )}
-        {relationships.policies && relationships.policies.length > 0 && (() => {
-          const policyKinds = new Set(['NetworkPolicy', 'CiliumNetworkPolicy', 'CiliumClusterwideNetworkPolicy', 'ClusterNetworkPolicy'])
-          const pdbs = relationships.policies.filter(r => r.kind === 'PodDisruptionBudget')
-          const netpols = relationships.policies.filter(r => policyKinds.has(r.kind))
-          const other = relationships.policies.filter(r => r.kind !== 'PodDisruptionBudget' && !policyKinds.has(r.kind))
-          return (
-            <>
-              {pdbs.length > 0 && (
-                <RelationshipGroup label="Disruption Budget" refs={dedupeRefs(pdbs)} onNavigate={onNavigate} />
-              )}
-              {netpols.length > 0 && (
-                <RelationshipGroup label="Network Policies" refs={dedupeRefs(netpols)} onNavigate={onNavigate} />
-              )}
-              {other.length > 0 && (
-                <RelationshipGroup label="Policies" refs={dedupeRefs(other)} onNavigate={onNavigate} />
-              )}
-            </>
-          )
-        })()}
+        {relationships.pdbs && relationships.pdbs.length > 0 && (
+          <RelationshipGroup label="Disruption Budget" refs={dedupeRefs(relationships.pdbs)} onNavigate={onNavigate} />
+        )}
+        {relationships.networkPolicies && relationships.networkPolicies.length > 0 && (
+          <RelationshipGroup label="Network Policies" refs={dedupeRefs(relationships.networkPolicies)} onNavigate={onNavigate} />
+        )}
+        {relationships.resourceClaims && relationships.resourceClaims.length > 0 && (
+          <RelationshipGroup label="Resource Claims" refs={dedupeRefs(relationships.resourceClaims)} onNavigate={onNavigate} />
+        )}
         {relationships.scaleTarget && (
           <RelationshipGroup label="Scale Target" refs={[relationships.scaleTarget]} onNavigate={onNavigate} />
         )}
@@ -830,36 +884,50 @@ function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroupProps) 
 export interface ResourceRefBadgeProps {
   resourceRef: ResourceRef
   onClick?: (ref: ResourceRef) => void
+  wrapAtSeparator?: boolean
 }
 
 /** Reusable chip/badge for showing a related resource with click-to-navigate */
-export function ResourceRefBadge({ resourceRef, onClick }: ResourceRefBadgeProps) {
+export function ResourceRefBadge({ resourceRef, onClick, wrapAtSeparator }: ResourceRefBadgeProps) {
   const kindClass = getKindColor(resourceRef.kind)
   const kindName = formatKindForRef(resourceRef.kind)
+  const content = wrapAtSeparator ? (
+    <>
+      <span className="shrink-0 opacity-60">{kindName}/</span>
+      <span className="min-w-0 max-w-full whitespace-normal break-normal text-left leading-tight">{resourceRef.name}</span>
+    </>
+  ) : (
+    <>
+      <span className="opacity-60">{kindName}/</span>
+      {resourceRef.name}
+    </>
+  )
+  const layoutClass = wrapAtSeparator
+    ? 'badge max-w-full min-w-0 flex-wrap items-center whitespace-normal text-left leading-tight'
+    : 'badge'
 
   if (onClick) {
     return (
       <button
         onClick={() => onClick(resourceRef)}
         className={clsx(
-          'badge hover:brightness-[0.92] dark:hover:brightness-125 transition-[filter]',
+          layoutClass,
+          'hover:brightness-[0.92] dark:hover:brightness-125 transition-[filter]',
           kindClass
         )}
         title={`${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`}
       >
-        <span className="opacity-60">{kindName}/</span>
-        {resourceRef.name}
+        {content}
       </button>
     )
   }
 
   return (
     <span
-      className={clsx('badge', kindClass)}
+      className={clsx(layoutClass, kindClass)}
       title={`${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`}
     >
-      <span className="opacity-60">{kindName}/</span>
-      {resourceRef.name}
+      {content}
     </span>
   )
 }
@@ -904,6 +972,7 @@ function formatKindForRef(kind: string): string {
     job: 'job',
     cronjob: 'cj',
     hpa: 'hpa',
+    horizontalpodautoscaler: 'hpa',
   }
   return shortNames[k] || k
 }
@@ -913,34 +982,80 @@ function formatKindForRef(kind: string): string {
 // ============================================================================
 
 interface EventsSectionProps {
+  /** K8s events for the focused resource — always shown. */
   events: TimelineEvent[]
+  /** Resource update events (informer/historical diffs) — hidden behind a
+   *  toggle to avoid drowning out K8s events when a resource flaps. */
+  updates?: TimelineEvent[]
   isLoading?: boolean
+  /** Errors from the K8s events / updates queries. Rendered inline so a
+   *  failed fetch doesn't silently look like "no events." */
+  eventsError?: Error | null
+  updatesError?: Error | null
   /** Optional hint shown below the event list (e.g. "See Timeline tab for related resources") */
   hint?: React.ReactNode
 }
 
-export function EventsSection({ events, isLoading, hint }: EventsSectionProps) {
+export function EventsSection({ events, updates = [], isLoading, eventsError, updatesError, hint }: EventsSectionProps) {
+  const [showUpdates, setShowUpdates] = useState(false)
+
   if (isLoading) {
     return (
       <Section title="Recent Events" defaultExpanded>
-        <div className="text-sm text-theme-text-tertiary">Loading events...</div>
+        <div className="text-sm text-theme-text-tertiary">Loading events…</div>
       </Section>
     )
   }
 
-  if (!events || events.length === 0) {
+  const updateCount = updates.length
+  const visible = showUpdates
+    ? [...events, ...updates].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    : events
+
+  const toggle = updateCount > 0 ? (
+    <Tooltip
+      className="max-w-xs leading-snug"
+      content={
+        <span style={{ whiteSpace: 'normal', display: 'inline-block' }}>
+          Changes are field-level diffs to this resource&apos;s spec or status (e.g. status flips, replica counts). Distinct from K8s events, which are messages emitted by the kubelet and controllers.
+        </span>
+      }
+    >
+      <button
+        onClick={(e) => { e.stopPropagation(); setShowUpdates(v => !v) }}
+        className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+      >
+        {showUpdates ? `Hide ${updateCount} changes` : `Show ${updateCount} changes`}
+      </button>
+    </Tooltip>
+  ) : null
+
+  const errors = (
+    <>
+      {eventsError && (
+        <div className="text-xs text-red-500 mt-2">Failed to load K8s events: {eventsError.message}</div>
+      )}
+      {updatesError && (
+        <div className="text-xs text-red-500 mt-2">Failed to load resource changes: {updatesError.message}</div>
+      )}
+    </>
+  )
+
+  if (visible.length === 0) {
     return (
-      <Section title="Recent Events" defaultExpanded={false}>
+      <Section title="Recent Events" defaultExpanded={!!(eventsError || updatesError)}>
         <div className="text-sm text-theme-text-tertiary">No recent events</div>
+        {errors}
+        {toggle && <div className="mt-2">{toggle}</div>}
         {hint && <div className="mt-2">{hint}</div>}
       </Section>
     )
   }
 
   return (
-    <Section title={`Recent Events (${events.length})`} defaultExpanded>
+    <Section title={`Recent Events (${visible.length})`} defaultExpanded>
       <div className="space-y-2 max-h-64 overflow-y-auto">
-        {events.map((event, i) => (
+        {visible.map((event, i) => (
           <div
             key={`${event.id}-${i}`}
             className={clsx(
@@ -973,6 +1088,8 @@ export function EventsSection({ events, isLoading, hint }: EventsSectionProps) {
           </div>
         ))}
       </div>
+      {errors}
+      {toggle && <div className="mt-2">{toggle}</div>}
       {hint && <div className="mt-2">{hint}</div>}
     </Section>
   )

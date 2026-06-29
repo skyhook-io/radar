@@ -23,7 +23,7 @@ import (
 type WorkloadRevision struct {
 	Number    int64     `json:"number"`
 	CreatedAt time.Time `json:"createdAt"`
-	Image     string    `json:"image"`    // primary container image
+	Image     string    `json:"image"` // primary container image
 	IsCurrent bool      `json:"isCurrent"`
 	Replicas  int64     `json:"replicas"`
 	Template  string    `json:"template,omitempty"` // Pod template spec as YAML (for revision diff)
@@ -35,11 +35,13 @@ type UpdateResourceOptions struct {
 	Namespace string
 	Name      string
 	YAML      string // YAML content to apply
+	Force     bool   // Force SSA field ownership conflicts (override Helm/Flux/Argo/kubectl)
 }
 
 // DeleteResourceOptions contains options for deleting a resource.
 type DeleteResourceOptions struct {
 	Kind      string
+	Group     string // API group, disambiguates kinds that collide across groups (e.g. Knative vs core Service)
 	Namespace string
 	Name      string
 	Force     bool // Force delete with grace period 0
@@ -51,14 +53,23 @@ type ApplyResourceOptions struct {
 	Mode              string // "apply" (server-side apply, default) or "create" (strict create)
 	DryRun            bool   // Validate without persisting
 	NamespaceOverride string // If set, overrides the namespace in the YAML
+	Force             bool   // Force SSA field ownership conflicts
 }
 
 // ApplyResourceResult contains the result of a create/apply operation.
 type ApplyResourceResult struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Kind      string `json:"kind"`
-	Created   bool   `json:"created"` // true if newly created, false if updated
+	Name      string                     `json:"name"`
+	Namespace string                     `json:"namespace"`
+	Kind      string                     `json:"kind"`
+	Created   bool                       `json:"created"` // true if newly created, false if updated
+	Object    *unstructured.Unstructured `json:"-"`
+
+	// Warnings are advisory notes derived from the actual state of the cluster
+	// (e.g., "this resource is reconciled by Helm" or "field X you omitted is
+	// still present after apply because manager Y owns it"). They never block
+	// the apply — the apply succeeded if no error was returned. Treat each
+	// entry as a self-contained sentence.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // WorkloadManager provides workload lifecycle operations using injected clients.
@@ -72,7 +83,10 @@ func NewWorkloadManager(dynClient dynamic.Interface, discovery *ResourceDiscover
 	return &WorkloadManager{dynClient: dynClient, discovery: discovery}
 }
 
-// UpdateResource updates a Kubernetes resource from YAML.
+// UpdateResource updates a Kubernetes resource from YAML using server-side apply.
+// SSA avoids the resourceVersion round-trip that PUT requires and matches
+// kubectl apply --server-side / Lens semantics. Force=true takes ownership of
+// fields the user is editing even if another field manager last wrote them.
 func (m *WorkloadManager) UpdateResource(ctx context.Context, opts UpdateResourceOptions) (*unstructured.Unstructured, error) {
 	if m.discovery == nil {
 		return nil, fmt.Errorf("resource discovery not initialized")
@@ -86,9 +100,38 @@ func (m *WorkloadManager) UpdateResource(ctx context.Context, opts UpdateResourc
 		return nil, fmt.Errorf("invalid YAML: %w", err)
 	}
 
-	gvr, ok := m.discovery.GetGVR(opts.Kind)
+	kindForLookup := opts.Kind
+	if obj.GetKind() != "" {
+		kindForLookup = obj.GetKind()
+	}
+	apiGroup := ""
+	if apiVersion := obj.GetAPIVersion(); strings.Contains(apiVersion, "/") {
+		apiGroup = strings.SplitN(apiVersion, "/", 2)[0]
+	}
+	var gvr schema.GroupVersionResource
+	var ok bool
+	if apiGroup != "" {
+		gvr, ok = m.discovery.GetGVRWithGroup(kindForLookup, apiGroup)
+		if !ok {
+			if fallbackGVR, fallbackOK := m.discovery.GetGVR(kindForLookup); fallbackOK && fallbackGVR.Group == apiGroup {
+				gvr, ok = fallbackGVR, true
+			}
+		}
+	} else {
+		gvr, ok = m.discovery.GetGVR(kindForLookup)
+	}
 	if !ok {
+		return nil, fmt.Errorf("unknown resource kind: %s", kindForLookup)
+	}
+	requestedGVR, requestedOK := m.discovery.GetGVRWithGroup(opts.Kind, apiGroup)
+	if !requestedOK {
+		requestedGVR, requestedOK = m.discovery.GetGVR(opts.Kind)
+	}
+	if !requestedOK {
 		return nil, fmt.Errorf("unknown resource kind: %s", opts.Kind)
+	}
+	if requestedGVR.Group != gvr.Group || requestedGVR.Resource != gvr.Resource {
+		return nil, fmt.Errorf("resource kind mismatch: expected %s, got %s", opts.Kind, kindForLookup)
 	}
 
 	if obj.GetName() != opts.Name {
@@ -98,18 +141,45 @@ func (m *WorkloadManager) UpdateResource(ctx context.Context, opts UpdateResourc
 		return nil, fmt.Errorf("resource namespace mismatch: expected %s, got %s", opts.Namespace, obj.GetNamespace())
 	}
 
-	var result *unstructured.Unstructured
-	var err error
-	if opts.Namespace != "" {
-		result, err = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Update(ctx, obj, metav1.UpdateOptions{})
-	} else {
-		result, err = m.dynClient.Resource(gvr).Update(ctx, obj, metav1.UpdateOptions{})
+	stripServerManagedFields(obj)
+
+	body, err := json.Marshal(obj.Object)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal resource: %w", err)
 	}
+
+	var ri dynamic.ResourceInterface
+	if opts.Namespace != "" {
+		ri = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
+	} else {
+		ri = m.dynClient.Resource(gvr)
+	}
+	result, err := ri.Patch(ctx, opts.Name, types.ApplyPatchType, body, metav1.PatchOptions{
+		FieldManager: "radar",
+		Force:        boolPtr(opts.Force),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update resource: %w", err)
 	}
-
 	return result, nil
+}
+
+// stripServerManagedFields removes metadata fields the apiserver owns. SSA
+// rejects ownership claims on these, and editor round-trips often round-trip
+// them back unchanged. status is intentionally NOT stripped: for resources
+// with a status subresource the apiserver ignores it on /apply anyway, and
+// for CRDs without a status subresource the user's edit IS the way to set it.
+func stripServerManagedFields(obj *unstructured.Unstructured) {
+	for _, f := range [][]string{
+		{"metadata", "resourceVersion"},
+		{"metadata", "managedFields"},
+		{"metadata", "uid"},
+		{"metadata", "generation"},
+		{"metadata", "creationTimestamp"},
+		{"metadata", "selfLink"},
+	} {
+		unstructured.RemoveNestedField(obj.Object, f...)
+	}
 }
 
 // ApplyResource creates or updates a Kubernetes resource from YAML.
@@ -187,12 +257,30 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 		client = m.dynClient.Resource(gvr)
 	}
 
+	// Pre-apply GET: feeds the external-manager warning and the SSA
+	// field-removal verification. Best-effort — a NotFound just means the
+	// resource is being newly created, and other errors shouldn't block the
+	// apply itself.
+	var pre *unstructured.Unstructured
+	var preGetErr error
+	if !opts.DryRun {
+		got, getErr := client.Get(ctx, name, metav1.GetOptions{})
+		if getErr == nil {
+			pre = got
+		} else if !apierrors.IsNotFound(getErr) {
+			preGetErr = getErr
+			log.Printf("[k8s] apply_resource: pre-apply GET %s/%s/%s failed: %v", kind, ns, name, getErr)
+		}
+	}
+
 	if mode == "create" {
-		_, err := client.Create(ctx, obj, metav1.CreateOptions{DryRun: dryRun})
+		created, err := client.Create(ctx, obj, metav1.CreateOptions{DryRun: dryRun})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create resource: %w", err)
 		}
 		result.Created = true
+		result.Object = created
+		m.populateApplyWarnings(ctx, result, obj, pre, created, ns, kind, name, opts.DryRun)
 		return result, nil
 	}
 
@@ -202,9 +290,9 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 		return nil, fmt.Errorf("failed to marshal resource: %w", err)
 	}
 
-	_, err = client.Patch(ctx, name, types.ApplyPatchType, objJSON, metav1.PatchOptions{
+	applied, err := client.Patch(ctx, name, types.ApplyPatchType, objJSON, metav1.PatchOptions{
 		FieldManager: "radar",
-		Force:        boolPtr(true),
+		Force:        boolPtr(opts.Force),
 		DryRun:       dryRun,
 	})
 	if err != nil {
@@ -215,7 +303,69 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 	// With server-side apply we can't easily distinguish, so we default to false (updated).
 	// The caller can check if the resource was newly created by other means if needed.
 	result.Created = false
+	result.Object = applied
+
+	// Post-apply GET feeds the state-derived warnings (run against what
+	// actually landed) and the field-removal diff. Fetch it for creates too,
+	// not just updates — an SSA apply that creates a resource still wants the
+	// external-manager / terminating-namespace warnings (field-removal stays
+	// gated on pre != nil below).
+	var post *unstructured.Unstructured
+	if !opts.DryRun {
+		got, getErr := client.Get(ctx, name, metav1.GetOptions{})
+		if getErr == nil {
+			post = got
+			result.Object = got
+		} else {
+			log.Printf("[k8s] apply_resource: post-apply GET %s/%s/%s failed: %v", kind, ns, name, getErr)
+		}
+	}
+
+	// A non-NotFound pre-apply GET error means the object likely existed but we
+	// couldn't read it, so field-retention can't be diffed (pre is nil). Tell the
+	// agent the verification was skipped rather than letting silence imply a clean
+	// apply — a partial manifest may have dropped fields without warning.
+	if !opts.DryRun && pre == nil && preGetErr != nil {
+		result.Warnings = append(result.Warnings, "Pre-apply GET failed; Radar could not compute field-retention warnings — a partial manifest may have silently dropped fields.")
+	}
+
+	m.populateApplyWarnings(ctx, result, obj, pre, post, ns, kind, name, opts.DryRun)
 	return result, nil
+}
+
+// populateApplyWarnings appends advisory warnings to result.Warnings.
+//
+//   - State-derived warnings (external manager, deletionTimestamp, etc.) come
+//     from the shared EnrichObjectWarnings; we run it against the post-apply
+//     object so the agent sees the resource the way any read of it would.
+//   - Apply-specific checks (SSA field-removal verification, ConfigMap/Secret
+//     consumer reload reminder) require knowledge of what was submitted vs.
+//     what landed and so live here.
+//
+// Best-effort throughout — a failed check never fails the apply itself.
+func (m *WorkloadManager) populateApplyWarnings(ctx context.Context, result *ApplyResourceResult, submitted, pre, post *unstructured.Unstructured, namespace, kind, name string, dryRun bool) {
+	// State-derived: prefer post-apply (reflects what the agent just landed),
+	// fall back to pre when post wasn't fetched (dry run or post-GET failed).
+	target := post
+	if target == nil {
+		target = pre
+	}
+	result.Warnings = append(result.Warnings, EnrichObjectWarnings(target)...)
+
+	if pre != nil && post != nil {
+		result.Warnings = append(result.Warnings, checkFieldRemoval(submitted, pre, post)...)
+	} else if !dryRun && pre != nil && post == nil {
+		result.Warnings = append(result.Warnings, "Post-apply verification GET failed; Radar could not compute field-retention warnings from the live object.")
+	}
+	// The consumer-reload reminder only makes sense for a persisted edit — on a
+	// dry run nothing landed, so the "restart consumers" advice would be
+	// premature (and the namespace-wide LISTs wasted).
+	if !dryRun && (kind == "ConfigMap" || kind == "Secret") && namespace != "" {
+		consumers, partial := findConfigMapSecretConsumers(ctx, m.dynClient, m.discovery, namespace, kind, name)
+		if w := formatConsumerWarning(kind, name, consumers, partial); w != "" {
+			result.Warnings = append(result.Warnings, w)
+		}
+	}
 }
 
 func boolPtr(b bool) *bool { return &b }
@@ -229,7 +379,7 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		return fmt.Errorf("dynamic client not initialized")
 	}
 
-	gvr, ok := m.discovery.GetGVR(opts.Kind)
+	gvr, ok := m.discovery.GetGVRWithGroup(opts.Kind, opts.Group)
 	if !ok {
 		return fmt.Errorf("unknown resource kind: %s", opts.Kind)
 	}

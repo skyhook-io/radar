@@ -3,6 +3,8 @@ package packages
 import (
 	"sort"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/health"
 )
 
 // Aggregate is the merge function. Given a Sources struct, returns a
@@ -20,7 +22,7 @@ import (
 //   - Unknown CRD groups stay as their own rows (FromCRDGroup set).
 //
 // Determinism: rows are returned sorted by (chart, namespace,
-// release_name) so consumers (SPA tables, MCP tool output) get stable
+// release_name) so consumers (frontend tables, MCP tool output) get stable
 // ordering across calls.
 func Aggregate(s Sources) []PackageRow {
 	// CRD-only rows that don't resolve to a chart get a synthetic key
@@ -113,6 +115,7 @@ func Aggregate(s Sources) []PackageRow {
 			ReleaseName:      releaseName,
 			ReleaseNamespace: releaseNs,
 		})
+		r.mergeOverlay(w.Overlay)
 	}
 
 	// 3. GitOps declarations (sources A / F) — declared installs, may
@@ -152,6 +155,7 @@ func Aggregate(s Sources) []PackageRow {
 			DeclarationName:      d.Name,
 			DeclarationNamespace: d.Namespace,
 		})
+		r.mergeOverlay(d.Overlay)
 	}
 
 	// 4. CRD registrations (source C). Two cases:
@@ -173,7 +177,7 @@ func Aggregate(s Sources) []PackageRow {
 		// silently expose mutation across rows if the literal were
 		// shared.
 		newContribution := func() SourceContribution {
-			return SourceContribution{Source: SourceCRDs, Version: version}
+			return SourceContribution{Source: SourceCRDs, APIVersion: version}
 		}
 		if known {
 			matched := false
@@ -297,6 +301,19 @@ func splitChart(s string) (name, version string) {
 	return s, ""
 }
 
+// mergeOverlay keeps the highest-confidence app-overlay across a row's
+// contributing workloads/declarations — lowest Tier wins (tier 1 Flux
+// HelmRelease beats tier 7 app-name). Nil candidate is a no-op; first non-nil
+// sets it. Deterministic: ties keep the first-seen (caller iteration order).
+func (r *PackageRow) mergeOverlay(o *Overlay) {
+	if o == nil {
+		return
+	}
+	if r.Overlay == nil || o.Tier < r.Overlay.Tier {
+		r.Overlay = o
+	}
+}
+
 // worseHealth returns the worse of two Health values using the order:
 // Unhealthy > Degraded > Unknown > Healthy. (Unknown beats Healthy
 // because we don't want a CRD-only "unknown" row to be promoted to
@@ -312,22 +329,40 @@ func worseHealth(a, b Health) Health {
 	if b == "" {
 		return a
 	}
-	if healthRank(a) >= healthRank(b) {
-		return a
+	ra, rb := healthRank(a), healthRank(b)
+	if ra != rb {
+		if ra > rb {
+			return a
+		}
+		return b
 	}
-	return b
+	// Equal rank. The only rank-0 collision is healthy vs neutral; prefer healthy
+	// over neutral regardless of fold order (a mix of running + intentionally-off
+	// rolls up healthy, not idle), matching health.WorseOf. Neutral isn't emitted
+	// onto the package wire today, but this keeps the two worst-of definitions in
+	// lockstep for when it is.
+	if strings.EqualFold(string(a), "neutral") {
+		return b
+	}
+	return a
 }
 
+// WorseHealth is the exported worst-of for callers outside the package (the app
+// rollup) so there is one rollup ordering, not a per-caller copy.
+func WorseHealth(a, b Health) Health { return worseHealth(a, b) }
+
+// healthRank normalizes external GitOps/Helm vocabularies onto the canonical
+// levels, then defers to the shared health.Rank ordering so the package rollup,
+// the timeline, and topology share one definition of "worse" — including neutral
+// aggregating as most-benign.
 func healthRank(h Health) int {
 	switch Health(strings.ToLower(string(h))) {
-	case HealthUnhealthy, "danger", "critical", "failed", "stalled":
-		return 4
-	case HealthDegraded, "warning", "warn", "progressing", "reconciling":
-		return 3
-	case HealthUnknown:
-		return 2
-	case HealthHealthy, "ok", "ready", "available":
-		return 1
+	case "danger", "critical", "failed", "stalled":
+		return health.Rank(health.LevelUnhealthy)
+	case "warning", "warn", "progressing", "reconciling":
+		return health.Rank(health.LevelDegraded)
+	case "ok", "ready", "available":
+		return health.Rank(health.LevelHealthy)
 	}
-	return 2
+	return health.Rank(health.Level(strings.ToLower(string(h))))
 }

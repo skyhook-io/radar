@@ -31,9 +31,19 @@
       "./src/components/gitops/*.tsx",
       "./src/components/gitops/*.ts"
     ],
+    "./components/issues": "./src/components/issues/index.ts",
+    "./components/issues/*": [
+      "./src/components/issues/*.tsx",
+      "./src/components/issues/*.ts"
+    ],
     "./components/timeline/*": [
       "./src/components/timeline/*.tsx",
       "./src/components/timeline/*.ts"
+    ],
+    "./components/charts": "./src/components/charts/index.ts",
+    "./components/charts/*": [
+      "./src/components/charts/*.tsx",
+      "./src/components/charts/*.ts"
     ],
     "./hooks/*": [
       "./src/hooks/*.ts",
@@ -47,7 +57,8 @@
     "./theme/tailwind-theme.css": "./src/theme/tailwind-theme.css",
     "./theme/components.css": "./src/theme/components.css",
     "./theme": "./src/theme/index.ts",
-    "./topology.css": "./src/components/topology/topology.css"
+    "./topology.css": "./src/components/topology/topology.css",
+    "./assets/radar/radar-icon-loading.svg": "./src/assets/radar/radar-icon-loading.svg"
   },
   "scripts": {
     "tsc": "tsc --noEmit",
@@ -57,8 +68,8 @@
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "html-to-image": "^1.11.0",
-    "react-virtuoso": "^4.18.5",
-    "shiki": "^4.0.0"
+    "react-virtuoso": "^4.18.7",
+    "shiki": "^4.2.0"
   },
   "peerDependencies": {
     "@xterm/addon-fit": ">=0.10.0",
@@ -74,8 +85,8 @@
     "yaml": ">=2.0.0"
   },
   "devDependencies": {
-    "@types/diff": "^7.0.2",
-    "@types/react": "^19.2.14",
+    "@types/node": "^26.0.0",
+    "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
@@ -84,11 +95,11 @@
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
     "elkjs": "^0.11.1",
-    "lucide-react": "^1.8.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
+    "lucide-react": "^1.16.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.5",
-    "yaml": "^2.8.3"
+    "vitest": "^4.1.8",
+    "yaml": "^2.9.0"
   }
 }

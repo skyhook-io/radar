@@ -1,7 +1,7 @@
-// Package portforward provides low-level K8s SPDY port-forwarding primitives.
+// Package portforward provides low-level K8s port-forwarding primitives.
 // These are the pure K8s API building blocks: finding pods, finding ports,
-// and running SPDY tunnels. Lifecycle management and singleton state live in
-// each consumer (e.g., Radar's internal/portforward for metrics proxying).
+// and running tunnels. Lifecycle management and singleton state live in each
+// consumer (e.g., Radar's internal/portforward for metrics proxying).
 package portforward
 
 import (
@@ -10,22 +10,48 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+	streamhttp "k8s.io/streaming/pkg/httpstream"
 )
 
-// RunPortForward runs a SPDY port-forward from localPort to targetPort on the given pod.
+// NewDialer builds a port-forward dialer that uses the WebSocket API
+// (SPDY-over-WebSocket), falling back to the legacy raw-SPDY API when the
+// apiserver doesn't support the WebSocket port-forward subprotocol.
+func NewDialer(config *rest.Config, u *url.URL) (httpstream.Dialer, error) {
+	wsDialer, err := portforward.NewSPDYOverWebsocketDialer(u, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create websocket dialer: %w", err)
+	}
+
+	transport, upgrader, err := spdy.RoundTripperFor(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create round tripper: %w", err)
+	}
+	spdyDialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", u)
+
+	// The WebSocket dialer is built on k8s.io/streaming/pkg/httpstream, so a
+	// rejected upgrade surfaces as that package's error types.
+	shouldFallback := func(err error) bool {
+		return streamhttp.IsUpgradeFailure(err) || streamhttp.IsHTTPSProxyError(err)
+	}
+	return portforward.NewFallbackDialer(wsDialer, spdyDialer, shouldFallback), nil
+}
+
+// RunPortForward runs a port-forward from localPort to targetPort on the given pod.
 // It blocks until the port-forward terminates (stopCh closed or context cancelled).
 // readyCh is closed once the tunnel is established and ready to accept connections.
 func RunPortForward(ctx context.Context, client kubernetes.Interface, config *rest.Config,
-	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{}) error {
-
+	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{},
+) error {
 	req := client.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
@@ -35,12 +61,11 @@ func RunPortForward(ctx context.Context, client kubernetes.Interface, config *re
 			Ports: []int32{int32(targetPort)},
 		}, scheme.ParameterCodec)
 
-	transport, upgrader, err := spdy.RoundTripperFor(config)
+	dialer, err := NewDialer(config, req.URL())
 	if err != nil {
-		return fmt.Errorf("failed to create round tripper: %w", err)
+		return err
 	}
 
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", req.URL())
 	ports := []string{fmt.Sprintf("%d:%d", localPort, targetPort)}
 
 	pf, err := portforward.New(dialer, ports, stopCh, readyCh, io.Discard, io.Discard)

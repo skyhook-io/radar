@@ -1,18 +1,39 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"net/http"
-	"sync"
+	"slices"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type ResourceCountsResponse struct {
-	Counts    map[string]int `json:"counts"`
-	Forbidden []string       `json:"forbidden,omitempty"`
+	Counts      map[string]int `json:"counts"`
+	Forbidden   []string       `json:"forbidden,omitempty"`
+	Unavailable []string       `json:"unavailable,omitempty"`
+	// Reasons maps a forbidden kind key to why it's hidden:
+	//   "rbac_denied" — Radar's ServiceAccount can read the kind but the user's
+	//      own RBAC denies it. Granting the user list access surfaces it.
+	//   "unavailable" — Radar can't read the kind at all (no informer): its type
+	//      isn't installed, the SA lacks RBAC, or the feature is off (e.g.
+	//      rbac.viewRBAC). A user-level grant won't help.
+	Reasons map[string]string `json:"reasons,omitempty"`
 }
+
+const (
+	reasonRBACDenied  = "rbac_denied"
+	reasonUnavailable = "unavailable"
+)
+
+const (
+	endpointSliceCountKey          = "discovery.k8s.io/EndpointSlice"
+	endpointSliceCountNamespaceCap = 50
+	endpointSliceCountConcurrency  = 8
+)
 
 func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
@@ -33,21 +54,69 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 
 	counts := make(map[string]int)
 	var forbidden []string
+	var unavailable []string
+	reasons := map[string]string{}
 
-	// 1. Typed resources from allKindListers
+	countEndpointSlices := func() {
+		dynamicCache := k8s.GetDynamicResourceCache()
+		if dynamicCache == nil {
+			unavailable = append(unavailable, endpointSliceCountKey)
+			return
+		}
+		gvr, ok := k8s.BuiltinGVR("endpointslices", "discovery.k8s.io")
+		if !ok {
+			unavailable = append(unavailable, endpointSliceCountKey)
+			return
+		}
+		total, err := dynamicCache.CountDirectProbe(r.Context(), gvr, namespaces, endpointSliceCountNamespaceCap, endpointSliceCountConcurrency)
+		if err != nil {
+			unavailable = append(unavailable, endpointSliceCountKey)
+			if !errors.Is(err, k8score.ErrResourceCountUnavailable) {
+				log.Printf("[resource-counts] Failed to count EndpointSlice: %v", err)
+			}
+			return
+		}
+		counts[endpointSliceCountKey] = total
+	}
+
 	for _, kl := range k8score.AllKindListers() {
 		l := kl.Lister()(cache.ResourceCache)
 		if l == nil {
+			// No informer: Radar's SA can't read this kind (not installed, SA
+			// RBAC, or feature off) — a user-level grant won't surface it.
 			forbidden = append(forbidden, kl.CountKey())
+			reasons[kl.CountKey()] = reasonUnavailable
 			continue
 		}
-		n := k8score.ListCountNamespaced(l, namespaces)
-		if n > 0 {
-			counts[kl.CountKey()] = n
+		// Cluster-scoped kinds: ListCountNamespaced ignores the namespace
+		// filter and returns the cluster-wide count, so authorize the kind
+		// per-user via SAR before counting.
+		if k8s.IsClusterOnlyKind(kl.Kind()) {
+			group, resource, ok := k8s.ClusterOnlyKindGVR(kl.Kind())
+			if !ok {
+				continue
+			}
+			// A core cluster-scoped kind always exists, so an RBAC denial is
+			// surfaced as forbidden rather than silently omitted — otherwise the
+			// UI shows "0 / No X found", indistinguishable from an empty cluster.
+			if !s.canRead(r, group, resource, "", "list") {
+				forbidden = append(forbidden, kl.CountKey())
+				reasons[kl.CountKey()] = reasonRBACDenied
+				continue
+			}
 		}
+		n := k8score.ListCountNamespaced(l, namespaces)
+		// Namespaces is cluster-scoped but exposed as a filtered list. For
+		// namespace-restricted users (non-empty filter), the lister can't
+		// honor the filter, so we report the count of namespaces they're
+		// allowed to see rather than leaking the cluster-wide total.
+		if kl.Kind() == "Namespace" && len(namespaces) > 0 {
+			n = len(namespaces)
+		}
+		counts[kl.CountKey()] = n
 	}
 
-	// 2. Dynamic resources (CRDs) — counted concurrently since each Count() hits a separate informer indexer
+	// 2. Dynamic resources (CRDs) — report counts only for already-watched informers.
 	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
 	if discovery != nil && dynamicCache != nil {
@@ -55,60 +124,80 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("[resource-counts] Failed to discover API resources for CRD counts: %v", err)
 		} else {
-			// Deduplicate CRDs by group+kind
+			// Deduplicate CRDs by group+kind, keeping the most stable served version.
 			type crdInfo struct {
 				kind       string
 				group      string
+				resource   string
+				version    string
 				namespaced bool
+				gvr        schema.GroupVersionResource
 			}
 			seen := make(map[string]bool)
-			var crds []crdInfo
+			crds := make(map[string]crdInfo)
+			var order []string
 			for _, res := range resources {
 				if !res.IsCRD {
+					continue
+				}
+				// Informer-backed counts only work for listable+watchable kinds.
+				// Create-only review resources (LocalSubjectAccessReview, etc.)
+				// never sync an informer and would log a permanent count error.
+				if !slices.Contains(res.Verbs, "list") || !slices.Contains(res.Verbs, "watch") {
 					continue
 				}
 				key := res.Group + "/" + res.Kind
 				if !seen[key] {
 					seen[key] = true
-					crds = append(crds, crdInfo{kind: res.Kind, group: res.Group, namespaced: res.Namespaced})
+					order = append(order, key)
+					crds[key] = crdInfo{
+						kind:       res.Kind,
+						group:      res.Group,
+						resource:   res.Name,
+						version:    res.Version,
+						namespaced: res.Namespaced,
+						gvr:        schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name},
+					}
+				} else if k8score.IsMoreStableVersion(res.Version, crds[key].version) {
+					crds[key] = crdInfo{
+						kind:       res.Kind,
+						group:      res.Group,
+						resource:   res.Name,
+						version:    res.Version,
+						namespaced: res.Namespaced,
+						gvr:        schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name},
+					}
 				}
 			}
 
-			var mu sync.Mutex
-			var wg sync.WaitGroup
-			for _, crd := range crds {
-				wg.Add(1)
-				go func(c crdInfo) {
-					defer wg.Done()
-					gvr, ok := discovery.GetGVRWithGroup(c.kind, c.group)
-					if !ok {
-						return
-					}
-					// For cluster-scoped CRDs, skip namespace filtering (same as typed resources)
-					ns := namespaces
-					if !c.namespaced {
-						ns = nil
-					}
-					n, err := dynamicCache.Count(gvr, ns)
-					if err != nil {
-						log.Printf("[resource-counts] Failed to count CRD %s/%s: %v", c.group, c.kind, err)
-						return
-					}
-					if n == 0 {
-						return
-					}
-					countKey := c.group + "/" + c.kind
-					mu.Lock()
-					counts[countKey] = n
-					mu.Unlock()
-				}(crd)
+			watchedCounts := dynamicCache.CountWatched(namespaces)
+			clusterScopedWatchedCounts := watchedCounts
+			if len(namespaces) > 0 {
+				clusterScopedWatchedCounts = dynamicCache.CountWatched(nil)
 			}
-			wg.Wait()
+			for _, key := range order {
+				crd := crds[key]
+				countSource := watchedCounts
+				if !crd.namespaced {
+					if !s.canRead(r, crd.group, crd.resource, "", "list") {
+						continue
+					}
+					countSource = clusterScopedWatchedCounts
+				}
+				if n, ok := countSource[crd.gvr]; ok {
+					counts[key] = n
+					continue
+				}
+				unavailable = append(unavailable, key)
+			}
 		}
 	}
+	countEndpointSlices()
 
 	s.writeJSON(w, ResourceCountsResponse{
-		Counts:    counts,
-		Forbidden: forbidden,
+		Counts:      counts,
+		Forbidden:   forbidden,
+		Unavailable: unavailable,
+		Reasons:     reasons,
 	})
 }

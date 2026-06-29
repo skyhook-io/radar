@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { useState, useCallback } from 'react'
 import type { TopologyNode, NodeKind, HealthStatus } from '../../types'
 import { getKindBadgeBordered, healthToSeverity, SEVERITY_BADGE_BORDERED } from '../../utils/badge-colors'
+import { Tooltip } from '../ui/Tooltip'
 
 interface ResourceDrawerProps {
   node: TopologyNode
@@ -146,10 +147,10 @@ export const ResourceDrawer = memo(function ResourceDrawer({
               <h2 className="text-lg font-semibold text-theme-text-primary truncate">
                 {node.name}
               </h2>
+              <Tooltip content="Copy name">
               <button
                 onClick={copyName}
                 className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-                title="Copy name"
               >
                 {copied ? (
                   <Check className="w-4 h-4 text-green-400" />
@@ -157,6 +158,7 @@ export const ResourceDrawer = memo(function ResourceDrawer({
                   <Copy className="w-4 h-4" />
                 )}
               </button>
+              </Tooltip>
             </div>
           </div>
           <button

@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/prom"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -26,6 +26,8 @@ func RegisterRoutes(r chi.Router) {
 	r.Get("/prometheus/namespace/{namespace}", handleNamespaceMetrics)
 	r.Get("/prometheus/cluster", handleClusterMetrics)
 	r.Get("/prometheus/query", handleRawQuery)
+	r.Get("/prometheus/pvc/{namespace}/{name}", handlePVCUsage)
+	r.Get("/prometheus/rightsizing/{kind}/{namespace}/{name}", handleRightsizing)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -44,29 +46,22 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, Status{Available: false, Error: "Prometheus client not initialized"})
+		writeJSON(w, http.StatusOK, prom.Status{Available: false, Error: "Prometheus client not initialized"})
 		return
 	}
 	writeJSON(w, http.StatusOK, client.GetStatus())
 }
 
-// handleConnect triggers Prometheus discovery and connection.
-// Accepts optional "url" query param to override discovery with a specific endpoint.
+// handleConnect triggers Prometheus discovery and connection. The endpoint
+// has no body or query parameters — the Prometheus URL is configured at
+// process startup via --prometheus-url, never per-request. Accepting a URL
+// here would let any caller redirect Prometheus queries to an arbitrary
+// host (SSRF) since radar binds to 0.0.0.0 by default.
 func handleConnect(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Prometheus client not initialized")
 		return
-	}
-
-	// Allow URL override via query param (resets existing connection)
-	if overrideURL := r.URL.Query().Get("url"); overrideURL != "" {
-		u, err := url.Parse(overrideURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			writeError(w, http.StatusBadRequest, "invalid URL: must be a valid HTTP(S) URL")
-			return
-		}
-		client.SetURL(overrideURL)
 	}
 
 	_, _, err := client.EnsureConnected(r.Context())
@@ -134,10 +129,10 @@ type ResourceMetricsResponse struct {
 	Kind      string         `json:"kind"`
 	Namespace string         `json:"namespace,omitempty"`
 	Name      string         `json:"name"`
-	Category  MetricCategory `json:"category"`
+	Category  prom.MetricCategory `json:"category"`
 	Unit      string         `json:"unit"`
 	Range     string         `json:"range"`
-	Result    *QueryResult   `json:"result"`
+	Result    *prom.QueryResult   `json:"result"`
 	Query     string         `json:"query,omitempty"` // PromQL query used (included when result is empty for diagnostics)
 	Hint      string         `json:"hint,omitempty"`  // Contextual hint when results are empty (e.g. cri-docker label issues)
 }
@@ -155,14 +150,14 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	category := MetricCategory(r.URL.Query().Get("category"))
+	category := prom.MetricCategory(r.URL.Query().Get("category"))
 	if category == "" {
-		category = CategoryCPU
+		category = prom.CategoryCPU
 	}
 
 	// Validate kind is supported
 	supported := false
-	for _, k := range SupportedKinds() {
+	for _, k := range prom.SupportedKinds() {
 		if strings.EqualFold(k, kind) {
 			kind = k // normalize casing
 			supported = true
@@ -175,7 +170,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate category
-	validCategories := CategoriesForKind(kind)
+	validCategories := prom.CategoriesForKind(kind)
 	categoryValid := false
 	for _, c := range validCategories {
 		if c == category {
@@ -188,7 +183,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := BuildQuery(kind, namespace, name, category)
+	query := prom.BuildQuery(kind, namespace, name, category)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "cannot build query for "+kind+"/"+string(category))
 		return
@@ -199,22 +194,22 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
-		log.Printf("[prometheus] Query failed for %s/%s/%s (%s): %v", kind, namespace, name, category, err)
-		errorlog.Record("prometheus", "error", "query failed for %s/%s/%s (%s): %v", kind, namespace, name, category, err)
+		log.Printf("[prometheus] Query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
+		errorlog.Record("prometheus", "error", "query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
 
 	result, query = retryWithoutContainerFilter(r.Context(), client, result, query, category, start, end, step,
-		func() string { return BuildQueryNoContainerFilter(kind, namespace, name, category) },
-		fmt.Sprintf("Primary query empty for %s/%s/%s (%s)", kind, namespace, name, category))
+		func() string { return prom.BuildQueryNoContainerFilter(kind, namespace, name, category) },
+		fmt.Sprintf("Primary query empty for %q/%q/%q (%q)", kind, namespace, name, category))
 
 	resp := ResourceMetricsResponse{
 		Kind:      kind,
 		Namespace: namespace,
 		Name:      name,
 		Category:  category,
-		Unit:      CategoryUnitForKind(kind, category),
+		Unit:      prom.CategoryUnitForKind(kind, category),
 		Range:     rangeStr,
 		Result:    result,
 	}
@@ -223,8 +218,8 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	if len(result.Series) == 0 {
 		resp.Query = query
 		resp.Hint = detectCRIDockerHint(kind, namespace, name)
-		log.Printf("[prometheus] Empty result for %s/%s/%s (%s), query: %s", kind, namespace, name, category, query)
-		errorlog.Record("prometheus", "warning", "empty result for %s/%s/%s (%s), query: %s", kind, namespace, name, category, query)
+		log.Printf("[prometheus] Empty result for %q/%q/%q (%q), query: %q", kind, namespace, name, category, query)
+		errorlog.Record("prometheus", "warning", "empty result for %q/%q/%q (%q), query: %q", kind, namespace, name, category, query)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -247,12 +242,12 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 	}
 	kind = "Node"
 
-	category := MetricCategory(r.URL.Query().Get("category"))
+	category := prom.MetricCategory(r.URL.Query().Get("category"))
 	if category == "" {
-		category = CategoryCPU
+		category = prom.CategoryCPU
 	}
 
-	validCategories := CategoriesForKind(kind)
+	validCategories := prom.CategoriesForKind(kind)
 	categoryValid := false
 	for _, c := range validCategories {
 		if c == category {
@@ -265,7 +260,7 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	query := BuildQuery(kind, "", name, category)
+	query := prom.BuildQuery(kind, "", name, category)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "cannot build query for "+kind+"/"+string(category))
 		return
@@ -276,8 +271,8 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
-		log.Printf("[prometheus] Query failed for %s/%s (%s): %v", kind, name, category, err)
-		errorlog.Record("prometheus", "error", "query failed for %s/%s (%s): %v", kind, name, category, err)
+		log.Printf("[prometheus] Query failed for %q/%q (%q): %v", kind, name, category, err)
+		errorlog.Record("prometheus", "error", "query failed for %q/%q (%q): %v", kind, name, category, err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
@@ -286,14 +281,14 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 		Kind:     kind,
 		Name:     name,
 		Category: category,
-		Unit:     CategoryUnitForKind(kind, category),
+		Unit:     prom.CategoryUnitForKind(kind, category),
 		Range:    rangeStr,
 		Result:   result,
 	}
 	if len(result.Series) == 0 {
 		resp.Query = query
-		log.Printf("[prometheus] Empty result for %s/%s (%s), query: %s", kind, name, category, query)
-		errorlog.Record("prometheus", "warning", "empty result for %s/%s (%s), query: %s", kind, name, category, query)
+		log.Printf("[prometheus] Empty result for %q/%q (%q), query: %q", kind, name, category, query)
+		errorlog.Record("prometheus", "warning", "empty result for %q/%q (%q), query: %q", kind, name, category, query)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -301,10 +296,10 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 // NamespaceMetricsResponse is the response shape for namespace-level metrics.
 type NamespaceMetricsResponse struct {
 	Namespace string         `json:"namespace"`
-	Category  MetricCategory `json:"category"`
+	Category  prom.MetricCategory `json:"category"`
 	Unit      string         `json:"unit"`
 	Range     string         `json:"range"`
-	Result    *QueryResult   `json:"result"`
+	Result    *prom.QueryResult   `json:"result"`
 }
 
 // handleNamespaceMetrics returns aggregate metrics for a namespace.
@@ -316,12 +311,12 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespace := chi.URLParam(r, "namespace")
-	category := MetricCategory(r.URL.Query().Get("category"))
+	category := prom.MetricCategory(r.URL.Query().Get("category"))
 	if category == "" {
-		category = CategoryCPU
+		category = prom.CategoryCPU
 	}
 
-	query := BuildNamespaceQuery(namespace, category)
+	query := prom.BuildNamespaceQuery(namespace, category)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "unsupported category for namespace: "+string(category))
 		return
@@ -332,20 +327,20 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
-		log.Printf("[prometheus] Namespace query failed for %s (%s): %v", namespace, category, err)
-		errorlog.Record("prometheus", "error", "namespace query failed for %s (%s): %v", namespace, category, err)
+		log.Printf("[prometheus] Namespace query failed for %q (%q): %v", namespace, category, err)
+		errorlog.Record("prometheus", "error", "namespace query failed for %q (%q): %v", namespace, category, err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
 
 	result, _ = retryWithoutContainerFilter(r.Context(), client, result, query, category, start, end, step,
-		func() string { return BuildNamespaceQueryNoContainerFilter(namespace, category) },
-		fmt.Sprintf("Namespace query empty for %s (%s)", namespace, category))
+		func() string { return prom.BuildNamespaceQueryNoContainerFilter(namespace, category) },
+		fmt.Sprintf("Namespace query empty for %q (%q)", namespace, category))
 
 	writeJSON(w, http.StatusOK, NamespaceMetricsResponse{
 		Namespace: namespace,
 		Category:  category,
-		Unit:      CategoryUnit(category),
+		Unit:      prom.CategoryUnit(category),
 		Range:     rangeStr,
 		Result:    result,
 	})
@@ -353,10 +348,10 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 
 // ClusterMetricsResponse is the response shape for cluster-level metrics.
 type ClusterMetricsResponse struct {
-	Category MetricCategory `json:"category"`
+	Category prom.MetricCategory `json:"category"`
 	Unit     string         `json:"unit"`
 	Range    string         `json:"range"`
-	Result   *QueryResult   `json:"result"`
+	Result   *prom.QueryResult   `json:"result"`
 }
 
 // handleClusterMetrics returns aggregate metrics for the entire cluster.
@@ -367,12 +362,12 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	category := MetricCategory(r.URL.Query().Get("category"))
+	category := prom.MetricCategory(r.URL.Query().Get("category"))
 	if category == "" {
-		category = CategoryCPU
+		category = prom.CategoryCPU
 	}
 
-	query := BuildClusterQuery(category)
+	query := prom.BuildClusterQuery(category)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "unsupported category for cluster: "+string(category))
 		return
@@ -383,19 +378,19 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
-		log.Printf("[prometheus] Cluster query failed (%s): %v", category, err)
-		errorlog.Record("prometheus", "error", "cluster query failed (%s): %v", category, err)
+		log.Printf("[prometheus] Cluster query failed (%q): %v", category, err)
+		errorlog.Record("prometheus", "error", "cluster query failed (%q): %v", category, err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
 
 	result, _ = retryWithoutContainerFilter(r.Context(), client, result, query, category, start, end, step,
-		func() string { return BuildClusterQueryNoContainerFilter(category) },
-		fmt.Sprintf("Cluster query empty (%s)", category))
+		func() string { return prom.BuildClusterQueryNoContainerFilter(category) },
+		fmt.Sprintf("Cluster query empty (%q)", category))
 
 	writeJSON(w, http.StatusOK, ClusterMetricsResponse{
 		Category: category,
-		Unit:     CategoryUnit(category),
+		Unit:     prom.CategoryUnit(category),
 		Range:    rangeStr,
 		Result:   result,
 	})
@@ -447,8 +442,8 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 // when the primary result is empty and the category uses that filter. This handles
 // cri-docker and other setups where cAdvisor metrics lack the container label.
 // Returns the updated result (original or fallback) and the query that produced it.
-func retryWithoutContainerFilter(ctx context.Context, client *Client, result *QueryResult, query string, category MetricCategory, start, end time.Time, step time.Duration, buildFallback func() string, logPrefix string) (*QueryResult, string) {
-	if len(result.Series) > 0 || !categoryUsesContainerFilter(category) {
+func retryWithoutContainerFilter(ctx context.Context, client *Client, result *prom.QueryResult, query string, category prom.MetricCategory, start, end time.Time, step time.Duration, buildFallback func() string, logPrefix string) (*prom.QueryResult, string) {
+	if len(result.Series) > 0 || !prom.CategoryUsesContainerFilter(category) {
 		return result, query
 	}
 	fallbackQuery := buildFallback()

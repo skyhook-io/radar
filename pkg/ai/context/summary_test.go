@@ -8,7 +8,10 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // --- Pod helpers ---
@@ -576,7 +579,13 @@ func TestSummary_HPAIssue(t *testing.T) {
 					MaxReplicas:    10,
 					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
 				},
-				Status: autoscalingv2.HorizontalPodAutoscalerStatus{CurrentReplicas: 10, DesiredReplicas: 10},
+				Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+					CurrentReplicas: 10,
+					DesiredReplicas: 10,
+					Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+						{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooManyReplicas", Message: "the desired replica count is more than the maximum replica count"},
+					},
+				},
 			},
 			wantIssue: "maxed",
 		},
@@ -589,6 +598,42 @@ func TestSummary_HPAIssue(t *testing.T) {
 					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
 				},
 				Status: autoscalingv2.HorizontalPodAutoscalerStatus{CurrentReplicas: 5, DesiredReplicas: 5},
+			},
+			wantIssue: "",
+		},
+		{
+			name: "metrics unavailable",
+			hpa: &autoscalingv2.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+				Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+					MaxReplicas:    10,
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
+				},
+				Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+					CurrentReplicas: 5,
+					DesiredReplicas: 5,
+					Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+						{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionFalse, Reason: "FailedGetResourceMetric"},
+					},
+				},
+			},
+			wantIssue: "HPA cannot compute replicas because required metrics are unavailable",
+		},
+		{
+			name: "scaling disabled is not an issue",
+			hpa: &autoscalingv2.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: "paused", Namespace: "default"},
+				Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+					MaxReplicas:    10,
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "paused"},
+				},
+				Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+					CurrentReplicas: 0,
+					DesiredReplicas: 0,
+					Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+						{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionFalse, Reason: "ScalingDisabled"},
+					},
+				},
 			},
 			wantIssue: "",
 		},
@@ -663,5 +708,142 @@ func TestSummary_CronJobIssue(t *testing.T) {
 	}
 }
 
+// TestSummary_TerminatingFields pins the lifecycle fields on the AI
+// summary output. AI assistants (and the MCP list_resources tool)
+// rely on these to spot zombie/finalizer-stuck resources at a glance
+// — without them, an LLM advising on "why is this not converging"
+// has no way to detect a Terminating resource short of fetching the
+// Detail-level YAML.
+func TestSummary_TerminatingFields(t *testing.T) {
+	dt := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	pod := makePod("terminating-pod", withPhase(corev1.PodRunning))
+	pod.DeletionTimestamp = &dt
+	pod.Finalizers = []string{"example.io/cleanup", "kubernetes"}
+
+	raw, err := Minify(pod, LevelSummary)
+	if err != nil {
+		t.Fatalf("Minify failed: %v", err)
+	}
+	s := raw.(*ResourceSummary)
+	if !s.Terminating {
+		t.Fatal("expected Terminating=true on a pod with deletionTimestamp set")
+	}
+	if len(s.Finalizers) != 2 || s.Finalizers[0] != "example.io/cleanup" {
+		t.Fatalf("Finalizers = %v, want [example.io/cleanup kubernetes]", s.Finalizers)
+	}
+
+	// Healthy pod (no deletionTimestamp) must report Terminating=false
+	// so prune-on-zero keeps the field out of the AI context entirely.
+	healthy := makePod("healthy-pod", withPhase(corev1.PodRunning))
+	rawH, _ := Minify(healthy, LevelSummary)
+	if rawH.(*ResourceSummary).Terminating {
+		t.Fatal("expected Terminating=false on a pod without deletionTimestamp")
+	}
+}
+
 //go:fix inline
 func int32Ptr(i int32) *int32 { return &i }
+
+// TestSummary_GenericFallback covers kinds without an explicit summarizer.
+// The load-bearing path is the TypeMeta-empty branch — informer-cached
+// objects have TypeMeta stripped, so summarizeGeneric must extract the
+// kind name from the Go type via fmt.Sprintf("%T", obj). A future
+// refactor that breaks strings.LastIndex(".") would silently degrade MCP
+// output for every kind covered by the generic path.
+func TestSummary_GenericFallback(t *testing.T) {
+	created := metav1.NewTime(time.Now().Add(-3 * time.Hour))
+
+	cases := []struct {
+		name       string
+		obj        runtime.Object
+		wantKind   string
+		wantName   string
+		wantNs     string // expected namespace, "" for cluster-scoped
+		wantAgeSet bool
+	}{
+		{
+			name:       "PersistentVolume (cluster-scoped, no namespace)",
+			obj:        &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-1", CreationTimestamp: created}},
+			wantKind:   "PersistentVolume",
+			wantName:   "pv-1",
+			wantNs:     "",
+			wantAgeSet: true,
+		},
+		{
+			name:       "StorageClass (cluster-scoped)",
+			obj:        &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "standard", CreationTimestamp: created}},
+			wantKind:   "StorageClass",
+			wantName:   "standard",
+			wantNs:     "",
+			wantAgeSet: true,
+		},
+		{
+			name:       "NetworkPolicy (namespaced)",
+			obj:        &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "deny-all", Namespace: "prod", CreationTimestamp: created}},
+			wantKind:   "NetworkPolicy",
+			wantName:   "deny-all",
+			wantNs:     "prod",
+			wantAgeSet: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := Minify(tc.obj, LevelSummary)
+			if err != nil {
+				t.Fatalf("Minify failed: %v", err)
+			}
+			s := raw.(*ResourceSummary)
+			if s.Kind != tc.wantKind {
+				t.Errorf("Kind = %q, want %q (TypeMeta-empty path may be broken)", s.Kind, tc.wantKind)
+			}
+			if s.Name != tc.wantName {
+				t.Errorf("Name = %q, want %q", s.Name, tc.wantName)
+			}
+			if s.Namespace != tc.wantNs {
+				t.Errorf("Namespace = %q, want %q", s.Namespace, tc.wantNs)
+			}
+			if tc.wantAgeSet && s.Age == "" {
+				t.Errorf("Age unset on object with CreationTimestamp set")
+			}
+		})
+	}
+}
+
+// TestSummary_GenericFallback_TypeMetaPopulated covers the other branch:
+// when obj.GetObjectKind() returns a non-empty Kind, that wins over the
+// Go-type reflection fallback. Production rarely hits this (informers
+// strip TypeMeta) but the branch exists.
+func TestSummary_GenericFallback_TypeMetaPopulated(t *testing.T) {
+	pv := &corev1.PersistentVolume{
+		TypeMeta:   metav1.TypeMeta{Kind: "PersistentVolume", APIVersion: "v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-with-typemeta"},
+	}
+	raw, err := Minify(pv, LevelSummary)
+	if err != nil {
+		t.Fatalf("Minify failed: %v", err)
+	}
+	if got := raw.(*ResourceSummary).Kind; got != "PersistentVolume" {
+		t.Errorf("Kind = %q, want PersistentVolume", got)
+	}
+}
+
+// TestSummary_GenericFallback_TypedNilSafe guards against Go's typed-nil-
+// through-interface trap: var pv *PV = nil; var obj runtime.Object = pv;
+// obj != nil but calling methods on it panics. summarizeGeneric must
+// detect this via reflection.
+func TestSummary_GenericFallback_TypedNilSafe(t *testing.T) {
+	var pv *corev1.PersistentVolume // typed nil
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("summarizeGeneric panicked on typed-nil obj: %v", r)
+		}
+	}()
+	raw, err := Minify(pv, LevelSummary)
+	if err != nil {
+		t.Fatalf("Minify failed: %v", err)
+	}
+	if got := raw.(*ResourceSummary).Kind; got != "Unknown" {
+		t.Errorf("Kind = %q, want Unknown for typed-nil obj", got)
+	}
+}

@@ -12,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
 // DropManagedFields is a SharedInformer transform that reduces memory usage
 // by removing managedFields and heavy annotations from cached objects.
 // This is the union of transforms used by both Radar and skyhook-connector.
@@ -51,7 +53,7 @@ func DropManagedFields(obj any) (any, error) {
 		*autoscalingv2.HorizontalPodAutoscaler,
 		*policyv1.PodDisruptionBudget, *storagev1.StorageClass:
 		if meta, ok := obj.(metav1.Object); ok && meta.GetAnnotations() != nil {
-			delete(meta.GetAnnotations(), "kubectl.kubernetes.io/last-applied-configuration")
+			delete(meta.GetAnnotations(), lastAppliedAnnotation)
 		}
 	}
 
@@ -71,28 +73,29 @@ func DropManagedFields(obj any) (any, error) {
 // those need StripUnstructuredFields which deep-copies.
 //
 // Always strips:
-//   - metadata.managedFields (like DropManagedFields does for typed kinds)
-//   - kubectl.kubernetes.io/last-applied-configuration annotation
+//   - metadata.managedFields
+//   - kubectl.kubernetes.io/last-applied-configuration. GitOps drift
+//     detection needs this annotation, but it pulls live objects via a
+//     dedicated direct-GET path (DynamicResourceCache.GetDirectPreserveLastApplied)
+//     so the informer cache never has to retain it — which matters
+//     because the dynamic cache can host core kinds (apps/Deployment,
+//     /v1/Service, etc.) referenced from an Argo Application's
+//     status.resources, where retaining last-applied across every object
+//     cluster-wide would be a meaningful memory regression to power a
+//     per-page diagnostic.
 //
 // For CustomResourceDefinitions specifically, also strips:
 //   - spec.versions[].schema — the OpenAPI v3 schema. On operator-heavy
-//     clusters a single CRD's schema is 50-100KB (think ArgoCD, cert-manager,
-//     Istio) and a cluster with 100+ CRDs easily produces a multi-MB list
-//     response. Radar's UI doesn't render CRD schemas anywhere — the
-//     resource browser shows CRDs with generic name/age columns, and any
-//     future "inspect CRD schema" feature would fetch fresh from the API
-//     server rather than relying on cached list data.
-//   - spec.conversion — the conversion webhook config (caBundle + URL).
-//     Also not rendered. The K8s API server applies conversion webhooks
-//     itself; we only need to display metadata about them, not the
-//     runtime config.
+//     clusters a single CRD's schema is 50-100KB (ArgoCD, cert-manager,
+//     Istio) and 100+ CRDs easily produce a multi-MB list response.
+//     Radar doesn't render CRD schemas; a future "inspect CRD schema"
+//     feature should fetch fresh from the API server.
+//   - spec.conversion — webhook config. Not rendered.
 //
 // Explicitly preserves:
 //   - spec.versions[].name and served/storage/deprecated flags
-//   - spec.versions[].additionalPrinterColumns — these drive column hints
-//     in generic resource list views
-//   - spec.group, spec.names, spec.scope, status.* — all the fields that
-//     describe what the CRD is, as opposed to what shape instances take
+//   - spec.versions[].additionalPrinterColumns — drives column hints
+//   - spec.group, spec.names, spec.scope, status.*
 func DropUnstructuredManagedFields(obj any) (any, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
@@ -103,15 +106,7 @@ func DropUnstructuredManagedFields(obj any) (any, error) {
 	}
 
 	unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
-
-	if annotations := u.GetAnnotations(); annotations != nil {
-		delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
-		if len(annotations) == 0 {
-			u.SetAnnotations(nil)
-		} else {
-			u.SetAnnotations(annotations)
-		}
-	}
+	unstructured.RemoveNestedField(u.Object, "metadata", "annotations", lastAppliedAnnotation)
 
 	if u.GetKind() == "CustomResourceDefinition" {
 		// Strip .schema from each version entry. Preserve everything
@@ -138,27 +133,37 @@ func DropUnstructuredManagedFields(obj any) (any, error) {
 	return u, nil
 }
 
-// StripUnstructuredFields removes managedFields and the last-applied-configuration
-// annotation from an unstructured object. Returns a deep copy — the cached object
-// is never mutated. Safe for use by both Radar and skyhook-connector.
+// StripUnstructuredFields removes managedFields and heavy internal annotations
+// from a deep copy of an unstructured object. The dynamic cache keeps
+// last-applied internally for GitOps drift, but outward cache readers should
+// not leak full desired manifests in annotations.
 func StripUnstructuredFields(u *unstructured.Unstructured) *unstructured.Unstructured {
+	return stripUnstructuredFields(u, false)
+}
+
+// StripUnstructuredFieldsPreserveLastApplied removes managedFields from a deep
+// copy while preserving kubectl last-applied. Use only for internal drift
+// computation paths; API/UI/MCP payloads should call StripUnstructuredFields.
+func StripUnstructuredFieldsPreserveLastApplied(u *unstructured.Unstructured) *unstructured.Unstructured {
+	return stripUnstructuredFields(u, true)
+}
+
+func stripUnstructuredFields(u *unstructured.Unstructured, preserveLastApplied bool) *unstructured.Unstructured {
 	if u == nil {
 		return nil
 	}
 
 	cp := u.DeepCopy()
-
 	unstructured.RemoveNestedField(cp.Object, "metadata", "managedFields")
-
-	annotations := cp.GetAnnotations()
-	if annotations != nil {
-		delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
-		if len(annotations) == 0 {
-			cp.SetAnnotations(nil)
-		} else {
-			cp.SetAnnotations(annotations)
+	if !preserveLastApplied {
+		if annotations := cp.GetAnnotations(); annotations != nil {
+			delete(annotations, lastAppliedAnnotation)
+			if len(annotations) == 0 {
+				cp.SetAnnotations(nil)
+			} else {
+				cp.SetAnnotations(annotations)
+			}
 		}
 	}
-
 	return cp
 }

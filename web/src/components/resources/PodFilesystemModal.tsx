@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { X, File, Link2, ChevronRight, AlertTriangle, Loader2, Search, Download, FolderOpen } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import type { FileNode } from '../../types'
 import { formatBytes } from '../../utils/format'
 import { downloadBlob, filterTree } from './file-browser-utils'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { Tooltip } from '../ui/Tooltip'
 
 interface PodFilesystem {
   root: FileNode
@@ -204,12 +206,7 @@ export function PodFilesystemModal({
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4">
           {/* Loading */}
-          {isLoading && (
-            <div className="flex flex-col items-center justify-center h-64">
-              <Loader2 className="w-8 h-8 text-blue-400 animate-spin" />
-              <span className="mt-3 text-theme-text-secondary">Loading files...</span>
-            </div>
-          )}
+          {isLoading && <PaneLoader label="Loading files…" className="h-64" />}
 
           {/* Error */}
           {error && !isLoading && (
@@ -388,11 +385,11 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
       )}
 
       {isDownloadable && (
+        <Tooltip content="Download file" wrapperClassName="ml-1">
         <button
           onClick={handleDownload}
           disabled={downloading}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded ml-1 disabled:opacity-50"
-          title="Download file"
+          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded disabled:opacity-50 disabled:pointer-events-none"
         >
           {downloading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -400,6 +397,7 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
             <Download className="w-3.5 h-3.5" />
           )}
         </button>
+        </Tooltip>
       )}
     </div>
   )

@@ -1,6 +1,7 @@
 package k8score
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"maps"
@@ -12,16 +13,25 @@ import (
 	"sync/atomic"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apiruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/pager"
 )
 
 // ResourceCache provides fast, eventually-consistent access to K8s resources
 // using SharedInformers. It is the shared core used by both Radar and
 // skyhook-connector.
 type ResourceCache struct {
-	factory          informers.SharedInformerFactory
+	factory          informers.SharedInformerFactory            // cluster-wide factory (always present)
+	nsFactories      map[string]informers.SharedInformerFactory // per-namespace factories (for mixed-scope mode)
+	factoryByKind    map[string]informers.SharedInformerFactory // resolved factory per enabled kind — listers MUST go through this
+	pagedInformers   map[string]cache.SharedIndexInformer       // per-kind paginating informers (ListPageSize>0); listers read these instead of the factory's
 	changes          chan ResourceChange
 	stopCh           chan struct{}
 	stopOnce         sync.Once
@@ -43,12 +53,15 @@ type ResourceCache struct {
 
 // InformerSyncStatus tracks the sync state of a single informer.
 type InformerSyncStatus struct {
-	Kind     string `json:"kind"`
-	Key      string `json:"key"`      // e.g. "pods", "deployments"
-	Deferred bool   `json:"deferred"` // true if deferred (non-critical)
-	Synced   bool   `json:"synced"`
-	SyncedAt string `json:"syncedAt,omitempty"` // RFC3339 timestamp
-	Items    int    `json:"items"`              // current item count in lister
+	Kind          string `json:"kind"`
+	Key           string `json:"key"`      // e.g. "pods", "deployments"
+	Deferred      bool   `json:"deferred"` // true if deferred (non-critical)
+	Synced        bool   `json:"synced"`
+	SyncedAt      string `json:"syncedAt,omitempty"`      // RFC3339 timestamp
+	Items         int    `json:"items"`                   // current item count in lister
+	LastError     string `json:"lastError,omitempty"`     // most recent watch error (truncated to keep diagnostics small)
+	LastErrorAt   string `json:"lastErrorAt,omitempty"`   // RFC3339 timestamp of last watch error
+	ForbiddenSeen bool   `json:"forbiddenSeen,omitempty"` // reflector hit 403/401 — probe and reality disagree
 }
 
 // SyncPhase describes the current phase of cache initialization.
@@ -63,37 +76,86 @@ const (
 
 // CacheSyncStatus is the overall sync status exposed for diagnostics.
 type CacheSyncStatus struct {
-	Phase             SyncPhase            `json:"phase"`
-	SyncStarted       string               `json:"syncStarted,omitempty"` // RFC3339
-	ElapsedSec        float64              `json:"elapsedSec"`
-	CriticalTotal     int                  `json:"criticalTotal"`
-	CriticalSynced    int                  `json:"criticalSynced"`
-	DeferredTotal     int                  `json:"deferredTotal"`
-	DeferredSynced    int                  `json:"deferredSynced"`
-	Informers         []InformerSyncStatus `json:"informers"`
-	PendingCritical   []string             `json:"pendingCritical,omitempty"`   // kinds not yet synced
-	PendingDeferred   []string             `json:"pendingDeferred,omitempty"`
-	PromotedKinds     []string             `json:"promotedKinds,omitempty"`    // critical informers that timed out
+	Phase           SyncPhase            `json:"phase"`
+	SyncStarted     string               `json:"syncStarted,omitempty"` // RFC3339
+	ElapsedSec      float64              `json:"elapsedSec"`
+	CriticalTotal   int                  `json:"criticalTotal"`
+	CriticalSynced  int                  `json:"criticalSynced"`
+	DeferredTotal   int                  `json:"deferredTotal"`
+	DeferredSynced  int                  `json:"deferredSynced"`
+	Informers       []InformerSyncStatus `json:"informers"`
+	PendingCritical []string             `json:"pendingCritical,omitempty"` // kinds not yet synced
+	PendingDeferred []string             `json:"pendingDeferred,omitempty"`
+	PromotedKinds   []string             `json:"promotedKinds,omitempty"` // critical informers that timed out
 }
 
 type informerSetup struct {
-	key     string
-	kind    string
-	setup   func() cache.SharedIndexInformer
-	isEvent bool
+	key             string
+	kind            string
+	setup           func(factory informers.SharedInformerFactory) cache.SharedIndexInformer
+	isEvent         bool
+	isClusterScoped bool // true for nodes, namespaces, PV, storageclasses, ingressclasses
+	// pagedSetup, when non-nil and CacheConfig.ListPageSize > 0, builds a
+	// paginating informer for this kind instead of the factory one. Set only
+	// for high-cardinality kinds whose single-shot initial LIST can fail on
+	// very large clusters.
+	pagedSetup func(client kubernetes.Interface, namespace string, pageSize int64) cache.SharedIndexInformer
+}
+
+// newPagedInformer builds a SharedIndexInformer whose initial LIST is fetched in
+// pages via a consistent (resourceVersion="") read rather than one unpaginated
+// response. The watch is unchanged. On clusters without WatchList streaming, a
+// single giant LIST of a high-cardinality kind can exceed the response-read
+// deadline or spike memory; paging bounds each request. When WatchList IS
+// available, client-go streams the initial state and never calls this ListFunc.
+func newPagedInformer(
+	example apiruntime.Object,
+	pageSize int64,
+	listFn pager.ListPageFunc,
+	watchFn func(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error),
+) cache.SharedIndexInformer {
+	lw := &cache.ListWatch{
+		ListWithContextFunc: func(ctx context.Context, _ metav1.ListOptions) (apiruntime.Object, error) {
+			p := pager.New(listFn)
+			p.PageSize = pageSize
+			// resourceVersion="" forces a consistent read the apiserver will
+			// paginate — RV=0 (watch-cache) reads ignore limit. We deliberately
+			// override the reflector's default RV here.
+			obj, _, err := p.List(ctx, metav1.ListOptions{ResourceVersion: ""})
+			return obj, err
+		},
+		WatchFuncWithContext: watchFn,
+	}
+	inf := cache.NewSharedIndexInformer(lw, example, 0, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	// Factory informers get DropManagedFields via WithTransform; these are built
+	// outside the factory, so apply the same transform directly. SetTransform
+	// only errors once started, which hasn't happened yet.
+	_ = inf.SetTransform(DropManagedFields)
+	return inf
 }
 
 // NewResourceCache creates and starts a ResourceCache from the given config.
 // Startup has three tiers:
-//   - Critical informers block until synced (or SyncTimeout, then promoted to deferred)
-//   - Deferred informers sync in the background after critical completes
-//   - Background informers (e.g. Events) sync independently on their own goroutine
+//   - Critical informers block until synced. With PatienceWindow + MinimalSet,
+//     the cache returns as soon as the minimal set is ready *after* the
+//     patience window elapses (rest of critical promoted to deferred). With
+//     SyncTimeout, the cache returns at most after the timeout.
+//   - Deferred informers sync in the background after critical completes.
+//   - Background informers (e.g. Events) sync independently on their own goroutine.
 func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	if cfg.Client == nil {
 		return nil, fmt.Errorf("CacheConfig.Client must not be nil")
 	}
 	if cfg.NamespaceScoped && cfg.Namespace == "" {
 		return nil, fmt.Errorf("CacheConfig.Namespace must be set when NamespaceScoped is true")
+	}
+	for k, scope := range cfg.ResourceScopes {
+		if scope.Enabled && scope.Namespace == "" {
+			continue
+		}
+		if scope.Enabled && scope.Namespace != "" && k == "" {
+			return nil, fmt.Errorf("CacheConfig.ResourceScopes contains entry with empty key")
+		}
 	}
 
 	channelSize := cfg.ChannelSize
@@ -113,35 +175,92 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 
 	// Clone caller-owned maps to prevent mutation after construction.
 	cfg.ResourceTypes = maps.Clone(cfg.ResourceTypes)
+	cfg.ResourceScopes = maps.Clone(cfg.ResourceScopes)
 	cfg.DeferredTypes = maps.Clone(cfg.DeferredTypes)
+	cfg.MinimalSet = maps.Clone(cfg.MinimalSet)
+
+	// Derive a per-kind scope view that captures both modes:
+	//   - ResourceScopes (when set) is authoritative.
+	//   - Otherwise fall back to ResourceTypes + NamespaceScoped + Namespace.
+	// This single map drives both the enabled set and which factory each
+	// informer is wired into.
+	scopes := make(map[string]ResourceScope)
+	if cfg.ResourceScopes != nil {
+		for k, s := range cfg.ResourceScopes {
+			if s.Enabled {
+				scopes[k] = s
+			}
+		}
+	} else {
+		ns := ""
+		if cfg.NamespaceScoped {
+			ns = cfg.Namespace
+		}
+		for k, ok := range cfg.ResourceTypes {
+			if ok {
+				scopes[k] = ResourceScope{Enabled: true, Namespace: ns}
+			}
+		}
+	}
 
 	stopCh := make(chan struct{})
 	changes := make(chan ResourceChange, channelSize)
 
-	// Build factory options
-	factoryOpts := []informers.SharedInformerOption{
-		informers.WithTransform(DropManagedFields),
-	}
-	if cfg.NamespaceScoped {
-		factoryOpts = append(factoryOpts, informers.WithNamespace(cfg.Namespace))
-		stdlog.Printf("Using namespace-scoped informers for namespace %q", cfg.Namespace)
-	}
-
-	// Factory serves as informer registry and shutdown coordinator.
-	// We don't call factory.Start() — informers are Run() individually
-	// to stagger critical vs deferred starts. Shutdown() still works
-	// because each informer's factory getter (e.g. factory.Core().V1().Pods().Informer())
-	// registers it internally when called in the setup loop below.
-	factory := informers.NewSharedInformerFactoryWithOptions(
+	// Build one factory per unique scope. The cluster-wide factory is
+	// always created so cluster-scoped kinds (nodes, namespaces, PV…)
+	// have a home; namespace-scoped factories are created on demand.
+	clusterFactory := informers.NewSharedInformerFactoryWithOptions(
 		cfg.Client,
 		0, // no resync — updates come via watch
-		factoryOpts...,
+		informers.WithTransform(DropManagedFields),
 	)
+	nsFactories := make(map[string]informers.SharedInformerFactory)
+	for _, s := range scopes {
+		if s.Namespace == "" {
+			continue
+		}
+		if _, ok := nsFactories[s.Namespace]; ok {
+			continue
+		}
+		nsFactories[s.Namespace] = informers.NewSharedInformerFactoryWithOptions(
+			cfg.Client,
+			0,
+			informers.WithTransform(DropManagedFields),
+			informers.WithNamespace(s.Namespace),
+		)
+	}
+	if len(nsFactories) > 0 {
+		var nsList []string
+		for ns := range nsFactories {
+			nsList = append(nsList, ns)
+		}
+		sort.Strings(nsList)
+		// %q on the slice quotes each element, neutering newlines / control
+		// characters in caller-supplied namespace strings before they hit logs.
+		stdlog.Printf("Using namespace-scoped informers for namespace(s): %q", nsList)
+	}
+
+	// pickFactory routes each informer to the factory matching its scope.
+	// Cluster-scoped kinds always use the cluster-wide factory regardless
+	// of caller intent — namespace-scoping them would 404.
+	pickFactory := func(s informerSetup) informers.SharedInformerFactory {
+		scope, ok := scopes[s.key]
+		if !ok || scope.Namespace == "" || s.isClusterScoped {
+			return clusterFactory
+		}
+		return nsFactories[scope.Namespace]
+	}
 
 	// Table-driven informer setup — only create informers for enabled types
-	setups := buildInformerSetups(factory)
+	setups := buildInformerSetups()
 
-	enabled := cfg.ResourceTypes
+	// enabledMap is the boolean projection over `scopes` exposed via
+	// GetEnabledResources for callers that only need "is this kind on?"
+	// without the per-kind scope detail.
+	enabled := make(map[string]bool, len(scopes))
+	for k := range scopes {
+		enabled[k] = true
+	}
 	deferredTypes := cfg.DeferredTypes
 	if deferredTypes == nil {
 		deferredTypes = map[string]bool{}
@@ -155,7 +274,10 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	enabledCount := 0
 
 	rc := &ResourceCache{
-		factory:          factory,
+		factory:          clusterFactory,
+		nsFactories:      nsFactories,
+		factoryByKind:    map[string]informers.SharedInformerFactory{},
+		pagedInformers:   map[string]cache.SharedIndexInformer{},
 		changes:          changes,
 		stopCh:           stopCh,
 		enabledResources: enabled,
@@ -179,7 +301,20 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			continue
 		}
 		enabledCount++
-		inf := s.setup()
+		factory := pickFactory(s)
+		rc.factoryByKind[s.key] = factory
+
+		var inf cache.SharedIndexInformer
+		if cfg.ListPageSize > 0 && s.pagedSetup != nil {
+			// scopes[s.key].Namespace is "" for cluster-wide access or the
+			// single namespace a restricted user is scoped to.
+			inf = s.pagedSetup(cfg.Client, scopes[s.key].Namespace, cfg.ListPageSize)
+			// Listers must read this informer's store, not the factory's
+			// (the factory's informer for this kind is never started).
+			rc.pagedInformers[s.key] = inf
+		} else {
+			inf = s.setup(factory)
+		}
 
 		var err error
 		if s.isEvent {
@@ -190,6 +325,23 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		if err != nil {
 			close(stopCh)
 			return nil, fmt.Errorf("failed to register %s event handler: %w", s.kind, err)
+		}
+
+		// Wire a WatchErrorHandler so reflector-level failures (most
+		// notably 403/Unauthorized that the probe didn't predict — e.g.
+		// the token expired between probe and watch, or RBAC changed
+		// mid-session) are visible in diagnostics. The reflector keeps
+		// retrying with exponential backoff regardless; this just makes
+		// the failure observable instead of silent.
+		idx := len(allEntries) // status index for this informer
+		key := s.key
+		kind := s.kind
+		if hErr := inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+			rc.recordWatchError(idx, key, kind, err)
+		}); hErr != nil {
+			// SetWatchErrorHandler only errors after the informer has
+			// started, which can't happen here — log and continue.
+			stdlog.Printf("Warning: failed to set watch error handler for %s: %v", s.kind, hErr)
 		}
 
 		isDeferred := deferredTypes[s.key]
@@ -273,12 +425,65 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		}()
 	}
 
-	// Phase 1: Wait for critical informers with periodic progress logging.
-	// Log every 5s so stuck syncs are visible in logs (previously silent).
+	// Phase 1: Wait for critical informers.
+	//
+	// Two modes (combinable):
+	//   - Patience+MinimalSet: wait for ALL critical until the patience
+	//     window elapses. Once elapsed, return as soon as the minimal set
+	//     is ready; promote the rest of critical to deferred.
+	//   - SyncTimeout: hard upper bound. When it fires, promote everything
+	//     still pending and return. Acts as a backstop on the minimal-set
+	//     path so a permanently-stuck informer doesn't trap the caller
+	//     forever (caller still gets to render with whatever synced).
+	useMinimalSet := cfg.PatienceWindow > 0 && len(cfg.MinimalSet) > 0
 	timedOut := false
+	patienceElapsed := false
 	if len(criticalSyncFuncs) > 0 {
-		progressTicker := time.NewTicker(5 * time.Second)
+		// Build the index of "must-sync" entries for the minimal-set check.
+		// Filter to entries that are critical AND in MinimalSet (deferred
+		// types or unknown keys don't gate first paint).
+		var minimalEntries []informerEntry
+		if useMinimalSet {
+			knownCritical := make(map[string]bool, len(allEntries))
+			for _, e := range allEntries {
+				if !e.deferred {
+					knownCritical[e.key] = true
+				}
+				if e.deferred {
+					continue
+				}
+				if cfg.MinimalSet[e.key] {
+					minimalEntries = append(minimalEntries, e)
+				}
+			}
+			// Validate MinimalSet keys: typos or kinds not enabled produce a
+			// silently-empty minimalEntries → cache returns ~PatienceWindow
+			// later with nothing meaningful synced. Surface that loud.
+			var unknown []string
+			for k := range cfg.MinimalSet {
+				if !knownCritical[k] {
+					unknown = append(unknown, k)
+				}
+			}
+			if len(unknown) > 0 {
+				sort.Strings(unknown)
+				stdlog.Printf("WARNING: MinimalSet keys not registered as critical informers (typo or RBAC-denied?): %s",
+					strings.Join(unknown, ", "))
+			}
+			if len(minimalEntries) == 0 {
+				stdlog.Printf("WARNING: MinimalSet matched no enabled critical informers; first paint will fire as soon as PatienceWindow elapses regardless of sync state")
+			}
+		}
+
+		progressTicker := time.NewTicker(1 * time.Second)
 		defer progressTicker.Stop()
+
+		var patienceCh <-chan time.Time
+		if useMinimalSet {
+			patienceTimer := time.NewTimer(cfg.PatienceWindow)
+			defer patienceTimer.Stop()
+			patienceCh = patienceTimer.C
+		}
 
 		var deadlineCh <-chan time.Time
 		if cfg.SyncTimeout > 0 {
@@ -287,8 +492,45 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			deadlineCh = deadline.C
 		}
 
+		// emitProgress reports current sync progress to the application
+		// callback (typically wired to the connection's progressMessage).
+		emitProgress := func(minimalReady bool) {
+			if cfg.SyncProgress == nil {
+				return
+			}
+			rc.informerMu.RLock()
+			var synced, total int
+			for _, s := range rc.informerStatuses {
+				if s.Deferred {
+					continue
+				}
+				total++
+				if s.Synced {
+					synced++
+				}
+			}
+			rc.informerMu.RUnlock()
+			cfg.SyncProgress(synced, total, minimalReady)
+		}
+
+		minimalReady := func() bool {
+			for _, e := range minimalEntries {
+				if !e.synced() {
+					return false
+				}
+			}
+			return true
+		}
+
+		emitProgress(false)
+
+		// Set of minimal-set keys for the post-patience log discrimination.
+		minimalKindSet := make(map[string]bool, len(minimalEntries))
+		for _, e := range minimalEntries {
+			minimalKindSet[e.kind] = true
+		}
+
 		for {
-			// Check if all critical informers are synced
 			allSynced := true
 			for _, fn := range criticalSyncFuncs {
 				if !fn() {
@@ -300,17 +542,22 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				break
 			}
 
-			// Wait for either: stopCh, deadline, or next progress tick
+			if patienceElapsed && useMinimalSet && minimalReady() {
+				break
+			}
+
 			select {
 			case <-stopCh:
 				return nil, fmt.Errorf("failed to sync critical resource caches")
+			case <-patienceCh:
+				patienceElapsed = true
+				patienceCh = nil // disable further receives on the drained timer channel
 			case <-deadlineCh:
 				timedOut = true
 			case <-progressTicker.C:
-				// Log which informers are still pending, with item counts
 				counts := rc.GetKindObjectCounts()
 				rc.informerMu.RLock()
-				var synced, pendingParts []string
+				var synced, pendingParts, minimalPending []string
 				for _, s := range rc.informerStatuses {
 					if s.Deferred {
 						continue
@@ -320,11 +567,25 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 					} else {
 						n := counts[s.Kind]
 						pendingParts = append(pendingParts, fmt.Sprintf("%s(%d)", s.Kind, n))
+						if minimalKindSet[s.Kind] {
+							minimalPending = append(minimalPending, s.Kind)
+						}
 					}
 				}
 				rc.informerMu.RUnlock()
-				stdlog.Printf("Critical sync progress: %d/%d synced (%.0fs elapsed) — pending: %s",
-					len(synced), len(synced)+len(pendingParts), time.Since(syncStart).Seconds(), strings.Join(pendingParts, ", "))
+				if len(pendingParts) > 0 {
+					// After patience elapses, the actual blocker for first paint
+					// is the minimal-set subset, not all of critical — surface it
+					// distinctly so operators know which kind is holding render.
+					if patienceElapsed && len(minimalPending) > 0 {
+						stdlog.Printf("First-paint blocked: %d/%d minimal-set kinds still syncing (%.0fs elapsed) — pending: %s",
+							len(minimalPending), len(minimalEntries), time.Since(syncStart).Seconds(), strings.Join(minimalPending, ", "))
+					} else {
+						stdlog.Printf("Critical sync progress: %d/%d synced (%.0fs elapsed) — pending: %s",
+							len(synced), len(synced)+len(pendingParts), time.Since(syncStart).Seconds(), strings.Join(pendingParts, ", "))
+					}
+				}
+				emitProgress(useMinimalSet && patienceElapsed && minimalReady())
 			default:
 				time.Sleep(100 * time.Millisecond)
 			}
@@ -334,32 +595,60 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		}
 	}
 
-	if timedOut {
-		// Promote unsynced critical informers to deferred so they continue
-		// syncing in the background. The UI renders with partial data.
-		var promoted []string
-		rc.informerMu.Lock()
-		for i, e := range allEntries {
-			if e.deferred || e.synced() {
-				continue
-			}
-			promoted = append(promoted, e.kind)
-			// Add to deferred tracking (the informer is already running from Phase 1)
-			deferredSyncFuncs = append(deferredSyncFuncs, e.synced)
-			deferredKeys = append(deferredKeys, e.key)
-			// Mark as deferred in diagnostics
-			rc.informerStatuses[i].Deferred = true
+	// Reclassify any critical informer still pending as deferred so the
+	// cache can return. No-op on the all-synced path.
+	var promoted []string
+	rc.informerMu.Lock()
+	for i, e := range allEntries {
+		if e.deferred || e.synced() {
+			continue
 		}
-		rc.informerMu.Unlock()
+		promoted = append(promoted, e.kind)
+		deferredSyncFuncs = append(deferredSyncFuncs, e.synced)
+		deferredKeys = append(deferredKeys, e.key)
+		rc.informerStatuses[i].Deferred = true
+	}
+	rc.informerMu.Unlock()
+
+	switch {
+	case timedOut:
 		stdlog.Printf("WARNING: Critical sync timed out after %v — promoting %d informers to deferred: %s",
 			cfg.SyncTimeout, len(promoted), strings.Join(promoted, ", "))
 		stdlog.Printf("UI will render with partial data; promoted informers continue syncing in background")
 		logf("    Phase 1 sync TIMED OUT (%d critical, %d promoted to deferred): %v",
 			len(criticalSyncFuncs), len(promoted), time.Since(syncStart))
 		rc.promotedKinds = promoted
-	} else {
+	case patienceElapsed && len(promoted) > 0:
+		stdlog.Printf("First-paint ready after %v: minimal set synced; %d slower informers continue in background: %s",
+			time.Since(syncStart), len(promoted), strings.Join(promoted, ", "))
+		logf("    Phase 1 minimal-set sync (%d/%d critical, %d still loading): %v",
+			len(criticalSyncFuncs)-len(promoted), len(criticalSyncFuncs), len(promoted), time.Since(syncStart))
+		rc.promotedKinds = promoted
+	default:
 		logf("    Phase 1 sync (%d critical informers): %v", len(criticalSyncFuncs), time.Since(syncStart))
 		stdlog.Printf("Critical resource caches synced in %v — UI can render", time.Since(syncStart))
+	}
+
+	if cfg.SyncProgress != nil {
+		// Count via e.synced() (same source as the Phase 1 loop) rather than
+		// informerStatuses[].Synced, which is set asynchronously by per-informer
+		// tracking goroutines and can lag by ~10ms after HasSynced() flips. On
+		// the all-synced happy path the lag would otherwise produce synced<total
+		// here even though we just exited the loop on allSynced — surfaced to
+		// callers as a misleading "showing partial" final message.
+		rc.informerMu.RLock()
+		var synced, total int
+		for i, e := range allEntries {
+			if rc.informerStatuses[i].Deferred {
+				continue
+			}
+			total++
+			if e.synced() {
+				synced++
+			}
+		}
+		rc.informerMu.RUnlock()
+		cfg.SyncProgress(synced, total, true)
 	}
 
 	// Log per-type resource counts for startup diagnostics
@@ -522,34 +811,136 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	return rc, nil
 }
 
-// buildInformerSetups returns the table-driven informer setup list.
-func buildInformerSetups(factory informers.SharedInformerFactory) []informerSetup {
+// InformerResourceKeys returns the resource-type keys that have a typed
+// informer setup in this package. Read-only introspection for cross-package
+// alignment tests (e.g. internal/k8s asserting that every capability field
+// has either a typed informer here or a documented dynamic-cache exception).
+// Not intended as a stable API for application use.
+func InformerResourceKeys() []string {
+	setups := buildInformerSetups()
+	keys := make([]string, 0, len(setups))
+	for _, s := range setups {
+		keys = append(keys, s.key)
+	}
+	return keys
+}
+
+// buildInformerSetups returns the table-driven informer setup list. Each
+// entry's setup func takes the factory it should be created from — caller
+// picks the cluster-wide or a namespace-scoped factory based on the kind's
+// resolved access scope.
+func buildInformerSetups() []informerSetup {
+	type entry = informerSetup
+	mk := func(key, kind string, isEvent, clusterScoped bool, fn func(f informers.SharedInformerFactory) cache.SharedIndexInformer) entry {
+		return entry{key: key, kind: kind, setup: fn, isEvent: isEvent, isClusterScoped: clusterScoped}
+	}
+	// withPaging marks a high-cardinality kind as paginatable: when
+	// CacheConfig.ListPageSize > 0, its initial LIST is fetched in pages.
+	withPaging := func(e entry, paged func(client kubernetes.Interface, namespace string, pageSize int64) cache.SharedIndexInformer) entry {
+		e.pagedSetup = paged
+		return e
+	}
 	return []informerSetup{
-		{Services, "Service", func() cache.SharedIndexInformer { return factory.Core().V1().Services().Informer() }, false},
-		{Pods, "Pod", func() cache.SharedIndexInformer { return factory.Core().V1().Pods().Informer() }, false},
-		{Nodes, "Node", func() cache.SharedIndexInformer { return factory.Core().V1().Nodes().Informer() }, false},
-		{Namespaces, "Namespace", func() cache.SharedIndexInformer { return factory.Core().V1().Namespaces().Informer() }, false},
-		{ConfigMaps, "ConfigMap", func() cache.SharedIndexInformer { return factory.Core().V1().ConfigMaps().Informer() }, false},
-		{Secrets, "Secret", func() cache.SharedIndexInformer { return factory.Core().V1().Secrets().Informer() }, false},
-		{Events, "Event", func() cache.SharedIndexInformer { return factory.Core().V1().Events().Informer() }, true},
-		{PersistentVolumeClaims, "PersistentVolumeClaim", func() cache.SharedIndexInformer { return factory.Core().V1().PersistentVolumeClaims().Informer() }, false},
-		{PersistentVolumes, "PersistentVolume", func() cache.SharedIndexInformer { return factory.Core().V1().PersistentVolumes().Informer() }, false},
-		{Deployments, "Deployment", func() cache.SharedIndexInformer { return factory.Apps().V1().Deployments().Informer() }, false},
-		{DaemonSets, "DaemonSet", func() cache.SharedIndexInformer { return factory.Apps().V1().DaemonSets().Informer() }, false},
-		{StatefulSets, "StatefulSet", func() cache.SharedIndexInformer { return factory.Apps().V1().StatefulSets().Informer() }, false},
-		{ReplicaSets, "ReplicaSet", func() cache.SharedIndexInformer { return factory.Apps().V1().ReplicaSets().Informer() }, false},
-		{Ingresses, "Ingress", func() cache.SharedIndexInformer { return factory.Networking().V1().Ingresses().Informer() }, false},
-		{IngressClasses, "IngressClass", func() cache.SharedIndexInformer { return factory.Networking().V1().IngressClasses().Informer() }, false},
-		{Jobs, "Job", func() cache.SharedIndexInformer { return factory.Batch().V1().Jobs().Informer() }, false},
-		{CronJobs, "CronJob", func() cache.SharedIndexInformer { return factory.Batch().V1().CronJobs().Informer() }, false},
-		{HorizontalPodAutoscalers, "HorizontalPodAutoscaler", func() cache.SharedIndexInformer {
-			return factory.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
-		}, false},
-		{StorageClasses, "StorageClass", func() cache.SharedIndexInformer { return factory.Storage().V1().StorageClasses().Informer() }, false},
-		{PodDisruptionBudgets, "PodDisruptionBudget", func() cache.SharedIndexInformer { return factory.Policy().V1().PodDisruptionBudgets().Informer() }, false},
-		{NetworkPolicies, "NetworkPolicy", func() cache.SharedIndexInformer { return factory.Networking().V1().NetworkPolicies().Informer() }, false},
-		{ServiceAccounts, "ServiceAccount", func() cache.SharedIndexInformer { return factory.Core().V1().ServiceAccounts().Informer() }, false},
-		{LimitRanges, "LimitRange", func() cache.SharedIndexInformer { return factory.Core().V1().LimitRanges().Informer() }, false},
+		mk(Services, "Service", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Services().Informer()
+		}),
+		withPaging(mk(Pods, "Pod", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Pods().Informer()
+		}), func(client kubernetes.Interface, ns string, pageSize int64) cache.SharedIndexInformer {
+			return newPagedInformer(&corev1.Pod{}, pageSize,
+				func(ctx context.Context, o metav1.ListOptions) (apiruntime.Object, error) {
+					return client.CoreV1().Pods(ns).List(ctx, o)
+				},
+				func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+					return client.CoreV1().Pods(ns).Watch(ctx, o)
+				})
+		}),
+		mk(Nodes, "Node", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Nodes().Informer()
+		}),
+		mk(Namespaces, "Namespace", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Namespaces().Informer()
+		}),
+		mk(ConfigMaps, "ConfigMap", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().ConfigMaps().Informer()
+		}),
+		mk(Secrets, "Secret", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Secrets().Informer()
+		}),
+		mk(Events, "Event", true, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Events().Informer()
+		}),
+		mk(PersistentVolumeClaims, "PersistentVolumeClaim", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().PersistentVolumeClaims().Informer()
+		}),
+		mk(PersistentVolumes, "PersistentVolume", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().PersistentVolumes().Informer()
+		}),
+		mk(Deployments, "Deployment", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Apps().V1().Deployments().Informer()
+		}),
+		mk(DaemonSets, "DaemonSet", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Apps().V1().DaemonSets().Informer()
+		}),
+		mk(StatefulSets, "StatefulSet", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Apps().V1().StatefulSets().Informer()
+		}),
+		withPaging(mk(ReplicaSets, "ReplicaSet", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Apps().V1().ReplicaSets().Informer()
+		}), func(client kubernetes.Interface, ns string, pageSize int64) cache.SharedIndexInformer {
+			return newPagedInformer(&appsv1.ReplicaSet{}, pageSize,
+				func(ctx context.Context, o metav1.ListOptions) (apiruntime.Object, error) {
+					return client.AppsV1().ReplicaSets(ns).List(ctx, o)
+				},
+				func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+					return client.AppsV1().ReplicaSets(ns).Watch(ctx, o)
+				})
+		}),
+		mk(Ingresses, "Ingress", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Networking().V1().Ingresses().Informer()
+		}),
+		mk(IngressClasses, "IngressClass", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Networking().V1().IngressClasses().Informer()
+		}),
+		mk(Jobs, "Job", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Batch().V1().Jobs().Informer()
+		}),
+		mk(CronJobs, "CronJob", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Batch().V1().CronJobs().Informer()
+		}),
+		mk(HorizontalPodAutoscalers, "HorizontalPodAutoscaler", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
+		}),
+		mk(StorageClasses, "StorageClass", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Storage().V1().StorageClasses().Informer()
+		}),
+		mk(PodDisruptionBudgets, "PodDisruptionBudget", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Policy().V1().PodDisruptionBudgets().Informer()
+		}),
+		mk(NetworkPolicies, "NetworkPolicy", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Networking().V1().NetworkPolicies().Informer()
+		}),
+		mk(ServiceAccounts, "ServiceAccount", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().ServiceAccounts().Informer()
+		}),
+		mk(Roles, "Role", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Rbac().V1().Roles().Informer()
+		}),
+		mk(ClusterRoles, "ClusterRole", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Rbac().V1().ClusterRoles().Informer()
+		}),
+		mk(RoleBindings, "RoleBinding", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Rbac().V1().RoleBindings().Informer()
+		}),
+		mk(ClusterRoleBindings, "ClusterRoleBinding", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Rbac().V1().ClusterRoleBindings().Informer()
+		}),
+		mk(LimitRanges, "LimitRange", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().LimitRanges().Informer()
+		}),
+		mk(ResourceQuotas, "ResourceQuota", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().ResourceQuotas().Informer()
+		}),
 	}
 }
 
@@ -720,6 +1111,58 @@ func (rc *ResourceCache) safeCallback(name string, fn func()) {
 	fn()
 }
 
+// recordWatchError is invoked from each informer's WatchErrorHandler when its
+// reflector drops its connection. It updates the per-informer status so the
+// failure surfaces in diagnostics, and logs the first 403/401 — these signal
+// that the access probe and the actual list/watch disagree (token rotation,
+// RBAC change mid-session, or webhook authorizer flakiness).
+//
+// The reflector continues retrying with exponential backoff regardless; this
+// hook just makes the failure observable. Cap the recorded error string to
+// keep the diagnostics payload small.
+func (rc *ResourceCache) recordWatchError(idx int, key, kind string, err error) {
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	const maxLen = 256
+	if len(msg) > maxLen {
+		msg = msg[:maxLen] + "…"
+	}
+	forbidden := isWatchForbiddenErr(err)
+
+	rc.informerMu.Lock()
+	if idx >= 0 && idx < len(rc.informerStatuses) {
+		s := &rc.informerStatuses[idx]
+		firstForbidden := forbidden && !s.ForbiddenSeen
+		s.LastError = msg
+		s.LastErrorAt = time.Now().Format(time.RFC3339)
+		if forbidden {
+			s.ForbiddenSeen = true
+		}
+		if firstForbidden {
+			rc.stdlog.Printf("WARNING: informer %s saw 403/Unauthorized — probe and reality disagree (key=%s): %v",
+				kind, key, err)
+		}
+	}
+	rc.informerMu.Unlock()
+}
+
+// isWatchForbiddenErr returns true when err signals 403/401 from the
+// apiserver. The reflector wraps the typed error in an unstructured
+// status error, so apierrors helpers (which need an *apierrors.StatusError)
+// can miss it — fall back to substring matching when type-detection fails.
+//
+// Kept here (rather than reusing the apierrors-aware helper in capabilities.go)
+// because pkg/k8score must not import internal/.
+func isWatchForbiddenErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "forbidden") || strings.Contains(msg, "unauthorized")
+}
+
 // Stop initiates a non-blocking shutdown of the cache.
 func (rc *ResourceCache) Stop() {
 	if rc == nil {
@@ -732,6 +1175,9 @@ func (rc *ResourceCache) Stop() {
 			done := make(chan struct{})
 			go func() {
 				rc.factory.Shutdown()
+				for _, f := range rc.nsFactories {
+					f.Shutdown()
+				}
 				close(done)
 			}()
 			select {
@@ -752,6 +1198,19 @@ func (rc *ResourceCache) Changes() <-chan ResourceChange {
 	return rc.changes
 }
 
+// IsKindClusterWide reports whether the informer for the given resource (plural
+// lowercase name, e.g. "services") is enabled and watches ALL namespaces. When
+// true, the lister's contents are authoritative cluster-wide; when false
+// (disabled or namespace-scoped fallback), reads only cover a subset of
+// namespaces, so callers must not infer cluster-wide absence from a miss.
+func (rc *ResourceCache) IsKindClusterWide(resource string) bool {
+	if rc == nil {
+		return false
+	}
+	s, ok := rc.config.ResourceScopes[resource]
+	return ok && s.Enabled && s.Namespace == ""
+}
+
 // ChangesRaw returns the bidirectional channel for internal use.
 func (rc *ResourceCache) ChangesRaw() chan ResourceChange {
 	if rc == nil {
@@ -761,12 +1220,40 @@ func (rc *ResourceCache) ChangesRaw() chan ResourceChange {
 }
 
 // PromotedKinds returns the list of resource kinds that were promoted from
-// critical to deferred due to SyncTimeout. Empty if sync completed normally.
+// critical to deferred at first paint. Empty if sync completed normally.
+// This is a snapshot from cache construction and does NOT shrink as
+// promoted informers eventually sync — use PendingPromotedKinds for the
+// live "still loading" view (e.g. for UI banners).
 func (rc *ResourceCache) PromotedKinds() []string {
 	if rc == nil {
 		return nil
 	}
 	return rc.promotedKinds
+}
+
+// PendingPromotedKinds returns the subset of PromotedKinds whose informers
+// have not yet completed their initial sync. Drains to empty as the
+// background informers finish, so a UI bound to this method shows a
+// truthful "still loading" indicator.
+func (rc *ResourceCache) PendingPromotedKinds() []string {
+	if rc == nil || len(rc.promotedKinds) == 0 {
+		return nil
+	}
+	rc.informerMu.RLock()
+	defer rc.informerMu.RUnlock()
+	syncedByKind := make(map[string]bool, len(rc.informerStatuses))
+	for _, s := range rc.informerStatuses {
+		if s.Synced {
+			syncedByKind[s.Kind] = true
+		}
+	}
+	var pending []string
+	for _, k := range rc.promotedKinds {
+		if !syncedByKind[k] {
+			pending = append(pending, k)
+		}
+	}
+	return pending
 }
 
 // IsSyncComplete returns true after the initial critical informer sync.
@@ -928,7 +1415,12 @@ var allKindListers = []kindLister{
 	{"PodDisruptionBudget", "policy", func(rc *ResourceCache) any { return rc.PodDisruptionBudgets() }},
 	{"NetworkPolicy", "networking.k8s.io", func(rc *ResourceCache) any { return rc.NetworkPolicies() }},
 	{"ServiceAccount", "", func(rc *ResourceCache) any { return rc.ServiceAccounts() }},
+	{"Role", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.Roles() }},
+	{"ClusterRole", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.ClusterRoles() }},
+	{"RoleBinding", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.RoleBindings() }},
+	{"ClusterRoleBinding", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.ClusterRoleBindings() }},
 	{"LimitRange", "", func(rc *ResourceCache) any { return rc.LimitRanges() }},
+	{"ResourceQuota", "", func(rc *ResourceCache) any { return rc.ResourceQuotas() }},
 }
 
 // AllKindListers returns the table of all resource kinds with their group and lister.

@@ -1,22 +1,12 @@
 import { Globe, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, KeyValueBadgeList } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import {
   getIstioGatewayStatus,
   getIstioGatewayServers,
   getIstioGatewaySelector,
 } from '../resource-utils-istio'
-
-const protocolColors: Record<string, string> = {
-  HTTP: 'bg-blue-500/20 text-blue-400',
-  HTTPS: 'bg-green-500/20 text-green-400',
-  HTTP2: 'bg-blue-500/20 text-blue-400',
-  GRPC: 'bg-purple-500/20 text-purple-400',
-  TCP: 'bg-orange-500/20 text-orange-400',
-  TLS: 'bg-green-500/20 text-green-400',
-  MONGO: 'bg-emerald-500/20 text-emerald-400',
-  MYSQL: 'bg-cyan-500/20 text-cyan-400',
-}
 
 interface IstioGatewayRendererProps {
   data: any
@@ -71,12 +61,9 @@ export function IstioGatewayRenderer({ data }: IstioGatewayRendererProps) {
                       <span className="text-sm font-medium text-theme-text-primary">
                         {server.port.name || `Port ${server.port.number}`}
                       </span>
-                      <span className={clsx(
-                        'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                        protocolColors[protocol] || 'bg-gray-500/20 text-gray-400'
-                      )}>
+                      <Badge protocol={protocol} size="sm">
                         {protocol}:{server.port.number}
-                      </span>
+                      </Badge>
                     </div>
                   </div>
 
@@ -92,16 +79,23 @@ export function IstioGatewayRenderer({ data }: IstioGatewayRendererProps) {
                       <>
                         <div>
                           <span className="text-theme-text-tertiary">TLS Mode: </span>
-                          <span className={clsx(
-                            'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                            server.tls.mode === 'SIMPLE' || server.tls.mode === 'MUTUAL'
-                              ? 'bg-green-500/20 text-green-400'
-                              : server.tls.mode === 'PASSTHROUGH'
-                                ? 'bg-blue-500/20 text-blue-400'
-                                : 'bg-gray-500/20 text-gray-400'
-                          )}>
+                          <Badge
+                            // Every TLS server row already shows a teal HTTPS/TLS protocol pill, so
+                            // a teal mode badge would collide. PASSTHROUGH uses `note` (the mode where
+                            // the gateway does not terminate TLS — the one worth flagging) to stay clear.
+                            tone={
+                              server.tls.mode === 'SIMPLE'
+                                ? 'accent1'
+                                : server.tls.mode === 'MUTUAL' || server.tls.mode === 'ISTIO_MUTUAL'
+                                  ? 'accent2'
+                                  : server.tls.mode === 'PASSTHROUGH' || server.tls.mode === 'AUTO_PASSTHROUGH'
+                                    ? 'note'
+                                    : 'structural'
+                            }
+                            size="sm"
+                          >
                             {server.tls.mode || 'SIMPLE'}
-                          </span>
+                          </Badge>
                         </div>
                         {server.tls.credentialName && (
                           <div>

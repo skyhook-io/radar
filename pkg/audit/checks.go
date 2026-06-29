@@ -3,13 +3,18 @@ package audit
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 // RunChecks runs all best-practice checks against the provided resources
@@ -46,12 +51,26 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// --- Cross-resource checks ---
 	findings = append(findings, checkServiceNoMatchingPods(input.Services, podsBySelector)...)
 	findings = append(findings, checkIngressNoMatchingService(input.Ingresses, servicesByName)...)
+	findings = append(findings, checkTraefikDanglingRefs(input)...)
 
 	// --- Utilization checks (optional, only when metrics provided) ---
 	findings = append(findings, checkResourceUtilization(input.PodMetrics)...)
 
 	// --- Deprecated API checks ---
 	findings = append(findings, checkDeprecatedAPIs(input.ServedAPIs, input.ClusterVersion)...)
+
+	// --- Lifecycle: stuck terminating resources ---
+	// Catches the "zombie awaiting finalizer cleanup" pattern across every
+	// typed kind we already scan. Pairs with the GitOps view's per-app
+	// Terminating chip + insight; the audit surface broadens coverage to
+	// non-GitOps resources (stuck Pods on failed nodes, Deployments
+	// blocked by webhook finalizers, etc.).
+	findings = append(findings, checkStuckTerminating(input)...)
+
+	// --- Crossplane: MRs/XRs/Claims stuck Ready=False or Synced=False ---
+	// Same severity ramp as stuckTerminating (5min warning, 30min danger) so
+	// operators see the same "long enough to flag" semantics across surfaces.
+	findings = append(findings, checkCrossplaneStuck(input)...)
 
 	return buildResults(findings)
 }
@@ -918,6 +937,15 @@ func buildResults(findings []Finding) *ScanResults {
 		categories[cat] = CategorySummary{}
 	}
 
+	// Populate Group from the built-in (Kind→Group) table. Check emission
+	// sites leave Group="" so the per-check code stays terse — single
+	// point of truth here instead of every Finding{} literal.
+	for i := range findings {
+		if findings[i].Group == "" {
+			findings[i].Group = resourceid.GroupForBuiltinKind(findings[i].Kind)
+		}
+	}
+
 	// Merge findings: same (resource, checkID) get combined into one finding
 	// with messages joined, so multi-container workloads show all affected containers.
 	type checkKey struct{ resource, checkID string }
@@ -925,7 +953,7 @@ func buildResults(findings []Finding) *ScanResults {
 	var dedupFindings []Finding
 
 	for _, f := range findings {
-		key := checkKey{ResourceKey(f.Kind, f.Namespace, f.Name), f.CheckID}
+		key := checkKey{ResourceKey(f.Group, f.Kind, f.Namespace, f.Name), f.CheckID}
 		if idx, exists := mergeIndex[key]; exists {
 			dedupFindings[idx].Message += "; " + f.Message
 			continue
@@ -991,4 +1019,242 @@ func tagDisplay(tag string) string {
 		return "<none>"
 	}
 	return tag
+}
+
+// stuckTerminatingThresholdWarning is when "Terminating" stops looking
+// like normal cleanup and starts looking like a stuck finalizer.
+// Most controllers complete cleanup within a couple of minutes.
+//
+// keep in sync: pkg/gitops/insights/insights.go::detectPendingDeletion
+// uses the same 5min/30min boundaries to ramp Issue severity. If you
+// retune one, retune the other so the cluster Audit and the per-resource
+// GitOps Issue agree on what counts as "stuck".
+const (
+	stuckTerminatingThresholdWarning = 5 * time.Minute
+	stuckTerminatingThresholdDanger  = 30 * time.Minute
+)
+
+// checkStuckTerminating finds resources stuck in the Terminating state
+// past the warning/danger thresholds. Scans every typed kind in the
+// CheckInput and applies the same age-based severity ramp the insights
+// detector uses, so an operator looking at the cluster Audit and the
+// GitOps detail page sees the same severity for the same resource.
+//
+// Why this lives at the audit layer in addition to per-resource
+// insights: an operator may not know which resources are stuck.
+// Audit surfaces the *list* up-front; a per-resource insight only
+// helps once they've drilled into a specific app. The two surfaces
+// are complementary, not redundant.
+func checkStuckTerminating(input *CheckInput) []Finding {
+	if input == nil {
+		return nil
+	}
+	var findings []Finding
+	now := time.Now()
+	emit := func(kind string, obj metav1.Object) {
+		dt := obj.GetDeletionTimestamp()
+		if dt == nil || dt.IsZero() {
+			return
+		}
+		age := now.Sub(dt.Time)
+		if age < stuckTerminatingThresholdWarning {
+			return
+		}
+		severity := SeverityWarning
+		if age >= stuckTerminatingThresholdDanger {
+			severity = SeverityDanger
+		}
+		// Naming the finalizers is the most actionable hint we can
+		// surface — the user otherwise has to drill into YAML to find
+		// what's blocking cleanup. Some controllers add multiple keys
+		// (Argo's `resources-finalizer.argocd.argoproj.io` plus the
+		// legacy cascade); listing them all costs a few extra bytes
+		// and is genuinely useful.
+		finalizers := obj.GetFinalizers()
+		var note string
+		if len(finalizers) > 0 {
+			note = " — finalizers: " + strings.Join(finalizers, ", ")
+		}
+		findings = append(findings, Finding{
+			Kind:      kind,
+			Namespace: obj.GetNamespace(),
+			Name:      obj.GetName(),
+			CheckID:   "stuckTerminating",
+			Category:  CategoryReliability,
+			Severity:  severity,
+			Message:   fmt.Sprintf("Has been pending deletion for %s%s", timeutil.FormatAgeShort(age), note),
+		})
+	}
+	// Scan every typed slice we have. Adding a new type to CheckInput
+	// later means adding one line here — trade-off accepted for
+	// explicitness over reflection.
+	for _, p := range input.Pods {
+		emit("Pod", p)
+	}
+	for _, d := range input.Deployments {
+		emit("Deployment", d)
+	}
+	for _, s := range input.StatefulSets {
+		emit("StatefulSet", s)
+	}
+	for _, d := range input.DaemonSets {
+		emit("DaemonSet", d)
+	}
+	for _, s := range input.Services {
+		emit("Service", s)
+	}
+	for _, i := range input.Ingresses {
+		emit("Ingress", i)
+	}
+	for _, h := range input.HorizontalPodAutoscalers {
+		emit("HorizontalPodAutoscaler", h)
+	}
+	for _, p := range input.PodDisruptionBudgets {
+		emit("PodDisruptionBudget", p)
+	}
+	for _, c := range input.ConfigMaps {
+		emit("ConfigMap", c)
+	}
+	for _, s := range input.Secrets {
+		emit("Secret", s)
+	}
+	for _, sa := range input.ServiceAccounts {
+		emit("ServiceAccount", sa)
+	}
+	return findings
+}
+
+// checkCrossplaneStuck finds Crossplane Managed Resources, Composites, and
+// Claims with Ready=False or Synced=False past the same 5-minute/30-minute
+// thresholds used by checkStuckTerminating. Reusing the thresholds keeps the
+// audit page consistent across stuck-resource categories so operators don't
+// have to relearn what "long enough to flag" means for each kind.
+//
+// The check inspects status.conditions on each unstructured object directly
+// — Crossplane condition semantics are stable across every provider (Ready,
+// Synced) so we don't need per-provider knowledge.
+func checkCrossplaneStuck(input *CheckInput) []Finding {
+	if input == nil {
+		return nil
+	}
+	var findings []Finding
+	now := time.Now()
+
+	emit := func(category string, u *unstructured.Unstructured) {
+		// Skip terminating resources — they're already flagged by checkStuckTerminating
+		// with the right severity ramp. Reporting both creates noise.
+		if !u.GetDeletionTimestamp().IsZero() {
+			return
+		}
+		// Don't flag paused resources — the operator intentionally stopped
+		// reconciliation; lighting a "stuck" finding is misleading.
+		if u.GetAnnotations()["crossplane.io/paused"] == "true" {
+			return
+		}
+		cond, ok := findFalseCrossplaneCondition(u)
+		if !ok {
+			return
+		}
+		age := now.Sub(cond.transitionTime)
+		if age < stuckTerminatingThresholdWarning {
+			return
+		}
+		severity := SeverityWarning
+		if age >= stuckTerminatingThresholdDanger {
+			severity = SeverityDanger
+		}
+		// Crossplane conditions almost always include a reason+message — surface
+		// both, since the message often contains the upstream cloud-API error
+		// verbatim (the actionable thing) and the reason classifies it.
+		extra := ""
+		if cond.reason != "" {
+			extra = " (" + cond.reason + ")"
+		}
+		if cond.message != "" {
+			// Keep messages bounded — some providers return multi-line errors.
+			msg := strings.SplitN(cond.message, "\n", 2)[0]
+			extra += ": " + msg
+		}
+		findings = append(findings, Finding{
+			Kind:      u.GetKind(),
+			Namespace: u.GetNamespace(),
+			Name:      u.GetName(),
+			CheckID:   "crossplaneStuck",
+			Category:  category,
+			Severity:  severity,
+			Message:   fmt.Sprintf("%s=False for %s%s", cond.condType, timeutil.FormatAgeShort(age), extra),
+		})
+	}
+	for _, mr := range input.ManagedResources {
+		if mr != nil {
+			emit(CategoryReliability, mr)
+		}
+	}
+	for _, xr := range input.CompositeResources {
+		if xr != nil {
+			emit(CategoryReliability, xr)
+		}
+	}
+	return findings
+}
+
+// crossplaneFalseCondition holds the fields we need from a False Ready/Synced
+// condition. Local to the audit package so it doesn't pollute the public API.
+type crossplaneFalseCondition struct {
+	condType       string
+	reason         string
+	message        string
+	transitionTime time.Time
+}
+
+// findFalseCrossplaneCondition returns the most-actionable False condition
+// for a Crossplane resource — Synced=False first (configuration error,
+// fixable), then Ready=False (provider can't converge, may resolve). Returns
+// false if neither is False or the transition time is missing.
+func findFalseCrossplaneCondition(u *unstructured.Unstructured) (crossplaneFalseCondition, bool) {
+	conds, found, err := unstructured.NestedSlice(u.Object, "status", "conditions")
+	if err != nil || !found {
+		return crossplaneFalseCondition{}, false
+	}
+	// Synced gets priority: it usually indicates the provider rejected
+	// the spec (bad ProviderConfig, malformed forProvider, missing perms).
+	// Ready=False is downstream — fixing Synced often resolves Ready.
+	priority := []string{"Synced", "Ready"}
+	for _, want := range priority {
+		for _, raw := range conds {
+			c, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			t, _ := c["type"].(string)
+			s, _ := c["status"].(string)
+			if t != want || s != "False" {
+				continue
+			}
+			reason, _ := c["reason"].(string)
+			message, _ := c["message"].(string)
+			tt, _ := c["lastTransitionTime"].(string)
+			var transitionTime time.Time
+			if tt != "" {
+				if parsed, err := time.Parse(time.RFC3339, tt); err == nil {
+					transitionTime = parsed
+				}
+			}
+			if transitionTime.IsZero() {
+				// Without a transition time we can't measure age — skip this
+				// condition and let the outer loop fall through to the next
+				// priority tier (Synced first, then Ready). Crossplane always
+				// sets it on its own conditions; missing means non-standard
+				// producer.
+				continue
+			}
+			return crossplaneFalseCondition{
+				condType:       t,
+				reason:         reason,
+				message:        message,
+				transitionTime: transitionTime,
+			}, true
+		}
+	}
+	return crossplaneFalseCondition{}, false
 }

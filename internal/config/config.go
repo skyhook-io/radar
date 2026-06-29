@@ -5,23 +5,37 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Config holds startup configuration persisted across restarts.
 // Values are used as flag defaults; explicit CLI flags always take precedence.
 type Config struct {
-	Kubeconfig      string   `json:"kubeconfig,omitempty"`
-	KubeconfigDirs  []string `json:"kubeconfigDirs,omitempty"`
-	Namespace       string   `json:"namespace,omitempty"`
-	Port            int      `json:"port,omitempty"`
-	NoBrowser       bool     `json:"noBrowser,omitempty"`
-	TimelineStorage string   `json:"timelineStorage,omitempty"`
-	TimelineDBPath  string   `json:"timelineDbPath,omitempty"`
-	HistoryLimit    int      `json:"historyLimit,omitempty"`
-	PrometheusURL   string   `json:"prometheusUrl,omitempty"`
-	MCP             *bool    `json:"mcp,omitempty"` // nil = default (true), false = disabled
+	Kubeconfig        string   `json:"kubeconfig,omitempty"`
+	KubeconfigDirs    []string `json:"kubeconfigDirs,omitempty"`
+	Namespace         string   `json:"namespace,omitempty"`
+	Port              int      `json:"port,omitempty"`
+	NoBrowser         bool     `json:"noBrowser,omitempty"`
+	Browser           string   `json:"browser,omitempty"`
+	TimelineStorage   string   `json:"timelineStorage,omitempty"`
+	TimelineDBPath    string   `json:"timelineDbPath,omitempty"`
+	TimelineRetention string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables age cleanup
+	TimelineMaxSize   string   `json:"timelineMaxSize,omitempty"`   // Byte size (e.g. "800Mi", "8Gi"); "0" disables
+	HistoryLimit      int      `json:"historyLimit,omitempty"`
+	PrometheusURL     string   `json:"prometheusUrl,omitempty"`
+	// PrometheusHeaders are sent with every request to the Prometheus API.
+	// Required for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
+	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
+	PrometheusHeaders        map[string]string `json:"prometheusHeaders,omitempty"`
+	PrometheusHeadersFromEnv map[string]string `json:"prometheusHeadersFromEnv,omitempty"`
+	MCP                      *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
+	// DebugImage is the image used for ephemeral debug containers and node debug
+	// pods. Empty falls back to busybox:latest; set it to a reachable mirror for
+	// air-gapped / private-registry clusters.
+	DebugImage string `json:"debugImage,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent writes
@@ -123,6 +137,74 @@ func (c Config) TimelineStorageOr(def string) string {
 		return c.TimelineStorage
 	}
 	return def
+}
+
+// TimelineRetentionOr parses c.TimelineRetention as a Go duration. Returns the
+// provided default if unset or unparseable. A literal "0" disables cleanup.
+func (c Config) TimelineRetentionOr(def time.Duration) time.Duration {
+	if c.TimelineRetention == "" {
+		return def
+	}
+	d, err := time.ParseDuration(c.TimelineRetention)
+	if err != nil {
+		log.Printf("[config] Invalid timelineRetention %q (using default %s): %v", c.TimelineRetention, def, err)
+		return def
+	}
+	return d
+}
+
+func (c Config) TimelineMaxSizeOr(def string) string {
+	if c.TimelineMaxSize == "" {
+		return def
+	}
+	return c.TimelineMaxSize
+}
+
+func ParseByteSize(raw string) (int64, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, strconv.ErrSyntax
+	}
+	lower := strings.ToLower(s)
+	multipliers := []struct {
+		suffix string
+		value  int64
+	}{
+		{"gib", 1 << 30},
+		{"gb", 1000 * 1000 * 1000},
+		{"gi", 1 << 30},
+		{"g", 1000 * 1000 * 1000},
+		{"mib", 1 << 20},
+		{"mb", 1000 * 1000},
+		{"mi", 1 << 20},
+		{"m", 1000 * 1000},
+		{"kib", 1 << 10},
+		{"kb", 1000},
+		{"ki", 1 << 10},
+		{"k", 1000},
+		{"b", 1},
+	}
+	for _, m := range multipliers {
+		if strings.HasSuffix(lower, m.suffix) {
+			num := strings.TrimSpace(s[:len(s)-len(m.suffix)])
+			v, err := strconv.ParseFloat(num, 64)
+			if err != nil {
+				return 0, err
+			}
+			if v < 0 {
+				return 0, strconv.ErrSyntax
+			}
+			return int64(v * float64(m.value)), nil
+		}
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if v < 0 {
+		return 0, strconv.ErrSyntax
+	}
+	return v, nil
 }
 
 // KubeconfigDirsFlag returns KubeconfigDirs joined as a comma-separated string

@@ -2,14 +2,22 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -19,10 +27,14 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 )
 
-var testServer *httptest.Server
+var (
+	testServer    *httptest.Server
+	testServerSrv *Server
+)
 
 func TestMain(m *testing.M) {
 	replicas := int32(1)
+	brokenReplicas := int32(3)
 
 	deployUID := "deploy-uid-1234"
 	rsUID := "rs-uid-5678"
@@ -31,6 +43,37 @@ func TestMain(m *testing.M) {
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "default"},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+		},
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "broken"},
+			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+		},
+		// Broken Deployment in its own namespace so it doesn't perturb the
+		// "default" fixture used by every other smoke test. Used by
+		// TestAIGetResource_IssueSummaryCountsURLPluralKind to assert the
+		// composer's URL-plural-kind filter actually matches the canonical
+		// Pascal-singular Issue.Kind values — pre-fix, count was 0.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "stuck-app",
+				Namespace: "broken",
+				Labels:    map[string]string{"app": "stuck"},
+			},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &brokenReplicas,
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "stuck"},
+				},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "stuck"}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "stuck", Image: "registry.example/stuck:1"}}},
+				},
+			},
+			Status: appsv1.DeploymentStatus{
+				Replicas:            3,
+				AvailableReplicas:   0,
+				UnavailableReplicas: 3,
+			},
 		},
 		&appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
@@ -46,12 +89,41 @@ func TestMain(m *testing.M) {
 				},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "nginx"}},
-					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "nginx", Image: "nginx:1.25"}}},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "nginx", Image: "nginx:1.25"}},
+						// Reference nginx-tls so the topology builder includes
+						// the Secret node when IncludeSecrets=true. The
+						// neighborhood handler's Secret-root tests depend on
+						// this — without a reference the Secret would be
+						// elided regardless of IncludeSecrets.
+						Volumes: []corev1.Volume{{
+							Name: "tls",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{SecretName: "nginx-tls"},
+							},
+						}},
+					},
 				},
 			},
 			Status: appsv1.DeploymentStatus{
 				Replicas:      1,
 				ReadyReplicas: 1,
+			},
+		},
+		&autoscalingv2.HorizontalPodAutoscaler{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-hpa", Namespace: "default", Generation: 1},
+			Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "nginx"},
+				MinReplicas:    &replicas,
+				MaxReplicas:    2,
+			},
+			Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+				ObservedGeneration: ptrInt64(1),
+				CurrentReplicas:    2,
+				DesiredReplicas:    2,
+				Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+					{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooManyReplicas", Message: "the desired replica count is more than the maximum replica count"},
+				},
 			},
 		},
 		&appsv1.ReplicaSet{
@@ -119,6 +191,80 @@ func TestMain(m *testing.M) {
 				Ports:    []corev1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(80)}},
 			},
 		},
+		// Ingress routing to the core Service "nginx". Used by
+		// TestAIGetResource_GroupRoutesRelationshipsToKnative to give the
+		// core Service a distinct incoming edge (EdgeRoutesTo) that the
+		// Knative Service node does NOT inherit — the test compares whether
+		// the AI GET handler picks up that edge under ?group=serving.knative.dev
+		// (regression for the kind-passed-to-relationship-lookup bug).
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "nginx-ingress",
+				Namespace: "default",
+			},
+			Spec: networkingv1.IngressSpec{
+				Rules: []networkingv1.IngressRule{{
+					Host: "nginx.example.com",
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{{
+								Path:     "/",
+								PathType: func() *networkingv1.PathType { p := networkingv1.PathTypePrefix; return &p }(),
+								Backend: networkingv1.IngressBackend{
+									Service: &networkingv1.IngressServiceBackend{
+										Name: "nginx",
+										Port: networkingv1.ServiceBackendPort{Number: 80},
+									},
+								},
+							}},
+						},
+					},
+				}},
+			},
+		},
+		// Seed Secrets in two namespaces so per-user RBAC tests can
+		// distinguish "gate denied → []" from "no secrets in cache" and can
+		// exercise the partial-allow case (one ns allowed, the other denied).
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-tls", Namespace: "default"},
+			Type:       corev1.SecretTypeOpaque,
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "system-token", Namespace: "kube-system"},
+			Type:       corev1.SecretTypeOpaque,
+		},
+		// RBAC fixtures: one SA, a Role/RoleBinding pair binding it, a
+		// ClusterRole/ClusterRoleBinding grant to system:authenticated so
+		// rbac_handlers_test can exercise both direct + inherited paths.
+		&corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-sa", Namespace: "default"},
+		},
+		&rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-reader", Namespace: "default"},
+			Rules: []rbacv1.PolicyRule{{
+				Verbs: []string{"get", "list"}, APIGroups: []string{""}, Resources: []string{"pods"},
+			}},
+		},
+		&rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-binding", Namespace: "default"},
+			RoleRef:    rbacv1.RoleRef{Kind: "Role", Name: "app-reader", APIGroup: "rbac.authorization.k8s.io"},
+			Subjects: []rbacv1.Subject{{
+				Kind: "ServiceAccount", Namespace: "default", Name: "app-sa",
+			}},
+		},
+		&rbacv1.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{Name: "rbac-test-view"},
+			Rules: []rbacv1.PolicyRule{{
+				Verbs: []string{"list"}, APIGroups: []string{""}, Resources: []string{"namespaces"},
+			}},
+		},
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "rbac-test-auth-view"},
+			RoleRef:    rbacv1.RoleRef{Kind: "ClusterRole", Name: "rbac-test-view", APIGroup: "rbac.authorization.k8s.io"},
+			Subjects: []rbacv1.Subject{{
+				Kind: "Group", Name: "system:authenticated", APIGroup: "rbac.authorization.k8s.io",
+			}},
+		},
 	)
 
 	// Initialize cache from fake client (bypasses RBAC checks)
@@ -138,6 +284,7 @@ func TestMain(m *testing.M) {
 	}
 
 	srv := New(Config{DevMode: true})
+	testServerSrv = srv
 	testServer = httptest.NewServer(srv.Handler())
 
 	code := m.Run()
@@ -175,6 +322,44 @@ func TestSmokeHealth(t *testing.T) {
 	count, _ := body["resourceCount"].(float64)
 	if count < 1 {
 		t.Errorf("expected resourceCount >= 1, got %v", count)
+	}
+
+	timelineStats, ok := body["timeline"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected timeline stats object, got %T", body["timeline"])
+	}
+	if _, ok := timelineStats["total_events"]; ok {
+		t.Error("health endpoint should not run live timeline event counts")
+	}
+	if timelineStats["store_present"] != true {
+		t.Errorf("expected store_present=true, got %v", timelineStats["store_present"])
+	}
+}
+
+func TestSmokeMetricsEndpoint(t *testing.T) {
+	resp := get(t, "/metrics")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/plain") {
+		t.Fatalf("expected Prometheus text content type, got %q", ct)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	for _, want := range []string{
+		"radar_sse_connected_clients",
+		"radar_sse_topology_broadcasts_total",
+		"radar_sse_dropped_events_total",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("expected %s in metrics output, got:\n%s", want, body)
+		}
 	}
 }
 
@@ -339,6 +524,50 @@ func TestSmokeListPods(t *testing.T) {
 	}
 }
 
+func TestSmokeTopPodsHonorsNamespaceFilter(t *testing.T) {
+	resp, err := http.Get(testServer.URL + "/api/metrics/top/pods?namespaces=default")
+	if err != nil {
+		t.Fatalf("GET /api/metrics/top/pods?namespaces=default: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body []k8s.TopPodMetrics
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(body) < 1 {
+		t.Fatal("expected at least 1 pod metric row")
+	}
+	for _, pod := range body {
+		if pod.Namespace != "default" {
+			t.Fatalf("expected only default namespace rows, got %s/%s", pod.Namespace, pod.Name)
+		}
+	}
+
+	resp, err = http.Get(testServer.URL + "/api/metrics/top/pods?namespaces=missing")
+	if err != nil {
+		t.Fatalf("GET /api/metrics/top/pods?namespaces=missing: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for missing namespace filter, got %d", resp.StatusCode)
+	}
+
+	body = nil
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode missing namespace response: %v", err)
+	}
+	if len(body) != 0 {
+		t.Fatalf("expected missing namespace filter to return no pod metrics, got %d rows", len(body))
+	}
+}
+
 func TestSmokeListDeployments(t *testing.T) {
 	resp, err := http.Get(testServer.URL + "/api/resources/deployments")
 	if err != nil {
@@ -382,6 +611,30 @@ func TestSmokeGetDeployment(t *testing.T) {
 	}
 }
 
+func TestSmokeGetHPAIncludesDiagnosis(t *testing.T) {
+	resp, err := http.Get(testServer.URL + "/api/resources/hpas/default/nginx-hpa")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	diagnosis, ok := body["hpaDiagnosis"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing hpaDiagnosis in response: %+v", body)
+	}
+	if diagnosis["state"] != "limited_max" {
+		t.Fatalf("hpaDiagnosis.state = %v, want limited_max", diagnosis["state"])
+	}
+}
+
 func TestSmokeGetResourceNotFound(t *testing.T) {
 	resp, err := http.Get(testServer.URL + "/api/resources/deployments/default/nonexistent")
 	if err != nil {
@@ -410,6 +663,8 @@ func TestSmokeEvents(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func ptrInt64(v int64) *int64 { return &v }
 
 // --- Helpers ---
 
@@ -579,6 +834,46 @@ func TestSmokeChanges(t *testing.T) {
 func TestSmokeChangesWithFilters(t *testing.T) {
 	var body []any
 	assertOK(t, get(t, "/api/changes?namespace=default&kind=Deployment&limit=10"), &body)
+}
+
+func TestSmokeChangesNameFilter(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	clusterContext := k8s.ActiveClusterContext()
+	events := []timeline.TimelineEvent{
+		{
+			ID:             "smoke-name-filter-keep",
+			Timestamp:      now,
+			Source:         timeline.SourceInformer,
+			Kind:           "Deployment",
+			Namespace:      "default",
+			Name:           "smoke-name-filter-keep",
+			EventType:      timeline.EventTypeUpdate,
+			ClusterContext: clusterContext,
+		},
+		{
+			ID:             "smoke-name-filter-drop",
+			Timestamp:      now,
+			Source:         timeline.SourceInformer,
+			Kind:           "Deployment",
+			Namespace:      "default",
+			Name:           "smoke-name-filter-drop",
+			EventType:      timeline.EventTypeUpdate,
+			ClusterContext: clusterContext,
+		},
+	}
+	if err := timeline.RecordEvents(ctx, events); err != nil {
+		t.Fatalf("RecordEvents: %v", err)
+	}
+
+	var body []timeline.TimelineEvent
+	assertOK(t, get(t, "/api/changes?namespace=default&kind=Deployment&name=smoke-name-filter-keep&include_managed=true&filter=all&limit=10"), &body)
+	if len(body) != 1 {
+		t.Fatalf("expected exactly one name-filtered event, got %d: %+v", len(body), body)
+	}
+	if body[0].Name != "smoke-name-filter-keep" {
+		t.Fatalf("expected smoke-name-filter-keep, got %q", body[0].Name)
+	}
 }
 
 func TestSmokeChangeChildren(t *testing.T) {
@@ -845,20 +1140,20 @@ func TestSmokeCloudMode_PprofNotMounted(t *testing.T) {
 				t.Fatalf("GET %s: %v", p, err)
 			}
 			defer resp.Body.Close()
-			// Under cloud-mode the route is not mounted. The SPA fallback
+			// Under cloud-mode the route is not mounted. The index.html fallback
 			// serves index.html (200) for unknown paths — what matters is
 			// that it's NOT serving the pprof handler's dump output. A
-			// 200 with the SPA HTML (not pprof data) is the pass
+			// 200 with the frontend HTML (not pprof data) is the pass
 			// condition here.
 			if resp.StatusCode == 200 {
-				// Sanity: the response should be HTML (SPA fallback), not
+				// Sanity: the response should be HTML (index.html fallback), not
 				// a pprof dump.
 				ct := resp.Header.Get("Content-Type")
 				if !bytes.HasPrefix([]byte(ct), []byte("text/html")) {
 					t.Errorf("%s returned 200 with Content-Type %q — pprof may still be mounted", p, ct)
 				}
 			}
-			// 404 is also acceptable (no SPA handler in some test configs).
+			// 404 is also acceptable (no frontend handler in some test configs).
 		})
 	}
 }
@@ -874,7 +1169,7 @@ func TestSmokeGetConfig(t *testing.T) {
 func TestSmokePutConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	resp := put(t, "/api/config", `{"kubeconfig":"/tmp/test-kube","port":9999,"namespace":"staging"}`)
+	resp := put(t, "/api/config", `{"kubeconfig":"/tmp/test-kube","port":9999,"namespace":"staging","browser":"Safari"}`)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -889,6 +1184,9 @@ func TestSmokePutConfig(t *testing.T) {
 	if saved["port"] != float64(9999) {
 		t.Errorf("port = %v, want 9999", saved["port"])
 	}
+	if saved["browser"] != "Safari" {
+		t.Errorf("browser = %v, want Safari", saved["browser"])
+	}
 
 	// Verify persisted via GET
 	var got map[string]any
@@ -896,6 +1194,9 @@ func TestSmokePutConfig(t *testing.T) {
 	file, _ := got["file"].(map[string]any)
 	if file["kubeconfig"] != "/tmp/test-kube" {
 		t.Errorf("persisted kubeconfig = %v", file["kubeconfig"])
+	}
+	if file["browser"] != "Safari" {
+		t.Errorf("persisted browser = %v", file["browser"])
 	}
 }
 
@@ -932,6 +1233,65 @@ func TestSmokePutConfigInvalidBody(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400 for invalid body, got %d", resp.StatusCode)
+	}
+}
+
+// TestSmokeCapabilitiesShape locks down the JSON contract for
+// /api/capabilities. The reflection-based alignment test in internal/k8s
+// asserts the probe writes every field — this test asserts the HTTP layer
+// surfaces every field as a JSON key. A regression that reverts to a
+// hand-mapped block, adds an `omitempty` that hides false values, or
+// changes the field-marshaling path would be caught here.
+func TestSmokeCapabilitiesShape(t *testing.T) {
+	resp := get(t, "/api/capabilities")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Resources      map[string]bool `json:"resources"`
+		WorkloadWrites map[string]bool `json:"workloadWrites"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Resources == nil {
+		t.Fatal("capabilities response missing 'resources' field — handler probably dropped it on the floor")
+	}
+
+	// Enumerate every JSON tag on ResourcePermissions and assert it shows
+	// up in the response. Adding a new struct field without wiring the
+	// handler will fail here.
+	permsType := reflect.TypeOf(k8s.ResourcePermissions{})
+	for i := 0; i < permsType.NumField(); i++ {
+		field := permsType.Field(i)
+		tag := field.Tag.Get("json")
+		if tag == "" {
+			t.Errorf("ResourcePermissions.%s has no json tag", field.Name)
+			continue
+		}
+		if _, ok := body.Resources[tag]; !ok {
+			t.Errorf("capabilities.resources missing key %q for ResourcePermissions.%s — "+
+				"the handler isn't copying this field to the JSON response.",
+				tag, field.Name)
+		}
+	}
+
+	if body.WorkloadWrites == nil {
+		t.Fatal("capabilities response missing 'workloadWrites' field")
+	}
+	workloadWritesType := reflect.TypeOf(k8s.WorkloadWritePermissions{})
+	for i := 0; i < workloadWritesType.NumField(); i++ {
+		field := workloadWritesType.Field(i)
+		tag := field.Tag.Get("json")
+		if tag == "" {
+			t.Errorf("WorkloadWritePermissions.%s has no json tag", field.Name)
+			continue
+		}
+		if _, ok := body.WorkloadWrites[tag]; !ok {
+			t.Errorf("capabilities.workloadWrites missing key %q for WorkloadWritePermissions.%s", tag, field.Name)
+		}
 	}
 }
 

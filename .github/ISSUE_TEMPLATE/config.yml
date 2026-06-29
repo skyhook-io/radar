@@ -1,8 +1,11 @@
 blank_issues_enabled: false
 contact_links:
+  - name: 💬 Discord Community
+    url: https://radarhq.io/community/chat
+    about: Ask questions, share feedback, and chat with the team and other Radar users.
   - name: Questions & Discussions
     url: https://github.com/skyhook-io/radar/discussions
-    about: Ask questions, share ideas, or discuss features with the community
+    about: Ask questions, share ideas, or discuss features with the community.
   - name: Documentation
-    url: https://github.com/skyhook-io/radar#readme
-    about: Check the README for usage and installation instructions
+    url: https://radarhq.io/docs
+    about: Check the docs for usage and installation instructions.

@@ -1,6 +1,6 @@
 import { Globe, ArrowRight, Network, Filter } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceRefBadge } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
 
 interface HTTPRouteRendererProps {
@@ -77,7 +77,7 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
               hostnames.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
                   {hostnames.map((h: string) => (
-                    <span key={h} className="badge bg-theme-elevated text-theme-text-secondary">{h}</span>
+                    <Badge key={h} tone="structural">{h}</Badge>
                   ))}
                 </div>
               ) : (
@@ -148,9 +148,9 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
                   {matches.map((match: any, matchIdx: number) => (
                     <div key={matchIdx} className="text-xs text-theme-text-secondary flex flex-wrap items-center gap-1.5">
                       {match.method && (
-                        <span className="px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded font-medium">
+                        <Badge tone="structural" size="sm">
                           {match.method}
-                        </span>
+                        </Badge>
                       )}
                       {match.path && (
                         <span>
@@ -201,9 +201,9 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
                       <Filter className="w-3 h-3 text-theme-text-tertiary" />
                       {filters.map((filter: any, filterIdx: number) => (
                         <span key={filterIdx} className="inline-flex items-center gap-1">
-                          <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded">
+                          <Badge tone="accent1" size="sm">
                             {filter.type}
-                          </span>
+                          </Badge>
                           {filter.type === 'RequestHeaderModifier' && filter.requestHeaderModifier && (
                             <span className="text-theme-text-tertiary">
                               {summarizeHeaderModifier(filter.requestHeaderModifier)}
@@ -263,20 +263,14 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {accepted && (
-                      <span className={clsx(
-                        'badge',
-                        accepted.status === 'True' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                      )}>
+                      <Badge severity={accepted.status === 'True' ? 'success' : 'error'}>
                         {accepted.status === 'True' ? 'Accepted' : 'Not Accepted'}
-                      </span>
+                      </Badge>
                     )}
                     {resolved && (
-                      <span className={clsx(
-                        'badge',
-                        resolved.status === 'True' ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
-                      )}>
+                      <Badge severity={resolved.status === 'True' ? 'success' : 'warning'}>
                         {resolved.status === 'True' ? 'Refs Resolved' : 'Unresolved Refs'}
-                      </span>
+                      </Badge>
                     )}
                   </div>
                   {accepted?.message && accepted.status === 'False' && (

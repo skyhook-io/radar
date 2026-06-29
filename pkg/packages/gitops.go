@@ -3,6 +3,8 @@ package packages
 import (
 	"fmt"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/conditions"
 )
 
 // Parsers for GitOps controller resources. Take generic JSON-decoded
@@ -99,7 +101,10 @@ func mapArgoHealth(s string) Health {
 	case "degraded":
 		return HealthUnhealthy
 	case "suspended":
-		return HealthDegraded
+		// Suspended = an operator deliberately paused sync (or a suspended
+		// CronJob/Rollout). Intentional, not a degradation — neutral (sky), so it
+		// doesn't light up amber on a surface meant for things that need action.
+		return HealthNeutral
 	case "missing":
 		// Argo "Missing" = "should exist but doesn't" — a real signal
 		// (controller hasn't been able to apply); not the same as
@@ -228,10 +233,13 @@ func fluxConditionStatus(obj map[string]any) Health {
 	case "True":
 		return HealthHealthy
 	case "False":
-		// Whitelist transient reasons; everything else (including any
-		// unrecognized future reason) classifies as unhealthy. Errs
-		// loud — false-positive unhealthy is preferable to silently
-		// masking a hard failure we don't yet recognize.
+		// A False Ready is degraded when its reason is a known transient
+		// (mid-reconcile / pending / in-progress), else unhealthy. The transient
+		// set is the SHARED packages.IsTransientConditionReason — one source of
+		// truth, so this GitOps-health path and the Issues CRD noise-floor
+		// (internal/issues.detectGenericCRDIssues) can't drift. It deliberately
+		// spans the common in-progress vocabulary across Flux/Argo/Crossplane/
+		// cert-manager; any unrecognized reason still errs loud (→ unhealthy).
 		reason := stringAt(ready, "reason")
 		if isTransientFluxReason(reason) {
 			return HealthDegraded
@@ -242,12 +250,14 @@ func fluxConditionStatus(obj map[string]any) Health {
 }
 
 func isTransientFluxReason(r string) bool {
-	switch r {
-	case "Progressing", "DependencyNotReady", "ReconciliationInProgress",
-		"ChartNotReady", "ArtifactFailed":
-		return true
-	}
-	return false
+	return IsTransientConditionReason(r)
+}
+
+// IsTransientConditionReason re-exports the neutral condition-state predicate
+// from pkg/conditions (the canonical home of the transient vocabulary) so the
+// GitOps health mapping here keeps a local entry point.
+func IsTransientConditionReason(r string) bool {
+	return conditions.IsTransientConditionReason(r)
 }
 
 // Tiny typed lookup helpers — Go stdlib doesn't expose nice JSON

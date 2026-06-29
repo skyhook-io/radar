@@ -74,7 +74,7 @@ export function ConfirmDialog({
 
       {/* Custom content */}
       {children && (
-        <div className="px-4 pt-4">
+        <div className="px-4 py-4">
           {children}
         </div>
       )}

@@ -386,9 +386,31 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
 
       {/* Footer stats */}
       <div className="px-3 py-2 border-t border-theme-border bg-theme-surface/50">
-        <div className="text-xs text-theme-text-tertiary">
-          Showing {availableKinds.filter(k => visibleKinds.has(k.kind)).reduce((sum, k) => sum + (kindCounts.get(k.kind) || 0), 0)} of {nodes.length} resources
-        </div>
+        {(() => {
+          // Total and visible both sum over availableKinds (the kinds the user
+          // can filter). nodes.length would include the synthetic Internet node,
+          // which isn't a filterable kind, so the two wouldn't reconcile and a
+          // "filtered" count would show even with nothing hidden.
+          const sumKinds = (ks: typeof availableKinds) =>
+            ks.reduce((sum, k) => sum + (kindCounts.get(k.kind) || 0), 0)
+          const total = sumKinds(availableKinds)
+          const visible = sumKinds(availableKinds.filter(k => visibleKinds.has(k.kind)))
+          const hidden = total - visible
+          const filteredOutKinds = availableKinds.filter(k => !visibleKinds.has(k.kind) && (kindCounts.get(k.kind) || 0) > 0)
+          return (
+            <div
+              className="text-xs text-theme-text-tertiary"
+              title={filteredOutKinds.length > 0
+                ? `Hidden by kind filter: ${filteredOutKinds.map(k => `${kindCounts.get(k.kind)} ${k.kind}`).join(', ')}`
+                : undefined}
+            >
+              Showing {visible} of {total} resources
+              {hidden > 0 && (
+                <span className="ml-1 text-amber-400 cursor-help">· {hidden} filtered</span>
+              )}
+            </div>
+          )
+        })()}
       </div>
     </div>
   )

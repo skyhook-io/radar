@@ -1,0 +1,32 @@
+# Custom AppProject that scopes the demo apps to the public
+# argocd-example-apps repo + this cluster. Exists primarily to give
+# the GitOps fleet view a non-default Project to filter on. Most
+# demo Applications below set spec.project: radar-demo to use it.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: radar-demo
+  namespace: argocd
+spec:
+  description: Curated radar visual-test scenarios
+  sourceRepos:
+    - https://github.com/argoproj/argocd-example-apps
+    - https://github.com/argoproj/argocd-example-apps.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: 'demo-*'
+    # The app-of-apps parent deploys child Application CRs (which live
+    # in the argocd namespace by Argo convention). Without this entry,
+    # the parent fails with InvalidSpecError and never creates children.
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: ''
+      kind: '*'
+    - group: apps
+      kind: '*'
+    - group: networking.k8s.io
+      kind: '*'

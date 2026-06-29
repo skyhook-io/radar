@@ -2,9 +2,14 @@ package helm
 
 import (
 	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,14 +22,26 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/helmhistory"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/releaseutil"
 	"helm.sh/helm/v3/pkg/repo"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/yaml"
+)
+
+const (
+	releaseHistoryMax        = 256
+	releaseListMaxOperations = 3
 )
 
 // HTTP client for ArtifactHub requests
@@ -126,13 +143,89 @@ func ReinitClient(kubeconfig string) error {
 
 // getActionConfig creates a new action configuration for the given namespace
 func (c *Client) getActionConfig(namespace string) (*action.Configuration, error) {
+	return c.buildActionConfig(namespace, "", nil)
+}
+
+// getActionConfigForUser creates an action configuration with K8s impersonation set.
+// Used for write operations when auth is enabled.
+func (c *Client) getActionConfigForUser(namespace, username string, groups []string) (*action.Configuration, error) {
+	return c.buildActionConfig(namespace, username, groups)
+}
+
+// buildActionConfig is the shared init path for both anonymous and
+// impersonated action configurations. When kubeconfig is empty (running
+// in-cluster) we hand Helm an in-cluster RESTClientGetter built from the
+// rest.Config the rest of Radar already uses — Helm's default
+// ConfigFlags only resolves kubeconfig and would otherwise fall through
+// to localhost:8080 inside a pod with no ~/.kube/config.
+func (c *Client) buildActionConfig(namespace, username string, groups []string) (*action.Configuration, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	actionConfig := new(action.Configuration)
 
-	// Use RESTClientGetter for kubeconfig
-	// NOTE: Use false for usePersistentConfig to avoid caching issues during context switches
+	getter, err := c.restClientGetter(namespace, username, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build helm RESTClientGetter: %w", err)
+	}
+
+	if err := actionConfig.Init(getter, namespace, "secrets", log.Printf); err != nil {
+		if username != "" {
+			return nil, fmt.Errorf("failed to initialize helm action config for user %s: %w", username, err)
+		}
+		return nil, fmt.Errorf("failed to initialize helm action config: %w", err)
+	}
+
+	return actionConfig, nil
+}
+
+// restClientGetter picks the RESTClientGetter strategy for this client.
+// Caller must hold c.mu (read or write). Reads global k8s package state
+// (rest.Config, current context); pure logic lives in
+// buildRESTClientGetter so it can be tested without those globals.
+func (c *Client) restClientGetter(namespace, username string, groups []string) (genericclioptions.RESTClientGetter, error) {
+	return buildRESTClientGetter(restClientGetterParams{
+		kubeconfig:     c.kubeconfig,
+		restConfig:     k8s.GetConfig(),
+		currentContext: k8s.GetContextName(),
+		namespace:      namespace,
+		username:       username,
+		groups:         groups,
+	})
+}
+
+type restClientGetterParams struct {
+	kubeconfig     string
+	restConfig     *rest.Config
+	currentContext string
+	namespace      string
+	username       string
+	groups         []string
+}
+
+// buildRESTClientGetter is the pure logic behind Client.restClientGetter.
+// Two strategies:
+//
+//   - kubeconfig path is set: hand Helm a ConfigFlags pointing at that
+//     single file. This is the dominant OSS path (kubectl plugin /
+//     standalone binary on a laptop with ~/.kube/config).
+//   - kubeconfig path is empty: hand Helm the rest.Config Radar already
+//     resolved at boot. Fires for in-cluster deploys (Hub mode, OSS
+//     Helm-chart deploy — no ~/.kube/config in the pod) and for
+//     multi-source kubeconfig modes (--kubeconfig-dir / multi-path
+//     KUBECONFIG, where there's no single file path to hand Helm).
+func buildRESTClientGetter(p restClientGetterParams) (genericclioptions.RESTClientGetter, error) {
+	if p.kubeconfig == "" {
+		if p.restConfig != nil {
+			return newRESTConfigGetter(p.restConfig, p.namespace, p.username, p.groups), nil
+		}
+		// No kubeconfig path AND no resolved rest.Config — no point in
+		// handing Helm a getter that would fall through to localhost:8080.
+		// Surface the misconfiguration instead.
+		return nil, fmt.Errorf("helm: no kubeconfig path and no resolved rest.Config available")
+	}
+
+	// usePersistentConfig=false avoids caching issues across context switches.
 	configFlags := genericclioptions.NewConfigFlags(false)
 	// Override the default discovery cache dir ($HOME/.kube/cache) to a writable path
 	// when running on a read-only filesystem (e.g. in-cluster with readOnlyRootFilesystem).
@@ -140,61 +233,23 @@ func (c *Client) getActionConfig(namespace string) (*action.Configuration, error
 		kubeCacheDir := "/tmp/helm/kube-cache"
 		configFlags.CacheDir = &kubeCacheDir
 	}
-	if c.kubeconfig != "" {
-		configFlags.KubeConfig = &c.kubeconfig
-	}
-	if namespace != "" {
-		configFlags.Namespace = &namespace
+	configFlags.KubeConfig = &p.kubeconfig
+	if p.namespace != "" {
+		configFlags.Namespace = &p.namespace
 	}
 
-	// Use Explorer's current context (in-memory) instead of kubeconfig's current-context
-	// This ensures Helm uses the same context as the rest of Explorer after context switches
-	currentContext := k8s.GetContextName()
-	if currentContext != "" && currentContext != "in-cluster" {
-		configFlags.Context = &currentContext
+	// Use Explorer's current context (in-memory) instead of kubeconfig's
+	// current-context, so Helm tracks Explorer through context switches.
+	if p.currentContext != "" && p.currentContext != "in-cluster" {
+		configFlags.Context = &p.currentContext
 	}
 
-	if err := actionConfig.Init(configFlags, namespace, "secrets", log.Printf); err != nil {
-		return nil, fmt.Errorf("failed to initialize helm action config: %w", err)
+	if p.username != "" {
+		configFlags.Impersonate = &p.username
+		configFlags.ImpersonateGroup = &p.groups
 	}
 
-	return actionConfig, nil
-}
-
-// getActionConfigForUser creates an action configuration with K8s impersonation set.
-// Used for write operations when auth is enabled.
-func (c *Client) getActionConfigForUser(namespace, username string, groups []string) (*action.Configuration, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	actionConfig := new(action.Configuration)
-
-	configFlags := genericclioptions.NewConfigFlags(false)
-	if homeDir, err := os.UserHomeDir(); err != nil || !isDirWritable(homeDir) {
-		kubeCacheDir := "/tmp/helm/kube-cache"
-		configFlags.CacheDir = &kubeCacheDir
-	}
-	if c.kubeconfig != "" {
-		configFlags.KubeConfig = &c.kubeconfig
-	}
-	if namespace != "" {
-		configFlags.Namespace = &namespace
-	}
-
-	currentContext := k8s.GetContextName()
-	if currentContext != "" && currentContext != "in-cluster" {
-		configFlags.Context = &currentContext
-	}
-
-	// Set impersonation
-	configFlags.Impersonate = &username
-	configFlags.ImpersonateGroup = &groups
-
-	if err := actionConfig.Init(configFlags, namespace, "secrets", log.Printf); err != nil {
-		return nil, fmt.Errorf("failed to initialize helm action config for user %s: %w", username, err)
-	}
-
-	return actionConfig, nil
+	return configFlags, nil
 }
 
 // GetActionConfig returns an action configuration for the given namespace.
@@ -220,7 +275,7 @@ func (c *Client) ListReleasesAsUser(namespace, username string, groups []string)
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesWith(actionConfig, namespace)
+	return listReleasesWith(actionConfig, namespace, username, groups)
 }
 
 // ListReleases returns all Helm releases, optionally filtered by namespace
@@ -229,24 +284,68 @@ func (c *Client) ListReleases(namespace string) ([]HelmRelease, error) {
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesWith(actionConfig, namespace)
+	return listReleasesWith(actionConfig, namespace, "", nil)
 }
 
-func listReleasesWith(actionConfig *action.Configuration, namespace string) ([]HelmRelease, error) {
-	listAction := action.NewList(actionConfig)
-	listAction.All = true
-	listAction.AllNamespaces = namespace == ""
-	listAction.StateMask = action.ListAll
+// ListReleasesAcrossNamespaces lists releases for an explicit set of namespaces
+// and merges the results. A nil slice means "cluster-wide" (a single
+// AllNamespaces list). Callers pass the identity's accessible namespaces instead
+// of nil when it can't list secrets cluster-wide, so namespace-restricted users
+// and ServiceAccounts read Helm without a cluster-scoped `list secrets` (403).
+// Per-namespace lists are disjoint, so the merge can't duplicate a release.
+//
+// The accessible-namespace set is discovered from pod/deployment access, which
+// doesn't imply secrets access (Helm storage is Secrets) — a namespace where the
+// caller is bound to e.g. `view` denies the read. Those forbidden namespaces are
+// skipped so one of them doesn't blank releases the caller CAN see. Only when
+// every namespace is forbidden is the 403 surfaced, so the UI still shows
+// "Access Restricted" rather than a misleading empty list.
+func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username string, groups []string) ([]HelmRelease, error) {
+	if namespaces == nil {
+		return c.ListReleasesAsUser("", username, groups)
+	}
+	var all []HelmRelease
+	var lastForbidden error
+	authorized := false
+	for _, ns := range namespaces {
+		rels, err := c.ListReleasesAsUser(ns, username, groups)
+		if err != nil {
+			if IsForbiddenError(err) {
+				lastForbidden = err
+				continue
+			}
+			return nil, err
+		}
+		authorized = true
+		all = append(all, rels...)
+	}
+	if !authorized && lastForbidden != nil {
+		return nil, lastForbidden
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Namespace != all[j].Namespace {
+			return all[i].Namespace < all[j].Namespace
+		}
+		return all[i].Name < all[j].Name
+	})
+	return all, nil
+}
 
-	releases, err := listAction.Run()
-	if err != nil {
+func listReleasesWith(actionConfig *action.Configuration, namespace, username string, groups []string) ([]HelmRelease, error) {
+	if err := actionConfig.KubeClient.IsReachable(); err != nil {
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
 
-	result := make([]HelmRelease, 0, len(releases))
-	for _, rel := range releases {
-		result = append(result, toHelmRelease(rel))
+	client, err := helmStorageClient(username, groups)
+	if err != nil {
+		return nil, err
 	}
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	result := helmReleaseRowsFromStorageSnapshot(snapshot, fluxHelmReleaseMap(context.Background()))
 
 	// Sort by namespace, then name
 	sort.Slice(result, func(i, j int) bool {
@@ -257,6 +356,31 @@ func listReleasesWith(actionConfig *action.Configuration, namespace string) ([]H
 	})
 
 	return result, nil
+}
+
+func helmReleaseRowsFromStorageSnapshot(snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string) []HelmRelease {
+	if snapshot == nil {
+		return nil
+	}
+	result := make([]HelmRelease, 0, len(snapshot.latest))
+	for _, rel := range snapshot.latest {
+		storageNs := snapshot.storageNamespaces[releaseStorageKey(rel)]
+		hr := toHelmRelease(rel, storageNs)
+		historyKey := releaseHistoryKey(rel)
+		analysis := helmhistory.Analyze(rel.Name, rel.Version, toHelmHistoryRevisions(snapshot.histories[historyKey]), helmhistory.Options{MaxOperations: releaseListMaxOperations})
+		hr.LastOperation = analysis.LastOperation
+		hr.Operations = analysis.Operations
+		// Match against the release's *actual* storage namespace (the
+		// un-normalized value), since toHelmRelease zeroes StorageNamespace
+		// when it equals Namespace for compactness.
+		effectiveStorage := storageNs
+		if effectiveStorage == "" {
+			effectiveStorage = rel.Namespace
+		}
+		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
+		result = append(result, hr)
+	}
+	return result
 }
 
 // GetReleaseAsUser is GetRelease with K8s impersonation.
@@ -291,7 +415,7 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 
 	// Get release history
 	historyAction := action.NewHistory(actionConfig)
-	historyAction.Max = 256
+	historyAction.Max = releaseHistoryMax
 	history, err := historyAction.Run(name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get helm release history: %w", err)
@@ -300,22 +424,27 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	// Convert history
 	revisions := make([]HelmRevision, 0, len(history))
 	for _, h := range history {
-		revisions = append(revisions, toHelmRevision(h))
+		if revision, ok := toHelmRevision(h); ok {
+			revisions = append(revisions, revision)
+		}
 	}
 
 	// Sort by revision descending (newest first)
 	sort.Slice(revisions, func(i, j int) bool {
 		return revisions[i].Revision > revisions[j].Revision
 	})
+	analysis := helmhistory.Analyze(rel.Name, rel.Version, toHelmHistoryRevisions(revisions), helmhistory.Options{})
 
 	// Parse manifest to get owned resources
-	resources := parseManifestResources(rel.Manifest, namespace)
+	resources := parseManifestResources(rel.Manifest, rel.Namespace)
 
 	// Enrich resources with live status from k8s cache
 	enrichResourcesWithStatus(resources)
+	health, issue, summary := computeResourceHealth(resources)
 
 	// Extract hooks
 	hooks := extractHooks(rel)
+	hookDiagnostics := extractHookDiagnostics(hooks)
 
 	// Extract README from chart files
 	readme := extractReadme(rel)
@@ -324,22 +453,37 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	dependencies := extractDependencies(rel)
 
 	detail := &HelmReleaseDetail{
-		Name:         rel.Name,
-		Namespace:    rel.Namespace,
-		Chart:        rel.Chart.Metadata.Name,
-		ChartVersion: rel.Chart.Metadata.Version,
-		AppVersion:   rel.Chart.Metadata.AppVersion,
-		Status:       rel.Info.Status.String(),
-		Revision:     rel.Version,
-		Updated:      rel.Info.LastDeployed.Time,
-		Description:  rel.Info.Description,
-		Notes:        rel.Info.Notes,
-		History:      revisions,
-		Resources:    resources,
-		Hooks:        hooks,
-		Readme:       readme,
-		Dependencies: dependencies,
+		Name:             rel.Name,
+		Namespace:        rel.Namespace,
+		StorageNamespace: namespace,
+		Chart:            rel.Chart.Metadata.Name,
+		ChartVersion:     rel.Chart.Metadata.Version,
+		AppVersion:       rel.Chart.Metadata.AppVersion,
+		Status:           rel.Info.Status.String(),
+		Revision:         rel.Version,
+		Updated:          rel.Info.LastDeployed.Time,
+		Description:      rel.Info.Description,
+		Notes:            rel.Info.Notes,
+		History:          revisions,
+		Resources:        resources,
+		ResourceHealth:   health,
+		HealthIssue:      issue,
+		HealthSummary:    summary,
+		Hooks:            hooks,
+		HookDiagnostics:  hookDiagnostics,
+		Readme:           readme,
+		Dependencies:     dependencies,
+		LastOperation:    analysis.LastOperation,
+		Operations:       analysis.Operations,
 	}
+	if detail.StorageNamespace == detail.Namespace {
+		detail.StorageNamespace = ""
+	}
+	effectiveStorage := namespace
+	if effectiveStorage == "" {
+		effectiveStorage = rel.Namespace
+	}
+	detail.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()))
 
 	return detail, nil
 }
@@ -381,49 +525,86 @@ func getManifestWith(actionConfig *action.Configuration, name string, revision i
 
 // GetValues returns the values for a release
 func (c *Client) GetValues(namespace, name string, allValues bool) (*HelmValues, error) {
+	return c.GetValuesRevision(namespace, name, allValues, 0)
+}
+
+// GetValuesRevision returns the values for a release revision. revision=0 uses the latest.
+func (c *Client) GetValuesRevision(namespace, name string, allValues bool, revision int) (*HelmValues, error) {
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return getValuesWith(actionConfig, name, allValues)
+	return getValuesWith(actionConfig, name, allValues, revision)
 }
 
 // GetValuesAsUser is GetValues with K8s impersonation.
 func (c *Client) GetValuesAsUser(namespace, name string, allValues bool, username string, groups []string) (*HelmValues, error) {
+	return c.GetValuesRevisionAsUser(namespace, name, allValues, 0, username, groups)
+}
+
+// GetValuesRevisionAsUser is GetValuesRevision with K8s impersonation.
+func (c *Client) GetValuesRevisionAsUser(namespace, name string, allValues bool, revision int, username string, groups []string) (*HelmValues, error) {
 	if username == "" {
-		return c.GetValues(namespace, name, allValues)
+		return c.GetValuesRevision(namespace, name, allValues, revision)
 	}
 	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
 	if err != nil {
 		return nil, err
 	}
-	return getValuesWith(actionConfig, name, allValues)
+	return getValuesWith(actionConfig, name, allValues, revision)
 }
 
-func getValuesWith(actionConfig *action.Configuration, name string, allValues bool) (*HelmValues, error) {
+func getValuesWith(actionConfig *action.Configuration, name string, allValues bool, revision int) (*HelmValues, error) {
 	getValuesAction := action.NewGetValues(actionConfig)
 	getValuesAction.AllValues = allValues
+	getValuesAction.Version = revision
 
 	values, err := getValuesAction.Run(name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get helm release values: %w", err)
 	}
 
-	result := &HelmValues{
-		UserSupplied: values,
-	}
-
-	// If allValues requested, also get just user-supplied for comparison
 	if allValues {
+		result := &HelmValues{
+			Computed:     values,
+			UserSupplied: map[string]any{},
+		}
 		getValuesAction.AllValues = false
+		getValuesAction.Version = revision
 		userValues, err := getValuesAction.Run(name)
 		if err == nil {
 			result.UserSupplied = userValues
-			result.Computed = values
 		}
+		return result, nil
 	}
 
-	return result, nil
+	return &HelmValues{UserSupplied: values}, nil
+}
+
+// GetValuesDiff returns a values diff between two revisions.
+func (c *Client) GetValuesDiff(namespace, name string, revision1, revision2 int, allValues bool) (*ValuesDiff, error) {
+	return c.getValuesDiff(namespace, name, revision1, revision2, allValues, "", nil)
+}
+
+// GetValuesDiffAsUser is GetValuesDiff with K8s impersonation.
+func (c *Client) GetValuesDiffAsUser(namespace, name string, revision1, revision2 int, allValues bool, username string, groups []string) (*ValuesDiff, error) {
+	return c.getValuesDiff(namespace, name, revision1, revision2, allValues, username, groups)
+}
+
+func (c *Client) getValuesDiff(namespace, name string, revision1, revision2 int, allValues bool, username string, groups []string) (*ValuesDiff, error) {
+	values1, err := c.GetValuesRevisionAsUser(namespace, name, allValues, revision1, username, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get values for revision %d: %w", revision1, err)
+	}
+	values2, err := c.GetValuesRevisionAsUser(namespace, name, allValues, revision2, username, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get values for revision %d: %w", revision2, err)
+	}
+	diff, err := computeValuesDiff(values1, values2, revision1, revision2, allValues)
+	if err != nil {
+		return nil, err
+	}
+	return &ValuesDiff{Revision1: revision1, Revision2: revision2, AllValues: allValues, Diff: diff}, nil
 }
 
 // GetManifestDiff returns the diff between two revisions
@@ -457,17 +638,224 @@ func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 in
 	}, nil
 }
 
+// GetNotesDiff returns a release notes diff between two revisions.
+func (c *Client) GetNotesDiff(namespace, name string, revision1, revision2 int) (*NotesDiff, error) {
+	return c.getNotesDiff(namespace, name, revision1, revision2, "", nil)
+}
+
+// GetNotesDiffAsUser is GetNotesDiff with K8s impersonation.
+func (c *Client) GetNotesDiffAsUser(namespace, name string, revision1, revision2 int, username string, groups []string) (*NotesDiff, error) {
+	return c.getNotesDiff(namespace, name, revision1, revision2, username, groups)
+}
+
+func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, username string, groups []string) (*NotesDiff, error) {
+	rel1, err := c.getReleaseRevisionAsUser(namespace, name, revision1, username, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get release revision %d: %w", revision1, err)
+	}
+	rel2, err := c.getReleaseRevisionAsUser(namespace, name, revision2, username, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get release revision %d: %w", revision2, err)
+	}
+	return &NotesDiff{
+		Revision1: revision1,
+		Revision2: revision2,
+		Diff:      computeDiff(releaseNotes(rel1), releaseNotes(rel2), revision1, revision2),
+	}, nil
+}
+
+func releaseNotes(rel *release.Release) string {
+	if rel == nil || rel.Info == nil {
+		return ""
+	}
+	return rel.Info.Notes
+}
+
+// GetResourceDiff returns added/removed rendered resources between two revisions.
+func (c *Client) GetResourceDiff(namespace, name string, revision1, revision2 int) (*ResourceDiff, error) {
+	return c.getResourceDiff(namespace, name, revision1, revision2, "", nil)
+}
+
+// GetResourceDiffAsUser is GetResourceDiff with K8s impersonation.
+func (c *Client) GetResourceDiffAsUser(namespace, name string, revision1, revision2 int, username string, groups []string) (*ResourceDiff, error) {
+	return c.getResourceDiff(namespace, name, revision1, revision2, username, groups)
+}
+
+func (c *Client) getResourceDiff(namespace, name string, revision1, revision2 int, username string, groups []string) (*ResourceDiff, error) {
+	rel1, err := c.getReleaseRevisionAsUser(namespace, name, revision1, username, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get release revision %d: %w", revision1, err)
+	}
+	rel2, err := c.getReleaseRevisionAsUser(namespace, name, revision2, username, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get release revision %d: %w", revision2, err)
+	}
+	removed, added, unchanged := diffResourceRefs(
+		resourceRefs(parseManifestResources(rel1.Manifest, rel1.Namespace)),
+		resourceRefs(parseManifestResources(rel2.Manifest, rel2.Namespace)),
+	)
+	return &ResourceDiff{
+		Revision1: revision1,
+		Revision2: revision2,
+		Added:     nonNilResourceRefs(added),
+		Removed:   nonNilResourceRefs(removed),
+		Unchanged: nonNilResourceRefs(unchanged),
+	}, nil
+}
+
+func nonNilResourceRefs(refs []ResourceRef) []ResourceRef {
+	if refs == nil {
+		return []ResourceRef{}
+	}
+	return refs
+}
+
+func (c *Client) getReleaseRevisionAsUser(namespace, name string, revision int, username string, groups []string) (*release.Release, error) {
+	var (
+		actionConfig *action.Configuration
+		err          error
+	)
+	if username == "" {
+		actionConfig, err = c.getActionConfig(namespace)
+	} else {
+		actionConfig, err = c.getActionConfigForUser(namespace, username, groups)
+	}
+	if err != nil {
+		return nil, err
+	}
+	getAction := action.NewGet(actionConfig)
+	if revision > 0 {
+		getAction.Version = revision
+	}
+	rel, err := getAction.Run(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get helm release: %w", err)
+	}
+	return rel, nil
+}
+
+func computeValuesDiff(values1, values2 *HelmValues, rev1, rev2 int, allValues bool) (string, error) {
+	var left, right map[string]any
+	if allValues {
+		left = values1.Computed
+		right = values2.Computed
+	} else {
+		left = values1.UserSupplied
+		right = values2.UserSupplied
+	}
+	leftYAML, err := valuesMapYAML(left)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize values for revision %d: %w", rev1, err)
+	}
+	rightYAML, err := valuesMapYAML(right)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize values for revision %d: %w", rev2, err)
+	}
+	return computeDiff(leftYAML, rightYAML, rev1, rev2), nil
+}
+
+func valuesMapYAML(values map[string]any) (string, error) {
+	if len(values) == 0 {
+		return "", nil
+	}
+	b, err := yaml.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(string(b), "\n"), nil
+}
+
+func resourceRefs(resources []OwnedResource) []ResourceRef {
+	refs := make([]ResourceRef, 0, len(resources))
+	for _, r := range resources {
+		refs = append(refs, ResourceRef{
+			Kind:       r.Kind,
+			APIVersion: r.APIVersion,
+			Name:       r.Name,
+			Namespace:  r.Namespace,
+		})
+	}
+	sortResourceRefs(refs)
+	return refs
+}
+
+func diffResourceRefs(left, right []ResourceRef) (removed, added, unchanged []ResourceRef) {
+	leftMap := make(map[string]ResourceRef, len(left))
+	rightMap := make(map[string]ResourceRef, len(right))
+	for _, ref := range left {
+		leftMap[resourceRefKey(ref)] = ref
+	}
+	for _, ref := range right {
+		rightMap[resourceRefKey(ref)] = ref
+	}
+	for key, ref := range leftMap {
+		if _, ok := rightMap[key]; ok {
+			unchanged = append(unchanged, ref)
+			continue
+		}
+		removed = append(removed, ref)
+	}
+	for key, ref := range rightMap {
+		if _, ok := leftMap[key]; ok {
+			continue
+		}
+		added = append(added, ref)
+	}
+	sortResourceRefs(removed)
+	sortResourceRefs(added)
+	sortResourceRefs(unchanged)
+	return removed, added, unchanged
+}
+
+func sortResourceRefs(refs []ResourceRef) {
+	sort.Slice(refs, func(i, j int) bool {
+		return resourceRefKey(refs[i]) < resourceRefKey(refs[j])
+	})
+}
+
+func resourceRefKey(ref ResourceRef) string {
+	return ref.APIVersion + "/" + ref.Kind + "/" + ref.Namespace + "/" + ref.Name
+}
+
+// releaseStorageKey identifies a release independent of where Helm stored the
+// record. Flux commonly stores the release secret in its controller namespace
+// while the release targets a different namespace.
+func releaseStorageKey(rel *release.Release) string {
+	if rel == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s/%d", rel.Namespace, rel.Name, rel.Version)
+}
+
+func releaseHistoryKey(rel *release.Release) string {
+	if rel == nil {
+		return ""
+	}
+	return rel.Namespace + "/" + rel.Name
+}
+
+func releaseUpgradeKey(rel *release.Release, storageNamespace string) string {
+	if storageNamespace == "" {
+		storageNamespace = rel.Namespace
+	}
+	return storageNamespace + "/" + rel.Name
+}
+
 // toHelmRelease converts a helm release to our API type
-func toHelmRelease(rel *release.Release) HelmRelease {
+func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
 	hr := HelmRelease{
-		Name:         rel.Name,
-		Namespace:    rel.Namespace,
-		Chart:        rel.Chart.Metadata.Name,
-		ChartVersion: rel.Chart.Metadata.Version,
-		AppVersion:   rel.Chart.Metadata.AppVersion,
-		Status:       rel.Info.Status.String(),
-		Revision:     rel.Version,
-		Updated:      rel.Info.LastDeployed.Time,
+		Name:             rel.Name,
+		Namespace:        rel.Namespace,
+		StorageNamespace: storageNamespace,
+		Chart:            rel.Chart.Metadata.Name,
+		ChartVersion:     rel.Chart.Metadata.Version,
+		AppVersion:       rel.Chart.Metadata.AppVersion,
+		Status:           rel.Info.Status.String(),
+		Revision:         rel.Version,
+		Updated:          rel.Info.LastDeployed.Time,
+	}
+	if hr.StorageNamespace == hr.Namespace {
+		hr.StorageNamespace = ""
 	}
 
 	// Compute health from owned resources
@@ -479,6 +867,181 @@ func toHelmRelease(rel *release.Release) HelmRelease {
 	hr.HealthSummary = summary
 
 	return hr
+}
+
+// fluxHelmReleaseMap returns a map keyed by "<storageNamespace>/<releaseName>"
+// to "<hrNamespace>/<hrName>" for every Flux HelmRelease CR in the cluster.
+// Helm releases that match a key were installed by Flux's helm-controller and
+// shouldn't be helm-upgraded directly — the next Flux reconcile would revert
+// the change. Built from the dynamic informer cache so this is a constant-time
+// lookup per release.
+//
+// Effective storageNamespace: defaults to spec.storageNamespace if set, else
+// the HelmRelease's own metadata.namespace. Effective releaseName: defaults
+// to the HelmRelease's metadata.name. Both match helm-controller's behavior.
+//
+// Returns an empty map (not an error) when the cluster has no Flux CRDs or
+// the cache lookup fails — the badge is best-effort, not load-bearing.
+func fluxHelmReleaseMap(ctx context.Context) map[string]string {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil
+	}
+	hrs, err := cache.ListDynamicWithGroup(ctx, "HelmRelease", "", "helm.toolkit.fluxcd.io")
+	if err != nil || len(hrs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(hrs))
+	for _, hr := range hrs {
+		spec, _, _ := unstructured.NestedMap(hr.Object, "spec")
+		releaseName, _ := spec["releaseName"].(string)
+		if releaseName == "" {
+			releaseName = hr.GetName()
+		}
+		// helm-controller defaults storageNamespace to the HelmRelease's
+		// own namespace, NOT spec.targetNamespace (the latter is where the
+		// chart's resources go; the former is where Helm's release Secret
+		// lives). The fixture's HelmRelease in flux-system targeting
+		// demo-flux-helm stores its release Secret in flux-system, confirming
+		// this default.
+		storageNs, _ := spec["storageNamespace"].(string)
+		if storageNs == "" {
+			storageNs = hr.GetNamespace()
+		}
+		out[storageNs+"/"+releaseName] = hr.GetNamespace() + "/" + hr.GetName()
+	}
+	return out
+}
+
+// applyFluxOwnership stamps ManagedByFluxHelmRelease on a HelmRelease (or
+// HelmReleaseDetail via the type-conversion call sites). storageNamespace is
+// the release's actual storage namespace (callers normalize when it equals
+// the release namespace — pass the un-normalized value here so the lookup
+// matches helm-controller's map).
+func applyFluxOwnership(name, storageNamespace string, fluxMap map[string]string) string {
+	if fluxMap == nil {
+		return ""
+	}
+	return fluxMap[storageNamespace+"/"+name]
+}
+
+type helmReleaseStorageSnapshot struct {
+	storageNamespaces map[string]string
+	histories         map[string][]HelmRevision
+	latest            []*release.Release
+}
+
+func helmStorageClient(username string, groups []string) (kubernetes.Interface, error) {
+	var client kubernetes.Interface = k8s.GetClient()
+	if username != "" {
+		impersonated, err := k8s.ImpersonatedClient(username, groups)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build impersonated client for release storage lookup: %w", err)
+		}
+		client = impersonated
+	}
+	if client == nil {
+		return nil, fmt.Errorf("kubernetes client not initialized for release storage lookup")
+	}
+	return client, nil
+}
+
+func helmReleaseStorageNamespaces(username string, groups []string) (map[string]string, error) {
+	client, err := helmStorageClient(username, groups)
+	if err != nil {
+		return nil, err
+	}
+	return helmReleaseStorageNamespacesWithClient(client)
+}
+
+func helmReleaseStorageNamespacesWithClient(client kubernetes.Interface) (map[string]string, error) {
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	if err != nil {
+		return nil, err
+	}
+	return snapshot.storageNamespaces, nil
+}
+
+func helmReleaseStorageSnapshotWithClient(client kubernetes.Interface, namespace string) (*helmReleaseStorageSnapshot, error) {
+	secrets, err := client.CoreV1().Secrets(namespace).List(context.Background(), metav1.ListOptions{
+		LabelSelector: "owner=helm",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect release storage namespaces: %w", err)
+	}
+
+	snapshot := &helmReleaseStorageSnapshot{
+		storageNamespaces: make(map[string]string, len(secrets.Items)),
+		histories:         make(map[string][]HelmRevision),
+	}
+	latestByRelease := make(map[string]*release.Release)
+	for _, secret := range secrets.Items {
+		encoded := secret.Data["release"]
+		if len(encoded) == 0 {
+			continue
+		}
+		rel, err := decodeHelmReleaseData(string(encoded))
+		if err != nil {
+			log.Printf("[helm] failed to decode release secret %s/%s: %v", secret.Namespace, secret.Name, err)
+			continue
+		}
+		snapshot.storageNamespaces[releaseStorageKey(rel)] = secret.Namespace
+
+		historyKey := releaseHistoryKey(rel)
+		if revision, ok := toHelmRevision(rel); ok {
+			snapshot.histories[historyKey] = append(snapshot.histories[historyKey], revision)
+		}
+
+		if latest, exists := latestByRelease[historyKey]; !exists || latest.Version <= rel.Version {
+			latestByRelease[historyKey] = rel
+		}
+	}
+	for key := range snapshot.histories {
+		sort.Slice(snapshot.histories[key], func(i, j int) bool {
+			return snapshot.histories[key][i].Revision > snapshot.histories[key][j].Revision
+		})
+		if len(snapshot.histories[key]) > releaseHistoryMax {
+			snapshot.histories[key] = snapshot.histories[key][:releaseHistoryMax]
+		}
+	}
+	snapshot.latest = make([]*release.Release, 0, len(latestByRelease))
+	for _, rel := range latestByRelease {
+		if !helmListAllIncludes(rel) {
+			continue
+		}
+		snapshot.latest = append(snapshot.latest, rel)
+	}
+	return snapshot, nil
+}
+
+func helmListAllIncludes(rel *release.Release) bool {
+	if rel == nil || rel.Info == nil || rel.Chart == nil || rel.Chart.Metadata == nil {
+		return false
+	}
+	return action.ListAll&action.ListAll.FromName(rel.Info.Status.String()) != 0
+}
+
+func decodeHelmReleaseData(data string) (*release.Release, error) {
+	b, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > 3 && bytes.Equal(b[0:3], []byte{0x1f, 0x8b, 0x08}) {
+		r, err := gzip.NewReader(bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+		b, err = io.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var rel release.Release
+	if err := json.Unmarshal(b, &rel); err != nil {
+		return nil, err
+	}
+	return &rel, nil
 }
 
 // computeResourceHealth analyzes owned resources and returns overall health status
@@ -570,8 +1133,11 @@ func computeResourceHealth(resources []OwnedResource) (health, issue, summary st
 	return health, issue, summary
 }
 
-// toHelmRevision converts a helm release to a revision entry
-func toHelmRevision(rel *release.Release) HelmRevision {
+// toHelmRevision converts a helm release to a revision entry.
+func toHelmRevision(rel *release.Release) (HelmRevision, bool) {
+	if rel == nil || rel.Info == nil || rel.Chart == nil || rel.Chart.Metadata == nil {
+		return HelmRevision{}, false
+	}
 	return HelmRevision{
 		Revision:    rel.Version,
 		Status:      rel.Info.Status.String(),
@@ -579,7 +1145,22 @@ func toHelmRevision(rel *release.Release) HelmRevision {
 		AppVersion:  rel.Chart.Metadata.AppVersion,
 		Description: rel.Info.Description,
 		Updated:     rel.Info.LastDeployed.Time,
+	}, true
+}
+
+func toHelmHistoryRevisions(revisions []HelmRevision) []helmhistory.Revision {
+	out := make([]helmhistory.Revision, 0, len(revisions))
+	for _, r := range revisions {
+		out = append(out, helmhistory.Revision{
+			Revision:    r.Revision,
+			Status:      r.Status,
+			Chart:       r.Chart,
+			AppVersion:  r.AppVersion,
+			Description: r.Description,
+			Updated:     r.Updated,
+		})
 	}
+	return out
 }
 
 // parseManifestResources extracts K8s resources from a rendered manifest
@@ -590,18 +1171,19 @@ func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
 	manifests := releaseutil.SplitManifests(manifest)
 
 	for _, m := range manifests {
-		// Simple parsing - look for kind, name, and namespace
 		lines := strings.Split(m, "\n")
-		var kind, name, namespace string
+		var kind, apiVersion, name, namespace string
 
+		// Take the first occurrence of each top-level field; nested specs
+		// (e.g. spec.template) can repeat the same keys with different values.
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if after, ok := strings.CutPrefix(line, "kind:"); ok {
-				kind = strings.TrimSpace(after)
+			if after, ok := strings.CutPrefix(line, "kind:"); ok && kind == "" {
+				kind = strings.Trim(strings.TrimSpace(after), `"'`)
+			} else if after, ok := strings.CutPrefix(line, "apiVersion:"); ok && apiVersion == "" {
+				apiVersion = strings.Trim(strings.TrimSpace(after), `"'`)
 			} else if strings.HasPrefix(line, "name:") && name == "" {
-				// Only take first name (metadata.name, not container names etc)
 				name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
-				// Remove quotes if present
 				name = strings.Trim(name, `"'`)
 			} else if strings.HasPrefix(line, "namespace:") && namespace == "" {
 				namespace = strings.TrimSpace(strings.TrimPrefix(line, "namespace:"))
@@ -614,9 +1196,10 @@ func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
 				namespace = defaultNamespace
 			}
 			resources = append(resources, OwnedResource{
-				Kind:      kind,
-				Name:      name,
-				Namespace: namespace,
+				Kind:       kind,
+				APIVersion: apiVersion,
+				Name:       name,
+				Namespace:  namespace,
 			})
 		}
 	}
@@ -809,27 +1392,79 @@ func extractHooks(rel *release.Release) []HelmHook {
 
 	hooks := make([]HelmHook, 0, len(rel.Hooks))
 	for _, h := range rel.Hooks {
+		namespace := rel.Namespace
+		for _, ref := range parseManifestResources(h.Manifest, rel.Namespace) {
+			if ref.Name == h.Name && strings.EqualFold(ref.Kind, h.Kind) {
+				namespace = ref.Namespace
+				break
+			}
+		}
+
 		events := make([]string, 0, len(h.Events))
 		for _, e := range h.Events {
 			events = append(events, string(e))
 		}
+		deletePolicies := make([]string, 0, len(h.DeletePolicies))
+		for _, p := range h.DeletePolicies {
+			deletePolicies = append(deletePolicies, string(p))
+		}
+		outputLogPolicies := make([]string, 0, len(h.OutputLogPolicies))
+		for _, p := range h.OutputLogPolicies {
+			outputLogPolicies = append(outputLogPolicies, string(p))
+		}
 
 		hook := HelmHook{
-			Name:   h.Name,
-			Kind:   h.Kind,
-			Events: events,
-			Weight: h.Weight,
+			Name:              h.Name,
+			Namespace:         namespace,
+			Kind:              h.Kind,
+			Path:              h.Path,
+			Events:            events,
+			Weight:            h.Weight,
+			DeletePolicies:    deletePolicies,
+			OutputLogPolicies: outputLogPolicies,
 		}
 
 		// Add status if available
 		if h.LastRun.Phase != "" {
 			hook.Status = string(h.LastRun.Phase)
+			if !h.LastRun.StartedAt.Time.IsZero() {
+				startedAt := h.LastRun.StartedAt.Time
+				hook.StartedAt = &startedAt
+			}
+			if !h.LastRun.CompletedAt.Time.IsZero() {
+				completedAt := h.LastRun.CompletedAt.Time
+				hook.CompletedAt = &completedAt
+			}
 		}
 
 		hooks = append(hooks, hook)
 	}
 
 	return hooks
+}
+
+func extractHookDiagnostics(hooks []HelmHook) []HookDiagnostic {
+	var out []HookDiagnostic
+	for _, h := range hooks {
+		phase := strings.ToLower(h.Status)
+		if phase != "failed" && phase != "running" {
+			continue
+		}
+		diag := HookDiagnostic{
+			Name:      h.Name,
+			Namespace: h.Namespace,
+			Kind:      h.Kind,
+			Events:    h.Events,
+			Phase:     h.Status,
+			Message:   fmt.Sprintf("Helm hook %q last ran with phase %q.", h.Name, h.Status),
+		}
+		if len(h.DeletePolicies) > 0 {
+			diag.EvidenceUnavailable = true
+			diag.EvidenceUnavailableReason = fmt.Sprintf("Hook delete policies may remove the Job/Pod evidence: %s.", strings.Join(h.DeletePolicies, ", "))
+		}
+		out = append(out, diag)
+	}
+	return out
 }
 
 // extractReadme extracts the README content from chart files
@@ -907,102 +1542,392 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 		CurrentVersion: currentVersion,
 	}
 
-	// Load repository file
+	// Load repository file. A missing/empty/unreadable repo config is not fatal —
+	// the user may rely solely on registered OCI sources, so we fall through to the
+	// OCI fallback with an empty classic-candidate set rather than returning early.
+	var candidates []repoVersionInfo
+	noClassicRepos := false
+	indexLoadFailed := false
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			info.Error = "no helm repositories configured"
+	switch {
+	case err != nil:
+		if !os.IsNotExist(err) {
+			log.Printf("[helm] failed to load repository config %s (treating as no classic repos): %v", repoFile, err)
+		}
+		noClassicRepos = true
+	case len(f.Repositories) == 0:
+		noClassicRepos = true
+	default:
+		// Search through all repo indexes, tracking which repos contain the current version
+		cacheDir := c.settings.RepositoryCache
+		for _, r := range f.Repositories {
+			indexPath := filepath.Join(cacheDir, fmt.Sprintf("%s-index.yaml", r.Name))
+			indexFile, err := repo.LoadIndexFile(indexPath)
+			if err != nil {
+				log.Printf("[helm] skipping repo %q: failed to load index %s: %v", r.Name, indexPath, err)
+				indexLoadFailed = true
+				continue
+			}
+
+			if versions, ok := indexFile.Entries[chartName]; ok {
+				var latestInRepo string
+				hasCurrentVersion := false
+				for _, v := range versions {
+					if latestInRepo == "" || compareVersions(v.Version, latestInRepo) > 0 {
+						latestInRepo = v.Version
+					}
+					if v.Version == currentVersion {
+						hasCurrentVersion = true
+					}
+				}
+				if latestInRepo != "" {
+					candidates = append(candidates, repoVersionInfo{
+						repoName:          r.Name,
+						repoURL:           r.URL,
+						latestVersion:     latestInRepo,
+						hasCurrentVersion: hasCurrentVersion,
+					})
+				}
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		// A failed classic index could be hiding the release's real (classic)
+		// source, so surface that before OCI — matching resolveUpgradeChartPath —
+		// rather than mislabel a classic-repo release as OCI-tracked.
+		if indexLoadFailed {
+			info.Error = "failed to load one or more configured repository indexes"
 			return info, nil
 		}
-		info.Error = fmt.Sprintf("failed to load repo file: %v", err)
+		// Genuine absence → registered OCI sources are the fallback for the user's
+		// own OCI-published charts. Only here, never on classic ambiguity below —
+		// falling back on ambiguity could advertise an OCI source for a release
+		// that actually came from a classic repo.
+		if c.applyOCIUpgrade(info, chartName, currentVersion, nil, nil) {
+			return info, nil
+		}
+		// Genuine untracked source — registering a chart source could fix it.
+		info.Untracked = true
+		if noClassicRepos && len(ListOCISources()) == 0 {
+			info.Error = "no chart sources configured"
+		} else {
+			info.Error = "chart not found in configured repositories or registered OCI sources"
+		}
 		return info, nil
 	}
 
-	if len(f.Repositories) == 0 {
-		info.Error = "no helm repositories configured"
-		return info, nil
-	}
-
-	// Search through all repo indexes, tracking which repos contain the current version
-	var candidates []repoVersionInfo
-	cacheDir := c.settings.RepositoryCache
-
-	for _, r := range f.Repositories {
-		// Load the index file for this repo
-		indexPath := filepath.Join(cacheDir, fmt.Sprintf("%s-index.yaml", r.Name))
-		indexFile, err := repo.LoadIndexFile(indexPath)
-		if err != nil {
-			// Skip repos with missing/invalid index
-			continue
-		}
-
-		// Look for the chart
-		if versions, ok := indexFile.Entries[chartName]; ok {
-			var latestInRepo string
-			hasCurrentVersion := false
-			for _, v := range versions {
-				if latestInRepo == "" || compareVersions(v.Version, latestInRepo) > 0 {
-					latestInRepo = v.Version
-				}
-				if v.Version == currentVersion {
-					hasCurrentVersion = true
-				}
-			}
-			if latestInRepo != "" {
-				candidates = append(candidates, repoVersionInfo{
-					repoName:          r.Name,
-					latestVersion:     latestInRepo,
-					hasCurrentVersion: hasCurrentVersion,
-				})
-			}
-		}
-	}
-
-	latestVersion, repoName := findBestUpgradeVersion(candidates)
+	sourceHosts := chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources)
+	latestVersion, repoName := findBestUpgradeVersion(candidates, sourceHosts)
 	if latestVersion == "" {
-		info.Error = "chart not found in configured repositories"
+		info.Error = "could not identify upstream chart repository"
 		return info, nil
 	}
 
 	info.LatestVersion = latestVersion
 	info.RepositoryName = repoName
+	info.SourceType = "repository"
 	info.UpdateAvailable = compareVersions(latestVersion, currentVersion) > 0
 
 	return info, nil
 }
 
+// applyOCIUpgrade probes registered OCI sources for chartName and, if one
+// publishes it, fills info (LatestVersion/ChartRef/SourceType/UpdateAvailable)
+// and returns true. The classic-repo inference is always tried first; this is the
+// fallback for the user's own OCI-published charts that no repo index lists.
+func (c *Client) applyOCIUpgrade(info *UpgradeInfo, chartName, currentVersion string, lister ociTagLister, tagCache map[string][]string) bool {
+	match := c.discoverOCIUpgrade(chartName, lister, tagCache)
+	if match == nil {
+		return false
+	}
+	info.LatestVersion = match.LatestVersion
+	info.ChartRef = match.ChartURL
+	info.SourceType = "oci"
+	info.UpdateAvailable = compareVersions(match.LatestVersion, currentVersion) > 0
+	return true
+}
+
+// AvailableVersions is AvailableVersionsAsUser without impersonation.
+func (c *Client) AvailableVersions(namespace, name string) ([]string, error) {
+	return c.availableVersions(namespace, name, "", nil)
+}
+
+// AvailableVersionsAsUser returns the newest-first list of chart versions a
+// release could be upgraded (or downgraded) to, resolved from its source — the
+// matching classic repo's index or, failing that, a registered OCI source. Lets
+// the upgrade dialog offer a specific target version instead of only "latest".
+// Returns an empty list (not an error) when the source can't be determined; the
+// dialog then falls back to latest-only.
+func (c *Client) AvailableVersionsAsUser(namespace, name, username string, groups []string) ([]string, error) {
+	return c.availableVersions(namespace, name, username, groups)
+}
+
+func (c *Client) availableVersions(namespace, name, username string, groups []string) ([]string, error) {
+	var actionConfig *action.Configuration
+	var err error
+	if username != "" {
+		actionConfig, err = c.getActionConfigForUser(namespace, username, groups)
+	} else {
+		actionConfig, err = c.getActionConfig(namespace)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rel, err := action.NewGet(actionConfig).Run(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get release: %w", err)
+	}
+	chartName := rel.Chart.Metadata.Name
+
+	// Resolve the classic repo the same way the upgrade check does, then return
+	// that repo's full version list — never a union across repos, which could mix
+	// an unrelated same-named chart's versions.
+	var candidates []repoVersionInfo
+	versionsByRepo := map[string][]string{}
+	if f, err := repo.LoadFile(c.settings.RepositoryConfig); err == nil {
+		cacheDir := c.settings.RepositoryCache
+		for _, r := range f.Repositories {
+			idx, err := repo.LoadIndexFile(filepath.Join(cacheDir, fmt.Sprintf("%s-index.yaml", r.Name)))
+			if err != nil {
+				continue
+			}
+			entries, ok := idx.Entries[chartName]
+			if !ok {
+				continue
+			}
+			latest := ""
+			all := make([]string, 0, len(entries))
+			hasCurrent := false
+			for _, v := range entries {
+				all = append(all, v.Version)
+				if latest == "" || compareVersions(v.Version, latest) > 0 {
+					latest = v.Version
+				}
+				if v.Version == rel.Chart.Metadata.Version {
+					hasCurrent = true
+				}
+			}
+			if latest != "" {
+				candidates = append(candidates, repoVersionInfo{repoName: r.Name, repoURL: r.URL, latestVersion: latest, hasCurrentVersion: hasCurrent})
+				versionsByRepo[r.Name] = all
+			}
+		}
+	}
+
+	if len(candidates) > 0 {
+		sourceHosts := chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources)
+		if _, repoName := findBestUpgradeVersion(candidates, sourceHosts); repoName != "" {
+			return capVersions(sortVersionsDesc(versionsByRepo[repoName])), nil
+		}
+		// Ambiguous classic source — don't guess a version list.
+		return nil, nil
+	}
+
+	return capVersions(c.discoverOCIVersions(chartName)), nil
+}
+
+// maxAvailableVersions bounds the version list returned to the upgrade dialog.
+// Some charts publish hundreds of versions; the newest N covers realistic upgrade
+// targets without an unwieldy dropdown or a large payload. The list is already
+// sorted newest-first, so this keeps the most relevant versions.
+const maxAvailableVersions = 50
+
+func capVersions(versions []string) []string {
+	if len(versions) > maxAvailableVersions {
+		return versions[:maxAvailableVersions]
+	}
+	return versions
+}
+
+// sortVersionsDesc returns versions sorted newest-first by semver.
+func sortVersionsDesc(versions []string) []string {
+	out := slices.Clone(versions)
+	sort.SliceStable(out, func(i, j int) bool { return compareVersions(out[i], out[j]) > 0 })
+	return out
+}
+
 // repoVersionInfo holds version information from a single repository for upgrade comparison.
 type repoVersionInfo struct {
 	repoName          string
+	repoURL           string
 	latestVersion     string
 	hasCurrentVersion bool
 }
 
-// findBestUpgradeVersion picks the best upgrade version for a chart.
-// It prefers repos that contain the currently installed version (source repo heuristic),
-// which avoids suggesting upgrades from unrelated charts that share the same name.
-func findBestUpgradeVersion(candidates []repoVersionInfo) (latestVersion, repoName string) {
-	// First: try repos that have the current version (likely the source repo)
+// findBestUpgradeVersion picks the upstream repo for a release whose chart name
+// may collide across configured repos (e.g. Bitnami ships an `argo-cd` chart
+// that's unrelated to argoproj's `argo-cd`). Tiers, in order:
+//
+//  1. A repo that lists the currently installed version — strongest signal that
+//     the release came from there. Ties require source-affinity.
+//  2. A repo whose URL host matches source-affinity hosts from Home/Sources.
+//     Catches the "installed version was pruned from index.yaml" case without
+//     letting an unrelated mirror win.
+//  3. Single candidate — only one configured repo lists this chart name, so
+//     there is nothing to confuse it with.
+//
+// If none of these apply we return empty strings; the caller surfaces an
+// "upstream not detected" state rather than guessing.
+func findBestUpgradeVersion(candidates []repoVersionInfo, sourceHosts []string) (latestVersion, repoName string) {
+	var currentMatches []repoVersionInfo
 	for _, c := range candidates {
 		if c.hasCurrentVersion {
-			if latestVersion == "" || compareVersions(c.latestVersion, latestVersion) > 0 {
-				latestVersion = c.latestVersion
-				repoName = c.repoName
-			}
+			currentMatches = append(currentMatches, c)
 		}
 	}
-	if latestVersion != "" {
-		return
+	if len(currentMatches) == 1 {
+		return currentMatches[0].latestVersion, currentMatches[0].repoName
 	}
-	// Fallback: pick highest across all repos (stale index case)
+	if len(currentMatches) > 1 {
+		return bestSourceAffinityVersion(currentMatches, sourceHosts)
+	}
+
+	return bestSourceAffinityVersion(candidates, sourceHosts)
+}
+
+func bestSourceAffinityVersion(candidates []repoVersionInfo, sourceHosts []string) (latestVersion, repoName string) {
+	if len(sourceHosts) == 0 {
+		if len(candidates) == 1 {
+			return candidates[0].latestVersion, candidates[0].repoName
+		}
+		return "", ""
+	}
+
 	for _, c := range candidates {
+		if !repoURLMatchesAny(c.repoURL, sourceHosts) {
+			continue
+		}
 		if latestVersion == "" || compareVersions(c.latestVersion, latestVersion) > 0 {
 			latestVersion = c.latestVersion
 			repoName = c.repoName
 		}
 	}
-	return
+	if latestVersion == "" && len(candidates) == 1 {
+		return candidates[0].latestVersion, candidates[0].repoName
+	}
+	return latestVersion, repoName
+}
+
+// chartSourceHosts builds the host-affinity set for a chart from its declared
+// Home and Sources URLs. Some charts declare GitHub source URLs while publishing
+// their Helm repo via GitHub Pages, so we also derive `<org>.github.io` from any
+// `github.com/<org>/<repo>` URL.
+func chartSourceHosts(home string, sources []string) []string {
+	urls := make([]string, 0, 1+len(sources))
+	if home != "" {
+		urls = append(urls, home)
+	}
+	urls = append(urls, sources...)
+
+	hosts := make([]string, 0, len(urls)*2)
+	seen := make(map[string]struct{}, len(urls)*2)
+	add := func(h string) {
+		if h == "" {
+			return
+		}
+		if _, dup := seen[h]; dup {
+			return
+		}
+		seen[h] = struct{}{}
+		hosts = append(hosts, h)
+	}
+	for _, raw := range urls {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Host == "" {
+			continue
+		}
+		h := strings.ToLower(u.Hostname())
+		add(h)
+		add(registeredDomain(h))
+		if h == "github.com" {
+			if org := firstPathSegment(u.Path); org != "" {
+				add(org + ".github.io")
+			}
+		}
+	}
+	return hosts
+}
+
+// markCurrentVersion returns a copy of base with hasCurrentVersion set on
+// each candidate whose repo's index lists installedVersion. The copy matters:
+// multiple releases share the base slice (indexed by chart name), so mutating
+// it would leak one release's flags onto another with the same chart name.
+func markCurrentVersion(base []repoVersionInfo, versionsByRepo map[string][]string, installedVersion string) []repoVersionInfo {
+	out := slices.Clone(base)
+	for i := range out {
+		if slices.Contains(versionsByRepo[out[i].repoName], installedVersion) {
+			out[i].hasCurrentVersion = true
+		}
+	}
+	return out
+}
+
+// firstPathSegment returns the first non-empty path segment lowercased,
+// e.g. "/argoproj/argo-helm" → "argoproj".
+func firstPathSegment(p string) string {
+	p = strings.Trim(p, "/")
+	if p == "" {
+		return ""
+	}
+	if i := strings.Index(p, "/"); i > 0 {
+		return strings.ToLower(p[:i])
+	}
+	return strings.ToLower(p)
+}
+
+// repoURLMatchesAny is coarse on purpose: reject unrelated mirrors, not
+// RFC-correct domain matching.
+func repoURLMatchesAny(repoURL string, hosts []string) bool {
+	if repoURL == "" || len(hosts) == 0 {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(repoURL))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	candidates := []string{h}
+	if reg := registeredDomain(h); reg != "" && reg != h {
+		candidates = append(candidates, reg)
+	}
+	for _, c := range candidates {
+		for _, want := range hosts {
+			if c == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// multiTenantSuffixes are two-label hosts where the registered-domain
+// fallback would produce false positives (every project hosts on the same
+// suffix). We treat the full host as the matching unit instead.
+var multiTenantSuffixes = map[string]bool{
+	"github.io": true,
+	"gitlab.io": true,
+}
+
+// registeredDomain returns the last two host labels (e.g. "charts.bitnami.com"
+// → "bitnami.com"), used as a fallback for source-affinity matching. Returns
+// "" for IP literals and for known multi-tenant suffixes (github.io etc.)
+// where the last two labels would collapse unrelated projects together.
+func registeredDomain(host string) string {
+	if host == "" || net.ParseIP(host) != nil {
+		return ""
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	candidate := parts[len(parts)-2] + "." + parts[len(parts)-1]
+	if multiTenantSuffixes[candidate] {
+		return ""
+	}
+	return candidate
 }
 
 // compareVersions compares two semver strings
@@ -1110,14 +2035,47 @@ func (c *Client) uninstallWith(actionConfig *action.Configuration, name string) 
 }
 
 // Upgrade upgrades a release to a new version
-func (c *Client) Upgrade(namespace, name, targetVersion string) error {
-	return c.UpgradeWithProgress(namespace, name, targetVersion, nil)
+func (c *Client) Upgrade(namespace, name, targetVersion, repositoryName string) error {
+	return c.UpgradeWithProgress(namespace, name, targetVersion, repositoryName, nil)
 }
 
 // UpgradeWithProgress upgrades a release with progress reporting via a channel.
 // If progressCh is nil, progress messages are silently discarded.
-func (c *Client) UpgradeWithProgress(namespace, name, targetVersion string, progressCh chan<- InstallProgress) error {
-	sendProgress := func(phase, message, detail string) {
+func (c *Client) UpgradeWithProgress(namespace, name, targetVersion, repositoryName string, progressCh chan<- InstallProgress) error {
+	sendProgress := progressSender(progressCh)
+	sendProgress("preparing", fmt.Sprintf("Getting current release %s...", name), "")
+
+	actionConfig, err := c.getActionConfig(namespace)
+	if err != nil {
+		return err
+	}
+	return c.upgradeWith(actionConfig, name, targetVersion, repositoryName, sendProgress)
+}
+
+// UpgradeWithProgressAsUser upgrades a release with K8s impersonation and progress reporting.
+func (c *Client) UpgradeWithProgressAsUser(namespace, name, targetVersion, repositoryName, username string, groups []string, progressCh chan<- InstallProgress) error {
+	sendProgress := progressSender(progressCh)
+	sendProgress("preparing", fmt.Sprintf("Getting current release %s...", name), "")
+
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	return c.upgradeWith(actionConfig, name, targetVersion, repositoryName, sendProgress)
+}
+
+// UpgradeAsUser upgrades a release with K8s impersonation.
+func (c *Client) UpgradeAsUser(namespace, name, targetVersion, repositoryName string, username string, groups []string) error {
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	noop := func(phase, message, detail string) {}
+	return c.upgradeWith(actionConfig, name, targetVersion, repositoryName, noop)
+}
+
+func progressSender(progressCh chan<- InstallProgress) func(phase, message, detail string) {
+	return func(phase, message, detail string) {
 		if progressCh == nil {
 			return
 		}
@@ -1126,27 +2084,9 @@ func (c *Client) UpgradeWithProgress(namespace, name, targetVersion string, prog
 		default:
 		}
 	}
-
-	sendProgress("preparing", fmt.Sprintf("Getting current release %s...", name), "")
-
-	actionConfig, err := c.getActionConfig(namespace)
-	if err != nil {
-		return err
-	}
-	return c.upgradeWith(actionConfig, namespace, name, targetVersion, sendProgress)
 }
 
-// UpgradeAsUser upgrades a release with K8s impersonation.
-func (c *Client) UpgradeAsUser(namespace, name, targetVersion string, username string, groups []string) error {
-	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
-	if err != nil {
-		return err
-	}
-	noop := func(phase, message, detail string) {}
-	return c.upgradeWith(actionConfig, namespace, name, targetVersion, noop)
-}
-
-func (c *Client) upgradeWith(actionConfig *action.Configuration, namespace, name, targetVersion string, sendProgress func(phase, message, detail string)) error {
+func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVersion, repositoryName string, sendProgress func(phase, message, detail string)) error {
 	// First, get the current release to find chart info
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -1157,58 +2097,38 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, namespace, name
 	chartName := rel.Chart.Metadata.Name
 	sendProgress("resolving", fmt.Sprintf("Finding %s version %s in repositories...", chartName, targetVersion), "")
 
-	// Find the chart in local repos
-	repoFile := c.settings.RepositoryConfig
-	repoCache := c.settings.RepositoryCache
-
-	repos, err := repo.LoadFile(repoFile)
+	chartPath, resolvedRepo, err := c.resolveUpgradeChartPath(chartName, targetVersion, repositoryName, chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources))
 	if err != nil {
-		return fmt.Errorf("failed to load repo file: %w", err)
+		return err
 	}
 
-	var chartPath string
-	for _, r := range repos.Repositories {
-		indexPath := filepath.Join(repoCache, r.Name+"-index.yaml")
-		idx, err := repo.LoadIndexFile(indexPath)
-		if err != nil {
-			continue
-		}
-
-		if entries, ok := idx.Entries[chartName]; ok {
-			for _, entry := range entries {
-				if entry.Version == targetVersion {
-					if len(entry.URLs) > 0 {
-						chartPath = entry.URLs[0]
-						if !strings.HasPrefix(chartPath, "http://") && !strings.HasPrefix(chartPath, "https://") {
-							chartPath = strings.TrimSuffix(r.URL, "/") + "/" + chartPath
-						}
-						break
-					}
-				}
-			}
-		}
-		if chartPath != "" {
-			break
-		}
-	}
-
-	if chartPath == "" {
-		return fmt.Errorf("chart %s version %s not found in configured repositories", chartName, targetVersion)
-	}
-
-	sendProgress("downloading", fmt.Sprintf("Downloading %s-%s...", chartName, targetVersion), chartPath)
+	sendProgress("downloading", fmt.Sprintf("Downloading %s-%s from %s...", chartName, targetVersion, resolvedRepo), chartPath)
 
 	// Create upgrade action — don't use Wait=true because Radar already
 	// shows real-time resource status via SSE. Waiting blocks the dialog
 	// for minutes with zero feedback; users can monitor the rollout in the UI.
 	upgradeAction := action.NewUpgrade(actionConfig)
-	upgradeAction.Namespace = namespace
+	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
-	upgradeAction.ReuseValues = true // Keep existing values
+	// Reset to the new chart's defaults, then re-merge the user's previously-supplied
+	// values on top — preserves their overrides while picking up the new chart's new
+	// default keys. Plain ReuseValues keeps the old merged values and can render nil
+	// for keys a newer chart added (a cross-version upgrade footgun).
+	upgradeAction.ResetThenReuseValues = true
 
 	// Use ChartPathOptions to locate/download the chart
 	client := action.NewInstall(actionConfig)
 	client.Version = targetVersion
+
+	// OCI pulls need a registry client on the action; Radar's action config
+	// doesn't carry one by default. Wire it from the user's helm registry login.
+	if registry.IsOCI(chartPath) {
+		rc, err := c.newRegistryClientConcrete()
+		if err != nil {
+			return fmt.Errorf("failed to build OCI registry client: %w", err)
+		}
+		client.SetRegistryClient(rc)
+	}
 
 	cp, err := client.ChartPathOptions.LocateChart(chartPath, c.settings)
 	if err != nil {
@@ -1220,6 +2140,13 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, namespace, name
 	chart, err := loader.Load(cp)
 	if err != nil {
 		return fmt.Errorf("failed to load chart: %w", err)
+	}
+
+	// Refuse a silent chart-swap: the resolved source must publish the SAME chart
+	// the release runs, not merely a chart at the same version. Matters most for
+	// OCI prefix probing, where "<prefix>/<chartName>" is derived, not asserted.
+	if chart.Metadata != nil && chart.Metadata.Name != chartName {
+		return fmt.Errorf("resolved chart is %q but release %q runs chart %q — refusing to swap charts", chart.Metadata.Name, name, chartName)
 	}
 
 	sendProgress("upgrading", fmt.Sprintf("Applying %s %s...", chartName, targetVersion), "")
@@ -1234,6 +2161,94 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, namespace, name
 	return nil
 }
 
+type chartPathCandidate struct {
+	repoName  string
+	repoURL   string
+	chartPath string
+}
+
+func (c *Client) resolveUpgradeChartPath(chartName, targetVersion, repositoryName string, sourceHosts []string) (chartPath, resolvedRepo string, err error) {
+	// A missing/unreadable repo config is not fatal: a pure-OCI user has no
+	// repositories.yaml, and discovery may have advertised an OCI upgrade. Proceed
+	// with an empty classic set so the OCI fallback below can still resolve.
+	repos, err := repo.LoadFile(c.settings.RepositoryConfig)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[helm] failed to load repository config during upgrade (treating as no classic repos): %v", err)
+		}
+		repos = &repo.File{}
+	}
+
+	var candidates []chartPathCandidate
+	var indexErrors []string
+	for _, r := range repos.Repositories {
+		if repositoryName != "" && r.Name != repositoryName {
+			continue
+		}
+
+		indexPath := filepath.Join(c.settings.RepositoryCache, r.Name+"-index.yaml")
+		idx, err := repo.LoadIndexFile(indexPath)
+		if err != nil {
+			log.Printf("[helm] skipping repo %q during upgrade: failed to load index %s: %v", r.Name, indexPath, err)
+			indexErrors = append(indexErrors, fmt.Sprintf("%s: %v", r.Name, err))
+			continue
+		}
+
+		if entries, ok := idx.Entries[chartName]; ok {
+			for _, entry := range entries {
+				if entry.Version != targetVersion || len(entry.URLs) == 0 {
+					continue
+				}
+				path := entry.URLs[0]
+				if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+					path = strings.TrimSuffix(r.URL, "/") + "/" + path
+				}
+				candidates = append(candidates, chartPathCandidate{repoName: r.Name, repoURL: r.URL, chartPath: path})
+				break
+			}
+		}
+	}
+
+	if len(candidates) == 1 {
+		return candidates[0].chartPath, candidates[0].repoName, nil
+	}
+	if len(candidates) > 1 {
+		var sourceMatches []chartPathCandidate
+		for _, candidate := range candidates {
+			if repoURLMatchesAny(candidate.repoURL, sourceHosts) {
+				sourceMatches = append(sourceMatches, candidate)
+			}
+		}
+		if len(sourceMatches) == 1 {
+			return sourceMatches[0].chartPath, sourceMatches[0].repoName, nil
+		}
+		return "", "", fmt.Errorf("could not identify upstream chart repository for %s version %s", chartName, targetVersion)
+	}
+
+	if repositoryName != "" {
+		if len(indexErrors) > 0 {
+			return "", "", fmt.Errorf("failed to load Helm repository index for %s: %s", repositoryName, strings.Join(indexErrors, "; "))
+		}
+		return "", "", fmt.Errorf("chart %s version %s not found in repository %s", chartName, targetVersion, repositoryName)
+	}
+
+	// Surface classic-repo index failures before the OCI fallback: a stale/missing
+	// index is a "fix your repo" condition the user should see, not something to
+	// silently paper over by pulling the same version from an OCI source.
+	if len(indexErrors) > 0 {
+		return "", "", fmt.Errorf("chart %s version %s not found in configured repositories; failed to load indexes: %s", chartName, targetVersion, strings.Join(indexErrors, "; "))
+	}
+
+	// No classic-repo match and indexes loaded cleanly. Fall back to registered OCI
+	// sources — the server re-derives the oci:// ref from a configured prefix (never
+	// a client-supplied ref), keeping the upgrade path configured-only.
+	if url, ok := c.resolveOCIUpgradeURL(chartName, targetVersion); ok {
+		return url, "oci", nil
+	}
+
+	return "", "", fmt.Errorf("chart %s version %s not found in configured repositories or registered OCI sources", chartName, targetVersion)
+}
+
 // BatchCheckUpgrades checks for upgrades for all releases at once (more efficient)
 func (c *Client) BatchCheckUpgrades(namespace string) (*BatchUpgradeInfo, error) {
 	return c.batchCheckUpgrades(namespace, "", nil)
@@ -1246,46 +2261,105 @@ func (c *Client) BatchCheckUpgradesAsUser(namespace, username string, groups []s
 	return c.batchCheckUpgrades(namespace, username, groups)
 }
 
+// BatchCheckUpgradesAcrossNamespaces is BatchCheckUpgradesAsUser over an explicit
+// set of namespaces, merging the per-namespace maps. A nil slice means
+// "cluster-wide". Mirrors ListReleasesAcrossNamespaces so the Helm view's
+// upgrade checks degrade the same way for namespace-restricted identities. Keys
+// are "storageNamespace/name" and namespaces are queried once each, so the merge
+// can't collide.
+//
+// Upgrade info is best-effort enrichment layered on top of the release list, so
+// forbidden namespaces are skipped and an all-forbidden result returns an empty
+// map rather than an error — the release list itself is what surfaces the 403.
+func (c *Client) BatchCheckUpgradesAcrossNamespaces(namespaces []string, username string, groups []string) (*BatchUpgradeInfo, error) {
+	if namespaces == nil {
+		return c.BatchCheckUpgradesAsUser("", username, groups)
+	}
+	merged := &BatchUpgradeInfo{Releases: make(map[string]*UpgradeInfo)}
+	for _, ns := range namespaces {
+		info, err := c.BatchCheckUpgradesAsUser(ns, username, groups)
+		if err != nil {
+			if IsForbiddenError(err) {
+				continue
+			}
+			return nil, err
+		}
+		for k, v := range info.Releases {
+			merged.Releases[k] = v
+		}
+	}
+	return merged, nil
+}
+
 func (c *Client) batchCheckUpgrades(namespace, username string, groups []string) (*BatchUpgradeInfo, error) {
-	// Get all releases
-	releases, err := c.ListReleasesAsUser(namespace, username, groups)
+	var actionConfig *action.Configuration
+	var err error
+	if username != "" {
+		actionConfig, err = c.getActionConfigForUser(namespace, username, groups)
+	} else {
+		actionConfig, err = c.getActionConfig(namespace)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to list releases: %w", err)
+		return nil, fmt.Errorf("failed to build helm action config: %w", err)
+	}
+
+	// We need full *release.Release objects (Chart.Metadata.Home/Sources are
+	// used for source-affinity disambiguation), so call action.NewList here
+	// instead of going through ListReleases which projects to HelmRelease.
+	listAction := action.NewList(actionConfig)
+	listAction.All = true
+	listAction.AllNamespaces = namespace == ""
+	listAction.StateMask = action.ListAll
+	releases, err := listAction.Run()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
 
 	result := &BatchUpgradeInfo{
 		Releases: make(map[string]*UpgradeInfo),
 	}
-
 	if len(releases) == 0 {
 		return result, nil
 	}
 
-	// Load repo indexes once
+	storageNamespaces := make(map[string]string, len(releases))
+	if namespace == "" {
+		storageNamespaces, err = helmReleaseStorageNamespaces(username, groups)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		for _, rel := range releases {
+			storageNamespaces[releaseStorageKey(rel)] = namespace
+		}
+	}
+
+	// A missing/unreadable repo config is not fatal: a user may rely solely on
+	// registered OCI sources, so we proceed with an empty classic-repo set and let
+	// the per-release OCI fallback run rather than failing every release here.
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	if err != nil {
-		// No repos configured - return empty results with error
-		for _, rel := range releases {
-			key := rel.Namespace + "/" + rel.Name
-			result.Releases[key] = &UpgradeInfo{
-				CurrentVersion: rel.ChartVersion,
-				Error:          "no helm repositories configured",
-			}
+		if !os.IsNotExist(err) {
+			log.Printf("[helm] failed to load repository config %s (treating as no classic repos): %v", repoFile, err)
 		}
-		return result, nil
+		f = &repo.File{}
 	}
 
-	// Build a map of chart name -> per-repo version info (including all versions for source detection)
+	// Split into two maps: latest-per-repo drives ranking; per-repo full
+	// version lists let us detect whether a release's installed version
+	// (which may not be the latest) is present in that repo's index.
 	chartRepoVersions := make(map[string][]repoVersionInfo)
-	// Also track all available versions per chart per repo, for current-version matching
-	chartAllVersions := make(map[string]map[string][]string) // chartName -> repoName -> []versions
+	chartAllVersions := make(map[string]map[string][]string)
 
 	cacheDir := c.settings.RepositoryCache
+	indexLoadFailed := false
 	for _, r := range f.Repositories {
 		indexPath := filepath.Join(cacheDir, fmt.Sprintf("%s-index.yaml", r.Name))
 		indexFile, err := repo.LoadIndexFile(indexPath)
 		if err != nil {
+			log.Printf("[helm] skipping repo %q: failed to load index %s: %v", r.Name, indexPath, err)
+			indexLoadFailed = true
 			continue
 		}
 
@@ -1304,6 +2378,7 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 
 			chartRepoVersions[chartName] = append(chartRepoVersions[chartName], repoVersionInfo{
 				repoName:      r.Name,
+				repoURL:       r.URL,
 				latestVersion: latestInRepo,
 			})
 			if chartAllVersions[chartName] == nil {
@@ -1313,30 +2388,60 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 		}
 	}
 
-	// Check each release against the chart versions map
+	// One registry client + tag cache shared across all releases in this batch, so
+	// the same OCI ref isn't re-listed per release. Built lazily on first miss so
+	// batches with no registered OCI sources pay nothing.
+	var ociLister ociTagLister
+	ociReady := false
+	tagCache := map[string][]string{}
+	ociFallback := func(info *UpgradeInfo, chartName, currentVersion string) bool {
+		if len(ListOCISources()) == 0 {
+			return false
+		}
+		if !ociReady {
+			ociLister = c.newRegistryClient()
+			ociReady = true
+		}
+		if ociLister == nil {
+			return false
+		}
+		return c.applyOCIUpgrade(info, chartName, currentVersion, ociLister, tagCache)
+	}
+
 	for _, rel := range releases {
-		key := rel.Namespace + "/" + rel.Name
-		info := &UpgradeInfo{
-			CurrentVersion: rel.ChartVersion,
+		key := releaseUpgradeKey(rel, storageNamespaces[releaseStorageKey(rel)])
+		currentVersion := rel.Chart.Metadata.Version
+		chartName := rel.Chart.Metadata.Name
+		info := &UpgradeInfo{CurrentVersion: currentVersion}
+
+		baseCandidates, ok := chartRepoVersions[chartName]
+		if !ok {
+			// A failed classic index could be hiding this release's real source —
+			// surface that before OCI rather than mislabel it as OCI-tracked.
+			if indexLoadFailed {
+				info.Error = "failed to load one or more configured repository indexes"
+			} else if !ociFallback(info, chartName, currentVersion) {
+				// Genuine absence → OCI fallback for the user's own OCI charts.
+				info.Untracked = true
+				info.Error = "chart not found in configured repositories or registered OCI sources"
+			}
+			result.Releases[key] = info
+			continue
 		}
 
-		if candidates, ok := chartRepoVersions[rel.Chart]; ok {
-			// Mark which repos contain the current version
-			for i := range candidates {
-				if repoVersions, ok := chartAllVersions[rel.Chart][candidates[i].repoName]; ok {
-					if slices.Contains(repoVersions, rel.ChartVersion) {
-						candidates[i].hasCurrentVersion = true
-					}
-				}
-			}
-			latestVersion, repoName := findBestUpgradeVersion(candidates)
+		candidates := markCurrentVersion(baseCandidates, chartAllVersions[chartName], currentVersion)
+		sourceHosts := chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources)
+		latestVersion, repoName := findBestUpgradeVersion(candidates, sourceHosts)
+		if latestVersion == "" {
+			// Classic candidates exist but are ambiguous — don't let OCI override
+			// a release that came from a classic repo.
+			info.Error = "could not identify upstream chart repository"
+		} else {
 			info.LatestVersion = latestVersion
 			info.RepositoryName = repoName
-			info.UpdateAvailable = compareVersions(latestVersion, rel.ChartVersion) > 0
-		} else {
-			info.Error = "chart not found in configured repositories"
+			info.SourceType = "repository"
+			info.UpdateAvailable = compareVersions(latestVersion, currentVersion) > 0
 		}
-
 		result.Releases[key] = info
 	}
 
@@ -1369,7 +2474,7 @@ func (c *Client) PreviewValuesChange(namespace, name string, newValues map[strin
 
 	// Perform a dry-run upgrade with the new values
 	upgradeAction := action.NewUpgrade(actionConfig)
-	upgradeAction.Namespace = namespace
+	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.DryRun = true
 	upgradeAction.DryRunOption = "client"
 	upgradeAction.ResetValues = true // Use only the provided values, don't merge
@@ -1396,7 +2501,7 @@ func (c *Client) ApplyValues(namespace, name string, newValues map[string]any) e
 	if err != nil {
 		return err
 	}
-	return c.applyValuesWith(actionConfig, namespace, name, newValues)
+	return c.applyValuesWith(actionConfig, name, newValues)
 }
 
 // ApplyValuesAsUser applies values with K8s impersonation.
@@ -1405,10 +2510,10 @@ func (c *Client) ApplyValuesAsUser(namespace, name string, newValues map[string]
 	if err != nil {
 		return err
 	}
-	return c.applyValuesWith(actionConfig, namespace, name, newValues)
+	return c.applyValuesWith(actionConfig, name, newValues)
 }
 
-func (c *Client) applyValuesWith(actionConfig *action.Configuration, namespace, name string, newValues map[string]any) error {
+func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string, newValues map[string]any) error {
 	// Get the current release to reuse its chart
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -1418,7 +2523,7 @@ func (c *Client) applyValuesWith(actionConfig *action.Configuration, namespace, 
 
 	// Create upgrade action — no Wait, Radar shows resource status in real-time
 	upgradeAction := action.NewUpgrade(actionConfig)
-	upgradeAction.Namespace = namespace
+	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
 	upgradeAction.ResetValues = true // Use only the provided values, don't merge
 
@@ -1846,28 +2951,27 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		}
 	}
 
-	// Create install action
-	installAction := action.NewInstall(actionConfig)
-	installAction.ReleaseName = req.ReleaseName
-	installAction.Namespace = req.Namespace
-	installAction.CreateNamespace = req.CreateNamespace
-	installAction.Timeout = 120 * time.Second
-	installAction.Version = req.Version
+	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	if err != nil {
+		return nil, err
+	}
 
-	// Locate/download chart
-	cp, err := installAction.ChartPathOptions.LocateChart(chartURL, c.settings)
+	// action.Install carries ChartPathOptions; instantiated here as a locator only.
+	locator := action.NewInstall(actionConfig)
+	locator.Version = req.Version
+	cp, err := locator.ChartPathOptions.LocateChart(chartURL, c.settings)
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate chart: %w", err)
 	}
-
-	// Load chart
 	chart, err := loader.Load(cp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	// Run install
-	rel, err := installAction.Run(chart, req.Values)
+	if mode != installFresh {
+		log.Printf("[helm] install %q/%q: prior release record exists, recovering via %s", req.Namespace, req.ReleaseName, recoveryMode(mode))
+	}
+	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}
@@ -2032,6 +3136,14 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		}
 	}
 
+	// Pre-flight before downloading: a deployed/pending release is knowable
+	// from local Helm storage and we shouldn't waste bandwidth + show
+	// "Downloading..." progress to a user who'll get a 409 anyway.
+	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
 	sendProgress("downloading", fmt.Sprintf("Downloading chart %s-%s...", req.ChartName, req.Version), chartURL)
 
 	// Download the chart archive directly via HTTP, bypassing the Helm SDK's
@@ -2067,19 +3179,19 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	installAction := action.NewInstall(actionConfig)
-	installAction.ReleaseName = req.ReleaseName
-	installAction.Namespace = req.Namespace
-	installAction.CreateNamespace = req.CreateNamespace
-	installAction.Timeout = 120 * time.Second
-
-	sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
-
-	if req.CreateNamespace {
-		sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
+	switch mode {
+	case installFresh:
+		sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
+		if req.CreateNamespace {
+			sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
+		}
+	case installReplace:
+		sendProgress("installing", fmt.Sprintf("Replacing prior uninstalled release %s in %s...", req.ReleaseName, req.Namespace), "")
+	case installUpgrade:
+		sendProgress("installing", fmt.Sprintf("Recovering prior failed release %s in %s...", req.ReleaseName, req.Namespace), "")
 	}
 
-	rel, err := installAction.Run(chart, req.Values)
+	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}

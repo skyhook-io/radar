@@ -1,6 +1,7 @@
 import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { isMac as isMacPlatform } from '../utils/platform'
 
-export type ShortcutScope = 'global' | 'topology' | 'resources' | 'timeline' | 'helm' | 'traffic' | 'drawer'
+export type ShortcutScope = 'global' | 'topology' | 'resources' | 'timeline' | 'helm' | 'gitops' | 'traffic' | 'applications' | 'audit' | 'drawer'
 
 // Scope priority: higher number = higher priority (wins when multiple scopes active)
 const SCOPE_PRIORITY: Record<ShortcutScope, number> = {
@@ -9,11 +10,14 @@ const SCOPE_PRIORITY: Record<ShortcutScope, number> = {
   resources: 1,
   timeline: 1,
   helm: 1,
+  gitops: 1,
   traffic: 1,
+  applications: 1,
+  audit: 1,
   drawer: 2,
 }
 
-export type ShortcutCategory = 'Navigation' | 'Search' | 'Resource Actions' | 'Table' | 'General' | 'Topology' | 'Timeline' | 'Helm' | 'Drawer' | 'Dock'
+export type ShortcutCategory = 'Navigation' | 'Search' | 'Resource Actions' | 'Table' | 'General' | 'Topology' | 'Timeline' | 'Helm' | 'GitOps' | 'Drawer' | 'Dock'
 
 export interface KeyboardShortcut {
   /** Unique ID for this shortcut */
@@ -75,7 +79,7 @@ interface KeyMatcher {
   altKey?: boolean
 }
 
-const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+const isMac = isMacPlatform()
 
 function parseKeys(keys: string): KeyMatcher {
   // Multi-key sequence (space-separated, e.g. "g g")

@@ -132,8 +132,10 @@ function ResourceItem({ resource, onClick, showHealth }: ResourceItemProps) {
 
   const content = (
     <div className="flex items-center gap-2 py-0.5">
-      {showHealth && resource.health && (
-        <HealthDot health={resource.health} />
+      {showHealth && (
+        <span className="shrink-0 w-1.5 h-1.5 inline-flex items-center justify-center">
+          {resource.health && <HealthDot health={resource.health} />}
+        </span>
       )}
       <span className="text-xs text-theme-text-secondary truncate" title={displayName}>
         {displayName}

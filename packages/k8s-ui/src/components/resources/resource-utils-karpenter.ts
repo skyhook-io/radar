@@ -3,12 +3,6 @@
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
 
-// Shared capacity type badge colors for NodeClaim renderer and table cells
-export const CAPACITY_TYPE_BADGE: Record<string, string> = {
-  spot: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-700/40',
-  'on-demand': 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
-}
-
 // ============================================================================
 // KARPENTER NODEPOOL UTILITIES
 // ============================================================================

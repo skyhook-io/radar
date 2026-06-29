@@ -10,8 +10,11 @@ import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda
 import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus, getArgoApplicationSync, getArgoApplicationHealth, getArgoApplicationProject } from './resource-utils-argo'
 import { getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
+import { getResourceClaimStatus as _getResourceClaimStatus, getResourceClaimDeviceClasses as _getResourceClaimDeviceClasses, getResourceClaimTemplateDeviceClasses as _getResourceClaimTemplateDeviceClasses, getResourceClaimAllocation as _getResourceClaimAllocation, getResourceClaimReservedFor as _getResourceClaimReservedFor } from './resource-utils-dra'
+import { getNvidiaClusterPolicyStatus as _getNvidiaClusterPolicyStatus, getNvidiaClusterPolicyEnabledComponents as _getNvidiaClusterPolicyEnabledComponents, getNvidiaDriverStatus as _getNvidiaDriverStatus } from './resource-utils-nvidia'
 import { getBackupStatus as _getBackupStatus, getRestoreStatus as _getRestoreStatus, getScheduleStatus as _getScheduleStatus, getBSLStatus as _getBSLStatus } from './resource-utils-velero'
 import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternalSecretStatus as _getClusterExternalSecretStatus, getSecretStoreStatus as _getSecretStoreStatus, getClusterSecretStoreStatus as _getClusterSecretStoreStatus, getSecretStoreProviderType as _getSecretStoreProviderType } from './resource-utils-eso'
+import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -48,6 +51,27 @@ export const healthColors: Record<HealthLevel, string> = {
 export interface PodProblem {
   severity: 'critical' | 'high' | 'medium'
   message: string
+  // detail carries extra human context shown after the short message (e.g.
+  // the scheduler's verdict for an Unschedulable pod). message stays the
+  // stable short label so filter-chip matching (podMatchesProblemCategory)
+  // and known-pattern checks keep working on exact strings.
+  detail?: string
+}
+
+/**
+ * Condense a kube-scheduler verdict (the PodScheduled=False / FailedScheduling
+ * message) for display: drop the "0/N nodes are available:" prefix and the
+ * "preemption: …" tail, keeping the per-predicate clause list — which already
+ * names untolerated taints, insufficient resources, and affinity/selector
+ * misses. Presentation-only; the backend `scheduling` issue source does the
+ * structured decomposition + node-label resolution (e.g. naming arm64).
+ */
+export function summarizeSchedulerMessage(message?: string): string {
+  if (!message) return ''
+  let m = message.split('. preemption:')[0].split(' preemption:')[0].trim()
+  const colon = m.indexOf(':')
+  if (colon >= 0) m = m.slice(colon + 1).trim()
+  return m.replace(/\.\s*$/, '').trim()
 }
 
 /** Tailwind classes for severity dot indicators (used in tooltips and alert banners) */
@@ -88,45 +112,255 @@ export function podMatchesProblemCategory(problems: PodProblem[], restarts: numb
   }
 }
 
+// A transient lifecycle state (plain Pending, Terminating, awaiting an address)
+// is not a fault while it's young — it becomes one only once it's stuck past
+// these windows, mirroring the backend health thresholds (ClassifyPodHealth:
+// pending 5m; detect.go: terminating 10m, LB/PVC pending 5m). Two things escalate
+// immediately, regardless of age, because they're definitive failures the backend
+// also flags at once: fatal *container* states (CrashLoopBackOff, ImagePull,
+// InvalidImageName, OOMKilled, …) and Unschedulable (the scheduler tried and
+// could not place the pod).
+const PENDING_STUCK_MINUTES = 5
+const TERMINATING_STUCK_MINUTES = 10
+
+// minutesSince returns minutes elapsed since an ISO timestamp, or 0 when it's
+// missing/invalid — so "unknown age" is treated as not-yet-stuck (benign).
+function minutesSince(timestamp?: string): number {
+  if (!timestamp) return 0
+  const t = new Date(timestamp).getTime()
+  if (Number.isNaN(t)) return 0
+  return (Date.now() - t) / 60000
+}
+
+function podUnschedulable(pod: any): boolean {
+  const conds = pod?.status?.conditions || []
+  return conds.some(
+    (c: any) => c.type === 'PodScheduled' && c.status === 'False' && c.reason === 'Unschedulable'
+  )
+}
+
+// A container that has terminated successfully (exit 0) is done, not "not ready".
+// A completing Job pod (Running phase, container Completed, Ready=false) must not
+// read as degraded just because ready<total — this mirrors ClassifyPodHealth, so
+// the badge agrees with the timeline/Problems verdict.
+function containerSettledOk(cs: any): boolean {
+  return cs?.ready === true || cs?.state?.terminated?.exitCode === 0
+}
+
+// Hard-failure waiting reasons that won't self-resolve — mirrors the backend's
+// isFatalWaitingReason. These escalate immediately regardless of pod age or a
+// Terminating overlay (a bad image / config error is a real failure now, not a
+// benign young-Pending pod).
+const FATAL_WAITING_REASONS = new Set([
+  'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'InvalidImageName',
+  'ImageInspectError', 'CreateContainerConfigError', 'CreateContainerError', 'RunContainerError',
+])
+
+// firstFatalContainer returns the first init- or main-container in a hard-failure
+// state (or null). Init containers are walked first: when init is failing the pod
+// stays Pending and main ContainerStatuses haven't populated yet, so checking main
+// alone would miss it and fall through to a benign "Pending".
+function firstFatalContainer(pod: any): { name: string; reason: string } | null {
+  const init = pod?.status?.initContainerStatuses || []
+  const main = pod?.status?.containerStatuses || []
+  for (const cs of [...init, ...main]) {
+    const w = cs?.state?.waiting?.reason
+    if (w && FATAL_WAITING_REASONS.has(w)) return { name: cs?.name, reason: w }
+    if (cs?.state?.terminated?.reason === 'OOMKilled') return { name: cs?.name, reason: 'OOMKilled' }
+  }
+  return null
+}
+
 export function getPodStatus(pod: any): StatusBadge {
   const phase = pod.status?.phase || 'Unknown'
   const containerStatuses = pod.status?.containerStatuses || []
 
-  // Check for terminating
-  if (pod.metadata?.deletionTimestamp) {
-    return { text: 'Terminating', color: healthColors.degraded, level: 'degraded' }
+  // Fatal init/main container states win over the Pending grace AND a Terminating
+  // overlay — a crash-loop, bad image, or config error is a real failure now,
+  // whatever the pod's age or deletion state. Skip for Succeeded: a terminal
+  // success must not flip unhealthy on a sidecar that OOMed before the main
+  // container finished (matches getPodPhaseDisplay + ClassifyPodHealth).
+  if (phase !== 'Succeeded') {
+    const fatal = firstFatalContainer(pod)
+    if (fatal) {
+      return { text: fatal.reason, color: healthColors.unhealthy, level: 'unhealthy' }
+    }
   }
 
-  // Check container states for issues
-  for (const cs of containerStatuses) {
-    if (cs.state?.waiting?.reason) {
-      const reason = cs.state.waiting.reason
-      if (['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'CreateContainerConfigError'].includes(reason)) {
-        return { text: reason, color: healthColors.unhealthy, level: 'unhealthy' }
-      }
+  // A terminal failure stays unhealthy even while the pod is being deleted — the
+  // Terminating overlay below must not mask a Failed pod (the Problems panel and
+  // dashboard report it as an error regardless).
+  if (phase === 'Failed') {
+    return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
+  // Terminating: neutral while gracefully shutting down, degraded once stuck
+  // (a wedged finalizer / preStop hook holding the pod open).
+  if (pod.metadata?.deletionTimestamp) {
+    if (minutesSince(pod.metadata.deletionTimestamp) >= TERMINATING_STUCK_MINUTES) {
+      return { text: 'Terminating', color: healthColors.degraded, level: 'degraded' }
     }
-    if (cs.state?.terminated?.reason === 'OOMKilled') {
-      return { text: 'OOMKilled', color: healthColors.unhealthy, level: 'unhealthy' }
-    }
+    return { text: 'Terminating', color: healthColors.neutral, level: 'neutral' }
   }
 
   switch (phase) {
-    case 'Running':
-      // Check if all containers are ready
+    case 'Running': {
+      // Degrade only on containers that are neither ready nor successfully done —
+      // a completed container (exit 0) on a Running pod is finishing, not a fault.
       const ready = containerStatuses.filter((c: any) => c.ready).length
       const total = containerStatuses.length
-      if (total > 0 && ready < total) {
+      const unsettled = containerStatuses.filter((c: any) => !containerSettledOk(c)).length
+      if (unsettled > 0) {
         return { text: `Running (${ready}/${total})`, color: healthColors.degraded, level: 'degraded' }
       }
       return { text: 'Running', color: healthColors.healthy, level: 'healthy' }
+    }
     case 'Succeeded':
       return { text: 'Completed', color: healthColors.neutral, level: 'neutral' }
     case 'Pending':
-      return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+      // Unschedulable = the scheduler tried and failed to place this pod; the
+      // backend flags it immediately (severity ramps with duration), so the badge
+      // does too. Plain Pending (not yet placed) keeps the young-grace window.
+      if (podUnschedulable(pod)) {
+        return { text: 'Unschedulable', color: healthColors.degraded, level: 'degraded' }
+      }
+      if (minutesSince(pod.metadata?.creationTimestamp) >= PENDING_STUCK_MINUTES) {
+        return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+      }
+      return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
     case 'Failed':
       return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
     default:
       return { text: phase, color: healthColors.unknown, level: 'unknown' }
+  }
+}
+
+/**
+ * Pod phase enriched with readiness/restart/crash signals so the Phase
+ * row doesn't show a bare "Running" on a 0/1 or crash-looping pod.
+ */
+export interface PodPhaseDisplay {
+  /** Verbatim `pod.status.phase` (or "Unknown") — never lost. */
+  phase: string
+  /** Phase + derived qualifier, e.g. "Running — Not Ready (0/1)". */
+  text: string
+  /** Severity tier for tinting / icon choice, mirrors getPodStatus. */
+  level: HealthLevel
+  /** Optional one-line explanation surfaced as a tooltip / muted suffix. */
+  hint?: string
+}
+
+const RESTART_CYCLING_THRESHOLD = 5
+
+export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
+  const phase: string = pod?.status?.phase || 'Unknown'
+  const containerStatuses: any[] = pod?.status?.containerStatuses || []
+  const totalContainers = containerStatuses.length
+  const readyContainers = containerStatuses.filter((c) => c?.ready).length
+  const restartTotal = containerStatuses.reduce(
+    (sum, c) => sum + (c?.restartCount || 0),
+    0
+  )
+
+  // Container-state failures take precedence over phase AND over a Terminating
+  // overlay: a CrashLoopBackOff pod can still report phase: Running, an init
+  // failure keeps the pod Pending, and a pod crashing while being deleted is
+  // still a failure worth surfacing. Skip for Succeeded — a Job pod whose sidecar
+  // was OOMKilled before the main container completed should not read unhealthy
+  // after terminal success.
+  if (phase !== 'Succeeded') {
+    const fatal = firstFatalContainer(pod)
+    if (fatal) {
+      return {
+        phase,
+        text: `${phase} — ${fatal.reason}`,
+        level: 'unhealthy',
+        hint: fatal.reason === 'OOMKilled'
+          ? `Container "${fatal.name}" was OOMKilled.`
+          : `Container "${fatal.name}" is stuck in ${fatal.reason}.`,
+      }
+    }
+  }
+
+  // A terminal failure stays unhealthy even while the pod is being deleted — don't
+  // let the Terminating overlay mask a Failed pod.
+  if (phase === 'Failed') {
+    return { phase, text: 'Failed', level: 'unhealthy' }
+  }
+
+  // Terminating: neutral while gracefully shutting down, degraded once stuck.
+  if (pod?.metadata?.deletionTimestamp) {
+    const stuck = minutesSince(pod.metadata.deletionTimestamp) >= TERMINATING_STUCK_MINUTES
+    return {
+      phase,
+      text: `${phase} — Terminating`,
+      level: stuck ? 'degraded' : 'neutral',
+      hint: stuck
+        ? 'Pod has been terminating for a while — a finalizer or preStop hook may be wedged.'
+        : 'Pod has a deletionTimestamp set; awaiting graceful termination.',
+    }
+  }
+
+  switch (phase) {
+    case 'Running': {
+      // A successfully-completed container (exit 0) is settled, not "not ready" —
+      // don't degrade a completing pod over it (matches getPodStatus / timeline).
+      const unsettled = containerStatuses.filter((c) => !containerSettledOk(c)).length
+      const notReady = totalContainers > 0 && unsettled > 0
+      const cycling = restartTotal > RESTART_CYCLING_THRESHOLD
+      if (notReady && cycling) {
+        return {
+          phase,
+          text: `Running — Not Ready (${readyContainers}/${totalContainers}), ${restartTotal} restarts`,
+          level: 'unhealthy',
+          hint: 'Containers report not-ready and have restarted many times — likely crash-looping.',
+        }
+      }
+      if (notReady) {
+        return {
+          phase,
+          text: `Running — Not Ready (${readyContainers}/${totalContainers})`,
+          level: 'degraded',
+          hint: 'Pod is in the Running phase but at least one container is not ready (probes failing or still starting).',
+        }
+      }
+      if (cycling) {
+        return {
+          phase,
+          text: `Running — Restarting (${restartTotal} restarts)`,
+          level: 'degraded',
+          hint: 'Containers are ready right now but have restarted many times — investigate stability.',
+        }
+      }
+      return { phase, text: 'Running', level: 'healthy' }
+    }
+    case 'Succeeded':
+      return { phase, text: 'Completed', level: 'neutral' }
+    case 'Pending':
+      // Unschedulable = the scheduler tried and failed; surface it immediately
+      // (the backend does, with severity ramping by duration). Plain Pending
+      // (not yet placed) keeps the young-grace window.
+      if (podUnschedulable(pod)) {
+        return {
+          phase,
+          text: `${phase} — Unschedulable`,
+          level: 'degraded',
+          hint: 'No node can accept this pod (insufficient resources, taints, affinity, or quota).',
+        }
+      }
+      if (minutesSince(pod?.metadata?.creationTimestamp) >= PENDING_STUCK_MINUTES) {
+        return {
+          phase,
+          text: 'Pending',
+          level: 'degraded',
+          hint: 'Pod has been Pending for several minutes — check scheduling and image pulls.',
+        }
+      }
+      return { phase, text: 'Pending', level: 'neutral' }
+    case 'Failed':
+      return { phase, text: 'Failed', level: 'unhealthy' }
+    default:
+      return { phase, text: phase, level: 'unknown' }
   }
 }
 
@@ -136,26 +370,39 @@ export function getPodProblems(pod: any): PodProblem[] {
   const initContainerStatuses = pod.status?.initContainerStatuses || []
   const conditions = pod.status?.conditions || []
   const phase = pod.status?.phase
+  const podStatusMessage = pod.status?.message || undefined
+  const hasPodIP = Boolean(pod.status?.podIP || pod.status?.podIPs?.some((ip: any) => ip?.ip))
+  const hasScheduledNode = Boolean(pod.spec?.nodeName)
+  const hasUnschedulableCondition = conditions.some((cond: any) => cond.type === 'PodScheduled' && cond.status === 'False')
+  const hasContainerCreating = containerStatuses.some((cs: any) => cs.state?.waiting?.reason === 'ContainerCreating')
+  const createdAtMs = pod.metadata?.creationTimestamp ? new Date(pod.metadata.creationTimestamp).getTime() : NaN
+  const podAgeMs = Number.isFinite(createdAtMs) ? Date.now() - createdAtMs : 0
+  const sandboxStartupStallAgeMs = 10 * 60 * 1000
+  const sandboxStartupStallCriticalAgeMs = 30 * 60 * 1000
+  const inferredSandboxStartupStall = phase === 'Pending' && hasScheduledNode && !hasUnschedulableCondition && hasContainerCreating && !hasPodIP && podAgeMs > sandboxStartupStallAgeMs
+  const inferredSandboxStartupStallSeverity: PodProblem['severity'] = podAgeMs >= sandboxStartupStallCriticalAgeMs ? 'critical' : 'high'
+  let hasSandboxStartupStallProblem = false
 
   // Failed or Unknown phase
   if (phase === 'Failed' && pod.status?.reason !== 'Evicted') {
-    problems.push({ severity: 'critical', message: 'Failed' })
+    problems.push({ severity: 'critical', message: 'Failed', detail: podStatusMessage })
   } else if (phase === 'Unknown') {
-    problems.push({ severity: 'high', message: 'Unknown' })
+    problems.push({ severity: 'high', message: 'Unknown', detail: podStatusMessage })
   }
 
   // Init container failures
   for (const cs of initContainerStatuses) {
     if (cs.state?.waiting?.reason && cs.state.waiting.reason !== 'PodInitializing') {
       const reason = cs.state.waiting.reason
+      const detail = cs.state.waiting.message || undefined
       if (['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull'].includes(reason)) {
-        problems.push({ severity: 'critical', message: `Init: ${reason}` })
+        problems.push({ severity: 'critical', message: `Init: ${reason}`, detail })
       } else {
-        problems.push({ severity: 'high', message: `Init: ${reason}` })
+        problems.push({ severity: 'high', message: `Init: ${reason}`, detail })
       }
     }
     if (cs.state?.terminated?.exitCode && cs.state.terminated.exitCode !== 0) {
-      problems.push({ severity: 'high', message: `Init: Exit Code ${cs.state.terminated.exitCode}` })
+      problems.push({ severity: 'high', message: `Init: Exit Code ${cs.state.terminated.exitCode}`, detail: cs.state.terminated.message || undefined })
     }
   }
 
@@ -163,30 +410,32 @@ export function getPodProblems(pod: any): PodProblem[] {
     // Check waiting state
     if (cs.state?.waiting?.reason) {
       const reason = cs.state.waiting.reason
+      const detail = cs.state.waiting.message || undefined
       if (['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull'].includes(reason)) {
-        problems.push({ severity: 'critical', message: reason })
+        problems.push({ severity: 'critical', message: reason, detail })
       } else if (reason === 'CreateContainerConfigError') {
-        problems.push({ severity: 'critical', message: 'Config Error' })
+        problems.push({ severity: 'critical', message: 'Config Error', detail })
       } else if (reason === 'ContainerCannotRun') {
-        problems.push({ severity: 'critical', message: 'Cannot Run' })
+        problems.push({ severity: 'critical', message: 'Cannot Run', detail })
       } else if (reason !== 'ContainerCreating' && reason !== 'PodInitializing') {
-        problems.push({ severity: 'high', message: reason })
+        problems.push({ severity: 'high', message: reason, detail })
       }
     }
     // Check terminated state
     if (cs.state?.terminated?.reason === 'OOMKilled') {
-      problems.push({ severity: 'critical', message: 'OOMKilled' })
+      problems.push({ severity: 'critical', message: 'OOMKilled', detail: cs.state.terminated.message || undefined })
     } else if (cs.state?.terminated?.exitCode && cs.state.terminated.exitCode !== 0) {
-      problems.push({ severity: 'high', message: `Exit Code ${cs.state.terminated.exitCode}` })
+      problems.push({ severity: 'high', message: `Exit Code ${cs.state.terminated.exitCode}`, detail: cs.state.terminated.message || undefined })
     }
     // High restart count
     if (cs.restartCount > 5) {
       problems.push({ severity: 'medium', message: `${cs.restartCount} restarts` })
     }
     // Volume mount issues from last state
-    const lastMsg = cs.lastState?.terminated?.message?.toLowerCase() || ''
+    const lastMsgRaw = cs.lastState?.terminated?.message || ''
+    const lastMsg = lastMsgRaw.toLowerCase()
     if (lastMsg.includes('failed to mount') || lastMsg.includes('failedattachvolume')) {
-      problems.push({ severity: 'high', message: 'Volume Mount Failed' })
+      problems.push({ severity: 'high', message: 'Volume Mount Failed', detail: lastMsgRaw || undefined })
     }
   }
 
@@ -194,46 +443,55 @@ export function getPodProblems(pod: any): PodProblem[] {
   for (const cond of conditions) {
     if (cond.type === 'PodScheduled' && cond.status === 'False') {
       if (cond.reason === 'Unschedulable') {
-        problems.push({ severity: 'high', message: 'Unschedulable' })
+        problems.push({ severity: 'high', message: 'Unschedulable', detail: summarizeSchedulerMessage(cond.message) || undefined })
       }
     }
     // Readiness/Liveness probe failures
     if (cond.type === 'ContainersReady' && cond.status === 'False') {
       const msg = (cond.message || '').toLowerCase()
       if (msg.includes('readiness')) {
-        problems.push({ severity: 'medium', message: 'Readiness Probe Failing' })
+        problems.push({ severity: 'medium', message: 'Readiness Probe Failing', detail: cond.message || undefined })
       } else if (msg.includes('liveness')) {
-        problems.push({ severity: 'high', message: 'Liveness Probe Failing' })
+        problems.push({ severity: 'high', message: 'Liveness Probe Failing', detail: cond.message || undefined })
       }
     }
     // IP allocation failures (subnet exhaustion)
     if (cond.type === 'PodReadyToStartContainers' && cond.status === 'False') {
       const msg = (cond.message || '').toLowerCase()
-      if (msg.includes('failed to assign an ip') || msg.includes('pod sandbox')) {
-        problems.push({ severity: 'critical', message: 'IP Allocation Failed' })
+      if (msg.includes('failed to assign an ip')) {
+        problems.push({ severity: 'critical', message: 'IP Allocation Failed', detail: cond.message || undefined })
+      } else if (msg.includes('pod sandbox')) {
+        problems.push({ severity: 'critical', message: 'Sandbox Startup Stalled', detail: cond.message || undefined })
+        hasSandboxStartupStallProblem = true
       }
     }
+  }
+  if (inferredSandboxStartupStall && !hasSandboxStartupStallProblem) {
+    problems.push({ severity: inferredSandboxStartupStallSeverity, message: 'Sandbox Startup Stalled' })
   }
 
   // Evicted pods
   if (phase === 'Failed' && pod.status?.reason === 'Evicted') {
-    problems.push({ severity: 'high', message: 'Evicted' })
+    problems.push({ severity: 'high', message: 'Evicted', detail: podStatusMessage })
   }
 
-  // Stuck terminating (zombie pod)
+  // Stuck terminating (zombie pod). Use the same threshold as the badge
+  // (TERMINATING_STUCK_MINUTES) so the drawer problem and the table badge flip
+  // together — firing at 60s while the badge stayed calm to 10m was a mismatch.
   if (pod.metadata?.deletionTimestamp) {
-    const deleteTime = new Date(pod.metadata.deletionTimestamp).getTime()
-    const ageSeconds = (Date.now() - deleteTime) / 1000
-    if (ageSeconds > 60) {
+    if (minutesSince(pod.metadata.deletionTimestamp) >= TERMINATING_STUCK_MINUTES) {
       problems.push({ severity: 'medium', message: 'Stuck Terminating' })
     }
   }
 
-  // Not ready (Running but containers not ready)
+  // Not ready (Running but containers not ready). Use the same containerSettledOk
+  // gate as getPodStatus so a completing Job pod (Running, container terminated
+  // exit 0, Ready=false) doesn't raise a drawer problem while the table badge
+  // stays calm — a settled/completed container is not "Not Ready".
   if (phase === 'Running') {
-    const readyContainers = containerStatuses.filter((c: any) => c.ready).length
+    const unsettled = containerStatuses.filter((c: any) => !containerSettledOk(c)).length
     const totalContainers = containerStatuses.length
-    if (totalContainers > 0 && readyContainers < totalContainers) {
+    if (totalContainers > 0 && unsettled > 0) {
       // Only add if we haven't already flagged a more specific issue
       const hasSpecificIssue = problems.some(p =>
         p.message.includes('Probe') || p.message.includes('CrashLoop') || p.message.includes('OOM')
@@ -287,6 +545,23 @@ export interface ContainerSquareState {
     startedAt?: string
     finishedAt?: string
   }
+}
+
+/**
+ * The container to default to for exec / logs on a multi-container pod. Honors
+ * the kubectl.kubernetes.io/default-container annotation (the convention
+ * kubectl, k9s, and Lens follow, and what service meshes like Istio set to
+ * point past their injected sidecar), falling back to the first container.
+ * Without this, mesh-injected pods default to their distroless sidecar — which
+ * has no shell — making the terminal appear broken.
+ */
+export function getDefaultContainerName(pod: any): string | undefined {
+  const containers = pod?.spec?.containers || []
+  const annotated = pod?.metadata?.annotations?.['kubectl.kubernetes.io/default-container']
+  if (annotated && containers.some((c: any) => c.name === annotated)) {
+    return annotated
+  }
+  return containers[0]?.name
 }
 
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
@@ -374,7 +649,9 @@ export function getWorkloadStatus(resource: any, kind: string): StatusBadge {
     const ready = status.numberReady || 0
     const updated = status.updatedNumberScheduled || 0
 
-    if (desired === 0) return { text: '0 nodes', color: healthColors.unknown, level: 'unknown' }
+    // 0 desired = the node selector matches no nodes — intentional/idle, not a
+    // fault and not "unknown" (matches pkg/health.Workload). Sky.
+    if (desired === 0) return { text: '0 nodes', color: healthColors.neutral, level: 'neutral' }
     if (ready === desired && updated === desired) {
       return { text: `${ready}/${desired}`, color: healthColors.healthy, level: 'healthy' }
     }
@@ -608,7 +885,12 @@ export function getIngressStatus(ingress: any): StatusBadge {
   if (lbIngress.length > 0) {
     return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
   }
-  return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+  // Awaiting an external address is normal right after creation; only flag it
+  // once the ingress/LB controller has had time and still hasn't assigned one.
+  if (minutesSince(ingress.metadata?.creationTimestamp) >= PENDING_STUCK_MINUTES) {
+    return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+  }
+  return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getIngressHosts(ingress: any): string {
@@ -731,11 +1013,13 @@ export function getJobStatus(job: any): StatusBadge {
 
   const completeCond = conditions.find((c: any) => c.type === 'Complete' && c.status === 'True')
   if (completeCond) {
-    return { text: 'Complete', color: healthColors.healthy, level: 'healthy' }
+    // A completed Job is done by design — neutral/idle (sky), not the green of a
+    // serving workload (matches pkg/health.Workload).
+    return { text: 'Complete', color: healthColors.neutral, level: 'neutral' }
   }
 
   if (job.spec?.suspend) {
-    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+    return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 
   if (status.active > 0) {
@@ -766,7 +1050,7 @@ export function getJobDuration(job: any): string | null {
 
 export function getCronJobStatus(cj: any): StatusBadge {
   if (cj.spec?.suspend) {
-    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+    return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
   const activeJobs = cj.status?.active?.length || 0
   if (activeJobs > 0) {
@@ -791,16 +1075,7 @@ export function getCronJobLastRun(cj: any): string | null {
 // ============================================================================
 
 export function getHPAStatus(hpa: any): StatusBadge {
-  const current = hpa.status?.currentReplicas || 0
-  const desired = hpa.status?.desiredReplicas || 0
-
-  if (current === desired) {
-    return { text: 'Stable', color: healthColors.healthy, level: 'healthy' }
-  }
-  if (current < desired) {
-    return { text: 'Scaling Up', color: healthColors.degraded, level: 'degraded' }
-  }
-  return { text: 'Scaling Down', color: healthColors.degraded, level: 'degraded' }
+  return hpaStatusFromState(getHPATableState(hpa), healthColors)
 }
 
 export function getHPAReplicas(hpa: any): { current: number; min: number; max: number } {
@@ -849,6 +1124,9 @@ export function getNodeStatus(node: any): StatusBadge {
   const isUnschedulable = node.spec?.unschedulable === true
 
   if (isReady && isUnschedulable) {
+    // Cordon is intentional but consequential — it's lost scheduling capacity, and
+    // a forgotten cordon strands nodes — so it stays on the warning axis (matching
+    // the backend Cordoned issue), unlike no-op intentional states (suspended/idle).
     return { text: 'Ready,SchedulingDisabled', color: healthColors.degraded, level: 'degraded' }
   }
   if (isReady) {
@@ -966,20 +1244,37 @@ export function cronToHuman(cron: string): string {
   if (minute === '0' && hour === '0' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return 'Daily at midnight'
   }
+  if (minute === '0' && hour.startsWith('*/') && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    const interval = hour.slice(2)
+    return interval === '1' ? 'Every hour' : `Every ${interval} hours`
+  }
   if (minute === '0' && hour !== '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return `Daily at ${hour}:00`
   }
-  if (minute !== '*' && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+  // Exclude step-minute ("*/N") here so it falls through to the interval branch
+  // below — otherwise "*/5 * * * *" rendered as "Every hour at :*/5" instead of
+  // "Every 5 minutes". A literal minute like "30" still reads "Every hour at :30".
+  if (minute !== '*' && !minute.startsWith('*/') && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return `Every hour at :${minute.padStart(2, '0')}`
   }
   if (minute === '*' && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return 'Every minute'
   }
-  if (minute.startsWith('*/')) {
+  // Only claim a plain "Every N minutes" when nothing else constrains the window;
+  // otherwise "*/5 9 * * *" (only at 09:xx) or "*/5 * * * 1-5" (weekdays only)
+  // would read as an unconstrained interval. Constrained shapes fall through to
+  // the raw cron rather than assert something misleading.
+  if (minute.startsWith('*/') && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     const interval = minute.slice(2)
-    return `Every ${interval} minutes`
+    return interval === '1' ? 'Every minute' : `Every ${interval} minutes`
   }
-  if (dayOfWeek === '1-5' || dayOfWeek === 'MON-FRI') {
+  // Weekday phrasing needs a literal hour:minute — a wildcard/step in either field
+  // (e.g. "*/5 * * * 1-5") would render "Weekdays at *:*/5", so let it fall to raw.
+  if (
+    (dayOfWeek === '1-5' || dayOfWeek === 'MON-FRI') &&
+    hour !== '*' && !hour.startsWith('*/') &&
+    minute !== '*' && !minute.startsWith('*/')
+  ) {
     return `Weekdays at ${hour}:${minute.padStart(2, '0')}`
   }
 
@@ -996,7 +1291,12 @@ export function getPVCStatus(pvc: any): StatusBadge {
     case 'Bound':
       return { text: 'Bound', color: healthColors.healthy, level: 'healthy' }
     case 'Pending':
-      return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+      // Pending is benign here: a WaitForFirstConsumer claim stays Pending by
+      // design until a pod needs it (could be forever for a scaled-to-zero
+      // workload). We can't see the StorageClass binding mode from the PVC alone,
+      // so age can't distinguish that from genuinely-stuck — the Problems panel,
+      // which has that context, owns the stuck-PVC alarm.
+      return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
     case 'Lost':
       return { text: 'Lost', color: healthColors.unhealthy, level: 'unhealthy' }
     default:
@@ -1071,7 +1371,7 @@ export function getWorkflowStatus(workflow: any): StatusBadge {
     case 'Succeeded':
       return { text: 'Succeeded', color: healthColors.healthy, level: 'healthy' }
     case 'Running':
-      return { text: 'Running', color: healthColors.degraded, level: 'degraded' }
+      return { text: 'Running', color: healthColors.neutral, level: 'neutral' }
     case 'Failed':
       return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
     case 'Error':
@@ -1155,6 +1455,7 @@ export {
   getFluxHelmReleaseChart,
   getFluxHelmReleaseVersion,
   getFluxHelmReleaseRevision,
+  getFluxHelmReleaseMessage,
   getFluxAlertProvider,
   getFluxAlertEventCount,
 } from './resource-utils-flux'
@@ -1480,6 +1781,10 @@ export function formatResources(resources: any): string {
   if (resources.memory) {
     parts.push(`Mem: ${formatMemoryString(resources.memory)}`)
   }
+  for (const [key, value] of Object.entries(resources)) {
+    if (key === 'cpu' || key === 'memory') continue
+    parts.push(`${key}: ${value}`)
+  }
   return parts.join(', ') || '-'
 }
 
@@ -1501,8 +1806,12 @@ export function parseColumnFilters(filtersParam: string | null): Record<string, 
   for (const pair of filtersParam.split('|')) {
     const colonIdx = pair.indexOf(':')
     if (colonIdx > 0) {
-      const key = pair.slice(0, colonIdx).trim()
+      const rawKey = pair.slice(0, colonIdx).trim()
       const valStr = pair.slice(colonIdx + 1).trim()
+      // Keys are URI-encoded so a custom-column key's own colon (e.g.
+      // "label:tier") doesn't collide with the key:value delimiter.
+      let key: string
+      try { key = decodeURIComponent(rawKey) } catch { key = rawKey }
       if (key && valStr) {
         filters[key] = valStr.split(',').map(v => {
           try { return decodeURIComponent(v.trim()) } catch { return v.trim() }
@@ -1513,12 +1822,13 @@ export function parseColumnFilters(filtersParam: string | null): Record<string, 
   return filters
 }
 
-// Serialize column filters to URL param format
-// Values are URI-encoded so commas inside values (e.g. "Ready,SchedulingDisabled") survive the round-trip.
+// Serialize column filters to URL param format. Keys and values are both
+// URI-encoded so a colon inside a custom-column key (e.g. "label:tier") or a
+// comma inside a value (e.g. "Ready,SchedulingDisabled") survives the round-trip.
 export function serializeColumnFilters(filters: Record<string, string[]>): string {
   const result = Object.entries(filters)
     .filter(([, v]) => v.length > 0)
-    .map(([k, vals]) => `${k}:${vals.map(v => encodeURIComponent(v)).join(',')}`)
+    .map(([k, vals]) => `${encodeURIComponent(k)}:${vals.map(v => encodeURIComponent(v)).join(',')}`)
     .join('|')
   return result
 }
@@ -1528,6 +1838,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   const kindLower = kind.toLowerCase()
 
   switch (column) {
+    case 'namespace':
+      return resource.metadata?.namespace || ''
     case 'type':
       if (kindLower === 'secrets' || kindLower === 'sealedsecrets') return getSecretType(resource).type
       if (kindLower === 'services') return resource.spec?.type || ''
@@ -1574,6 +1886,9 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'scaledjobs') return getScaledJobStatus(resource).text
       if (kindLower === 'policyreports' || kindLower === 'clusterpolicyreports') return _getPolicyReportStatus(resource).text
       if (kindLower === 'kyvernopolicies' || kindLower === 'clusterpolicies') return _getKyvernoPolicyStatus(resource).text
+      if (kindLower === 'nvidiaclusterpolicies') return _getNvidiaClusterPolicyStatus(resource).text
+      if (kindLower === 'nvidiadrivers') return _getNvidiaDriverStatus(resource).text
+      if (kindLower === 'resourceclaims') return _getResourceClaimStatus(resource).text
       if (kindLower === 'backups') return _getBackupStatus(resource).text
       if (kindLower === 'restores') return _getRestoreStatus(resource).text
       if (kindLower === 'schedules') return _getScheduleStatus(resource).text
@@ -1634,6 +1949,33 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
     case 'provider':
       if (kindLower === 'secretstores' || kindLower === 'clustersecretstores') return _getSecretStoreProviderType(resource)
       return resource.spec?.provider || ''
+    // DRA + NVIDIA columns. Unmatched kinds break to the generic fallback —
+    // these keys are shared (e.g. 'components' is also a Trivy SBOM column).
+    case 'deviceClass':
+      if (kindLower === 'resourceclaims') return _getResourceClaimDeviceClasses(resource).join(', ')
+      if (kindLower === 'resourceclaimtemplates') return _getResourceClaimTemplateDeviceClasses(resource).join(', ')
+      break
+    case 'allocated':
+      if (kindLower === 'resourceclaims') return _getResourceClaimAllocation(resource).map(r => r.driver).join(', ')
+      break
+    case 'reservedFor':
+      if (kindLower === 'resourceclaims') return _getResourceClaimReservedFor(resource).map(r => r.name).join(', ')
+      break
+    case 'pool':
+      if (kindLower === 'resourceslices') return resource.spec?.pool?.name || ''
+      break
+    case 'devices':
+      if (kindLower === 'resourceslices') return String((resource.spec?.devices || []).length)
+      break
+    case 'selectors':
+      if (kindLower === 'deviceclasses') return String((resource.spec?.selectors || []).length)
+      break
+    case 'components':
+      if (kindLower === 'nvidiaclusterpolicies') return _getNvidiaClusterPolicyEnabledComponents(resource).filter(c => c.enabled).map(c => c.label).join(', ')
+      break
+    case 'mig':
+      if (kindLower === 'nvidiaclusterpolicies') return resource.spec?.mig?.strategy || ''
+      break
   }
 
   // Fallback: try common paths

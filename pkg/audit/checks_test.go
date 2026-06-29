@@ -1,7 +1,9 @@
 package audit
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -10,6 +12,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -1451,5 +1454,336 @@ func TestSecretInConfigMap(t *testing.T) {
 	}
 	if found["app-config"] {
 		t.Error("app-config should not be flagged (no sensitive keys)")
+	}
+}
+
+// TestCheckStuckTerminating pins the lifecycle check's age-tier mapping.
+// Cluster Audit + per-resource GitOps Issue must agree on what counts
+// as "stuck" so an operator looking at both surfaces sees consistent
+// severity for the same resource.
+func TestCheckStuckTerminating(t *testing.T) {
+	now := time.Now()
+	mkPod := func(name string, ago time.Duration, finalizers []string) *corev1.Pod {
+		dt := metav1.NewTime(now.Add(-ago))
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              name,
+				Namespace:         "default",
+				DeletionTimestamp: &dt,
+				Finalizers:        finalizers,
+			},
+		}
+	}
+
+	input := &CheckInput{
+		Pods: []*corev1.Pod{
+			// Healthy pod (no deletionTimestamp) — must not be flagged.
+			{ObjectMeta: metav1.ObjectMeta{Name: "healthy", Namespace: "default"}},
+			// Just deleted, within window — must not be flagged.
+			mkPod("recently-deleted", 30*time.Second, nil),
+			// 4m59s — under threshold, must not be flagged.
+			mkPod("under-threshold", 4*time.Minute+59*time.Second, nil),
+			// 6 minutes — warning tier.
+			mkPod("warning", 6*time.Minute, []string{"example.io/cleanup"}),
+			// 45 minutes — danger tier.
+			mkPod("danger", 45*time.Minute, []string{"finalizers.fluxcd.io"}),
+		},
+	}
+
+	results := RunChecks(input)
+
+	bySeverity := map[string]map[string]string{} // severity → name → message
+	for _, f := range results.Findings {
+		if f.CheckID != "stuckTerminating" {
+			continue
+		}
+		if bySeverity[f.Severity] == nil {
+			bySeverity[f.Severity] = map[string]string{}
+		}
+		bySeverity[f.Severity][f.Name] = f.Message
+	}
+
+	if _, found := bySeverity["warning"]["healthy"]; found {
+		t.Error("healthy pod should not be flagged")
+	}
+	if _, found := bySeverity["warning"]["recently-deleted"]; found {
+		t.Error("pod within cleanup window should not be flagged")
+	}
+	if _, found := bySeverity["warning"]["under-threshold"]; found {
+		t.Error("pod under 5min threshold should not be flagged")
+	}
+	msg, ok := bySeverity["warning"]["warning"]
+	if !ok {
+		t.Fatal("expected warning-tier finding for 6min-old terminating pod")
+	}
+	if !strings.Contains(msg, "example.io/cleanup") {
+		t.Errorf("expected warning message to name finalizer; got %q", msg)
+	}
+	dangerMsg, ok := bySeverity["danger"]["danger"]
+	if !ok {
+		t.Fatal("expected danger-tier finding for 45min-old terminating pod")
+	}
+	if !strings.Contains(dangerMsg, "finalizers.fluxcd.io") {
+		t.Errorf("expected danger message to name finalizer; got %q", dangerMsg)
+	}
+}
+
+// TestCheckStuckTerminating_AllKinds asserts the check fires for *every*
+// typed slice in CheckInput, not just Pods. The implementation has 11
+// near-identical for-loops that each call emit() with a hardcoded kind
+// string. A copy-paste bug (omitting one slice during a refactor, or
+// passing the wrong kind label to emit()) would silently regress
+// coverage for that kind without any other test catching it. One
+// terminating fixture per kind, all set 45min old → all should report
+// danger-tier with their correct Kind field.
+func TestCheckStuckTerminating_AllKinds(t *testing.T) {
+	now := time.Now()
+	dt := metav1.NewTime(now.Add(-45 * time.Minute))
+	meta := func(name string) metav1.ObjectMeta {
+		return metav1.ObjectMeta{
+			Name:              name,
+			Namespace:         "default",
+			DeletionTimestamp: &dt,
+			Finalizers:        []string{"example.io/cleanup"},
+		}
+	}
+
+	input := &CheckInput{
+		Pods:                     []*corev1.Pod{{ObjectMeta: meta("pod-x")}},
+		Deployments:              []*appsv1.Deployment{{ObjectMeta: meta("deploy-x")}},
+		StatefulSets:             []*appsv1.StatefulSet{{ObjectMeta: meta("sts-x")}},
+		DaemonSets:               []*appsv1.DaemonSet{{ObjectMeta: meta("ds-x")}},
+		Services:                 []*corev1.Service{{ObjectMeta: meta("svc-x")}},
+		Ingresses:                []*networkingv1.Ingress{{ObjectMeta: meta("ing-x")}},
+		HorizontalPodAutoscalers: []*autoscalingv2.HorizontalPodAutoscaler{{ObjectMeta: meta("hpa-x")}},
+		PodDisruptionBudgets:     []*policyv1.PodDisruptionBudget{{ObjectMeta: meta("pdb-x")}},
+		ConfigMaps:               []*corev1.ConfigMap{{ObjectMeta: meta("cm-x")}},
+		Secrets:                  []*corev1.Secret{{ObjectMeta: meta("secret-x")}},
+		ServiceAccounts:          []*corev1.ServiceAccount{{ObjectMeta: meta("sa-x")}},
+	}
+
+	// Call the check directly. RunChecks would run the full chain
+	// (pod-spec checks, PDB matcher, etc.) which expect richer fixtures
+	// (Selector, container specs) than this test cares about. The audit
+	// dispatch is itself covered by RunChecks tests; this one targets
+	// only the stuckTerminating loop completeness.
+	findings := checkStuckTerminating(input)
+	byKindAndName := map[string]string{} // "Kind/name" → severity
+	for _, f := range findings {
+		if f.CheckID != "stuckTerminating" {
+			continue
+		}
+		byKindAndName[f.Kind+"/"+f.Name] = f.Severity
+	}
+
+	wantPairs := map[string]string{
+		"Pod/pod-x":                         SeverityDanger,
+		"Deployment/deploy-x":               SeverityDanger,
+		"StatefulSet/sts-x":                 SeverityDanger,
+		"DaemonSet/ds-x":                    SeverityDanger,
+		"Service/svc-x":                     SeverityDanger,
+		"Ingress/ing-x":                     SeverityDanger,
+		"HorizontalPodAutoscaler/hpa-x":     SeverityDanger,
+		"PodDisruptionBudget/pdb-x":         SeverityDanger,
+		"ConfigMap/cm-x":                    SeverityDanger,
+		"Secret/secret-x":                   SeverityDanger,
+		"ServiceAccount/sa-x":               SeverityDanger,
+	}
+	for k, want := range wantPairs {
+		got, ok := byKindAndName[k]
+		if !ok {
+			t.Errorf("missing finding for %s — kind not flagged when terminating", k)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s: severity = %q, want %q", k, got, want)
+		}
+	}
+}
+
+// TestCheckCrossplaneStuck pins the severity ramp and condition-priority
+// rules for stuck MR/XR/Claim resources. The 5min/30min thresholds are
+// shared with stuckTerminating; if either is retuned, retune both so the
+// audit page reports consistent severity across stuck-resource categories.
+func TestCheckCrossplaneStuck(t *testing.T) {
+	now := time.Now()
+	mr := func(name string, ttype, treason, tmessage string, transitionAgo time.Duration, paused bool) *unstructured.Unstructured {
+		annotations := map[string]interface{}{}
+		if paused {
+			annotations["crossplane.io/paused"] = "true"
+		}
+		u := &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "kubernetes.crossplane.io/v1alpha1",
+			"kind":       "Object",
+			"metadata": map[string]interface{}{
+				"name":        name,
+				"annotations": annotations,
+			},
+			"spec": map[string]interface{}{
+				"providerConfigRef": map[string]interface{}{"name": "default"},
+			},
+			"status": map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"type":               ttype,
+						"status":             "False",
+						"reason":             treason,
+						"message":            tmessage,
+						"lastTransitionTime": now.Add(-transitionAgo).Format(time.RFC3339),
+					},
+				},
+			},
+		}}
+		return u
+	}
+
+	healthy := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kubernetes.crossplane.io/v1alpha1",
+		"kind":       "Object",
+		"metadata":   map[string]interface{}{"name": "healthy"},
+		"spec":       map[string]interface{}{"providerConfigRef": map[string]interface{}{"name": "default"}},
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "Ready", "status": "True", "lastTransitionTime": now.Format(time.RFC3339)},
+				map[string]interface{}{"type": "Synced", "status": "True", "lastTransitionTime": now.Format(time.RFC3339)},
+			},
+		},
+	}}
+
+	input := &CheckInput{
+		ManagedResources: []*unstructured.Unstructured{
+			healthy,
+			mr("under-threshold", "Ready", "Pending", "still converging", 4*time.Minute+59*time.Second, false),
+			mr("warn-ready", "Ready", "ProviderConfigNotReady", "auth error from cloud", 6*time.Minute, false),
+			mr("warn-synced", "Synced", "ReconcileError", "schema rejected by provider", 6*time.Minute, false),
+			mr("danger", "Ready", "BackendError", "quota exceeded", 45*time.Minute, false),
+			mr("paused-ignored", "Ready", "ProviderConfigNotReady", "auth error", 45*time.Minute, true),
+		},
+	}
+
+	results := RunChecks(input)
+	bySeverity := map[string]map[string]Finding{}
+	for _, f := range results.Findings {
+		if f.CheckID != "crossplaneStuck" {
+			continue
+		}
+		if bySeverity[f.Severity] == nil {
+			bySeverity[f.Severity] = map[string]Finding{}
+		}
+		bySeverity[f.Severity][f.Name] = f
+	}
+
+	if _, found := bySeverity["warning"]["healthy"]; found {
+		t.Error("healthy MR should not be flagged")
+	}
+	if _, found := bySeverity["warning"]["under-threshold"]; found {
+		t.Error("MR within 5min window should not be flagged")
+	}
+	if _, found := bySeverity["warning"]["paused-ignored"]; found {
+		t.Error("paused MR should not be flagged regardless of age — operator intent")
+	}
+	if _, found := bySeverity["danger"]["paused-ignored"]; found {
+		t.Error("paused MR should not be flagged regardless of age — operator intent")
+	}
+
+	warnReady, ok := bySeverity["warning"]["warn-ready"]
+	if !ok {
+		t.Fatal("expected warning-tier finding for 6min-old Ready=False MR")
+	}
+	if !strings.Contains(warnReady.Message, "Ready=False") {
+		t.Errorf("expected message to name Ready=False; got %q", warnReady.Message)
+	}
+	if !strings.Contains(warnReady.Message, "auth error from cloud") {
+		t.Errorf("expected message to include the upstream cloud error; got %q", warnReady.Message)
+	}
+
+	warnSynced, ok := bySeverity["warning"]["warn-synced"]
+	if !ok {
+		t.Fatal("expected warning-tier finding for 6min-old Synced=False MR")
+	}
+	if !strings.Contains(warnSynced.Message, "Synced=False") {
+		t.Errorf("expected message to name Synced=False; got %q", warnSynced.Message)
+	}
+
+	danger, ok := bySeverity["danger"]["danger"]
+	if !ok {
+		t.Fatal("expected danger-tier finding for 45min-old MR")
+	}
+	if !strings.Contains(danger.Message, "quota exceeded") {
+		t.Errorf("expected danger message to include cloud error; got %q", danger.Message)
+	}
+}
+
+// TestCheckCrossplaneStuck_SyncedPriority verifies Synced=False takes
+// precedence over Ready=False when both are present. Synced=False usually
+// indicates a configuration error (the actionable thing); Ready=False is
+// often a downstream consequence. Operators fixing Synced first resolves
+// both — surfacing Synced=False in the finding tells them where to look.
+func TestCheckCrossplaneStuck_SyncedPriority(t *testing.T) {
+	now := time.Now()
+	bothFalse := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kubernetes.crossplane.io/v1alpha1",
+		"kind":       "Object",
+		"metadata":   map[string]interface{}{"name": "both"},
+		"spec":       map[string]interface{}{"providerConfigRef": map[string]interface{}{"name": "default"}},
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "Ready", "status": "False", "reason": "ProviderConfigNotReady", "message": "ready msg", "lastTransitionTime": now.Add(-10 * time.Minute).Format(time.RFC3339)},
+				map[string]interface{}{"type": "Synced", "status": "False", "reason": "ReconcileError", "message": "synced msg", "lastTransitionTime": now.Add(-10 * time.Minute).Format(time.RFC3339)},
+			},
+		},
+	}}
+	input := &CheckInput{ManagedResources: []*unstructured.Unstructured{bothFalse}}
+	results := RunChecks(input)
+	var found *Finding
+	for i := range results.Findings {
+		if results.Findings[i].CheckID == "crossplaneStuck" && results.Findings[i].Name == "both" {
+			found = &results.Findings[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected a crossplaneStuck finding")
+	}
+	if !strings.Contains(found.Message, "Synced=False") {
+		t.Errorf("expected Synced=False to win over Ready=False; got message %q", found.Message)
+	}
+	if !strings.Contains(found.Message, "synced msg") {
+		t.Errorf("expected Synced message body in finding; got %q", found.Message)
+	}
+}
+
+// TestCheckCrossplaneStuck_Composites checks that XRs/Claims are scanned too.
+func TestCheckCrossplaneStuck_Composites(t *testing.T) {
+	now := time.Now()
+	xr := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "demo.example.io/v1alpha1",
+		"kind":       "AppBundle",
+		"metadata":   map[string]interface{}{"name": "broken-xr"},
+		"spec": map[string]interface{}{
+			"crossplane": map[string]interface{}{
+				"resourceRefs": []interface{}{},
+			},
+		},
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "Synced", "status": "False", "reason": "ComposeResources", "message": "composition error", "lastTransitionTime": now.Add(-10 * time.Minute).Format(time.RFC3339)},
+			},
+		},
+	}}
+	input := &CheckInput{CompositeResources: []*unstructured.Unstructured{xr}}
+	results := RunChecks(input)
+	var found *Finding
+	for i := range results.Findings {
+		if results.Findings[i].CheckID == "crossplaneStuck" && results.Findings[i].Name == "broken-xr" {
+			found = &results.Findings[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected crossplaneStuck finding for composite resource")
+	}
+	if found.Kind != "AppBundle" {
+		t.Errorf("expected Kind=AppBundle, got %q", found.Kind)
 	}
 }

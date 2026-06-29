@@ -18,6 +18,9 @@ interface ResourceDetailDrawerProps {
   onExpand?: (resource: SelectedResource) => void
   /** Navigate to another resource within expanded WorkloadView */
   onNavigateToResource?: (resource: SelectedResource) => void
+  /** Top offset for the drawer (px). Defaults to Radar's 49px header height;
+   *  pass 0 in chromeless embeds where there's no Radar header above it. */
+  headerHeight?: number
 }
 
 export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {

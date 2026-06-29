@@ -1,0 +1,28 @@
+# Stuck-Terminating zombie fixture. The Kustomization itself is valid
+# Flux config; what makes it a zombie is the post-apply orchestration:
+# the script patches in a fake finalizer (radar-demo.io/intentional-zombie)
+# that no controller owns, then deletes the resource. Flux removes its
+# own finalizer normally, but the fake one blocks deletion forever — the
+# resource sits with deletionTimestamp set indefinitely, exercising:
+#   - lifecycle severity ramp (info → warning at 5min → alert at 30min)
+#   - finalizer-owner attribution + controller-health enrichment
+#   - [Terminating] chip in the title
+#   - disabled action buttons
+#   - Audit `stuckTerminating` finding
+#
+# This is purely additive — no controllers are scaled down, so the
+# healthy Flux fixtures (podinfo-base, podinfo-overlay, the HelmRelease)
+# keep reconciling normally alongside the zombie.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: zombie-kustomization
+  namespace: flux-system
+spec:
+  interval: 30m
+  sourceRef:
+    kind: GitRepository
+    name: podinfo
+  path: ./kustomize
+  prune: true
+  targetNamespace: demo-zombie

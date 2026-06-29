@@ -109,6 +109,17 @@ const pendingRequests = new Map<number, {
   reject: (error: Error) => void
 }>()
 
+const WORKER_UNAVAILABLE = 'Worker unavailable'
+
+function rejectPendingWorkerRequests() {
+  for (const [, pending] of pendingRequests) {
+    pending.reject(new Error(WORKER_UNAVAILABLE))
+  }
+  pendingRequests.clear()
+  layoutWorker?.terminate()
+  layoutWorker = null
+}
+
 function getOrCreateWorker(): Worker {
   if (!layoutWorker) {
     layoutWorker = new Worker(new URL('./layout.worker.ts', import.meta.url), { type: 'module' })
@@ -126,10 +137,7 @@ function getOrCreateWorker(): Worker {
     }
     layoutWorker.onerror = (e) => {
       console.error('[TopologyLayout] Worker error:', e)
-      for (const [, pending] of pendingRequests) {
-        pending.reject(new Error('Worker error'))
-      }
-      pendingRequests.clear()
+      rejectPendingWorkerRequests()
     }
   }
   return layoutWorker
@@ -142,10 +150,16 @@ function runLayoutViaWorker(
   padding: typeof GROUP_PADDING
 ): Promise<LayoutResult> {
   return new Promise((resolve, reject) => {
-    const worker = getOrCreateWorker()
-    const requestId = ++requestIdCounter
-    pendingRequests.set(requestId, { resolve, reject })
-    worker.postMessage({ type: 'layout', requestId, elkGraph, groupingMode, hideGroupHeader, padding })
+    try {
+      const worker = getOrCreateWorker()
+      const requestId = ++requestIdCounter
+      pendingRequests.set(requestId, { resolve, reject })
+      worker.postMessage({ type: 'layout', requestId, elkGraph, groupingMode, hideGroupHeader, padding })
+    } catch (err) {
+      console.error('[TopologyLayout] Worker unavailable:', err)
+      rejectPendingWorkerRequests()
+      reject(new Error(WORKER_UNAVAILABLE))
+    }
   })
 }
 
@@ -164,7 +178,24 @@ async function runLayoutOnMainThread(
 
   const groupLayouts: LayoutResult['groupLayouts'] = []
   const ungroupedNodes: LayoutResult['ungroupedNodes'] = []
-  const groupNodeIds = new Map<string, Set<string>>()
+  // Map each node to its group once. Serves both the intra-group edge bucketing
+  // here (filtering all edges per group would be O(groups × edges)) and the
+  // node→group lookup for Phase 2's inter-group edges below.
+  const nodeToGroup = new Map<string, string>()
+  for (const child of elkGraph.children) {
+    if (child.id.startsWith('group-') && child.children) {
+      for (const c of child.children) nodeToGroup.set(c.id, child.id)
+    }
+  }
+  const intraEdgesByGroup = new Map<string, ElkEdge[]>()
+  for (const e of elkGraph.edges) {
+    const sg = nodeToGroup.get(e.sources[0])
+    if (sg && sg === nodeToGroup.get(e.targets[0])) {
+      const arr = intraEdgesByGroup.get(sg)
+      if (arr) arr.push(e)
+      else intraEdgesByGroup.set(sg, [e])
+    }
+  }
 
   // Phase 1: Layout each group independently
   for (const child of elkGraph.children) {
@@ -173,12 +204,8 @@ async function runLayoutOnMainThread(
     if (isGroup && child.children && child.children.length > 0) {
       const groupKey = child.id.replace(`group-${groupingMode}-`, '')
       const minWidth = hideGroupHeader ? 300 : Math.max(500, groupKey.length * 16 + 200)
-      const nodeIds = new Set(child.children.map(c => c.id))
-      groupNodeIds.set(child.id, nodeIds)
 
-      const intraGroupEdges = elkGraph.edges.filter(e =>
-        nodeIds.has(e.sources[0]) && nodeIds.has(e.targets[0])
-      )
+      const intraGroupEdges = intraEdgesByGroup.get(child.id) ?? []
 
       const layoutResult = await elk.layout({
         id: child.id,
@@ -217,24 +244,12 @@ async function runLayoutOnMainThread(
   }
 
   // Phase 2: Build meta-graph and position groups based on inter-group edges
-  const nodeToGroup = new Map<string, string>()
-  for (const [groupId, nodeIds] of groupNodeIds) {
-    for (const nodeId of nodeIds) nodeToGroup.set(nodeId, groupId)
-  }
-
-  const interGroupEdges: ElkEdge[] = []
-  const seen = new Set<string>()
-  for (const edge of elkGraph.edges) {
-    const sg = nodeToGroup.get(edge.sources[0])
-    const tg = nodeToGroup.get(edge.targets[0])
-    if (sg && tg && sg !== tg) {
-      const key = `${sg}->${tg}`
-      if (!seen.has(key)) { seen.add(key); interGroupEdges.push({ id: `inter-${key}`, sources: [sg], targets: [tg] }) }
-    } else if ((!sg && tg) || (sg && !tg)) {
-      const s = sg || edge.sources[0], t = tg || edge.targets[0], key = `${s}->${t}`
-      if (!seen.has(key)) { seen.add(key); interGroupEdges.push({ id: `inter-${key}`, sources: [s], targets: [t] }) }
-    }
-  }
+  // (nodeToGroup was built once above).
+  const metaIds = new Set<string>([
+    ...groupLayouts.map(g => g.groupId),
+    ...ungroupedNodes.map(n => n.id),
+  ])
+  const interGroupEdges = buildInterGroupEdges(elkGraph.edges, nodeToGroup, metaIds)
 
   const metaResult = await elk.layout({
     id: 'meta-root',
@@ -264,7 +279,18 @@ function runLayout(
   if (layoutEngine === 'main-thread') {
     return runLayoutOnMainThread(elkGraph, groupingMode, hideGroupHeader, padding)
   }
-  return runLayoutViaWorker(elkGraph, groupingMode, hideGroupHeader, padding)
+  return runLayoutViaWorker(elkGraph, groupingMode, hideGroupHeader, padding).catch((err) => {
+    // A worker failure before a layout result arrives usually means the
+    // consumer's bundler/CSP couldn't serve or run the worker chunk.
+    // Fall back to the inline engine permanently rather than rendering a dead
+    // "Layout Error" pane.
+    if (err instanceof Error && err.message === WORKER_UNAVAILABLE) {
+      console.warn('[TopologyLayout] layout worker unavailable — falling back to main-thread ELK')
+      layoutEngine = 'main-thread'
+      return runLayoutOnMainThread(elkGraph, groupingMode, hideGroupHeader, padding)
+    }
+    throw err
+  })
 }
 
 interface ElkNode {
@@ -287,6 +313,36 @@ interface ElkGraph {
   layoutOptions: Record<string, string>
   children: ElkNode[]
   edges: ElkEdge[]
+}
+
+/**
+ * Build the meta-graph edges that position groups relative to each other (Phase 2).
+ * Each endpoint is normalized to its meta node: an expanded group's member maps to
+ * its group (via nodeToGroup); a collapsed-group chip id or an ungrouped node id is
+ * ALREADY a meta node and is used as-is. Edges between two already-meta nodes
+ * (chip↔chip, chip↔ungrouped) must still be included — dropping them loses the
+ * connectivity ELK uses to place connected groups near each other. Endpoints absent
+ * from metaIds are skipped (defensive — keeps the meta graph importable).
+ *
+ * Mirrored inline in layout.worker.ts, which is intentionally self-contained.
+ */
+export function buildInterGroupEdges(
+  edges: ElkEdge[],
+  nodeToGroup: Map<string, string>,
+  metaIds: Set<string>,
+): ElkEdge[] {
+  const out: ElkEdge[] = []
+  const seen = new Set<string>()
+  for (const edge of edges) {
+    const s = nodeToGroup.get(edge.sources[0]) ?? edge.sources[0]
+    const t = nodeToGroup.get(edge.targets[0]) ?? edge.targets[0]
+    if (s === t || !metaIds.has(s) || !metaIds.has(t)) continue
+    const key = `${s}->${t}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ id: `inter-${key}`, sources: [s], targets: [t] })
+  }
+  return out
 }
 
 // Get app label from a node (if it has one)
@@ -425,13 +481,41 @@ function pickGroupName(nodes: TopologyNode[]): string {
   return sorted[0].name
 }
 
+/**
+ * Whether a group renders as a single collapsed chip/card (members hidden) vs an
+ * expanded container. This is the ONE predicate that node placement, ELK edge
+ * redirect, and ReactFlow edge building must all agree on — if they diverge, an
+ * edge can reference a member hidden inside a chip, which either crashes ELK
+ * ("Referenced shape does not exist") or silently drops the rendered edge.
+ *
+ * - Explicit chip/cardGrid levels are always collapsed (they're in collapsedGroups).
+ * - When the smart-default chip pass is active (large clusters), a group with no
+ *   level entry is a late arrival and defaults to collapsed — e.g. a namespace
+ *   that only surfaces after switching Resources↔Traffic. When it is NOT active
+ *   (small clusters, manual per-group toggles), a no-entry group stays expanded,
+ *   so collapsing one group never cascades to untouched groups.
+ */
+export function isGroupEffectivelyCollapsed(
+  groupId: string,
+  collapsedGroups: Set<string>,
+  groupLevels: Map<string, GroupDisplayLevel> | undefined,
+  smartDefaultActive: boolean,
+): boolean {
+  if (collapsedGroups.has(groupId)) return true
+  if (smartDefaultActive && groupLevels?.get(groupId) !== 'topology') return true
+  return false
+}
+
 // Build hierarchical ELK graph with groups containing children
 export function buildHierarchicalElkGraph(
   topologyNodes: TopologyNode[],
   edges: Array<{ id: string; source: string; target: string; type: string }>,
   groupingMode: GroupingMode,
   collapsedGroups: Set<string>,
-  groupLevels?: Map<string, GroupDisplayLevel>
+  groupLevels?: Map<string, GroupDisplayLevel>,
+  /** True when the large-cluster smart-default chip pass has materialized levels;
+   *  makes no-entry groups default to collapsed (see isGroupEffectivelyCollapsed). */
+  smartDefaultActive = false,
 ): { elkGraph: ElkGraph; groupMap: Map<string, string[]>; nodeToGroup: Map<string, string> } {
   const groupMap = new Map<string, string[]>()
   const nodeToGroup = new Map<string, string>()
@@ -462,6 +546,11 @@ export function buildHierarchicalElkGraph(
     }
   }
 
+  // Node placement and edge redirect MUST share this predicate — see
+  // isGroupEffectivelyCollapsed for why.
+  const isGroupCollapsed = (groupId: string): boolean =>
+    isGroupEffectivelyCollapsed(groupId, collapsedGroups, groupLevels, smartDefaultActive)
+
   const children: ElkNode[] = []
   const processedNodes = new Set<string>()
 
@@ -482,16 +571,7 @@ export function buildHierarchicalElkGraph(
     // Create group nodes with children
     for (const [groupKey, memberIds] of groupMap) {
       const groupId = `group-${groupingMode}-${groupKey}`
-      // When groupLevels has entries for the CURRENT grouping mode, any group without
-      // an explicit 'topology' level is collapsed. This prevents late-arriving namespaces
-      // from defaulting to expanded and overlapping with collapsed chips.
-      // Only apply when levels exist for the same grouping prefix — don't let namespace
-      // levels leak into app/label grouping contexts.
-      const groupPrefix = `group-${groupingMode}-`
-      const hasLevelsForCurrentMode = groupLevels && groupLevels.size > 0 &&
-        [...groupLevels.keys()].some(k => k.startsWith(groupPrefix))
-      const isCollapsed = collapsedGroups.has(groupId) ||
-        (hasLevelsForCurrentMode && groupLevels!.get(groupId) !== 'topology')
+      const isCollapsed = isGroupCollapsed(groupId)
 
       if (isCollapsed) {
         const displayLevel = groupLevels?.get(groupId) || 'chip'
@@ -589,6 +669,18 @@ export function buildHierarchicalElkGraph(
     }
   }
 
+  // Every ELK edge endpoint must reference a node present in the graph (a
+  // top-level child, or a member of an expanded group). A single dangling
+  // reference makes ELK reject the whole import, blanking the topology — so we
+  // drop the stray edge instead. With the unified isGroupCollapsed predicate
+  // this should never fire; it's insurance against future placement/redirect
+  // drift.
+  const validEndpointIds = new Set<string>()
+  for (const child of children) {
+    validEndpointIds.add(child.id)
+    if (child.children) for (const c of child.children) validEndpointIds.add(c.id)
+  }
+
   // Build edges, redirecting to groups when collapsed
   const elkEdges: ElkEdge[] = []
   const seenEdges = new Set<string>()
@@ -597,16 +689,20 @@ export function buildHierarchicalElkGraph(
     let source = edge.source
     let target = edge.target
 
-    // Redirect edges to collapsed groups
+    // Redirect edges to collapsed groups — same predicate as node placement so
+    // an edge never references a member hidden inside a chip.
     const sourceGroup = nodeToGroup.get(source)
-    if (sourceGroup && collapsedGroups.has(sourceGroup)) {
+    if (sourceGroup && isGroupCollapsed(sourceGroup)) {
       source = sourceGroup
     }
 
     const targetGroup = nodeToGroup.get(target)
-    if (targetGroup && collapsedGroups.has(targetGroup)) {
+    if (targetGroup && isGroupCollapsed(targetGroup)) {
       target = targetGroup
     }
+
+    // Drop edges whose endpoints aren't in the graph (see validEndpointIds)
+    if (!validEndpointIds.has(source) || !validEndpointIds.has(target)) continue
 
     // Skip self-loops
     if (source === target) continue
@@ -635,11 +731,14 @@ export function buildHierarchicalElkGraph(
   }
 }
 
-// Lower number = higher severity
-const HEALTH_PRIORITY: Record<HealthStatus, number> = { unhealthy: 0, degraded: 1, unknown: 2, healthy: 3 }
+// Lower number = higher severity. `neutral` (intentional/idle) is the
+// most-benign tier, so a group whose every member is idle rolls up to neutral,
+// while a mixed healthy+idle group still reads healthy (healthy out-ranks
+// neutral). An empty/unresolved group defaults to healthy.
+const HEALTH_PRIORITY: Record<HealthStatus, number> = { unhealthy: 0, degraded: 1, unknown: 2, healthy: 3, neutral: 4 }
 
 function computeGroupHealth(memberIds: string[], nodeMap: Map<string, TopologyNode>): { worstStatus: HealthStatus; unhealthyCount: number } {
-  let worstPriority = 3
+  let worstPriority = Infinity
   let worstStatus: HealthStatus = 'healthy'
   let unhealthyCount = 0
   for (const id of memberIds) {
@@ -708,8 +807,11 @@ function computeWorkloadCards(
     })
     const primary = sorted[0]
 
-    // Compute worst health
-    let worstPriority = 3
+    // Compute worst health. Seed with Infinity (not 3) so an all-neutral
+    // component can surface neutral — `neutral` is priority 4 (most benign), so a
+    // `< 3` seed would never accept it and the card would stay green. Matches
+    // computeGroupHealth.
+    let worstPriority = Infinity
     let worstStatus: HealthStatus = 'healthy'
     for (const node of comp) {
       const p = HEALTH_PRIORITY[node.status] ?? 2
@@ -789,7 +891,7 @@ function computeGridDimensions(cardCount: number, groupKey: string): { width: nu
 }
 
 // Two-phase layout: first layout groups internally, then position groups based on connections
-// Layout is performed in a Web Worker to avoid blocking the main thread
+// Layout runs via the active engine — a Web Worker when available, else inline
 export async function applyHierarchicalLayout(
   elkGraph: ElkGraph,
   topologyNodes: TopologyNode[],
@@ -808,7 +910,7 @@ export async function applyHierarchicalLayout(
   try {
     const padding = hideGroupHeader ? GROUP_PADDING_NO_HEADER : GROUP_PADDING
 
-    // Run layout in worker (off main thread)
+    // Run layout via the active engine
     const workerResult = await runLayout(elkGraph, groupingMode, hideGroupHeader, padding)
 
     if (workerResult.error) {
@@ -831,12 +933,13 @@ export async function applyHierarchicalLayout(
       positions.set(group.groupId, pos)
 
       const { worstStatus, unhealthyCount } = computeGroupHealth(memberIds, nodeMap)
-      // Default to 'chip' when groupLevels has entries for the current grouping mode,
-      // so late-arriving namespaces don't render as expanded topology and overlap with chips.
-      const hasLevelsForMode = groupLevels && groupLevels.size > 0 &&
-        [...groupLevels.keys()].some(k => k.startsWith(`group-${groupingMode}-`))
-      const defaultLevel: GroupDisplayLevel = hasLevelsForMode ? 'chip' : 'topology'
-      const displayLevel: GroupDisplayLevel = groupLevels?.get(group.groupId) || (group.isCollapsed ? 'chip' : defaultLevel)
+      // Display level derives from the SAME source of truth as ELK node placement:
+      // group.isCollapsed reflects buildHierarchicalElkGraph's isGroupEffectivelyCollapsed
+      // decision (an expanded group was laid out with its children). Recomputing a
+      // separate "default" here would let the rendered chip disagree with the laid-out
+      // children — e.g. a manual single collapse rendering untouched groups as chips
+      // while their children are still placed. An explicit level (e.g. cardGrid) wins.
+      const displayLevel: GroupDisplayLevel = groupLevels?.get(group.groupId) || (group.isCollapsed ? 'chip' : 'topology')
 
       // Compute kind breakdown for collapsed chips
       const kindCounts: Record<string, number> = {}

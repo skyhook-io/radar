@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -44,8 +45,8 @@ type (
 // Re-export constants from pkg/timeline.
 const (
 	// EventSource constants
-	SourceInformer  = pkgtimeline.SourceInformer
-	SourceK8sEvent  = pkgtimeline.SourceK8sEvent
+	SourceInformer   = pkgtimeline.SourceInformer
+	SourceK8sEvent   = pkgtimeline.SourceK8sEvent
 	SourceHistorical = pkgtimeline.SourceHistorical
 
 	// EventType constants
@@ -55,10 +56,14 @@ const (
 	EventTypeNormal  = pkgtimeline.EventTypeNormal
 	EventTypeWarning = pkgtimeline.EventTypeWarning
 
+	// Reason constants
+	ReasonRecreated = pkgtimeline.ReasonRecreated
+
 	// HealthState constants
 	HealthHealthy   = pkgtimeline.HealthHealthy
 	HealthDegraded  = pkgtimeline.HealthDegraded
 	HealthUnhealthy = pkgtimeline.HealthUnhealthy
+	HealthNeutral   = pkgtimeline.HealthNeutral
 	HealthUnknown   = pkgtimeline.HealthUnknown
 
 	// GroupingMode constants
@@ -85,25 +90,22 @@ func ResourceKey(kind, namespace, name string) string {
 }
 
 // Converter functions.
-func NewInformerEvent(kind, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
-	return pkgtimeline.NewInformerEvent(kind, namespace, name, uid, operation, healthState, diff, owner, labels, createdAt)
+func NewInformerEvent(kind, apiVersion, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
+	return pkgtimeline.NewInformerEvent(kind, apiVersion, namespace, name, uid, operation, healthState, diff, owner, labels, createdAt)
 }
 func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEvent {
 	return pkgtimeline.NewK8sEventTimelineEvent(event, owner)
 }
-func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
-	return pkgtimeline.NewHistoricalEvent(kind, namespace, name, ts, reason, message, healthState, owner, labels)
+func NewHistoricalEvent(kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
+	return pkgtimeline.NewHistoricalEvent(kind, apiVersion, namespace, name, ts, reason, message, healthState, owner, labels)
 }
-func ExtractOwner(obj any) *OwnerInfo       { return pkgtimeline.ExtractOwner(obj) }
+func ExtractOwner(obj any) *OwnerInfo         { return pkgtimeline.ExtractOwner(obj) }
 func ExtractLabels(obj any) map[string]string { return pkgtimeline.ExtractLabels(obj) }
-func DetermineHealthState(kind string, obj any) HealthState {
-	return pkgtimeline.DetermineHealthState(kind, obj)
-}
-func OperationToEventType(op string) EventType   { return pkgtimeline.OperationToEventType(op) }
-func EventTypeToOperation(et EventType) string   { return pkgtimeline.EventTypeToOperation(et) }
-func HealthStateToString(hs HealthState) string  { return pkgtimeline.HealthStateToString(hs) }
-func StringToHealthState(s string) HealthState   { return pkgtimeline.StringToHealthState(s) }
-func ToLegacyDiffInfo(d *DiffInfo) *DiffInfo     { return pkgtimeline.ToLegacyDiffInfo(d) }
+func OperationToEventType(op string) EventType  { return pkgtimeline.OperationToEventType(op) }
+func EventTypeToOperation(et EventType) string  { return pkgtimeline.EventTypeToOperation(et) }
+func HealthStateToString(hs HealthState) string { return pkgtimeline.HealthStateToString(hs) }
+func StringToHealthState(s string) HealthState  { return pkgtimeline.StringToHealthState(s) }
+func ToLegacyDiffInfo(d *DiffInfo) *DiffInfo    { return pkgtimeline.ToLegacyDiffInfo(d) }
 
 // Store constructors.
 func NewMemoryStore(maxSize int) *pkgtimeline.MemoryStore { return pkgtimeline.NewMemoryStore(maxSize) }
@@ -141,7 +143,12 @@ func InitStore(cfg StoreConfig) error {
 				return
 			}
 			globalStore = store
-			log.Printf("Initialized SQLite event store at %s", cfg.Path)
+			if cfg.RetentionAge > 0 || cfg.MaxStorageBytes > 0 {
+				store.StartCleanupLoop(cfg.RetentionAge, time.Hour, cfg.MaxStorageBytes)
+				log.Printf("Initialized SQLite event store at %s (retention: %s, max size: %d bytes)", cfg.Path, cfg.RetentionAge, cfg.MaxStorageBytes)
+			} else {
+				log.Printf("Initialized SQLite event store at %s (retention: disabled — events table will grow unbounded)", cfg.Path)
+			}
 
 		case StoreTypeMemory:
 			fallthrough
@@ -153,8 +160,38 @@ func InitStore(cfg StoreConfig) error {
 			globalStore = NewMemoryStore(maxSize)
 			log.Printf("Initialized in-memory event store (max %d events)", maxSize)
 		}
+		observationStartNanos.Store(time.Now().UnixNano())
 	})
 	return initErr
+}
+
+// observationStartNanos (unix nanos; 0 = no store) is when THIS process began
+// recording events. Claims of the form "no changes in the last N seconds"
+// must clamp to it: after a restart the store (in-memory always; SQLite
+// during the downtime gap) has not been watching for the full window, and
+// asserting a longer one would be a false statement. Atomic because it is
+// written on context switch (ResetStore) while concurrent MCP request
+// goroutines read it.
+var observationStartNanos atomic.Int64
+
+// ObservationStart returns when this process's store began observing, or the
+// zero time when no store is initialized.
+func ObservationStart() time.Time {
+	nanos := observationStartNanos.Load()
+	if nanos == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nanos)
+}
+
+// SetObservationStartForTest backdates the observation window so tests can
+// exercise claims that require a longer watch period.
+func SetObservationStartForTest(t time.Time) {
+	if t.IsZero() {
+		observationStartNanos.Store(0)
+		return
+	}
+	observationStartNanos.Store(t.UnixNano())
 }
 
 // GetStore returns the global event store instance
@@ -174,6 +211,7 @@ func ResetStore() {
 		}
 		globalStore = nil
 	}
+	observationStartNanos.Store(0)
 	globalStoreOnce = sync.Once{}
 }
 

@@ -1,6 +1,7 @@
 import { Network, Route } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import {
   getVirtualServiceStatus,
   getVirtualServiceHostsList,
@@ -62,7 +63,7 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
                 {gateways.map((gw, i) => {
                   // Gateway reference can be "namespace/name" or just "name" or "mesh"
                   if (gw === 'mesh') {
-                    return <span key={i} className="badge-sm bg-theme-hover text-theme-text-secondary">mesh</span>
+                    return <Badge key={i} tone="structural" size="sm">mesh</Badge>
                   }
                   const parts = gw.split('/')
                   const gwNs = parts.length === 2 ? parts[0] : ns
@@ -95,19 +96,19 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
                     {route.name || `Route ${i + 1}`}
                   </span>
                   {route.timeout && (
-                    <span className="px-1.5 py-0.5 bg-theme-hover rounded text-[10px] text-theme-text-secondary">
+                    <Badge tone="structural" size="sm">
                       timeout: {route.timeout}
-                    </span>
+                    </Badge>
                   )}
                   {route.fault && (
-                    <span className="px-1.5 py-0.5 bg-yellow-500/20 text-yellow-400 rounded text-[10px] font-medium">
+                    <Badge severity="warning" size="sm">
                       fault injection
-                    </span>
+                    </Badge>
                   )}
                   {route.mirror && (
-                    <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded text-[10px] font-medium">
+                    <Badge tone="note" size="sm">
                       mirroring
-                    </span>
+                    </Badge>
                   )}
                 </div>
 
@@ -119,19 +120,19 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
                       {route.match.map((m: any, mi: number) => (
                         <div key={mi} className="flex flex-wrap gap-1 text-xs">
                           {m.uri && (
-                            <span className="px-1.5 py-0.5 bg-blue-500/10 text-blue-400 rounded">
+                            <Badge tone="structural" size="sm">
                               URI {Object.keys(m.uri)[0]}: {Object.values(m.uri)[0] as string}
-                            </span>
+                            </Badge>
                           )}
                           {m.method && (
-                            <span className="px-1.5 py-0.5 bg-blue-500/10 text-blue-400 rounded">
+                            <Badge tone="structural" size="sm">
                               Method: {m.method.exact || Object.values(m.method)[0]}
-                            </span>
+                            </Badge>
                           )}
                           {m.headers && Object.entries(m.headers).map(([hk, hv]: [string, any]) => (
-                            <span key={hk} className="px-1.5 py-0.5 bg-blue-500/10 text-blue-400 rounded">
+                            <Badge key={hk} tone="structural" size="sm">
                               Header {hk}: {typeof hv === 'object' ? Object.values(hv)[0] as string : String(hv)}
-                            </span>
+                            </Badge>
                           ))}
                         </div>
                       ))}
@@ -174,9 +175,9 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
                               <span className="text-theme-text-tertiary">:{destPort}</span>
                             )}
                             {destSubset && (
-                              <span className="px-1.5 py-0.5 bg-theme-hover rounded text-theme-text-secondary">
+                              <Badge tone="structural" size="sm">
                                 subset: {destSubset}
-                              </span>
+                              </Badge>
                             )}
                           </div>
                         )
@@ -201,16 +202,16 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
                 {route.fault && (
                   <div className="flex flex-wrap gap-2 text-xs">
                     {route.fault.delay && (
-                      <span className="px-1.5 py-0.5 bg-yellow-500/10 text-yellow-400 rounded">
+                      <Badge severity="warning" size="sm">
                         Delay: {route.fault.delay.fixedDelay}
                         {route.fault.delay.percentage?.value && ` (${route.fault.delay.percentage.value}%)`}
-                      </span>
+                      </Badge>
                     )}
                     {route.fault.abort && (
-                      <span className="px-1.5 py-0.5 bg-red-500/10 text-red-400 rounded">
+                      <Badge severity="error" size="sm">
                         Abort: HTTP {route.fault.abort.httpStatus}
                         {route.fault.abort.percentage?.value && ` (${route.fault.abort.percentage.value}%)`}
-                      </span>
+                      </Badge>
                     )}
                   </div>
                 )}

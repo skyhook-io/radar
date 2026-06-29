@@ -19,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/images"
+	rcpkg "github.com/skyhook-io/radar/pkg/remotecommand"
 )
 
 // PodFilesystem represents the file listing response for a pod container
@@ -74,7 +75,7 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	exec, err := rcpkg.NewExecutor(config, req.URL())
 	if err != nil {
 		log.Printf("[copy] Failed to create executor for %s/%s: %v", namespace, podName, err)
 		errorlog.Record("copy", "error", "failed to create executor for %s/%s: %v", namespace, podName, err)
@@ -87,7 +88,6 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
-
 	if err != nil {
 		// find failed — could be missing command, unsupported flags (e.g. -printf on BusyBox), etc.
 		// Always fall back to ls which is more universally available.
@@ -130,7 +130,7 @@ func (s *Server) listFilesWithLS(r *http.Request, namespace, podName, container,
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	exec, err := rcpkg.NewExecutor(config, req.URL())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -192,7 +192,7 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	exec, err := rcpkg.NewExecutor(config, req.URL())
 	if err != nil {
 		log.Printf("[copy] Failed to create executor for download %s/%s: %v", namespace, podName, err)
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create executor: %v", err))
@@ -204,7 +204,6 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
-
 	if err != nil {
 		errMsg := err.Error() + " " + stderr.String()
 		if isCommandNotFound(errMsg) {
@@ -289,7 +288,7 @@ func (s *Server) downloadWithCat(r *http.Request, namespace, podName, container,
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	exec, err := rcpkg.NewExecutor(config, req.URL())
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +527,7 @@ func classifyExecError(findErr, lsErr string) string {
 
 // shellQuote wraps a string in single quotes for safe use in sh -c commands.
 // Single quotes inside the string are escaped by ending the quote, adding an
-// escaped single quote, and re-opening the quote: ' → '\''
+// escaped single quote, and re-opening the quote.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

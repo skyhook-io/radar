@@ -1,6 +1,10 @@
 package timeline
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/skyhook-io/radar/pkg/health"
+)
 
 // GroupEvents groups events according to the specified mode.
 // Exported so pkg consumers (e.g. SQLite store) can share the same grouping logic.
@@ -70,7 +74,11 @@ func groupByOwner(events []TimelineEvent) []EventGroup {
 
 	var groups []EventGroup
 	for _, group := range groupMap {
-		worstHealth := HealthUnknown
+		// Seed with "no opinion" (empty) rather than HealthUnknown: unknown
+		// outranks healthy, so seeding it would pin an all-healthy owner group at
+		// unknown forever. worseHealth treats "" as no-opinion and the first real
+		// event wins.
+		worstHealth := HealthState("")
 		group.EventCount = len(group.Events)
 		for _, event := range group.Events {
 			worstHealth = worseHealth(worstHealth, event.HealthState)
@@ -80,6 +88,9 @@ func groupByOwner(events []TimelineEvent) []EventGroup {
 			for _, event := range group.Children[i].Events {
 				worstHealth = worseHealth(worstHealth, event.HealthState)
 			}
+		}
+		if worstHealth == "" {
+			worstHealth = HealthUnknown
 		}
 		group.HealthState = worstHealth
 		groups = append(groups, *group)
@@ -169,16 +180,9 @@ func groupByNamespace(events []TimelineEvent) []EventGroup {
 	return groups
 }
 
-// worseHealth returns the worse of two health states.
+// worseHealth returns the worse of two health states, delegating to the shared
+// health.Rank ordering so the timeline, package rollup, and topology all agree on
+// what "worse" means (and on neutral aggregating as most-benign).
 func worseHealth(a, b HealthState) HealthState {
-	order := map[HealthState]int{
-		HealthHealthy:   0,
-		HealthUnknown:   1,
-		HealthDegraded:  2,
-		HealthUnhealthy: 3,
-	}
-	if order[b] > order[a] {
-		return b
-	}
-	return a
+	return HealthState(health.WorseOf(health.Level(a), health.Level(b)))
 }

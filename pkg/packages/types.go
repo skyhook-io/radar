@@ -12,7 +12,7 @@
 package packages
 
 // SourceCode is the single-character code identifying which signal
-// contributed to a PackageRow. Stable on-wire — agents, SPAs, Hub
+// contributed to a PackageRow. Stable on-wire — agents, frontends, Hub
 // fan-in, etc. depend on these exact strings. Defined as a named type
 // so call sites get compile-time checks against typos.
 type SourceCode string
@@ -46,8 +46,28 @@ const (
 	HealthHealthy   Health = "healthy"
 	HealthDegraded  Health = "degraded"
 	HealthUnhealthy Health = "unhealthy"
-	HealthUnknown   Health = "unknown"
+	// HealthNeutral = intentional/idle (suspended app, every workload scaled to
+	// 0). Aggregates as most-benign (WorseHealth ties healthy, healthy-preferred),
+	// so an all-idle app rolls up to neutral while a mixed app stays healthy.
+	HealthNeutral Health = "neutral"
+	HealthUnknown Health = "unknown"
 )
+
+// Overlay is the optional Tier-2 "application" identity ABOVE a package — the
+// grouping key the Applications fleet surface uses (see
+// radar-hub/docs/ADDONS-AND-APPLICATIONS-PLAN.md). It mirrors
+// pkg/subject.AppOverlay but with plain fields, so pkg/packages stays free of
+// pkg/subject + metav1: the caller resolves subject.ResolveOverlay (for
+// workloads) or maps a GitOps declaration's identity, then sets this.
+//
+//	Tier   — 1-9, mirrors pkg/subject.Tier (lower = higher precedence/confidence).
+//	Key    — stable grouping key, e.g. "<ns>/Application/<name>" or "<ns>/app/<name>".
+//	Confidence — "high" (tiers 1-4) | "medium" (5-8) | "low" (9).
+type Overlay struct {
+	Key        string `json:"key"`
+	Tier       int    `json:"tier"`
+	Confidence string `json:"confidence,omitempty"`
+}
 
 // HelmRelease is the Helm-side input shape. Mirrors the on-wire shape
 // of `internal/helm.HelmRelease` but lives here so pkg/packages stays
@@ -76,6 +96,10 @@ type Workload struct {
 	// Health is the workload's aggregated runtime status. Caller decides
 	// the rule (e.g. ready/desired ratio for Deployments).
 	Health Health `json:"health"`
+	// Overlay is the resolved Tier-2 app identity for this workload (the
+	// caller runs pkg/subject.ResolveOverlay on the workload's metadata).
+	// Optional — nil when no app-overlay signal reached tier 7.
+	Overlay *Overlay `json:"overlay,omitempty"`
 }
 
 // CRD is the CRD-side input shape. We need just enough to map
@@ -115,6 +139,10 @@ type Declaration struct {
 	// reasons collapse to degraded. Suspended (spec.suspend) is not yet
 	// surfaced separately.
 	Status Health `json:"status"`
+	// Overlay is the app identity derived from the declaration's own GitOps
+	// identity (Argo Application → tier 3, Flux HelmRelease → tier 1, Flux
+	// Kustomization → tier 2). Set by the caller. Optional.
+	Overlay *Overlay `json:"overlay,omitempty"`
 }
 
 // Sources is the input struct fed to Aggregate. Every field is optional;
@@ -142,6 +170,7 @@ type SourceContribution struct {
 	Source           SourceCode `json:"source"`
 	Health           Health     `json:"health,omitempty"`
 	Version          string     `json:"version,omitempty"`
+	APIVersion       string     `json:"apiVersion,omitempty"`
 	AppVersion       string     `json:"appVersion,omitempty"`
 	ReleaseName      string     `json:"releaseName,omitempty"`
 	ReleaseNamespace string     `json:"releaseNamespace,omitempty"`
@@ -179,10 +208,11 @@ type PackageRow struct {
 	// cluster-scoped registrations with no namespaced release identity).
 	Namespace   string `json:"namespace,omitempty"`
 	ReleaseName string `json:"releaseName,omitempty"`
-	// Version (Helm chart version > label version > CRD spec.versions[0].name
-	// > GitOps declared version). Empty if no source supplied one. For
-	// per-source values (and to detect same-cluster version disagreement),
-	// read Contributors.
+	// Version (Helm chart version > label version > GitOps declared
+	// version). Empty if no package source supplied one. CRD API
+	// versions are source metadata and live on Contributors.APIVersion.
+	// For per-source values (and to detect same-cluster version
+	// disagreement), read Contributors.
 	Version string `json:"version,omitempty"`
 	// AppVersion if Helm provided one. Optional.
 	AppVersion string `json:"appVersion,omitempty"`
@@ -199,9 +229,14 @@ type PackageRow struct {
 	Contributors []SourceContribution `json:"contributors,omitempty"`
 	// FromCRDGroup, when set, indicates this row originated from a CRD
 	// whose group wasn't in crdGroupToChart — Chart is the group string
-	// itself in that case. Lets the SPA render with appropriate framing
+	// itself in that case. Lets the frontend render with appropriate framing
 	// ("cert-manager.io CRDs detected") vs a real chart row.
 	FromCRDGroup string `json:"fromCRDGroup,omitempty"`
+	// Overlay is the resolved Tier-2 app identity for this package (the
+	// highest-confidence overlay across its contributing workloads /
+	// declarations — lowest Tier wins). Drives the Applications fleet
+	// surface's app grouping. Optional — nil when no app-overlay resolved.
+	Overlay *Overlay `json:"overlay,omitempty"`
 }
 
 // AddSource appends src to r.Sources if not already present and
@@ -236,9 +271,10 @@ func (r *PackageRow) MergeHealth(h Health) {
 //     first-seen wins) — preserves the existing on-wire semantics
 //     for simple consumers that ignore Contributors.
 func (r *PackageRow) AddContribution(c SourceContribution) {
+	c = normalizeContribution(c)
 	r.AddSource(c.Source)
 	r.MergeHealth(c.Health)
-	if r.Version == "" {
+	if r.Version == "" && c.Source != SourceCRDs {
 		r.Version = c.Version
 	}
 	if r.AppVersion == "" {
@@ -252,6 +288,9 @@ func (r *PackageRow) AddContribution(c SourceContribution) {
 		existing.Health = worseHealth(existing.Health, c.Health)
 		if existing.Version == "" {
 			existing.Version = c.Version
+		}
+		if existing.APIVersion == "" {
+			existing.APIVersion = c.APIVersion
 		}
 		if existing.AppVersion == "" {
 			existing.AppVersion = c.AppVersion
@@ -272,6 +311,19 @@ func (r *PackageRow) AddContribution(c SourceContribution) {
 	}
 	r.Contributors = append(r.Contributors, c)
 	sortContributors(r.Contributors)
+}
+
+func normalizeContribution(c SourceContribution) SourceContribution {
+	if c.Source == SourceCRDs {
+		if c.APIVersion == "" {
+			c.APIVersion = c.Version
+		}
+		c.Version = ""
+		c.AppVersion = ""
+		return c
+	}
+	c.APIVersion = ""
+	return c
 }
 
 // Contributor returns the first contribution from the given source

@@ -82,6 +82,9 @@ export function ActivitySummary({ namespaces, topology, onNavigate }: ActivitySu
     limit: 1000,
   })
 
+  // Intentionally re-sample 'now' only when events refresh (not every render),
+  // so the timeline window stays stable between data updates.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const now = useMemo(() => Date.now(), [events])
   const spanMs = SPAN_MINUTES * 60 * 1000
   const startTime = now - spanMs
@@ -125,7 +128,7 @@ export function ActivitySummary({ namespaces, topology, onNavigate }: ActivitySu
       <div className="flex-1 min-h-0 overflow-hidden px-4 py-1.5">
         {isLoading ? (
           <div className="flex items-center justify-center h-full py-4 text-xs text-theme-text-tertiary">
-            Loading...
+            Loading…
           </div>
         ) : error ? (
           <div className="flex items-center justify-center h-full py-4 text-xs text-theme-text-tertiary">

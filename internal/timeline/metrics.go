@@ -1,6 +1,7 @@
 package timeline
 
 import (
+	"context"
 	"maps"
 	"sync"
 	"time"
@@ -45,6 +46,15 @@ const (
 	DropReasonHistoryNil     = "history_nil"
 	DropReasonStoreFailed    = "store_failed"
 	DropReasonSubscriberFull = "subscriber_full"
+	// DropReasonNoDiff: update event for a kind whose diff function found no
+	// observable change. Heartbeats, managed-fields-only updates, reconcile
+	// counters — see KindHasDiffer for the audited set.
+	DropReasonNoDiff = "no_diff"
+	// DropReasonTypeMismatch: a diff function received an object that wasn't
+	// the expected type (e.g. dynamic informer wired with the wrong factory).
+	// Distinguished from no_diff so a sudden spike is visible — these would
+	// otherwise look like healthy heartbeat suppression.
+	DropReasonTypeMismatch = "type_mismatch"
 )
 
 var (
@@ -271,7 +281,7 @@ func GetDiagnosis(kind, namespace, name string) DiagnoseResponse {
 
 	if store != nil {
 		// Query for events matching this resource
-		events, err := store.Query(nil, QueryOptions{
+		events, err := store.Query(context.Background(), QueryOptions{
 			Namespaces:       []string{namespace},
 			Kinds:            []string{kind},
 			Limit:            50,

@@ -44,9 +44,9 @@ func InvalidateServerVersionCache() {
 
 // ClusterInfo contains detected cluster information
 type ClusterInfo struct {
-	Context            string `json:"context"`                      // kubeconfig context name
-	Cluster            string `json:"cluster"`                      // cluster name from kubeconfig
-	Platform           string `json:"platform"`                     // gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, generic
+	Context            string `json:"context"`  // kubeconfig context name
+	Cluster            string `json:"cluster"`  // cluster name from kubeconfig
+	Platform           string `json:"platform"` // gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, generic
 	KubernetesVersion  string `json:"kubernetesVersion"`
 	NodeCount          int    `json:"nodeCount"`
 	PodCount           int    `json:"podCount"`
@@ -241,10 +241,10 @@ func checkAutopilotViaAnnotations(ctx context.Context) (bool, bool) {
 }
 
 // Pure helpers delegate to pkg/k8score for reuse without singletons.
-func detectByProviderID(node corev1.Node) string    { return k8score.DetectByProviderID(node) }
-func detectByLabels(node corev1.Node) string        { return k8score.DetectByLabels(node) }
-func detectByNodeName(node corev1.Node) string      { return k8score.DetectByNodeName(node) }
-func isNodeGKE(node corev1.Node) bool               { return k8score.IsNodeGKE(node) }
+func detectByProviderID(node corev1.Node) string { return k8score.DetectByProviderID(node) }
+func detectByLabels(node corev1.Node) string     { return k8score.DetectByLabels(node) }
+func detectByNodeName(node corev1.Node) string   { return k8score.DetectByNodeName(node) }
+func isNodeGKE(node corev1.Node) bool            { return k8score.IsNodeGKE(node) }
 
 func detectPlatformFallback(ctx context.Context) (string, error) {
 	isAutopilot, found := checkAutopilotViaAnnotations(ctx)

@@ -22,6 +22,9 @@ export * from './components/logs'
 // Timeline
 export * from './components/timeline'
 
+// GitOps
+export * from './components/gitops'
+
 // Shared components (ResourceRendererDispatch, EditableYamlView, ResourceActionsBar)
 export * from './components/shared'
 
@@ -36,3 +39,26 @@ export * from './components/topology'
 
 // Cluster audit (AuditCard, AuditAlerts, AuditFindingsTable)
 export * from './components/audit'
+
+// Checks remediation queue (ChecksView, shared types + severity vocabulary).
+// Host-agnostic: Hub feeds fleet-resolved data, OSS can feed a single-cluster
+// resolve.
+export * from './components/checks'
+
+// Live issues queue (IssuesView — the grouped operational-issue triage queue,
+// shared by OSS single-cluster and the hub fleet view; sibling to the Checks
+// queue)
+export * from './components/issues'
+
+// Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
+export * from './components/cluster-switcher'
+
+// Applications (shared host-agnostic list + detail shell for the deployable-
+// software surface; OSS renders single-cluster, Cloud adds the fleet layer)
+export * from './components/applications'
+
+// Compare (ResourceCompareView, CompareResourcePicker, normalize utilities)
+export * from './components/compare'
+
+// Perf instrumentation (ELK + structureKey timers, surfaced in diagnostics overlay)
+export * from './perf'

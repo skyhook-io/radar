@@ -1,4 +1,5 @@
 import { Copy, Check, Code } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { CodeViewer } from '../ui/CodeViewer'
 
 interface ManifestViewerProps {
@@ -11,11 +12,7 @@ interface ManifestViewerProps {
 
 export function ManifestViewer({ manifest, isLoading, revision, onCopy, copied }: ManifestViewerProps) {
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
-        Loading manifest...
-      </div>
-    )
+    return <PaneLoader label="Loading manifest…" className="h-32" />
   }
 
   if (!manifest) {

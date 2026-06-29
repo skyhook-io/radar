@@ -17,8 +17,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/portforward"
-	promclient "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 const (
@@ -70,9 +71,22 @@ type CarettaSource struct {
 	metricsService   string // service name for port-forward
 	metricsPort      int    // port for port-forward
 	metricsURL       string // manual override URL from --prometheus-url flag
+	headers          map[string]string
 	isConnected      bool
 	currentContext   string // current K8s context name
 	mu               sync.RWMutex
+}
+
+// applyHeaders attaches the configured custom headers to a Prometheus
+// request. No lock: c.headers is assigned exactly once inside
+// manager.go's initOnce.Do and never mutated afterwards (a context
+// switch builds a fresh CarettaSource). Locking here would deadlock the
+// tryMetricsEndpointLocked path, which holds c.mu.Lock() and cannot
+// re-enter as a reader — sync.RWMutex isn't reentrant.
+func (c *CarettaSource) applyHeaders(req *http.Request) {
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
 }
 
 // NewCarettaSource creates a new Caretta traffic source
@@ -322,7 +336,7 @@ func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr st
 	query := "caretta_links_observed"
 	if opts.Namespace != "" {
 		// Filter by namespace (either client or server)
-		safeNS := promclient.SanitizeLabelValue(opts.Namespace)
+		safeNS := prom.SanitizeLabelValue(opts.Namespace)
 		query = fmt.Sprintf(`caretta_links_observed{client_namespace="%s"} or caretta_links_observed{server_namespace="%s"}`,
 			safeNS, safeNS)
 	}
@@ -333,6 +347,7 @@ func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr st
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
+	c.applyHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -856,6 +871,7 @@ func (c *CarettaSource) tryMetricsEndpointLocked(ctx context.Context, addr strin
 	if err != nil {
 		return false
 	}
+	c.applyHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -863,6 +879,10 @@ func (c *CarettaSource) tryMetricsEndpointLocked(ctx context.Context, addr strin
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// See client.go probe — auth failures must not look like "not found".
+		errorlog.Record("traffic", "error", "metrics endpoint %s returned HTTP %d (check --prometheus-header credentials)", addr, resp.StatusCode)
+	}
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -897,6 +917,7 @@ func (c *CarettaSource) queryPrometheusRaw(ctx context.Context, query string) (*
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
+	c.applyHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

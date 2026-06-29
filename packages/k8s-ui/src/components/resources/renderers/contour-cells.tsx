@@ -2,6 +2,7 @@
 
 import { Shield } from 'lucide-react'
 import { Tooltip } from '../../ui/Tooltip'
+import { Badge, type BadgeSeverity } from '../../ui/Badge'
 import {
   getHTTPProxyFQDN,
   getHTTPProxyRouteCount,
@@ -36,11 +37,11 @@ export function HTTPProxyCell({ resource, column }: { resource: any; column: str
     }
     case 'status': {
       const { label } = getHTTPProxyStatus(resource)
-      const color = label === 'Valid' ? 'text-green-500'
-        : label === 'Invalid' ? 'text-red-500'
-        : label === 'Orphaned' ? 'text-yellow-500'
-        : 'text-theme-text-secondary'
-      return <span className={`text-sm ${color}`}>{label}</span>
+      const severity: BadgeSeverity = label === 'Valid' ? 'success'
+        : label === 'Invalid' ? 'error'
+        : label === 'Orphaned' ? 'warning'
+        : 'neutral'
+      return <Badge severity={severity}>{label}</Badge>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

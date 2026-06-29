@@ -42,6 +42,10 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // Force list view on large clusters without namespace filter
   const effectiveInitialMode = requiresNamespaceFilter ? 'list' : (initialViewMode ?? 'swimlane')
   const [viewMode, setViewMode] = useState<TimelineViewMode>(effectiveInitialMode)
+  // Shared across list + swimlane so the toggle carries across the view switch,
+  // and so the swimlane fetch can exclude deletes server-side (before LIMIT)
+  // rather than only hiding them client-side after the 10k cap.
+  const [showDeleted, setShowDeleted] = useState(true)
 
   // Only fetch heavy swimlane data when actually showing swimlanes
   const showSwimlanes = viewMode === 'swimlane' && !requiresNamespaceFilter
@@ -53,6 +57,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     timeRange: 'all',
     includeK8sEvents: true,
     includeManaged: true,
+    includeDeleted: showDeleted,
     limit: 10000,
     enabled: showSwimlanes,
   })
@@ -119,6 +124,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
         onViewModeChange={setViewMode}
         topology={stableTopology}
         namespaces={namespaces}
+        showDeleted={showDeleted}
+        onShowDeletedChange={setShowDeleted}
       />
     )
   }
@@ -131,6 +138,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       onResourceClick={onResourceClick}
       initialFilter={initialFilter}
       initialTimeRange={initialTimeRange}
+      showDeleted={showDeleted}
+      onShowDeletedChange={setShowDeleted}
     />
   )
 }

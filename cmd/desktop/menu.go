@@ -6,17 +6,13 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-func createMenu(desktopApp *DesktopApp) *menu.Menu {
+func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 	appMenu := menu.NewMenu()
 
 	// File menu
 	fileMenu := appMenu.AddSubmenu("File")
-	fileMenu.AddText("New Window", keys.CmdOrCtrl("n"), func(_ *menu.CallbackData) {
-		// Future: open a new window with a different context
-	})
-	fileMenu.AddSeparator()
 	fileMenu.AddText("Settings...", keys.CmdOrCtrl(","), func(_ *menu.CallbackData) {
-		runtime.EventsEmit(desktopApp.ctx, "open-settings")
+		runtime.WindowExecJS(desktopApp.ctx, `window.dispatchEvent(new Event('radar:open-settings'))`)
 	})
 	fileMenu.AddSeparator()
 	fileMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
@@ -97,15 +93,14 @@ func createMenu(desktopApp *DesktopApp) *menu.Menu {
 	// Help menu
 	helpMenu := appMenu.AddSubmenu("Help")
 	helpMenu.AddText("Check for Updates...", nil, func(_ *menu.CallbackData) {
-		// Emit an event that the frontend listens for to trigger a version check
-		runtime.EventsEmit(desktopApp.ctx, "check-for-updates")
+		runtime.WindowExecJS(desktopApp.ctx, `window.dispatchEvent(new Event('radar:check-for-updates'))`)
 	})
 	helpMenu.AddSeparator()
 	helpMenu.AddText("About Radar", nil, func(_ *menu.CallbackData) {
 		runtime.MessageDialog(desktopApp.ctx, runtime.MessageDialogOptions{
 			Type:    runtime.InfoDialog,
 			Title:   "About Radar",
-			Message: "Radar — Kubernetes Visibility Tool\nBuilt by Skyhook\n\nhttps://github.com/skyhook-io/radar",
+			Message: "Radar — Kubernetes Visibility Tool\nBuilt by Skyhook\n\nVersion: " + version + "\n\nhttps://github.com/skyhook-io/radar",
 		})
 	})
 	helpMenu.AddText("Documentation", nil, func(_ *menu.CallbackData) {

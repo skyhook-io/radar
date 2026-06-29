@@ -1,19 +1,21 @@
 import { useState } from 'react'
 import { History, Eye, GitCompare, Check, RotateCcw } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { HelmRevision } from '../../types'
+import type { HelmOperation, HelmRevision } from '../../types'
 import { getStatusColor, formatDate, formatAge } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
+import { Tooltip } from '../ui/Tooltip'
 
 interface RevisionHistoryProps {
   history: HelmRevision[]
   currentRevision: number
+  operations?: HelmOperation[]
   onViewRevision: (revision: number) => void
   onCompare: (rev1: number, rev2: number) => void
   onRollback?: (revision: number) => void
 }
 
-export function RevisionHistory({ history, currentRevision, onViewRevision, onCompare, onRollback }: RevisionHistoryProps) {
+export function RevisionHistory({ history, currentRevision, operations = [], onViewRevision, onCompare, onRollback }: RevisionHistoryProps) {
   const [selectedForCompare, setSelectedForCompare] = useState<number | null>(null)
 
   const handleCompareClick = (revision: number) => {
@@ -62,6 +64,7 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
         {history.map((revision, index) => {
           const isCurrent = revision.revision === currentRevision
           const isSelectedForCompare = selectedForCompare === revision.revision
+          const annotations = operationAnnotationsForRevision(operations, revision.revision, revision.status)
 
           return (
             <div
@@ -105,10 +108,15 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
                         Current
                       </span>
                     )}
+                    {annotations.map((annotation) => (
+                      <span key={annotation.label} className={clsx('badge-sm', annotation.className)}>
+                        {annotation.label}
+                      </span>
+                    ))}
                   </div>
 
                   <div className="flex items-center gap-4 mt-1 text-xs text-theme-text-tertiary">
-                    <span title={revision.updated}>{formatDate(revision.updated)}</span>
+                    <Tooltip content={revision.updated}><span>{formatDate(revision.updated)}</span></Tooltip>
                     <span>{formatAge(revision.updated)} ago</span>
                   </div>
 
@@ -164,4 +172,45 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
       </div>
     </div>
   )
+}
+
+function operationAnnotationsForRevision(operations: HelmOperation[], revision: number, revisionStatus: string): Array<{ label: string; className: string }> {
+  const annotations: Array<{ label: string; className: string }> = []
+  const seen = new Set<string>()
+  const add = (label: string, className: string) => {
+    if (seen.has(label)) return
+    seen.add(label)
+    annotations.push({ label, className })
+  }
+  const addFailure = (label: string) => {
+    if (revisionStatus.toLowerCase() === 'failed') return
+    add(label, SEVERITY_BADGE.error)
+  }
+
+  for (const op of operations) {
+    if (op.failedRevision === revision) {
+      addFailure('Failed upgrade')
+    }
+    if (op.rollbackRevision === revision) {
+      add('Rollback revision', SEVERITY_BADGE.warning)
+    }
+    if (op.revision === revision) {
+      switch (op.kind) {
+        case 'upgrade_failed':
+          addFailure('Failed upgrade')
+          break
+        case 'release_failed':
+          addFailure('Failed')
+          break
+        case 'rollback':
+          add('Rollback', SEVERITY_BADGE.warning)
+          break
+        case 'pending':
+          add('Pending', SEVERITY_BADGE.warning)
+          break
+      }
+    }
+  }
+
+  return annotations
 }

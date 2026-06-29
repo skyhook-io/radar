@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { DashboardResponse, DashboardMetrics, DashboardCRDCount, DashboardProblem } from '../../api/client'
+import type { DashboardResponse, DashboardMetrics, DashboardCRDCount } from '../../api/client'
 import { HealthRing } from './HealthRing'
 import {
   AlertTriangle, CheckCircle, XCircle,
@@ -12,6 +12,9 @@ import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { MCPSetupDialog } from './MCPSetupDialog'
 import { pluralize, parseContextName } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
+import gkeIcon from '../../assets/platform-icons/google_kubernetes_engine.png'
+import eksIcon from '../../assets/platform-icons/aws_eks.png'
+import aksIcon from '../../assets/platform-icons/azure-aks.svg'
 
 interface ClusterHealthCardProps {
   health: DashboardResponse['health']
@@ -20,12 +23,13 @@ interface ClusterHealthCardProps {
   metrics: DashboardMetrics | null
   metricsServerAvailable: boolean
   topCRDs?: DashboardCRDCount[] // Loaded lazily, may be undefined
-  problems: DashboardProblem[]
+  issueCount: number
+  hasCriticalIssues: boolean
   nodeVersionSkew: DashboardResponse['nodeVersionSkew']
   onNavigateToKind: (kind: string, group?: string) => void
   onNavigateToView: () => void
   onWarningEventsClick?: () => void
-  onUnhealthyClick?: () => void
+  onIssuesClick?: () => void
 }
 
 function getMetricsInstallHint(platform: string): string {
@@ -49,7 +53,7 @@ function MetricsUnavailableHint({ platform, metricsServerAvailable }: { platform
       content={
         <div className="space-y-1">
           <div className="font-medium">How to fix</div>
-          <div>{isPreInstalled ? hint : <>Install by running:<br /><code className="text-[10px] opacity-80">{hint}</code></>}</div>
+          <div>{isPreInstalled ? hint : <>Install by running:<br /><code className="inline-code text-[10px] opacity-80">{hint}</code></>}</div>
         </div>
       }
       position="bottom"
@@ -67,13 +71,13 @@ function MetricsUnavailableHint({ platform, metricsServerAvailable }: { platform
 function getPlatformInfo(platform: string): { name: string; icon: string | null } {
   const platformLower = platform.toLowerCase()
   if (platformLower.includes('gke') || platformLower.includes('google')) {
-    return { name: 'Google Kubernetes Engine', icon: '/icons/google_kubernetes_engine.png' }
+    return { name: 'Google Kubernetes Engine', icon: gkeIcon }
   }
   if (platformLower.includes('eks') || platformLower.includes('amazon') || platformLower.includes('aws')) {
-    return { name: 'Amazon EKS', icon: '/icons/aws_eks.png' }
+    return { name: 'Amazon EKS', icon: eksIcon }
   }
   if (platformLower.includes('aks') || platformLower.includes('azure')) {
-    return { name: 'Azure Kubernetes Service', icon: '/icons/azure-aks.svg' }
+    return { name: 'Azure Kubernetes Service', icon: aksIcon }
   }
   if (platformLower.includes('openshift')) {
     return { name: 'OpenShift', icon: null }
@@ -93,7 +97,14 @@ function getPlatformInfo(platform: string): { name: string; icon: string | null 
   if (platformLower.includes('docker')) {
     return { name: 'Docker Desktop', icon: null }
   }
-  return { name: platform || 'Kubernetes', icon: null }
+  // The Go backend returns "generic" for unrecognized platforms — that
+  // literal string is no better than the empty case, so fall back to
+  // the friendlier "Kubernetes" label for both. Only pass the platform
+  // string through when it's actually a recognizable name.
+  if (!platform || platformLower === 'generic') {
+    return { name: 'Kubernetes', icon: null }
+  }
+  return { name: platform, icon: null }
 }
 
 export function ClusterHealthCard({
@@ -103,18 +114,31 @@ export function ClusterHealthCard({
   metrics,
   metricsServerAvailable,
   topCRDs: _topCRDs,
-  problems,
+  issueCount,
+  hasCriticalIssues,
   nodeVersionSkew,
   onNavigateToKind,
   onNavigateToView,
   onWarningEventsClick,
-  onUnhealthyClick,
+  onIssuesClick,
 }: ClusterHealthCardProps) {
   void _topCRDs // Reserved for future CRD display
 
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
-  const { mcpEnabled } = useCapabilitiesContext()
+  const caps = useCapabilitiesContext()
+  // Default to local mode when the backend doesn't ship a `deployment`
+  // field (older Radar binaries pre-0.2.2). Local rendering is the safe
+  // OSS-shape default — wrong-direction defaults would briefly suppress
+  // chrome OSS users expect to see.
+  const deployment = caps.deployment ?? { mode: 'local' as const }
+  const mcpEnabled = caps.mcpEnabled
+  const isCloud = deployment.mode === 'cloud'
+  const isInCluster = deployment.mode === 'in-cluster' || deployment.mode === 'cloud'
   const mcpUrl = `${window.location.origin}/mcp`
+  // In Cloud, MCP is org-wide and PAT-authed (api.radarhq.io/mcp). The OSS
+  // "this binary is your local MCP server" framing is wrong there — Cloud
+  // surfaces MCP from the hub Home dashboard instead.
+  const showLocalMcpCard = mcpEnabled && !isCloud
 
   const restricted = counts.restricted ?? []
   const isRestricted = (kind: string) => restricted.includes(kind)
@@ -158,13 +182,23 @@ export function ClusterHealthCard({
     { kind: 'cronjobs', label: 'CronJobs', icon: Clock, total: counts.cronJobs.total, subtitle: `${counts.cronJobs.active} active` },
   ]
   const platformInfo = getPlatformInfo(cluster.platform)
-  // The raw cluster.name is the kubeconfig context (e.g.
-  // `gke_koalabackend_us-east1-b_nonprod-cluster-us-east1`). That string
-  // is the user's primary orientation cue, but the bit they actually
-  // recognize is the short clusterName. We promote that, push the raw
-  // path into a tooltip, and surface project/region as muted metadata.
+  // Headline-name derivation has three branches, in priority order:
+  //  1. Local-kubeconfig users get the parsed short clusterName from a
+  //     string like `gke_koalabackend_us-east1-b_nonprod-cluster-us-east1`
+  //     (the meaningful tail). Account/region are surfaced separately
+  //     below as muted metadata, and the raw path is exposed via tooltip
+  //     on the headline element.
+  //  2. In-cluster mode (deployment.mode === 'in-cluster' OR 'cloud')
+  //     has no meaningful kubeconfig context — bootstrap sets it to
+  //     the literal "in-cluster" sentinel. Fall back to the platform
+  //     label ("Google Kubernetes Engine") which IS recognizable.
+  //  3. Last resort: the literal cluster.name, or "Cluster".
+  // When the card is rendered embedded (cloud mode), the H2 itself is
+  // suppressed below — the hub shell already shows the cluster name in
+  // its top bar.
   const parsedContext = parseContextName(cluster.name || '')
-  const headlineName = parsedContext.clusterName || cluster.name || 'Cluster'
+  const rawHeadline = parsedContext.clusterName || cluster.name || 'Cluster'
+  const headlineName = isInCluster ? platformInfo.name : rawHeadline
 
   return (
     <div className="rounded-xl bg-theme-surface shadow-theme-sm overflow-hidden">
@@ -181,29 +215,43 @@ export function ClusterHealthCard({
               )}
               <span className="text-xs text-theme-text-secondary truncate">{platformInfo.name}</span>
             </div>
-            <h2
-              className="text-xl font-semibold text-theme-text-primary truncate mb-1.5 leading-tight"
-              title={cluster.name}
-            >
-              {headlineName}
-            </h2>
+            {/* In Cloud, the hub shell already shows the cluster name in
+                its top bar; rendering it again here is redundant and
+                makes the card feel like a label rather than content. */}
+            {!isCloud && (
+              // In-cluster mode's cluster.name is the literal "in-cluster"
+              // sentinel, which would leak via the hover tooltip even though
+              // the visible text falls back to the platform label. Render no
+              // tooltip in that case; local mode keeps it so users can hover
+              // to see the full kubeconfig context path.
+              <Tooltip content={isInCluster ? '' : cluster.name} wrapperClassName="!block min-w-0">
+              <h2 className="text-xl font-semibold text-theme-text-primary truncate leading-tight mb-1.5">
+                {headlineName}
+              </h2>
+              </Tooltip>
+            )}
             <div className="flex flex-col gap-0.5 text-xs text-theme-text-tertiary">
               {(parsedContext.account || parsedContext.region) && (
-                <span className="truncate font-mono" title={[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')}>
+                <Tooltip content={[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')} wrapperClassName="min-w-0">
+                <span className="truncate font-mono">
                   {[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')}
                 </span>
+                </Tooltip>
               )}
               {cluster.version && (
                 <span>Kubernetes {cluster.version}</span>
               )}
               <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
-              {cluster.name && cluster.name !== headlineName && (
-                <span
-                  className="font-mono text-[10px] text-theme-text-disabled break-all leading-snug pt-0.5"
-                  title={cluster.name}
-                >
+              {/* Show raw kubeconfig context as muted metadata only when
+                  it differs from the headline AND we're in local mode
+                  (in-cluster has no meaningful context name, cloud
+                  shell already renders the canonical name). */}
+              {cluster.name && cluster.name !== headlineName && deployment.mode === 'local' && (
+                <Tooltip content={cluster.name}>
+                <span className="font-mono text-[10px] text-theme-text-disabled break-all leading-snug pt-0.5">
                   {cluster.name}
                 </span>
+                </Tooltip>
               )}
             </div>
             {nodeVersionSkew && (
@@ -229,8 +277,11 @@ export function ClusterHealthCard({
                 </span>
               </Tooltip>
             )}
-            {/* MCP Server indicator */}
-            {mcpEnabled && (
+            {/* MCP Server indicator. OSS-only: in Cloud, MCP discovery
+                lives at the hub level (org-wide endpoint, PAT-authed)
+                rather than per-cluster, so this localhost/no-auth card
+                would mislead a Cloud user. */}
+            {showLocalMcpCard && (
               <button
                 onClick={() => setMcpDialogOpen(true)}
                 className="flex items-center gap-2 mt-3 px-2.5 py-2 bg-purple-500/5 hover:bg-purple-500/10 border border-purple-500/20 rounded-md transition-colors w-full"
@@ -238,9 +289,11 @@ export function ClusterHealthCard({
                 <Radio className="w-3.5 h-3.5 text-purple-400 animate-pulse shrink-0" />
                 <div className="flex flex-col gap-0.5 min-w-0 flex-1 text-left">
                   <span className="text-xs font-medium text-purple-400">MCP Server Live</span>
-                  <span className="text-[10px] text-theme-text-tertiary truncate font-mono" title={mcpUrl}>
+                  <Tooltip content={mcpUrl} wrapperClassName="min-w-0">
+                  <span className="text-[10px] text-theme-text-tertiary truncate font-mono">
                     HTTP · {mcpUrl}
                   </span>
+                  </Tooltip>
                 </div>
                 <Info className="w-3.5 h-3.5 text-purple-400/60 shrink-0" />
               </button>
@@ -339,12 +392,14 @@ export function ClusterHealthCard({
                     <Cpu className="w-3.5 h-3.5 text-theme-text-tertiary" />
                     CPU
                   </div>
-                  <ResourceBar
-                    label="Used"
-                    used={formatCPUMillicores(metrics.cpu.usageMillis)}
-                    total={formatCPUMillicores(metrics.cpu.capacityMillis)}
-                    percent={metrics.cpu.usagePercent}
-                  />
+                  {metricsServerAvailable && (
+                    <ResourceBar
+                      label="Used"
+                      used={formatCPUMillicores(metrics.cpu.usageMillis)}
+                      total={formatCPUMillicores(metrics.cpu.capacityMillis)}
+                      percent={metrics.cpu.usagePercent}
+                    />
+                  )}
                   <ResourceBar
                     label="Requested"
                     used={formatCPUMillicores(metrics.cpu.requestsMillis)}
@@ -359,12 +414,14 @@ export function ClusterHealthCard({
                     <MemoryStick className="w-3.5 h-3.5 text-theme-text-tertiary" />
                     Memory
                   </div>
-                  <ResourceBar
-                    label="Used"
-                    used={formatMemoryMiB(metrics.memory.usageMillis)}
-                    total={formatMemoryMiB(metrics.memory.capacityMillis)}
-                    percent={metrics.memory.usagePercent}
-                  />
+                  {metricsServerAvailable && (
+                    <ResourceBar
+                      label="Used"
+                      used={formatMemoryMiB(metrics.memory.usageMillis)}
+                      total={formatMemoryMiB(metrics.memory.capacityMillis)}
+                      percent={metrics.memory.usagePercent}
+                    />
+                  )}
                   <ResourceBar
                     label="Requested"
                     used={formatMemoryMiB(metrics.memory.requestsMillis)}
@@ -373,7 +430,7 @@ export function ClusterHealthCard({
                   />
                 </div>
               )}
-              {!metrics?.cpu && !metrics?.memory && (
+              {!metricsServerAvailable && (
                 <MetricsUnavailableHint platform={cluster.platform} metricsServerAvailable={metricsServerAvailable} />
               )}
             </div>
@@ -387,24 +444,26 @@ export function ClusterHealthCard({
         {/* Left column: Warning indicators (aligned with cluster info) */}
         <div className="flex flex-col justify-center gap-1 w-1/4 shrink-0 pr-4 border-r border-theme-border/50">
           {health.warningEvents > 0 && (
+            <Tooltip content="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)" wrapperClassName="w-fit">
             <button
               onClick={onWarningEventsClick}
-              title="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)"
               className="badge status-degraded w-fit gap-1.5 hover:opacity-80 transition-opacity"
             >
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
               <span><span className="font-mono">{health.warningEvents}</span> Warning Events</span>
             </button>
+            </Tooltip>
           )}
-          {problems.length > 0 && (
+          {issueCount > 0 && (
+            <Tooltip content="View grouped live operational issues" wrapperClassName="w-fit">
             <button
-              onClick={onUnhealthyClick}
-              title="View timeline of unhealthy/degraded workload events"
-              className="badge status-unhealthy w-fit gap-1.5 hover:opacity-80 transition-opacity"
+              onClick={onIssuesClick}
+              className={clsx('badge w-fit gap-1.5 hover:opacity-80 transition-opacity', hasCriticalIssues ? 'status-unhealthy' : 'status-degraded')}
             >
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-              <span>View unhealthy workload events</span>
+              <span>{pluralize(issueCount, 'Active Issue')}</span>
             </button>
+            </Tooltip>
           )}
         </div>
 

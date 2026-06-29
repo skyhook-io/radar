@@ -1,6 +1,6 @@
 import { Globe, ArrowRight, Network, Filter } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceRefBadge } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
 
 interface GRPCRouteRendererProps {
@@ -77,7 +77,7 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
               hostnames.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
                   {hostnames.map((h: string) => (
-                    <span key={h} className="badge bg-theme-elevated text-theme-text-secondary">{h}</span>
+                    <Badge key={h} tone="structural">{h}</Badge>
                   ))}
                 </div>
               ) : (
@@ -150,7 +150,7 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
                       {match.method && (
                         <>
                           {match.method.type && match.method.type !== 'Exact' && (
-                            <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded text-[10px]">{match.method.type}</span>
+                            <Badge tone="accent1" size="sm">{match.method.type}</Badge>
                           )}
                           {match.method.service && (
                             <span>
@@ -200,9 +200,9 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
                     <div className="text-xs text-theme-text-secondary flex flex-wrap items-center gap-1.5">
                       <Filter className="w-3 h-3 text-theme-text-tertiary" />
                       {filters.map((filter: any, filterIdx: number) => (
-                        <span key={filterIdx} className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded">
+                        <Badge key={filterIdx} tone="accent1" size="sm">
                           {filter.type}
-                        </span>
+                        </Badge>
                       ))}
                     </div>
                   </div>
@@ -231,20 +231,14 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {accepted && (
-                      <span className={clsx(
-                        'badge',
-                        accepted.status === 'True' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                      )}>
+                      <Badge severity={accepted.status === 'True' ? 'success' : 'error'}>
                         {accepted.status === 'True' ? 'Accepted' : 'Not Accepted'}
-                      </span>
+                      </Badge>
                     )}
                     {resolved && (
-                      <span className={clsx(
-                        'badge',
-                        resolved.status === 'True' ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
-                      )}>
+                      <Badge severity={resolved.status === 'True' ? 'success' : 'warning'}>
                         {resolved.status === 'True' ? 'Refs Resolved' : 'Unresolved Refs'}
-                      </span>
+                      </Badge>
                     )}
                   </div>
                   {accepted?.message && accepted.status === 'False' && (

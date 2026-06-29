@@ -13,6 +13,7 @@
 
 import type { TimelineEvent, Topology } from '../types/core'
 import { isWorkloadKind } from '../types/core'
+import { apiVersionToGroup } from './navigation'
 
 /**
  * Resource lane representing a single resource and its timeline events.
@@ -21,6 +22,12 @@ import { isWorkloadKind } from '../types/core'
 export interface ResourceLane {
   id: string
   kind: string
+  /**
+   * API group for the resource (e.g. "cluster.x-k8s.io"). Empty for core
+   * resources. Needed to disambiguate CRDs whose kind collides with another
+   * (e.g. CAPI Cluster vs CNPG Cluster) when the lane is clicked.
+   */
+  group?: string
   namespace: string
   name: string
   events: TimelineEvent[]
@@ -179,6 +186,25 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
   const { events, topology, rootResource, groupByApp = true } = options
   const laneMap = new Map<string, ResourceLane>()
 
+  // API group lookup by lane ID (kind/namespace/name) sourced from topology nodes.
+  // Lanes built from events (which carry apiVersion) take precedence over this fallback,
+  // but parent lanes that exist only as edge endpoints still need a group.
+  const topoGroupByLaneId = new Map<string, string>()
+  if (topology?.nodes) {
+    for (const node of topology.nodes) {
+      const laneId = nodeIdToLaneId(node.id)
+      if (!laneId) continue
+      const apiVersion = node.data?.apiVersion as string | undefined
+      const group = apiVersionToGroup(apiVersion)
+      if (group) topoGroupByLaneId.set(laneId, group)
+    }
+  }
+  const resolveGroup = (laneId: string, event?: TimelineEvent): string => {
+    const fromEvent = apiVersionToGroup(event?.apiVersion)
+    if (fromEvent) return fromEvent
+    return topoGroupByLaneId.get(laneId) ?? ''
+  }
+
   // Track events that should be attached to their owner instead of their own lane
   const eventsToAttach: { event: TimelineEvent; ownerLaneId: string }[] = []
 
@@ -192,19 +218,28 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
     }
 
     const laneId = `${event.kind}/${event.namespace}/${event.name}`
-    if (!laneMap.has(laneId)) {
+    const existing = laneMap.get(laneId)
+    if (!existing) {
       laneMap.set(laneId, {
         id: laneId,
         kind: event.kind,
+        group: resolveGroup(laneId, event),
         namespace: event.namespace,
         name: event.name,
-        events: [],
+        events: [event],
         isWorkload: isWorkloadKind(event.kind),
         children: [],
         childEventCount: 0,
       })
+    } else {
+      // Stored events may lack apiVersion; upgrade the lane's group from any
+      // later event that carries it.
+      if (!existing.group) {
+        const fromEvent = apiVersionToGroup(event.apiVersion)
+        if (fromEvent) existing.group = fromEvent
+      }
+      existing.events.push(event)
     }
-    laneMap.get(laneId)!.events.push(event)
   }
 
   // Attach K8s Events to their owner lanes
@@ -218,6 +253,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       laneMap.set(ownerLaneId, {
         id: ownerLaneId,
         kind: parts[0],
+        group: resolveGroup(ownerLaneId),
         namespace: parts[1],
         name: parts.slice(2).join('/'),
         events: [event],
@@ -242,6 +278,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         laneMap.set(ownerLaneId, {
           id: ownerLaneId,
           kind: eventWithOwner.owner.kind,
+          group: resolveGroup(ownerLaneId),
           namespace: lane.namespace,
           name: eventWithOwner.owner.name,
           events: [],
@@ -277,6 +314,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
             laneMap.set(sourceLaneId, {
               id: sourceLaneId,
               kind: parts[0],
+              group: resolveGroup(sourceLaneId),
               namespace: parts[1],
               name: parts.slice(2).join('/'),
               events: [],
@@ -304,6 +342,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
               laneMap.set(sourceLaneId, {
                 id: sourceLaneId,
                 kind: parts[0],
+                group: resolveGroup(sourceLaneId),
                 namespace: parts[1],
                 name: parts.slice(2).join('/'),
                 events: [],
@@ -323,6 +362,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
               laneMap.set(targetLaneId, {
                 id: targetLaneId,
                 kind: parts[0],
+                group: resolveGroup(targetLaneId),
                 namespace: parts[1],
                 name: parts.slice(2).join('/'),
                 events: [],
@@ -342,6 +382,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
               laneMap.set(targetLaneId, {
                 id: targetLaneId,
                 kind: parts[0],
+                group: resolveGroup(targetLaneId),
                 namespace: parts[1],
                 name: parts.slice(2).join('/'),
                 events: [],
@@ -361,6 +402,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
               laneMap.set(sourceLaneId, {
                 id: sourceLaneId,
                 kind: parts[0],
+                group: resolveGroup(sourceLaneId),
                 namespace: parts[1],
                 name: parts.slice(2).join('/'),
                 events: [],
@@ -382,6 +424,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
             laneMap.set(targetLaneId, {
               id: targetLaneId,
               kind: parts[0],
+              group: resolveGroup(targetLaneId),
               namespace: parts[1],
               name: parts.slice(2).join('/'),
               events: [],
@@ -516,13 +559,23 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
           TraefikService: 2, Middleware: 3, MiddlewareTCP: 3,
           HTTPProxy: 1, // Contour
         }
+        // Precompute each child's latest event time once — otherwise the
+        // comparator below reparses every child's event timestamps on every
+        // comparison (O(children log children × events) Date parses).
+        const latestByChildId = new Map<string, number>()
+        for (const c of lane.children) {
+          let latest = 0
+          for (const e of c.events) {
+            const t = new Date(e.timestamp).getTime()
+            if (t > latest) latest = t
+          }
+          latestByChildId.set(c.id, latest)
+        }
         lane.children.sort((a, b) => {
           const aPriority = kindPriority[a.kind] || 10
           const bPriority = kindPriority[b.kind] || 10
           if (aPriority !== bPriority) return aPriority - bPriority
-          const aLatest = a.events.length > 0 ? Math.max(...a.events.map(e => new Date(e.timestamp).getTime())) : 0
-          const bLatest = b.events.length > 0 ? Math.max(...b.events.map(e => new Date(e.timestamp).getTime())) : 0
-          return bLatest - aLatest
+          return (latestByChildId.get(b.id) ?? 0) - (latestByChildId.get(a.id) ?? 0)
         })
       }
 
@@ -582,6 +635,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
     const placeholderLane: ResourceLane = {
       id: rootLaneId,
       kind: rootResource.kind,
+      group: resolveGroup(rootLaneId),
       namespace: rootResource.namespace,
       name: rootResource.name,
       events: [],

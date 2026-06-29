@@ -92,6 +92,29 @@ source .playwright-mcp/visual-test-state.env
 
 ## Step 6: Visual Testing with Playwright
 
+### Step 6a: Set viewport FIRST — before any navigation
+
+**Playwright MCP defaults to a narrow viewport (~1280px) that does NOT match real users.** Set the viewport explicitly at the start of every visual test, before the first `browser_navigate`:
+
+```ts
+mcp__playwright__browser_resize({ width: 1920, height: 1080 })
+```
+
+**Default to 1920×1080** — the single most common desktop resolution, and the only reliable way to catch layout bugs (missing `flex-1`, `w-full`, or `min-w-0`) that the narrow default hides.
+
+**Sweep widths when the change is layout-sensitive.** For new pages, full-screen views, sticky bars, side panels, anything that flexes — capture each of:
+- **1280×800** — small laptop (close to Playwright's default; the easiest layouts to pass)
+- **1920×1080** — standard desktop (primary)
+- **2560×1440** — ultrawide / external monitor (where overflow / underfill bugs surface)
+
+Two real bugs that 1200px screenshots missed and 2000px+ caught:
+- A full-screen view (`ResourceCompareView`) was missing `flex-1` on its root — at 1280px it filled the column by accident; at 2000px+ it collapsed to content width with empty space to the right.
+- A sticky bottom bar (`CompareTray`) collided with Radar's fixed bottom-right overlay buttons (debug + `?` shortcut help) — only visible once the bar extended to the viewport's right edge.
+
+**When in doubt: capture both 1280 and 1920 for the same flow** — it takes 10 extra seconds and is the cheapest sanity check available.
+
+### Step 6b: Navigate and screenshot
+
 Navigate to `$RADAR_URL` and systematically test the changed areas.
 
 ### Screenshot Strategy
@@ -117,6 +140,13 @@ For each changed renderer/component:
 7. **Check the browser console** for errors: `mcp__playwright__browser_console_messages`
 8. **Check dark mode** if color/styling changes were made (toggle in settings)
 
+### Common gotchas
+- **Empty list / "Resource not found" on drawer?** Check the namespace switcher in the header — it persists across URL navigation and intersects every read. URL `?namespaces=X` does NOT override it. Either change the active namespace via the switcher or set it to All before navigating.
+- **Drawer doesn't open on row click?** Click the name cell (`td`), not the row (`tr`). Row-level clicks aren't wired to navigation. In Playwright: find the `td` whose `textContent.trim() === '<name>'` and click that.
+- **Screenshots fail with "outside allowed roots"?** Playwright MCP's write root is tied to the harness session's cwd, not Radar's repo. If you're testing Radar in a different workspace than the one Claude was launched in, save screenshots under the launch cwd's `.playwright-mcp/` instead of Radar's.
+- **`scripts/*-demo.sh up` switches kubectl context silently.** Both `crossplane-demo.sh` and `gitops-demo.sh` call `kubectl config use-context kind-...` mid-run. Run `kubectl config current-context` after these scripts to confirm where you are.
+- **Don't run two demo clusters at once.** Two kind control planes on one Docker daemon can deadlock; the older one may stop responding without warning. Bring one down before the other up, or use Radar's in-app context switch to retarget the running binary instead of starting a second cluster.
+
 ### What to look for
 
 - Sections render with data (not empty/undefined/null)
@@ -126,6 +156,8 @@ For each changed renderer/component:
 - Layout doesn't break (no overflow, no clipping, proper spacing)
 - Responsive behavior in the drawer (text truncation, wrapping)
 - Long text doesn't overflow into adjacent table columns
+- **At wide viewports (≥1920)**: full-screen views fill the column edge-to-edge (no large empty area to the right — usually a missing `flex-1` / `w-full` on the root)
+- **At wide viewports (≥1920)**: sticky bottom bars don't sit underneath Radar's fixed bottom-right overlay buttons (debug + `?`) — leave ~80px right padding on any new bottom bar
 
 ## Step 7: Report
 

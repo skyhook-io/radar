@@ -2,174 +2,229 @@ package k8score
 
 import (
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/informers"
 	listersappsv1 "k8s.io/client-go/listers/apps/v1"
 	listersautoscalingv2 "k8s.io/client-go/listers/autoscaling/v2"
 	listersbatchv1 "k8s.io/client-go/listers/batch/v1"
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
 	listersnetworkingv1 "k8s.io/client-go/listers/networking/v1"
 	listerspolicyv1 "k8s.io/client-go/listers/policy/v1"
+	listersrbacv1 "k8s.io/client-go/listers/rbac/v1"
 	listersstoragev1 "k8s.io/client-go/listers/storage/v1"
 )
+
+// factoryFor resolves the informer factory the given enabled kind is wired
+// to. With ResourceScopes a kind may live in the cluster-wide factory or in
+// a per-namespace factory; reading the lister from the wrong one returns
+// an empty result with no error (the kind never registered an informer
+// against that factory). Callers MUST go through this helper.
+func (rc *ResourceCache) factoryFor(key string) informers.SharedInformerFactory {
+	if f, ok := rc.factoryByKind[key]; ok {
+		return f
+	}
+	return rc.factory
+}
 
 func (rc *ResourceCache) Services() listerscorev1.ServiceLister {
 	if rc == nil || !rc.isEnabled(Services) {
 		return nil
 	}
-	return rc.factory.Core().V1().Services().Lister()
+	return rc.factoryFor(Services).Core().V1().Services().Lister()
 }
 
 func (rc *ResourceCache) Pods() listerscorev1.PodLister {
 	if rc == nil || !rc.isEnabled(Pods) {
 		return nil
 	}
-	return rc.factory.Core().V1().Pods().Lister()
+	if inf := rc.pagedInformers[Pods]; inf != nil {
+		return listerscorev1.NewPodLister(inf.GetIndexer())
+	}
+	return rc.factoryFor(Pods).Core().V1().Pods().Lister()
 }
 
 func (rc *ResourceCache) Nodes() listerscorev1.NodeLister {
 	if rc == nil || !rc.isEnabled(Nodes) {
 		return nil
 	}
-	return rc.factory.Core().V1().Nodes().Lister()
+	return rc.factoryFor(Nodes).Core().V1().Nodes().Lister()
 }
 
 func (rc *ResourceCache) Namespaces() listerscorev1.NamespaceLister {
 	if rc == nil || !rc.isEnabled(Namespaces) {
 		return nil
 	}
-	return rc.factory.Core().V1().Namespaces().Lister()
+	return rc.factoryFor(Namespaces).Core().V1().Namespaces().Lister()
 }
 
 func (rc *ResourceCache) ConfigMaps() listerscorev1.ConfigMapLister {
 	if rc == nil || !rc.isReady(ConfigMaps) {
 		return nil
 	}
-	return rc.factory.Core().V1().ConfigMaps().Lister()
+	return rc.factoryFor(ConfigMaps).Core().V1().ConfigMaps().Lister()
 }
 
 func (rc *ResourceCache) Secrets() listerscorev1.SecretLister {
 	if rc == nil || !rc.isReady(Secrets) {
 		return nil
 	}
-	return rc.factory.Core().V1().Secrets().Lister()
+	return rc.factoryFor(Secrets).Core().V1().Secrets().Lister()
 }
 
 func (rc *ResourceCache) Events() listerscorev1.EventLister {
 	if rc == nil || !rc.isReady(Events) {
 		return nil
 	}
-	return rc.factory.Core().V1().Events().Lister()
+	return rc.factoryFor(Events).Core().V1().Events().Lister()
 }
 
 func (rc *ResourceCache) PersistentVolumeClaims() listerscorev1.PersistentVolumeClaimLister {
 	if rc == nil || !rc.isReady(PersistentVolumeClaims) {
 		return nil
 	}
-	return rc.factory.Core().V1().PersistentVolumeClaims().Lister()
+	return rc.factoryFor(PersistentVolumeClaims).Core().V1().PersistentVolumeClaims().Lister()
 }
 
 func (rc *ResourceCache) PersistentVolumes() listerscorev1.PersistentVolumeLister {
 	if rc == nil || !rc.isReady(PersistentVolumes) {
 		return nil
 	}
-	return rc.factory.Core().V1().PersistentVolumes().Lister()
+	return rc.factoryFor(PersistentVolumes).Core().V1().PersistentVolumes().Lister()
 }
 
 func (rc *ResourceCache) Deployments() listersappsv1.DeploymentLister {
 	if rc == nil || !rc.isEnabled(Deployments) {
 		return nil
 	}
-	return rc.factory.Apps().V1().Deployments().Lister()
+	return rc.factoryFor(Deployments).Apps().V1().Deployments().Lister()
 }
 
 func (rc *ResourceCache) DaemonSets() listersappsv1.DaemonSetLister {
 	if rc == nil || !rc.isEnabled(DaemonSets) {
 		return nil
 	}
-	return rc.factory.Apps().V1().DaemonSets().Lister()
+	return rc.factoryFor(DaemonSets).Apps().V1().DaemonSets().Lister()
 }
 
 func (rc *ResourceCache) StatefulSets() listersappsv1.StatefulSetLister {
 	if rc == nil || !rc.isEnabled(StatefulSets) {
 		return nil
 	}
-	return rc.factory.Apps().V1().StatefulSets().Lister()
+	return rc.factoryFor(StatefulSets).Apps().V1().StatefulSets().Lister()
 }
 
 func (rc *ResourceCache) ReplicaSets() listersappsv1.ReplicaSetLister {
 	if rc == nil || !rc.isEnabled(ReplicaSets) {
 		return nil
 	}
-	return rc.factory.Apps().V1().ReplicaSets().Lister()
+	if inf := rc.pagedInformers[ReplicaSets]; inf != nil {
+		return listersappsv1.NewReplicaSetLister(inf.GetIndexer())
+	}
+	return rc.factoryFor(ReplicaSets).Apps().V1().ReplicaSets().Lister()
 }
 
 func (rc *ResourceCache) Ingresses() listersnetworkingv1.IngressLister {
 	if rc == nil || !rc.isEnabled(Ingresses) {
 		return nil
 	}
-	return rc.factory.Networking().V1().Ingresses().Lister()
+	return rc.factoryFor(Ingresses).Networking().V1().Ingresses().Lister()
 }
 
 func (rc *ResourceCache) IngressClasses() listersnetworkingv1.IngressClassLister {
 	if rc == nil || !rc.isEnabled(IngressClasses) {
 		return nil
 	}
-	return rc.factory.Networking().V1().IngressClasses().Lister()
+	return rc.factoryFor(IngressClasses).Networking().V1().IngressClasses().Lister()
 }
 
 func (rc *ResourceCache) Jobs() listersbatchv1.JobLister {
 	if rc == nil || !rc.isEnabled(Jobs) {
 		return nil
 	}
-	return rc.factory.Batch().V1().Jobs().Lister()
+	return rc.factoryFor(Jobs).Batch().V1().Jobs().Lister()
 }
 
 func (rc *ResourceCache) CronJobs() listersbatchv1.CronJobLister {
 	if rc == nil || !rc.isEnabled(CronJobs) {
 		return nil
 	}
-	return rc.factory.Batch().V1().CronJobs().Lister()
+	return rc.factoryFor(CronJobs).Batch().V1().CronJobs().Lister()
 }
 
 func (rc *ResourceCache) HorizontalPodAutoscalers() listersautoscalingv2.HorizontalPodAutoscalerLister {
 	if rc == nil || !rc.isEnabled(HorizontalPodAutoscalers) {
 		return nil
 	}
-	return rc.factory.Autoscaling().V2().HorizontalPodAutoscalers().Lister()
+	return rc.factoryFor(HorizontalPodAutoscalers).Autoscaling().V2().HorizontalPodAutoscalers().Lister()
 }
 
 func (rc *ResourceCache) StorageClasses() listersstoragev1.StorageClassLister {
 	if rc == nil || !rc.isReady(StorageClasses) {
 		return nil
 	}
-	return rc.factory.Storage().V1().StorageClasses().Lister()
+	return rc.factoryFor(StorageClasses).Storage().V1().StorageClasses().Lister()
 }
 
 func (rc *ResourceCache) PodDisruptionBudgets() listerspolicyv1.PodDisruptionBudgetLister {
 	if rc == nil || !rc.isReady(PodDisruptionBudgets) {
 		return nil
 	}
-	return rc.factory.Policy().V1().PodDisruptionBudgets().Lister()
+	return rc.factoryFor(PodDisruptionBudgets).Policy().V1().PodDisruptionBudgets().Lister()
 }
 
 func (rc *ResourceCache) NetworkPolicies() listersnetworkingv1.NetworkPolicyLister {
 	if rc == nil || !rc.isReady(NetworkPolicies) {
 		return nil
 	}
-	return rc.factory.Networking().V1().NetworkPolicies().Lister()
+	return rc.factoryFor(NetworkPolicies).Networking().V1().NetworkPolicies().Lister()
 }
 
 func (rc *ResourceCache) ServiceAccounts() listerscorev1.ServiceAccountLister {
 	if rc == nil || !rc.isEnabled(ServiceAccounts) {
 		return nil
 	}
-	return rc.factory.Core().V1().ServiceAccounts().Lister()
+	return rc.factoryFor(ServiceAccounts).Core().V1().ServiceAccounts().Lister()
+}
+
+func (rc *ResourceCache) Roles() listersrbacv1.RoleLister {
+	if rc == nil || !rc.isEnabled(Roles) {
+		return nil
+	}
+	return rc.factoryFor(Roles).Rbac().V1().Roles().Lister()
+}
+
+func (rc *ResourceCache) ClusterRoles() listersrbacv1.ClusterRoleLister {
+	if rc == nil || !rc.isEnabled(ClusterRoles) {
+		return nil
+	}
+	return rc.factoryFor(ClusterRoles).Rbac().V1().ClusterRoles().Lister()
+}
+
+func (rc *ResourceCache) RoleBindings() listersrbacv1.RoleBindingLister {
+	if rc == nil || !rc.isEnabled(RoleBindings) {
+		return nil
+	}
+	return rc.factoryFor(RoleBindings).Rbac().V1().RoleBindings().Lister()
+}
+
+func (rc *ResourceCache) ClusterRoleBindings() listersrbacv1.ClusterRoleBindingLister {
+	if rc == nil || !rc.isEnabled(ClusterRoleBindings) {
+		return nil
+	}
+	return rc.factoryFor(ClusterRoleBindings).Rbac().V1().ClusterRoleBindings().Lister()
 }
 
 func (rc *ResourceCache) LimitRanges() listerscorev1.LimitRangeLister {
 	if rc == nil || !rc.isEnabled(LimitRanges) {
 		return nil
 	}
-	return rc.factory.Core().V1().LimitRanges().Lister()
+	return rc.factoryFor(LimitRanges).Core().V1().LimitRanges().Lister()
+}
+
+func (rc *ResourceCache) ResourceQuotas() listerscorev1.ResourceQuotaLister {
+	if rc == nil || !rc.isEnabled(ResourceQuotas) {
+		return nil
+	}
+	return rc.factoryFor(ResourceQuotas).Core().V1().ResourceQuotas().Lister()
 }
 
 // listCountNamespaced counts items from a lister filtered to specific namespaces.
@@ -196,7 +251,8 @@ func isClusterScoped(lister any) bool {
 	switch lister.(type) {
 	case listerscorev1.NodeLister, listerscorev1.NamespaceLister,
 		listerscorev1.PersistentVolumeLister, listersstoragev1.StorageClassLister,
-		listersnetworkingv1.IngressClassLister:
+		listersnetworkingv1.IngressClassLister, listersrbacv1.ClusterRoleLister,
+		listersrbacv1.ClusterRoleBindingLister:
 		return true
 	}
 	return false
@@ -227,6 +283,15 @@ func listCountInNamespace(lister any, ns string) int {
 		return len(items)
 	case listerscorev1.LimitRangeLister:
 		items, _ := l.LimitRanges(ns).List(labels.Everything())
+		return len(items)
+	case listerscorev1.ResourceQuotaLister:
+		items, _ := l.ResourceQuotas(ns).List(labels.Everything())
+		return len(items)
+	case listersrbacv1.RoleLister:
+		items, _ := l.Roles(ns).List(labels.Everything())
+		return len(items)
+	case listersrbacv1.RoleBindingLister:
+		items, _ := l.RoleBindings(ns).List(labels.Everything())
 		return len(items)
 	case listersappsv1.DeploymentLister:
 		items, _ := l.Deployments(ns).List(labels.Everything())
@@ -304,6 +369,21 @@ func listCount(lister any) int {
 		items, _ := l.List(labels.Everything())
 		return len(items)
 	case listerscorev1.LimitRangeLister:
+		items, _ := l.List(labels.Everything())
+		return len(items)
+	case listerscorev1.ResourceQuotaLister:
+		items, _ := l.List(labels.Everything())
+		return len(items)
+	case listersrbacv1.RoleLister:
+		items, _ := l.List(labels.Everything())
+		return len(items)
+	case listersrbacv1.ClusterRoleLister:
+		items, _ := l.List(labels.Everything())
+		return len(items)
+	case listersrbacv1.RoleBindingLister:
+		items, _ := l.List(labels.Everything())
+		return len(items)
+	case listersrbacv1.ClusterRoleBindingLister:
 		items, _ := l.List(labels.Everything())
 		return len(items)
 	case listersappsv1.DeploymentLister:

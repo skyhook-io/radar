@@ -23,7 +23,8 @@ import { ForceDeleteConfirmDialog, type CascadeDependent } from '../ui/ForceDele
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
-import { formatKindName } from '../ui/drawer-components'
+import { displayKindName } from '../ui/drawer-components'
+import { getDefaultContainerName } from '../resources/resource-utils'
 
 // ============================================================================
 // ACTIONS BAR - Interactive buttons that change based on resource kind
@@ -36,6 +37,18 @@ interface ResourceActionsBarProps {
   hideLogs?: boolean
   showYaml?: boolean
   onToggleYaml?: () => void
+
+  /** When provided, renders a "Compare" button that opens the compare picker. */
+  onCompareTo?: () => void
+
+  /**
+   * Host-supplied callback for cross-cluster compare. When set alongside
+   * onCompareTo, the Compare button becomes a small dropdown offering both
+   * scopes. When set alone, the button opens cross-cluster compare directly.
+   * Only embedded hosts (Radar Hub) wire this; standalone Radar leaves it
+   * undefined and the button stays single-cluster.
+   */
+  onCompareAcrossClusters?: () => void
 
   // Capabilities (injected by platform)
   canExec?: boolean
@@ -52,7 +65,7 @@ interface ResourceActionsBarProps {
   renderPortForward?: (props: { type: 'pod' | 'service'; namespace: string; name: string; className?: string }) => React.ReactNode
 
   // Delete
-  onDelete?: (params: { kind: string; namespace: string; name: string; force: boolean }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
+  onDelete?: (params: { kind: string; group?: string; namespace: string; name: string; force: boolean }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isDeleting?: boolean
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
@@ -111,6 +124,8 @@ interface ResourceActionsBarProps {
 
 export function ResourceActionsBar({
   resource, data, onClose, hideLogs, showYaml, onToggleYaml,
+  onCompareTo,
+  onCompareAcrossClusters,
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
@@ -151,7 +166,7 @@ export function ResourceActionsBar({
 
   function handleDeleteConfirm(force: boolean) {
     onDelete?.(
-      { kind: resource.kind, namespace: resource.namespace, name: resource.name, force },
+      { kind: resource.kind, group: resource.group, namespace: resource.namespace, name: resource.name, force },
       {
         onSuccess: () => {
           setShowDeleteConfirm(false)
@@ -169,7 +184,7 @@ export function ResourceActionsBar({
       onOpenTerminal?.({
         namespace: resource.namespace,
         podName: resource.name,
-        containerName: containers[0],
+        containerName: getDefaultContainerName(data) || containers[0],
         containers,
       })
     }
@@ -181,13 +196,23 @@ export function ResourceActionsBar({
         namespace: resource.namespace,
         podName: resource.name,
         containers,
-        containerName,
+        containerName: containerName || getDefaultContainerName(data),
       })
     }
   }
 
   const [showLogsMenu, setShowLogsMenu] = useState(false)
   const logsMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const [showCompareMenu, setShowCompareMenu] = useState(false)
+  const compareMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleCompareMouseEnter = () => {
+    if (compareMenuTimeout.current) clearTimeout(compareMenuTimeout.current)
+    if (onCompareTo && onCompareAcrossClusters) setShowCompareMenu(true)
+  }
+  const handleCompareMouseLeave = () => {
+    compareMenuTimeout.current = setTimeout(() => setShowCompareMenu(false), 150)
+  }
 
   const handleLogsMouseEnter = () => {
     if (logsMenuTimeout.current) clearTimeout(logsMenuTimeout.current)
@@ -483,6 +508,59 @@ export function ResourceActionsBar({
         </button>
       )}
 
+      {(onCompareTo || onCompareAcrossClusters) && (
+        <div
+          className="relative"
+          onMouseEnter={handleCompareMouseEnter}
+          onMouseLeave={handleCompareMouseLeave}
+        >
+          <Tooltip
+            content={
+              onCompareTo && onCompareAcrossClusters
+                ? `Compare ${displayKindName(resource.kind, data?.kind).toLowerCase()}`
+                : onCompareAcrossClusters
+                  ? `Compare across clusters`
+                  : `Compare to another ${displayKindName(resource.kind, data?.kind).toLowerCase()}`
+            }
+          >
+            <button
+              onClick={onCompareTo ?? onCompareAcrossClusters}
+              aria-label={
+                onCompareTo && onCompareAcrossClusters
+                  ? `Compare ${displayKindName(resource.kind, data?.kind).toLowerCase()}`
+                  : onCompareAcrossClusters
+                    ? `Compare across clusters`
+                    : `Compare to another ${displayKindName(resource.kind, data?.kind).toLowerCase()}`
+              }
+              className="p-1.5 text-theme-text-secondary border border-theme-border-light rounded-lg hover:text-theme-text-primary hover:bg-theme-elevated transition-colors flex items-center"
+            >
+              <GitCompare className="w-3.5 h-3.5" />
+              {onCompareTo && onCompareAcrossClusters && (
+                <ChevronDown className="w-3 h-3 ml-0.5" />
+              )}
+            </button>
+          </Tooltip>
+          {showCompareMenu && onCompareTo && onCompareAcrossClusters && (
+            <div className="absolute top-full right-0 mt-1 min-w-[220px] py-1 bg-theme-surface border border-theme-border rounded-lg shadow-theme-lg z-50">
+              <button
+                onClick={() => { onCompareTo(); setShowCompareMenu(false) }}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-hover transition-colors text-left"
+              >
+                <GitCompare className="w-3 h-3 text-theme-text-tertiary shrink-0" />
+                <span>Compare in this cluster</span>
+              </button>
+              <button
+                onClick={() => { onCompareAcrossClusters(); setShowCompareMenu(false) }}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-hover transition-colors text-left"
+              >
+                <GitCompare className="w-3 h-3 text-theme-text-tertiary shrink-0" />
+                <span>Compare across clusters</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {onDelete && (
         <Tooltip content="Delete resource">
           <button
@@ -499,7 +577,7 @@ export function ResourceActionsBar({
         onClose={() => setShowDeleteConfirm(false)}
         onConfirm={handleDeleteConfirm}
         resourceName={resource.name}
-        resourceKind={formatKindName(resource.kind)}
+        resourceKind={displayKindName(resource.kind, data?.kind)}
         namespaceName={resource.namespace}
         isLoading={isDeleting ?? false}
         cascadeDependents={cascadeDependents}
@@ -829,7 +907,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
         <div className={clsx("p-4 overflow-y-auto", diffRevision ? "max-h-48 shrink-0" : "max-h-80")}>
           {isLoading && (
             <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
-              Loading revisions...
+              Loading revisions…
             </div>
           )}
 

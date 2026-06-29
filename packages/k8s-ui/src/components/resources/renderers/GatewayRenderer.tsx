@@ -1,14 +1,8 @@
 import { Globe, Radio, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
-
-const protocolColors: Record<string, string> = {
-  HTTP: 'bg-blue-500/20 text-blue-400',
-  HTTPS: 'bg-green-500/20 text-green-400',
-  TLS: 'bg-green-500/20 text-green-400',
-  TCP: 'bg-orange-500/20 text-orange-400',
-  UDP: 'bg-purple-500/20 text-purple-400',
-}
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
+import { Badge } from '../../ui/Badge'
 
 interface GatewayRendererProps {
   data: any
@@ -67,31 +61,17 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
           <Property
             label="Accepted"
             value={
-              <span className={clsx(
-                'badge',
-                isAccepted
-                  ? 'bg-green-500/20 text-green-400'
-                  : isNotAccepted
-                    ? 'bg-red-500/20 text-red-400'
-                    : 'bg-gray-500/20 text-gray-400'
-              )}>
+              <Badge severity={isAccepted ? 'success' : isNotAccepted ? 'error' : 'neutral'}>
                 {isAccepted ? 'True' : isNotAccepted ? 'False' : 'Unknown'}
-              </span>
+              </Badge>
             }
           />
           <Property
             label="Programmed"
             value={
-              <span className={clsx(
-                'badge',
-                isProgrammed
-                  ? 'bg-green-500/20 text-green-400'
-                  : isNotProgrammed
-                    ? 'bg-red-500/20 text-red-400'
-                    : 'bg-gray-500/20 text-gray-400'
-              )}>
+              <Badge severity={isProgrammed ? 'success' : isNotProgrammed ? 'error' : 'neutral'}>
                 {isProgrammed ? 'True' : isNotProgrammed ? 'False' : 'Unknown'}
-              </span>
+              </Badge>
             }
           />
         </PropertyList>
@@ -132,23 +112,20 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
                   <div className="flex items-center gap-2">
                     {isHTTPS && <Lock className="w-3.5 h-3.5 text-green-400" />}
                     <span className="text-sm font-medium text-theme-text-primary">{listener.name}</span>
-                    <span className={clsx(
-                      'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                      protocolColors[listener.protocol] || 'bg-gray-500/20 text-gray-400'
-                    )}>
+                    <Badge protocol={listener.protocol} size="sm">
                       {listener.protocol}:{listener.port}
-                    </span>
+                    </Badge>
                   </div>
                   <div className="flex items-center gap-1">
                     {isConflicted && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/20 text-red-400">
+                      <Badge severity="error" size="sm">
                         Conflicted
-                      </span>
+                      </Badge>
                     )}
                     {hasUnresolvedRefs && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-yellow-500/20 text-yellow-400">
+                      <Badge severity="warning" size="sm">
                         Unresolved Refs
-                      </span>
+                      </Badge>
                     )}
                     {listenerAccepted && (
                       <span className={clsx(
@@ -157,7 +134,7 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
                           ? 'bg-green-500/20 text-green-400'
                           : isListenerNotAccepted
                             ? 'bg-red-500/20 text-red-400'
-                            : 'bg-gray-500/20 text-gray-400'
+                            : BADGE_INACTIVE
                       )}>
                         {isListenerAccepted ? '\u2713' : isListenerNotAccepted ? '\u2717' : '?'}
                       </span>

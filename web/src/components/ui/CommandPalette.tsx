@@ -1,129 +1,26 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { Search, X, ChevronRight } from 'lucide-react'
-import { Home, Network, List, Clock, Package, Activity, Sun, Stethoscope, DollarSign, ShieldCheck } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useNamespaces, useContexts } from '../../api/client'
-import { CORE_RESOURCES, useAPIResources } from '../../api/apiResources'
-import { getResourceIcon } from '../../utils/resource-icons'
-type MainView = 'home' | 'topology' | 'resources' | 'timeline' | 'helm' | 'traffic' | 'cost' | 'audit'
+import { useCommandItems, bestScore, type CommandItem, type CommandItemCallbacks } from './command-items'
 
-interface CommandPaletteProps {
+interface CommandPaletteProps extends CommandItemCallbacks {
   onClose: () => void
-  onNavigateView: (view: MainView) => void
-  onNavigateKind: (kind: string, group: string) => void
-  onSwitchContext: (name: string) => void
-  onSetNamespaces: (ns: string[]) => void
-  onToggleTheme: () => void
-  onShowDiagnostics?: () => void
   /** Controls fade-in/out animation (driven by useAnimatedUnmount) */
   isOpen?: boolean
 }
 
-interface CommandItem {
-  id: string
-  label: string
-  sublabel?: string
-  category: string
-  icon?: React.ComponentType<{ className?: string }>
-  shortcut?: string
-  action: () => void
-  /** Extra terms to match against during search (not displayed) */
-  searchTerms?: string[]
-  /** Small priority bonus added to the final score (only if the item matched). Used to nudge built-in k8s kinds above CRDs on tied queries like "policy" or "event". */
-  priorityBonus?: number
-}
 
-// Built-in k8s API groups. Used to nudge these above CRDs on tied matches.
-const CORE_GROUP_BONUS = 10
-const WELL_KNOWN_GROUP_BONUS = 5
-const WELL_KNOWN_GROUPS = new Set([
-  'apps',
-  'batch',
-  'autoscaling',
-  'policy',
-  'networking.k8s.io',
-  'rbac.authorization.k8s.io',
-  'storage.k8s.io',
-  'scheduling.k8s.io',
-  'coordination.k8s.io',
-  'apiextensions.k8s.io',
-  'admissionregistration.k8s.io',
-  'apiregistration.k8s.io',
-  'certificates.k8s.io',
-  'events.k8s.io',
-  'discovery.k8s.io',
-  'flowcontrol.apiserver.k8s.io',
-  'node.k8s.io',
-  'authentication.k8s.io',
-  'authorization.k8s.io',
-])
-
-function groupPriorityBonus(group: string): number {
-  if (!group) return CORE_GROUP_BONUS
-  if (WELL_KNOWN_GROUPS.has(group)) return WELL_KNOWN_GROUP_BONUS
-  return 0
-}
-
-// Fuzzy match scoring: exact > prefix > word boundary > substring.
-// Within a tier, a coverage bonus (up to +20) breaks ties in favor of
-// shorter labels — so "serv" picks Service over ServiceAccount, and
-// "service" picks Service (exact) decisively. Bonus is capped below the
-// 25-point tier gap, so tier ordering is preserved.
-function scoreMatch(text: string, query: string): number {
-  const lower = text.toLowerCase()
-  const q = query.toLowerCase()
-  if (!lower.includes(q)) return 0
-  let base: number
-  if (lower === q) base = 150
-  else if (lower.startsWith(q)) base = 100
-  else {
-    const wordStart = lower.indexOf(q)
-    const prev = lower[wordStart - 1]
-    base = wordStart > 0 && (prev === ' ' || prev === '/' || prev === '-' || prev === '.') ? 75 : 50
-  }
-  return base + (q.length / lower.length) * 20
-}
-
-function bestScore(item: CommandItem, query: string): number {
-  // Primary label gets full score; secondary fields are discounted
-  // so that e.g. "node" matching the label "Node" ranks above
-  // "UpdateInfo" where "node" only matches the group "nodemanagement.gke.io"
-  let best = scoreMatch(item.label, query)
-  const secondary = Math.floor(Math.max(
-    scoreMatch(item.sublabel || '', query),
-    scoreMatch(item.category, query)
-  ) * 0.6)
-  best = Math.max(best, secondary)
-  if (item.searchTerms) {
-    for (const term of item.searchTerms) {
-      best = Math.max(best, scoreMatch(term, query))
-    }
-  }
-  // Only apply the priority bonus to items that actually matched, so we don't
-  // surface unrelated built-ins ahead of a relevant CRD.
-  return best > 0 ? best + (item.priorityBonus || 0) : 0
-}
-
-export function CommandPalette({
-  onClose,
-  onNavigateView,
-  onNavigateKind,
-  onSwitchContext,
-  onSetNamespaces,
-  onToggleTheme,
-  onShowDiagnostics,
-  isOpen = true,
-}: CommandPaletteProps) {
+export function CommandPalette({ onClose, isOpen = true, ...callbacks }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
   const isKeyboardNav = useRef(false)
 
-  const { data: namespacesData } = useNamespaces()
-  const { data: contexts } = useContexts()
-  const { data: apiResources } = useAPIResources()
+  // The static command items (Views / Kinds / Namespaces / Actions) — shared
+  // with the standalone omnibar via useCommandItems so the two never drift.
+  const items = useCommandItems(callbacks)
 
   // Focus input on mount
   useEffect(() => {
@@ -142,110 +39,6 @@ export function CommandPalette({
     document.addEventListener('keydown', handler, true)
     return () => document.removeEventListener('keydown', handler, true)
   }, [onClose])
-
-  // Build command items
-  const items = useMemo<CommandItem[]>(() => {
-    const result: CommandItem[] = []
-
-    // Views
-    const viewEntries: { view: MainView; label: string; icon: React.ComponentType<{ className?: string }>; shortcut: string }[] = [
-      { view: 'home', label: 'Home', icon: Home, shortcut: '1' },
-      { view: 'topology', label: 'Topology', icon: Network, shortcut: '2' },
-      { view: 'resources', label: 'Resources', icon: List, shortcut: '3' },
-      { view: 'timeline', label: 'Timeline', icon: Clock, shortcut: '4' },
-      { view: 'helm', label: 'Helm', icon: Package, shortcut: '5' },
-      { view: 'traffic', label: 'Traffic', icon: Activity, shortcut: '6' },
-      { view: 'cost', label: 'Cost', icon: DollarSign, shortcut: '7' },
-      { view: 'audit', label: 'Audit', icon: ShieldCheck, shortcut: '8' },
-    ]
-    for (const v of viewEntries) {
-      result.push({
-        id: `view-${v.view}`,
-        label: `Go to ${v.label}`,
-        category: 'Views',
-        icon: v.icon,
-        shortcut: v.shortcut,
-        action: () => { onNavigateView(v.view) },
-      })
-    }
-
-    // Resource kinds (deduplicate by name+group — backend may return multiple API versions)
-    const resources = apiResources || CORE_RESOURCES
-    const seenKinds = new Set<string>()
-    for (const r of resources) {
-      if (!r.verbs?.includes('list')) continue
-      const kindKey = `${r.name}/${r.group}`
-      if (seenKinds.has(kindKey)) continue
-      seenKinds.add(kindKey)
-      result.push({
-        id: `kind-${r.name}-${r.group}`,
-        label: r.kind,
-        sublabel: r.group || 'core',
-        category: 'Resource Kinds',
-        icon: getResourceIcon(r.kind),
-        action: () => { onNavigateKind(r.name, r.group) },
-        searchTerms: [r.name, r.kind],
-        priorityBonus: groupPriorityBonus(r.group),
-      })
-    }
-
-    // Contexts
-    if (contexts) {
-      for (const ctx of contexts) {
-        result.push({
-          id: `context-${ctx.name}`,
-          label: ctx.name,
-          sublabel: ctx.isCurrent ? 'current' : ctx.cluster,
-          category: 'Contexts',
-          action: () => { if (!ctx.isCurrent) onSwitchContext(ctx.name) },
-        })
-      }
-    }
-
-    // Namespaces
-    if (namespacesData) {
-      for (const ns of namespacesData) {
-        result.push({
-          id: `ns-${ns.name}`,
-          label: ns.name,
-          category: 'Namespaces',
-          action: () => { onSetNamespaces([ns.name]) },
-        })
-      }
-      // "All namespaces" option
-      result.push({
-        id: 'ns-all',
-        label: 'All Namespaces',
-        category: 'Namespaces',
-        action: () => { onSetNamespaces([]) },
-      })
-    }
-
-    // Actions
-    result.push({
-      id: 'action-theme',
-      label: 'Toggle Theme',
-      category: 'Actions',
-      icon: Sun,
-      shortcut: 't',
-      action: () => { onToggleTheme() },
-    })
-
-    if (onShowDiagnostics) {
-      result.push({
-        id: 'action-diagnostics',
-        label: 'Diagnostics',
-        category: 'Actions',
-        icon: Stethoscope,
-        shortcut: 'Ctrl+Shift+D',
-        action: () => { onShowDiagnostics() },
-        searchTerms: ['debug', 'health', 'status', 'snapshot'],
-      })
-    }
-
-    return result
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiResources, contexts, namespacesData, onNavigateView, onNavigateKind, onSwitchContext, onSetNamespaces, onToggleTheme, onShowDiagnostics])
 
   // Filter and rank results
   const filteredItems = useMemo(() => {

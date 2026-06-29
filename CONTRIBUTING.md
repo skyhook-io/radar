@@ -6,6 +6,12 @@ Thank you for your interest in contributing to Radar! This document provides gui
 
 By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
+## Get Help & Join the Community
+
+The fastest way to get help, ask questions, or share feedback is our [Discord community](https://radarhq.io/community/chat). Maintainers and other Radar users hang out there.
+
+For longer-form discussion, use [GitHub Discussions](https://github.com/skyhook-io/radar/discussions).
+
 ## How to Contribute
 
 ### Reporting Bugs

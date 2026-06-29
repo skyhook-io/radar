@@ -1,6 +1,7 @@
 import { ShoppingCart, AlertTriangle, Globe, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection } from '../../ui/drawer-components'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 function getOrderStateBadge(state: string): { color: string; text: string } {
   switch (state?.toLowerCase()) {
@@ -17,7 +18,7 @@ function getOrderStateBadge(state: string): { color: string; text: string } {
     case 'errored':
       return { text: 'Errored', color: 'bg-red-500/20 text-red-400' }
     default:
-      return { text: state || 'Unknown', color: 'bg-gray-500/20 text-gray-400' }
+      return { text: state || 'Unknown', color: BADGE_INACTIVE }
   }
 }
 

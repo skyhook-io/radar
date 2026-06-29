@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect } from 'react'
-import Editor, { OnMount, OnChange, type Monaco } from '@monaco-editor/react'
+import Editor, { DiffEditor, OnMount, OnChange, type Monaco } from '@monaco-editor/react'
+import { PaneLoader } from './PaneLoader'
 import type { editor } from 'monaco-editor'
 
 interface YamlEditorProps {
@@ -232,7 +233,7 @@ export function YamlEditor({
         }}
         loading={
           <div className="flex items-center justify-center h-full bg-theme-surface text-theme-text-secondary">
-            Loading editor...
+            Loading editor…
           </div>
         }
       />
@@ -240,40 +241,52 @@ export function YamlEditor({
   )
 }
 
-// Diff editor for showing changes before apply
 interface YamlDiffEditorProps {
   original: string
   modified: string
   height?: string | number
+  /** When true, render unified (single column) instead of side-by-side. */
+  unified?: boolean
+  /** When true, only diff regions stay rendered — unchanged sections collapse. */
+  hideUnchanged?: boolean
+  /** Caller-controlled theme. Defaults to dark to match YamlEditor. */
+  theme?: 'vs-dark' | 'vs'
+  /** When true, drops the rounded border so the editor reaches its container's edges. */
+  bleed?: boolean
 }
 
 export function YamlDiffEditor({
-  original: _original,
+  original,
   modified,
   height = '100%',
+  unified = false,
+  hideUnchanged = false,
+  theme = 'vs-dark',
+  bleed = false,
 }: YamlDiffEditorProps) {
-  // TODO: Use Monaco DiffEditor to show actual diff
-  void _original
   return (
-    <div className="rounded-lg overflow-hidden border border-theme-border" style={{ height }}>
-      <Editor
-        defaultLanguage="yaml"
-        value={modified}
-        theme="vs-dark"
+    <div className={bleed ? 'overflow-hidden' : 'rounded-lg overflow-hidden border border-theme-border'} style={{ height }}>
+      <DiffEditor
+        original={original}
+        modified={modified}
+        language="yaml"
+        theme={theme}
         options={{
           readOnly: true,
+          renderSideBySide: !unified,
+          hideUnchangedRegions: { enabled: hideUnchanged },
           minimap: { enabled: false },
           lineNumbers: 'on',
           scrollBeyondLastLine: false,
+          wordWrap: 'on',
           fontSize: 13,
           fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
           padding: { top: 12, bottom: 12 },
+          renderOverviewRuler: true,
+          ignoreTrimWhitespace: false,
+          automaticLayout: true,
         }}
-        loading={
-          <div className="flex items-center justify-center h-full bg-theme-surface text-theme-text-secondary">
-            Loading diff...
-          </div>
-        }
+        loading={<PaneLoader label="Loading resources…" className="h-full" />}
       />
     </div>
   )

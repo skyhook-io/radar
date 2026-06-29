@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import { MetricsChart } from '../../ui/MetricsChart'
 import { formatMemoryString } from '../../../utils/format'
+import { getExtendedCapacityRows } from '../../../utils/extended-resources'
 import type { MetricsDataPoint } from '../../../types/core'
 
 interface NodeRendererProps {
@@ -25,16 +26,12 @@ function formatStorage(value: string | undefined): string {
   return formatMemory(value)
 }
 
-// Extract problems from node status and spec
+// Extract genuine problems from node status. Cordoned (unschedulable) is
+// deliberately NOT included here — it's an intentional operator action
+// (cordon/drain), surfaced separately as a calm advisory, not a red error.
 function getNodeProblems(data: any): string[] {
   const problems: string[] = []
   const conditions = data.status?.conditions || []
-  const spec = data.spec || {}
-
-  // Check if unschedulable
-  if (spec.unschedulable) {
-    problems.push('Node is cordoned (unschedulable)')
-  }
 
   for (const cond of conditions) {
     // NotReady is a problem when status is not True
@@ -76,6 +73,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
   // Check for problems
   const problems = getNodeProblems(data)
   const hasProblems = problems.length > 0
+  const isCordoned = !!spec.unschedulable
 
   // Extract platform info from labels
   const instanceType = labels['node.kubernetes.io/instance-type']
@@ -87,9 +85,21 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
 
   return (
     <>
-      {/* Problems alert - shown at top when there are issues */}
+      {/* Problems alert - shown at top when there are genuine issues */}
       {hasProblems && (
         <AlertBanner variant="error" title="Issues Detected" items={problems} />
+      )}
+
+      {/* Cordoned is intentional but consequential — it removes scheduling
+          capacity and a forgotten cordon strands a node. So it's a warning (amber),
+          matching the node table badge + the Cordoned audit check — NOT the calm
+          sky of a no-op intentional state (suspended/idle), and not a red error. */}
+      {isCordoned && (
+        <AlertBanner
+          variant="warning"
+          title="Cordoned (unschedulable)"
+          message="New pods won't be scheduled here. Uncordon to resume scheduling."
+        />
       )}
 
       {/* Node Info */}
@@ -132,6 +142,12 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
               allocatable: formatStorage(allocatable['ephemeral-storage']),
               inUse: undefined,
             },
+            ...getExtendedCapacityRows(capacity, allocatable).map((row) => ({
+              label: row.key,
+              capacity: row.capacity,
+              allocatable: row.allocatable,
+              inUse: undefined,
+            })),
           ].map((row) => (
             <div key={row.label} className="card-inner">
               <div className="text-xs font-medium text-theme-text-secondary mb-1">{row.label}</div>

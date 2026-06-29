@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -22,12 +23,34 @@ func TestFilterNamespacesForUser_NilUser(t *testing.T) {
 	}
 }
 
-func TestFilterNamespacesForUser_NilPerms(t *testing.T) {
+func TestFilterNamespacesForUser_NilPerms_FailsClosed(t *testing.T) {
 	requested := []string{"default"}
 	user := &User{Username: "alice"}
 	got := FilterNamespacesForUser(requested, user, nil)
-	if len(got) != 1 || got[0] != "default" {
-		t.Errorf("nil perms should pass through: got %v", got)
+	if len(got) != 0 {
+		t.Errorf("nil perms with non-nil user must fail closed: got %v, want empty", got)
+	}
+}
+
+func TestFilterNamespacesForUser_NilUser_PassesThrough(t *testing.T) {
+	requested := []string{"default", "prod"}
+	got := FilterNamespacesForUser(requested, nil, nil)
+	if len(got) != 2 {
+		t.Errorf("nil user is the unauthenticated/system path: got %v, want passthrough", got)
+	}
+}
+
+func TestFilterNamespacesForUser_AllNamespaces_ReturnsClone(t *testing.T) {
+	user := &User{Username: "alice"}
+	perms := &UserPermissions{AllowedNamespaces: []string{"a", "b"}}
+	got := FilterNamespacesForUser(nil, user, perms)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 namespaces, got %v", got)
+	}
+	got[0] = "tampered"
+	if perms.AllowedNamespaces[0] != "a" {
+		t.Errorf("FilterNamespacesForUser returned aliased slice: cached AllowedNamespaces[0] = %q, want %q",
+			perms.AllowedNamespaces[0], "a")
 	}
 }
 
@@ -292,6 +315,29 @@ func TestDiscoverNamespaces_EmptyNamespaceList(t *testing.T) {
 	}
 	if len(ns) != 0 {
 		t.Errorf("expected empty slice, got %v", ns)
+	}
+}
+
+func TestDiscoverNamespaces_PropagatesPerNamespaceError(t *testing.T) {
+	// When a per-namespace SAR fails (apiserver hiccup), DiscoverNamespaces
+	// must surface the error so the caller can avoid caching the partial
+	// result. Otherwise a brief outage would lock the user out for the
+	// whole cache TTL window.
+	client := fake.NewClientset()
+	client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		sar := action.(k8stesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
+		spec := sar.Spec
+		// Step 1 (cluster-wide list pods, namespace=="") succeeds with deny.
+		if spec.ResourceAttributes.Namespace == "" {
+			return true, &authv1.SubjectAccessReview{Status: authv1.SubjectAccessReviewStatus{Allowed: false}}, nil
+		}
+		// Step 2 (per-namespace) returns a transport error.
+		return true, nil, errors.New("apiserver unreachable")
+	})
+
+	_, err := DiscoverNamespaces(context.Background(), client, "alice", nil, []string{"dev", "prod"})
+	if err == nil {
+		t.Fatal("expected error from per-namespace SAR failure, got nil")
 	}
 }
 

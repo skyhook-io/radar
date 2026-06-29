@@ -11,7 +11,7 @@ User → [Auth Layer] → Radar Backend → K8s API (as user, via impersonation)
 ```
 
 1. **Authentication** identifies the user (proxy headers or OIDC login)
-2. **Reads** are filtered — Radar discovers which namespaces the user can access via `SubjectAccessReview` and only returns resources from those namespaces
+2. **Reads** are filtered by namespace — Radar discovers which namespaces the user can access via `SubjectAccessReview` and only returns resources from those namespaces. Cluster-scoped resources (Nodes, PersistentVolumes, StorageClasses, ClusterRoles when `rbac.viewRBAC` is on, cluster-scoped CRDs, etc.) have no namespace to filter on, so they are gated per-kind via `SubjectAccessReview`: a user sees them only if their own RBAC permits listing that kind. Cluster-wide pod visibility does **not** imply Node/PV visibility — each cluster-scoped read goes through its own check.
 3. **Writes** use K8s impersonation — Radar makes the K8s API call as the authenticated user, so K8s RBAC decides whether it's allowed
 4. **UI adapts** — capability checks run per-user, so buttons (exec, restart, scale, Helm) only appear if the user has permission
 
@@ -57,6 +57,14 @@ radar --auth-mode=proxy \
 
 > **Security:** Your ingress must strip `X-Forwarded-User` and `X-Forwarded-Groups` headers from external requests to prevent spoofing. The auth proxy should be the **only** path to Radar. Radar logs a warning at startup as a reminder.
 
+**Logout behavior:**
+
+The user menu always shows a **Logout** button. Clicking it clears Radar's session cookie. On its own, that isn't enough to switch users: your proxy re-injects the identity header on the next request and signs the same user back in.
+
+To make logout actually switch users, point Radar at your proxy's sign-out URL with `--auth-proxy-logout-url` (or `auth.proxy.logoutURL` in Helm) — e.g. oauth2-proxy's `/oauth2/sign_out`. Radar then redirects the browser there after clearing its own cookie, so the upstream session is torn down too. When unset, the menu shows a note that the proxy may re-authenticate automatically.
+
+> **Note:** HTTP Basic Auth has no reliable logout mechanism — browsers cache credentials and resend them. If you need user-switching, prefer a proxy with a real sign-out endpoint (oauth2-proxy, Authelia) over plain Basic Auth.
+
 ### OIDC Mode
 
 Use this when you want Radar to handle login directly — no separate auth proxy needed. Radar redirects to your identity provider (Google, Okta, Dex, Keycloak, etc.), validates the token, and creates a session cookie.
@@ -77,7 +85,10 @@ auth:
     clientSecret: your-client-secret
     redirectURL: https://radar.example.com/auth/callback
     groupsClaim: groups                        # JWT claim containing group membership
+    # scopes: ["openid", "profile", "email", "groups"]  # Default — uncomment to override (e.g., drop "groups" for Google)
 ```
+
+**Scopes:** by default Radar requests `openid profile email groups` at the authorization endpoint. The `groups` scope is required by Dex, Keycloak, and most IdPs to actually include the groups claim in the ID token. If your IdP rejects unknown scopes (Google in particular doesn't define `groups`), override via `auth.oidc.scopes` / `--auth-oidc-scopes` to drop it or substitute the provider-specific equivalent.
 
 **Logout behavior:**
 
@@ -164,6 +175,14 @@ Under cloud-mode (`RADAR_CLOUD_MODE=true`, set automatically by the chart when `
 - Forces `--auth-mode=proxy` with pinned `X-Forwarded-User` / `X-Forwarded-Groups` headers — the Cloud tunnel is the trust boundary.
 - Ships three default ClusterRoleBindings mapping Cloud's `cloud:owner` / `cloud:member` / `cloud:viewer` groups to the standard K8s `admin` / `edit` / `view` ClusterRoles. Configurable via `cloud.defaultRbac.*` in `values.yaml`.
 - Hardens the listener (no `/debug/pprof/*`, narrower exempt paths).
+
+<a id="cloud-mode-helm-bindings"></a>
+**Helm-specific bindings (when `rbac.helm=true`).** Helm's pre-flight existence check needs cluster-scoped reads/writes that the K8s built-in `admin`/`edit`/`view` ClusterRoles don't grant. The chart emits two add-on ClusterRoles, split by trust tier:
+
+- `radar-helm` — CRDs, StorageClasses, RuntimeClasses, PriorityClasses, PodDisruptionBudgets, Namespaces. Bound to `cloud:owner` AND `cloud:member`.
+- `radar-helm-admin` — RBAC objects (Roles/Bindings, Cluster variants), validating/mutating webhooks, ApiServices. Bound to `cloud:owner` ONLY. Granting these to a tier weaker than owner would let a member self-promote to cluster-admin in one `ClusterRoleBinding` write, collapsing the owner/member distinction.
+
+A `cloud:member` attempting to install a chart that bundles its own RBAC will get a typed `rbac_preflight` 403 with an actionable "ask an owner" message. Day-to-day app charts and operator-CRD installs still work for members.
 
 Customer-facing documentation for Radar Cloud lives on [radarhq.io](https://radarhq.io). The authoritative reference for the Cloud-mode chart values is the comment block in [`deploy/helm/radar/values.yaml`](../deploy/helm/radar/values.yaml) under `cloud:`.
 
@@ -330,7 +349,7 @@ When auth is enabled:
 - A **username** appears in the Radar header with a logout option
 - The **namespace selector** only shows namespaces the user can access
 - **Topology, resources, events, dashboard** are filtered to accessible namespaces
-- **Cluster-scoped resources** (Nodes, PersistentVolumes, StorageClasses) are currently visible to all authenticated users regardless of namespace permissions — per-resource SAR checks for these are planned for a future release
+- **Cluster-scoped resources** (Nodes, PersistentVolumes, StorageClasses) are gated per-kind via `SubjectAccessReview` — a user sees them only if their own RBAC permits listing that kind, independent of namespace access
 - **Helm releases** are visible to all authenticated users (reads use the ServiceAccount, not impersonation, because the K8s `view` role doesn't include `list secrets` which Helm requires). Write operations (install, upgrade, rollback, uninstall) are impersonated and require the user to have appropriate RBAC.
 - **Write buttons** (restart, scale, exec, Helm install, etc.) only appear if the user has permission
 - Write operations return **403** from K8s if RBAC denies them (shown as an error toast)
@@ -372,6 +391,7 @@ Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contain
 | Cookie TTL | `--auth-cookie-ttl` | `auth.cookieTTL` | `4h` (sliding) |
 | User header (proxy) | `--auth-user-header` | `auth.proxy.userHeader` | `X-Forwarded-User` |
 | Groups header (proxy) | `--auth-groups-header` | `auth.proxy.groupsHeader` | `X-Forwarded-Groups` |
+| Proxy logout URL (proxy) | `--auth-proxy-logout-url` | `auth.proxy.logoutURL` | — |
 | OIDC issuer | `--auth-oidc-issuer` | `auth.oidc.issuerURL` | — |
 | OIDC client ID | `--auth-oidc-client-id` | `auth.oidc.clientID` | — |
 | OIDC client secret | `--auth-oidc-client-secret` | `auth.oidc.clientSecret` | — |
@@ -379,6 +399,7 @@ Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contain
 | OIDC client secret key | — | `auth.oidc.clientSecretKey` | `client-secret` |
 | OIDC redirect URL | `--auth-oidc-redirect-url` | `auth.oidc.redirectURL` | — |
 | OIDC groups claim | `--auth-oidc-groups-claim` | `auth.oidc.groupsClaim` | `groups` |
+| OIDC scopes | `--auth-oidc-scopes` | `auth.oidc.scopes` | `openid,profile,email,groups` |
 | OIDC post-logout redirect | `--auth-oidc-post-logout-redirect-url` | `auth.oidc.postLogoutRedirectURL` | — |
 | OIDC username prefix | `--auth-oidc-username-prefix` | `auth.oidc.usernamePrefix` | — |
 | OIDC groups prefix | `--auth-oidc-groups-prefix` | `auth.oidc.groupsPrefix` | — |

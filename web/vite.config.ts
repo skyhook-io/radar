@@ -33,7 +33,8 @@ export default defineConfig({
           // Trailing slashes on react/ and react-dom/ prevent matching react-router, react-resizable, etc.
           const chunks: Record<string, string[]> = {
             vendor: ['react/', 'react-dom/', 'react-router'],
-            ui: ['@xyflow/', '@monaco-editor/', '@xterm/'],
+            monaco: ['monaco-editor/', '@monaco-editor/'],
+            ui: ['@xyflow/', '@xterm/'],
           }
 
           for (const [chunk, prefixes] of Object.entries(chunks)) {

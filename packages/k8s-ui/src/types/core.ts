@@ -1,6 +1,8 @@
 // Topology types matching the Go backend
 
-// Per-resource-type RBAC permissions (matches backend k8s.ResourcePermissions)
+// Per-resource-type RBAC permissions. Field names must match the JSON keys
+// produced by ResourcePermissions in internal/k8s/capabilities.go — there
+// is no automated check across the Go/TS boundary.
 export interface ResourcePermissions {
   pods: boolean
   services: boolean
@@ -12,14 +14,46 @@ export interface ResourcePermissions {
   configMaps: boolean
   secrets: boolean
   events: boolean
-  pvcs: boolean
+  persistentVolumeClaims: boolean
   nodes: boolean
   namespaces: boolean
   jobs: boolean
   cronJobs: boolean
-  hpas: boolean
+  horizontalPodAutoscalers: boolean
+  persistentVolumes: boolean
+  storageClasses: boolean
+  podDisruptionBudgets: boolean
+  networkPolicies: boolean
+  serviceAccounts: boolean
+  roles: boolean
+  clusterRoles: boolean
+  roleBindings: boolean
+  clusterRoleBindings: boolean
+  limitRanges: boolean
   gateways: boolean
   httpRoutes: boolean
+  verticalPodAutoscalers: boolean
+}
+
+// Keys in ResourcePermissions that represent optional CRDs Radar can monitor
+// when they're installed in the cluster. A `false` here means "CRD not
+// installed (or RBAC denied)" — NOT "Radar is missing data the user expects",
+// so banners about RBAC restrictions should ignore these keys.
+//
+// Keep in sync with dynamicCapabilityKinds in internal/k8s/capabilities_alignment_test.go.
+export const OPTIONAL_RESOURCE_KINDS: ReadonlyArray<keyof ResourcePermissions> = [
+  'gateways',
+  'httpRoutes',
+  'verticalPodAutoscalers',
+]
+
+// Per-workload write permissions. Field names must match
+// WorkloadWritePermissions in internal/k8s/capabilities.go.
+export interface WorkloadWritePermissions {
+  deployments: boolean
+  daemonSets: boolean
+  statefulSets: boolean
+  rollouts: boolean
 }
 
 // Feature capabilities based on RBAC permissions
@@ -32,10 +66,27 @@ export interface Capabilities {
   secretsUpdate: boolean  // Update secrets (inline editing)
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
+  workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
   mcpEnabled: boolean     // MCP server is running
+  // How / where this Radar binary is running. Optional on the wire so a
+  // newer frontend (e.g. radar-hub-web bundling a fresher @skyhook-io/radar-app)
+  // doesn't crash against an older backend that hasn't shipped the field yet —
+  // consumers should default to { mode: 'local' } when absent.
+  deployment?: Deployment
   resources?: ResourcePermissions // Per-resource-type permissions
   authEnabled?: boolean   // Auth is enabled on the backend
   username?: string       // Authenticated user's username (when auth enabled)
+}
+
+// DeploymentMode is the closed set of topologies Radar can run in.
+// `local` is a developer's machine with a kubeconfig (most OSS use).
+// `in-cluster` is a Radar pod inside the cluster, no kubeconfig.
+// `cloud` is in-cluster + tunneled to Radar Cloud's hub — UI suppresses
+// chrome the hub already renders (cluster headline, local-MCP card).
+export type DeploymentMode = 'local' | 'in-cluster' | 'cloud'
+
+export interface Deployment {
+  mode: DeploymentMode
 }
 
 // Core node kinds that have specific UI handling
@@ -142,7 +193,7 @@ export function displayKind(kind: string): string {
   return shortNames[kind] || kind
 }
 
-export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
 
 export type EdgeType = 'routes-to' | 'exposes' | 'manages' | 'uses' | 'configures' | 'protects'
 
@@ -171,7 +222,17 @@ export interface Topology {
   largeCluster?: boolean // True if cluster exceeds large cluster threshold
   hiddenKinds?: string[] // Resource kinds auto-hidden for performance
   requiresNamespaceFilter?: boolean // True if cluster is too large for all-namespace topology
+  estimatedNodes?: number // Pre-build node count estimate
+  summaryMode?: boolean // True when the pod tier was collapsed into per-workload/service counts
   crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready' // CRD discovery status
+}
+
+// PodSummary is stamped onto a workload or service node's data in summary mode.
+export interface PodSummary {
+  total: number
+  healthy: number
+  degraded: number
+  unhealthy: number
 }
 
 // K8s Event (from SSE stream)
@@ -217,6 +278,7 @@ export interface TimelineEvent {
 
   // Resource identity
   kind: string
+  apiVersion?: string // e.g. "apps/v1", "cluster.x-k8s.io/v1beta1"
   namespace: string
   name: string
   uid?: string
@@ -313,6 +375,9 @@ export interface ContextInfo {
   user: string
   namespace: string
   isCurrent: boolean
+  /** Source kubeconfig label (e.g. "kube-cluster-paris"). Set by backend
+   *  only when 2+ kubeconfig files are loaded; empty otherwise. */
+  source?: string
 }
 
 // Namespace
@@ -356,7 +421,8 @@ export interface ResolvedEnvFromEntry {
   values: Record<string, string>
   isSecret: boolean
 }
-export type ResolvedEnvFrom = Record<string, ResolvedEnvFromEntry>
+export type ResolvedEnvFromKey = `configmap:${string}` | `secret:${string}`
+export type ResolvedEnvFrom = Partial<Record<ResolvedEnvFromKey, ResolvedEnvFromEntry>>
 
 // Resource reference (for relationships)
 export interface ResourceRef {
@@ -370,6 +436,7 @@ export interface ResourceRef {
 export interface Relationships {
   owner?: ResourceRef
   deployment?: ResourceRef   // Grandparent Deployment (for Pods owned by ReplicaSets)
+  managedBy?: ResourceRef[]  // Topmost meaningful manager(s): GitOps controller (ArgoCD Application / Flux Kustomization / Flux HelmRelease), Helm release, or the topmost K8s owner. Synthesized server-side; replaces client-side detectGitOpsOwner.
   children?: ResourceRef[]
   services?: ResourceRef[]
   ingresses?: ResourceRef[]
@@ -379,8 +446,12 @@ export interface Relationships {
   consumers?: ResourceRef[]
   scalers?: ResourceRef[]
   scaleTarget?: ResourceRef
-  policies?: ResourceRef[]
+  pdbs?: ResourceRef[]              // PodDisruptionBudgets protecting this workload
+  networkPolicies?: ResourceRef[]   // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy variants selecting this workload
   pods?: ResourceRef[]
+  serviceAccount?: ResourceRef      // For Pods: derived from pod.spec.serviceAccountName
+  node?: ResourceRef                // For scheduled Pods: derived from pod.spec.nodeName
+  resourceClaims?: ResourceRef[]    // For Pods: DRA ResourceClaims (direct + template-generated)
 }
 
 // Parsed X.509 certificate metadata (from backend cert parsing)
@@ -401,11 +472,63 @@ export interface SecretCertificateInfo {
   certificates: CertificateInfo[]
 }
 
+export type HPADiagnosisState =
+  | 'ok'
+  | 'scaling_up'
+  | 'scaling_down'
+  | 'limited_max'
+  | 'limited_min'
+  | 'metrics_unavailable'
+  | 'metrics_incomplete'
+  | 'unable_to_scale'
+  | 'disabled'
+  | 'pinned'
+  | 'stale'
+  | 'stabilized'
+  | 'unknown'
+
+export interface HPADiagnosis {
+  state: HPADiagnosisState
+  summary: string
+  target: {
+    apiVersion?: string
+    kind?: string
+    name?: string
+  }
+  bounds: {
+    min: number
+    max: number
+    current: number
+    desired: number
+    observedGeneration?: number
+    generation?: number
+  }
+  metrics?: HPAMetricSummary[]
+  reasons?: HPAReasonSummary[]
+}
+
+export interface HPAReasonSummary {
+  id: string
+  message: string
+  detail?: string
+  conditionType?: string
+  conditionReason?: string
+}
+
+export interface HPAMetricSummary {
+  type: string
+  name: string
+  current?: string
+  target?: string
+  status: string
+}
+
 // Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
   resource: T
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo
+  hpaDiagnosis?: HPADiagnosis
 }
 
 // API Resource (from discovery endpoint)
@@ -423,16 +546,25 @@ export interface APIResource {
 export interface HelmRelease {
   name: string
   namespace: string
+  // Empty means Helm stores release metadata in namespace.
+  storageNamespace?: string
   chart: string
   chartVersion: string
   appVersion: string
   status: string
   revision: number
   updated: string // ISO date string
+  lastOperation?: HelmOperation
+  operations?: HelmOperation[]
   // Health summary from owned resources
-  resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+  resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
   healthIssue?: string    // Primary issue if unhealthy (e.g., "OOMKilled")
   healthSummary?: string  // Brief summary like "2/3 pods ready"
+  // When set, this release was installed by Flux's helm-controller — the
+  // user should manage it via the named HelmRelease CR (GitOps tab) rather
+  // than helm CLI / Radar's Helm view, since changes here would get
+  // reverted at the next reconcile. Format: "namespace/name".
+  managedByFluxHelmRelease?: string
 }
 
 export interface HelmRevision {
@@ -444,9 +576,32 @@ export interface HelmRevision {
   updated: string // ISO date string
 }
 
+export type HelmOperationKind = 'release_failed' | 'upgrade_failed' | 'upgrade_rolled_back' | 'rollback' | 'pending'
+export type HelmOperationStatus = 'failed' | 'rolled_back' | 'completed' | 'stuck_pending'
+export type HelmOperationConfidence = 'high' | 'medium' | 'low'
+export type HelmOperationSource = 'helm_status' | 'helm_history'
+
+export interface HelmOperation {
+  kind: HelmOperationKind
+  status: HelmOperationStatus
+  source: HelmOperationSource
+  confidence: HelmOperationConfidence
+  message: string
+  evidence?: string
+  failureDescription?: string
+  revision?: number
+  failedRevision?: number
+  rollbackRevision?: number
+  targetRevision?: number
+  pendingStatus?: string
+  updated?: string
+}
+
 export interface HelmReleaseDetail {
   name: string
   namespace: string
+  // Empty means Helm stores release metadata in namespace.
+  storageNamespace?: string
   chart: string
   chartVersion: string
   appVersion: string
@@ -457,17 +612,94 @@ export interface HelmReleaseDetail {
   notes: string
   history: HelmRevision[]
   resources: HelmOwnedResource[]
+  resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
+  healthIssue?: string
+  healthSummary?: string
   hooks?: HelmHook[]
+  hookDiagnostics?: HookDiagnostic[]
   readme?: string
   dependencies?: ChartDependency[]
+  lastOperation?: HelmOperation
+  operations?: HelmOperation[]
+  // When set, this release was installed by Flux's helm-controller — see
+  // HelmRelease.managedByFluxHelmRelease for context. Format: "namespace/name".
+  managedByFluxHelmRelease?: string
 }
 
 export interface HelmHook {
   name: string
+  namespace?: string
   kind: string
+  path?: string
   events: string[]
   weight: number
   status?: string
+  startedAt?: string
+  completedAt?: string
+  deletePolicies?: string[]
+  outputLogPolicies?: string[]
+}
+
+export interface HookDiagnostic {
+  name: string
+  namespace?: string
+  kind: string
+  events?: string[]
+  phase: string
+  message: string
+  evidence?: HookEvidence
+  evidenceUnavailable?: boolean
+  evidenceUnavailableReason?: string
+}
+
+export interface HookEvidence {
+  summary?: string
+  jobs?: HookJobEvidence[]
+  pods?: HookPodEvidence[]
+  events?: HookEventEvidence[]
+  logs?: HookLogEvidence[]
+  errors?: string[]
+}
+
+export interface HookJobEvidence {
+  name: string
+  namespace?: string
+  status?: string
+  active?: number
+  succeeded?: number
+  failed?: number
+  conditions?: string[]
+}
+
+export interface HookPodEvidence {
+  name: string
+  namespace?: string
+  phase?: string
+  ready?: string
+  restartCount?: number
+  reason?: string
+  message?: string
+}
+
+export interface HookEventEvidence {
+  involvedKind: string
+  involvedName: string
+  type?: string
+  reason?: string
+  message?: string
+  count?: number
+  lastSeen?: string
+}
+
+export interface HookLogEvidence {
+  pod: string
+  container: string
+  previous?: boolean
+  lines?: string[]
+  totalLines?: number
+  matchedLines?: number
+  fallback?: boolean
+  error?: string
 }
 
 export interface ChartDependency {
@@ -480,6 +712,7 @@ export interface ChartDependency {
 
 export interface HelmOwnedResource {
   kind: string
+  apiVersion?: string // e.g. "apps/v1", "cluster.x-k8s.io/v1beta1"
   name: string
   namespace: string
   status?: string   // Running, Pending, Failed, Active, etc.
@@ -494,16 +727,45 @@ export interface HelmValues {
   computed?: Record<string, unknown>
 }
 
+export interface ValuesDiff {
+  revision1: number
+  revision2: number
+  allValues: boolean
+  diff: string
+}
+
 export interface ManifestDiff {
   revision1: number
   revision2: number
   diff: string
 }
 
+export interface NotesDiff {
+  revision1: number
+  revision2: number
+  diff: string
+}
+
+export interface HelmResourceRef {
+  kind: string
+  apiVersion?: string
+  name: string
+  namespace: string
+}
+
+export interface ResourceDiff {
+  revision1: number
+  revision2: number
+  added: HelmResourceRef[]
+  removed: HelmResourceRef[]
+  unchanged: HelmResourceRef[]
+}
+
 // Selected Helm release (for drawer state)
 export interface SelectedHelmRelease {
   namespace: string
   name: string
+  storageNamespace?: string
 }
 
 // Upgrade availability info
@@ -512,10 +774,19 @@ export interface UpgradeInfo {
   latestVersion?: string
   updateAvailable: boolean
   repositoryName?: string
+  // 'repository' for classic HTTP-repo matches, 'oci' when discovered via a
+  // registered OCI chart source. Absent when the source couldn't be determined.
+  sourceType?: 'repository' | 'oci'
+  // oci:// chart reference an OCI-sourced upgrade lives at (display only).
+  chartRef?: string
   error?: string
+  // True only when the error is a genuinely untracked source (registering a
+  // chart source could fix it) — NOT for repo-side errors like a stale index or
+  // classic ambiguity. Gates the "track source" affordance.
+  untracked?: boolean
 }
 
-// Batch upgrade info (map of "namespace/name" to UpgradeInfo)
+// Batch upgrade info keyed by "storageNamespace/name".
 export interface BatchUpgradeInfo {
   releases: Record<string, UpgradeInfo>
 }
@@ -862,8 +1133,11 @@ export interface TrafficFilters {
   timeRange: string
 }
 
-// Main view type now includes 'traffic' and 'cost'
-export type ExtendedMainView = MainView | 'traffic' | 'cost' | 'audit'
+// Main view type now includes 'traffic', 'cost', 'checks', 'gitops'.
+// Library consumers (Radar Hub) get all GitOps surfaces — the package
+// IS the public surface, so adding new top-level views must extend
+// this type rather than rely on app-local extensions.
+export type ExtendedMainView = MainView | 'traffic' | 'cost' | 'checks' | 'gitops' | 'issues' | 'applications'
 
 // ============================================================================
 // Image Filesystem Types

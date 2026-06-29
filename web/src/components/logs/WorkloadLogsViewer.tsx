@@ -9,9 +9,11 @@ interface WorkloadLogsViewerProps {
   kind: string
   namespace: string
   name: string
+  /** Start streaming on mount. Default true — workload logs are aggregated from live pods. */
+  autoStream?: boolean
 }
 
-export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true }: WorkloadLogsViewerProps) {
   const desktopDownload = useDesktopDownload()
   const { theme } = useTheme()
 
@@ -38,6 +40,7 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
       createStream={makeStream}
       overrideDownload={desktopDownload}
       forceDark={theme === 'dark' ? true : undefined}
+      autoStream={autoStream}
     />
   )
 }

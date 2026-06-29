@@ -1,10 +1,11 @@
 package server
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -21,11 +22,18 @@ func (s *Server) handleArgoSync(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for sync Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for sync Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
-	result, err := gitops.SyncArgoApp(r.Context(), client, namespace, name)
+	var opts gitops.ArgoSyncOptions
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid sync request: %v", err))
+			return
+		}
+	}
+	result, err := gitops.SyncArgoApp(r.Context(), client, namespace, name, opts)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "sync", namespace, name)
 		return
@@ -50,7 +58,7 @@ func (s *Server) handleArgoRefresh(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for refresh Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for refresh Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -58,6 +66,43 @@ func (s *Server) handleArgoRefresh(w http.ResponseWriter, r *http.Request) {
 	result, err := gitops.RefreshArgoApp(r.Context(), client, namespace, name, refreshType)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "refresh", namespace, name)
+		return
+	}
+
+	s.writeJSON(w, toGitOpsResponse(result))
+}
+
+// handleArgoRollback rolls an Application back to a prior history entry by ID.
+func (s *Server) handleArgoRollback(w http.ResponseWriter, r *http.Request) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		log.Printf("[argo] Dynamic client unavailable for rollback Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
+		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
+		return
+	}
+
+	var opts gitops.ArgoRollbackOptions
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid rollback request: %v", err))
+			return
+		}
+	}
+	// Match the core function's contract (RollbackArgoApp rejects <= 0).
+	// Reject negatives at the HTTP boundary so they 400 instead of falling
+	// through to a generic 500 from the operation layer.
+	if opts.ID <= 0 {
+		s.writeError(w, http.StatusBadRequest, "rollback request requires positive id")
+		return
+	}
+
+	result, err := gitops.RollbackArgoApp(r.Context(), client, namespace, name, opts)
+	if err != nil {
+		s.writeGitOpsError(w, err, "argo", "rollback", namespace, name)
 		return
 	}
 
@@ -72,7 +117,7 @@ func (s *Server) handleArgoTerminate(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for terminate Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for terminate Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -94,7 +139,7 @@ func (s *Server) handleArgoSuspend(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for suspend Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for suspend Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -116,7 +161,7 @@ func (s *Server) handleArgoResume(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for resume Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for resume Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -145,30 +190,33 @@ func toGitOpsResponse(r gitops.OperationResult) GitOpsOperationResponse {
 	return resp
 }
 
-// writeGitOpsError maps gitops operation errors to appropriate HTTP status codes.
+// writeGitOpsError maps gitops operation errors to HTTP status codes via
+// errors.Is on typed sentinels (defined in pkg/gitops) so the mapping doesn't
+// drift if upstream wording changes. Every branch logs so 4xx outcomes
+// remain visible to operators scraping server logs.
 func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, action, namespace, name string) {
 	msg := err.Error()
-
-	// Check typed K8s API errors first (preserved through %w wrapping)
-	if apierrors.IsNotFound(err) {
-		s.writeError(w, http.StatusNotFound, msg)
-		return
-	}
-	if apierrors.IsForbidden(err) {
-		s.writeError(w, http.StatusForbidden, msg)
-		return
-	}
-
-	// Application-level errors from gitops operations
+	var status int
 	switch {
-	case strings.Contains(msg, "not found"):
-		s.writeError(w, http.StatusNotFound, msg)
-	case strings.Contains(msg, "already in progress"):
-		s.writeError(w, http.StatusConflict, msg)
-	case strings.Contains(msg, "no sync operation in progress"):
-		s.writeError(w, http.StatusBadRequest, msg)
+	case apierrors.IsNotFound(err):
+		status = http.StatusNotFound
+	case apierrors.IsForbidden(err):
+		status = http.StatusForbidden
+	case errors.Is(err, gitops.ErrHistoryEntryNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, gitops.ErrOperationInProgress):
+		status = http.StatusConflict
+	case errors.Is(err, gitops.ErrResourceTerminating):
+		// 409 Conflict: the resource state ("being deleted") conflicts
+		// with the request. Same status family as ErrOperationInProgress
+		// — both signal "request is well-formed but the resource isn't
+		// in a state where this verb can run".
+		status = http.StatusConflict
+	case errors.Is(err, gitops.ErrNoOperationInProgress):
+		status = http.StatusBadRequest
 	default:
-		log.Printf("[%s] Failed to %s %s/%s: %v", module, action, namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, msg)
+		status = http.StatusInternalServerError
 	}
+	log.Printf("[%s] %s %s/%s -> %d: %v", module, action, sanitizeForLog(namespace), sanitizeForLog(name), status, err)
+	s.writeError(w, status, msg)
 }

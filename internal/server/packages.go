@@ -11,13 +11,48 @@ import (
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/subject"
 )
+
+// toPackagesOverlay maps the unified resolver's app-overlay (pkg/subject) into
+// the plain packages.Overlay carried on the wire. nil → nil (raw-always: no
+// app-overlay degrades to package/subject-only on the Applications surface).
+func toPackagesOverlay(ao *subject.AppOverlay) *packages.Overlay {
+	if ao == nil {
+		return nil
+	}
+	return &packages.Overlay{
+		Key:        ao.Winner.Key,
+		Tier:       int(ao.Winner.Tier),
+		Confidence: string(ao.Winner.Confidence),
+	}
+}
+
+// declarationOverlay derives the app-overlay for a GitOps declaration from its
+// own identity, mirroring the key format pkg/subject.ResolveOverlay produces
+// for the workloads the controller stamps — so a Helm-labeled workload and its
+// managing declaration collapse to one app. Argo App → tier 3; Flux HelmRelease
+// (has a chart) → tier 1; Flux Kustomization (no chart) → tier 2.
+func declarationOverlay(d packages.Declaration) *packages.Overlay {
+	switch strings.ToLower(d.Source) {
+	case "argocd", "argo-cd", "argo":
+		return &packages.Overlay{Key: d.Namespace + "/Application/" + d.Name, Tier: int(subject.TierArgoTrackingID), Confidence: string(subject.ConfidenceHigh)}
+	case "flux", "fluxcd":
+		if d.Chart != "" {
+			return &packages.Overlay{Key: d.Namespace + "/HelmRelease/" + d.Name, Tier: int(subject.TierFluxHelmRelease), Confidence: string(subject.ConfidenceHigh)}
+		}
+		return &packages.Overlay{Key: d.Namespace + "/Kustomization/" + d.Name, Tier: int(subject.TierFluxKustomize), Confidence: string(subject.ConfidenceHigh)}
+	}
+	return nil
+}
 
 // packagesCacheTTL bounds how often we recompute the merged package
 // list. Aggregate is cheap; the inputs (Helm secret reads, dynamic-cache
@@ -51,17 +86,80 @@ type PackagesResponse struct {
 	SourcesErrored []SourceError         `json:"sourcesErrored,omitempty"`
 }
 
-// SourceError carries a per-source failure.
+// SourceError carries a per-source failure. Field names + JSON tags
+// are part of the /api/packages public response shape — wire-stable.
+// Code values are likewise stable (see ErrCode* below); add new codes,
+// never rename. Renaming any of these fields silently breaks the frontend
+// (radar-hub-web) and MCP fleet_list_packages clients.
 type SourceError struct {
 	Source     packages.SourceCode `json:"source"`
 	StatusCode int                 `json:"statusCode,omitempty"`
 	Error      string              `json:"error"`
+	// Code is a machine-readable category for this failure. Stable
+	// across phrasing changes in Error so consumers (the frontend's
+	// categorize fn, MCP clients) can branch without string-matching
+	// log messages. Populated for known failure shapes; empty for
+	// generic errors (consumer falls back to category="failed").
+	// Producer: errorCodeForHelm in this file. Consumer: the frontend's
+	// categorizeSourceError in radar-hub-web.
+	Code string `json:"code,omitempty"`
 	// AffectedNamespaces, when set, lists the namespaces this error
 	// applies to. Populated when the error is scoped (e.g., a
 	// per-namespace Helm RBAC denial); empty when cluster-wide.
 	// Lets consumers reason about partial-result scope without
 	// reverse-parsing the Error string.
 	AffectedNamespaces []string `json:"affectedNamespaces,omitempty"`
+}
+
+// Error code constants. Stable wire values that the frontend and MCP clients
+// branch on. Add new codes here, never rename.
+const (
+	ErrCodeRBACDenied   = "rbac_denied"
+	ErrCodeUnreachable  = "unreachable"
+	ErrCodeTimedOut     = "timed_out"
+	ErrCodeUnconfigured = "unconfigured"
+	ErrCodeAuthRequired = "auth_required"
+)
+
+// errorCodeForHelm classifies a Helm error string + status into a
+// stable Code value. The frontend used to do this with regex on the user-
+// visible string; doing it backend-side means a phrasing change in
+// the SDK doesn't silently move errors into "failed" until someone
+// updates the regex too.
+func errorCodeForHelm(err string, statusCode int) string {
+	e := strings.ToLower(err)
+	switch {
+	case statusCode == http.StatusUnauthorized,
+		strings.Contains(e, "unauthorized"),
+		strings.Contains(e, "credentials expired"),
+		strings.Contains(e, "token expired"):
+		return ErrCodeAuthRequired
+	case statusCode == http.StatusForbidden,
+		strings.Contains(e, "rbac"),
+		strings.Contains(e, "forbidden"),
+		strings.Contains(e, "not authorized"),
+		strings.Contains(e, "cannot list"):
+		return ErrCodeRBACDenied
+	case strings.Contains(e, "no kubeconfig path"),
+		strings.Contains(e, "no resolved rest.config"),
+		strings.Contains(e, "no in-cluster rest config"),
+		strings.Contains(e, "client not initialized"),
+		strings.Contains(e, "connect in progress"):
+		return ErrCodeUnconfigured
+	case strings.Contains(e, "context deadline exceeded"),
+		strings.Contains(e, "timed out"),
+		strings.Contains(e, "timeout"):
+		return ErrCodeTimedOut
+	case strings.Contains(e, "connection refused"),
+		strings.Contains(e, "no such host"),
+		strings.Contains(e, "dial tcp"),
+		strings.Contains(e, "cluster unreachable"):
+		// Note: "i/o timeout" is dead here — the timed_out case above
+		// matches "timeout" which subsumes it. The TimedOut classification
+		// is the right one for that shape (see test "timeout + dial tcp").
+		return ErrCodeUnreachable
+	}
+	return ""
 }
 
 // ListPackagesParams carries the filters the REST + MCP handlers both
@@ -108,7 +206,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		}, nil
 	}
 
-	cacheKey := packagesCacheKeyFor(p.User, p.Namespaces)
+	cacheKey := packagesCacheKeyFor(p.Namespaces)
 	packagesCacheMu.Lock()
 	entry, hit := packagesCache[cacheKey]
 	packagesCacheMu.Unlock()
@@ -122,7 +220,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		generatedAt = entry.at
 	} else {
 		var err error
-		rows, sourceErrs, err = computePackagesInternal(ctx, p.Namespaces, p.User, p.Groups)
+		rows, sourceErrs, err = computePackagesInternal(ctx, p.Namespaces)
 		if err != nil {
 			return PackagesResponse{}, err
 		}
@@ -178,14 +276,20 @@ func evictOldestPackagesCacheEntry() {
 	}
 }
 
-// packagesCacheKeyFor produces a stable cache key. Both the user
-// identity and the requested namespace set must be part of the key:
-// Helm reads are user-scoped (RBAC-impersonated), so two users hitting
-// the same namespace must not share an entry.
-func packagesCacheKeyFor(user string, namespaces []string) string {
+func clearPackagesCache() {
+	packagesCacheMu.Lock()
+	packagesCache = map[string]packagesCacheEntry{}
+	packagesCacheMu.Unlock()
+}
+
+// packagesCacheKeyFor produces a stable cache key from the requested
+// namespace set. User identity is intentionally NOT part of the key:
+// inventory reads run via the ServiceAccount (see computePackagesInternal),
+// so the result is identical for any caller with the same namespace
+// scope. Sharing entries across users avoids N-way duplication and
+// premature LRU eviction in multi-user Cloud deployments.
+func packagesCacheKeyFor(namespaces []string) string {
 	var b strings.Builder
-	b.WriteString(user)
-	b.WriteByte('|')
 	if namespaces == nil {
 		b.WriteByte('*')
 	} else {
@@ -240,7 +344,13 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 // computePackagesInternal reads from all sources, merges via
 // packages.Aggregate, and post-filters by the requested namespace set.
 // Per-source errors are attributed but non-fatal.
-func computePackagesInternal(ctx context.Context, namespaces []string, user string, groups []string) ([]packages.PackageRow, []SourceError, error) {
+//
+// User identity is intentionally NOT a parameter: every read source
+// here is inventory metadata that uses the ServiceAccount under
+// cloud-mode (see the helm comment below for the rationale). User
+// identity does still flow through ListPackagesParams for cache
+// scoping and for sensitive Helm endpoints invoked elsewhere.
+func computePackagesInternal(ctx context.Context, namespaces []string) ([]packages.PackageRow, []SourceError, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, errResourceCacheUnavailable
@@ -249,12 +359,13 @@ func computePackagesInternal(ctx context.Context, namespaces []string, user stri
 	src := packages.Sources{}
 	var errs []SourceError
 
-	// Helm releases (source H). For a single-namespace request we ask
-	// Helm directly; for nil (all namespaces) we ask cluster-wide. For a
-	// multi-namespace allow-list we iterate per-namespace — asking
-	// cluster-wide would require the user to have list-secrets across
-	// the cluster, which limited-RBAC users typically lack.
-	helmReleases, helmErrs := collectHelmReleases(namespaces, user, groups)
+	// Helm releases (source H). Inventory reads pass empty user/groups
+	// so the SA does the read — see deploy/helm/radar/templates/clusterrole.yaml
+	// for the secrets-rule rationale (cloud:viewer → K8s `view` excludes
+	// secrets, so impersonating would 403 viewers on inventory metadata
+	// that isn't credential data). Sensitive Helm reads (GetValues,
+	// GetManifest) and all writes still impersonate.
+	helmReleases, helmErrs := collectHelmReleases(namespaces, "", nil)
 	src.Helm = helmReleases
 	errs = append(errs, helmErrs...)
 
@@ -347,6 +458,7 @@ func collectHelmReleases(namespaces []string, user string, groups []string) ([]p
 		return nil, []SourceError{{
 			Source: packages.SourceHelm,
 			Error:  "helm client not initialized (cluster connect in progress or failed)",
+			Code:   ErrCodeUnconfigured,
 		}}
 	}
 	scopes := []string{""}
@@ -389,13 +501,16 @@ func collectHelmReleases(namespaces []string, user string, groups []string) ([]p
 			Source:             packages.SourceHelm,
 			StatusCode:         http.StatusForbidden,
 			Error:              "RBAC denied (helm release secrets): " + describeNamespaces(forbiddenNamespaces),
+			Code:               ErrCodeRBACDenied,
 			AffectedNamespaces: namespaceList(forbiddenNamespaces),
 		})
 	}
 	if len(otherErrs) > 0 {
+		joined := errors.Join(otherErrs...).Error()
 		errs = append(errs, SourceError{
 			Source:             packages.SourceHelm,
-			Error:              errors.Join(otherErrs...).Error(),
+			Error:              joined,
+			Code:               errorCodeForHelm(joined, 0),
 			AffectedNamespaces: namespaceList(otherErrNamespaces),
 		})
 	}
@@ -455,6 +570,10 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 		if lbls["helm.sh/chart"] == "" && anns["meta.helm.sh/release-name"] == "" {
 			return
 		}
+		// Resolve the Tier-2 app-overlay from the workload's metadata via the
+		// unified resolver. allowBareApp=false: a bare `app` label alone never
+		// silently groups (raw-always — see pkg/subject.ResolveOverlay).
+		meta := metav1.ObjectMeta{Namespace: ns, Name: name, Labels: lbls, Annotations: anns}
 		out = append(out, packages.Workload{
 			Kind:        kind,
 			Namespace:   ns,
@@ -462,6 +581,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			Labels:      lbls,
 			Annotations: anns,
 			Health:      health,
+			Overlay:     toPackagesOverlay(subject.ResolveOverlay(&meta, false)),
 		})
 	}
 
@@ -484,7 +604,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				noteErr("Deployment", ns, err)
 				for _, d := range items {
 					add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
-						deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)))
+						levelToPackagesHealth(health.Workload(d, time.Now()).Level))
 				}
 				return
 			}
@@ -492,7 +612,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			noteErr("Deployment", ns, err)
 			for _, d := range items {
 				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
-					deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)))
+					levelToPackagesHealth(health.Workload(d, time.Now()).Level))
 			}
 		})
 	}
@@ -503,7 +623,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				noteErr("DaemonSet", ns, err)
 				for _, d := range items {
 					add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
-						daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)))
+						levelToPackagesHealth(health.Workload(d, time.Now()).Level))
 				}
 				return
 			}
@@ -511,7 +631,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			noteErr("DaemonSet", ns, err)
 			for _, d := range items {
 				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
-					daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)))
+					levelToPackagesHealth(health.Workload(d, time.Now()).Level))
 			}
 		})
 	}
@@ -522,7 +642,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				noteErr("StatefulSet", ns, err)
 				for _, ss := range items {
 					add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
-						statefulsetHealth(int(ss.Status.Replicas), int(ss.Status.ReadyReplicas)))
+						levelToPackagesHealth(health.Workload(ss, time.Now()).Level))
 				}
 				return
 			}
@@ -530,27 +650,12 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			noteErr("StatefulSet", ns, err)
 			for _, ss := range items {
 				add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
-					statefulsetHealth(int(ss.Status.Replicas), int(ss.Status.ReadyReplicas)))
+					levelToPackagesHealth(health.Workload(ss, time.Now()).Level))
 			}
 		})
 	}
 	return out, errors.Join(listerErrs...)
 }
-
-func deploymentHealth(desired, available int) packages.Health {
-	if desired == 0 {
-		return packages.HealthUnknown
-	}
-	if available >= desired {
-		return packages.HealthHealthy
-	}
-	if available == 0 {
-		return packages.HealthUnhealthy
-	}
-	return packages.HealthDegraded
-}
-func daemonsetHealth(desired, ready int) packages.Health   { return deploymentHealth(desired, ready) }
-func statefulsetHealth(desired, ready int) packages.Health { return deploymentHealth(desired, ready) }
 
 // collectGitOpsDeclarations reads Argo Applications + Flux HelmReleases
 // + Flux Kustomizations cluster-wide. Missing CRDs (controller not
@@ -562,6 +667,7 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, er
 	if items, err := cache.ListDynamicWithGroup(ctx, "Application", "", "argoproj.io"); err == nil {
 		for _, item := range items {
 			if d, ok := packages.ParseArgoApplication(item.Object); ok {
+				d.Overlay = declarationOverlay(d)
 				out = append(out, d)
 			} else {
 				log.Printf("[packages] failed to parse Argo Application %s/%s — skipping", item.GetNamespace(), item.GetName())
@@ -574,6 +680,7 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, er
 	if items, err := cache.ListDynamicWithGroup(ctx, "HelmRelease", "", "helm.toolkit.fluxcd.io"); err == nil {
 		for _, item := range items {
 			if d, ok := packages.ParseFluxHelmRelease(item.Object); ok {
+				d.Overlay = declarationOverlay(d)
 				out = append(out, d)
 			} else {
 				log.Printf("[packages] failed to parse Flux HelmRelease %s/%s — skipping", item.GetNamespace(), item.GetName())
@@ -586,6 +693,7 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, er
 	if items, err := cache.ListDynamicWithGroup(ctx, "Kustomization", "", "kustomize.toolkit.fluxcd.io"); err == nil {
 		for _, item := range items {
 			if d, ok := packages.ParseFluxKustomization(item.Object); ok {
+				d.Overlay = declarationOverlay(d)
 				out = append(out, d)
 			} else {
 				log.Printf("[packages] failed to parse Flux Kustomization %s/%s — skipping", item.GetNamespace(), item.GetName())

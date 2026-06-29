@@ -1,0 +1,20 @@
+# App-of-apps coverage in this demo is provided by the ApplicationSet
+# in 05-argo-applicationset.yaml — its three child Applications
+# (`set-vanilla`, `set-kustomize`, `set-helm`) exercise the same
+# parent→child portal-node treatment + lineage breadcrumb that a true
+# app-of-apps Application would, with the advantage that the parent
+# (an ApplicationSet) is fully controlled by us rather than a public
+# Helm chart that fans out to clusters we don't have.
+#
+# The argocd-example-apps `apps/` chart was the obvious reference, but
+# it generates 14 children pointing at varied sources, demoing
+# (deliberately) credentials we don't have. The InvalidSpecError /
+# SyncError noise it produced obscured the lifecycle scenarios we're
+# actually trying to test. If/when we want a real "Application
+# managing Applications" fixture (Helm-template fan-out vs.
+# ApplicationSet generator semantics), the right path is to host a
+# small private Git repo with 2-3 hand-written child Application
+# manifests targeting demo-* destinations, and point a new parent
+# Application at it.
+#
+# Intentionally empty.

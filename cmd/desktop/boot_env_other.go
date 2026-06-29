@@ -3,3 +3,5 @@
 package main
 
 func logBootEnv() {}
+
+func applyWebKitDefaults() {}

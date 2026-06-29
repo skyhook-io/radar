@@ -48,6 +48,25 @@ spec:
       targetPort: 80
   type: ClusterIP`,
 
+  EndpointSlice: `apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: my-service-1
+  namespace: default
+  labels:
+    kubernetes.io/service-name: my-service
+addressType: IPv4
+ports:
+  - name: http
+    protocol: TCP
+    port: 80
+endpoints:
+  - addresses:
+      - 10.0.0.10
+    conditions:
+      ready: true
+      serving: true`,
+
   ConfigMap: `apiVersion: v1
 kind: ConfigMap
 metadata:

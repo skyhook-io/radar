@@ -33,6 +33,7 @@ export const CORE_RESOURCES: APIResource[] = [
   { group: 'batch', version: 'v1', kind: 'CronJob', name: 'cronjobs', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'networking.k8s.io', version: 'v1', kind: 'Ingress', name: 'ingresses', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'networking.k8s.io', version: 'v1', kind: 'NetworkPolicy', name: 'networkpolicies', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'discovery.k8s.io', version: 'v1', kind: 'EndpointSlice', name: 'endpointslices', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'autoscaling', version: 'v2', kind: 'HorizontalPodAutoscaler', name: 'horizontalpodautoscalers', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: '', version: 'v1', kind: 'Event', name: 'events', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'rbac.authorization.k8s.io', version: 'v1', kind: 'Role', name: 'roles', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
@@ -124,8 +125,11 @@ export function formatGroupName(group: string): string {
     'gateway.networking.k8s.io': 'Gateway API',
     'traefik.io': 'Traefik',
     'traefik.containo.us': 'Traefik',
+    'crossplane.io': 'Crossplane',
     'pkg.crossplane.io': 'Crossplane',
     'apiextensions.crossplane.io': 'Crossplane',
+    'helm.crossplane.io': 'Crossplane',
+    'kubernetes.crossplane.io': 'Crossplane',
     'source.toolkit.fluxcd.io': 'Flux',
     'helm.toolkit.fluxcd.io': 'Flux',
     'kustomize.toolkit.fluxcd.io': 'Flux',
@@ -166,8 +170,34 @@ export function formatGroupName(group: string): string {
     'sparkoperator.k8s.io': 'Spark',
     'kubeflow.org': 'Kubeflow',
     'snapshot.storage.k8s.io': 'Snapshots',
+    'karpenter.sh': 'Karpenter',
+    'karpenter.k8s.aws': 'Karpenter',
+    'karpenter.azure.com': 'Karpenter',
+    'karpenter.k8s.gcp': 'Karpenter',
+    'resource.k8s.io': 'Dynamic Resource Allocation',
+    'kueue.x-k8s.io': 'Kueue',
+    'autoscaling.x-k8s.io': 'Cluster Autoscaler',
+    'serving.kserve.io': 'KServe',
+    'ray.io': 'KubeRay',
+    'leaderworkerset.x-k8s.io': 'LeaderWorkerSet',
+    'jobset.x-k8s.io': 'JobSet',
+    'inference.networking.k8s.io': 'Inference Gateway',
+    'inference.networking.x-k8s.io': 'Inference Gateway',
+    'nvidia.com': 'NVIDIA GPU Operator',
+    'scheduling.run.ai': 'KAI Scheduler',
+    'kai.scheduler': 'KAI Scheduler',
+    'kaito.sh': 'KAITO',
+    'batch.volcano.sh': 'Volcano',
+    'scheduling.volcano.sh': 'Volcano',
+    'flow.volcano.sh': 'Volcano',
+    'bus.volcano.sh': 'Volcano',
   }
-  return knownGroups[group] || group
+  if (knownGroups[group]) return knownGroups[group]
+  // Suffix rules — for unbounded provider group sets (Crossplane providers ship
+  // their own per-service groups like s3.aws.upbound.io, compute.gcp.upbound.io).
+  if (group.endsWith('.upbound.io')) return 'Crossplane'
+  if (group.endsWith('.crossplane.io')) return 'Crossplane'
+  return group
 }
 
 export function shortenGroupName(group: string): string {

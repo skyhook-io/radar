@@ -1,0 +1,125 @@
+{
+  "_comment": "Cross-language health contract. The Go test (golden_crosslang_test.go) and the TS test (packages/k8s-ui/src/__tests__/health-golden.test.ts) BOTH load this file and assert their classifier produces `level` for `object`. It is the anti-drift gate: pkg/health is the source of truth; the TS table classifiers must agree. Only TIME-INDEPENDENT cases belong here — the TS classifier uses the real wall clock (no injected clock), so anything gated on age (young-pending grace, stuck-terminating, CronJob staleness) is intentionally excluded. `level` is the display/wire level (Pod via PodDisplayLevel; workloads via Workload).",
+  "vectors": [
+    {
+      "name": "pod running and ready is healthy",
+      "kind": "Pod",
+      "level": "healthy",
+      "object": { "status": { "phase": "Running", "containerStatuses": [{ "ready": true }] } }
+    },
+    {
+      "name": "pod succeeded is neutral (completed)",
+      "kind": "Pod",
+      "level": "neutral",
+      "object": { "status": { "phase": "Succeeded" } }
+    },
+    {
+      "name": "pod failed is unhealthy",
+      "kind": "Pod",
+      "level": "unhealthy",
+      "object": { "status": { "phase": "Failed" } }
+    },
+    {
+      "name": "pod crashloop is unhealthy",
+      "kind": "Pod",
+      "level": "unhealthy",
+      "object": { "status": { "phase": "Running", "containerStatuses": [{ "ready": false, "state": { "waiting": { "reason": "CrashLoopBackOff" } } }] } }
+    },
+    {
+      "name": "pod node-lost (phase Unknown) is unknown",
+      "kind": "Pod",
+      "level": "unknown",
+      "object": { "status": { "phase": "Unknown" } }
+    },
+    {
+      "name": "pod unschedulable is degraded",
+      "kind": "Pod",
+      "level": "degraded",
+      "object": { "status": { "phase": "Pending", "conditions": [{ "type": "PodScheduled", "status": "False", "reason": "Unschedulable" }] } }
+    },
+    {
+      "name": "deployment all replicas ready is healthy",
+      "kind": "Deployment",
+      "level": "healthy",
+      "object": { "spec": { "replicas": 3 }, "status": { "replicas": 3, "readyReplicas": 3, "availableReplicas": 3, "updatedReplicas": 3 } }
+    },
+    {
+      "name": "deployment partially ready is degraded",
+      "kind": "Deployment",
+      "level": "degraded",
+      "object": { "spec": { "replicas": 3 }, "status": { "replicas": 3, "readyReplicas": 1, "availableReplicas": 1, "updatedReplicas": 3 } }
+    },
+    {
+      "name": "deployment none ready is unhealthy",
+      "kind": "Deployment",
+      "level": "unhealthy",
+      "object": { "spec": { "replicas": 3 }, "status": { "replicas": 3, "readyReplicas": 0, "availableReplicas": 0, "updatedReplicas": 3 } }
+    },
+    {
+      "name": "deployment scaled to zero is neutral",
+      "kind": "Deployment",
+      "level": "neutral",
+      "object": { "spec": { "replicas": 0 }, "status": {} }
+    },
+    {
+      "name": "statefulset all replicas ready is healthy",
+      "kind": "StatefulSet",
+      "level": "healthy",
+      "object": { "spec": { "replicas": 2 }, "status": { "replicas": 2, "readyReplicas": 2, "availableReplicas": 2, "updatedReplicas": 2 } }
+    },
+    {
+      "name": "daemonset fully scheduled is healthy",
+      "kind": "DaemonSet",
+      "level": "healthy",
+      "object": { "status": { "desiredNumberScheduled": 3, "numberReady": 3, "updatedNumberScheduled": 3, "numberAvailable": 3 } }
+    },
+    {
+      "name": "daemonset matching no nodes (0/0) is neutral",
+      "kind": "DaemonSet",
+      "level": "neutral",
+      "object": { "status": { "desiredNumberScheduled": 0, "numberReady": 0 } }
+    },
+    {
+      "name": "job complete is neutral",
+      "kind": "Job",
+      "level": "neutral",
+      "object": { "status": { "conditions": [{ "type": "Complete", "status": "True" }] } }
+    },
+    {
+      "name": "job failed is unhealthy",
+      "kind": "Job",
+      "level": "unhealthy",
+      "object": { "status": { "conditions": [{ "type": "Failed", "status": "True" }] } }
+    },
+    {
+      "name": "job suspended is neutral",
+      "kind": "Job",
+      "level": "neutral",
+      "object": { "spec": { "suspend": true }, "status": {} }
+    },
+    {
+      "name": "cronjob suspended is neutral",
+      "kind": "CronJob",
+      "level": "neutral",
+      "object": { "spec": { "suspend": true, "schedule": "*/5 * * * *" }, "status": {} }
+    },
+    {
+      "name": "pvc bound is healthy",
+      "kind": "PersistentVolumeClaim",
+      "level": "healthy",
+      "object": { "status": { "phase": "Bound" } }
+    },
+    {
+      "name": "pvc pending is neutral",
+      "kind": "PersistentVolumeClaim",
+      "level": "neutral",
+      "object": { "status": { "phase": "Pending" } }
+    },
+    {
+      "name": "pvc lost is unhealthy",
+      "kind": "PersistentVolumeClaim",
+      "level": "unhealthy",
+      "object": { "status": { "phase": "Lost" } }
+    }
+  ]
+}

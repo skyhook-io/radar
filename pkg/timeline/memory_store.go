@@ -119,18 +119,12 @@ func (m *MemoryStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 func (m *MemoryStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*TimelineResponse, error) {
 	startTime := time.Now()
 
-	// First get all matching events
-	events, err := m.Query(ctx, QueryOptions{
-		Namespaces:       opts.Namespaces,
-		Kinds:            opts.Kinds,
-		Since:            opts.Since,
-		Until:            opts.Until,
-		Sources:          opts.Sources,
-		FilterPreset:     opts.FilterPreset,
-		Limit:            opts.Limit * 10, // Get more events for grouping
-		IncludeManaged:   opts.IncludeManaged,
-		IncludeK8sEvents: opts.IncludeK8sEvents,
-	})
+	// First get all matching events, with a higher limit for grouping. Copy the
+	// full option struct so new filters can't drift between Query and grouped
+	// queries.
+	queryOpts := opts
+	queryOpts.Limit = opts.Limit * 10
+	events, err := m.Query(ctx, queryOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +184,7 @@ func (m *MemoryStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, 
 }
 
 // GetChangesForOwner retrieves changes for resources owned by the given owner
-func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName string, since time.Time, limit int) ([]TimelineEvent, error) {
+func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -209,6 +203,10 @@ func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 		}
 
 		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+
+		if clusterContext != "" && event.ClusterContext != clusterContext {
 			continue
 		}
 
@@ -289,6 +287,10 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 	}
 
 	// Apply individual filters (these override preset if both specified)
+	if opts.ClusterContext != "" && event.ClusterContext != opts.ClusterContext {
+		return false
+	}
+
 	if !opts.Since.IsZero() && event.Timestamp.Before(opts.Since) {
 		return false
 	}
@@ -311,11 +313,29 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 		}
 	}
 
+	if len(opts.Names) > 0 {
+		found := slices.Contains(opts.Names, event.Name)
+		if !found {
+			return false
+		}
+	}
+
 	if len(opts.Sources) > 0 {
 		found := slices.Contains(opts.Sources, event.Source)
 		if !found {
 			return false
 		}
+	}
+
+	if len(opts.EventTypes) > 0 {
+		found := slices.Contains(opts.EventTypes, event.EventType)
+		if !found {
+			return false
+		}
+	}
+
+	if opts.ExcludeDeleted && event.EventType == EventTypeDelete {
+		return false
 	}
 
 	// Handle IncludeManaged

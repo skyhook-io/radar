@@ -1,5 +1,6 @@
 import { Globe, Route, Layers, Lock } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 
 interface TraefikIngressRouteRendererProps {
   data: any
@@ -84,14 +85,14 @@ export function TraefikIngressRouteRenderer({ data, onNavigate }: TraefikIngress
                     {route.match || 'No match rule'}
                   </span>
                   {route.priority && (
-                    <span className="px-1.5 py-0.5 bg-theme-hover rounded text-[10px] text-theme-text-secondary shrink-0">
+                    <Badge tone="structural" size="sm" className="shrink-0">
                       priority: {route.priority}
-                    </span>
+                    </Badge>
                   )}
                   {route.kind && route.kind !== 'Rule' && (
-                    <span className="px-1.5 py-0.5 bg-theme-hover rounded text-[10px] text-theme-text-secondary shrink-0">
+                    <Badge tone="structural" size="sm" className="shrink-0">
                       {route.kind}
-                    </span>
+                    </Badge>
                   )}
                 </div>
 
@@ -110,9 +111,9 @@ export function TraefikIngressRouteRenderer({ data, onNavigate }: TraefikIngress
                         return (
                           <div key={si} className="flex items-center gap-2 text-xs">
                             {isTraefikSvc && (
-                              <span className="px-1.5 py-0.5 bg-cyan-500/10 text-cyan-400 rounded text-[10px]">
+                              <Badge kind="TraefikService" size="sm">
                                 TraefikService
-                              </span>
+                              </Badge>
                             )}
                             <ResourceLink
                               name={svc.name}
@@ -152,9 +153,9 @@ export function TraefikIngressRouteRenderer({ data, onNavigate }: TraefikIngress
                             kind="middlewares"
                             namespace={mwNs}
                             label={
-                              <span className="px-1.5 py-0.5 bg-purple-500/10 text-purple-400 rounded text-[10px] inline-block">
+                              <Badge tone="accent1" size="sm" className="inline-block">
                                 {mw.namespace && mw.namespace !== ns ? `${mw.namespace}/` : ''}{mw.name}
-                              </span>
+                              </Badge>
                             }
                             onNavigate={onNavigate}
                           />
@@ -242,9 +243,9 @@ export function TraefikIngressRouteRenderer({ data, onNavigate }: TraefikIngress
                     onNavigate={onNavigate}
                   />
                   {isCrossNs && (
-                    <span className="px-1.5 py-0.5 bg-yellow-500/10 text-yellow-400 rounded text-[10px]">
+                    <Badge tone="note" size="sm">
                       {mw.namespace}
-                    </span>
+                    </Badge>
                   )}
                 </div>
               )

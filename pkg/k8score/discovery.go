@@ -39,6 +39,8 @@ type ResourceDiscovery struct {
 	resourceMap map[string]APIResource // keyed by lowercase kind
 	gvrMap      map[string]schema.GroupVersionResource
 	lastRefresh time.Time
+	partial     bool
+	failedGroup map[string]bool
 	cacheTTL    time.Duration
 	mu          sync.RWMutex
 }
@@ -155,6 +157,13 @@ func (d *ResourceDiscovery) Refresh() error {
 	if err != nil {
 		log.Printf("Warning: partial error discovering API resources: %v", err)
 	}
+	failedGroups := make(map[string]bool)
+	if groups, ok := discovery.GroupDiscoveryFailedErrorGroups(err); ok {
+		for gv := range groups {
+			failedGroups[gv.Group] = true
+		}
+	}
+	partial := discovery.IsGroupDiscoveryFailedError(err) || len(failedGroups) > 0
 	log.Printf("API resource discovery took %v", time.Since(start))
 
 	d.mu.Lock()
@@ -191,39 +200,87 @@ func (d *ResourceDiscovery) Refresh() error {
 				Verbs:      apiRes.Verbs,
 			}
 
-			d.resources = append(d.resources, resource)
-
-			gvr := schema.GroupVersionResource{
-				Group:    gv.Group,
-				Version:  gv.Version,
-				Resource: apiRes.Name,
-			}
-
-			// Store in map by lowercase kind for lookup.
-			// Prefer: non-CRD over CRD, then stable versions over beta/alpha.
-			kindKey := strings.ToLower(apiRes.Kind)
-			if existing, ok := d.resourceMap[kindKey]; !ok ||
-				(!isCRD && existing.IsCRD) ||
-				(isCRD == existing.IsCRD && existing.Group == gv.Group && IsMoreStableVersion(gv.Version, existing.Version)) {
-				d.resourceMap[kindKey] = resource
-				d.gvrMap[kindKey] = gvr
-			}
-
-			// Also store by plural name (lowercase)
-			nameKey := strings.ToLower(apiRes.Name)
-			if existing, ok := d.resourceMap[nameKey]; !ok ||
-				(!isCRD && existing.IsCRD) ||
-				(isCRD == existing.IsCRD && existing.Group == gv.Group && IsMoreStableVersion(gv.Version, existing.Version)) {
-				d.resourceMap[nameKey] = resource
-				d.gvrMap[nameKey] = gvr
-			}
+			d.addResourceLocked(resource)
 		}
 	}
 
 	d.lastRefresh = time.Now()
+	d.partial = partial
+	d.failedGroup = failedGroups
 	log.Printf("Discovered %d API resources (%d unique kinds)", len(d.resources), len(d.resourceMap)/2)
 
 	return nil
+}
+
+// HasPartialDiscovery reports whether the last refresh missed one or more
+// group/versions while still returning partial API resource data.
+func (d *ResourceDiscovery) HasPartialDiscovery() bool {
+	if d == nil {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.partial
+}
+
+// GroupHadPartialDiscovery reports whether a group was specifically missing
+// from the last partial discovery response.
+func (d *ResourceDiscovery) GroupHadPartialDiscovery(group string) bool {
+	if d == nil {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.failedGroup[group]
+}
+
+// AddAPIResource registers a resource that was proven accessible without
+// server discovery returning it, such as under restricted discovery RBAC.
+func (d *ResourceDiscovery) AddAPIResource(resource APIResource) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.addResourceLocked(resource)
+}
+
+func (d *ResourceDiscovery) addResourceLocked(resource APIResource) {
+	for i, existing := range d.resources {
+		if existing.Group == resource.Group && existing.Version == resource.Version && existing.Name == resource.Name {
+			d.resources[i] = resource
+			d.indexResourceLocked(resource)
+			return
+		}
+	}
+	d.resources = append(d.resources, resource)
+	d.indexResourceLocked(resource)
+}
+
+func (d *ResourceDiscovery) indexResourceLocked(resource APIResource) {
+	gvr := schema.GroupVersionResource{
+		Group:    resource.Group,
+		Version:  resource.Version,
+		Resource: resource.Name,
+	}
+
+	// Store in map by lowercase kind for lookup. Prefer non-CRD over CRD,
+	// then stable versions within the same group.
+	kindKey := strings.ToLower(resource.Kind)
+	if existing, ok := d.resourceMap[kindKey]; !ok ||
+		(!resource.IsCRD && existing.IsCRD) ||
+		(resource.IsCRD == existing.IsCRD && existing.Group == resource.Group && IsMoreStableVersion(resource.Version, existing.Version)) {
+		d.resourceMap[kindKey] = resource
+		d.gvrMap[kindKey] = gvr
+	}
+
+	nameKey := strings.ToLower(resource.Name)
+	if existing, ok := d.resourceMap[nameKey]; !ok ||
+		(!resource.IsCRD && existing.IsCRD) ||
+		(resource.IsCRD == existing.IsCRD && existing.Group == resource.Group && IsMoreStableVersion(resource.Version, existing.Version)) {
+		d.resourceMap[nameKey] = resource
+		d.gvrMap[nameKey] = gvr
+	}
 }
 
 // Stats returns lightweight stats without triggering a refresh.
@@ -319,17 +376,26 @@ func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (sc
 	defer d.mu.RUnlock()
 
 	kindLower := strings.ToLower(kindOrName)
-	for _, res := range d.resources {
+	var best *APIResource
+	for i := range d.resources {
+		res := &d.resources[i]
 		if (strings.ToLower(res.Kind) == kindLower || strings.ToLower(res.Name) == kindLower) && res.Group == group {
-			return schema.GroupVersionResource{
-				Group:    res.Group,
-				Version:  res.Version,
-				Resource: res.Name,
-			}, true
+			// Multiple served versions can coexist (e.g. Gateway v1beta1 + v1).
+			// Informers are registered against the most stable version, so a
+			// first-match return would hand back a version no informer watches.
+			if best == nil || IsMoreStableVersion(res.Version, best.Version) {
+				best = res
+			}
 		}
 	}
-
-	return schema.GroupVersionResource{}, false
+	if best == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	return schema.GroupVersionResource{
+		Group:    best.Group,
+		Version:  best.Version,
+		Resource: best.Name,
+	}, true
 }
 
 // GetResource returns the APIResource for a given kind or plural name.
@@ -343,6 +409,35 @@ func (d *ResourceDiscovery) GetResource(kindOrName string) (APIResource, bool) {
 
 	res, ok := d.resourceMap[strings.ToLower(kindOrName)]
 	return res, ok
+}
+
+// GetResourceWithGroup returns the APIResource for a kind in a specific
+// API group. Mirrors GetGVRWithGroup but yields the full resource (incl.
+// Namespaced) rather than just the GVR. Empty group falls back to the
+// kind-keyed lookup (first match wins, with the same caveat as GetGVR).
+//
+// Used for authorization decisions where the caller has both kind and
+// group from a request and needs to know the resource's scope before
+// running a SubjectAccessReview.
+func (d *ResourceDiscovery) GetResourceWithGroup(kindOrName, group string) (APIResource, bool) {
+	if d == nil {
+		return APIResource{}, false
+	}
+
+	if group == "" {
+		return d.GetResource(kindOrName)
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	kindLower := strings.ToLower(kindOrName)
+	for _, res := range d.resources {
+		if (strings.ToLower(res.Kind) == kindLower || strings.ToLower(res.Name) == kindLower) && res.Group == group {
+			return res, true
+		}
+	}
+	return APIResource{}, false
 }
 
 // IsKnownResource checks if a kind or plural name is a known resource.
@@ -378,15 +473,82 @@ func (d *ResourceDiscovery) SupportsWatch(kindOrName string) bool {
 
 // SupportsWatchGVR checks if a GVR supports list and watch verbs.
 func (d *ResourceDiscovery) SupportsWatchGVR(gvr schema.GroupVersionResource) bool {
-	return d.SupportsWatch(gvr.Resource)
+	if d == nil {
+		return false
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	for _, res := range d.resources {
+		if res.Group != gvr.Group || res.Version != gvr.Version || res.Name != gvr.Resource {
+			continue
+		}
+		hasList := false
+		hasWatch := false
+		for _, verb := range res.Verbs {
+			if verb == "list" {
+				hasList = true
+			}
+			if verb == "watch" {
+				hasWatch = true
+			}
+		}
+		return hasList && hasWatch
+	}
+	return false
+}
+
+// HasKindInGroup reports whether a specific Kind exists within an API
+// group. Use this when you depend on a specific CRD being registered.
+func (d *ResourceDiscovery) HasKindInGroup(kind, group string) bool {
+	if d == nil {
+		return false
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	kindLower := strings.ToLower(kind)
+	for _, res := range d.resources {
+		if res.Group == group && strings.ToLower(res.Kind) == kindLower {
+			return true
+		}
+	}
+	return false
+}
+
+// IsKyvernoInstalled reports whether the Kyverno admission controller's
+// CRDs are present on the cluster. The check uses Kyverno's own Policy
+// and ClusterPolicy CRDs as the signal — these are unique to Kyverno
+// itself, whereas the PolicyReport CRDs (wgpolicyk8s.io) are emitted by
+// several engines (Kyverno, Trivy, etc.) and so do not by themselves
+// imply Kyverno is the source.
+//
+// The signal drives conditional eager warmup of PolicyReport informers:
+// clusters without Kyverno keep the reports in the deferred-fetch tier
+// and pay no extra memory or watch budget.
+func (d *ResourceDiscovery) IsKyvernoInstalled() bool {
+	if d == nil {
+		return false
+	}
+	return d.HasKindInGroup("Policy", "kyverno.io") || d.HasKindInGroup("ClusterPolicy", "kyverno.io")
 }
 
 // GetKindForGVR returns the Kind name for a given GVR
 // e.g., for GVR{Resource: "rollouts"}, returns "Rollout".
 func (d *ResourceDiscovery) GetKindForGVR(gvr schema.GroupVersionResource) string {
-	res, ok := d.GetResource(gvr.Resource)
-	if ok {
-		return res.Kind
+	if d == nil {
+		return ""
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	for _, res := range d.resources {
+		if res.Group == gvr.Group && res.Version == gvr.Version && res.Name == gvr.Resource {
+			return res.Kind
+		}
 	}
 	return ""
 }

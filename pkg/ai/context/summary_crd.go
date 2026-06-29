@@ -61,10 +61,186 @@ func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 		return summarizeCAPIMachineHealthCheck(obj)
 	case group == "controlplane.cluster.x-k8s.io" && kind == "KubeadmControlPlane":
 		return summarizeCAPIKubeadmControlPlane(obj)
+	case group == "resource.k8s.io" && kind == "ResourceClaim":
+		return summarizeResourceClaim(obj)
+	case group == "resource.k8s.io" && kind == "ResourceClaimTemplate":
+		return summarizeResourceClaimTemplate(obj)
+	case group == "resource.k8s.io" && kind == "DeviceClass":
+		return summarizeDeviceClass(obj)
+	case group == "resource.k8s.io" && kind == "ResourceSlice":
+		return summarizeResourceSlice(obj)
+	case group == "nvidia.com" && kind == "ClusterPolicy":
+		return summarizeNvidiaClusterPolicy(obj)
+	case group == "nvidia.com" && kind == "NVIDIADriver":
+		return summarizeNvidiaDriver(obj)
 	}
 
 	// Generic fallback
 	return summarizeGenericCRD(obj)
+}
+
+// draRequestDeviceClasses collects deviceClassName values across all API
+// shapes: v1/v1beta2 nest under "exactly" or "firstAvailable" subrequests;
+// v1beta1 had deviceClassName directly on the request.
+func draRequestDeviceClasses(obj *unstructured.Unstructured, path ...string) []string {
+	var classes []string
+	seen := map[string]bool{}
+	add := func(dc string) {
+		if dc != "" && !seen[dc] {
+			seen[dc] = true
+			classes = append(classes, dc)
+		}
+	}
+	requests, _, _ := unstructured.NestedSlice(obj.Object, path...)
+	for _, r := range requests {
+		req, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		if dc, _, _ := unstructured.NestedString(req, "exactly", "deviceClassName"); dc != "" {
+			add(dc)
+		} else if dc, _, _ := unstructured.NestedString(req, "deviceClassName"); dc != "" {
+			add(dc)
+		}
+		subs, _, _ := unstructured.NestedSlice(req, "firstAvailable")
+		for _, s := range subs {
+			if sub, ok := s.(map[string]any); ok {
+				if dc, _, _ := unstructured.NestedString(sub, "deviceClassName"); dc != "" {
+					add(dc)
+				}
+			}
+		}
+	}
+	return classes
+}
+
+func summarizeResourceClaim(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind:      "ResourceClaim",
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+	if classes := draRequestDeviceClasses(obj, "spec", "devices", "requests"); len(classes) > 0 {
+		s.Type = strings.Join(classes, ", ")
+	}
+	// Allocated is keyed to devices.results — an allocation block without
+	// assigned devices must not read as allocated.
+	results, _, _ := unstructured.NestedSlice(obj.Object, "status", "allocation", "devices", "results")
+	reserved, _, _ := unstructured.NestedSlice(obj.Object, "status", "reservedFor")
+	switch {
+	case len(results) > 0 && len(reserved) > 0:
+		s.Status = "Allocated"
+		s.Ready = fmt.Sprintf("reserved by %d consumer(s)", len(reserved))
+	case len(results) > 0:
+		s.Status = "Allocated"
+		s.Issue = "allocated but not reserved by any consumer"
+	default:
+		s.Status = "Pending"
+		s.Issue = "no device allocated yet"
+	}
+	if len(results) > 0 {
+		if first, ok := results[0].(map[string]any); ok {
+			driver, _, _ := unstructured.NestedString(first, "driver")
+			device, _, _ := unstructured.NestedString(first, "device")
+			if driver != "" {
+				s.Target = fmt.Sprintf("%s/%s (%d device(s))", driver, device, len(results))
+			}
+		}
+	}
+	return s
+}
+
+func summarizeResourceClaimTemplate(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind:      "ResourceClaimTemplate",
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+	if classes := draRequestDeviceClasses(obj, "spec", "spec", "devices", "requests"); len(classes) > 0 {
+		s.Type = strings.Join(classes, ", ")
+	}
+	return s
+}
+
+func summarizeDeviceClass(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind: "DeviceClass",
+		Name: obj.GetName(),
+		Age:  age(obj.GetCreationTimestamp().Time),
+	}
+	selectors, _, _ := unstructured.NestedSlice(obj.Object, "spec", "selectors")
+	if len(selectors) > 0 {
+		s.Ready = fmt.Sprintf("%d selector(s)", len(selectors))
+	}
+	return s
+}
+
+func summarizeResourceSlice(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind: "ResourceSlice",
+		Name: obj.GetName(),
+		Age:  age(obj.GetCreationTimestamp().Time),
+	}
+	driver, _, _ := unstructured.NestedString(obj.Object, "spec", "driver")
+	pool, _, _ := unstructured.NestedString(obj.Object, "spec", "pool", "name")
+	if driver != "" {
+		s.Type = driver
+	}
+	if nodeName, _, _ := unstructured.NestedString(obj.Object, "spec", "nodeName"); nodeName != "" {
+		s.Node = nodeName
+	}
+	devices, _, _ := unstructured.NestedSlice(obj.Object, "spec", "devices")
+	s.Ready = fmt.Sprintf("%d device(s)", len(devices))
+	if pool != "" {
+		s.Ready += " in pool " + pool
+	}
+	return s
+}
+
+func summarizeNvidiaClusterPolicy(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind: "ClusterPolicy",
+		Name: obj.GetName(),
+		Age:  age(obj.GetCreationTimestamp().Time),
+	}
+	state, _, _ := unstructured.NestedString(obj.Object, "status", "state")
+	s.Status = state
+	if state == "notReady" {
+		s.Issue = "GPU Operator components not ready"
+	}
+	var components []string
+	for _, c := range []string{"driver", "toolkit", "devicePlugin", "dcgmExporter", "migManager"} {
+		if enabled, found, _ := unstructured.NestedBool(obj.Object, "spec", c, "enabled"); found && enabled {
+			components = append(components, c)
+		}
+	}
+	if len(components) > 0 {
+		s.Ready = "enabled: " + strings.Join(components, ", ")
+	}
+	if mig, _, _ := unstructured.NestedString(obj.Object, "spec", "mig", "strategy"); mig != "" {
+		s.Type = "MIG: " + mig
+	}
+	return s
+}
+
+func summarizeNvidiaDriver(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind: "NVIDIADriver",
+		Name: obj.GetName(),
+		Age:  age(obj.GetCreationTimestamp().Time),
+	}
+	state, _, _ := unstructured.NestedString(obj.Object, "status", "state")
+	s.Status = state
+	driverType, _, _ := unstructured.NestedString(obj.Object, "spec", "driverType")
+	version, _, _ := unstructured.NestedString(obj.Object, "spec", "version")
+	s.Type = driverType
+	s.Version = version
+	if state == "notReady" {
+		s.Issue = "driver rollout not ready"
+	}
+	return s
 }
 
 func summarizeArgoApp(obj *unstructured.Unstructured) *ResourceSummary {

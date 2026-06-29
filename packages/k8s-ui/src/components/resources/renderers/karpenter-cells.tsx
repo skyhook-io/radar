@@ -2,8 +2,8 @@
 
 import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
+import { CAPACITY_TYPE_BADGE } from '../../../utils/badge-colors'
 import {
-  CAPACITY_TYPE_BADGE,
   getNodePoolStatus,
   getNodePoolNodeClassRef,
   getNodePoolLimits,

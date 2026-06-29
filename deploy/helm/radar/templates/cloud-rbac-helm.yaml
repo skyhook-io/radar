@@ -1,0 +1,67 @@
+{{- /*
+Bind Helm add-on ClusterRoles to cloud tiers. radar-helm goes to owner +
+member; radar-helm-admin goes to owner only — see clusterrole-helm-admin.yaml
+for the rationale. Viewer is intentionally not bound; viewers never install.
+
+Gating note: cloud.enabled is sufficient (matches sibling cloud-rbac.yaml
+and the upstream clusterrole-helm.yaml which uses
+`(or (ne auth.mode "none") cloud.enabled)`). The previous extra check on
+`auth.mode != "none"` caused these bindings to silently NOT render for
+installs that set cloud.enabled=true but left auth.mode at the default —
+which is the shape produced by the cloud install wizard. The underlying
+ClusterRoles still rendered, so it looked like Helm RBAC was wired up
+when in fact cloud:owner/cloud:member groups had no path to them.
+Runtime forces --auth-mode=proxy via RADAR_CLOUD_MODE when cloud.enabled
+is set, so the bindings are always meaningful here regardless of the
+chart-values auth.mode.
+*/}}
+{{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create .Values.rbac.helm -}}
+{{- if .Values.cloud.defaultRbac.owner }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-owner-helm
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-helm
+subjects:
+  - kind: Group
+    name: cloud:owner
+    apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-owner-helm-admin
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-helm-admin
+subjects:
+  - kind: Group
+    name: cloud:owner
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- if .Values.cloud.defaultRbac.member }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-member-helm
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-helm
+subjects:
+  - kind: Group
+    name: cloud:member
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end -}}

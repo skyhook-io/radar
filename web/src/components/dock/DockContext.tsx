@@ -2,6 +2,7 @@
 export {
   DockProvider,
   useDock,
+  useDockReservedHeight,
   useOpenTerminal,
   useOpenLogs,
   useOpenWorkloadLogs,

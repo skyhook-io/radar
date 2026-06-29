@@ -100,7 +100,7 @@ export function TrafficSummary({ data, onNavigate }: TrafficSummaryProps) {
       <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-theme-text-tertiary" />
-          <span className="text-xs font-semibold uppercase tracking-wider text-theme-text-secondary">Traffic</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-theme-text-secondary">Live Traffic</span>
         </div>
         {hasFlows && (
           <span className="text-[11px] text-theme-text-tertiary">
@@ -145,7 +145,7 @@ export function TrafficSummary({ data, onNavigate }: TrafficSummaryProps) {
       </div>
 
       <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-theme-text-secondary group-hover:text-theme-text-primary transition-colors">
-        Open Traffic
+        Open Live Traffic
         <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
       </div>
       </div>

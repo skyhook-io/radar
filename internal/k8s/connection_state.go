@@ -28,9 +28,9 @@ type ConnectionStatus struct {
 type ConnectionChangeCallback func(status ConnectionStatus)
 
 var (
-	connectionStatus    ConnectionStatus
-	connectionStatusMu  sync.RWMutex
-	connectionCallbacks []ConnectionChangeCallback
+	connectionStatus      ConnectionStatus
+	connectionStatusMu    sync.RWMutex
+	connectionCallbacks   []ConnectionChangeCallback
 	connectionCallbacksMu sync.RWMutex
 )
 

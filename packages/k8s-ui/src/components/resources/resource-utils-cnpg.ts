@@ -2,6 +2,7 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors, formatAge, formatDuration } from './resource-utils'
+import { parseGoTimeString } from '../../utils/parse-go-time'
 
 // ============================================================================
 // CNPG CLUSTER UTILITIES
@@ -195,7 +196,7 @@ export function getCNPGClusterCertificateExpirations(resource: any): CNPGCertifi
   if (!expirations || typeof expirations !== 'object') return []
   const now = new Date()
   return Object.entries(expirations).map(([secretName, expiryDate]: [string, any]) => {
-    const expiry = new Date(expiryDate)
+    const expiry = parseGoTimeString(String(expiryDate))
     const daysUntilExpiry = isNaN(expiry.getTime())
       ? -1  // treat unparseable dates as expired/critical
       : Math.floor((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
@@ -282,7 +283,7 @@ export function getCNPGScheduledBackupStatus(resource: any): StatusBadge {
   const isSuspended = resource.spec?.suspend === true
 
   if (isSuspended) {
-    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+    return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 
   // If we have a last schedule time, it's active

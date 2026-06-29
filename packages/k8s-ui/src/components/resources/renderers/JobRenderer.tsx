@@ -25,19 +25,18 @@ function getJobProblems(data: any): string[] {
     }
   }
 
-  // Check for pod failures without terminal condition yet
-  if (!failedCondition && status.failed > 0) {
+  // Check for pod failures without terminal condition yet. A Job that already
+  // completed successfully (Complete condition) keeps its earlier failed pod
+  // attempts in status.failed — those are retries, not a problem — so don't flag
+  // them, or the drawer would read red while the table badge is calm neutral.
+  const completeCondition = conditions.find((c: any) => c.type === 'Complete' && c.status === 'True')
+  if (!failedCondition && !completeCondition && status.failed > 0) {
     const remaining = (spec.backoffLimit ?? 6) - status.failed
     if (remaining > 0) {
       problems.push(`${status.failed} pod(s) failed — ${remaining} retries remaining`)
     } else {
       problems.push(`${status.failed} pod(s) failed — no retries remaining`)
     }
-  }
-
-  // Check for suspended
-  if (spec.suspend) {
-    problems.push('Job is suspended — pods will not be created')
   }
 
   return problems
@@ -62,12 +61,18 @@ export function JobRenderer({ data }: JobRendererProps) {
 
   // Check if job completed successfully
   const isComplete = conditions.some((c: any) => c.type === 'Complete' && c.status === 'True')
+  const isSuspended = spec.suspend === true
 
   return (
     <>
       {/* Problems alert */}
       {hasProblems && (
         <AlertBanner variant="error" title="Job Issues" items={problems} />
+      )}
+
+      {/* Suspended is an intentional state, not a fault — keep it informational. */}
+      {isSuspended && !hasProblems && (
+        <AlertBanner variant="info" title="Job Suspended" message="Pods will not be created until this Job is resumed." />
       )}
 
       {/* Success banner */}

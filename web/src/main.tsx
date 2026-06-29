@@ -1,8 +1,14 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import { configureBundledMonaco } from './monaco-setup'
 import { RadarApp } from './RadarApp'
 import { openExternal } from './utils/navigation'
 import './index.css'
+
+// Keep this as an explicit call: side-effect-only imports of the Monaco setup can
+// be dropped by production tree-shaking, which makes offline desktop builds fall
+// back to Monaco's CDN loader.
+configureBundledMonaco()
 
 // Intercept external link clicks in the Wails desktop app.
 // <a target="_blank"> is swallowed by WKWebView/WebView2 — route through openExternal()
@@ -124,7 +130,7 @@ document.execCommand = function (command: string, showUI?: boolean, value?: stri
         dt.setData('text/plain', text)
         const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })
         if (!el.dispatchEvent(ev)) return
-      } catch (_e) { /* ClipboardEvent dispatch failed, fall back to insertText */ }
+      } catch { /* ClipboardEvent dispatch failed, fall back to insertText */ }
       _origExecCommand('insertText', false, text)
     }).catch((err) => { console.warn('[Radar] Paste failed:', err) })
     return true
@@ -149,10 +155,12 @@ window.addEventListener('mouseup', (e: MouseEvent) => {
 }, true)
 
 
-// Standalone Radar binary: same-origin API, router at root. Library consumers
-// (e.g. radar-hub-web) render <RadarApp apiBase="..." basename="..." /> instead.
+// Standalone Radar binary: same-origin API, router at root. It owns the whole
+// tab, so it opts into per-view document.title. Library consumers (e.g.
+// radar-hub-web) render <RadarApp apiBase="..." basename="..." /> WITHOUT this
+// flag, keeping their own tab title.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <RadarApp />
+    <RadarApp manageDocumentTitle />
   </React.StrictMode>
 )

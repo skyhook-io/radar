@@ -5,6 +5,8 @@ metadata:
   name: {{ include "radar.fullname" . }}
   labels:
     {{- include "radar.labels" . | nindent 4 }}
+# Keep default and opt-in resource rules aligned with ResourcePermissions in
+# internal/k8s/capabilities.go and the README's "Supported Resources" table.
 rules:
   # Core resources (read-only)
   - apiGroups: [""]
@@ -15,10 +17,28 @@ rules:
       - events
       - namespaces
       - nodes
+      - persistentvolumes
       - persistentvolumeclaims
       - serviceaccounts
       - endpoints
       - limitranges
+      - resourcequotas
+    verbs: ["get", "list", "watch"]
+  - apiGroups:
+      - discovery.k8s.io
+    resources:
+      - endpointslices
+    verbs: ["get", "list", "watch"]
+  - apiGroups:
+      - policy
+    resources:
+      - poddisruptionbudgets
+    verbs: ["get", "list", "watch"]
+
+  # Storage classes (cluster-scoped, separate API group)
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - storageclasses
     verbs: ["get", "list", "watch"]
 
   {{- if .Values.rbac.helm }}
@@ -54,7 +74,24 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources:
       - ingresses
+      - ingressclasses
       - networkpolicies
+    verbs: ["get", "list", "watch"]
+
+  # Scheduling / runtime / coordination metadata (read-only). PriorityClass
+  # and RuntimeClass are cluster-scoped infra; Leases are namespaced but
+  # surface in the resource browser and feed GitOps controller readiness.
+  - apiGroups: ["scheduling.k8s.io"]
+    resources:
+      - priorityclasses
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["node.k8s.io"]
+    resources:
+      - runtimeclasses
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources:
+      - leases
     verbs: ["get", "list", "watch"]
 
   # Batch resources (read-only)
@@ -75,6 +112,37 @@ rules:
     resources:
       - selfsubjectaccessreviews
     verbs: ["create"]
+
+  {{- if or .Values.rbac.viewRBAC (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  # RBAC objects (read): powers the resource browser's RBAC views and the
+  # per-ServiceAccount "blast radius" Permissions panel on Pod/Workload pages.
+  # Auto-enabled when auth is on or in cloud mode — there, every RBAC read is
+  # re-checked against the requesting user's own permissions, so the shared
+  # informer cache cannot leak the cluster's authorization graph. For no-auth
+  # installs it stays opt-in via rbac.viewRBAC, since cache-served reads there
+  # are not gated per-user and would expose the graph to any viewer.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+
+  {{- if or .Values.rbac.viewWebhooks (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  # Admission webhook configurations (read): surfaces the cluster's admission
+  # plane (Gatekeeper, Kyverno, image scanners, DLP, etc.) in the resource
+  # browser. Auto-enabled under auth/cloud for the same reason as viewRBAC —
+  # responses are re-checked per user. For no-auth installs this is opt-in
+  # since the configurations reveal which controls are enforced (and where the
+  # gaps are), which is recon value for a low-trust viewer.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - mutatingwebhookconfigurations
+      - validatingwebhookconfigurations
+    verbs: ["get", "list", "watch"]
+  {{- end }}
 
   {{- if .Values.rbac.podLogs }}
   # Pod logs (opt-in - enables log viewer)
@@ -134,6 +202,11 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- else }}
   # Per-group CRD access
+  {{- if .Values.rbac.crdGroups.apiRegistration }}
+  - apiGroups: ["apiregistration.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.argo }}
   - apiGroups: ["argoproj.io"]
     resources: ["*"]
@@ -145,17 +218,39 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.certManager }}
-  - apiGroups: ["cert-manager.io"]
+  # acme.cert-manager.io carries Orders + Challenges — the ACME issuance flow
+  # surfaced when diagnosing a stuck Certificate.
+  - apiGroups: ["cert-manager.io", "acme.cert-manager.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.cilium }}
+  - apiGroups: ["cilium.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.cloudnativePg }}
-  - apiGroups: ["cloudnative-pg.io"]
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.clusterApi }}
+  - apiGroups:
+      - "cluster.x-k8s.io"
+      - "infrastructure.cluster.x-k8s.io"
+      - "controlplane.cluster.x-k8s.io"
+      - "bootstrap.cluster.x-k8s.io"
+      - "addons.cluster.x-k8s.io"
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.contour }}
+  - apiGroups: ["projectcontour.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.crossplane }}
-  - apiGroups: ["crossplane.io", "pkg.crossplane.io", "apiextensions.crossplane.io"]
+  - apiGroups: ["crossplane.io", "pkg.crossplane.io", "apiextensions.crossplane.io", "helm.crossplane.io", "kubernetes.crossplane.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
@@ -205,7 +300,7 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.karpenter }}
-  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.gcp.compute.com"]
+  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.k8s.gcp"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
@@ -224,6 +319,11 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.kubevirt }}
+  - apiGroups: ["kubevirt.io", "cdi.kubevirt.io", "clone.kubevirt.io", "export.kubevirt.io", "instancetype.kubevirt.io", "migrations.kubevirt.io", "pool.kubevirt.io", "snapshot.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.kured }}
   - apiGroups: ["kured.io"]
     resources: ["*"]
@@ -236,6 +336,25 @@ rules:
   {{- end }}
   {{- if .Values.rbac.crdGroups.mariadb }}
   - apiGroups: ["mariadb.mmontes.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.networkPolicyApi }}
+  # SIG-network out-of-tree Network Policy API; ClusterNetworkPolicy is
+  # cluster-scoped and surfaced in topology.
+  - apiGroups: ["policy.networking.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.dra }}
+  # Dynamic Resource Allocation — built-in resource.k8s.io group (GA in 1.34),
+  # not a CRD, but gated like one since pre-1.32 clusters don't serve it.
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.nvidia }}
+  - apiGroups: ["nvidia.com"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
@@ -289,8 +408,18 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.trivy }}
+  - apiGroups: ["aquasecurity.github.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.velero }}
   - apiGroups: ["velero.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.verticalPodAutoscaler }}
+  - apiGroups: ["autoscaling.k8s.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}

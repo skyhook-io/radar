@@ -135,7 +135,8 @@ Some features require additional permissions. Most are disabled by default for s
 | Terminal | `rbac.podExec: true` | `false` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | `false` | Port forwarding to pods/services |
 | Logs | `rbac.podLogs: true` | `true` | View pod logs |
-| Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets) |
+| Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
+| RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |
 | Traffic TLS | `rbac.traffic: true` | `true` | Read Hubble relay TLS certs for Cilium traffic observation |
 
 > **Node management** (cordon, uncordon, drain) is available via the MCP server and API. These operations require `patch` on nodes, `list` on pods, and `create` on `pods/eviction`, which are not included in the default ClusterRole. Add them via `rbac.additionalRules` or use [per-user authentication](authentication.md) so each user's own RBAC governs node operations.
@@ -152,6 +153,16 @@ rbac:
   helm: false         # Enable Helm write operations (broad permissions)
 ```
 
+The terminal's **Debug** action launches a throwaway container (ephemeral container on a pod, or a privileged pod on a node) using `busybox:latest` by default. If the built-in restricted Pod Security Standard rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default, so custom images used in restricted namespaces must work as a non-root user. In air-gapped or private-registry clusters where the default image can't be pulled, point it at a reachable mirror:
+
+```yaml
+# values.yaml
+debug:
+  image: my-registry.internal/busybox:1.36
+```
+
+Radar doesn't attach image-pull secrets to debug containers or pods — ephemeral containers inherit the target pod's, and node debug pods rely on the `default` namespace's ServiceAccount / node registry config — so the image must be pullable without Radar supplying credentials.
+
 ### CRD Permissions
 
 Radar reads CRDs from many popular tools. Each CRD group can be toggled individually:
@@ -165,7 +176,7 @@ rbac:
     certManager: true   # cert-manager.io
     flux: true          # *.toolkit.fluxcd.io
     istio: true         # networking.istio.io, security.istio.io
-    karpenter: true     # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.gcp.compute.com
+    karpenter: true     # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp
     keda: true          # keda.sh
     knative: true       # serving, eventing, sources, messaging, flows, networking.internal (.knative.dev)
     prometheus: true    # monitoring.coreos.com
@@ -178,14 +189,16 @@ rbac:
 
 ### Graceful RBAC Degradation
 
-Radar works with whatever permissions are available — it does not require full cluster-admin access. At startup, Radar checks which resource types are accessible using `SelfSubjectAccessReview` and only starts informers for permitted resources.
+You see what you have access to — Radar doesn't require cluster-admin. Whatever your ServiceAccount (or the impersonated user, when auth is enabled) can list, Radar shows. Resource types you can't list show an actionable denied-state instead of a misleading "0 / None found": for a core cluster-scoped kind (Node, PV, StorageClass, and the like) your identity can't read, Radar shows a copyable `ClusterRole` + `ClusterRoleBinding` request to hand to a cluster admin (reason `rbac_denied`), and distinguishes that from a kind Radar's own ServiceAccount can't read, where a user-level grant wouldn't help (reason `unavailable`, no snippet). The "Your access on this cluster" dialog lists the core cluster-scoped kinds being hidden alongside your effective rules. Namespaces you can't access don't appear.
 
-**What this means in practice:**
+A namespace-scoped ServiceAccount (RoleBinding without a ClusterRole) is fully supported — Radar detects this at startup and works within the permitted namespace.
 
-- If your ServiceAccount can only list Pods and Services, Radar shows those — other resource types display an "Access Restricted" message
-- Cluster-scoped resources (Nodes, Namespaces) require a ClusterRole; if unavailable, those sections are gracefully hidden
-- For namespace-scoped ServiceAccounts (RoleBinding instead of ClusterRoleBinding), Radar automatically detects this and scopes its informers to the permitted namespace
-- The UI clearly indicates which resources are restricted vs simply empty
+**RBAC granularity (auth enabled):**
+
+- Namespaced resources (Pods, Deployments, Services, …) are filtered by namespace: read access is granted in any namespace where the user has list-pods or list-deployments. Per-resource gating *within* a namespace is currently coarse — if a user has any namespace-level read access, they can see all namespaced resources Radar's pod ServiceAccount caches in that namespace. Where you need finer control (e.g. denying Secrets in a shared namespace), enforce it via the pod ServiceAccount's RBAC instead.
+- Cluster-scoped resources (Nodes, PVs, StorageClasses, ClusterRoles, cluster-scoped CRDs, …) are gated per-kind via SubjectAccessReview. Cluster-wide pod visibility does NOT imply Node visibility — every cluster-scoped read goes through its own RBAC check, with results cached per user.
+
+The same RBAC boundary applies to MCP — read tools intersect with each user's allowed namespaces, write tools impersonate the user against the apiserver, and cluster-scoped reads run the same per-kind SAR. The pod ServiceAccount's permissions are the upper bound for both REST and MCP; per-user RBAC narrows that to what each user can see.
 
 **Example: Namespace-scoped deployment**
 
@@ -200,7 +213,7 @@ rules:
   - apiGroups: ["", "apps", "batch", "networking.k8s.io"]
     resources: ["pods", "services", "deployments", "daemonsets", "statefulsets",
                 "replicasets", "jobs", "cronjobs", "configmaps", "events",
-                "ingresses", "persistentvolumeclaims"]
+                "ingresses", "persistentvolumeclaims", "resourcequotas"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods/log"]
@@ -260,6 +273,17 @@ When deploying Radar in-cluster:
 
 4. **Network access**: Consider using NetworkPolicies to restrict which pods can reach Radar.
 
+## Timeline Storage: memory vs sqlite
+
+Radar's timeline records every cluster change. Two backends:
+
+- **`memory`** (default): events live in-process, lost on pod restart. Lowest footprint; pick this if you only need recent activity (last few hours).
+- **`sqlite`**: events persist to a PVC across restarts. Multi-day audit trail; pick this for long-running in-cluster deployments where you care about history surviving pod cycles.
+
+Timeline volume depends on cluster size and controller churn. Tune `timeline.retention` (Go duration; `0` disables age cleanup), `timeline.maxSize`, and `persistence.size` together. Keep `timeline.maxSize` below the PVC size so Radar prunes oldest events before the volume fills.
+
+Cleanup runs hourly + once at startup. Confirm it's keeping up via `/api/diagnostics` — the `timeline.maxStorageBytes`, `timeline.lastCleanupAt`, `timeline.lastCleanupDeletedRows`, `timeline.lastCleanupError`, and `timeline.storageBytes` fields surface the state without requiring `kubectl logs`.
+
 ## Configuration Reference
 
 See [Helm Chart README](../deploy/helm/radar/README.md) for all available values.
@@ -272,10 +296,15 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `ingress.className` | Ingress class | `""` |
 | `service.port` | Service port | `9280` |
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
+| `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
+| `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `timeline.storage` | Event storage (memory/sqlite) | `memory` |
 | `timeline.dbPath` | SQLite database path | `/data/timeline.db` |
-| `timeline.historyLimit` | Max events to retain | `10000` |
+| `timeline.historyLimit` | Max events to retain (memory only) | `10000` |
+| `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
+| `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL | `""` (auto-discover) |
+| `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
 | `persistence.enabled` | Enable PVC for SQLite storage | `false` |
 | `persistence.size` | PVC size | `1Gi` |
 | `rbac.podLogs` | Enable log viewer | `true` |
@@ -283,8 +312,11 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.portForward` | Enable port forwarding | `false` |
 | `rbac.secrets` | Show secrets in resource list | `false` |
 | `rbac.helm` | Enable Helm write operations | `false` |
+| `rbac.viewRBAC` | Show RBAC objects in resource browser | `false` |
 | `rbac.traffic` | Read Hubble TLS certs | `true` |
 | `rbac.crdGroups.all` | Wildcard CRD read access | `false` |
+
+**Response compression:** Radar gzip-compresses HTTP responses by default (streaming endpoints like SSE are excluded). The level defaults to `1` (best speed), since on large clusters peak response size coincides with peak CPU. Set the `RADAR_COMPRESS_LEVEL` environment variable (via the chart's pod `env`) to `0` to disable, or `2`-`9` to trade CPU for smaller bodies on bandwidth-bound deployments.
 
 ## Troubleshooting
 

@@ -1,8 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Plug, ChevronDown, Loader2, Globe, Monitor, Copy, Check, X, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useAvailablePorts, useClusterInfo, AvailablePort } from '../../api/client'
+import { useAvailablePorts, AvailablePort } from '../../api/client'
 import { useStartPortForward } from './PortForwardManager'
+import { useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
+import { validatePort } from '@skyhook-io/k8s-ui/utils/validators'
+import { Tooltip } from '../ui/Tooltip'
 
 interface PortForwardButtonProps {
   type: 'pod' | 'service'
@@ -20,6 +24,13 @@ interface KubectlDialogInfo {
   port: number
 }
 
+// kubectl port-forward (and the live forward, which uses the same transport) is
+// TCP-only — UDP/SCTP can't be forwarded (kubernetes/kubernetes#47862). Treat an
+// unset protocol as TCP.
+export function isPortForwardable(protocol?: string): boolean {
+  return (protocol || 'TCP').toUpperCase() === 'TCP'
+}
+
 function buildKubectlCommand(type: 'pod' | 'service', namespace: string, name: string, localPort: number, remotePort: number) {
   const resource = type === 'pod' ? `pod/${name}` : `svc/${name}`
   const portArg = localPort === remotePort ? `${remotePort}` : `${localPort}:${remotePort}`
@@ -35,7 +46,13 @@ function KubectlCommandDialog({
 }) {
   const [copied, setCopied] = useState(false)
   const [copyFallback, setCopyFallback] = useState(false)
-  const [localPort, setLocalPort] = useState(info.port)
+  // Track raw input separately from the validated port so the user
+  // always sees the characters they typed; the validated port (used to
+  // build the command) only updates when the input parses cleanly.
+  const [portInput, setPortInput] = useState(String(info.port))
+  const portValidation = validatePort(portInput)
+  const localPort = portValidation.valid ? portValidation.value : info.port
+  const portError = portValidation.valid ? null : portValidation.error
   const commandRef = useRef<HTMLElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
 
@@ -62,17 +79,23 @@ function KubectlCommandDialog({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      // Capture + stopPropagation so Escape closes only this dialog, not the
+      // drawer behind it (whose Escape shortcut listens in the bubble phase).
+      e.stopPropagation()
+      onClose()
     }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
+    document.addEventListener('keydown', handleKeyDown, true)
+    return () => document.removeEventListener('keydown', handleKeyDown, true)
   }, [onClose])
 
   useEffect(() => {
     dialogRef.current?.focus()
   }, [])
 
-  return (
+  // Portal to <body>: the drawer is a transformed ancestor that would otherwise
+  // trap this position:fixed dialog inside the drawer instead of centering it.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
@@ -95,23 +118,37 @@ function KubectlCommandDialog({
 
         <div className="p-4 space-y-3">
           <p className="text-sm text-theme-text-secondary">
-            Radar is running in-cluster, so port forwarding must be run from your local terminal.
+            Forward this port to your own machine — run it from your terminal:
           </p>
-          <div className="flex items-center gap-2 text-sm text-theme-text-secondary">
-            <label htmlFor="local-port">Local port:</label>
-            <input
-              id="local-port"
-              type="number"
-              min={1}
-              max={65535}
-              value={localPort}
-              onChange={(e) => {
-                const val = Number(e.target.value)
-                if (val >= 1 && val <= 65535) setLocalPort(val)
-                else if (e.target.value === '') setLocalPort(info.port)
-              }}
-              className="w-20 bg-theme-base border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary font-mono text-center"
-            />
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-sm text-theme-text-secondary">
+              <label htmlFor="local-port">Local port:</label>
+              <input
+                id="local-port"
+                type="text"
+                inputMode="numeric"
+                value={portInput}
+                onChange={(e) => setPortInput(e.target.value)}
+                aria-invalid={portError ? true : undefined}
+                aria-describedby="local-port-help"
+                className={clsx(
+                  'w-24 bg-theme-base border rounded px-2 py-1 text-sm text-theme-text-primary font-mono text-center',
+                  portError
+                    ? 'border-red-500/60 focus:outline-none focus:ring-2 focus:ring-red-500'
+                    : 'border-theme-border',
+                )}
+              />
+              {portError && (
+                <span className="text-xs text-red-400">
+                  using {info.port}
+                </span>
+              )}
+            </div>
+            {portError && (
+              <p id="local-port-help" className="text-xs text-red-400">
+                {portError.charAt(0).toUpperCase() + portError.slice(1)}.
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <code ref={commandRef} className="flex-1 text-sm bg-theme-base rounded px-3 py-2 text-blue-400 font-mono select-all">
@@ -125,12 +162,13 @@ function KubectlCommandDialog({
               {copied ? 'Copied' : copyFallback ? 'Press Ctrl+C' : 'Copy'}
             </button>
           </div>
-          <p className="text-xs text-theme-text-secondary">
-            Requires kubectl and authentication to this cluster.
+          <p className="text-xs text-theme-text-tertiary">
+            You&apos;ll need <code className="inline-code">kubectl</code> and access to this cluster.
           </p>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -146,12 +184,16 @@ export function PortForwardButton({
   const [listenAddress, setListenAddress] = useState<'127.0.0.1' | '0.0.0.0'>('127.0.0.1')
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  const { data: clusterInfo } = useClusterInfo()
+  const isLocal = useIsLocalDeployment()
   const { data, isLoading } = useAvailablePorts(type, namespace, name)
   const startPortForward = useStartPortForward()
 
   const ports = data?.ports || []
-  const inCluster = clusterInfo?.inCluster ?? false
+  // Decide copy-command vs live forward from the SAME deployment signal that
+  // gates whether the button shows at all — so the two can't disagree (and we
+  // don't race a separate /cluster-info fetch that defaults to "not in-cluster").
+  // Cloud runs in-cluster too, so anything not-local uses the copy command.
+  const inCluster = !isLocal
   const isPending = !inCluster && startPortForward.isPending
   const resourceName = type === 'service' ? (serviceName || name) : name
 
@@ -182,42 +224,49 @@ export function PortForwardButton({
   }
 
   function renderButton() {
-    // If no ports available, show disabled button
-    if (!isLoading && ports.length === 0) {
+    // kubectl port-forward is TCP-only — never offer UDP/SCTP ports as targets.
+    const forwardable = ports.filter((p) => isPortForwardable(p.protocol))
+
+    // No forwardable ports: disabled button. Distinguish "no ports at all" from
+    // "ports exist but are all UDP" so the operator isn't left guessing.
+    if (!isLoading && forwardable.length === 0) {
+      const udpOnly = ports.length > 0
       return (
+        <Tooltip content={udpOnly ? "kubectl port-forward doesn't support UDP" : 'No ports available'}>
         <button
           disabled
           className={clsx(
-            'flex items-center gap-2 px-3 py-2 bg-theme-elevated text-theme-text-primary text-sm rounded-lg opacity-50 cursor-not-allowed',
+            'flex items-center gap-2 px-3 py-2 bg-theme-elevated text-theme-text-primary text-sm rounded-lg opacity-50 cursor-not-allowed disabled:pointer-events-none',
             className
           )}
-          title="No ports available"
         >
           <Plug className="w-4 h-4" />
-          No Ports
+          {udpOnly ? 'No TCP Ports' : 'No Ports'}
         </button>
+        </Tooltip>
       )
     }
 
-    // If only one port, forward directly on click (most common case)
-    if (ports.length === 1) {
+    // If only one forwardable port, forward directly on click (most common case)
+    if (forwardable.length === 1) {
       return (
+        <Tooltip content={`Port forward to ${forwardable[0].port}`}>
         <button
-          onClick={() => handlePortSelect(ports[0])}
+          onClick={() => handlePortSelect(forwardable[0])}
           disabled={isPending}
           className={clsx(
-            'flex items-center gap-2 px-3 py-2 bg-theme-elevated text-theme-text-primary text-sm rounded-lg hover:bg-theme-hover transition-colors disabled:opacity-50',
+            'flex items-center gap-2 px-3 py-2 bg-theme-elevated text-theme-text-primary text-sm rounded-lg hover:bg-theme-hover transition-colors disabled:opacity-50 disabled:pointer-events-none',
             className
           )}
-          title={`Port forward to ${ports[0].port}`}
         >
           {isPending ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
             <Plug className="w-4 h-4" />
           )}
-          Forward :{ports[0].port}
+          Forward :{forwardable[0].port}
         </button>
+        </Tooltip>
       )
     }
 
@@ -248,6 +297,7 @@ export function PortForwardButton({
               <div className="px-3 py-2 border-b border-theme-border">
                 <div className="text-xs text-theme-text-disabled mb-2">Listen on</div>
                 <div className="flex gap-1">
+                  <Tooltip content="Only accessible from this machine" wrapperClassName="flex-1">
                   <button
                     onClick={(e) => { e.stopPropagation(); setListenAddress('127.0.0.1') }}
                     className={clsx(
@@ -256,11 +306,12 @@ export function PortForwardButton({
                         ? 'btn-brand-toggle'
                         : 'bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-primary'
                     )}
-                    title="Only accessible from this machine"
                   >
                     <Monitor className="w-3 h-3" />
                     localhost
                   </button>
+                  </Tooltip>
+                  <Tooltip content="Accessible from other machines on the network" wrapperClassName="flex-1">
                   <button
                     onClick={(e) => { e.stopPropagation(); setListenAddress('0.0.0.0') }}
                     className={clsx(
@@ -269,25 +320,25 @@ export function PortForwardButton({
                         ? 'bg-amber-600 text-white'
                         : 'bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-primary'
                     )}
-                    title="Accessible from other machines on the network"
                   >
                     <Globe className="w-3 h-3" />
                     all interfaces
                   </button>
+                  </Tooltip>
                 </div>
               </div>
             )}
             <div className="px-2 py-1.5 text-xs text-theme-text-disabled border-b border-theme-border">
               Select port to forward
             </div>
-            {ports.map((port, i) => (
+            {forwardable.map((port, i) => (
               <button
                 key={i}
                 onClick={() => handlePortSelect(port)}
                 className="w-full px-3 py-2 text-left text-sm text-theme-text-primary hover:bg-theme-elevated flex items-center justify-between"
               >
                 <span className="flex items-center gap-2 shrink-0">
-                  <code className="text-accent-text">{port.port}</code>
+                  <code className="inline-code">{port.port}</code>
                   <span className="text-theme-text-disabled">/{port.protocol || 'TCP'}</span>
                 </span>
                 {port.name && (
@@ -329,11 +380,15 @@ export function PortForwardInlineButton({
   protocol = 'TCP',
   disabled = false,
 }: PortForwardInlineButtonProps) {
-  const { data: clusterInfo } = useClusterInfo()
+  const isLocal = useIsLocalDeployment()
   const startPortForward = useStartPortForward()
   const [dialogInfo, setDialogInfo] = useState<KubectlDialogInfo | null>(null)
 
-  const inCluster = clusterInfo?.inCluster ?? false
+  // Decide copy-command vs live forward from the SAME deployment signal that
+  // gates whether the button shows at all — so the two can't disagree (and we
+  // don't race a separate /cluster-info fetch that defaults to "not in-cluster").
+  // Cloud runs in-cluster too, so anything not-local uses the copy command.
+  const inCluster = !isLocal
   const isPending = !inCluster && startPortForward.isPending
 
   const handleClick = (e: React.MouseEvent) => {
@@ -352,21 +407,37 @@ export function PortForwardInlineButton({
     }
   }
 
+  // UDP/SCTP can't be port-forwarded — show a muted, non-interactive hint that
+  // explains why rather than a button that would copy a command that can't work.
+  if (!isPortForwardable(protocol)) {
+    return (
+      <Tooltip content="kubectl port-forward doesn't support UDP">
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-tertiary opacity-60 cursor-default">
+          {port}/{protocol}
+          <Plug className="w-3 h-3" />
+        </span>
+      </Tooltip>
+    )
+  }
+
   return (
     <>
+      <Tooltip content={inCluster ? 'Copy a kubectl port-forward command' : `Port forward ${port}`}>
       <button
         onClick={handleClick}
         disabled={disabled || isPending}
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-theme-elevated hover:bg-accent-muted rounded text-xs transition-colors disabled:opacity-50 disabled:hover:bg-theme-elevated"
-        title={`Port forward ${port}`}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-theme-elevated hover:bg-accent-muted rounded text-xs transition-colors disabled:opacity-50 disabled:hover:bg-theme-elevated disabled:pointer-events-none"
       >
-        {port}/{protocol}
+        {/* In-cluster this opens a copy-command dialog rather than forwarding now;
+            the trailing "…" signals "opens a dialog" (it doesn't fire immediately). */}
+        {port}/{protocol}{inCluster ? '…' : ''}
         {isPending ? (
           <Loader2 className="w-3 h-3 animate-spin" />
         ) : (
           <Plug className="w-3 h-3" />
         )}
       </button>
+      </Tooltip>
       {dialogInfo && (
         <KubectlCommandDialog info={dialogInfo} onClose={() => setDialogInfo(null)} />
       )}

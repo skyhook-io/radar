@@ -70,6 +70,28 @@ export interface RadarAppProps {
    * See ./context/NavCustomization for the slot shape.
    */
   navSlots?: NavCustomization;
+  /**
+   * Whether Radar may set the browser tab title (`document.title`) per view.
+   * Defaults to OFF: embedders keep title ownership without opting out. The
+   * standalone binary opts in (`web/src/main.tsx` renders
+   * `<RadarApp manageDocumentTitle />`), and any full-page embed that wants
+   * Radar's per-view titles can do the same.
+   */
+  manageDocumentTitle?: boolean;
+  /**
+   * Trailing string appended after the per-view label (only when
+   * `manageDocumentTitle` is on). It's the *full* suffix including any
+   * separator, so a host can rebrand (`' — My Cloud'`) or drop it (`''`).
+   * Defaults to `' · Radar'`.
+   */
+  documentTitleSuffix?: string;
+  /**
+   * Initial route for `router: 'memory'` (ignored for 'browser'). Lets a host
+   * deep-link a specific view (e.g. '/topology') without owning the URL bar —
+   * used with `navSlots.chrome: 'none'` to render a single per-cluster view
+   * chromeless under the host's own chrome (Radar Hub's per-cluster destinations).
+   */
+  initialPath?: string;
 }
 
 // Default QueryClient with the same shape Radar's standalone binary uses.
@@ -109,6 +131,9 @@ export function RadarApp({
   router = 'browser',
   queryClient,
   navSlots,
+  manageDocumentTitle = false,
+  documentTitleSuffix,
+  initialPath,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
   // before children construct URLs. getApiBase() / getAuthHeaders() /
@@ -128,7 +153,7 @@ export function RadarApp({
       <QueryClientProvider client={client}>
         <ToastProvider>
           <NavCustomizationProvider value={navSlots}>
-            <App />
+            <App manageDocumentTitle={manageDocumentTitle} documentTitleSuffix={documentTitleSuffix} />
           </NavCustomizationProvider>
         </ToastProvider>
       </QueryClientProvider>
@@ -136,7 +161,7 @@ export function RadarApp({
   );
 
   if (router === 'memory') {
-    return <MemoryRouter initialEntries={['/']}>{inner}</MemoryRouter>;
+    return <MemoryRouter initialEntries={[initialPath || '/']}>{inner}</MemoryRouter>;
   }
 
   return <BrowserRouter basename={basename || undefined}>{inner}</BrowserRouter>;

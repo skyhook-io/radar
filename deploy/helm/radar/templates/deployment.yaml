@@ -1,3 +1,6 @@
+{{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") (gt (int .Values.replicaCount) 1) }}
+{{- fail "replicaCount must be 1 when persistence.enabled=true and timeline.storage=sqlite: a single PVC cannot be safely shared across pods (RWO volumes won't attach to a second pod, RWX volumes risk SQLite corruption)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,6 +9,10 @@ metadata:
     {{- include "radar.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") }}
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "radar.selectorLabels" . | nindent 6 }}
@@ -17,6 +24,9 @@ spec:
       {{- end }}
       labels:
         {{- include "radar.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -25,6 +35,10 @@ spec:
       serviceAccountName: {{ include "radar.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -37,47 +51,71 @@ spec:
             - --timeline-storage={{ .Values.timeline.storage }}
             {{- if eq .Values.timeline.storage "sqlite" }}
             - --timeline-db={{ .Values.timeline.dbPath }}
+            {{- if .Values.timeline.retention }}
+            - --timeline-retention={{ .Values.timeline.retention }}
+            {{- end }}
+            {{- if .Values.timeline.maxSize }}
+            - --timeline-max-size={{ .Values.timeline.maxSize }}
+            {{- end }}
             {{- end }}
             - --history-limit={{ .Values.timeline.historyLimit }}
             {{- if .Values.traffic.prometheusUrl }}
             - --prometheus-url={{ .Values.traffic.prometheusUrl }}
             {{- end }}
+            {{- range $k, $v := .Values.traffic.prometheusHeaders }}
+            - {{ printf "--prometheus-header=%s=%s" $k $v | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.traffic.prometheusHeadersFromEnv }}
+            - {{ printf "--prometheus-header-from-env=%s=%s" $k $v | quote }}
+            {{- end }}
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
             {{- end }}
+            {{- if .Values.debug.image }}
+            - --debug-image={{ .Values.debug.image }}
+            {{- end }}
+            {{- if .Values.listPageSize }}
+            - --list-page-size={{ .Values.listPageSize }}
+            {{- end }}
             {{- if ne .Values.auth.mode "none" }}
-            - --auth-mode={{ .Values.auth.mode }}
-            - --auth-cookie-ttl={{ .Values.auth.cookieTTL }}
+            - {{ printf "--auth-mode=%s" .Values.auth.mode | quote }}
+            - {{ printf "--auth-cookie-ttl=%s" .Values.auth.cookieTTL | quote }}
             {{- if .Values.auth.proxy.userHeader }}
-            - --auth-user-header={{ .Values.auth.proxy.userHeader }}
+            - {{ printf "--auth-user-header=%s" .Values.auth.proxy.userHeader | quote }}
             {{- end }}
             {{- if .Values.auth.proxy.groupsHeader }}
-            - --auth-groups-header={{ .Values.auth.proxy.groupsHeader }}
+            - {{ printf "--auth-groups-header=%s" .Values.auth.proxy.groupsHeader | quote }}
+            {{- end }}
+            {{- if .Values.auth.proxy.logoutURL }}
+            - {{ printf "--auth-proxy-logout-url=%s" .Values.auth.proxy.logoutURL | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.issuerURL }}
-            - --auth-oidc-issuer={{ .Values.auth.oidc.issuerURL }}
+            - {{ printf "--auth-oidc-issuer=%s" .Values.auth.oidc.issuerURL | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.clientID }}
-            - --auth-oidc-client-id={{ .Values.auth.oidc.clientID }}
+            - {{ printf "--auth-oidc-client-id=%s" .Values.auth.oidc.clientID | quote }}
             {{- end }}
             {{- /* clientSecret is injected via RADAR_OIDC_CLIENT_SECRET env var below */}}
             {{- if .Values.auth.oidc.redirectURL }}
-            - --auth-oidc-redirect-url={{ .Values.auth.oidc.redirectURL }}
+            - {{ printf "--auth-oidc-redirect-url=%s" .Values.auth.oidc.redirectURL | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.groupsClaim }}
-            - --auth-oidc-groups-claim={{ .Values.auth.oidc.groupsClaim }}
+            - {{ printf "--auth-oidc-groups-claim=%s" .Values.auth.oidc.groupsClaim | quote }}
+            {{- end }}
+            {{- if .Values.auth.oidc.scopes }}
+            - {{ printf "--auth-oidc-scopes=%s" (join "," .Values.auth.oidc.scopes) | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.postLogoutRedirectURL }}
-            - --auth-oidc-post-logout-redirect-url={{ .Values.auth.oidc.postLogoutRedirectURL }}
+            - {{ printf "--auth-oidc-post-logout-redirect-url=%s" .Values.auth.oidc.postLogoutRedirectURL | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.usernamePrefix }}
-            - --auth-oidc-username-prefix={{ .Values.auth.oidc.usernamePrefix }}
+            - {{ printf "--auth-oidc-username-prefix=%s" .Values.auth.oidc.usernamePrefix | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.groupsPrefix }}
-            - --auth-oidc-groups-prefix={{ .Values.auth.oidc.groupsPrefix }}
+            - {{ printf "--auth-oidc-groups-prefix=%s" .Values.auth.oidc.groupsPrefix | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.caCert }}
-            - --auth-oidc-ca-cert={{ .Values.auth.oidc.caCert }}
+            - {{ printf "--auth-oidc-ca-cert=%s" .Values.auth.oidc.caCert | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.insecureSkipVerify }}
             - --auth-oidc-insecure-skip-verify

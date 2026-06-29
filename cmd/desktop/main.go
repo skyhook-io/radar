@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
 	"github.com/skyhook-io/radar/internal/config"
@@ -42,6 +43,8 @@ func main() {
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
+	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
+	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	flag.Parse()
 
@@ -64,6 +67,11 @@ func main() {
 	// No-op on macOS/Windows.
 	logBootEnv()
 
+	// Disable WebKit's DMABUF renderer on Linux unless the user opts in —
+	// it produces blank windows on Wayland+KDE/NVIDIA and upstream won't fix.
+	// Must run before Wails initializes WebKit.
+	applyWebKitDefaults()
+
 	// GUI apps (macOS .app, Linux .desktop) get a minimal PATH that
 	// doesn't include user-installed tools like gke-gcloud-auth-plugin,
 	// gcloud, aws CLI, etc. Enrich PATH from the user's login shell.
@@ -77,24 +85,38 @@ func main() {
 		log.Printf("ERROR: --kubeconfig and --kubeconfig-dir are mutually exclusive")
 		os.Exit(1)
 	}
+	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
+	if err != nil {
+		log.Printf("ERROR: invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
+		os.Exit(1)
+	}
+	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(fileCfg.PrometheusHeaders, fileCfg.PrometheusHeadersFromEnv)
+	if err != nil {
+		log.Printf("ERROR: invalid Prometheus header configuration: %v", err)
+		os.Exit(1)
+	}
 
 	cfg := app.AppConfig{
-		Kubeconfig:       *kubeconfig,
-		KubeconfigDirs:   app.ParseKubeconfigDirs(*kubeconfigDir),
-		Namespace:        *namespace,
-		Port:             fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
-		DevMode:          false,
-		HistoryLimit:     *historyLimit,
-		DebugEvents:      *debugEvents,
-		FakeInCluster:    *fakeInCluster,
-		DisableHelmWrite: *disableHelmWrite,
-		DisableExec:      *disableExec,
-		PodShellDefault:  *podShellDefault,
-		TimelineStorage:  *timelineStorage,
-		TimelineDBPath:   *timelineDBPath,
-		PrometheusURL:    *prometheusURL,
-		Version:          version,
-		MCPEnabled:       fileCfg.MCPEnabledOr(true),
+		Kubeconfig:               *kubeconfig,
+		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
+		Namespace:                *namespace,
+		Port:                     fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
+		DevMode:                  false,
+		HistoryLimit:             *historyLimit,
+		DebugEvents:              *debugEvents,
+		FakeInCluster:            *fakeInCluster,
+		DisableHelmWrite:         *disableHelmWrite,
+		DisableExec:              *disableExec,
+		PodShellDefault:          *podShellDefault,
+		TimelineStorage:          *timelineStorage,
+		TimelineDBPath:           *timelineDBPath,
+		TimelineRetention:        *timelineRetention,
+		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
+		PrometheusURL:            *prometheusURL,
+		PrometheusHeaders:        resolvedPrometheusHeaders,
+		PrometheusHeadersFromEnv: fileCfg.PrometheusHeadersFromEnv,
+		Version:                  version,
+		MCPEnabled:               fileCfg.MCPEnabledOr(true),
 	}
 
 	app.SetGlobals(cfg)
@@ -144,17 +166,12 @@ func main() {
 	// Track opens and maybe prompt to star (non-blocking)
 	app.MaybePromptGitHubStar()
 
-	// Build window title
-	windowTitle := "Radar"
-	if ctx := k8s.GetContextName(); ctx != "" {
-		windowTitle = "Radar — " + ctx
-	}
+	windowTitle := formatWindowTitle(k8s.GetContextName())
 
-	// Create desktop app
 	desktopApp := NewDesktopApp(srv, timelineStoreCfg)
 
 	// Run Wails application
-	err := wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		Title:            windowTitle,
 		Width:            1440,
 		Height:           900,
@@ -168,7 +185,7 @@ func main() {
 			Handler: NewRedirectHandler(srv.ActualAddr(), cfg.Namespace),
 		},
 
-		Menu: createMenu(desktopApp),
+		Menu: createMenu(desktopApp, version),
 
 		BackgroundColour: options.NewRGBA(10, 10, 15, 255),
 

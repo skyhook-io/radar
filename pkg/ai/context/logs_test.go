@@ -180,3 +180,30 @@ func TestFilterLogs_RedactsSecrets(t *testing.T) {
 		t.Errorf("Secret not redacted in log line: %s", result.Lines[0])
 	}
 }
+
+func TestFilterLogsByPattern_FiltersBeforeSummary(t *testing.T) {
+	lines := []string{
+		"INFO checkout request ok",
+		"INFO cart request slow",
+		"INFO recommendation request ok",
+	}
+	input := strings.Join(lines, "\n")
+
+	result, err := FilterLogsByPattern(input, "cart")
+	if err != nil {
+		t.Fatalf("FilterLogsByPattern returned error: %v", err)
+	}
+	if result.TotalLines != 1 {
+		t.Errorf("Expected TotalLines=1 after grep, got %d", result.TotalLines)
+	}
+	if len(result.Lines) != 1 || !strings.Contains(result.Lines[0], "cart request slow") {
+		t.Fatalf("Expected cart line, got %#v", result.Lines)
+	}
+}
+
+func TestFilterLogsByPattern_InvalidRegex(t *testing.T) {
+	_, err := FilterLogsByPattern("INFO ok", "[")
+	if err == nil {
+		t.Fatal("Expected invalid regex error")
+	}
+}

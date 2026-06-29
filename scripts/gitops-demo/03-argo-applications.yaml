@@ -1,0 +1,110 @@
+# Argo CD Application scenarios. All point at argocd-example-apps,
+# which is the canonical Argo demo source — small workloads (guestbook,
+# kustomize-guestbook, helm-guestbook) with no external dependencies
+# beyond a public image registry.
+#
+# Coverage:
+#   guestbook-healthy   → Synced + Healthy (auto-sync on)
+#   guestbook-drift     → stable OutOfSync (auto-sync on, selfHeal: false — stays drifted)
+#   guestbook-manual    → manual sync (auto-sync off, drives ManualDriftWithoutAutoSync detector)
+#   guestbook-suspended → suspended via Radar's annotation pattern (drives Suspended chip)
+---
+# Healthy + auto-sync. Default scenario the Topology graph + sync/health
+# badges + Activity history all need a working example for.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-healthy
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-healthy
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false  # namespace pre-created in 01-namespaces.yaml
+---
+# Drift fixture — auto-sync on but selfHeal disabled. After the cluster
+# bootstraps, `make gitops-demo-drift` scales guestbook-ui to 3 replicas
+# while Git declares 1. With selfHeal: false, Argo detects OutOfSync but
+# won't revert it, giving a stable drifted state for visual-testing the
+# Changes tab, drift diff, and OutOfSync badges.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-drift
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-drift
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: false   # drift persists — Argo detects but won't revert
+    syncOptions:
+      - CreateNamespace=false
+---
+# Manual-sync app — auto-sync deliberately disabled. After the first
+# sync, edit a managed resource and the GitOps detail will report
+# "OutOfSync, auto-sync off — click Sync" via the manual-drift detector.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-manual
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: kustomize-guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-suspended
+  # No syncPolicy.automated → manual sync only. Argo treats this as
+  # syncMode "Manual" which is what describeArgoAutoSync renders.
+---
+# Suspended app — uses the same annotation scheme Radar's
+# SetArgoAutoSync writes. The frontend's "Enable auto-sync" affordance
+# should appear (suspended path) instead of the default Disable button.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-suspended
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    radarhq.io/suspended-prune: "true"
+    radarhq.io/suspended-selfheal: "false"
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: helm-guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-suspended
+  # automated removed (suspended state). The annotations above record
+  # what to restore on resume.

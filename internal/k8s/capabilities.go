@@ -2,26 +2,23 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	authv1 "k8s.io/api/authorization/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
-
-// clusterScopedResources are K8s resources that exist at cluster scope (not namespaced).
-// These cannot be checked with a namespace-scoped SelfSubjectAccessReview.
-var clusterScopedResources = map[string]bool{
-	"nodes":             true,
-	"namespaces":        true,
-	"persistentvolumes": true,
-	"storageclasses":    true,
-}
 
 // ResourcePermissions indicates which resource types the user can list/watch
 type ResourcePermissions struct {
@@ -46,41 +43,120 @@ type ResourcePermissions struct {
 	PodDisruptionBudgets     bool `json:"podDisruptionBudgets"`
 	NetworkPolicies          bool `json:"networkPolicies"`
 	ServiceAccounts          bool `json:"serviceAccounts"`
+	Roles                    bool `json:"roles"`
+	ClusterRoles             bool `json:"clusterRoles"`
+	RoleBindings             bool `json:"roleBindings"`
+	ClusterRoleBindings      bool `json:"clusterRoleBindings"`
 	LimitRanges              bool `json:"limitRanges"`
+	ResourceQuotas           bool `json:"resourceQuotas"`
 	Gateways                 bool `json:"gateways"`
 	HTTPRoutes               bool `json:"httpRoutes"`
+	VerticalPodAutoscalers   bool `json:"verticalPodAutoscalers"`
 }
 
-// PermissionCheckResult holds the result of RBAC permission checks
+// PermissionCheckResult holds the result of resource access probes.
+//
+// Two views over the same probe pass:
+//   - Perms / NamespaceScoped / Namespace: a uniform projection (Perm=true if
+//     any scope works; NamespaceScoped=true if at least one kind ended up
+//     namespace-scoped). Used by callers that just want a "can the user see
+//     anything?" answer.
+//   - Scopes: the per-kind authoritative map that drives informer wiring —
+//     some kinds may be cluster-wide while others are namespace-scoped on
+//     the same cluster, which the uniform view cannot express.
 type PermissionCheckResult struct {
 	Perms           *ResourcePermissions
-	NamespaceScoped bool   // True if permissions are namespace-scoped (not cluster-wide)
-	Namespace       string // The namespace checked, when namespace-scoped
+	NamespaceScoped bool   // True if at least one resource type ended up namespace-scoped
+	Namespace       string // The fallback namespace used for namespace-scoped probes
+	Scopes          map[string]k8score.ResourceScope
 }
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
-	Exec          bool                 `json:"exec"`                    // Can create pods/exec (terminal feature)
-	LocalTerminal bool                 `json:"localTerminal"`           // Local terminal available (not in-cluster, not disabled)
-	Logs          bool                 `json:"logs"`                    // Can get pods/log (log viewer)
-	PortForward   bool                 `json:"portForward"`             // Can create pods/portforward
-	Secrets       bool                 `json:"secrets"`                 // Can list secrets
-	SecretsUpdate bool                 `json:"secretsUpdate"`           // Can update secrets (inline editing)
-	HelmWrite     bool                 `json:"helmWrite"`               // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite     bool                 `json:"nodeWrite"`               // Can patch nodes (cordon/uncordon/drain)
-	MCPEnabled    bool                 `json:"mcpEnabled"`              // MCP server is running
-	AuthEnabled   bool                 `json:"authEnabled,omitempty"`   // Auth is enabled on the server
-	Username      string               `json:"username,omitempty"`      // Authenticated username (when auth enabled)
-	Resources     *ResourcePermissions `json:"resources,omitempty"`     // Per-resource-type permissions
+	Exec           bool                     `json:"exec"`                  // Can create pods/exec (terminal feature)
+	LocalTerminal  bool                     `json:"localTerminal"`         // Local terminal available (not in-cluster, not disabled)
+	Logs           bool                     `json:"logs"`                  // Can get pods/log (log viewer)
+	PortForward    bool                     `json:"portForward"`           // Can create pods/portforward
+	Secrets        bool                     `json:"secrets"`               // Can list secrets
+	SecretsUpdate  bool                     `json:"secretsUpdate"`         // Can update secrets (inline editing)
+	HelmWrite      bool                     `json:"helmWrite"`             // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite      bool                     `json:"nodeWrite"`             // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites WorkloadWritePermissions `json:"workloadWrites"`        // Can patch workload kinds (restart/scale controls)
+	MCPEnabled     bool                     `json:"mcpEnabled"`            // MCP server is running
+	Deployment     DeploymentInfo           `json:"deployment"`            // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
+	AuthEnabled    bool                     `json:"authEnabled,omitempty"` // Auth is enabled on the server
+	Username       string                   `json:"username,omitempty"`    // Authenticated username (when auth enabled)
+	Resources      *ResourcePermissions     `json:"resources,omitempty"`   // Per-resource-type permissions
+	Visibility     *VisibilitySummary       `json:"visibility,omitempty"`  // Present when resource visibility is limited enough to make diagnostics incomplete
 }
 
-// NamespaceCapabilities holds the effective exec/logs/portForward capabilities
-// for a specific namespace. When global checks deny these capabilities,
-// namespace-scoped RBAC re-checks may grant them.
+// WorkloadWritePermissions indicates which workload resources the user can patch.
+type WorkloadWritePermissions struct {
+	Deployments  bool `json:"deployments"`
+	DaemonSets   bool `json:"daemonSets"`
+	StatefulSets bool `json:"statefulSets"`
+	Rollouts     bool `json:"rollouts"`
+}
+
+type WorkloadWriteCapabilityErrors struct {
+	Deployments  bool
+	DaemonSets   bool
+	StatefulSets bool
+	Rollouts     bool
+}
+
+type NamespaceCapabilityErrors struct {
+	Exec           bool
+	Logs           bool
+	PortForward    bool
+	WorkloadWrites WorkloadWriteCapabilityErrors
+}
+
+// NamespaceCapabilities holds the effective capabilities for a specific namespace.
 type NamespaceCapabilities struct {
-	Exec        bool `json:"exec"`
-	Logs        bool `json:"logs"`
-	PortForward bool `json:"portForward"`
+	Exec           bool                      `json:"exec"`
+	Logs           bool                      `json:"logs"`
+	PortForward    bool                      `json:"portForward"`
+	WorkloadWrites WorkloadWritePermissions  `json:"workloadWrites"`
+	Errors         NamespaceCapabilityErrors `json:"-"`
+}
+
+// DeploymentInfo describes how / where this Radar binary is running.
+// The frontend uses Mode to gate chrome that only makes sense in some
+// topologies — e.g. cloud-connected mode hides the cluster headline
+// because Radar Cloud's hub renders it in the top bar; in-cluster mode
+// falls back to the platform label for the cluster name because the
+// kubeconfig context is the meaningless "in-cluster" sentinel.
+//
+// The set is closed; if a new topology ships (air-gapped, on-prem-SAML,
+// BYOC, ...), add a member here and update consumers — the bool
+// alternative would force every consumer to grow `mode-A || mode-B`
+// disjunctions ad hoc.
+type DeploymentMode string
+
+const (
+	// DeploymentModeLocal: Radar binary running on a developer's
+	// machine with a kubeconfig. The most common OSS path.
+	DeploymentModeLocal DeploymentMode = "local"
+	// DeploymentModeInCluster: Radar pod running inside the cluster
+	// it's observing, with no kubeconfig. The kubeconfig context name
+	// is set to the literal "in-cluster" sentinel during bootstrap.
+	// Frontend should fall back to the platform label for headlines.
+	DeploymentModeInCluster DeploymentMode = "in-cluster"
+	// DeploymentModeCloud: Radar pod running in-cluster AND tunneled
+	// to Radar Cloud's hub (RADAR_CLOUD_MODE=true; technically a
+	// superset of in-cluster mode plus the outbound tunnel). The hub
+	// shell renders cluster identity + MCP discovery surfaces, so the
+	// embedded UI suppresses both.
+	DeploymentModeCloud DeploymentMode = "cloud"
+)
+
+// DeploymentInfo is exposed in the Capabilities response. Currently
+// just Mode; reserved as a struct so future deployment-scoped facts
+// (region, cluster id surface, helm chart version) can be added
+// without another wire-shape change.
+type DeploymentInfo struct {
+	Mode DeploymentMode `json:"mode"`
 }
 
 var (
@@ -93,8 +169,8 @@ var (
 	// Per-namespace capability cache for lazy RBAC re-checks.
 	// When global checks (cluster-wide + effective-namespace) deny
 	// exec/logs/portForward, callers can re-check for a specific namespace.
-	nsCapCache   map[string]*nsCapEntry
-	nsCapMu      sync.RWMutex
+	nsCapCache map[string]*nsCapEntry
+	nsCapMu    sync.RWMutex
 
 	// ForceDisableHelmWrite overrides the helmWrite capability to false (for dev testing)
 	ForceDisableHelmWrite bool
@@ -155,20 +231,26 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	var hadErrors atomic.Bool
 
 	type capCheck struct {
-		resource string
-		verb     string
-		result   *bool
+		group             string
+		resource          string
+		verb              string
+		result            *bool
+		namespaceFallback bool
 	}
 
 	caps := &Capabilities{}
 	checks := []capCheck{
-		{"pods/exec", "create", &caps.Exec},
-		{"pods/log", "get", &caps.Logs},
-		{"pods/portforward", "create", &caps.PortForward},
-		{"secrets", "list", &caps.Secrets},
-		{"secrets", "update", &caps.SecretsUpdate},
-		{"secrets", "create", &caps.HelmWrite},
-		{"nodes", "patch", &caps.NodeWrite},
+		{resource: "pods/exec", verb: "create", result: &caps.Exec, namespaceFallback: true},
+		{resource: "pods/log", verb: "get", result: &caps.Logs, namespaceFallback: true},
+		{resource: "pods/portforward", verb: "create", result: &caps.PortForward, namespaceFallback: true},
+		{resource: "secrets", verb: "list", result: &caps.Secrets, namespaceFallback: true},
+		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
+		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
+		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
+		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
+		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
+		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
+		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
 	}
 
 	var wg sync.WaitGroup
@@ -177,13 +259,13 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, apiErr := canI(checkCtx, "", "", c.resource, c.verb)
+			allowed, apiErr := canI(checkCtx, "", c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 				return
 			}
-			if fallbackNs != "" {
-				allowed, nsApiErr := canI(checkCtx, fallbackNs, "", c.resource, c.verb)
+			if fallbackNs != "" && c.namespaceFallback {
+				allowed, nsApiErr := canI(checkCtx, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
 					return
@@ -201,6 +283,14 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 
 	// Local terminal is not RBAC-gated — it depends on runtime mode only
 	caps.LocalTerminal = !IsInCluster() && !ForceDisableLocalTerminal
+
+	// Port-forward binds a local TCP listener on the radar host; like the local
+	// terminal it's meaningless in-cluster (the listener would be on the radar
+	// pod, not the user's machine), so force it off regardless of RBAC. The HTTP
+	// capabilities handler re-applies this after its namespace merge.
+	if IsInCluster() {
+		caps.PortForward = false
+	}
 
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false
@@ -258,20 +348,10 @@ func InvalidateCapabilitiesCache() {
 	nsCapMu.Unlock()
 }
 
-// CheckNamespaceCapabilities performs namespace-scoped RBAC checks for capabilities
-// that were denied by global checks (cluster-wide + effective-namespace fallback).
-// This enables lazy re-checking when a user views a resource in a specific namespace —
-// they may have namespace-scoped RoleBindings that grant exec/logs/portForward in
-// namespaces other than the kubeconfig default.
-//
-// Returns nil if no namespace-scoped re-check is needed (all capabilities already allowed).
-func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCaps *Capabilities) (*NamespaceCapabilities, error) {
+// CheckNamespaceCapabilities performs namespace-scoped RBAC checks for
+// capabilities that drive resource-level controls.
+func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*NamespaceCapabilities, error) {
 	if namespace == "" {
-		return nil, nil
-	}
-
-	// If all three are already allowed globally, no need for namespace check
-	if globalCaps.Exec && globalCaps.Logs && globalCaps.PortForward {
 		return nil, nil
 	}
 
@@ -293,33 +373,28 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCap
 	checkCtx, cancel := NewOperationContext(10 * time.Second)
 	defer cancel()
 
-	result := &NamespaceCapabilities{
-		Exec:        globalCaps.Exec,
-		Logs:        globalCaps.Logs,
-		PortForward: globalCaps.PortForward,
-	}
+	result := &NamespaceCapabilities{}
 
-	// Only re-check capabilities that were denied globally
 	type capCheck struct {
+		group    string
 		resource string
 		verb     string
 		result   *bool
+		apiError *bool
 	}
 
 	var checks []capCheck
-	if !globalCaps.Exec && !ForceDisableExec {
-		checks = append(checks, capCheck{"pods/exec", "create", &result.Exec})
+	if !ForceDisableExec {
+		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
 	}
-	if !globalCaps.Logs {
-		checks = append(checks, capCheck{"pods/log", "get", &result.Logs})
-	}
-	if !globalCaps.PortForward {
-		checks = append(checks, capCheck{"pods/portforward", "create", &result.PortForward})
-	}
-
-	if len(checks) == 0 {
-		return result, nil
-	}
+	checks = append(checks,
+		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
+		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
+		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
+		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
+		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
+		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
+	)
 
 	var hadErrors atomic.Bool
 	var wg sync.WaitGroup
@@ -327,11 +402,12 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCap
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, apiErr := canI(checkCtx, namespace, "", c.resource, c.verb)
+			allowed, apiErr := canI(checkCtx, namespace, c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 			}
 			if apiErr {
+				*c.apiError = true
 				hadErrors.Store(true)
 			}
 		}(check)
@@ -360,13 +436,23 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCap
 
 // Per-user capabilities cache (keyed by username)
 var (
-	userCapabilitiesCache   sync.Map // map[string]*userCapEntry
-	userCapabilitiesTTL     = 60 * time.Second
+	userCapabilitiesCache          sync.Map // map[string]*userCapEntry
+	userNamespaceCapabilitiesCache sync.Map // map[string]*userNSCapEntry
+	userCapabilitiesTTL            = 60 * time.Second
 )
 
 type userCapEntry struct {
 	caps      *Capabilities
 	expiresAt time.Time
+}
+
+type userNSCapEntry struct {
+	caps      NamespaceCapabilities
+	expiresAt time.Time
+}
+
+func userNamespaceCapabilitiesCacheKey(username, namespace string) string {
+	return username + "\x00" + namespace
 }
 
 // CheckCapabilitiesForUser runs SubjectAccessReview as the given user
@@ -395,20 +481,26 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	defer cancel()
 
 	type capCheck struct {
-		resource string
-		verb     string
-		result   *bool
+		group             string
+		resource          string
+		verb              string
+		result            *bool
+		namespaceFallback bool
 	}
 
 	caps := &Capabilities{}
 	checks := []capCheck{
-		{"pods/exec", "create", &caps.Exec},
-		{"pods/log", "get", &caps.Logs},
-		{"pods/portforward", "create", &caps.PortForward},
-		{"secrets", "list", &caps.Secrets},
-		{"secrets", "update", &caps.SecretsUpdate},
-		{"secrets", "create", &caps.HelmWrite},
-		{"nodes", "patch", &caps.NodeWrite},
+		{resource: "pods/exec", verb: "create", result: &caps.Exec, namespaceFallback: true},
+		{resource: "pods/log", verb: "get", result: &caps.Logs, namespaceFallback: true},
+		{resource: "pods/portforward", verb: "create", result: &caps.PortForward, namespaceFallback: true},
+		{resource: "secrets", verb: "list", result: &caps.Secrets, namespaceFallback: true},
+		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
+		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
+		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
+		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
+		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
+		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
+		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
 	}
 
 	var wg sync.WaitGroup
@@ -417,14 +509,14 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, _ := canIAs(checkCtx, k8sClient, username, groups, "", "", c.resource, c.verb)
+			allowed, _ := canIAs(checkCtx, k8sClient, username, groups, "", c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 				return
 			}
 			// Try namespace-scoped fallback
-			if fallbackNs := GetEffectiveNamespace(); fallbackNs != "" {
-				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, "", c.resource, c.verb)
+			if fallbackNs := GetEffectiveNamespace(); fallbackNs != "" && c.namespaceFallback {
+				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
 				}
@@ -445,6 +537,88 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	})
 
 	return caps, nil
+}
+
+// CheckNamespaceCapabilitiesForUser runs namespace-scoped SubjectAccessReview
+// checks as the authenticated user.
+func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, groups []string, namespace string) (*NamespaceCapabilities, error) {
+	if namespace == "" {
+		return nil, nil
+	}
+
+	cacheKey := userNamespaceCapabilitiesCacheKey(username, namespace)
+	if entry, ok := userNamespaceCapabilitiesCache.Load(cacheKey); ok {
+		e := entry.(*userNSCapEntry)
+		if time.Now().Before(e.expiresAt) {
+			result := e.caps
+			return &result, nil
+		}
+	}
+
+	k8sClient := GetClient()
+	if k8sClient == nil {
+		return nil, nil
+	}
+
+	if GetConnectionStatus().State == StateDisconnected {
+		return nil, nil
+	}
+
+	checkCtx, cancel := NewOperationContext(10 * time.Second)
+	defer cancel()
+
+	result := &NamespaceCapabilities{}
+
+	type capCheck struct {
+		group    string
+		resource string
+		verb     string
+		result   *bool
+		apiError *bool
+	}
+
+	var checks []capCheck
+	if !ForceDisableExec {
+		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
+	}
+	checks = append(checks,
+		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
+		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
+		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
+		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
+		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
+		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
+	)
+
+	var hadErrors atomic.Bool
+	var wg sync.WaitGroup
+	wg.Add(len(checks))
+	for _, check := range checks {
+		go func(c capCheck) {
+			defer wg.Done()
+			allowed, apiErr := canIAs(checkCtx, k8sClient, username, groups, namespace, c.group, c.resource, c.verb)
+			if allowed {
+				*c.result = true
+			}
+			if apiErr {
+				*c.apiError = true
+				hadErrors.Store(true)
+			}
+		}(check)
+	}
+	wg.Wait()
+
+	ttl := userCapabilitiesTTL
+	if hadErrors.Load() {
+		ttl = capabilitiesErrorTTL
+		log.Printf("Warning: namespace %s capability checks for user %s had API errors, using short cache TTL (%v)", SanitizeForLog(namespace), SanitizeForLog(username), ttl)
+	}
+	userNamespaceCapabilitiesCache.Store(cacheKey, &userNSCapEntry{
+		caps:      *result,
+		expiresAt: time.Now().Add(ttl),
+	})
+
+	return result, nil
 }
 
 // canIAs checks if a specific user can perform an action using SubjectAccessReview.
@@ -474,7 +648,7 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 	result, err := client.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {
 		if ctx.Err() == nil {
-			log.Printf("Warning: SubjectAccessReview failed for user=%s %s %s: %v", username, verb, resource, err)
+			log.Printf("Warning: SubjectAccessReview failed for user=%s %s %s: %v", SanitizeForLog(username), SanitizeForLog(verb), SanitizeForLog(resource), err)
 		}
 		return false, true
 	}
@@ -488,6 +662,10 @@ func InvalidateUserCapabilitiesCache() {
 		userCapabilitiesCache.Delete(key)
 		return true
 	})
+	userNamespaceCapabilitiesCache.Range(func(key, _ any) bool {
+		userNamespaceCapabilitiesCache.Delete(key)
+		return true
+	})
 }
 
 var (
@@ -498,189 +676,256 @@ var (
 	resourcePermsErrorTTL = 5 * time.Second // Short TTL when API errors caused fail-closed results
 )
 
-// CheckResourcePermissions checks RBAC permissions for all resource types using
-// SelfSubjectAccessReview. Results are cached for 60 seconds.
-// This is used at informer startup to decide which informers to create.
+// resourceProbe describes one typed-resource probe target. The probe issues
+// `list?limit=1` against this resource (cluster-wide first, then namespace-scoped
+// fallback for non-cluster-scoped kinds when a fallback namespace is set), and
+// the result drives whether an informer is created and at what scope.
+type resourceProbe struct {
+	key         string                      // ResourceType key (k8score.Pods etc.)
+	gvr         schema.GroupVersionResource // For dynamic-client probe
+	clusterOnly bool                        // true: cannot be namespace-scoped (nodes, namespaces, PV, storageclasses)
+	field       *bool                       // Pointer into the boolean view on ResourcePermissions
+	// requiresDiscovery marks dynamic-cache CRDs. For these, a NotFound on
+	// the list probe means "CRD isn't installed" and we report the field
+	// as false. Without this gate, capabilities.resources would
+	// optimistically report true on clusters that don't have the CRD
+	// installed, because probeListAccessWith treats NotFound the same as
+	// any other transient error.
+	requiresDiscovery bool
+}
+
+// resourceProbeTargets returns the resource kinds we probe access for.
+// Includes dynamic-cache CRDs (those tagged requiresDiscovery) so their
+// booleans land on ResourcePermissions for the UI snapshot — the dynamic
+// cache doesn't write here itself.
+func resourceProbeTargets(perms *ResourcePermissions) []resourceProbe {
+	return []resourceProbe{
+		{key: k8score.Pods, gvr: schema.GroupVersionResource{Version: "v1", Resource: "pods"}, field: &perms.Pods},
+		{key: k8score.Services, gvr: schema.GroupVersionResource{Version: "v1", Resource: "services"}, field: &perms.Services},
+		{key: k8score.ConfigMaps, gvr: schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}, field: &perms.ConfigMaps},
+		{key: k8score.Secrets, gvr: schema.GroupVersionResource{Version: "v1", Resource: "secrets"}, field: &perms.Secrets},
+		{key: k8score.Events, gvr: schema.GroupVersionResource{Version: "v1", Resource: "events"}, field: &perms.Events},
+		{key: k8score.PersistentVolumeClaims, gvr: schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}, field: &perms.PersistentVolumeClaims},
+		{key: k8score.ServiceAccounts, gvr: schema.GroupVersionResource{Version: "v1", Resource: "serviceaccounts"}, field: &perms.ServiceAccounts},
+		{key: k8score.LimitRanges, gvr: schema.GroupVersionResource{Version: "v1", Resource: "limitranges"}, field: &perms.LimitRanges},
+		{key: k8score.ResourceQuotas, gvr: schema.GroupVersionResource{Version: "v1", Resource: "resourcequotas"}, field: &perms.ResourceQuotas},
+		{key: k8score.Nodes, gvr: schema.GroupVersionResource{Version: "v1", Resource: "nodes"}, clusterOnly: true, field: &perms.Nodes},
+		{key: k8score.Namespaces, gvr: schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, clusterOnly: true, field: &perms.Namespaces},
+		{key: k8score.PersistentVolumes, gvr: schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumes"}, clusterOnly: true, field: &perms.PersistentVolumes},
+		{key: k8score.Deployments, gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, field: &perms.Deployments},
+		{key: k8score.DaemonSets, gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}, field: &perms.DaemonSets},
+		{key: k8score.StatefulSets, gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, field: &perms.StatefulSets},
+		{key: k8score.ReplicaSets, gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"}, field: &perms.ReplicaSets},
+		{key: k8score.Ingresses, gvr: schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}, field: &perms.Ingresses},
+		{key: k8score.NetworkPolicies, gvr: schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, field: &perms.NetworkPolicies},
+		{key: k8score.Jobs, gvr: schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}, field: &perms.Jobs},
+		{key: k8score.CronJobs, gvr: schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}, field: &perms.CronJobs},
+		{key: k8score.HorizontalPodAutoscalers, gvr: schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"}, field: &perms.HorizontalPodAutoscalers},
+		{key: k8score.StorageClasses, gvr: schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}, clusterOnly: true, field: &perms.StorageClasses},
+		{key: k8score.PodDisruptionBudgets, gvr: schema.GroupVersionResource{Group: "policy", Version: "v1", Resource: "poddisruptionbudgets"}, field: &perms.PodDisruptionBudgets},
+		{key: k8score.Roles, gvr: schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "roles"}, field: &perms.Roles},
+		{key: k8score.ClusterRoles, gvr: schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles"}, clusterOnly: true, field: &perms.ClusterRoles},
+		{key: k8score.RoleBindings, gvr: schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "rolebindings"}, field: &perms.RoleBindings},
+		{key: k8score.ClusterRoleBindings, gvr: schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterrolebindings"}, clusterOnly: true, field: &perms.ClusterRoleBindings},
+		// Dynamic-cache CRDs — the bool surfaces in the UI even though they're
+		// served via the dynamic informer path, not buildInformerSetups().
+		// requiresDiscovery makes IsNotFound deny instead of optimistically
+		// allow, so we don't claim a CRD is supported when it isn't installed.
+		{key: "gateways", gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}, field: &perms.Gateways, requiresDiscovery: true},
+		{key: "httproutes", gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}, field: &perms.HTTPRoutes, requiresDiscovery: true},
+		{key: "verticalpodautoscalers", gvr: schema.GroupVersionResource{Group: "autoscaling.k8s.io", Version: "v1", Resource: "verticalpodautoscalers"}, field: &perms.VerticalPodAutoscalers, requiresDiscovery: true},
+	}
+}
+
+// SanitizeForLog strips CR/LF from a string before it's written to a log.
+// Use this for any value that originates from user-controlled input
+// (HTTP request bodies, kubeconfig fields edited by the user, etc.) —
+// without it, an attacker-controlled string containing newlines could
+// inject forged log entries. CodeQL's `Log entries created from user
+// input` rule fires on tainted strings even when wrapped in %q because
+// the taint analyzer doesn't model fmt's escaping behavior; an explicit
+// strings.ReplaceAll terminates the taint flow.
+func SanitizeForLog(s string) string {
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	return s
+}
+
+// probeListAccessWith attempts a list?limit=1 against the GVR using the
+// given dynamic client. Returns:
+//   - allowed=true: list succeeded — informer can run.
+//   - allowed=false, forbidden=true: explicit 403/401 — gate the informer.
+//   - allowed=true, transient!=nil: non-auth error (network, 503, NotFound for
+//     missing CRD, etc.). Treated as "allow optimistically" so a transient API
+//     hiccup doesn't permanently disable the resource for the session — the
+//     informer's reflector will retry. Same convention as the dynamic cache
+//     probe in pkg/k8score/dynamic_cache.go.
 //
-// For namespace-scoped users (e.g., ServiceAccounts with RoleBindings), cluster-wide
-// checks will fail. When a fallback namespace is available (from kubeconfig context
-// or --namespace flag), namespace-scoped checks are tried as a second pass.
+// Exposed (lowercase but called from tests in the same package) so tests can
+// drive it with a fake dynamic.Interface.
+func probeListAccessWith(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, namespace string) (allowed bool, forbidden bool, transient error) {
+	if dyn == nil {
+		return false, false, nil
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	opts := metav1.ListOptions{Limit: 1}
+	var err error
+	if namespace != "" {
+		_, err = dyn.Resource(gvr).Namespace(namespace).List(probeCtx, opts)
+	} else {
+		_, err = dyn.Resource(gvr).List(probeCtx, opts)
+	}
+	if err == nil {
+		return true, false, nil
+	}
+	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		return false, true, nil
+	}
+	return true, false, err
+}
+
+// probeKindAccess probes a resource kind. For typed probes (single GVR)
+// this is a thin wrapper over probeListAccessWith. For dynamic CRD probes
+// (requiresDiscovery=true) it walks every version registered in
+// supportedCRDFallbacks for the (group, resource) and treats the kind as
+// "not installed" only when every version returns NotFound — otherwise
+// a cluster serving only v1beta1 Gateway API would be wrongly reported
+// as having no Gateway API at all.
+func probeKindAccess(ctx context.Context, dyn dynamic.Interface, p resourceProbe, namespace string) (allowed bool, forbidden bool, transient error) {
+	if !p.requiresDiscovery {
+		return probeListAccessWith(ctx, dyn, p.gvr, namespace)
+	}
+	gvrs := resolveProbeGVRs(p)
+	var (
+		sawForbidden    bool
+		lastNonNotFound error
+	)
+	for _, gvr := range gvrs {
+		a, f, t := probeListAccessWith(ctx, dyn, gvr, namespace)
+		if a && t == nil {
+			return true, false, nil
+		}
+		if f {
+			// Native K8s RBAC is version-agnostic (apiGroups stanza names
+			// the group, not specific versions), so a 403 on any version
+			// almost always means all versions are denied — short-circuit.
+			// Webhook authorizers (OPA, Kyverno, GKE IAM) can theoretically
+			// gate by version but rarely do; we accept the false-negative
+			// on those clusters in exchange for not multiplying probe
+			// latency by the number of CRD versions.
+			sawForbidden = true
+			break
+		}
+		if t != nil && !apierrors.IsNotFound(t) {
+			lastNonNotFound = t
+		}
+	}
+	if sawForbidden {
+		return false, true, nil
+	}
+	if lastNonNotFound != nil {
+		// At least one version hit a real transient (5xx, network, etc.).
+		// Preserve optimistic-allow so the informer can retry rather than
+		// permanently disabling the resource for the session — matches the
+		// behavior for typed kinds in probeListAccessWith.
+		return true, false, lastNonNotFound
+	}
+	// All versions returned NotFound — CRD truly not installed. Cached for
+	// the full 60s TTL (transient=nil → hadErrors stays false). If the
+	// CRD installs mid-cache, the user sees stale capabilities until the
+	// next TTL expiry or context-switch invalidation; CRD installs are
+	// operator-initiated and rare enough that this is acceptable.
+	return false, false, nil
+}
+
+// resolveProbeGVRs returns every version registered in supportedCRDFallbacks
+// for a dynamic probe, so the probe matches what the dynamic cache can
+// actually serve. Typed probes return their single configured GVR.
+func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
+	if !p.requiresDiscovery {
+		return []schema.GroupVersionResource{p.gvr}
+	}
+	for _, c := range supportedCRDFallbacks {
+		if c.Group != p.gvr.Group || c.Resource != p.gvr.Resource {
+			continue
+		}
+		out := make([]schema.GroupVersionResource, 0, len(c.Versions))
+		for _, v := range c.Versions {
+			out = append(out, schema.GroupVersionResource{Group: c.Group, Version: v, Resource: c.Resource})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return []schema.GroupVersionResource{p.gvr}
+}
+
+// CheckResourcePermissions probes list access for every typed resource and
+// returns per-kind scope plus a uniform projection. Results are cached for
+// 60s (5s on transient errors).
+//
+// Per-kind probe behavior:
+//   - Cluster-wide list?limit=1 first.
+//   - If 403/401 and the kind is namespaceable AND a fallback namespace is set,
+//     retry scoped to that namespace.
+//   - Anything still 403/401 → kind is denied.
+//   - Anything that returns a non-auth error → optimistically allowed
+//     cluster-wide, except dynamic-cache probes use NotFound to mean the
+//     CRD is not installed.
+//
+// This is authoritative because it IS the operation the informer will perform.
+// SelfSubjectAccessReview is one indirection too many — it can disagree with
+// reality on clusters using webhook authorizers (e.g. GKE IAM).
 func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	resourcePermsMu.RLock()
 	if cachedPermResult != nil && time.Now().Before(resourcePermsExpiry) {
+		// Deep-copy so callers can't mutate the cached result.
 		permsCopy := *cachedPermResult.Perms
+		scopesCopy := make(map[string]k8score.ResourceScope, len(cachedPermResult.Scopes))
+		for k, v := range cachedPermResult.Scopes {
+			scopesCopy[k] = v
+		}
 		result := &PermissionCheckResult{
 			Perms:           &permsCopy,
 			NamespaceScoped: cachedPermResult.NamespaceScoped,
 			Namespace:       cachedPermResult.Namespace,
+			Scopes:          scopesCopy,
 		}
 		resourcePermsMu.RUnlock()
 		return result
 	}
 	resourcePermsMu.RUnlock()
 
-	// Compute RBAC permissions WITHOUT holding the write lock.
-	// Multiple concurrent callers may race, but redundant checks are harmless.
-	// Critical: holding the lock during network calls blocks
-	// InvalidateResourcePermissionsCache() during context switch.
+	// Compute probes WITHOUT holding the write lock — concurrent callers
+	// may race but redundant probes are harmless. Holding the lock during
+	// network calls would block InvalidateResourcePermissionsCache() during
+	// context switch.
 
-	if GetClient() == nil {
+	if GetClient() == nil || GetDynamicClient() == nil {
 		log.Printf("Warning: K8s client not initialized, returning no resource permissions")
-		return &PermissionCheckResult{Perms: &ResourcePermissions{}}
+		return &PermissionCheckResult{Perms: &ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{}}
 	}
 
-	type permCheck struct {
-		group    string // API group ("" for core, "apps", "batch", etc.)
-		resource string
-		result   *bool
-	}
-
-	perms := &ResourcePermissions{}
-	checks := []permCheck{
-		// Core API group
-		{"", "pods", &perms.Pods},
-		{"", "services", &perms.Services},
-		{"", "configmaps", &perms.ConfigMaps},
-		{"", "secrets", &perms.Secrets},
-		{"", "events", &perms.Events},
-		{"", "persistentvolumeclaims", &perms.PersistentVolumeClaims},
-		{"", "nodes", &perms.Nodes},
-		{"", "namespaces", &perms.Namespaces},
-		// apps group
-		{"apps", "deployments", &perms.Deployments},
-		{"apps", "daemonsets", &perms.DaemonSets},
-		{"apps", "statefulsets", &perms.StatefulSets},
-		{"apps", "replicasets", &perms.ReplicaSets},
-		// networking.k8s.io group
-		{"networking.k8s.io", "ingresses", &perms.Ingresses},
-		// gateway.networking.k8s.io group
-		{"gateway.networking.k8s.io", "gateways", &perms.Gateways},
-		{"gateway.networking.k8s.io", "httproutes", &perms.HTTPRoutes},
-		// batch group
-		{"batch", "jobs", &perms.Jobs},
-		{"batch", "cronjobs", &perms.CronJobs},
-		// autoscaling group
-		{"autoscaling", "horizontalpodautoscalers", &perms.HorizontalPodAutoscalers},
-		// core group (cluster-scoped)
-		{"", "persistentvolumes", &perms.PersistentVolumes},
-		// storage.k8s.io group
-		{"storage.k8s.io", "storageclasses", &perms.StorageClasses},
-		// policy group
-		{"policy", "poddisruptionbudgets", &perms.PodDisruptionBudgets},
-		// networking.k8s.io group
-		{"networking.k8s.io", "networkpolicies", &perms.NetworkPolicies},
-		// core (namespaced) — inheritance lookups for audit checks
-		{"", "serviceaccounts", &perms.ServiceAccounts},
-		{"", "limitranges", &perms.LimitRanges},
-	}
-
-	// Phase 1: Check all resources cluster-wide
-	logTiming("   [perms] Phase 1 starting: %d cluster-wide RBAC checks", len(checks))
-	phase1Start := time.Now()
-	var wg sync.WaitGroup
-	var hadErrors atomic.Bool
-	wg.Add(len(checks))
-
-	for _, check := range checks {
-		go func(c permCheck) {
-			defer wg.Done()
-			allowed, apiErr := canI(ctx, "", c.group, c.resource, "list")
-			*c.result = allowed
-			if apiErr {
-				hadErrors.Store(true)
-			}
-		}(check)
-	}
-
-	wg.Wait()
-	logTiming("    RBAC phase 1 (cluster-wide, %d checks): %v", len(checks), time.Since(phase1Start))
-
-	// Bail early if context was canceled (e.g., version check failed while
-	// RBAC checks were in-flight). No point starting Phase 2.
-	if ctx.Err() != nil {
-		logTiming("   [perms] Bailing after Phase 1: context canceled")
-		result := &PermissionCheckResult{Perms: perms}
-		resourcePermsMu.Lock()
-		cachedPermResult = result
-		resourcePermsExpiry = time.Now().Add(resourcePermsErrorTTL)
-		resourcePermsMu.Unlock()
-		return result
-	}
-
-	// Phase 2: If all namespace-scoped resources failed and we have a fallback namespace,
-	// retry those checks scoped to the specific namespace.
-	fallbackNs := GetEffectiveNamespace()
-	namespaceScoped := false
-
-	if fallbackNs != "" {
-		allNamespacedFailed := true
-		for _, check := range checks {
-			if !clusterScopedResources[check.resource] && *check.result {
-				allNamespacedFailed = false
-				break
-			}
-		}
-
-		if allNamespacedFailed {
-			log.Printf("RBAC: cluster-wide checks failed for all namespaced resources, retrying in namespace %q", fallbackNs)
-
-			var nsChecks []permCheck
-			for i := range checks {
-				if !clusterScopedResources[checks[i].resource] {
-					nsChecks = append(nsChecks, checks[i])
-				}
-			}
-
-			wg.Add(len(nsChecks))
-			for _, check := range nsChecks {
-				go func(c permCheck) {
-					defer wg.Done()
-					allowed, apiErr := canI(ctx, fallbackNs, c.group, c.resource, "list")
-					*c.result = allowed
-					if apiErr {
-						hadErrors.Store(true)
-					}
-				}(check)
-			}
-			wg.Wait()
-
-			// If any namespace-scoped check passed, we're in namespace-scoped mode
-			for _, check := range nsChecks {
-				if *check.result {
-					namespaceScoped = true
-					break
-				}
-			}
-		}
-	}
-
-	// Log which resources are restricted
-	var restricted []string
-	for _, check := range checks {
-		if !*check.result {
-			restricted = append(restricted, check.resource)
-		}
-	}
-	if len(restricted) > 0 {
-		if namespaceScoped {
-			log.Printf("RBAC: namespace-scoped mode (namespace=%s), restricted resources: %v", fallbackNs, restricted)
+	forceNamespace := ForceNamespaceScope
+	scopeNamespaces := buildScopeCandidates(ctx)
+	if forceNamespace {
+		if target := GetNamespaceScopeTarget(); target != "" {
+			scopeNamespaces = mergeForcedScopeCandidate(target, scopeNamespaces)
 		} else {
-			log.Printf("RBAC: restricted resources (no list permission): %v", restricted)
+			log.Printf("Warning: --namespace-scope enabled but no namespace target is configured")
 		}
 	}
 
-	result := &PermissionCheckResult{
-		Perms:           perms,
-		NamespaceScoped: namespaceScoped,
-		Namespace:       fallbackNs,
-	}
+	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, forceNamespace)
 
 	resourcePermsMu.Lock()
 	cachedPermResult = result
 	ttl := resourcePermsTTL
-	if hadErrors.Load() {
+	if hadErrors {
 		ttl = resourcePermsErrorTTL
-		log.Printf("Warning: resource permission checks had API errors, using short cache TTL (%v)", ttl)
+		log.Printf("Warning: resource access probes had API errors, using short cache TTL (%v)", ttl)
 	}
 	resourcePermsExpiry = time.Now().Add(ttl)
 	resourcePermsMu.Unlock()
@@ -688,16 +933,338 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	return result
 }
 
-// GetCachedPermissionResult returns the cached permission check result, if available.
-// Used by dynamic cache to determine namespace scoping without re-running checks.
+// MaxScopeCandidates was promoted to a package variable in deadlines.go
+// (default 20) so operators with clusters carrying more namespaces than the
+// original cap can widen the fanout via flag/env without recompiling.
+
+// buildScopeCandidates returns the namespace candidates for the fallback
+// probe when cluster-wide list is denied. Kubeconfig context (or
+// --namespace) first; then namespaces from GetAccessibleNamespaces, in the
+// cluster-list order (alphabetical). Empty when no fallback is configured
+// and the user can't enumerate namespaces — caller treats that as "no
+// fallback".
+func buildScopeCandidates(ctx context.Context) []string {
+	// GetEffectiveNamespace would return only one (kubeconfig context wins
+	// over --namespace). Reach into both globals so when an operator sets
+	// `--namespace` distinct from the context, both surface as candidates.
+	clientMu.RLock()
+	ctxNs, flagNs := contextNamespace, fallbackNamespace
+	clientMu.RUnlock()
+
+	accessible, authoritative := GetAccessibleNamespaces(ctx)
+	out, dropped := mergeScopeCandidates(ctxNs, flagNs, accessible, authoritative)
+	if !authoritative {
+		// Authoritative=false means the user can't list namespaces. Without
+		// that list the probe can only try whatever the operator named
+		// explicitly — log it so an operator diagnosing "Radar disabled my
+		// kinds" has a breadcrumb instead of silence.
+		log.Printf("RBAC: namespace discovery non-authoritative (cluster-wide list namespaces denied); fallback candidates limited to %v", out)
+		return out
+	}
+	if dropped > 0 {
+		// Capped: kinds the user can list only in a dropped namespace stay
+		// marked denied. Workaround: name the target with --namespace (or
+		// the kubeconfig context) so it sits ahead of the alphabetical
+		// accessible list and survives truncation.
+		log.Printf("RBAC: candidate namespaces truncated (cap=%d, %d dropped); kinds reachable only in dropped namespaces will be marked denied", MaxScopeCandidates, dropped)
+	}
+	return out
+}
+
+func mergeForcedScopeCandidate(target string, candidates []string) []string {
+	if target == "" {
+		return candidates
+	}
+	out := []string{target}
+	for _, ns := range candidates {
+		if ns == "" || ns == target {
+			continue
+		}
+		out = append(out, ns)
+	}
+	return out
+}
+
+// mergeScopeCandidates is the pure-function core of buildScopeCandidates:
+// dedup + cap + drop-counting with no globals or network calls. When
+// authoritative is false the accessible list is ignored — the caller has
+// already decided that list is not trustworthy as a probe target.
+func mergeScopeCandidates(ctxNs, flagNs string, accessible []string, authoritative bool) (out []string, dropped int) {
+	seen := map[string]bool{}
+	out = make([]string, 0, MaxScopeCandidates)
+	atCap := false
+	add := func(ns string) {
+		if ns == "" || seen[ns] {
+			return
+		}
+		if atCap {
+			dropped++
+			return
+		}
+		seen[ns] = true
+		out = append(out, ns)
+		if len(out) >= MaxScopeCandidates {
+			atCap = true
+		}
+	}
+	add(ctxNs)
+	add(flagNs)
+	if !authoritative {
+		return out, 0
+	}
+	// Iterate the full accessible list after cap so add() counts drops.
+	for _, ns := range accessible {
+		add(ns)
+	}
+	return out, dropped
+}
+
+// pickPrimaryNs picks the namespace that PermissionCheckResult.Namespace
+// reports. The dynamic CRD cache reads it as NamespaceFallback (single
+// anchor for all CRD informers); it has to be a namespace where the user
+// actually has reads, otherwise CRD informers get pinned where they 403.
+// Walk candidates in order and pick the first one any typed kind landed
+// in. Fall back to scopeNamespaces[0] when nothing was granted — the
+// dynamic cache short-circuits on NamespaceScoped=false in that case, so
+// the value is only used by the diagnostics page (preserves prior shape).
+func pickPrimaryNs(scopeNamespaces []string, scopes map[string]k8score.ResourceScope) string {
+	granted := map[string]bool{}
+	for _, s := range scopes {
+		if s.Enabled && s.Namespace != "" {
+			granted[s.Namespace] = true
+		}
+	}
+	for _, ns := range scopeNamespaces {
+		if granted[ns] {
+			// CRDs the user reads in the OTHER granted namespaces will
+			// silently 403 — proper fix needs multi-ns scope per kind in
+			// pkg/k8score; warn so the operator can see the asymmetry.
+			if len(granted) > 1 {
+				log.Printf("RBAC: typed kinds granted in %d distinct namespaces; CRD informer fallback pinned to %q — CRDs in the others will be marked denied", len(granted), SanitizeForLog(ns))
+			}
+			return ns
+		}
+	}
+	if len(scopeNamespaces) > 0 {
+		return scopeNamespaces[0]
+	}
+	return ""
+}
+
+// probeResourceAccess is the testable inner of CheckResourcePermissions.
+// It does the actual probing with the supplied dynamic client and namespaces,
+// with no caching and no global state. The returned bool is true when at
+// least one probe hit a non-auth (transient) error — caller uses this to
+// shorten the cache TTL so the next attempt re-probes.
+//
+// scopeNamespaces are candidate fallback namespaces; see buildScopeCandidates
+// for how production callers populate it. Pass nil/empty to disable fallback.
+//
+// forceNamespace describes the role of scopeNamespaces:
+//   - false: probe cluster-wide first; on 403 walk candidates until one
+//     grants list. Per-user view filtering happens at the HTTP layer (see
+//     internal/server/namespace_scope.go), so the cache preferentially boots
+//     cluster-wide.
+//   - true: probe namespaced kinds ONLY in the first scopeNamespaces entry.
+//     Used by --namespace-scope to pin the informer cache. Cluster-only kinds
+//     (nodes, namespaces, PV, storageclasses, ingressclasses) are still probed
+//     cluster-wide since they have no namespace dimension to pin to.
+func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamespaces []string, forceNamespace bool) (*PermissionCheckResult, bool) {
+	perms := &ResourcePermissions{}
+	probes := resourceProbeTargets(perms)
+
+	type probeOutcome struct {
+		scope k8score.ResourceScope
+	}
+	outcomes := make([]probeOutcome, len(probes))
+
+	var forcedNs string
+	if forceNamespace && len(scopeNamespaces) > 0 {
+		forcedNs = scopeNamespaces[0]
+	}
+
+	logTiming("   [perms] Probing list access for %d typed resources (scopeNamespaces=%q forced=%v)", len(probes), scopeNamespaces, forceNamespace)
+	probeStart := time.Now()
+	var wg sync.WaitGroup
+	var hadErrors atomic.Bool
+	wg.Add(len(probes))
+
+	for i, p := range probes {
+		go func(i int, p resourceProbe) {
+			defer wg.Done()
+			// A panic inside the dynamic client (codec issues, nil-interface
+			// returns from a misbehaving fake in tests, version-skew bugs
+			// in client-go) would otherwise crash the whole server. Recover
+			// so one bad GVR can't take down capabilities probing.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[perms] panic probing %s: %v", SanitizeForLog(p.key), r)
+					hadErrors.Store(true)
+				}
+			}()
+
+			if forceNamespace {
+				// Cluster-only kinds (nodes, namespaces, PV…) have no namespace
+				// dimension — pin them cluster-wide regardless of the picked
+				// namespace, so a cluster-admin who scoped to a namespace still
+				// sees Node counts, Namespace lists, and node metrics.
+				if p.clusterOnly {
+					allowed, _, transient := probeKindAccess(ctx, dyn, p, "")
+					if transient != nil {
+						hadErrors.Store(true)
+					}
+					if allowed {
+						outcomes[i] = probeOutcome{scope: k8score.ResourceScope{Enabled: true, Namespace: ""}}
+					}
+					return
+				}
+				if forcedNs == "" {
+					return
+				}
+				nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, forcedNs)
+				if nsTransient != nil {
+					hadErrors.Store(true)
+				}
+				if nsAllowed {
+					outcomes[i] = probeOutcome{scope: k8score.ResourceScope{Enabled: true, Namespace: forcedNs}}
+				}
+				return
+			}
+
+			allowed, forbidden, transient := probeKindAccess(ctx, dyn, p, "")
+			if transient != nil {
+				hadErrors.Store(true)
+			}
+			if allowed {
+				outcomes[i] = probeOutcome{scope: k8score.ResourceScope{Enabled: true, Namespace: ""}}
+				return
+			}
+			// Cluster-wide denied. Cluster-scoped kinds have no fallback.
+			// Dynamic CRDs that were marked not-installed (all versions
+			// returned NotFound) also skip the fallback — the namespace
+			// probe would hit the same NotFound for every version.
+			if !forbidden || p.clusterOnly || len(scopeNamespaces) == 0 {
+				return
+			}
+			// Try candidate namespaces in priority order. First grant wins.
+			// Multi-ns users (secret-list in NS A and NS B but neither
+			// cluster-wide) get partial coverage of one ns per kind — proper
+			// multi-ns scope per kind would need the cache to support it.
+			for _, ns := range scopeNamespaces {
+				nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, ns)
+				if nsTransient != nil {
+					hadErrors.Store(true)
+				}
+				if nsAllowed {
+					outcomes[i] = probeOutcome{scope: k8score.ResourceScope{Enabled: true, Namespace: ns}}
+					return
+				}
+			}
+		}(i, p)
+	}
+
+	wg.Wait()
+	logTiming("    Probe phase (%d resources): %v", len(probes), time.Since(probeStart))
+
+	if ctx.Err() != nil {
+		logTiming("   [perms] Bailing after probes: context canceled")
+		return &PermissionCheckResult{Perms: perms, Scopes: map[string]k8score.ResourceScope{}}, true
+	}
+
+	// Apply outcomes to perms (boolean projection) and build the scope map.
+	scopes := make(map[string]k8score.ResourceScope, len(probes))
+	namespaceScoped := false
+	var (
+		restricted   []string
+		nsScopedKeys []string
+	)
+	for i, p := range probes {
+		r := outcomes[i]
+		scopes[p.key] = r.scope
+		if r.scope.Enabled {
+			*p.field = true
+			if r.scope.Namespace != "" {
+				namespaceScoped = true
+				nsScopedKeys = append(nsScopedKeys, p.key)
+			}
+		} else {
+			restricted = append(restricted, p.key)
+		}
+	}
+
+	// Strip CR/LF defensively before logging — candidates come from
+	// operator-controlled config (kubeconfig context, --namespace flag,
+	// accessible-namespaces list); a malicious kubeconfig could otherwise
+	// inject lines. CodeQL doesn't model %q escaping, so be explicit.
+	scopedDetail := make([]string, 0, len(nsScopedKeys))
+	for _, k := range nsScopedKeys {
+		scopedDetail = append(scopedDetail, fmt.Sprintf("%s=%s", k, SanitizeForLog(scopes[k].Namespace)))
+	}
+	sort.Strings(scopedDetail)
+	candidatesLog := make([]string, 0, len(scopeNamespaces))
+	for _, ns := range scopeNamespaces {
+		candidatesLog = append(candidatesLog, SanitizeForLog(ns))
+	}
+	if len(restricted) > 0 {
+		sort.Strings(restricted)
+		if namespaceScoped {
+			log.Printf("RBAC: mixed scope (candidates=%q; ns-scoped: %s); denied: %s",
+				candidatesLog, strings.Join(scopedDetail, ", "), strings.Join(restricted, ", "))
+		} else {
+			log.Printf("RBAC: restricted resources (no list permission): %s", strings.Join(restricted, ", "))
+		}
+	} else if namespaceScoped {
+		log.Printf("RBAC: mixed scope (candidates=%q; ns-scoped: %s); all kinds accessible",
+			candidatesLog, strings.Join(scopedDetail, ", "))
+	}
+
+	// In forced-namespace mode the user's intent is to be ns-scoped — even
+	// if every typed probe failed (e.g. they picked a namespace they have
+	// no access to). Force NamespaceScoped=true so the dynamic cache scopes
+	// CRD informers to the same namespace and doesn't silently fall through
+	// to cluster-wide watches.
+	if forceNamespace && forcedNs != "" {
+		namespaceScoped = true
+	}
+
+	// Namespace is the single-valued anchor consumed by the dynamic CRD
+	// cache (internal/k8s/dynamic_cache.go) as NamespaceFallback and by
+	// the diagnostics page (internal/server/diagnostics.go). It must be a
+	// namespace where the user actually has reads — otherwise CRD informers
+	// silently 403. Walk candidates in order and pick the first one that
+	// granted at least one typed kind. Fall back to scopeNamespaces[0]
+	// when nothing was granted (NamespaceScoped is false in that case, so
+	// the dynamic cache ignores this field anyway).
+	primaryNs := pickPrimaryNs(scopeNamespaces, scopes)
+	return &PermissionCheckResult{
+		Perms:           perms,
+		NamespaceScoped: namespaceScoped,
+		Namespace:       primaryNs,
+		Scopes:          scopes,
+	}, hadErrors.Load()
+}
+
+// GetCachedPermissionResult returns the cached permission check result, if
+// available. Returns a deep copy so callers can mutate Perms or Scopes
+// without corrupting the cache (mirrors the cache-hit path in
+// CheckResourcePermissions).
 func GetCachedPermissionResult() *PermissionCheckResult {
 	resourcePermsMu.RLock()
 	defer resourcePermsMu.RUnlock()
 	if cachedPermResult == nil {
 		return nil
 	}
-	result := *cachedPermResult
-	return &result
+	permsCopy := *cachedPermResult.Perms
+	scopesCopy := make(map[string]k8score.ResourceScope, len(cachedPermResult.Scopes))
+	for k, v := range cachedPermResult.Scopes {
+		scopesCopy[k] = v
+	}
+	return &PermissionCheckResult{
+		Perms:           &permsCopy,
+		NamespaceScoped: cachedPermResult.NamespaceScoped,
+		Namespace:       cachedPermResult.Namespace,
+		Scopes:          scopesCopy,
+	}
 }
 
 // InvalidateResourcePermissionsCache forces the next CheckResourcePermissions call to refresh

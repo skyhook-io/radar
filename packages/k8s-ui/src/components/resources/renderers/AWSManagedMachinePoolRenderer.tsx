@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getAWSMMPStatus, getAWSMMPInstanceType, getAWSMMPCapacityType, getAWSMMPAMIType, getAWSMMPNodegroupName, getAWSMMPScaling } from '../resource-utils-aws-capi'
+import { CAPACITY_TYPE_BADGE } from '../../../utils/badge-colors'
 
 interface Props {
   data: any
@@ -39,10 +40,7 @@ export function AWSManagedMachinePoolRenderer({ data }: Props) {
           <Property label="Instance Type" value={getAWSMMPInstanceType(data)} />
           <Property label="AMI Type" value={getAWSMMPAMIType(data)} />
           <Property label="Capacity Type" value={
-            <span className={clsx('badge badge-sm', capacityType === 'spot'
-              ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-700/40'
-              : 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40'
-            )}>{capacityType === 'onDemand' ? 'On-Demand' : capacityType}</span>
+            <span className={clsx('badge badge-sm', capacityType === 'spot' ? CAPACITY_TYPE_BADGE.spot : CAPACITY_TYPE_BADGE.onDemand)}>{capacityType === 'onDemand' ? 'On-Demand' : capacityType}</span>
           } />
           {spec.roleName && <Property label="IAM Role" value={spec.roleName} />}
         </PropertyList>

@@ -86,3 +86,41 @@ func TestClientFromContext_TypedNilGuard(t *testing.T) {
 		t.Fatalf("ClientFromContext with no config must return untyped nil; got %T (typed-nil interface trap)", client)
 	}
 }
+
+// MCP write tools (apply_resource, manage_workload, manage_gitops, …) all
+// route through DynamicClientFromContext so writes are RBAC-checked against
+// the calling user, not the SA. These tests pin the contract: any refactor
+// that swaps DynamicClientFromContext for k8s.GetDynamicClient() would
+// silently run user writes as the SA.
+
+func TestDynamicClientFromContext_Impersonation(t *testing.T) {
+	swapGlobals(t, &rest.Config{Host: "https://example.invalid"})
+
+	user := &pkgauth.User{Username: "alice", Groups: []string{"cloud:owner"}}
+	ctx := pkgauth.ContextWithUser(context.Background(), user)
+
+	if client := DynamicClientFromContext(ctx); client == nil {
+		t.Fatal("DynamicClientFromContext returned nil with valid config + user")
+	}
+	cfg := ConfigFromContext(ctx)
+	if cfg == nil {
+		t.Fatal("ConfigFromContext returned nil with valid config + user")
+	}
+	if cfg.Impersonate.UserName != "alice" {
+		t.Errorf("Impersonate.UserName = %q, want %q", cfg.Impersonate.UserName, "alice")
+	}
+}
+
+func TestDynamicClientFromContext_FailsClosedOnNoConfig(t *testing.T) {
+	swapGlobals(t, nil)
+
+	user := &pkgauth.User{Username: "alice", Groups: []string{"cloud:viewer"}}
+	ctx := pkgauth.ContextWithUser(context.Background(), user)
+
+	if client := DynamicClientFromContext(ctx); client != nil {
+		t.Error("DynamicClientFromContext must return nil when base config is missing (fail-closed)")
+	}
+	if cfg := ConfigFromContext(ctx); cfg != nil {
+		t.Error("ConfigFromContext must return nil when base config is missing (fail-closed)")
+	}
+}

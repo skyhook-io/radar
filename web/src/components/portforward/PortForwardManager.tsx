@@ -20,6 +20,7 @@ import {
   Globe,
   Monitor,
   PenLine,
+  RotateCw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 // CSS_EASE (the shared spring curve) is intentionally NOT used for this panel —
@@ -30,6 +31,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
 import { openExternal } from '../../utils/navigation'
 import { apiUrl } from '../../api/config'
+import { apiFetch, useCapabilities } from '../../api/client'
 import { pluralize } from '@skyhook-io/k8s-ui'
 
 // --- Types -------------------------------------------------------------------
@@ -42,21 +44,58 @@ interface PortForwardSession {
   localPort: number
   listenAddress: string
   serviceName?: string
+  servicePort?: number
+  scheme?: 'http' | 'https'
   startedAt: string
   status: 'running' | 'stopped' | 'error'
   error?: string
 }
 
+function sessionUrl(session: PortForwardSession): string {
+  return `${session.scheme || 'http'}://localhost:${session.localPort}`
+}
+
+function formatPortLabel(session: PortForwardSession): string {
+  if (session.servicePort && session.servicePort !== session.podPort) {
+    return `${session.servicePort} → ${session.podPort}`
+  }
+  return String(session.podPort)
+}
+
+// Build the recreate request body for toggle-listen / change-port flows.
+// When the original session was service-resolved, the recreate must also go
+// through the service path (servicePort + serviceName). Sending podName+podPort
+// would skip resolution and validate against the pod's declared containerPorts,
+// which can fail even though the original session worked: services can route to
+// any port the container actually listens on, regardless of containerPort
+// declarations. Going through service also re-resolves to a currently-running
+// pod if the original has since been replaced.
+function buildRecreateBody(session: PortForwardSession, overrides: { localPort: number; listenAddress: string }) {
+  const base = {
+    namespace: session.namespace,
+    localPort: overrides.localPort,
+    listenAddress: overrides.listenAddress,
+  }
+  if (session.serviceName && session.servicePort) {
+    return { ...base, serviceName: session.serviceName, podPort: session.servicePort }
+  }
+  return { ...base, podName: session.podName, podPort: session.podPort }
+}
+
 // --- Shared query ------------------------------------------------------------
 
-function usePortForwardQuery() {
+function usePortForwardQuery(enabled: boolean) {
   return useQuery<PortForwardSession[]>({
     queryKey: ['portforwards'],
     queryFn: async () => {
-      const res = await fetch(apiUrl('/portforwards'))
+      const res = await apiFetch(apiUrl('/portforwards'))
       if (!res.ok) throw new Error('Failed to fetch port forwards')
       return res.json()
     },
+    // Port-forward is a local-binary feature; in-cluster (Radar Cloud) the
+    // capability is false, so don't poll an endpoint that can never return a
+    // usable session. Also covers RBAC-denied users.
+    enabled,
     // 30s fallback poll — user mutations invalidate immediately, but out-of-band
     // session death (pod restart, OOM kill, server-side cleanup) only surfaces on
     // the next tick.
@@ -109,12 +148,21 @@ interface PortForwardContextValue {
 const PortForwardContext = createContext<PortForwardContextValue | null>(null)
 
 export function PortForwardProvider({ children }: { children: ReactNode }) {
+  // Gate the session-list poll on runtime mode, not the RBAC capability: port-forward
+  // only works when radar runs as a local binary, so in-cluster (Radar Cloud) we never
+  // poll /portforwards. We deliberately do NOT gate on `portForward` (RBAC) — a local
+  // user with portforward rights in only some namespaces must still see/stop the
+  // sessions they start (the start buttons gate per-namespace separately). Using the
+  // resolved value (undefined while capabilities load → no poll) keeps Cloud silent on
+  // first paint.
+  const { data: caps } = useCapabilities()
+  const canPortForward = caps?.deployment?.mode === 'local'
   const {
     data: sessions = [],
     isLoading,
     isError: isQueryError,
     error: queryError,
-  } = usePortForwardQuery()
+  } = usePortForwardQuery(canPortForward)
   const activeSessions = sessions.filter((s) => s.status !== 'stopped')
   const errorSessions = sessions.filter((s) => s.status === 'error')
   const count = activeSessions.length
@@ -139,10 +187,25 @@ export function PortForwardProvider({ children }: { children: ReactNode }) {
   const measureAnchor = useCallback(() => {
     if (!indicatorRef.current) return
     const rect = indicatorRef.current.getBoundingClientRect()
+    // Align panel right edge with indicator right edge, but clamp so the
+    // panel's left edge never runs off the viewport's left edge — happens on
+    // narrow windows / split-screens where the indicator is closer to the
+    // left edge than the panel is wide. PANEL_WIDTH must match the panel's
+    // Tailwind w-80 (20rem = 320px).
+    const PANEL_WIDTH = 320
+    const MARGIN = 8
+    const desiredRight = Math.max(MARGIN, window.innerWidth - rect.right)
+    const maxRight = Math.max(MARGIN, window.innerWidth - PANEL_WIDTH - MARGIN)
+    const right = Math.min(desiredRight, maxRight)
+    // Keep the caret pointing at the indicator's horizontal center even after
+    // the panel has been clamped away from the indicator.
+    const panelRightX = window.innerWidth - right
+    const indicatorCenterX = rect.right - rect.width / 2
+    const caretRight = panelRightX - indicatorCenterX - 6
     setAnchor({
       top: rect.bottom + 10,
-      right: Math.max(16, window.innerWidth - rect.right),
-      caretRight: rect.width / 2 - 6,
+      right,
+      caretRight,
     })
   }, [])
 
@@ -342,6 +405,9 @@ export function PortForwardPanel() {
   // without disabling all stop buttons (the old shared-mutation approach blocked
   // every row when any single stop was in-flight).
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set())
+  // Per-session retry tracking — same rationale as stoppingIds: multiple failed
+  // forwards can be retried independently without disabling every retry button.
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(() => new Set())
   const queryClient = useQueryClient()
   const { showSuccess, showError } = useToast()
 
@@ -376,7 +442,7 @@ export function PortForwardPanel() {
   const stopPortForward = useCallback(async (id: string) => {
     setStoppingIds(prev => new Set(prev).add(id))
     try {
-      const res = await fetch(apiUrl(`/portforwards/${id}`), { method: 'DELETE' })
+      const res = await apiFetch(apiUrl(`/portforwards/${id}`), { method: 'DELETE' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error || `Failed to stop port forward (HTTP ${res.status})`)
@@ -396,6 +462,48 @@ export function PortForwardPanel() {
     }
   }, [queryClient, showError])
 
+  // Recreate a failed forward. The errored session is already dead — there's no live
+  // forward to lose — so we drop the stale row FIRST, then recreate. Delete-first keeps
+  // the panel at exactly one row in every outcome (success → one running row; failure →
+  // one errored row), avoiding the orphaned-duplicate the reverse order would leave when
+  // the backend keeps a failed-start session in its map. A 404 means it was already
+  // cleared (e.g. context switch) — benign, proceed. Service-resolved sessions re-route
+  // through the service path via buildRecreateBody, so a retry after the backing pod was
+  // replaced re-resolves to a currently-running pod.
+  const retryPortForward = useCallback(async (session: PortForwardSession) => {
+    commitInteraction()
+    setRetryingIds(prev => new Set(prev).add(session.id))
+    try {
+      const delRes = await apiFetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
+      if (!delRes.ok && delRes.status !== 404) {
+        const body = await delRes.json().catch(() => ({}))
+        throw new Error(body.error || `Failed to clear failed port forward (HTTP ${delRes.status})`)
+      }
+      const res = await apiFetch(apiUrl('/portforwards'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildRecreateBody(session, { localPort: session.localPort, listenAddress: session.listenAddress })),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `Failed to retry port forward (HTTP ${res.status})`)
+      }
+      queryClient.invalidateQueries({ queryKey: ['portforwards'] })
+      showSuccess('Port forward restarted', `Now listening on localhost:${session.localPort}`)
+    } catch (err) {
+      queryClient.invalidateQueries({ queryKey: ['portforwards'] })
+      const msg = err instanceof Error ? err.message : 'Failed to retry port forward'
+      showError('Failed to retry port forward', msg)
+      console.error('Failed to retry port forward:', err)
+    } finally {
+      setRetryingIds(prev => {
+        const next = new Set(prev)
+        next.delete(session.id)
+        return next
+      })
+    }
+  }, [commitInteraction, queryClient, showSuccess, showError])
+
   const toggleListenAddress = async (session: PortForwardSession) => {
     commitInteraction()
     const newAddress = session.listenAddress === '0.0.0.0' ? '127.0.0.1' : '0.0.0.0'
@@ -406,23 +514,16 @@ export function PortForwardPanel() {
     // apart from "original gone and recreate failed = data loss."
     let deleted = false
     try {
-      const delRes = await fetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
+      const delRes = await apiFetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
       if (!delRes.ok) {
         const body = await delRes.json().catch(() => ({}))
         throw new Error(body.error || `Failed to stop existing port forward (HTTP ${delRes.status})`)
       }
       deleted = true
-      const res = await fetch(apiUrl('/portforwards'), {
+      const res = await apiFetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          namespace: session.namespace,
-          podName: session.podName || undefined,
-          serviceName: session.serviceName || undefined,
-          podPort: session.podPort,
-          localPort: session.localPort,
-          listenAddress: newAddress,
-        }),
+        body: JSON.stringify(buildRecreateBody(session, { localPort: session.localPort, listenAddress: newAddress })),
       })
       if (!res.ok) {
         const error = await res.json().catch(() => ({}))
@@ -460,23 +561,16 @@ export function PortForwardPanel() {
     // apart from "original gone and recreate failed = data loss."
     let deleted = false
     try {
-      const delRes = await fetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
+      const delRes = await apiFetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
       if (!delRes.ok) {
         const body = await delRes.json().catch(() => ({}))
         throw new Error(body.error || `Failed to stop existing port forward (HTTP ${delRes.status})`)
       }
       deleted = true
-      const res = await fetch(apiUrl('/portforwards'), {
+      const res = await apiFetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          namespace: session.namespace,
-          podName: session.podName || undefined,
-          serviceName: session.serviceName || undefined,
-          podPort: session.podPort,
-          localPort: newPort,
-          listenAddress: session.listenAddress,
-        }),
+        body: JSON.stringify(buildRecreateBody(session, { localPort: newPort, listenAddress: session.listenAddress })),
       })
       if (!res.ok) {
         const error = await res.json().catch(() => ({}))
@@ -506,7 +600,7 @@ export function PortForwardPanel() {
     async (session: PortForwardSession) => {
       commitInteraction()
       try {
-        await navigator.clipboard.writeText(`http://localhost:${session.localPort}`)
+        await navigator.clipboard.writeText(sessionUrl(session))
       } catch (err) {
         // Clipboard API can reject in non-secure contexts, denied permissions, or
         // when the document isn't focused. Surface the failure — the checkmark
@@ -529,7 +623,7 @@ export function PortForwardPanel() {
   const handleOpenUrl = useCallback(
     (session: PortForwardSession) => {
       commitInteraction()
-      openExternal(`http://localhost:${session.localPort}`)
+      openExternal(sessionUrl(session))
     },
     [commitInteraction]
   )
@@ -611,7 +705,7 @@ export function PortForwardPanel() {
       </div>
 
       {/* Sessions list */}
-      <div className="max-h-64 overflow-y-auto">
+      <div className="max-h-[28rem] overflow-y-auto">
         {isQueryError ? (
           <div className="p-3 text-xs bg-red-500/10 border-b border-theme-border">
             <div className={clsx('badge-sm mb-1 inline-block', SEVERITY_BADGE.error)}>
@@ -636,37 +730,99 @@ export function PortForwardPanel() {
               <div
                 key={session.id}
                 className={clsx(
-                  'p-3',
+                  'p-3 space-y-1',
                   session.status === 'error' ? 'bg-red-500/10' : 'hover:bg-theme-elevated'
                 )}
               >
+                {/* Row 1: status dot + name | stop button */}
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={clsx(
-                          'w-2 h-2 rounded-full shrink-0',
-                          session.status === 'running' ? 'bg-green-500' : 'bg-red-500'
-                        )}
-                      />
-                      <span className="text-sm text-theme-text-primary font-medium truncate">
-                        {session.serviceName || session.podName}
-                      </span>
-                      {session.status === 'error' && (
-                        <span className={clsx('badge-sm', SEVERITY_BADGE.error)}>Failed</span>
+                  <div className="flex items-start gap-2 min-w-0 flex-1">
+                    <span
+                      className={clsx(
+                        'w-2 h-2 rounded-full shrink-0 mt-[7px]',
+                        session.status === 'running' ? 'bg-green-500' : 'bg-red-500'
                       )}
-                    </div>
-                    <div className="mt-1 text-xs text-theme-text-disabled">
-                      {session.namespace} · Port {session.podPort}
-                    </div>
-                    {session.status === 'error' && session.error && (
-                      <div className="mt-1.5 text-xs text-red-400 bg-red-500/10 px-2 py-1 rounded">
-                        {session.error}
-                      </div>
+                    />
+                    <span className="text-sm text-theme-text-primary font-medium break-all line-clamp-2">
+                      {session.serviceName || session.podName}
+                    </span>
+                    {session.status === 'error' && (
+                      <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.error)}>Failed</span>
                     )}
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
                     {session.status === 'running' && (
-                      <div className="mt-1.5 flex items-center gap-2">
-                        {editingPortId === session.id ? (
+                      <Tooltip
+                        content={session.listenAddress === '0.0.0.0' ? 'Switch to localhost only' : 'Allow access from other machines'}
+                        delay={300} position="bottom" disabled={!isPanelOpen}
+                      >
+                      <button
+                        onClick={() => toggleListenAddress(session)}
+                        disabled={togglingId === session.id || changingPortId === session.id}
+                        className={clsx(
+                          'flex items-center justify-center p-1.5 rounded transition-colors',
+                          session.listenAddress === '0.0.0.0'
+                            ? `${SEVERITY_BADGE.warning} hover:bg-amber-500/30`
+                            : 'text-theme-text-disabled hover:text-theme-text-primary hover:bg-theme-hover'
+                        )}
+                      >
+                        {togglingId === session.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : session.listenAddress === '0.0.0.0' ? (
+                          <Globe className="w-3.5 h-3.5" />
+                        ) : (
+                          <Monitor className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      </Tooltip>
+                    )}
+                    {session.status === 'error' && (
+                      <Tooltip content="Retry" delay={300} position="bottom" disabled={!isPanelOpen}>
+                      <button
+                        onClick={() => retryPortForward(session)}
+                        disabled={retryingIds.has(session.id) || stoppingIds.has(session.id)}
+                        className="p-1.5 text-theme-text-tertiary hover:text-green-400 hover:bg-theme-hover rounded disabled:opacity-50"
+                      >
+                        {retryingIds.has(session.id) ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RotateCw className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      </Tooltip>
+                    )}
+                    <Tooltip content={session.status === 'error' ? 'Dismiss' : 'Stop'} delay={300} position="bottom" disabled={!isPanelOpen}>
+                    <button
+                      onClick={() => {
+                        commitInteraction()
+                        stopPortForward(session.id)
+                      }}
+                      disabled={stoppingIds.has(session.id) || retryingIds.has(session.id)}
+                      className="p-1.5 text-theme-text-tertiary hover:text-red-400 hover:bg-theme-hover rounded disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                    </Tooltip>
+                  </div>
+                </div>
+
+                {/* Row 2: namespace · port translation */}
+                <div className="text-xs text-theme-text-disabled">
+                  {session.namespace} · {formatPortLabel(session)}
+                </div>
+
+                {/* Row 2.5: error message */}
+                {session.status === 'error' && session.error && (
+                  <div className="text-xs text-red-400 bg-red-500/10 px-2 py-1 rounded">
+                    {session.error}
+                  </div>
+                )}
+
+                {/* Row 3: URL (+ optional toggle) | copy + open */}
+                {session.status === 'running' && (
+                  <div className="pt-0.5 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {editingPortId === session.id ? (
                           <div className="flex items-center text-xs bg-theme-base rounded text-accent-text font-mono">
                             <span className="pl-2 py-1 text-theme-text-disabled select-none">
                               {session.listenAddress === '0.0.0.0' ? '0.0.0.0' : 'localhost'}:
@@ -709,10 +865,11 @@ export function PortForwardPanel() {
                             />
                           </div>
                         ) : (
+                          <>
                           <Tooltip content="Click to change local port" delay={300} position="bottom" disabled={!isPanelOpen}>
                           <code
                             className={clsx(
-                              'group/port text-xs bg-theme-base px-2 py-1 rounded text-accent-text transition-all inline-flex items-center gap-1',
+                              'inline-code group/port text-xs transition-all inline-flex items-center gap-1',
                               changingPortId === session.id
                                 ? 'opacity-50'
                                 : 'cursor-pointer hover:ring-1 hover:ring-blue-500/50'
@@ -732,74 +889,33 @@ export function PortForwardPanel() {
                             <PenLine className="w-3 h-3 text-theme-text-disabled opacity-0 group-hover/port:opacity-100 transition-opacity" />
                           </code>
                           </Tooltip>
+                          </>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <Tooltip content={copiedId === session.id ? 'Copied!' : 'Copy URL'} delay={300} position="bottom" disabled={!isPanelOpen}>
+                      <button
+                        onClick={() => handleCopyUrl(session)}
+                        className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
+                      >
+                        {copiedId === session.id ? (
+                          <Check className="w-3.5 h-3.5 text-green-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
                         )}
-                        <Tooltip
-                          content={session.listenAddress === '0.0.0.0' ? 'Switch to localhost only' : 'Allow access from other machines'}
-                          delay={300} position="bottom" disabled={!isPanelOpen}
-                        >
-                        <button
-                          onClick={() => toggleListenAddress(session)}
-                          disabled={togglingId === session.id || changingPortId === session.id}
-                          className={clsx(
-                            'flex items-center gap-1 px-1.5 py-0.5 text-xs rounded transition-colors',
-                            session.listenAddress === '0.0.0.0'
-                              ? `${SEVERITY_BADGE.warning} hover:bg-amber-500/30`
-                              : 'bg-theme-elevated text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary'
-                          )}
-                        >
-                          {togglingId === session.id ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : session.listenAddress === '0.0.0.0' ? (
-                            <Globe className="w-3 h-3" />
-                          ) : (
-                            <Monitor className="w-3 h-3" />
-                          )}
-                          {session.listenAddress === '0.0.0.0' ? 'network' : 'local'}
-                        </button>
-                        </Tooltip>
-                      </div>
-                    )}
+                      </button>
+                      </Tooltip>
+                      <Tooltip content="Open in browser" delay={300} position="bottom" disabled={!isPanelOpen}>
+                      <button
+                        onClick={() => handleOpenUrl(session)}
+                        className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </button>
+                      </Tooltip>
+                    </div>
                   </div>
-
-                  <div className="flex items-center gap-1 shrink-0">
-                    {session.status === 'running' && (
-                      <>
-                        <Tooltip content={copiedId === session.id ? 'Copied!' : 'Copy URL'} delay={300} position="bottom" disabled={!isPanelOpen}>
-                        <button
-                          onClick={() => handleCopyUrl(session)}
-                          className="p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
-                        >
-                          {copiedId === session.id ? (
-                            <Check className="w-3.5 h-3.5 text-green-400" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                        </Tooltip>
-                        <Tooltip content="Open in browser" delay={300} position="bottom" disabled={!isPanelOpen}>
-                        <button
-                          onClick={() => handleOpenUrl(session)}
-                          className="p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </button>
-                        </Tooltip>
-                      </>
-                    )}
-                    <Tooltip content={session.status === 'error' ? 'Dismiss' : 'Stop'} delay={300} position="bottom" disabled={!isPanelOpen}>
-                    <button
-                      onClick={() => {
-                        commitInteraction()
-                        stopPortForward(session.id)
-                      }}
-                      disabled={stoppingIds.has(session.id)}
-                      className="p-1.5 text-theme-text-tertiary hover:text-red-400 hover:bg-theme-hover rounded disabled:opacity-50"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                    </Tooltip>
-                  </div>
-                </div>
+                )}
               </div>
             ))}
           </div>
@@ -841,7 +957,7 @@ export function useStartPortForward() {
       localPort?: number
       listenAddress?: string // "127.0.0.1" (default) or "0.0.0.0"
     }) => {
-      const res = await fetch(apiUrl('/portforwards'), {
+      const res = await apiFetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
@@ -867,6 +983,7 @@ export function useStartPortForward() {
 
 // Backwards-compat: existing consumers that just want a count number.
 export function usePortForwardCount() {
-  const { data: sessions = [] } = usePortForwardQuery()
+  const { data: caps } = useCapabilities()
+  const { data: sessions = [] } = usePortForwardQuery(caps?.deployment?.mode === 'local')
   return sessions.filter((s) => s.status !== 'stopped').length
 }

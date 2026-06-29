@@ -39,7 +39,7 @@ export function LargeClusterNamespacePicker({ namespaces, onSelect }: {
       <div className="max-h-[240px] overflow-y-auto rounded-lg border border-theme-border bg-theme-base">
         {!namespaces ? (
           <div className="px-3 py-6 text-center text-sm text-theme-text-tertiary">
-            Loading namespaces...
+            Loading namespaces…
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-3 py-6 text-center text-sm text-theme-text-tertiary">

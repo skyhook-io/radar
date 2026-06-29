@@ -13,7 +13,7 @@ jobs:
     name: macOS (universal)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -136,7 +136,7 @@ jobs:
     name: Windows (amd64)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -178,6 +178,7 @@ jobs:
               token: dummy' > ~/.kube/config
 
       - name: Build Windows exe
+        shell: bash
         run: cd cmd/desktop && wails build -platform windows/amd64 -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
 
       - name: Create archive
@@ -222,7 +223,7 @@ jobs:
     name: Linux (amd64)
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v6

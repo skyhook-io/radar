@@ -15,9 +15,11 @@ interface TimelineListProps {
   onResourceClick?: NavigateToResource
   initialFilter?: ActivityTypeFilter
   initialTimeRange?: TimeRange
+  showDeleted: boolean
+  onShowDeletedChange: (showDeleted: boolean) => void
 }
 
-export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange }: TimelineListProps) {
+export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange }: TimelineListProps) {
   const hasLimitedAccess = useHasLimitedAccess()
   const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kind?: string }>({
     timeRange: initialTimeRange ?? '1h',
@@ -32,6 +34,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     kind: queryParams.kind,
     timeRange: queryParams.timeRange,
     includeK8sEvents: true,
+    includeDeleted: showDeleted,
     limit: 500,
   })
 
@@ -64,6 +67,8 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
       onResourceClick={onResourceClick}
       initialFilter={initialFilter}
       initialTimeRange={initialTimeRange}
+      showDeleted={showDeleted}
+      onShowDeletedChange={onShowDeletedChange}
     />
   )
 }

@@ -217,4 +217,3 @@ func TestE2ETopologyBuild(t *testing.T) {
 		}
 	})
 }
-

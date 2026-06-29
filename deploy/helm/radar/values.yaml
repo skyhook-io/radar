@@ -1,5 +1,11 @@
 # Default values for radar.
 
+# Radar is designed to run as a single replica. Each pod holds its own
+# in-memory K8s informer cache, SSE streams, exec/port-forward sessions, and
+# (in memory mode) timeline buffer — none of which are shared across pods.
+# Setting replicaCount > 1 produces a confusing UX even when it doesn't fail
+# outright. The chart hard-fails replicaCount > 1 when persistence+sqlite are
+# enabled (single PVC + SQLite cannot be safely shared across pods).
 replicaCount: 1
 
 image:
@@ -11,6 +17,29 @@ image:
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
+
+# Debug feature (terminal "Debug" tab): the image used for ephemeral debug
+# containers attached to pods and for privileged node debug pods. Point this at
+# a reachable mirror in air-gapped / private-registry clusters where the default
+# busybox:latest cannot be pulled. If built-in restricted PodSecurity rejects
+# the default pod debug container, Radar retries with a restricted-compatible
+# Linux security context using the target/pod non-root UID, or UID 65532 by
+# default. Custom images used there must work as a non-root user.
+# Empty = busybox:latest.
+# Note: Radar does not attach imagePullSecrets to debug containers/pods —
+# ephemeral containers inherit the target pod's, and node debug pods rely on the
+# default namespace's ServiceAccount / node registry config — so the image must
+# be pullable without extra credentials from Radar.
+debug:
+  image: ""
+
+# Initial-sync tuning for very large clusters. When > 0, the initial LIST of
+# high-cardinality kinds (Pods, ReplicaSets) is fetched in pages of this size
+# instead of one response — avoids response-read timeouts / memory spikes during
+# startup on clusters with tens of thousands of objects. Only takes effect when
+# the apiserver lacks WatchList streaming (otherwise the initial state streams).
+# 0 = off (single LIST). Try 2000 if a large cluster fails to sync.
+listPageSize: 0
 
 serviceAccount:
   # Specifies whether a service account should be created
@@ -39,6 +68,28 @@ rbac:
 
   # Allow reading secrets (shows secrets in resource list)
   secrets: false
+
+  # Allow reading RBAC objects (Roles, RoleBindings, ClusterRoles, ClusterRoleBindings)
+  # so the resource browser can list them and the per-ServiceAccount "blast radius"
+  # Permissions panel can render. Auto-enabled when auth is on (auth.mode != none)
+  # or in cloud mode, where every RBAC read is re-checked against the requesting
+  # user's own permissions so the shared cache can't leak the authorization graph.
+  # This flag therefore only matters for no-auth installs: there, cache-served reads
+  # aren't gated per-user, so anyone reaching Radar's API would see the full RBAC
+  # graph — reconnaissance value for a low-trust user. Enable only if that audience
+  # is trusted with cluster RBAC visibility.
+  viewRBAC: false
+
+  # Allow reading admission webhook configurations (MutatingWebhookConfiguration,
+  # ValidatingWebhookConfiguration) so the resource browser can list them.
+  # Auto-enabled when auth is on (auth.mode != none) or in cloud mode, where
+  # every read is re-checked against the requesting user's own permissions.
+  # For no-auth installs this stays opt-in: the configurations reveal which
+  # admission controls are enforced (Gatekeeper / Kyverno policies, image
+  # scanners, DLP, etc.) and where the gaps are — reconnaissance value for a
+  # low-trust viewer. Enable only if that audience is trusted with admission
+  # plane visibility.
+  viewWebhooks: false
 
   # Allow pod exec (enables terminal feature)
   podExec: false
@@ -75,12 +126,17 @@ rbac:
     # Simpler but broader permissions - some orgs may not allow this
     all: false
 
+    apiRegistration: true   # apiregistration.k8s.io (APIService health for aggregated APIs)
     argo: true              # argoproj.io
     awx: true               # awx.ansible.com
-    certManager: true       # cert-manager.io
-    cloudnativePg: true     # cloudnative-pg.io
-    crossplane: true        # crossplane.io, pkg.crossplane.io
+    certManager: true       # cert-manager.io, acme.cert-manager.io
+    cilium: true            # cilium.io (CiliumClusterwideNetworkPolicy etc. in topology)
+    cloudnativePg: true     # postgresql.cnpg.io (CloudNativePG: Clusters, Poolers, Backups)
+    clusterApi: true        # *.cluster.x-k8s.io (CAPI core + infrastructure / controlplane / bootstrap / addons)
+    contour: true           # projectcontour.io
+    crossplane: true        # crossplane.io, pkg.crossplane.io, apiextensions.crossplane.io, helm.crossplane.io, kubernetes.crossplane.io. For Upbound provider CRDs (s3.aws.upbound.io, compute.gcp.upbound.io, etc.) list them in additionalCrdGroups — K8s RBAC has no apiGroup wildcards.
     descheduler: true       # descheduler.alpha.kubernetes.io
+    dra: true               # resource.k8s.io (Dynamic Resource Allocation — ResourceClaims, DeviceClasses, ResourceSlices)
     envoyGateway: true      # gateway.envoyproxy.io
     externalDns: true       # externaldns.k8s.io
     externalSecrets: true   # external-secrets.io
@@ -89,14 +145,17 @@ rbac:
     gcpMonitoring: true     # monitoring.googleapis.com
     grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org
     istio: true             # networking.istio.io, security.istio.io
-    karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.gcp.compute.com
+    karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp
     keda: true              # keda.sh
     knative: true           # serving.knative.dev, eventing.knative.dev, sources/messaging/flows/networking.internal.knative.dev
     kubeshark: true         # kubeshark.io
+    kubevirt: true          # kubevirt.io (VirtualMachines/VMIs) + cdi/clone/export/instancetype/migrations/pool/snapshot.kubevirt.io
     kured: true             # kured.io
-    kyverno: true           # kyverno.io, wgpolicyk8s.io, reports.kyverno.io
+    kyverno: true           # kyverno.io, wgpolicyk8s.io, reports.kyverno.io, openreports.io
     mariadb: true           # mariadb.mmontes.io
+    networkPolicyApi: true  # policy.networking.k8s.io (Admin/Baseline/ClusterNetworkPolicy — SIG-network)
     nginx: true             # nginx.org
+    nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com
@@ -106,13 +165,17 @@ rbac:
     strimzi: true           # strimzi.io, kafka.strimzi.io
     tekton: true            # tekton.dev
     traefik: true           # traefik.io, traefik.containo.us
+    trivy: true             # aquasecurity.github.io
     velero: true            # velero.io
+    verticalPodAutoscaler: true  # autoscaling.k8s.io (VPA — granted by default; no-op on clusters where VPA isn't installed)
 
   # Additional CRD API groups for custom/unlisted CRDs
   # Example: ["mycompany.io", "custom.example.com"]
   additionalCrdGroups: []
 
 podAnnotations: {}
+
+podLabels: {}
 
 podSecurityContext:
   runAsNonRoot: true
@@ -130,6 +193,7 @@ securityContext:
       - ALL
 
 service:
+  annotations: {}
   type: ClusterIP
   port: 9280
 
@@ -158,14 +222,39 @@ resources:
     memory: 128Mi
 
 # Timeline storage configuration
+#
+# When to pick which:
+#   memory (default) — events live in-process and are lost on pod restart.
+#     Pick this if you only need recent activity (last few hours), don't
+#     care about losing history when a pod cycles, or want the simplest
+#     setup. Lower memory footprint than sqlite for the same retention
+#     window because there's no overhead for indexes / WAL.
+#   sqlite — events persist across restarts to a PVC. Pick this if you want
+#     a multi-day audit trail (who did what, when), need to inspect changes
+#     that happened while you weren't looking, or run Radar in-cluster as a
+#     long-lived deployment. Adds operational concerns: the PVC fills if
+#     retention is unbounded; restart on a multi-GB DB is slower.
+#
+# Timeline volume depends on cluster size and controller churn. Keep `maxSize`
+# below the PVC `size` so Radar can prune before the volume fills; tune
+# `retention`, `maxSize`, and PVC `size` together.
 timeline:
   # Storage backend: "memory" or "sqlite"
   storage: memory
   # Path to SQLite database (only used when storage is "sqlite")
   # Note: Requires a PVC when using sqlite
   dbPath: /data/timeline.db
-  # Maximum number of events to retain
+  # Maximum number of events to retain (memory store only — currently
+  # ignored by sqlite; use `retention` instead).
   historyLimit: 10000
+  # SQLite retention: how long to keep events. Go duration (e.g. 168h, 720h).
+  # "0" disables cleanup (events table grows unbounded — not recommended for
+  # in-cluster deployments). Cleanup runs hourly + once at startup.
+  retention: 168h
+  # SQLite max storage size. When the DB + WAL exceed this value, Radar prunes
+  # oldest events until storage is back under the low-water mark. Set "0" to
+  # disable size-based pruning.
+  maxSize: 800Mi
 
 # Authentication and RBAC configuration
 auth:
@@ -182,6 +271,11 @@ auth:
   proxy:
     userHeader: "X-Forwarded-User"
     groupsHeader: "X-Forwarded-Groups"
+    # URL the logout button redirects to, to tear down the upstream proxy
+    # session (e.g. oauth2-proxy's "/oauth2/sign_out"). The proxy must actually
+    # invalidate the session at this URL — Radar only clears its own cookie
+    # (Basic Auth has no logout). Empty = clear Radar's cookie only.
+    logoutURL: ""
   # OIDC mode settings
   oidc:
     issuerURL: ""
@@ -194,6 +288,11 @@ auth:
     clientSecretKey: "client-secret"
     redirectURL: ""
     groupsClaim: "groups"
+    # OAuth2 scopes requested at authorization. Defaults to
+    # ["openid", "profile", "email", "groups"] inside the binary when empty.
+    # Override if your IdP rejects "groups" (e.g., Google — drop it) or you
+    # need extras like "offline_access".
+    scopes: []
     # URL to redirect after OIDC provider logout (must be registered with IdP)
     postLogoutRedirectURL: ""
     # Prefix for OIDC username/groups to match kube-apiserver --oidc-username-prefix / --oidc-groups-prefix
@@ -277,6 +376,27 @@ traffic:
   #   http://vmsingle.victoria-metrics:8428
   #   http://vmselect.victoria-metrics:8481/select/0/prometheus
   prometheusUrl: ""
+  # HTTP headers sent with every Prometheus request. Required for
+  # auth-protected backends (Bearer tokens, X-Scope-OrgID multi-tenancy, etc.).
+  # Values are rendered into the pod spec; use prometheusHeadersFromEnv for
+  # secrets.
+  # Example:
+  #   prometheusHeaders:
+  #     X-Scope-OrgID: "my-org"
+  prometheusHeaders: {}
+  # HTTP headers sourced from environment variables at Radar startup. Use with
+  # env[].valueFrom.secretKeyRef to keep tokens out of container args and pod
+  # specs.
+  # Example:
+  #   prometheusHeadersFromEnv:
+  #     Authorization: PROMETHEUS_TOKEN
+  #   env:
+  #     - name: PROMETHEUS_TOKEN
+  #       valueFrom:
+  #         secretKeyRef:
+  #           name: prometheus-auth
+  #           key: token
+  prometheusHeadersFromEnv: {}
 
 # Persistence for SQLite timeline storage
 # Required when timeline.storage is "sqlite" (readOnlyRootFilesystem prevents local writes)
@@ -296,6 +416,12 @@ affinity: {}
 env: []
 #  - name: DEBUG
 #    value: "true"
+
+# Init containers to run before the main container
+initContainers: []
+#  - name: init-myservice
+#    image: busybox:1.36
+#    command: ['sh', '-c', 'echo init']
 
 # Liveness and readiness probes
 probes:

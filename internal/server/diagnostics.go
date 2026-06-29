@@ -15,19 +15,21 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/perfstats"
 )
 
 // DiagConfig holds sanitized configuration for the diagnostics endpoint.
 // No sensitive values (kubeconfig paths, Prometheus URLs, etc.).
 type DiagConfig struct {
-	Port             int    `json:"port"`
-	DevMode          bool   `json:"devMode"`
-	Namespace        string `json:"namespace,omitempty"`
-	TimelineStorage  string `json:"timelineStorage"`
-	HistoryLimit     int    `json:"historyLimit"`
-	DebugEvents      bool   `json:"debugEvents"`
-	MCPEnabled       bool   `json:"mcpEnabled"`
-	HasPrometheusURL bool   `json:"hasPrometheusURL"`
+	Port                 int    `json:"port"`
+	DevMode              bool   `json:"devMode"`
+	Namespace            string `json:"namespace,omitempty"`
+	TimelineStorage      string `json:"timelineStorage"`
+	HistoryLimit         int    `json:"historyLimit"`
+	DebugEvents          bool   `json:"debugEvents"`
+	MCPEnabled           bool   `json:"mcpEnabled"`
+	HasPrometheusURL     bool   `json:"hasPrometheusURL"`
+	HasPrometheusHeaders bool   `json:"hasPrometheusHeaders"`
 }
 
 // DiagnosticsSnapshot is the top-level diagnostics response.
@@ -53,6 +55,7 @@ type DiagnosticsSnapshot struct {
 	Permissions         *DiagPermissions             `json:"permissions,omitempty"`
 	APIDiscovery        *DiagAPIDiscovery            `json:"apiDiscovery,omitempty"`
 	SSE                 *DiagSSE                     `json:"sse,omitempty"`
+	Perf                *perfstats.Snapshot          `json:"perf,omitempty"`
 	Runtime             *DiagRuntime                 `json:"runtime,omitempty"`
 	Config              *DiagConfig                  `json:"config,omitempty"`
 	RecentErrors        []errorlog.ErrorEntry        `json:"recentErrors,omitempty"`
@@ -78,13 +81,13 @@ type DiagConnection struct {
 // collisions, shell env enrichment, or an exec auth plugin missing from
 // the desktop app's PATH.
 type DiagKubeconfig struct {
-	Mode                   string   `json:"mode"`                             // in-cluster, single, multi-env, multi-dir, or "" if not initialized
-	FileCount              int      `json:"fileCount"`                        // Number of kubeconfig files loaded
-	ContextCount           int      `json:"contextCount"`                     // Contexts exposed after client-go merge
-	EnrichedFromShell      bool     `json:"enrichedFromShell"`                // Desktop app captured KUBECONFIG from login shell
-	CurrentContextUsesExec bool     `json:"currentContextUsesExec"`           // Current context's AuthInfo uses an exec credential plugin
-	ExecPluginsPresent     []string `json:"execPluginsPresent,omitempty"`     // Exec plugin command basenames resolvable on $PATH
-	ExecPluginsMissing     []string `json:"execPluginsMissing,omitempty"`     // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
+	Mode                   string   `json:"mode"`                         // in-cluster, single, multi-env, multi-dir, or "" if not initialized
+	FileCount              int      `json:"fileCount"`                    // Number of kubeconfig files loaded
+	ContextCount           int      `json:"contextCount"`                 // Contexts exposed after client-go merge
+	EnrichedFromShell      bool     `json:"enrichedFromShell"`            // Desktop app captured KUBECONFIG from login shell
+	CurrentContextUsesExec bool     `json:"currentContextUsesExec"`       // Current context's AuthInfo uses an exec credential plugin
+	ExecPluginsPresent     []string `json:"execPluginsPresent,omitempty"` // Exec plugin command basenames resolvable on $PATH
+	ExecPluginsMissing     []string `json:"execPluginsMissing,omitempty"` // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
 }
 
 // DiagCluster holds cluster detection info.
@@ -104,12 +107,20 @@ type DiagCache struct {
 
 // DiagTimeline holds timeline store info.
 type DiagTimeline struct {
-	StorageType string `json:"storageType"`
-	TotalEvents int64  `json:"totalEvents"`
-	OldestEvent string `json:"oldestEvent,omitempty"`
-	NewestEvent string `json:"newestEvent,omitempty"`
-	StoreErrors int64  `json:"storeErrors"`
-	TotalDrops  int64  `json:"totalDrops"`
+	StorageType  string `json:"storageType"`
+	TotalEvents  int64  `json:"totalEvents"`
+	OldestEvent  string `json:"oldestEvent,omitempty"`
+	NewestEvent  string `json:"newestEvent,omitempty"`
+	StorageBytes int64  `json:"storageBytes,omitempty"`
+	StoreErrors  int64  `json:"storeErrors"`
+	TotalDrops   int64  `json:"totalDrops"`
+
+	// SQLite-only retention/cleanup state.
+	RetentionAge       string `json:"retentionAge,omitempty"`
+	MaxStorageBytes    int64  `json:"maxStorageBytes,omitempty"`
+	LastCleanupAt      string `json:"lastCleanupAt,omitempty"`
+	LastCleanupDeleted int64  `json:"lastCleanupDeletedRows,omitempty"`
+	LastCleanupError   string `json:"lastCleanupError,omitempty"`
 }
 
 // DiagEventPipeline holds event pipeline metrics.
@@ -284,9 +295,12 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		}
 		stats := store.Stats()
 		diag := &DiagTimeline{
-			TotalEvents: stats.TotalEvents,
-			StoreErrors: timeline.GetStoreErrorCount(),
-			TotalDrops:  timeline.GetTotalDropCount(),
+			TotalEvents:        stats.TotalEvents,
+			StorageBytes:       stats.StorageBytes,
+			StoreErrors:        timeline.GetStoreErrorCount(),
+			TotalDrops:         timeline.GetTotalDropCount(),
+			LastCleanupDeleted: stats.LastCleanupDeletedRows,
+			LastCleanupError:   stats.LastCleanupError,
 		}
 		if !stats.OldestEvent.IsZero() {
 			diag.OldestEvent = stats.OldestEvent.Format(time.RFC3339)
@@ -294,6 +308,13 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		if !stats.NewestEvent.IsZero() {
 			diag.NewestEvent = stats.NewestEvent.Format(time.RFC3339)
 		}
+		if !stats.LastCleanupAt.IsZero() {
+			diag.LastCleanupAt = stats.LastCleanupAt.Format(time.RFC3339)
+		}
+		if stats.RetentionAge > 0 {
+			diag.RetentionAge = stats.RetentionAge.String()
+		}
+		diag.MaxStorageBytes = stats.MaxStorageBytes
 		if s.diagConfig != nil {
 			diag.StorageType = s.diagConfig.TimelineStorage
 		}
@@ -453,6 +474,14 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		snap.SSE = &DiagSSE{
 			ConnectedClients: s.broadcaster.ClientCount(),
 		}
+	})
+
+	// Perf — always-on counters + sample windows for topology build/SSE
+	// behavior at scale. Cheap to collect (atomic loads + copy of a
+	// 100-entry ring buffer per metric).
+	collectSafe("perf", &errs, func() {
+		perf := perfstats.GetSnapshot()
+		snap.Perf = &perf
 	})
 
 	// Runtime

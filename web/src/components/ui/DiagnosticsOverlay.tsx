@@ -4,7 +4,8 @@ import { clsx } from 'clsx'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { openExternal } from '../../utils/navigation'
 import { useDiagnostics } from '../../api/client'
-import type { DiagnosticsSnapshot, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry } from '../../api/client'
+import type { DiagnosticsSnapshot, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry, DiagCacheSyncStatus, DiagInformerSyncStatus, DiagSyncPhase, DiagSampleWindow } from '../../api/client'
+import { getK8sUIPerfSnapshot, type K8sUIPerfSnapshot } from '@skyhook-io/k8s-ui'
 
 interface DiagnosticsOverlayProps {
   onClose: () => void
@@ -31,9 +32,10 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
 
   const copyToClipboard = useCallback(async (type: 'json' | 'formatted') => {
     if (!data) return
+    const frontendPerf = getK8sUIPerfSnapshot()
     const text = type === 'json'
-      ? JSON.stringify(data, null, 2)
-      : formatForGitHub(data)
+      ? JSON.stringify({ ...data, frontendPerf }, null, 2)
+      : formatForGitHub(data, frontendPerf)
     try {
       await navigator.clipboard.writeText(text)
       setCopied(type)
@@ -46,7 +48,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
 
   const openBugReport = useCallback(() => {
     if (!data) return
-    const body = formatForBugReport(data)
+    const body = formatForBugReport(data, getK8sUIPerfSnapshot())
     const url = `https://github.com/skyhook-io/radar/issues/new?labels=bug&body=${encodeURIComponent(body)}`
     if (url.length > 8000) {
       // URL too long for GitHub — copy diagnostics to clipboard and open blank issue
@@ -97,7 +99,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
         {/* Content */}
         <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
           {isLoading && (
-            <div className="text-sm text-theme-text-tertiary text-center py-8">Loading diagnostics...</div>
+            <div className="text-sm text-theme-text-tertiary text-center py-8">Loading diagnostics…</div>
           )}
           {error && (
             <div className="text-sm text-red-400 text-center py-8">Failed to load diagnostics: {(error as Error).message}</div>
@@ -116,6 +118,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
               <TrafficSection data={data} />
               <PermissionsSection data={data} />
               <APIDiscoverySection data={data} />
+              <PerfSection data={data} />
               <RuntimeSection data={data} />
               <ConfigSection data={data} />
               {data.errors && data.errors.length > 0 && (
@@ -315,15 +318,93 @@ function EventPipelineSection({ data }: { data: DiagnosticsSnapshot }) {
 function InformersSection({ data }: { data: DiagnosticsSnapshot }) {
   if (!data.informers) return null
   const inf = data.informers
+  const sync = inf.syncStatus
+  const phaseWarn = sync ? sync.phase !== 'complete' : false
+  const criticalWarn = sync ? sync.criticalSynced < sync.criticalTotal : false
+  const promoted = sync?.promotedKinds ?? []
+  const pendingCritical = sync?.pendingCritical ?? []
+  const pendingDeferred = sync?.pendingDeferred ?? []
+  const sectionWarn = phaseWarn || criticalWarn || promoted.length > 0
   return (
-    <Section title="Informers">
+    <Section title="Informers" warn={sectionWarn}>
       <Row label="Typed" value={inf.typedCount} />
       <Row label="Dynamic (CRDs)" value={inf.dynamicCount} />
+      {sync && (
+        <>
+          <Row
+            label="Sync Phase"
+            value={`${formatSyncPhase(sync.phase)} (${formatElapsed(sync.elapsedSec)})`}
+            warn={phaseWarn}
+          />
+          <Row
+            label="Critical Synced"
+            value={`${sync.criticalSynced} / ${sync.criticalTotal}`}
+            warn={criticalWarn}
+          />
+          <Row
+            label="Deferred Synced"
+            value={`${sync.deferredSynced} / ${sync.deferredTotal}`}
+          />
+          {promoted.length > 0 && (
+            <Row label="Promoted to Deferred" value={promoted.join(', ')} warn />
+          )}
+          {(pendingCritical.length > 0 || pendingDeferred.length > 0) && (
+            <PendingInformers sync={sync} />
+          )}
+        </>
+      )}
       {inf.watchedCRDs && inf.watchedCRDs.length > 0 && (
         <Row label="Watched CRDs" value={inf.watchedCRDs.join(', ')} />
       )}
     </Section>
   )
+}
+
+function PendingInformers({ sync }: { sync: DiagCacheSyncStatus }) {
+  const pending = getPendingInformers(sync)
+  if (pending.length === 0) return null
+  return (
+    <div className="mt-1.5 pt-1.5 border-t border-theme-border-light">
+      <span className="text-[10px] text-theme-text-tertiary uppercase">Pending Informers ({pending.length})</span>
+      {pending.map((i: DiagInformerSyncStatus) => (
+        <Row
+          key={i.kind}
+          label={`${i.kind} (${i.deferred ? 'deferred' : 'critical'})`}
+          value={`${i.items.toLocaleString()} items so far`}
+          warn={!i.deferred}
+        />
+      ))}
+    </div>
+  )
+}
+
+function getPendingInformers(sync: DiagCacheSyncStatus): DiagInformerSyncStatus[] {
+  const pendingNames = new Set([
+    ...(sync.pendingCritical ?? []),
+    ...(sync.pendingDeferred ?? []),
+  ])
+  return sync.informers
+    .filter((i) => pendingNames.has(i.kind))
+    .sort((a, b) => Number(a.deferred) - Number(b.deferred) || a.kind.localeCompare(b.kind))
+}
+
+function formatSyncPhase(phase: DiagSyncPhase): string {
+  switch (phase) {
+    case 'not_started': return 'not started'
+    case 'syncing_critical': return 'syncing critical'
+    case 'syncing_deferred': return 'syncing deferred'
+    case 'complete': return 'complete'
+  }
+}
+
+function formatElapsed(sec: number): string {
+  const s = Math.max(0, sec)
+  if (s < 1) return `${Math.round(s * 1000)}ms`
+  if (s < 60) return `${s.toFixed(1)}s`
+  const total = Math.round(s)
+  const m = Math.floor(total / 60)
+  const rem = total - m * 60
+  return `${m}m ${rem}s`
 }
 
 function PrometheusSection({ data }: { data: DiagnosticsSnapshot }) {
@@ -381,6 +462,73 @@ function APIDiscoverySection({ data }: { data: DiagnosticsSnapshot }) {
   )
 }
 
+function PerfSection({ data }: { data: DiagnosticsSnapshot }) {
+  const backend = data.perf
+  const frontend = getK8sUIPerfSnapshot()
+  if (!backend && frontend.totalLayouts === 0 && frontend.totalStructureKeyComputes === 0) return null
+  // Warn when SSE has dropped frames, the topology payload window's p95 exceeds
+  // 5 MB, or the frontend ELK layout p95 exceeds 1s — these are the load-bearing
+  // thresholds for "the tab is going to feel bad."
+  const warn =
+    (backend?.sse.totalDrops ?? 0) > 0 ||
+    (backend?.topology.payloadBytes.p95 ?? 0) > 5 * 1024 * 1024 ||
+    frontend.layoutMs.p95 > 1000
+  return (
+    <Section title="Performance" warn={warn}>
+      {backend && (
+        <>
+          <Row label="Topology Builds" value={backend.topology.totalBuilds.toLocaleString()} />
+          <Row label="  Duration" value={formatSampleDuration(backend.topology.durationUs)} />
+          <Row label="  Node Count" value={formatSampleCount(backend.topology.nodeCount)} />
+          <Row label="  Edge Count" value={formatSampleCount(backend.topology.edgeCount)} />
+          <Row label="  Payload" value={formatSampleBytes(backend.topology.payloadBytes)} warn={backend.topology.payloadBytes.p95 > 5 * 1024 * 1024} />
+          <Row label="  Estimated Nodes" value={formatSampleCount(backend.topology.estimatedNodes)} />
+          <Row label="SSE Broadcasts" value={backend.sse.totalBroadcasts.toLocaleString()} />
+          <Row label="SSE Drops" value={backend.sse.totalDrops.toLocaleString()} warn={backend.sse.totalDrops > 0} />
+        </>
+      )}
+      {(frontend.totalLayouts > 0 || frontend.totalStructureKeyComputes > 0) && (
+        <>
+          <Row label="Frontend Layouts" value={`${frontend.totalLayouts.toLocaleString()} (skipped ${frontend.totalLayoutsSkipped.toLocaleString()})`} />
+          <Row label="  ELK Duration" value={formatFrontendMs(frontend.layoutMs)} warn={frontend.layoutMs.p95 > 1000} />
+          <Row label="  Last Rendered" value={`${frontend.lastLayoutNodeCount.toLocaleString()} nodes / ${frontend.lastLayoutEdgeCount.toLocaleString()} edges`} />
+          <Row label="Frontend structureKey" value={`${frontend.totalStructureKeyComputes.toLocaleString()} computes`} />
+          <Row label="  Duration" value={formatFrontendUs(frontend.structureKeyUs)} />
+        </>
+      )}
+    </Section>
+  )
+}
+
+function formatSampleDuration(w: DiagSampleWindow): string {
+  if (w.count === 0) return 'no samples'
+  const ms = (us: number) => (us / 1000).toFixed(us < 1000 ? 2 : 1)
+  return `last ${ms(w.last)}ms · p50 ${ms(w.p50)} · p95 ${ms(w.p95)} · max ${ms(w.max)}ms (n=${w.count})`
+}
+
+function formatSampleCount(w: DiagSampleWindow): string {
+  if (w.count === 0) return 'no samples'
+  return `last ${w.last.toLocaleString()} · p50 ${w.p50.toLocaleString()} · p95 ${w.p95.toLocaleString()} · max ${w.max.toLocaleString()}`
+}
+
+function formatSampleBytes(w: DiagSampleWindow): string {
+  if (w.count === 0) return 'no samples'
+  const kb = (b: number) => b < 1024 * 1024 ? `${(b / 1024).toFixed(1)}KB` : `${(b / 1024 / 1024).toFixed(2)}MB`
+  return `last ${kb(w.last)} · p50 ${kb(w.p50)} · p95 ${kb(w.p95)} · max ${kb(w.max)}`
+}
+
+function formatFrontendMs(w: { count: number; last: number; p50: number; p95: number; max: number }): string {
+  if (w.count === 0) return 'no samples'
+  const fmt = (v: number) => v < 100 ? v.toFixed(1) : Math.round(v).toString()
+  return `last ${fmt(w.last)}ms · p50 ${fmt(w.p50)} · p95 ${fmt(w.p95)} · max ${fmt(w.max)}ms (n=${w.count})`
+}
+
+function formatFrontendUs(w: { count: number; last: number; p50: number; p95: number; max: number }): string {
+  if (w.count === 0) return 'no samples'
+  const fmt = (v: number) => v < 1000 ? `${v.toFixed(0)}μs` : `${(v / 1000).toFixed(2)}ms`
+  return `last ${fmt(w.last)} · p50 ${fmt(w.p50)} · p95 ${fmt(w.p95)} · max ${fmt(w.max)} (n=${w.count})`
+}
+
 function RuntimeSection({ data }: { data: DiagnosticsSnapshot }) {
   if (!data.runtime) return null
   const rt = data.runtime
@@ -406,6 +554,7 @@ function ConfigSection({ data }: { data: DiagnosticsSnapshot }) {
       <Row label="History Limit" value={cfg.historyLimit.toLocaleString()} />
       <Row label="MCP Enabled" value={cfg.mcpEnabled ? 'Yes' : 'No'} />
       <Row label="Prometheus URL" value={cfg.hasPrometheusURL ? 'Set' : 'Auto-discover'} />
+      <Row label="Prometheus Headers" value={cfg.hasPrometheusHeaders ? 'Set' : 'None'} />
     </Section>
   )
 }
@@ -431,7 +580,7 @@ function CopyButton({ label, onClick, copied }: { label: string; onClick: () => 
 
 // --- GitHub-friendly formatting ---
 
-function formatForGitHub(data: DiagnosticsSnapshot, includeRawJson = true): string {
+function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIPerfSnapshot, includeRawJson = true): string {
   const lines: string[] = []
   lines.push(`## Radar Diagnostics`)
   lines.push(``)
@@ -512,6 +661,36 @@ function formatForGitHub(data: DiagnosticsSnapshot, includeRawJson = true): stri
     const inf = data.informers
     lines.push(`### Informers`)
     lines.push(`- Typed: ${inf.typedCount} | Dynamic: ${inf.dynamicCount}`)
+    if (inf.syncStatus) {
+      const sync = inf.syncStatus
+      lines.push(`- Sync Phase: \`${sync.phase}\` (${formatElapsed(sync.elapsedSec)})`)
+      lines.push(`- Critical: ${sync.criticalSynced}/${sync.criticalTotal} synced | Deferred: ${sync.deferredSynced}/${sync.deferredTotal} synced`)
+      if (sync.promotedKinds && sync.promotedKinds.length > 0) {
+        lines.push(`- **Promoted to Deferred:** ${sync.promotedKinds.join(', ')}`)
+      }
+      const pending = getPendingInformers(sync)
+      if (pending.length > 0) {
+        const parts = pending.map((i) => {
+          const flags = [i.deferred ? 'deferred' : 'critical', `${i.items.toLocaleString()} items`]
+          if (i.forbiddenSeen) flags.push('forbidden')
+          if (i.lastError) flags.push(`err: ${i.lastError}`)
+          return `${i.kind}(${flags.join(', ')})`
+        })
+        lines.push(`- **Pending:** ${parts.join(', ')}`)
+      }
+      // Synced informers that have since hit a watch error or 403 — a count of 0
+      // from one of these is a stale/forbidden lister, not an empty cluster.
+      const errored = sync.informers.filter((i) => !pending.includes(i) && (i.lastError || i.forbiddenSeen))
+      if (errored.length > 0) {
+        const parts = errored.map((i) => {
+          const flags: string[] = []
+          if (i.forbiddenSeen) flags.push('forbidden')
+          if (i.lastError) flags.push(`err: ${i.lastError}`)
+          return `${i.kind}(${flags.join(', ')})`
+        })
+        lines.push(`- **Informer errors:** ${parts.join(', ')}`)
+      }
+    }
     if (inf.watchedCRDs && inf.watchedCRDs.length > 0) {
       lines.push(`- CRDs: ${inf.watchedCRDs.join(', ')}`)
     }
@@ -545,6 +724,37 @@ function formatForGitHub(data: DiagnosticsSnapshot, includeRawJson = true): stri
     const d = data.apiDiscovery
     lines.push(`### API Discovery`)
     lines.push(`- Total Resources: ${d.totalResources} | CRDs: ${d.crdCount}`)
+    lines.push(``)
+  }
+
+  if (data.perf || (frontendPerf && (frontendPerf.totalLayouts > 0 || frontendPerf.totalStructureKeyComputes > 0))) {
+    lines.push(`### Performance`)
+    if (data.perf) {
+      const p = data.perf
+      const fmtMs = (us: number) => (us / 1000).toFixed(us < 1000 ? 2 : 1)
+      const fmtKB = (b: number) => b < 1024 * 1024 ? `${(b / 1024).toFixed(1)}KB` : `${(b / 1024 / 1024).toFixed(2)}MB`
+      lines.push(`- Topology Builds: ${p.topology.totalBuilds.toLocaleString()}`)
+      if (p.topology.durationUs.count > 0) {
+        lines.push(`  - Duration (ms): last ${fmtMs(p.topology.durationUs.last)} · p50 ${fmtMs(p.topology.durationUs.p50)} · p95 ${fmtMs(p.topology.durationUs.p95)} · max ${fmtMs(p.topology.durationUs.max)}`)
+        lines.push(`  - Nodes: last ${p.topology.nodeCount.last} · p95 ${p.topology.nodeCount.p95} · max ${p.topology.nodeCount.max}`)
+        lines.push(`  - Edges: last ${p.topology.edgeCount.last} · p95 ${p.topology.edgeCount.p95} · max ${p.topology.edgeCount.max}`)
+        lines.push(`  - Payload: last ${fmtKB(p.topology.payloadBytes.last)} · p95 ${fmtKB(p.topology.payloadBytes.p95)} · max ${fmtKB(p.topology.payloadBytes.max)}`)
+        lines.push(`  - Estimated Nodes: last ${p.topology.estimatedNodes.last} · p95 ${p.topology.estimatedNodes.p95}`)
+      }
+      lines.push(`- SSE: ${p.sse.totalBroadcasts.toLocaleString()} broadcasts, ${p.sse.totalDrops.toLocaleString()} drops`)
+    }
+    if (frontendPerf && (frontendPerf.totalLayouts > 0 || frontendPerf.totalStructureKeyComputes > 0)) {
+      const fmt = (v: number) => v < 100 ? v.toFixed(1) : Math.round(v).toString()
+      lines.push(`- Frontend Layouts: ${frontendPerf.totalLayouts.toLocaleString()} (${frontendPerf.totalLayoutsSkipped.toLocaleString()} skipped)`)
+      if (frontendPerf.layoutMs.count > 0) {
+        lines.push(`  - ELK (ms): last ${fmt(frontendPerf.layoutMs.last)} · p50 ${fmt(frontendPerf.layoutMs.p50)} · p95 ${fmt(frontendPerf.layoutMs.p95)} · max ${fmt(frontendPerf.layoutMs.max)}`)
+        lines.push(`  - Last rendered: ${frontendPerf.lastLayoutNodeCount.toLocaleString()} nodes / ${frontendPerf.lastLayoutEdgeCount.toLocaleString()} edges`)
+      }
+      if (frontendPerf.structureKeyUs.count > 0) {
+        const fmtUs = (v: number) => v < 1000 ? `${Math.round(v)}μs` : `${(v / 1000).toFixed(2)}ms`
+        lines.push(`  - structureKey: ${frontendPerf.totalStructureKeyComputes.toLocaleString()} computes · p50 ${fmtUs(frontendPerf.structureKeyUs.p50)} · p95 ${fmtUs(frontendPerf.structureKeyUs.p95)} · max ${fmtUs(frontendPerf.structureKeyUs.max)}`)
+      }
+    }
     lines.push(``)
   }
 
@@ -591,8 +801,8 @@ function formatForGitHub(data: DiagnosticsSnapshot, includeRawJson = true): stri
   return lines.join('\n')
 }
 
-function formatForBugReport(data: DiagnosticsSnapshot): string {
-  const diagnostics = formatForGitHub(data, false)
+function formatForBugReport(data: DiagnosticsSnapshot, frontendPerf?: K8sUIPerfSnapshot): string {
+  const diagnostics = formatForGitHub(data, frontendPerf, false)
 
   const lines: string[] = []
   lines.push(`## Describe the bug`)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -93,6 +94,28 @@ func TestLoadInvalidJSON(t *testing.T) {
 	s := Load()
 	if s.Theme != "" {
 		t.Error("invalid JSON should return zero-value Settings")
+	}
+}
+
+// TestActiveNamespaces_RoundTrip pins that the multi-namespace pick shape
+// round-trips through Marshal → Unmarshal cleanly.
+func TestActiveNamespaces_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	original := Settings{
+		ActiveNamespaces: map[string][]string{
+			"ctx-a": {"alpha"},
+			"ctx-b": {"beta", "gamma"},
+		},
+	}
+	if err := Save(original); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded := Load()
+	if !reflect.DeepEqual(loaded.ActiveNamespaces, original.ActiveNamespaces) {
+		t.Errorf("round-trip lost data: %v → %v", original.ActiveNamespaces, loaded.ActiveNamespaces)
 	}
 }
 

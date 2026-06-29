@@ -14,37 +14,44 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
-	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/internal/traffic"
+	"github.com/skyhook-io/radar/pkg/health"
+	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
 // DashboardResponse is the aggregated response for the home dashboard
 type DashboardResponse struct {
-	Cluster                DashboardCluster            `json:"cluster"`
-	Health                 DashboardHealth             `json:"health"`
-	Problems               []DashboardProblem          `json:"problems"`
-	ResourceCounts         DashboardResourceCounts     `json:"resourceCounts"`
-	RecentEvents           []DashboardEvent            `json:"recentEvents"`
-	RecentChanges          []DashboardChange           `json:"recentChanges"`
-	TopologySummary        DashboardTopologySummary    `json:"topologySummary"`
-	TrafficSummary         *DashboardTrafficSummary    `json:"trafficSummary"`
-	Metrics                *DashboardMetrics           `json:"metrics"`
-	MetricsServerAvailable bool                        `json:"metricsServerAvailable"`
+	Cluster                DashboardCluster                `json:"cluster"`
+	Health                 DashboardHealth                 `json:"health"`
+	Problems               []DashboardProblem              `json:"problems"`
+	ResourceCounts         DashboardResourceCounts         `json:"resourceCounts"`
+	RecentEvents           []DashboardEvent                `json:"recentEvents"`
+	RecentChanges          []DashboardChange               `json:"recentChanges"`
+	TopologySummary        DashboardTopologySummary        `json:"topologySummary"`
+	TrafficSummary         *DashboardTrafficSummary        `json:"trafficSummary"`
+	Metrics                *DashboardMetrics               `json:"metrics"`
+	MetricsServerAvailable bool                            `json:"metricsServerAvailable"`
 	CertificateHealth      *DashboardCertificateHealth     `json:"certificateHealth,omitempty"`
 	NetworkPolicyCoverage  *DashboardNetworkPolicyCoverage `json:"networkPolicyCoverage,omitempty"`
-	NodeVersionSkew        *k8s.VersionSkew            `json:"nodeVersionSkew,omitempty"`
-	Audit          *DashboardAudit      `json:"audit,omitempty"`
-	DeferredLoading        bool                        `json:"deferredLoading,omitempty"`  // True while deferred informers (secrets, events, etc.) are still syncing
-	PartialData            []string                    `json:"partialData,omitempty"`      // Resource kinds that timed out during critical sync (e.g. ["Pod", "Deployment"])
-	AccessRestricted       bool                        `json:"accessRestricted,omitempty"` // True when user has no namespace access (RBAC)
+	NodeVersionSkew        *k8s.VersionSkew                `json:"nodeVersionSkew,omitempty"`
+	Audit                  *DashboardAudit                 `json:"audit,omitempty"`
+	Visibility             *k8s.VisibilitySummary          `json:"visibility,omitempty"`
+	// GitOpsControllers summarizes Argo CD / Flux controller pod health.
+	// Omitted when no controllers are detected — the Home dashboard
+	// hides the card entirely on non-GitOps clusters rather than
+	// rendering an empty state.
+	GitOpsControllers *DashboardGitOpsControllers `json:"gitopsControllers,omitempty"`
+	DeferredLoading   bool                        `json:"deferredLoading,omitempty"`  // True while deferred informers (secrets, events, etc.) are still syncing
+	PartialData       []string                    `json:"partialData,omitempty"`      // Resource kinds that timed out during critical sync (e.g. ["Pod", "Deployment"])
+	AccessRestricted  bool                        `json:"accessRestricted,omitempty"` // True when user has no namespace access (RBAC)
 }
 
 // DashboardCRDsResponse is the response for CRD counts (loaded lazily)
@@ -70,15 +77,68 @@ type DashboardProblem struct {
 	Kind            string `json:"kind"`
 	Namespace       string `json:"namespace"`
 	Name            string `json:"name"`
-	Group           string `json:"group,omitempty"`  // API group for CRD disambiguation (e.g., "cluster.x-k8s.io")
-	Severity        string `json:"severity"`         // "critical", "high", or "medium"
+	Group           string `json:"group,omitempty"` // API group for CRD disambiguation (e.g., "cluster.x-k8s.io")
+	Severity        string `json:"severity"`        // "critical", "high", or "medium"
 	Reason          string `json:"reason"`
 	Message         string `json:"message"`
 	Age             string `json:"age"`
-	AgeSeconds      int64  `json:"ageSeconds"`       // For sorting: lower = more recent
-	Duration        string `json:"duration"`          // How long the problem has persisted
-	DurationSeconds int64  `json:"durationSeconds"`   // For sorting by problem age
+	AgeSeconds      int64  `json:"ageSeconds"`         // For sorting: lower = more recent
+	Duration        string `json:"duration"`           // How long the problem has persisted
+	DurationSeconds int64  `json:"durationSeconds"`    // For sorting by problem age
 	PodCount        int    `json:"podCount,omitempty"` // For workload rollups: number of affected pods
+}
+
+// mergeResourceCounts adds src's per-namespace counts into dst. Cluster-scoped
+// fields (Nodes, Namespaces) are intentionally NOT merged here — those are
+// populated separately at the call site after a SAR check. Merging per-
+// namespace results would multi-count cluster-scoped values (each iteration
+// returns the same cluster-wide number); getDashboardResourceCounts no longer
+// populates them at all, so the caller is the only writer.
+func mergeResourceCounts(dst *DashboardResourceCounts, src DashboardResourceCounts) {
+	dst.Pods.Total += src.Pods.Total
+	dst.Pods.Running += src.Pods.Running
+	dst.Pods.Pending += src.Pods.Pending
+	dst.Pods.Failed += src.Pods.Failed
+	dst.Pods.Succeeded += src.Pods.Succeeded
+	dst.Deployments.Total += src.Deployments.Total
+	dst.Deployments.Available += src.Deployments.Available
+	dst.Deployments.Unavailable += src.Deployments.Unavailable
+	dst.StatefulSets.Total += src.StatefulSets.Total
+	dst.StatefulSets.Ready += src.StatefulSets.Ready
+	dst.StatefulSets.Unready += src.StatefulSets.Unready
+	dst.DaemonSets.Total += src.DaemonSets.Total
+	dst.DaemonSets.Ready += src.DaemonSets.Ready
+	dst.DaemonSets.Unready += src.DaemonSets.Unready
+	dst.Services += src.Services
+	dst.Ingresses += src.Ingresses
+	dst.Jobs.Total += src.Jobs.Total
+	dst.Jobs.Active += src.Jobs.Active
+	dst.Jobs.Succeeded += src.Jobs.Succeeded
+	dst.Jobs.Failed += src.Jobs.Failed
+	dst.CronJobs.Total += src.CronJobs.Total
+	dst.CronJobs.Active += src.CronJobs.Active
+	dst.CronJobs.Suspended += src.CronJobs.Suspended
+	dst.ConfigMaps += src.ConfigMaps
+	dst.Secrets += src.Secrets
+	dst.PVCs.Total += src.PVCs.Total
+	dst.PVCs.Bound += src.PVCs.Bound
+	dst.PVCs.Pending += src.PVCs.Pending
+	dst.PVCs.Unbound += src.PVCs.Unbound
+	dst.Gateways += src.Gateways
+	dst.Routes += src.Routes
+	// Restricted: union (per-ns may report different missing kinds).
+	for _, k := range src.Restricted {
+		found := false
+		for _, existing := range dst.Restricted {
+			if existing == k {
+				found = true
+				break
+			}
+		}
+		if !found {
+			dst.Restricted = append(dst.Restricted, k)
+		}
+	}
 }
 
 type DashboardResourceCounts struct {
@@ -97,7 +157,7 @@ type DashboardResourceCounts struct {
 	PVCs         PVCCount      `json:"pvcs"`
 	Gateways     int           `json:"gateways"`
 	Routes       int           `json:"routes"`
-	Restricted []string `json:"restricted,omitempty"` // Resource kinds the user cannot list
+	Restricted   []string      `json:"restricted,omitempty"` // Resource kinds the user cannot list
 }
 
 type WorkloadCount struct {
@@ -109,6 +169,10 @@ type WorkloadCount struct {
 type DashboardMetrics struct {
 	CPU    *MetricSummary `json:"cpu,omitempty"`
 	Memory *MetricSummary `json:"memory,omitempty"`
+	// UsageAvailable reports whether live usage (UsageMillis/UsagePercent) came
+	// from metrics-server. When false, only RequestsMillis/CapacityMillis are
+	// meaningful — usage fields are zero.
+	UsageAvailable bool `json:"usageAvailable"`
 }
 
 type MetricSummary struct {
@@ -203,7 +267,16 @@ type DashboardTopFlow struct {
 type DashboardHelmSummary struct {
 	Total      int                    `json:"total"`
 	Releases   []DashboardHelmRelease `json:"releases"`
-	Restricted bool                   `json:"restricted,omitempty"` // True when user lacks permissions to list Helm releases
+	Restricted bool                   `json:"restricted,omitempty"` // True when user lacks permissions to list Helm releases (RBAC-denied)
+	// Error + ErrorCode are populated when the Helm read failed for a
+	// reason other than RBAC (Helm client not initialized, no resolved
+	// rest.Config, network error). Lets the dashboard widget render
+	// "Helm unavailable: not configured" instead of an empty list that
+	// looks like "this cluster has zero releases." ErrorCode uses the
+	// same vocabulary as packages.go ErrCode* (rbac_denied,
+	// unreachable, timed_out, unconfigured, auth_required).
+	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"errorCode,omitempty"`
 }
 
 type DashboardHelmRelease struct {
@@ -216,16 +289,28 @@ type DashboardHelmRelease struct {
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
 	dashStart := time.Now()
 	namespaces := s.parseNamespacesForUser(r)
 	if noNamespaceAccess(namespaces) {
 		s.writeJSON(w, DashboardResponse{AccessRestricted: true})
 		return
 	}
-	// For backward compat with single namespace string in internal functions
-	namespace := ""
-	if len(namespaces) == 1 {
-		namespace = namespaces[0]
+	// Decide how to drive the per-namespace helpers:
+	//   - namespaces == nil → cluster-admin / no-auth: single call with ""
+	//     (cluster-wide informers + cluster-scoped sections).
+	//   - non-nil → namespace-restricted user; iterate per ns and aggregate.
+	//
+	// Cluster-scoped fields (Nodes, total Namespaces, version skew) are gated
+	// by SAR for namespace-restricted users — having list-pod cluster-wide is
+	// not a license to read those.
+	var iterateNamespaces []string
+	if namespaces == nil {
+		iterateNamespaces = []string{""}
+	} else {
+		iterateNamespaces = namespaces
 	}
 
 	cache := k8s.GetResourceCache()
@@ -235,15 +320,22 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := DashboardResponse{}
+	if result := k8s.GetCachedPermissionResult(); result != nil {
+		resp.Visibility = k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(namespaces))
+	}
+	canReadNodes := s.canRead(r, "", "nodes", "", "list")
+	canReadNamespaces := s.canRead(r, "", "namespaces", "", "list")
 
 	// Signal to the frontend that some data (events, secrets, configmaps, etc.)
 	// may be incomplete because deferred informers are still syncing.
 	resp.DeferredLoading = !cache.IsDeferredSynced()
 
-	// If critical sync timed out, tell the frontend which resource kinds
-	// may be missing so it can show a banner.
-	if promoted := cache.PromotedKinds(); len(promoted) > 0 && resp.DeferredLoading {
-		resp.PartialData = promoted
+	// If critical informers were promoted at first paint, tell the
+	// frontend which kinds are STILL loading (live-filtered, not the
+	// snapshot from connect time) so the banner doesn't list kinds that
+	// have since populated.
+	if pending := cache.PendingPromotedKinds(); len(pending) > 0 {
+		resp.PartialData = pending
 	}
 
 	// --- Slow network calls: run in parallel ---
@@ -264,7 +356,13 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer wg.Done()
 		t := time.Now()
-		metrics = s.getDashboardMetrics(ctx)
+		// Pass allowed namespaces so pod-request totals only sum pods the
+		// user has read access to. nil means "all namespaces" (cluster-
+		// wide namespaced access / no-auth). Node capacity and usage are
+		// cluster-scoped, so omit metrics unless the caller can list Nodes.
+		if canReadNodes {
+			metrics = s.getDashboardMetrics(ctx, namespaces)
+		}
 		k8s.LogTiming("  [dashboard] metrics: %v", time.Since(t))
 	}()
 	go func() {
@@ -275,17 +373,35 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// --- Fast cache-based calls: run while network calls are in flight ---
+	// Iterate per allowed namespace and aggregate. For cluster-admin / no-auth
+	// callers iterateNamespaces is [""], so this collapses to a single
+	// cluster-wide call.
 	t := time.Now()
-	resp.Health, resp.Problems = s.getDashboardHealth(cache, namespace)
+	for _, ns := range iterateNamespaces {
+		h, probs := s.getDashboardHealth(cache, ns)
+		resp.Health.Healthy += h.Healthy
+		resp.Health.Warning += h.Warning
+		resp.Health.Error += h.Error
+		for _, p := range probs {
+			if p.Kind == "Node" && !canReadNodes {
+				continue
+			}
+			resp.Problems = append(resp.Problems, p)
+		}
+	}
 	k8s.LogTiming("  [dashboard] health: %v", time.Since(t))
 
 	t = time.Now()
-	resp.ResourceCounts = s.getDashboardResourceCounts(cache, namespace)
+	for _, ns := range iterateNamespaces {
+		mergeResourceCounts(&resp.ResourceCounts, s.getDashboardResourceCounts(cache, ns))
+	}
 	k8s.LogTiming("  [dashboard] resource counts: %v", time.Since(t))
 
 	t = time.Now()
-	resp.RecentEvents = s.getDashboardRecentEvents(cache, namespace)
-	resp.Health.WarningEvents = s.countWarningEvents(cache, namespace)
+	for _, ns := range iterateNamespaces {
+		resp.RecentEvents = append(resp.RecentEvents, s.getDashboardRecentEvents(cache, ns)...)
+		resp.Health.WarningEvents += s.countWarningEvents(cache, ns)
+	}
 	k8s.LogTiming("  [dashboard] events: %v", time.Since(t))
 
 	t = time.Now()
@@ -296,12 +412,41 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	resp.TopologySummary = s.getDashboardTopologySummary(namespaces)
 	k8s.LogTiming("  [dashboard] topology: %v", time.Since(t))
 
-	resp.CertificateHealth = s.getDashboardCertificateHealth(namespace)
+	resp.CertificateHealth = s.getDashboardCertificateHealth(namespaces)
 	resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(cache, namespaces)
 	resp.Audit = getDashboardAudit(cache, namespaces)
+	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
-	if nodeLister := cache.Nodes(); nodeLister != nil {
-		nodes, _ := nodeLister.List(labels.Everything())
+	if canReadNodes {
+		if nodeLister := cache.Nodes(); nodeLister != nil {
+			nodeList, _ := nodeLister.List(labels.Everything())
+			resp.ResourceCounts.Nodes.Total = len(nodeList)
+			for _, n := range nodeList {
+				h := health.Node(n)
+				if h.Ready {
+					if h.Unschedulable {
+						resp.ResourceCounts.Nodes.Cordoned++
+					} else {
+						resp.ResourceCounts.Nodes.Ready++
+					}
+				} else {
+					resp.ResourceCounts.Nodes.NotReady++
+				}
+			}
+		}
+	}
+	if canReadNamespaces {
+		if nsLister := cache.Namespaces(); nsLister != nil {
+			nss, _ := nsLister.List(labels.Everything())
+			resp.ResourceCounts.Namespaces = len(nss)
+		}
+	} else if len(namespaces) > 0 {
+		// Restricted user — surface their accessible count instead of "0".
+		resp.ResourceCounts.Namespaces = len(namespaces)
+	}
+
+	if canReadNodes && cache.Nodes() != nil {
+		nodes, _ := cache.Nodes().List(labels.Everything())
 		resp.NodeVersionSkew = k8s.DetectVersionSkew(nodes)
 	}
 
@@ -310,7 +455,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	resp.Cluster = cluster
 	resp.Metrics = metrics
-	resp.MetricsServerAvailable = metrics != nil
+	// "Available" means live usage is present — not merely that capacity/request
+	// data exists. metrics is now non-nil whenever nodes are cached, so gate the
+	// flag on actual usage so the frontend's "usage unavailable" hint still fires.
+	resp.MetricsServerAvailable = metrics != nil && metrics.UsageAvailable
 	resp.TrafficSummary = trafficSummary
 
 	k8s.LogTiming(" [dashboard] total: %v", time.Since(dashStart))
@@ -322,27 +470,36 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	namespaces, ok := s.resolveHelmNamespaces(r)
+	if !ok {
 		s.writeJSON(w, DashboardHelmSummary{})
 		return
 	}
-	namespace := ""
-	if len(namespaces) == 1 {
-		namespace = namespaces[0]
-	}
-	s.writeJSON(w, s.getDashboardHelmSummary(r, namespace))
+
+	summary := s.getDashboardHelmSummary(r, namespaces)
+	s.writeJSON(w, summary)
 }
 
-// handleDashboardCRDs returns CRD counts - loaded lazily to keep main dashboard fast
+// handleDashboardCRDs returns CRD counts - loaded lazily to keep main dashboard fast.
+//
+// Cluster-scoped CRDs: each is gated per-kind via SubjectAccessReview, so a
+// user with cluster-wide pod visibility (AllowedNamespaces==nil from the
+// namespace-discovery probe) doesn't implicitly see cluster-scoped CRDs they
+// can't list directly.
+//
+// Namespaced CRDs: scoped to the user's allowed namespaces. nil = all
+// (auth disabled or user has cluster-wide namespaced access). Empty =
+// no access.
 func (s *Server) handleDashboardCRDs(w http.ResponseWriter, r *http.Request) {
-	namespace := r.URL.Query().Get("namespace")
-
-	resp := DashboardCRDsResponse{
-		TopCRDs: s.getDashboardCRDCounts(r.Context(), namespace),
+	if !s.requireConnected(w) {
+		return
 	}
+	namespaces := s.parseNamespacesForUser(r)
 
-	s.writeJSON(w, resp)
+	clusterScoped := s.collectClusterScopedCRDCounts(r)
+	nsScoped := s.collectNamespacedCRDCounts(r.Context(), namespaces)
+
+	s.writeJSON(w, DashboardCRDsResponse{TopCRDs: mergeCRDCounts(clusterScoped, nsScoped)})
 }
 
 func (s *Server) getDashboardCluster(ctx context.Context) DashboardCluster {
@@ -359,7 +516,7 @@ func (s *Server) getDashboardCluster(ctx context.Context) DashboardCluster {
 }
 
 func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) (DashboardHealth, []DashboardProblem) {
-	health := DashboardHealth{}
+	dh := DashboardHealth{}
 	problems := make([]DashboardProblem, 0)
 
 	now := time.Now()
@@ -374,22 +531,45 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 			pods, err = podLister.List(labels.Everything())
 		}
 	}
+	// Pods the post-bind layer owns (stuck ContainerCreating on CNI/volume).
+	// Computed up front so the warning rollup below can skip them the same way
+	// it skips unschedulable pods — otherwise a long-Pending stuck pod gets
+	// both a bare "Pending" rollup row and the richer post-bind row. Keyed
+	// "namespace/name"; the slice is reused in the scheduling block below.
+	postBind := k8s.DetectPostBindProblems(cache, namespace)
+	postBindPods := make(map[string]bool, len(postBind))
+	for _, p := range postBind {
+		postBindPods[p.Namespace+"/"+p.Name] = true
+	}
+
 	// Group unhealthy pods by owner workload for rollup
 	ownerGroups := make(map[ownerKey]*ownerGroup)
 	var orphanProblems []DashboardProblem
 
 	if err == nil {
 		for _, pod := range pods {
-			status := classifyPodHealth(pod, now)
-			switch status {
-			case "healthy":
-				health.Healthy++
-			case "warning":
-				health.Warning++
-				collectPodForRollup(pod, "medium", now, ownerGroups, &orphanProblems)
-			case "error":
-				health.Error++
+			switch health.Pod(pod, now).Level {
+			case health.LevelUnhealthy:
+				dh.Error++
 				collectPodForRollup(pod, "critical", now, ownerGroups, &orphanProblems)
+			case health.LevelDegraded:
+				dh.Warning++
+				// Unschedulable pods (bind-time) and stuck-creating pods
+				// (post-bind) are owned by the scheduling rows appended below,
+				// which name the actual constraint; don't also roll them up
+				// here as a bare "Pending".
+				if !health.IsPodUnschedulable(pod) && !postBindPods[pod.Namespace+"/"+pod.Name] {
+					collectPodForRollup(pod, "medium", now, ownerGroups, &orphanProblems)
+				}
+			case health.LevelUnknown:
+				// node-lost / unobservable: count as warning so it isn't hidden in
+				// the healthy bucket, but don't add a per-pod rollup row — the Node
+				// NotReady row is the actionable signal (and the problem detector
+				// likewise defers to it), so a per-pod row would just be noise with
+				// no real reason to show.
+				dh.Warning++
+			default: // healthy, neutral
+				dh.Healthy++
 			}
 		}
 	}
@@ -408,11 +588,16 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		sort.Strings(reasonParts)
 
 		problems = append(problems, DashboardProblem{
-			Kind:            key.kind,
-			Namespace:       key.namespace,
-			Name:            key.name,
-			Severity:        g.severity,
-			Reason:          fmt.Sprintf("%d %s unhealthy", g.podCount, func() string { if g.podCount == 1 { return "pod" }; return "pods" }()),
+			Kind:      key.kind,
+			Namespace: key.namespace,
+			Name:      key.name,
+			Severity:  g.severity,
+			Reason: fmt.Sprintf("%d %s unhealthy", g.podCount, func() string {
+				if g.podCount == 1 {
+					return "pod"
+				}
+				return "pods"
+			}()),
 			Message:         k8s.Truncate(strings.Join(reasonParts, ", "), 200),
 			Age:             k8s.FormatAge(g.newestAge),
 			AgeSeconds:      int64(g.newestAge.Seconds()),
@@ -424,8 +609,64 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	// Add orphan pod problems (no owner workload)
 	problems = append(problems, orphanProblems...)
 
-	// Workload/HPA/CronJob/Node problems (excluding pods, handled above)
-	for _, p := range k8s.DetectProblems(cache, namespace) {
+	// Workload/HPA/CronJob/Node problems (excluding pods, handled above) +
+	// direct dangling-ref errors (missing CM/Secret/PVC/SA refs, missing
+	// HPA target, missing Ingress backend / TLS / port, missing roleRef,
+	// missing StorageClass on a PVC, missing headless Service on a
+	// StatefulSet) + webhook-config refs (missing Service on
+	// Validating/MutatingWebhookConfiguration). Skip Pod-kind rows from
+	// DetectProblems — REST's pod rollup + orphan handling above is the
+	// canonical pod surface; including DetectProblems Pod rows would
+	// duplicate them. (Missing-ref Pod rows are intentionally kept: those
+	// catch pods stuck Pending on missing refs, which the pod-error loop
+	// above doesn't surface.)
+	detected := append(k8s.DetectProblems(cache, namespace), k8s.DetectMissingRefs(cache, namespace)...)
+	detected = append(detected, k8s.DetectMissingWebhookRefs(cache, k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace)...)
+	// DetectProblems Pod rows duplicate REST's pod rollup above; skip them.
+	// DetectMissingRefs Pod rows are kept (different failure category — won't-
+	// schedule etc.). We can't tell the source from the Problem struct, so
+	// distinguish by whether Reason starts with "Missing " (only emitted by
+	// DetectMissingRefs at present). Dedupe keys by (ns, name, reason) so a
+	// Pod with multiple distinct missing-ref reasons (e.g. PVC + ConfigMap)
+	// keeps a row per blocker — agents triaging a Pending pod need ALL of
+	// the missing refs, not just whichever fired first.
+	seenPodReason := map[string]bool{}
+	for _, p := range detected {
+		if p.Kind == "Pod" {
+			if !strings.HasPrefix(p.Reason, "Missing ") {
+				continue
+			}
+			key := p.Namespace + "/" + p.Name + "/" + p.Reason
+			if seenPodReason[key] {
+				continue
+			}
+			seenPodReason[key] = true
+		}
+		problems = append(problems, DashboardProblem{
+			Kind:            p.Kind,
+			Namespace:       p.Namespace,
+			Name:            p.Name,
+			Severity:        p.Severity,
+			Reason:          p.Reason,
+			Message:         p.Message,
+			Age:             p.Age,
+			AgeSeconds:      p.AgeSeconds,
+			Duration:        p.Duration,
+			DurationSeconds: p.DurationSeconds,
+		})
+	}
+
+	// Scheduling problems: unschedulable pods (with the offending node
+	// constraint named), admission rejections (quota/PodSecurity/webhook — no
+	// Pod exists, so the pod rollup above can't see them), and post-bind
+	// CNI/volume stalls. Appended directly (not through the Missing-ref Pod
+	// filter above) — an Unschedulable row IS the pod's scheduling reason; the
+	// pod rollup above skips unschedulable + post-bind pods so they don't
+	// double-surface. postBind was computed above for that skip; reuse it.
+	sched := k8s.DetectSchedulingProblems(cache, namespace)
+	sched = append(sched, k8s.DetectAdmissionProblems(cache, namespace)...)
+	sched = append(sched, postBind...)
+	for _, p := range sched {
 		problems = append(problems, DashboardProblem{
 			Kind:            p.Kind,
 			Namespace:       p.Namespace,
@@ -458,21 +699,26 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	}
 
 	// Sort: critical first, then high, then medium; within each group sort by age (most recent first)
-	severityOrder := map[string]int{"critical": 0, "high": 1, "medium": 2}
+	// "warning" is below medium — degraded states that aren't immediate
+	// failures. Info is inert/posture and ranks last. Unknown severities also
+	// rank last instead of falling through to Go's zero value beside critical.
+	severityOrder := map[string]int{"critical": 0, "high": 1, "medium": 2, "warning": 3, "info": 4}
 	sort.SliceStable(problems, func(i, j int) bool {
-		si, sj := severityOrder[problems[i].Severity], severityOrder[problems[j].Severity]
+		si, ok := severityOrder[problems[i].Severity]
+		if !ok {
+			si = len(severityOrder)
+		}
+		sj, ok := severityOrder[problems[j].Severity]
+		if !ok {
+			sj = len(severityOrder)
+		}
 		if si != sj {
 			return si < sj
 		}
 		return problems[i].AgeSeconds < problems[j].AgeSeconds
 	})
 
-	return health, problems
-}
-
-// classifyPodHealth delegates to the shared implementation in k8s.ClassifyPodHealth.
-func classifyPodHealth(pod *corev1.Pod, now time.Time) string {
-	return k8s.ClassifyPodHealth(pod, now)
+	return dh, problems
 }
 
 func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProblem {
@@ -560,11 +806,11 @@ func podProblemDuration(pod *corev1.Pod, now time.Time) time.Duration {
 
 type ownerKey struct{ kind, namespace, name string }
 type ownerGroup struct {
-	podCount   int
-	severity   string
-	reasons    map[string]int
-	newestDur  time.Duration
-	newestAge  time.Duration
+	podCount  int
+	severity  string
+	reasons   map[string]int
+	newestDur time.Duration
+	newestAge time.Duration
 }
 
 // collectPodForRollup groups a problematic pod under its owner workload, or adds it as an orphan.
@@ -606,12 +852,12 @@ func collectPodForRollup(pod *corev1.Pod, severity string, now time.Time, groups
 
 	g.podCount++
 	// Keep worst severity: critical > high > medium
-	order := map[string]int{"critical": 0, "high": 1, "medium": 2}
+	order := map[string]int{"critical": 0, "high": 1, "medium": 2, "warning": 3}
 	if g.severity == "" || order[severity] < order[g.severity] {
 		g.severity = severity
 	}
 
-	reason := k8s.PodProblemReason(pod)
+	reason := health.PodProblemReason(pod, now)
 	if reason != "" {
 		g.reasons[reason]++
 	}
@@ -798,32 +1044,6 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 		}
 	}
 
-	// Nodes (cluster-scoped, not filtered by namespace)
-	if nodeLister := cache.Nodes(); nodeLister != nil {
-		nodeList, _ := nodeLister.List(labels.Everything())
-		counts.Nodes.Total = len(nodeList)
-		for _, n := range nodeList {
-			h := k8s.ClassifyNodeHealth(n)
-			if h.Ready {
-				if h.Unschedulable {
-					counts.Nodes.Cordoned++
-				} else {
-					counts.Nodes.Ready++
-				}
-			} else {
-				counts.Nodes.NotReady++
-			}
-		}
-	} else {
-		restricted = append(restricted, "nodes")
-	}
-
-	// Namespaces (cluster-scoped)
-	if nsLister := cache.Namespaces(); nsLister != nil {
-		nss, _ := nsLister.List(labels.Everything())
-		counts.Namespaces = len(nss)
-	}
-
 	// Jobs
 	if jobLister := cache.Jobs(); jobLister != nil {
 		if namespace != "" {
@@ -1006,10 +1226,11 @@ func (s *Server) getDashboardRecentChanges(ctx context.Context, namespaces []str
 	}
 
 	opts := timeline.QueryOptions{
-		Namespaces:   namespaces,
-		Since:        time.Now().Add(-1 * time.Hour),
-		Limit:        5,
-		FilterPreset: "workloads",
+		Namespaces:     namespaces,
+		Since:          time.Now().Add(-1 * time.Hour),
+		Limit:          5,
+		FilterPreset:   "workloads",
+		ClusterContext: k8s.ActiveClusterContext(),
 	}
 
 	events, err := store.Query(ctx, opts)
@@ -1126,10 +1347,14 @@ func (s *Server) getDashboardTrafficSummary(ctx context.Context, namespaces []st
 	}
 }
 
-func (s *Server) getDashboardHelmSummary(r *http.Request, namespace string) DashboardHelmSummary {
+func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) DashboardHelmSummary {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
-		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}}
+		return DashboardHelmSummary{
+			Releases:  []DashboardHelmRelease{},
+			Error:     "Helm client not initialized",
+			ErrorCode: ErrCodeUnconfigured,
+		}
 	}
 
 	var username string
@@ -1138,38 +1363,45 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespace string) Dash
 		username = user.Username
 		groups = user.Groups
 	}
-	releases, err := helmClient.ListReleasesAsUser(namespace, username, groups)
+	releases, err := helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
 	if err != nil {
 		if helm.IsForbiddenError(err) {
 			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
 		}
 		log.Printf("[dashboard] Failed to list Helm releases: %v", err)
-		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}}
+		return DashboardHelmSummary{
+			Releases:  []DashboardHelmRelease{},
+			Error:     err.Error(),
+			ErrorCode: errorCodeForHelm(err.Error(), 0),
+		}
 	}
 
+	return dashboardHelmSummaryFromReleases(releases)
+}
+
+func dashboardHelmSummaryFromReleases(releases []helm.HelmRelease) DashboardHelmSummary {
 	result := DashboardHelmSummary{
 		Total: len(releases),
 	}
 
-	// Sort: failed/unhealthy releases first to surface problems
+	// Sort: failed/pending first, then operation-signaled Helm rollbacks,
+	// then unhealthy/degraded owned resources.
 	sort.SliceStable(releases, func(i, j int) bool {
-		pi := helm.StatusPriority(releases[i].Status, releases[i].ResourceHealth)
-		pj := helm.StatusPriority(releases[j].Status, releases[j].ResourceHealth)
-		return pi < pj
+		return helm.ReleasePriority(releases[i]) < helm.ReleasePriority(releases[j])
 	})
 
 	// Take top 6 releases
 	limit := min(len(releases), 6)
 
 	result.Releases = make([]DashboardHelmRelease, 0, limit)
-	for _, r := range releases[:limit] {
+	for _, rel := range releases[:limit] {
 		result.Releases = append(result.Releases, DashboardHelmRelease{
-			Name:           r.Name,
-			Namespace:      r.Namespace,
-			Chart:          r.Chart,
-			ChartVersion:   r.ChartVersion,
-			Status:         r.Status,
-			ResourceHealth: r.ResourceHealth,
+			Name:           rel.Name,
+			Namespace:      rel.Namespace,
+			Chart:          rel.Chart,
+			ChartVersion:   rel.ChartVersion,
+			Status:         rel.Status,
+			ResourceHealth: rel.ResourceHealth,
 		})
 	}
 
@@ -1196,45 +1428,16 @@ func (s *Server) countWarningEvents(cache *k8s.ResourceCache, namespace string) 
 	return count
 }
 
-func (s *Server) getDashboardMetrics(ctx context.Context) *DashboardMetrics {
-	client := k8s.ClientFromContext(ctx)
-	if client == nil {
-		return nil
-	}
+// metricsServerTimeout bounds the metrics-server query so a slow or unreachable
+// metrics endpoint can't consume the dashboard's whole request budget (the
+// handler runs this in a goroutine and blocks on it in wg.Wait()).
+const metricsServerTimeout = 8 * time.Second
 
-	// Query metrics-server via raw REST to avoid adding k8s.io/metrics dependency.
-	// GET /apis/metrics.k8s.io/v1beta1/nodes. Metrics-server forwards the
-	// impersonation headers, so a user without metrics.k8s.io/nodes access
-	// gets a 403 here and dashboard metrics are silently omitted.
-	data, err := client.CoreV1().RESTClient().Get().
-		AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
-		DoRaw(ctx)
-	if err != nil {
-		// metrics-server not installed or not accessible — that's fine
-		return nil
-	}
-
-	var nodeMetricsList struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Usage struct {
-				CPU    string `json:"cpu"`
-				Memory string `json:"memory"`
-			} `json:"usage"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
-		log.Printf("Failed to parse node metrics: %v", err)
-		return nil
-	}
-
-	if len(nodeMetricsList.Items) == 0 {
-		return nil
-	}
-
-	// Get node capacity from the cache
+func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []string) *DashboardMetrics {
+	// Node capacity and pod requests come from the cache — they don't need
+	// metrics-server. Live usage does. Compute the cached values first and
+	// treat usage as best-effort so a missing/slow metrics-server still leaves
+	// requests vs. capacity on the dashboard.
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil
@@ -1248,7 +1451,7 @@ func (s *Server) getDashboardMetrics(ctx context.Context) *DashboardMetrics {
 		return nil
 	}
 
-	// Sum capacity across all nodes
+	// Sum capacity across all nodes (cached)
 	var cpuCapacityMillis int64
 	var memCapacityBytes int64
 	for _, n := range nodes {
@@ -1256,20 +1459,22 @@ func (s *Server) getDashboardMetrics(ctx context.Context) *DashboardMetrics {
 		memCapacityBytes += n.Status.Capacity.Memory().Value()
 	}
 
-	// Sum usage across all nodes
-	var cpuUsageMillis int64
-	var memUsageBytes int64
-	for _, item := range nodeMetricsList.Items {
-		cpuUsageMillis += parseCPUToMillis(item.Usage.CPU)
-		memUsageBytes += parseMemoryToBytes(item.Usage.Memory)
-	}
-
-	// Sum requests across all pods
+	// Sum requests across pods the user can see (cached). For namespace-
+	// restricted users this scopes to allowedNamespaces — without it, the
+	// dashboard would expose aggregate pod-resource totals from namespaces they
+	// have no read access to.
 	var cpuRequestsMillis int64
 	var memRequestsBytes int64
 	var metricPods []*corev1.Pod
 	if podLister := cache.Pods(); podLister != nil {
-		metricPods, _ = podLister.List(labels.Everything())
+		if allowedNamespaces == nil {
+			metricPods, _ = podLister.List(labels.Everything())
+		} else {
+			for _, ns := range allowedNamespaces {
+				items, _ := podLister.Pods(ns).List(labels.Everything())
+				metricPods = append(metricPods, items...)
+			}
+		}
 	}
 	for _, pod := range metricPods {
 		// Skip completed/failed pods
@@ -1288,7 +1493,44 @@ func (s *Server) getDashboardMetrics(ctx context.Context) *DashboardMetrics {
 		}
 	}
 
-	metrics := &DashboardMetrics{}
+	// Live usage from metrics-server — best-effort. Query via raw REST to avoid
+	// adding k8s.io/metrics dependency; metrics-server forwards impersonation
+	// headers, so a user without metrics.k8s.io/nodes access gets a 403. A
+	// missing, forbidden, or slow metrics-server leaves usageAvailable false
+	// rather than discarding the capacity/request data computed above.
+	var cpuUsageMillis int64
+	var memUsageBytes int64
+	usageAvailable := false
+	if client := k8s.ClientFromContext(ctx); client != nil {
+		mctx, cancel := context.WithTimeout(ctx, metricsServerTimeout)
+		defer cancel()
+		data, err := client.CoreV1().RESTClient().Get().
+			AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
+			DoRaw(mctx)
+		if err != nil {
+			log.Printf("[dashboard] node metrics unavailable (showing requests/capacity only): %v", err)
+		} else {
+			var nodeMetricsList struct {
+				Items []struct {
+					Usage struct {
+						CPU    string `json:"cpu"`
+						Memory string `json:"memory"`
+					} `json:"usage"`
+				} `json:"items"`
+			}
+			if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
+				log.Printf("[dashboard] failed to parse node metrics: %v", err)
+			} else if len(nodeMetricsList.Items) > 0 {
+				for _, item := range nodeMetricsList.Items {
+					cpuUsageMillis += parseCPUToMillis(item.Usage.CPU)
+					memUsageBytes += parseMemoryToBytes(item.Usage.Memory)
+				}
+				usageAvailable = true
+			}
+		}
+	}
+
+	metrics := &DashboardMetrics{UsageAvailable: usageAvailable}
 	if cpuCapacityMillis > 0 {
 		metrics.CPU = &MetricSummary{
 			UsageMillis:    cpuUsageMillis,
@@ -1323,99 +1565,144 @@ func parseMemoryToBytes(s string) int64 { return k8s.ParseMemoryToBytes(s) }
 
 // Helper functions
 
-
-// getDashboardCRDCounts returns counts of CRD instances in the cluster.
-func (s *Server) getDashboardCRDCounts(_ context.Context, namespace string) []DashboardCRDCount {
-	discovery := k8s.GetResourceDiscovery()
-	if discovery == nil {
-		return []DashboardCRDCount{}
-	}
-
-	resources, err := discovery.GetAPIResources()
-	if err != nil {
-		return []DashboardCRDCount{}
-	}
-
-	// Filter to CRDs only, deduplicating by Group+Kind (different versions of same CRD)
-	seen := make(map[string]bool)
-	var crds []k8s.APIResource
-	for _, r := range resources {
-		if r.IsCRD {
-			key := r.Group + "/" + r.Kind
-			if !seen[key] {
-				seen[key] = true
-				crds = append(crds, r)
-			}
-		}
-	}
-	if len(crds) == 0 {
-		return []DashboardCRDCount{}
-	}
-
+// collectClusterScopedCRDCounts returns counts of cluster-scoped CRD instances
+// the calling user is authorized to see. Each cluster-scoped CRD is gated by
+// a per-kind SubjectAccessReview; CRDs the user can't list are omitted.
+func (s *Server) collectClusterScopedCRDCounts(r *http.Request) []DashboardCRDCount {
+	disc := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
-	if dynamicCache == nil {
-		return []DashboardCRDCount{}
+	if disc == nil || dynamicCache == nil {
+		return nil
+	}
+	resources, err := disc.GetAPIResources()
+	if err != nil {
+		return nil
 	}
 
-	type result struct {
-		kind  string
-		name  string
-		group string
-		count int
-	}
+	seen := make(map[string]bool)
+	var counts []DashboardCRDCount
+	for _, res := range resources {
+		if !res.IsCRD || res.Namespaced {
+			continue
+		}
+		key := res.Group + "/" + res.Kind
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 
-	results := make([]result, len(crds))
-	var wg sync.WaitGroup
-
-	for i, crd := range crds {
-		wg.Add(1)
-		go func(idx int, r k8s.APIResource) {
-			defer wg.Done()
-
-			gvr, ok := discovery.GetGVRWithGroup(r.Kind, r.Group)
-			if !ok {
-				return
-			}
-
-			// Only count CRDs that are already synced in cache
-			// Skip unsynced CRDs to avoid slow API calls that trigger throttling
-			if !dynamicCache.IsSynced(gvr) {
-				return
-			}
-
-			items, err := dynamicCache.List(gvr, namespace)
-			if err != nil {
-				return
-			}
-
-			results[idx] = result{kind: r.Kind, name: r.Name, group: r.Group, count: len(items)}
-		}(i, crd)
-	}
-
-	wg.Wait()
-
-	// Filter out zero-count and sort by count descending
-	counts := make([]DashboardCRDCount, 0)
-	for _, r := range results {
-		if r.count > 0 {
+		// Per-kind cluster-scoped SAR. canRead caches the result on
+		// UserPermissions and short-circuits when auth is disabled.
+		if !s.canRead(r, res.Group, res.Name, "", "list") {
+			continue
+		}
+		gvr, ok := disc.GetGVRWithGroup(res.Kind, res.Group)
+		if !ok {
+			continue
+		}
+		if !dynamicCache.IsSynced(gvr) {
+			continue
+		}
+		items, err := dynamicCache.List(gvr, "")
+		if err != nil {
+			log.Printf("WARNING [dashboard] Failed to count cluster-scoped CRD %s.%s: %v", res.Name, res.Group, err)
+			continue
+		}
+		if len(items) > 0 {
 			counts = append(counts, DashboardCRDCount{
-				Kind:  r.kind,
-				Name:  r.name,
-				Group: r.group,
-				Count: r.count,
+				Kind:  res.Kind,
+				Name:  res.Name,
+				Group: res.Group,
+				Count: len(items),
 			})
 		}
 	}
+	return counts
+}
 
-	sort.Slice(counts, func(i, j int) bool {
-		return counts[i].Count > counts[j].Count
-	})
-
-	if len(counts) > 8 {
-		counts = counts[:8]
+// collectNamespacedCRDCounts returns counts of namespaced CRD instances.
+//
+// allowed semantics (matches parseNamespacesForUser):
+//   - nil:        cluster-wide listing (auth off or cluster-wide namespaced
+//     access). One call to dynamicCache.List with namespace="".
+//   - empty:      user has no namespace access; returns nil.
+//   - non-empty:  iterate per allowed namespace and sum.
+func (s *Server) collectNamespacedCRDCounts(_ context.Context, allowed []string) []DashboardCRDCount {
+	if allowed != nil && len(allowed) == 0 {
+		return nil
+	}
+	disc := k8s.GetResourceDiscovery()
+	dynamicCache := k8s.GetDynamicResourceCache()
+	if disc == nil || dynamicCache == nil {
+		return nil
+	}
+	resources, err := disc.GetAPIResources()
+	if err != nil {
+		return nil
 	}
 
+	seen := make(map[string]bool)
+	var counts []DashboardCRDCount
+	for _, res := range resources {
+		if !res.IsCRD || !res.Namespaced {
+			continue
+		}
+		key := res.Group + "/" + res.Kind
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		gvr, ok := disc.GetGVRWithGroup(res.Kind, res.Group)
+		if !ok {
+			continue
+		}
+		if !dynamicCache.IsSynced(gvr) {
+			continue
+		}
+		total := 0
+		if allowed == nil {
+			// Cluster-wide list across all namespaces.
+			items, err := dynamicCache.List(gvr, "")
+			if err != nil {
+				log.Printf("WARNING [dashboard] Failed to count namespaced CRD %s.%s cluster-wide: %v", k8s.SanitizeForLog(res.Name), k8s.SanitizeForLog(res.Group), err)
+				continue
+			}
+			total = len(items)
+		} else {
+			for _, ns := range allowed {
+				items, err := dynamicCache.List(gvr, ns)
+				if err != nil {
+					log.Printf("WARNING [dashboard] Failed to count namespaced CRD %s.%s in ns=%s: %v", k8s.SanitizeForLog(res.Name), k8s.SanitizeForLog(res.Group), k8s.SanitizeForLog(ns), err)
+					continue
+				}
+				total += len(items)
+			}
+		}
+		if total > 0 {
+			counts = append(counts, DashboardCRDCount{
+				Kind:  res.Kind,
+				Name:  res.Name,
+				Group: res.Group,
+				Count: total,
+			})
+		}
+	}
 	return counts
+}
+
+// mergeCRDCounts combines two CRD count lists, sorts by count descending,
+// and trims to the top 8 (matching the cluster-wide getDashboardCRDCounts
+// behavior).
+func mergeCRDCounts(a, b []DashboardCRDCount) []DashboardCRDCount {
+	merged := make([]DashboardCRDCount, 0, len(a)+len(b))
+	merged = append(merged, a...)
+	merged = append(merged, b...)
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Count > merged[j].Count })
+	if len(merged) > 8 {
+		merged = merged[:8]
+	}
+	return merged
 }
 
 // DashboardNetworkPolicyCoverage reports how many workloads are covered by at least one NetworkPolicy.
@@ -1575,9 +1862,9 @@ func (s *Server) getDashboardNetworkPolicyCoverage(cache *k8s.ResourceCache, nam
 
 // DashboardAudit is the audit summary in the dashboard response.
 type DashboardAudit struct {
-	Passing    int                                `json:"passing"`
-	Warning    int                                `json:"warning"`
-	Danger     int                                `json:"danger"`
+	Passing    int                                 `json:"passing"`
+	Warning    int                                 `json:"warning"`
+	Danger     int                                 `json:"danger"`
 	Categories map[string]DashboardCategorySummary `json:"categories"`
 }
 
@@ -1608,4 +1895,3 @@ func getDashboardAudit(cache *k8s.ResourceCache, namespaces []string) *Dashboard
 		Categories: cats,
 	}
 }
-

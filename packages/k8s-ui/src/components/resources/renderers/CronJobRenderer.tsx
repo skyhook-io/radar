@@ -15,17 +15,24 @@ export function CronJobRenderer({ data, onNavigate }: CronJobRendererProps) {
   const isSuspended = spec.suspend === true
   const hasNeverRun = !status.lastScheduleTime
 
-  // Calculate time since last success vs last schedule
-  const lastScheduleAge = status.lastScheduleTime ? new Date().getTime() - new Date(status.lastScheduleTime).getTime() : 0
-  const lastSuccessAge = status.lastSuccessfulTime ? new Date().getTime() - new Date(status.lastSuccessfulTime).getTime() : 0
-  const recentFailures = lastScheduleAge > 0 && lastSuccessAge > lastScheduleAge
+  // "Recent failures" means the latest scheduled run didn't reach success.
+  // Only meaningful once nothing is running — while a job is active the most
+  // recent run is simply still in flight, not failing. With concurrencyPolicy
+  // Allow an older failed run can overlap a new active one; CronJob status only
+  // carries aggregate timestamps, so we accept missing that rare case here (the
+  // failed Job still surfaces in the job list / topology) rather than reviving
+  // the false positive that fired on every normal in-flight run.
+  const activeJobs = status.active?.length || 0
+  const lastSchedule = status.lastScheduleTime ? new Date(status.lastScheduleTime).getTime() : 0
+  const lastSuccess = status.lastSuccessfulTime ? new Date(status.lastSuccessfulTime).getTime() : 0
+  const recentFailures = activeJobs === 0 && lastSchedule > 0 && lastSchedule > lastSuccess
 
   return (
     <>
-      {/* Suspended warning */}
+      {/* Suspended is an intentional operator state, not a fault — keep it informational. */}
       {isSuspended && (
         <AlertBanner
-          variant="warning"
+          variant="info"
           icon={Pause}
           title="CronJob Suspended"
           message="No new jobs will be scheduled until this CronJob is resumed."
@@ -42,7 +49,7 @@ export function CronJobRenderer({ data, onNavigate }: CronJobRendererProps) {
       )}
 
       {/* Recent failures warning */}
-      {recentFailures && (
+      {recentFailures && !isSuspended && (
         <AlertBanner
           variant="error"
           title="Recent Jobs Failing"

@@ -1,0 +1,35 @@
+{{- /*
+Cluster-admin-equivalent add-on ClusterRole. Emitted under the same gate as
+radar-helm but bound only to cloud:owner — never cloud:member.
+
+The verbs in this role are individually sufficient for self-promotion to
+cluster-admin or for bypassing admission control:
+  - rbac writes: bind your own user to cluster-admin in one apply
+  - webhook writes: delete the policy that blocks privileged pods
+  - apiservices: register a rogue aggregated API
+Granting these to a tier weaker than owner collapses the owner/member
+distinction. Charts that bundle their own RBAC, webhooks, or APIServices
+require an owner identity to install.
+*/}}
+{{- if and .Values.rbac.create .Values.rbac.helm (or (ne .Values.auth.mode "none") .Values.cloud.enabled) -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-helm-admin
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - validatingwebhookconfigurations
+      - mutatingwebhookconfigurations
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apiregistration.k8s.io"]
+    resources: ["apiservices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}

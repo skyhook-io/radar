@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadMissing(t *testing.T) {
@@ -33,10 +34,18 @@ func TestSaveAndLoad(t *testing.T) {
 		Namespace:       "prod",
 		Port:            9999,
 		NoBrowser:       true,
+		Browser:         "firefox",
 		TimelineStorage: "sqlite",
 		HistoryLimit:    5000,
 		PrometheusURL:   "http://prom:9090",
-		MCP:             &mcp,
+		PrometheusHeaders: map[string]string{
+			"Authorization": "Bearer abc",
+			"X-Scope-OrgID": "tenant-1",
+		},
+		PrometheusHeadersFromEnv: map[string]string{
+			"X-Api-Key": "PROMETHEUS_API_KEY",
+		},
+		MCP: &mcp,
 	}
 
 	if err := Save(want); err != nil {
@@ -65,6 +74,9 @@ func TestSaveAndLoad(t *testing.T) {
 	if got.NoBrowser != want.NoBrowser {
 		t.Errorf("NoBrowser = %v, want %v", got.NoBrowser, want.NoBrowser)
 	}
+	if got.Browser != want.Browser {
+		t.Errorf("Browser = %q, want %q", got.Browser, want.Browser)
+	}
 	if got.TimelineStorage != want.TimelineStorage {
 		t.Errorf("TimelineStorage = %q, want %q", got.TimelineStorage, want.TimelineStorage)
 	}
@@ -73,6 +85,15 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 	if got.MCP == nil || *got.MCP != true {
 		t.Errorf("MCP = %v, want true", got.MCP)
+	}
+	if len(got.PrometheusHeaders) != 2 ||
+		got.PrometheusHeaders["Authorization"] != "Bearer abc" ||
+		got.PrometheusHeaders["X-Scope-OrgID"] != "tenant-1" {
+		t.Errorf("PrometheusHeaders = %v, want %v", got.PrometheusHeaders, want.PrometheusHeaders)
+	}
+	if len(got.PrometheusHeadersFromEnv) != 1 ||
+		got.PrometheusHeadersFromEnv["X-Api-Key"] != "PROMETHEUS_API_KEY" {
+		t.Errorf("PrometheusHeadersFromEnv = %v, want %v", got.PrometheusHeadersFromEnv, want.PrometheusHeadersFromEnv)
 	}
 }
 
@@ -134,6 +155,63 @@ func TestHelpers(t *testing.T) {
 		}
 		if (Config{TimelineStorage: "sqlite"}).TimelineStorageOr("memory") != "sqlite" {
 			t.Error("set TimelineStorage should return value")
+		}
+	})
+
+	t.Run("TimelineRetentionOr", func(t *testing.T) {
+		def := 7 * 24 * time.Hour
+		cases := []struct {
+			name string
+			in   string
+			want time.Duration
+		}{
+			{"empty falls back to default", "", def},
+			{"valid duration", "168h", 168 * time.Hour},
+			{"explicit zero disables", "0", 0},
+			// Go's ParseDuration doesn't accept "d" — verify we fall back to
+			// def, not 0. A future "improvement" returning 0 on error would
+			// silently disable retention for everyone with this typo.
+			{"7d typo falls back to default", "7d", def},
+			{"garbage falls back to default", "garbage", def},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				got := (Config{TimelineRetention: tc.in}).TimelineRetentionOr(def)
+				if got != tc.want {
+					t.Errorf("TimelineRetentionOr(%q) = %s, want %s", tc.in, got, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("TimelineMaxSizeOr", func(t *testing.T) {
+		if (Config{}).TimelineMaxSizeOr("123") != "123" {
+			t.Error("empty TimelineMaxSize should return default")
+		}
+		if got := (Config{TimelineMaxSize: "800Mi"}).TimelineMaxSizeOr("0"); got != "800Mi" {
+			t.Errorf("TimelineMaxSizeOr(800Mi) = %q", got)
+		}
+		if got := (Config{TimelineMaxSize: "bad"}).TimelineMaxSizeOr("123"); got != "bad" {
+			t.Errorf("TimelineMaxSizeOr(bad) = %q, want bad", got)
+		}
+	})
+
+	t.Run("ParseByteSize", func(t *testing.T) {
+		cases := map[string]int64{
+			"42":    42,
+			"1Ki":   1024,
+			"1.5Mi": int64(1.5 * float64(1<<20)),
+			"2Gi":   2 << 30,
+			"3GB":   3_000_000_000,
+		}
+		for in, want := range cases {
+			got, err := ParseByteSize(in)
+			if err != nil {
+				t.Fatalf("ParseByteSize(%q): %v", in, err)
+			}
+			if got != want {
+				t.Errorf("ParseByteSize(%q) = %d, want %d", in, got, want)
+			}
 		}
 	})
 

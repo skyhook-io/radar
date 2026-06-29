@@ -3,6 +3,7 @@ package images
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -180,25 +181,33 @@ func (h *Handlers) handleGetFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
-	w.Write(content)
+	if _, err := w.Write(content); err != nil {
+		log.Printf("[images] Failed to write file content: %v", err)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("[images] Failed to encode JSON response: %v", err)
+	}
 }
 
 func writeAuthError(w http.ResponseWriter, image string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"error":        "Authentication required for this image",
 		"registryType": string(DetectRegistryType(image)),
-	})
+	}); err != nil {
+		log.Printf("[images] Failed to encode auth error response: %v", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		log.Printf("[images] Failed to encode error response: %v", err)
+	}
 }

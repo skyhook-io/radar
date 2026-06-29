@@ -62,9 +62,9 @@ export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectR
       )}
       {isPaused && (
         <AlertBanner
-          variant="warning"
+          variant="info"
           title="Scaling Paused"
-          message="Autoscaling is paused via annotation."
+          message="Autoscaling is paused via annotation. This is intentional — resume by removing the paused annotation."
         />
       )}
 

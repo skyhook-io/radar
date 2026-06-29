@@ -20,13 +20,40 @@ type DesktopApp struct {
 	ctx              context.Context
 	srv              *server.Server
 	timelineStoreCfg timeline.StoreConfig
+
+	// setWindowTitle is the side-effecty title setter, injectable for tests.
+	// Defaults to wailsRuntime.WindowSetTitle bound to a.ctx.
+	setWindowTitle func(title string)
 }
 
 func NewDesktopApp(srv *server.Server, timelineStoreCfg timeline.StoreConfig) *DesktopApp {
-	return &DesktopApp{
+	a := &DesktopApp{
 		srv:              srv,
 		timelineStoreCfg: timelineStoreCfg,
 	}
+	a.setWindowTitle = func(title string) {
+		if a.ctx == nil {
+			return
+		}
+		wailsRuntime.WindowSetTitle(a.ctx, title)
+	}
+	return a
+}
+
+// formatWindowTitle returns the Wails window title for a given kubeconfig
+// context name. Empty context (e.g. before the cluster is initialized) yields
+// the bare product name. Otherwise the context is run through clusterShortName
+// so the OS title matches the label the in-page cluster selector shows for the
+// same cluster (e.g. "packagear-prod-eks", not the full EKS ARN).
+func formatWindowTitle(contextName string) string {
+	if contextName == "" {
+		return "Radar"
+	}
+	return "Radar — " + clusterShortName(contextName)
+}
+
+func (a *DesktopApp) updateWindowTitle(contextName string) {
+	a.setWindowTitle(formatWindowTitle(contextName))
 }
 
 // startup is called when the Wails app starts.
@@ -34,6 +61,13 @@ func (a *DesktopApp) startup(ctx context.Context) {
 	a.ctx = ctx
 	startNativeMouseMonitor(ctx)
 	a.srv.SetSaveFileFunc(a.saveFile)
+
+	// The OS titlebar must track the active kubeconfig context for the same
+	// reason the in-page selector does: a fleet UI showing the wrong cluster
+	// name invites destructive actions on the wrong cluster.
+	k8s.OnContextSwitch(func(newContext string) {
+		a.updateWindowTitle(newContext)
+	})
 }
 
 // saveFile writes a file to the user's Downloads folder.
@@ -73,11 +107,7 @@ func (a *DesktopApp) saveFile(defaultFilename string, data []byte) (string, erro
 
 // domReady is called when the webview DOM is ready.
 func (a *DesktopApp) domReady(ctx context.Context) {
-	// Update window title with cluster context
-	contextName := k8s.GetContextName()
-	if contextName != "" {
-		wailsRuntime.WindowSetTitle(ctx, "Radar — "+contextName)
-	}
+	a.updateWindowTitle(k8s.GetContextName())
 }
 
 // beforeClose is called before the window closes. Return true to prevent closing.

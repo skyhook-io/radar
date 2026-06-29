@@ -2,8 +2,8 @@ import { Server, Cpu, Settings } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
+import { CAPACITY_TYPE_BADGE, BADGE_INACTIVE } from '../../../utils/badge-colors'
 import {
-  CAPACITY_TYPE_BADGE,
   getNodeClaimStatus,
   getNodeClaimInstanceType,
   getNodeClaimNodeName,
@@ -188,7 +188,7 @@ export function KarpenterNodeClaimRenderer({ data, onNavigate }: KarpenterNodeCl
                     isComplete && 'bg-green-500/20 text-green-400',
                     isCurrent && 'bg-blue-500/20 text-blue-400',
                     isFailed && 'bg-red-500/20 text-red-400',
-                    isPending && !isCurrent && 'bg-gray-500/20 text-gray-400'
+                    isPending && !isCurrent && BADGE_INACTIVE
                   )}
                 >
                   {isComplete ? '\u2713' : isFailed ? '\u2717' : isCurrent ? '\u25CF' : '\u25CB'}

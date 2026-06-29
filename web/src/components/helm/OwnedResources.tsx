@@ -1,18 +1,19 @@
 import { useState, useCallback } from 'react'
-import { Link2, ExternalLink, AlertCircle, Terminal, FileText, Plug, X, Loader2 } from 'lucide-react'
+import { Link2, ExternalLink, AlertCircle, Terminal, FileText, X, Loader2 } from 'lucide-react'
 import { getResourceIcon } from '../../utils/resource-icons'
 import { clsx } from 'clsx'
 import type { HelmOwnedResource } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
-import { kindToPlural } from '../../utils/navigation'
+import { kindToPlural, apiVersionToGroup } from '../../utils/navigation'
 import { getResourceStatusColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { useQueryClient } from '@tanstack/react-query'
 import { useOpenTerminal, useOpenLogs } from '../dock'
-import { useStartPortForward } from '../portforward/PortForwardManager'
+import { PortForwardInlineButton } from '../portforward/PortForwardButton'
 import { useAvailablePorts } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
-import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
+import { useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
 import { pluralize } from '@skyhook-io/k8s-ui'
+import { Tooltip } from '../ui/Tooltip'
 
 interface OwnedResourcesProps {
   resources: HelmOwnedResource[]
@@ -103,13 +104,14 @@ export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
           ) : (
             <span className="flex items-center gap-2">
               Showing {filteredResources.length} of {resources.length} resources
+              <Tooltip content="Clear filter">
               <button
                 onClick={() => setHealthFilter('all')}
                 className="p-0.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-                title="Clear filter"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
+              </Tooltip>
             </span>
           )}
         </div>
@@ -205,7 +207,7 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
 
   const handleClick = () => {
     if (onNavigate) {
-      onNavigate({ kind: kindToPlural(resource.kind), namespace: resource.namespace, name: resource.name })
+      onNavigate({ kind: kindToPlural(resource.kind), namespace: resource.namespace, name: resource.name, group: apiVersionToGroup(resource.apiVersion) })
     }
   }
 
@@ -255,39 +257,44 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
 
         {/* Status badge */}
         {resource.status && (
+          <Tooltip content={resource.message || resource.status}>
           <span
             className={clsx('badge-sm', getResourceStatusColor(resource.status || ''))}
-            title={resource.message || resource.status}
           >
             {resource.status}
           </span>
+          </Tooltip>
         )}
 
         {/* Issue summary (e.g., "OOMKilled", "CrashLoopBackOff") */}
         {resource.issue && (
+          <Tooltip content={resource.summary || resource.issue}>
           <span
             className="text-xs text-red-400"
-            title={resource.summary || resource.issue}
           >
             {resource.issue}
           </span>
+          </Tooltip>
         )}
 
         {/* Error icon with message tooltip */}
         {isError && resource.message && !resource.issue && (
-          <span title={resource.message}>
+          <Tooltip content={resource.message}>
+          <span>
             <AlertCircle className="w-3.5 h-3.5 text-red-400" />
           </span>
+          </Tooltip>
         )}
 
         {canNavigate && (
+          <Tooltip content="View details">
           <button
             onClick={handleClick}
             className="p-1 text-theme-text-tertiary opacity-0 group-hover:opacity-100 hover:text-theme-text-primary hover:bg-theme-elevated rounded transition-all"
-            title="View details"
           >
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
+          </Tooltip>
         )}
       </div>
     </div>
@@ -305,11 +312,14 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
   const queryClient = useQueryClient()
   const openTerminal = useOpenTerminal()
   const openLogs = useOpenLogs()
-  const startPortForward = useStartPortForward()
   const { data: portsData, isLoading: portsLoading } = useAvailablePorts('pod', namespace, podName)
 
   // Capabilities (namespace-scoped: re-checks RBAC if globally denied)
   const { canExec, canViewLogs, canPortForward } = useNamespacedCapabilities(namespace)
+  // Live forward (local + RBAC) or the kubectl copy-command (in-cluster/Cloud);
+  // PortForwardInlineButton picks which by deployment mode.
+  const isLocal = useIsLocalDeployment()
+  const showPortForward = canPortForward || !isLocal
 
   const [isLoadingAction, setIsLoadingAction] = useState(false)
 
@@ -367,14 +377,6 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
     }
   }, [namespace, podName, openLogs, fetchPodData])
 
-  const handlePortForward = useCallback((port: number) => {
-    startPortForward.mutate({
-      namespace,
-      podName,
-      podPort: port,
-    })
-  }, [namespace, podName, startPortForward])
-
   const ports = portsData?.ports || []
 
   return (
@@ -383,42 +385,33 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
 
       {/* Terminal */}
       {isRunning && canExec && (
+        <Tooltip content="Open terminal">
         <button
           onClick={(e) => { e.stopPropagation(); handleOpenTerminal() }}
           disabled={isLoadingAction}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50"
-          title="Open terminal"
+          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none"
         >
           <Terminal className="w-3.5 h-3.5" />
         </button>
+        </Tooltip>
       )}
 
       {/* Logs */}
       {canViewLogs && (
+        <Tooltip content="View logs">
         <button
           onClick={(e) => { e.stopPropagation(); handleOpenLogs() }}
           disabled={isLoadingAction}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50"
-          title="View logs"
+          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none"
         >
           <FileText className="w-3.5 h-3.5" />
         </button>
+        </Tooltip>
       )}
 
-      {/* Port Forward */}
-      {canPortForward && !portsLoading && ports.length > 0 && (
-        <button
-          onClick={(e) => { e.stopPropagation(); handlePortForward(ports[0].port) }}
-          disabled={startPortForward.isPending}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50"
-          title={`Port forward :${ports[0].port}`}
-        >
-          {startPortForward.isPending ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <Plug className="w-3.5 h-3.5" />
-          )}
-        </button>
+      {/* Port Forward (live locally; kubectl copy-command in-cluster/Cloud) */}
+      {showPortForward && !portsLoading && ports.length > 0 && (
+        <PortForwardInlineButton namespace={namespace} podName={podName} port={ports[0].port} />
       )}
     </div>
   )
@@ -431,36 +424,18 @@ interface ServiceQuickActionsProps {
 }
 
 function ServiceQuickActions({ namespace, serviceName }: ServiceQuickActionsProps) {
-  const startPortForward = useStartPortForward()
   const { data: portsData, isLoading: portsLoading } = useAvailablePorts('service', namespace, serviceName)
   const { canPortForward } = useNamespacedCapabilities(namespace)
-
-  const handlePortForward = useCallback((port: number) => {
-    startPortForward.mutate({
-      namespace,
-      serviceName,
-      podPort: port,
-    })
-  }, [namespace, serviceName, startPortForward])
+  const isLocal = useIsLocalDeployment()
+  const showPortForward = canPortForward || !isLocal
 
   const ports = portsData?.ports || []
 
-  if (!canPortForward || portsLoading || ports.length === 0) return null
+  if (!showPortForward || portsLoading || ports.length === 0) return null
 
   return (
     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-      <button
-        onClick={(e) => { e.stopPropagation(); handlePortForward(ports[0].port) }}
-        disabled={startPortForward.isPending}
-        className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50"
-        title={`Port forward :${ports[0].port}`}
-      >
-        {startPortForward.isPending ? (
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-        ) : (
-          <Plug className="w-3.5 h-3.5" />
-        )}
-      </button>
+      <PortForwardInlineButton namespace={namespace} serviceName={serviceName} port={ports[0].port} />
     </div>
   )
 }

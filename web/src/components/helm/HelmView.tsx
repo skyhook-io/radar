@@ -1,11 +1,12 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield } from 'lucide-react'
+import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
+import { PaneLoader, PageHeader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
-import type { HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
-import { getStatusColor, formatAge, truncate } from './helm-utils'
+import type { HelmOperation, HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
+import { getStatusColor, formatAge, isHelmReleaseActionable } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { ChartBrowser } from './ChartBrowser'
@@ -14,24 +15,26 @@ import { InstallWizard } from './InstallWizard'
 type ViewTab = 'releases' | 'charts'
 
 interface HelmViewProps {
-  namespace: string
+  namespaces: string[]
   selectedRelease?: SelectedHelmRelease | null
-  onReleaseClick?: (namespace: string, name: string) => void
+  onReleaseClick?: (namespace: string, name: string, storageNamespace?: string) => void
 }
 
-export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmViewProps) {
+export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmViewProps) {
   const [activeTab, setActiveTab] = useState<ViewTab>('releases')
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedChart, setSelectedChart] = useState<{ repo: string; chart: string; version: string; source: ChartSource } | null>(null)
 
-  const { data: releases, isLoading, error: releasesError, refetch: refetchReleases } = useHelmReleases(namespace || undefined)
+  const { data: releases, isLoading, error: releasesError, refetch: refetchReleases } = useHelmReleases(namespaces)
   const isForbidden = isForbiddenError(releasesError)
+  const releasesErrorMessage = releasesError instanceof Error ? releasesError.message : 'Failed to load Helm releases'
 
   // Lazy load upgrade info after releases are loaded
-  const { data: upgradeInfo, isLoading: upgradeLoading, refetch: refetchUpgradeInfo } = useHelmBatchUpgradeInfo(
-    namespace || undefined,
+  const { data: upgradeInfo, isLoading: upgradeLoading, error: upgradeError, refetch: refetchUpgradeInfo } = useHelmBatchUpgradeInfo(
+    namespaces,
     Boolean(releases && releases.length > 0)
   )
+  const upgradeErrorMessage = upgradeError instanceof Error ? upgradeError.message : 'Upgrade checks failed'
 
   const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(async () => {
     await Promise.all([refetchReleases(), refetchUpgradeInfo()])
@@ -131,7 +134,7 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
       scope: 'helm',
       handler: () => {
         const release = getHighlightedRelease()
-        if (release) onReleaseClick?.(release.namespace, release.name)
+        if (release) onReleaseClick?.(release.namespace, release.name, release.storageNamespace)
       },
       enabled: highlightedIndex >= 0,
     },
@@ -164,6 +167,14 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
     <div className="flex h-full w-full">
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 w-full">
+        {/* Page header — consistent across views; the tabs + search sit below. */}
+        <div className="px-4 pt-4 pb-1">
+          <PageHeader
+            icon={Package}
+            title="Helm"
+            description="Installed Helm releases and the chart catalog for this cluster."
+          />
+        </div>
         {/* Tab bar */}
         <div className="flex items-center gap-1 px-4 pt-3 border-b border-theme-border bg-theme-surface/50">
           <button
@@ -201,13 +212,9 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
           <>
             {/* Releases Toolbar */}
             <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
-              <div className="flex items-center gap-2 text-theme-text-secondary">
-                <Package className="w-5 h-5" />
-                <span className="font-medium">Helm Releases</span>
-                {!isFullyLoaded && (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-theme-text-tertiary" />
-                )}
-              </div>
+              {!isFullyLoaded && (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-theme-text-tertiary shrink-0" />
+              )}
               <div className="flex-1 relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
                 <input
@@ -219,27 +226,45 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
                   className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
+              <Tooltip content="Refresh">
               <button
                 onClick={handleRefresh}
                 disabled={isRefreshAnimating}
-                className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg disabled:opacity-50"
-                title="Refresh"
+                className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg disabled:opacity-50 disabled:pointer-events-none"
               >
                 <RefreshCw className={clsx('w-4 h-4', isRefreshAnimating && 'animate-spin')} />
               </button>
+              </Tooltip>
             </div>
 
             {/* Releases Table */}
             <div className="flex-1 overflow-auto">
-              {isLoading ? (
-                <div className="flex items-center justify-center h-full text-theme-text-tertiary">
-                  Loading...
+              {upgradeError && (
+                <div className="m-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+                  Upgrade checks failed: {upgradeErrorMessage}
                 </div>
+              )}
+              {isLoading ? (
+                <PaneLoader className="h-full" />
               ) : isForbidden ? (
                 <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
                   <Shield className="w-8 h-8 text-amber-400 mb-2" />
                   <p className="text-theme-text-secondary font-medium">Access Restricted</p>
                   <p className="text-sm mt-1">Insufficient permissions to list Helm releases</p>
+                </div>
+              ) : releasesError ? (
+                <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-3 px-6 text-center">
+                  <Package className="w-10 h-10 text-amber-400" />
+                  <div>
+                    <p className="text-theme-text-secondary font-medium">Failed to load Helm releases</p>
+                    <p className="text-sm mt-1 break-all">{releasesErrorMessage}</p>
+                  </div>
+                  <button
+                    onClick={() => refetchReleases()}
+                    className="px-3 py-1.5 text-sm text-theme-text-primary border border-theme-border rounded-lg hover:bg-theme-elevated transition-colors"
+                  >
+                    Retry
+                  </button>
                 </div>
               ) : filteredReleases.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-2">
@@ -266,22 +291,22 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
                 <table className="w-full table-fixed">
                   <thead className="bg-theme-surface sticky top-0 z-10">
                     <tr>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-[28%]">
                         Name
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-32">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-[18%]">
                         Namespace
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-48">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-[22%]">
                         Chart
                       </th>
                       <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24 hidden xl:table-cell">
                         App Version
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-28">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-40">
                         Status
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-20">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-16">
                         Rev
                       </th>
                       <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24">
@@ -292,16 +317,17 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
                   <tbody className="table-divide-subtle">
                     {filteredReleases.map((release, index) => (
                       <ReleaseRow
-                        key={`${release.namespace}-${release.name}`}
+                        key={releaseIdentityKey(release)}
                         ref={index === highlightedIndex ? highlightedRowRef : null}
                         release={release}
-                        upgradeInfo={upgradeInfo?.releases[`${release.namespace}/${release.name}`]}
+                        upgradeInfo={upgradeInfo?.releases[releaseIdentityKey(release)]}
                         isSelected={
                           selectedRelease?.namespace === release.namespace &&
-                          selectedRelease?.name === release.name
+                          selectedRelease?.name === release.name &&
+                          (selectedRelease?.storageNamespace || selectedRelease?.namespace) === (release.storageNamespace || release.namespace)
                         }
                         isHighlighted={index === highlightedIndex}
-                        onClick={() => onReleaseClick?.(release.namespace, release.name)}
+                        onClick={() => onReleaseClick?.(release.namespace, release.name, release.storageNamespace)}
                         onMouseEnter={() => setHighlightedIndex(-1)}
                       />
                     ))}
@@ -328,6 +354,10 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
       )}
     </div>
   )
+}
+
+function releaseIdentityKey(release: Pick<HelmRelease, 'namespace' | 'name' | 'storageNamespace'>): string {
+  return `${release.storageNamespace || release.namespace}/${release.name}`
 }
 
 interface ReleaseRowProps {
@@ -381,8 +411,74 @@ function getActionableTooltip(issue: string | undefined, summary: string | undef
   )
 }
 
+function getListOperation(release: HelmRelease): HelmOperation | undefined {
+  if (release.lastOperation) {
+    const releaseStatus = release.status.toLowerCase()
+    if (release.lastOperation.status === 'failed' && releaseStatus === 'failed') {
+      return undefined
+    }
+    if (isListOperation(release.lastOperation)) {
+      return release.lastOperation
+    }
+  }
+  return release.operations?.find(isListOperation)
+}
+
+function isListOperation(operation: HelmOperation): boolean {
+  return operation.kind === 'upgrade_rolled_back' || operation.kind === 'rollback' || operation.status === 'stuck_pending'
+}
+
+function HelmOperationChip({ operation }: { operation: HelmOperation }) {
+  const isPending = operation.status === 'stuck_pending'
+  const isRollback = operation.kind === 'upgrade_rolled_back' || operation.kind === 'rollback'
+  const Icon = isRollback ? RotateCcw : Clock
+  const tone: keyof typeof SEVERITY_BADGE = operation.kind === 'rollback' ? 'info' : isPending ? 'warning' : 'alert'
+  const label = operation.kind === 'upgrade_rolled_back'
+    ? 'rolled back'
+    : operation.kind === 'rollback'
+      ? 'rollback'
+      : 'stuck'
+
+  return (
+    <Tooltip content={
+      <div className="max-w-xs">
+        <div className="font-medium text-theme-text-primary">{operationSummary(operation)}</div>
+        <div className="mt-1 text-[10px] text-theme-text-secondary">{operation.message}</div>
+        {operation.failureDescription && (
+          <div className="mt-1.5 border-t border-theme-border pt-1.5 text-[10px] text-theme-text-tertiary">
+            {operation.failureDescription}
+          </div>
+        )}
+      </div>
+    }>
+      <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE[tone])} aria-label={operationSummary(operation)}>
+        <Icon className="h-3 w-3" />
+        <span className="sr-only">{label}</span>
+        <span className="hidden 2xl:inline" aria-hidden="true">{label}</span>
+      </span>
+    </Tooltip>
+  )
+}
+
+function operationSummary(operation: HelmOperation): string {
+  switch (operation.kind) {
+    case 'upgrade_rolled_back':
+      return 'Helm rolled back after failed upgrade'
+    case 'rollback':
+      return 'Helm rollback applied'
+    case 'pending':
+      return 'Helm operation may be stuck'
+    case 'upgrade_failed':
+      return 'Helm upgrade failed'
+    default:
+      return 'Helm release failed'
+  }
+}
+
 const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
   function ReleaseRow({ release, upgradeInfo, isSelected, isHighlighted, onClick, onMouseEnter }, ref) {
+  const listOperation = getListOperation(release)
+
   // Health badge styling
   const getHealthBadge = () => {
     if (!release.resourceHealth || release.resourceHealth === 'unknown') return null
@@ -424,10 +520,19 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
       )}
     >
       <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
-          <span className="text-sm text-theme-text-primary font-medium truncate">{release.name}</span>
+          <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{release.name}</span>
           {getHealthBadge()}
+          {listOperation && <HelmOperationChip operation={listOperation} />}
+          {release.managedByFluxHelmRelease && (
+            <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${release.managedByFluxHelmRelease}. Changes here will be reverted at the next reconcile — manage via the GitOps tab.`}>
+              <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">
+                <GitBranch className="w-3 h-3" />
+                Flux
+              </span>
+            </Tooltip>
+          )}
           {upgradeInfo?.updateAvailable && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
               <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.warning)}>
@@ -437,30 +542,49 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           )}
         </div>
       </td>
-      <td className="px-4 py-3 w-32">
-        <span className="text-sm text-theme-text-secondary">{release.namespace}</span>
+      <td className="px-4 py-3 w-[18%]">
+        <Tooltip content={release.namespace}>
+          <span className="block truncate text-sm text-theme-text-secondary">{release.namespace}</span>
+        </Tooltip>
       </td>
-      <td className="px-4 py-3 w-48">
+      <td className="px-4 py-3 w-[22%]">
         <Tooltip content={`${release.chart}-${release.chartVersion}`}>
           <span className="text-sm text-theme-text-secondary truncate block">
-            {truncate(`${release.chart}-${release.chartVersion}`, 35)}
+            {release.chart}-{release.chartVersion}
           </span>
         </Tooltip>
       </td>
       <td className="px-4 py-3 w-24 hidden xl:table-cell">
-        <span className="text-sm text-theme-text-secondary">{release.appVersion || '-'}</span>
+        {release.appVersion ? (
+          <span className="text-sm text-theme-text-secondary">{release.appVersion}</span>
+        ) : (
+          <Tooltip content="This chart did not declare an appVersion in Chart.yaml.">
+            <span className="text-sm text-theme-text-disabled cursor-help">—</span>
+          </Tooltip>
+        )}
       </td>
-      <td className="px-4 py-3 w-28">
-        <span
-          className={clsx(
-            'badge',
-            getStatusColor(release.status)
-          )}
-        >
-          {release.status}
-        </span>
+      <td className="px-4 py-3 w-40">
+        {isHelmReleaseActionable(release.status) ? (
+          <Tooltip content="Click row to view rollback / history / logs and recover">
+            <span
+              className={clsx('badge inline-flex items-center gap-1', getStatusColor(release.status))}
+            >
+              {release.status}
+              <ChevronRight className="w-3 h-3 opacity-70" />
+            </span>
+          </Tooltip>
+        ) : (
+          <span
+            className={clsx(
+              'badge',
+              getStatusColor(release.status)
+            )}
+          >
+            {release.status}
+          </span>
+        )}
       </td>
-      <td className="px-4 py-3 w-20">
+      <td className="px-4 py-3 w-16">
         <span className="text-sm text-theme-text-secondary">{release.revision}</span>
       </td>
       <td className="px-4 py-3 w-24">

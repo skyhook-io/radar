@@ -8,6 +8,7 @@ import {
   useApplyDesktopUpdate,
 } from '../../api/client'
 import type { DesktopUpdateState } from '../../api/client'
+import { WithTooltip } from './Tooltip'
 
 const DISMISSED_KEY = 'radar-update-dismissed'
 
@@ -26,21 +27,16 @@ export function UpdateNotification() {
 
   const isDesktop = versionInfo?.installMethod === 'desktop'
 
-  // Listen for "Check for Updates" menu item in desktop app (Wails runtime event).
-  // Un-dismisses the notification and invalidates the version check cache.
+  // Listen for "Check for Updates" menu item in desktop app.
   useEffect(() => {
-    const wailsRuntime = (window as unknown as Record<string, unknown>).runtime as
-      | { EventsOn?: (event: string, callback: () => void) => () => void }
-      | undefined
-    if (!wailsRuntime?.EventsOn) return
-
-    const cleanup = wailsRuntime.EventsOn('check-for-updates', () => {
+    const handler = () => {
       setDismissed(false)
       try { localStorage.removeItem(DISMISSED_KEY) } catch { /* ignore */ }
       queryClient.invalidateQueries({ queryKey: ['version-check'] })
-    })
+    }
 
-    return cleanup
+    window.addEventListener('radar:check-for-updates', handler)
+    return () => window.removeEventListener('radar:check-for-updates', handler)
   }, [queryClient])
 
   // Log version check errors for debugging
@@ -111,13 +107,13 @@ export function UpdateNotification() {
   const effectiveState: DesktopUpdateState = updateStatus?.state ?? 'idle'
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 max-w-sm bg-theme-surface border border-blue-500/50 rounded-lg shadow-xl p-4 animate-in slide-in-from-right">
+    <div className="fixed bottom-4 right-4 z-50 max-w-sm bg-theme-surface border border-accent/50 rounded-lg shadow-xl p-4 animate-in slide-in-from-right">
       <div className="flex items-start gap-3">
-        <div className="flex items-center justify-center w-8 h-8 bg-blue-500/20 rounded-full shrink-0">
+        <div className="flex items-center justify-center w-8 h-8 bg-accent-muted rounded-full shrink-0">
           <UpdateIcon state={effectiveState} />
         </div>
         <div className="flex-1 min-w-0">
-          <h4 className="text-sm font-medium text-theme-text-primary">
+          <h4 className="text-sm font-medium text-theme-text-primary pr-6">
             <UpdateTitle state={effectiveState} />
           </h4>
           <p className="text-xs text-theme-text-secondary mt-1">
@@ -140,38 +136,54 @@ export function UpdateNotification() {
 
           {/* CLI: show update command with copy button for package managers */}
           {!isDesktop && versionInfo.updateCommand ? (
-            <button
-              onClick={handleCopyCommand}
-              className="flex items-center gap-2 mt-2 px-2 py-1.5 bg-theme-elevated rounded text-xs font-mono text-theme-text-primary hover:bg-theme-surface-hover transition-colors w-full"
-            >
-              <code className="flex-1 text-left truncate">{versionInfo.updateCommand}</code>
-              <CopyIcon copied={copied} failed={copyFailed} />
-            </button>
+            <>
+              <WithTooltip tip={versionInfo.updateCommand} delay={100}>
+                <button
+                  onClick={handleCopyCommand}
+                  className="flex items-center gap-2 mt-2 px-2 py-1.5 bg-theme-elevated rounded font-mono text-theme-text-primary hover:bg-theme-surface-hover transition-colors w-full"
+                >
+                  <code className="inline-code flex-1 truncate text-left text-[11px]">{versionInfo.updateCommand}</code>
+                  <CopyIcon copied={copied} failed={copyFailed} />
+                </button>
+              </WithTooltip>
+              {/* Direct installs may have placed the binary somewhere the install
+                  script won't touch — surface a download link as a fallback. */}
+              {versionInfo.installMethod === 'direct' && versionInfo.releaseUrl && (
+                <a
+                  href={versionInfo.releaseUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 mt-1.5 text-xs text-theme-text-tertiary hover:text-theme-text-secondary hover:underline"
+                >
+                  or download from GitHub →
+                </a>
+              )}
+            </>
           ) : (
-            /* Direct download - show release link */
             !isDesktop && versionInfo.releaseUrl && (
               <a
                 href={versionInfo.releaseUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-blue-400 hover:text-blue-300"
+                className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-accent-text hover:underline"
               >
                 Download from GitHub →
               </a>
             )
           )}
         </div>
-        {/* Don't show dismiss during active update */}
-        {effectiveState !== 'downloading' && effectiveState !== 'applying' && (
-          <button
-            onClick={handleDismiss}
-            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-            aria-label="Dismiss"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
       </div>
+      {/* Dismiss is absolute so it doesn't compress the chip's width.
+          fixed on the parent already establishes the positioning context. */}
+      {effectiveState !== 'downloading' && effectiveState !== 'applying' && (
+        <button
+          onClick={handleDismiss}
+          className="absolute top-2 right-2 p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+          aria-label="Dismiss"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      )}
     </div>
   )
 }
@@ -186,11 +198,11 @@ function UpdateIcon({ state }: { state: DesktopUpdateState }) {
   switch (state) {
     case 'downloading':
     case 'applying':
-      return <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+      return <Loader2 className="w-4 h-4 text-accent animate-spin" />
     case 'ready':
       return <ArrowDownToLine className="w-4 h-4 text-green-400" />
     default:
-      return <Download className="w-4 h-4 text-blue-400" />
+      return <Download className="w-4 h-4 text-accent" />
   }
 }
 
@@ -247,7 +259,7 @@ function DesktopUpdateControls({
         <div className="mt-2 space-y-1">
           <div className="w-full bg-theme-elevated rounded-full h-1.5 overflow-hidden">
             <div
-              className="bg-blue-500 h-full rounded-full transition-all duration-300"
+              className="bg-accent h-full rounded-full transition-all duration-300"
               style={{ width: `${Math.round((progress ?? 0) * 100)}%` }}
             />
           </div>
@@ -272,7 +284,7 @@ function DesktopUpdateControls({
     case 'applying':
       return (
         <div className="mt-2 flex items-center gap-2">
-          <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
+          <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />
           <p className="text-xs text-theme-text-secondary">Applying update...</p>
         </div>
       )

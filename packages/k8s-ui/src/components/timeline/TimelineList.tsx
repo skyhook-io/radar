@@ -1,10 +1,11 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { PaneLoader } from '../ui/PaneLoader'
+import { SearchBox } from '../ui/SearchBox'
 import {
   AlertCircle,
   CheckCircle,
   Clock,
-  Search,
   RefreshCw,
   ChevronRight,
   Filter,
@@ -21,9 +22,8 @@ import { isChangeEvent, isK8sEvent, isHistoricalEvent, isOperation } from '../..
 import { getOperationColor, getHealthBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { ResourceRefBadge } from '../ui/drawer-components'
 import type { NavigateToResource } from '../../utils/navigation'
-import { kindToPlural, refToSelectedResource } from '../../utils/navigation'
+import { kindToPlural, refToSelectedResource, apiVersionToGroup } from '../../utils/navigation'
 import { pluralize } from '../../utils/pluralize'
-import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 
 /** Format resource age (e.g., "3d", "5h", "10m") */
 function formatResourceAge(createdAt: string): string {
@@ -53,6 +53,11 @@ export interface TimelineListProps {
   onResourceClick?: NavigateToResource
   initialFilter?: ActivityTypeFilter
   initialTimeRange?: TimeRange
+  // Controlled "show deleted" toggle. When omitted the component manages it
+  // internally; the host passes it to share one toggle across list + swimlane
+  // and to drive server-side delete filtering.
+  showDeleted?: boolean
+  onShowDeletedChange?: (showDeleted: boolean) => void
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -80,35 +85,20 @@ const RESOURCE_KINDS = [
   'StatefulSet',
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, showDeleted: showDeletedProp, onShowDeletedChange }: TimelineListProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [activityTypeFilter, setActivityTypeFilter] = useState<ActivityTypeFilter>(initialFilter ?? 'all')
   const [timeRange, setTimeRange] = useState<TimeRange>(initialTimeRange ?? '1h')
   const [kindFilter, setKindFilter] = useState<string>('')
+  const [showDeletedInternal, setShowDeletedInternal] = useState(true)
+  const showDeleted = showDeletedProp ?? showDeletedInternal
+  const setShowDeleted = onShowDeletedChange ?? setShowDeletedInternal
   const [expandedItem, setExpandedItem] = useState<string | null>(null)
-  const searchInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     onQueryChange?.({ timeRange, kind: kindFilter || undefined })
   }, [timeRange, kindFilter, onQueryChange])
 
-  // Keyboard shortcut: / to focus search
-  useRegisterShortcut({
-    id: 'timeline-list-search',
-    keys: '/',
-    description: 'Focus search',
-    category: 'Search',
-    scope: 'timeline',
-    handler: () => searchInputRef.current?.focus(),
-  })
-  useRegisterShortcut({
-    id: 'timeline-list-escape',
-    keys: 'Escape',
-    description: 'Blur search',
-    category: 'Search',
-    scope: 'timeline',
-    handler: () => searchInputRef.current?.blur(),
-  })
 
   const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(onRefresh ?? (() => {}))
 
@@ -129,6 +119,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
         const isUnhealthyChange = isChangeEvent(item) && (item.healthState === 'unhealthy' || item.healthState === 'degraded')
         if (!isUnhealthyChange) return false
       }
+      if (!showDeleted && item.eventType === 'delete') return false
 
       // Filter by search term
       if (searchTerm) {
@@ -147,7 +138,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
 
       return true
     })
-  }, [events, activityTypeFilter, searchTerm])
+  }, [events, activityTypeFilter, searchTerm, showDeleted])
 
   // Aggregated event group type
   type AggregatedItem = {
@@ -263,12 +254,13 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
 
   // Count stats
   const stats = useMemo(() => {
-    if (!events) return { total: 0, changes: 0, warnings: 0, unhealthy: 0 }
+    if (!events) return { total: 0, changes: 0, warnings: 0, unhealthy: 0, deleted: 0 }
     return {
       total: events.length,
       changes: events.filter((e) => isChangeEvent(e)).length,
       warnings: events.filter((e) => e.eventType === 'Warning').length,
       unhealthy: events.filter((e) => isChangeEvent(e) && (e.healthState === 'unhealthy' || e.healthState === 'degraded')).length,
+      deleted: events.filter((e) => e.eventType === 'delete').length,
     }
   }, [events])
 
@@ -277,17 +269,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       {/* Toolbar */}
       <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 flex-wrap">
         {/* Search */}
-        <div className="flex-1 relative min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-          <input
-            ref={searchInputRef}
-            type="text"
-            placeholder="Search... (press /)"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
+        <SearchBox value={searchTerm} onChange={setSearchTerm} scope="timeline" shortcutId="timeline-list-search" className="flex-1 min-w-[200px] max-w-md" />
 
         {/* Activity type filter */}
         <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">
@@ -333,6 +315,24 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
             tooltip="All native Kubernetes events (Normal + Warning types)"
           />
         </div>
+
+        <button
+          type="button"
+          onClick={() => setShowDeleted(!showDeleted)}
+          title="Show or hide resources that were deleted, including Pods that no longer exist"
+          className={clsx(
+            'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 bg-theme-elevated',
+            showDeleted ? 'text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
+          )}
+        >
+          <Trash2 className="w-3 h-3" />
+          Deleted
+          {stats.deleted > 0 && (
+            <span className="text-xs px-1.5 rounded bg-theme-hover/50">
+              {stats.deleted}
+            </span>
+          )}
+        </button>
 
         {/* Kind filter */}
         <select
@@ -403,10 +403,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       {/* Timeline content */}
       <div className="flex-1 overflow-auto">
         {isLoading ? (
-          <div className="flex items-center justify-center h-full text-theme-text-tertiary">
-            <RefreshCw className="w-5 h-5 animate-spin mr-2" />
-            Loading timeline...
-          </div>
+          <PaneLoader label="Loading timeline…" className="h-full" />
         ) : filteredActivity.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
             <Clock className="w-12 h-12 mb-4 opacity-50" />
@@ -591,7 +588,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onResourceClick?.({ kind: kindToPlural(item.kind), namespace: item.namespace, name: item.name })
+                  onResourceClick?.({ kind: kindToPlural(item.kind), namespace: item.namespace, name: item.name, group: apiVersionToGroup(item.apiVersion) })
                 }}
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >
@@ -734,7 +731,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onResourceClick?.({ kind: kindToPlural(first.kind), namespace: first.namespace, name: first.name })
+                  onResourceClick?.({ kind: kindToPlural(first.kind), namespace: first.namespace, name: first.name, group: apiVersionToGroup(first.apiVersion) })
                 }}
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >

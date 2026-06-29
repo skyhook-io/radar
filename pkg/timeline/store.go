@@ -24,8 +24,11 @@ type EventStore interface {
 	// GetEvent retrieves a single event by ID
 	GetEvent(ctx context.Context, id string) (*TimelineEvent, error)
 
-	// GetChangesForOwner retrieves changes for resources owned by the given owner
-	GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName string, since time.Time, limit int) ([]TimelineEvent, error)
+	// GetChangesForOwner retrieves changes for resources owned by the given
+	// owner. clusterContext scopes to one cluster's events ("" = all) — owner
+	// identity (kind/namespace/name) collides across clusters in a persistent
+	// store, so current-cluster callers must pass it.
+	GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error)
 
 	// MarkResourceSeen records that a resource has been seen (for dedup on restart)
 	MarkResourceSeen(kind, namespace, name string)
@@ -48,9 +51,17 @@ type QueryOptions struct {
 	// Filters
 	Namespaces []string      // Filter by namespaces (empty = all)
 	Kinds      []string      // Filter by resource kinds (empty = all)
+	Names      []string      // Filter by resource names (empty = all)
 	Since      time.Time     // Filter events after this time
 	Until      time.Time     // Filter events before this time
 	Sources    []EventSource // Filter by event source (empty = all)
+	EventTypes []EventType   // Filter by event type, e.g. add/delete (empty = all)
+	// ClusterContext scopes results to one cluster's events (empty = all).
+	// Anything answering "what happened on THIS cluster" must set it: the
+	// SQLite store outlives context switches, and rows written before the
+	// column existed carry "" (unknowable provenance), which a non-empty
+	// filter deliberately excludes.
+	ClusterContext string
 
 	// Filter preset (overrides individual filters if set)
 	FilterPreset string
@@ -64,6 +75,7 @@ type QueryOptions struct {
 
 	// Include/exclude options
 	IncludeManaged   bool // Include ReplicaSets, Pods, Events (default false)
+	ExcludeDeleted   bool // Exclude delete events
 	IncludeK8sEvents bool // Include K8s Event resources (default true)
 }
 
@@ -73,6 +85,7 @@ func DefaultQueryOptions() QueryOptions {
 		Limit:            200,
 		GroupBy:          GroupByNone,
 		IncludeManaged:   false,
+		ExcludeDeleted:   false,
 		IncludeK8sEvents: true,
 	}
 }
@@ -84,6 +97,13 @@ type StoreStats struct {
 	NewestEvent   time.Time `json:"newestEvent"`
 	StorageBytes  int64     `json:"storageBytes,omitempty"`
 	SeenResources int       `json:"seenResources"`
+
+	// SQLite-only retention/cleanup state. Zero values for memory store.
+	RetentionAge           time.Duration `json:"retentionAge,omitempty"`
+	MaxStorageBytes        int64         `json:"maxStorageBytes,omitempty"`
+	LastCleanupAt          time.Time     `json:"lastCleanupAt,omitempty"`
+	LastCleanupDeletedRows int64         `json:"lastCleanupDeletedRows,omitempty"`
+	LastCleanupError       string        `json:"lastCleanupError,omitempty"`
 }
 
 // CompiledFilter is a pre-compiled filter for efficient event filtering

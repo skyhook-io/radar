@@ -43,22 +43,28 @@ func TestIsNewerVersion(t *testing.T) {
 
 func TestGetUpdateCommand(t *testing.T) {
 	tests := []struct {
+		name   string
 		method InstallMethod
+		goos   string
 		want   string
 	}{
-		{InstallHomebrew, "brew upgrade skyhook-io/tap/radar"},
-		{InstallKrew, "kubectl krew upgrade radar"},
-		{InstallScoop, "scoop update radar"},
-		{InstallDirect, ""},
-		{InstallDesktop, ""},
-		{InstallMethod("unknown"), ""},
+		{"homebrew", InstallHomebrew, "darwin", "brew upgrade skyhook-io/tap/radar"},
+		{"krew", InstallKrew, "linux", "kubectl krew upgrade radar"},
+		{"scoop", InstallScoop, "windows", "scoop update radar"},
+		{"direct linux", InstallDirect, "linux", "curl -fsSL https://get.radarhq.io | sh"},
+		{"direct darwin", InstallDirect, "darwin", "curl -fsSL https://get.radarhq.io | sh"},
+		{"direct windows", InstallDirect, "windows", "irm https://get.radarhq.io/install.ps1 | iex"},
+		{"direct freebsd falls through", InstallDirect, "freebsd", ""},
+		{"direct empty goos falls through", InstallDirect, "", ""},
+		{"desktop", InstallDesktop, "darwin", ""},
+		{"unknown", InstallMethod("unknown"), "linux", ""},
 	}
 
 	for _, tt := range tests {
-		t.Run(string(tt.method), func(t *testing.T) {
-			got := getUpdateCommand(tt.method)
+		t.Run(tt.name, func(t *testing.T) {
+			got := getUpdateCommandForOS(tt.method, tt.goos)
 			if got != tt.want {
-				t.Errorf("getUpdateCommand(%q) = %q, want %q", tt.method, got, tt.want)
+				t.Errorf("getUpdateCommandForOS(%q, %q) = %q, want %q", tt.method, tt.goos, got, tt.want)
 			}
 		})
 	}

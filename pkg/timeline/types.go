@@ -42,6 +42,12 @@ const (
 	EventTypeWarning EventType = "Warning"
 )
 
+// ReasonRecreated marks an add event that replaced a just-deleted resource of
+// the same kind/namespace/name (different UID). Such events carry a Diff
+// against the predecessor object — the delete+add pair was a recreate, and
+// the diff shows what changed across it.
+const ReasonRecreated = "recreated"
+
 // HealthState represents the health of a resource
 type HealthState string
 
@@ -49,7 +55,11 @@ const (
 	HealthHealthy   HealthState = "healthy"
 	HealthDegraded  HealthState = "degraded"
 	HealthUnhealthy HealthState = "unhealthy"
-	HealthUnknown   HealthState = "unknown"
+	// HealthNeutral = intentional/idle (suspended, scaled-to-0, completed) —
+	// renders sky in the timeline, distinct from HealthUnknown (gray). Aggregates
+	// as most-benign via health.WorseOf (ties healthy, healthy-preferred).
+	HealthNeutral HealthState = "neutral"
+	HealthUnknown HealthState = "unknown"
 )
 
 // GroupingMode determines how events are grouped in the timeline
@@ -74,12 +84,18 @@ type TimelineEvent struct {
 	ID        string      `json:"id"`
 	Timestamp time.Time   `json:"timestamp"`
 	Source    EventSource `json:"source"`
+	// ClusterContext is the kubeconfig context the event was observed on
+	// ("in-cluster" when no context name exists). Persistent stores outlive
+	// context switches, so reads MUST scope to the active context or events
+	// from a previously-connected cluster leak into answers about this one.
+	ClusterContext string `json:"clusterContext,omitempty"`
 
 	// Resource identity
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	UID       string `json:"uid,omitempty"`
+	Kind       string `json:"kind"`
+	APIVersion string `json:"apiVersion,omitempty"` // e.g. "apps/v1", "cluster.x-k8s.io/v1beta1" — disambiguates CRD kind collisions on navigation
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	UID        string `json:"uid,omitempty"`
 
 	// Resource metadata - when the resource was actually created in K8s
 	// This is different from Timestamp which is when we observed the event

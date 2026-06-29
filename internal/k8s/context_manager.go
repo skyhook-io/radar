@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -13,8 +14,9 @@ import (
 	"github.com/skyhook-io/radar/internal/errorlog"
 )
 
-// ContextSwitchTimeout is the maximum time allowed for a context switch operation
-const ContextSwitchTimeout = 30 * time.Second
+// ContextSwitchTimeout is now defined in deadlines.go as a package variable
+// so operators can override it via flag/env without recompiling. The default
+// value (30 * time.Second) is preserved for backwards compatibility.
 
 // ConnectionTestTimeout is the maximum time allowed for initial connection test
 // This is a short timeout for quick fail detection
@@ -22,6 +24,10 @@ const ConnectionTestTimeout = 5 * time.Second
 
 // ContextSwitchCallback is called when the context is switched
 type ContextSwitchCallback func(newContext string)
+
+// NamespaceRescopeCallback is called when the active cache namespace changes
+// without switching kubeconfig contexts.
+type NamespaceRescopeCallback func(namespace string)
 
 // ContextSwitchProgressCallback is called with progress updates during context switch
 type ContextSwitchProgressCallback func(message string)
@@ -54,6 +60,7 @@ type PrometheusReinitFunc func() error
 
 var (
 	contextSwitchCallbacks         []ContextSwitchCallback
+	namespaceRescopeCallbacks      []NamespaceRescopeCallback
 	contextSwitchProgressCallbacks []ContextSwitchProgressCallback
 	contextSwitchMu                sync.RWMutex
 	helmResetFunc                  HelmResetFunc
@@ -64,6 +71,19 @@ var (
 	trafficReinitFunc              TrafficReinitFunc
 	prometheusResetFunc            PrometheusResetFunc
 	prometheusReinitFunc           PrometheusReinitFunc
+	// sessionStopFunc terminates active port-forward / exec sessions. Invoked at
+	// the point of no return — immediately before the cache is torn down — so a
+	// pre-teardown failure (connectivity test, scope-target validation) doesn't
+	// kill the user's sessions for an operation that never changed the cache.
+	sessionStopFunc func()
+
+	// contextOpMu serializes the destructive context-changing operations
+	// (PerformContextSwitch, PerformNamespaceRescope). operationGen only decides
+	// which operation gets to roll back / notify; it does NOT stop two operations
+	// from running ResetAllSubsystems + InitAllSubsystems concurrently on the
+	// shared cache singletons. This mutex does — a second request waits for the
+	// first to finish rather than interleaving teardown/init.
+	contextOpMu sync.Mutex
 
 	// operationCtx is canceled at the start of every context switch and retry.
 	// API calls that should not survive a context switch (RBAC checks, capability
@@ -71,6 +91,12 @@ var (
 	operationCtx    context.Context
 	operationCancel context.CancelFunc
 	operationMu     sync.Mutex
+	// operationGen bumps on every CancelOngoingOperations (i.e. at the start of
+	// every context switch / rescope). An operation captures the generation it
+	// owns; if a newer operation has since started, the older one must not apply
+	// destructive side effects (e.g. a namespace-rescope rollback against the
+	// context a newer switch already moved to).
+	operationGen uint64
 )
 
 func init() {
@@ -86,6 +112,15 @@ func CancelOngoingOperations() {
 	log.Printf("[ops] Canceling ongoing operations (previous API calls will be interrupted)")
 	operationCancel()
 	operationCtx, operationCancel = context.WithCancel(context.Background())
+	operationGen++
+}
+
+// currentOperationGen returns the generation of the most recently started
+// operation. Compare against a captured generation to detect supersession.
+func currentOperationGen() uint64 {
+	operationMu.Lock()
+	defer operationMu.Unlock()
+	return operationGen
 }
 
 // NewOperationContext returns a context derived from the current operation
@@ -106,11 +141,38 @@ func OperationContext() context.Context {
 	return operationCtx
 }
 
+// SetSessionStopper registers the callback that terminates active port-forward /
+// exec sessions. The destructive cache operations call it once they commit to
+// tearing the cache down. Registered by the server (which owns sessions) to
+// avoid a server→k8s import cycle.
+func SetSessionStopper(fn func()) {
+	contextSwitchMu.Lock()
+	defer contextSwitchMu.Unlock()
+	sessionStopFunc = fn
+}
+
+func stopActiveSessions() {
+	contextSwitchMu.RLock()
+	fn := sessionStopFunc
+	contextSwitchMu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // OnContextSwitch registers a callback to be called when the context is switched
 func OnContextSwitch(callback ContextSwitchCallback) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()
 	contextSwitchCallbacks = append(contextSwitchCallbacks, callback)
+}
+
+// OnNamespaceRescope registers a callback for local --namespace-scope cache
+// rescope completion.
+func OnNamespaceRescope(callback NamespaceRescopeCallback) {
+	contextSwitchMu.Lock()
+	defer contextSwitchMu.Unlock()
+	namespaceRescopeCallbacks = append(namespaceRescopeCallbacks, callback)
 }
 
 // OnContextSwitchProgress registers a callback for progress updates during context switch
@@ -217,16 +279,40 @@ func TestClusterConnection(ctx context.Context) error {
 // 3. Tests connectivity to ensure cluster is reachable
 // 4. Reinitializes all subsystems (same sequence as initial boot)
 // 5. Notifies all registered callbacks
+// ErrContextSwitchPreflight is returned by PerformContextSwitch when the switch
+// is rejected BEFORE any teardown (e.g. --namespace-scope with no usable target
+// for the new context). Callers must treat it as "request rejected, still
+// connected to the current cluster" and NOT mark the connection disconnected.
+var ErrContextSwitchPreflight = errors.New("context switch preflight rejected")
+
 func PerformContextSwitch(newContext string) error {
 	switchStart := time.Now()
 	log.Printf("[ops] Context switch START → %q", newContext)
+
+	// Serialize against any other in-flight switch / rescope so their teardown +
+	// init can't interleave on the shared cache. A queued request waits here.
+	contextOpMu.Lock()
+	defer contextOpMu.Unlock()
+
+	// Under --namespace-scope, validate the new context has a usable scope target
+	// BEFORE tearing anything down. Otherwise a switch to a context with no
+	// namespace (and no saved pick) would reset and repoint the client, then fail
+	// at requireNamespaceScopeTarget below — leaving us on the new context with no
+	// informer caches until a full reconnect succeeds. This is a preflight failure
+	// (nothing torn down yet) so the caller must keep the current connection intact.
+	if ForceNamespaceScope && ProspectiveNamespaceScopeTarget(newContext) == "" {
+		return fmt.Errorf("%w: --namespace-scope requires --namespace, a namespace on context %q, or a saved namespace pick", ErrContextSwitchPreflight, newContext)
+	}
 
 	// Cancel any in-flight API calls from the previous context (RBAC checks,
 	// capability probes, etc.) so they don't serialize through the old exec
 	// plugin and block the new context's connectivity test.
 	CancelOngoingOperations()
 
-	// Step 1: Tear down all subsystems
+	// Step 1: Tear down all subsystems. Stop sessions first — past this point the
+	// previous cluster's caches are gone, so lingering port-forwards / exec
+	// terminals would be reading state we can no longer serve.
+	stopActiveSessions()
 	reportProgress("Stopping caches...")
 	t := time.Now()
 	ResetAllSubsystems()
@@ -244,6 +330,11 @@ func PerformContextSwitch(newContext string) error {
 		return fmt.Errorf("failed to switch context: %w", err)
 	}
 	logTiming("   [ops] SwitchContext: %v", time.Since(t))
+	ClearNamespaceScopeOverride()
+	RestoreNamespaceScopePreference(GetContextName())
+	if err := requireNamespaceScopeTarget(newContext); err != nil {
+		return err
+	}
 
 	// Invalidate caches - permissions and cluster info may differ between clusters
 	InvalidateCapabilitiesCache()
@@ -295,4 +386,123 @@ func PerformContextSwitch(newContext string) error {
 	}
 
 	return nil
+}
+
+func requireNamespaceScopeTarget(contextName string) error {
+	if !ForceNamespaceScope || GetNamespaceScopeTarget() != "" {
+		return nil
+	}
+	return fmt.Errorf("--namespace-scope requires --namespace, a namespace on context %q, or a saved namespace pick", contextName)
+}
+
+// PerformNamespaceRescope rebuilds all cache-backed subsystems for a new
+// namespace while keeping the current kubeconfig context. It is intended for
+// local --namespace-scope sessions only; multi-user deployments must not let
+// one user's namespace pick reshape the process-wide cache for everyone.
+func PerformNamespaceRescope(namespace string) error {
+	if namespace == "" {
+		return fmt.Errorf("namespace is required")
+	}
+	// Serialize against any other in-flight switch / rescope (see contextOpMu).
+	// previousNamespace is read under the lock so two rescopes can't both decide
+	// the namespace changed and run teardown/init concurrently.
+	contextOpMu.Lock()
+	defer contextOpMu.Unlock()
+	previousNamespace := GetNamespaceScopeTarget()
+	if namespace == previousNamespace {
+		return nil
+	}
+
+	rescopeStart := time.Now()
+	safeNamespace := SanitizeForLog(namespace)
+	safePreviousNamespace := SanitizeForLog(previousNamespace)
+	log.Printf("[ops] Namespace rescope START → %q", safeNamespace)
+
+	CancelOngoingOperations()
+	myGen := currentOperationGen()
+	reportProgress("Testing cluster connectivity...")
+	t := time.Now()
+	connCtx, connCancel := NewOperationContext(ConnectionTestTimeout)
+	defer connCancel()
+	if err := TestClusterConnection(connCtx); err != nil {
+		elapsed := time.Since(rescopeStart).Truncate(time.Millisecond)
+		log.Printf("[ops] Namespace rescope FAILED at connectivity test: %v (%v since rescope start)", err, elapsed)
+		errorlog.Record("namespace-rescope", "error",
+			"stage=TestClusterConnection namespace=%q elapsed=%v: %v", safeNamespace, elapsed, err)
+		return fmt.Errorf("cluster connection failed: %w", err)
+	}
+	log.Printf("[ops] Cluster connectivity verified (%v)", time.Since(t))
+
+	// Connectivity passed, so we're committed to rebuilding the cache for the new
+	// namespace. Stop sessions now (not before the connectivity test) so a failed
+	// pre-rescope check doesn't tear down port-forwards / exec for nothing.
+	stopActiveSessions()
+	if err := reinitializeNamespaceScope(namespace, "Stopping caches..."); err != nil {
+		elapsed := time.Since(rescopeStart).Truncate(time.Millisecond)
+		log.Printf("[ops] Namespace rescope FAILED at subsystem init: %v (%v since rescope start)", err, elapsed)
+		errorlog.Record("namespace-rescope", "error",
+			"stage=InitAllSubsystems namespace=%q elapsed=%v: %v", safeNamespace, elapsed, err)
+		// If a newer context switch / rescope started while our init was running,
+		// it canceled our operation context (hence this failure) and now owns the
+		// cache state. Rolling back here would reset the newer operation's
+		// subsystems and pin the cache to OUR previous namespace — clobbering it.
+		// Bail without rolling back; the newer operation is authoritative.
+		if currentOperationGen() != myGen {
+			log.Printf("[ops] Namespace rescope to %q superseded by a newer operation; skipping rollback", safeNamespace)
+			return fmt.Errorf("namespace rescope to %q superseded by a newer operation", namespace)
+		}
+		if rollbackErr := reinitializeNamespaceScope(previousNamespace, "Restoring previous namespace..."); rollbackErr != nil {
+			log.Printf("[ops] Namespace rescope rollback to %q FAILED: %v", safePreviousNamespace, rollbackErr)
+			errorlog.Record("namespace-rescope", "error",
+				"stage=Rollback namespace=%q elapsed=%v: %v", safePreviousNamespace, time.Since(rescopeStart).Truncate(time.Millisecond), rollbackErr)
+			return fmt.Errorf("subsystem init failed: %w; rollback to previous namespace %q failed: %v", err, previousNamespace, rollbackErr)
+		}
+		notifyNamespaceRescopeCallbacks(previousNamespace)
+		return fmt.Errorf("subsystem init failed: %w; restored previous namespace %q", err, previousNamespace)
+	}
+
+	// A newer operation may have started after our init completed; it now owns
+	// the cache, so don't announce our (now-stale) namespace to callbacks.
+	if currentOperationGen() != myGen {
+		log.Printf("[ops] Namespace rescope to %q superseded by a newer operation after init", safeNamespace)
+		return fmt.Errorf("namespace rescope to %q superseded by a newer operation", namespace)
+	}
+
+	reportProgress("Building topology...")
+	log.Printf("[ops] Namespace rescope to %q COMPLETE (%v total)", safeNamespace, time.Since(rescopeStart))
+	notifyNamespaceRescopeCallbacks(namespace)
+
+	return nil
+}
+
+func reinitializeNamespaceScope(namespace, resetMessage string) error {
+	reportProgress(resetMessage)
+	t := time.Now()
+	ResetAllSubsystems()
+	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
+
+	SetNamespaceScopeOverride(namespace)
+	InvalidateCapabilitiesCache()
+	InvalidateResourcePermissionsCache()
+	InvalidateServerVersionCache()
+
+	t = time.Now()
+	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
+	defer initCancel()
+	if err := InitAllSubsystems(initCtx, reportProgress); err != nil {
+		return err
+	}
+	logTiming("   [ops] InitAllSubsystems: %v", time.Since(t))
+	return nil
+}
+
+func notifyNamespaceRescopeCallbacks(namespace string) {
+	contextSwitchMu.RLock()
+	callbacks := make([]NamespaceRescopeCallback, len(namespaceRescopeCallbacks))
+	copy(callbacks, namespaceRescopeCallbacks)
+	contextSwitchMu.RUnlock()
+
+	for _, callback := range callbacks {
+		callback(namespace)
+	}
 }

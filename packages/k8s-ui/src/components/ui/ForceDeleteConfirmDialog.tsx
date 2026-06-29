@@ -1,7 +1,6 @@
 import { useState, useMemo } from 'react'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { ConfirmDialog } from './ConfirmDialog'
-import { formatKindName } from './drawer-components'
 import { pluralize } from '../../utils/pluralize'
 
 export interface CascadeDependent {
@@ -115,7 +114,7 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
         <div className="px-3 pb-2.5 space-y-1.5">
           {grouped.map(([kind, names]) => (
             <div key={kind} className="text-xs">
-              <span className="font-medium text-theme-text-primary">{formatKindName(kind)}</span>
+              <span className="font-medium text-theme-text-primary">{kind}</span>
               <span className="text-theme-text-tertiary ml-1">({names.length})</span>
               <div className="ml-3 mt-0.5 text-theme-text-secondary font-mono break-all">
                 {names.slice(0, MAX_NAMES_PER_KIND).join(', ')}

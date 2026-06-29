@@ -10,6 +10,58 @@ import (
 	"github.com/skyhook-io/radar/pkg/packages"
 )
 
+func TestErrorCodeForHelm(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        string
+		statusCode int
+		want       string
+	}{
+		{"empty", "", 0, ""},
+		{"unknown shape", "something weird happened", 0, ""},
+
+		// auth — 401 status OR auth-keyword in body.
+		{"401 status", "x", 401, ErrCodeAuthRequired},
+		{"unauthorized in body", "Unauthorized: token expired", 0, ErrCodeAuthRequired},
+
+		// rbac — 403 status OR rbac/forbidden-keyword.
+		{"403 status", "denied", 403, ErrCodeRBACDenied},
+		{"rbac in body", "rbac denied (helm release secrets)", 0, ErrCodeRBACDenied},
+		{"forbidden in body", "secrets is forbidden: User cannot list", 0, ErrCodeRBACDenied},
+		{"cannot list", "cannot list resource secrets", 0, ErrCodeRBACDenied},
+
+		// unconfigured — covers both legacy + new-from-restConfigGetter strings.
+		{"new restConfigGetter error", `helm: no kubeconfig path and no resolved rest.Config available`, 0, ErrCodeUnconfigured},
+		{"in-cluster fallback error", "no in-cluster rest config available", 0, ErrCodeUnconfigured},
+		{"client not initialized", "helm client not initialized (cluster connect in progress or failed)", 0, ErrCodeUnconfigured},
+
+		// timeout
+		{"context deadline", "context deadline exceeded", 0, ErrCodeTimedOut},
+		{"timeout in body", "operation timeout", 0, ErrCodeTimedOut},
+
+		// unreachable
+		{"connection refused", `dial tcp 127.0.0.1:8080: connect: connection refused`, 0, ErrCodeUnreachable},
+		{"no such host", "dial tcp: lookup foo: no such host", 0, ErrCodeUnreachable},
+
+		// Ordering pins. The classifier is a sequential switch; these
+		// cases lock down precedence so a future reorder doesn't
+		// silently re-bucket multi-keyword bodies.
+		{"401 status with rbac word in body", "rbac unavailable", 401, ErrCodeAuthRequired},
+		{"rbac word + context deadline", "context deadline exceeded querying rbac role", 0, ErrCodeRBACDenied},
+		{"forbidden + connection refused", "forbidden: dial tcp connection refused", 0, ErrCodeRBACDenied},
+		{"unconfigured + timeout phrase", "no resolved rest.Config available; timeout reached", 0, ErrCodeUnconfigured},
+		{"timeout + dial tcp (i/o timeout shape)", "i/o timeout dialing tcp 10.0.0.1:443", 0, ErrCodeTimedOut},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := errorCodeForHelm(tc.err, tc.statusCode)
+			if got != tc.want {
+				t.Errorf("errorCodeForHelm(%q, %d) = %q, want %q", tc.err, tc.statusCode, got, tc.want)
+			}
+		})
+	}
+}
+
 // Pins the error wording produced by k8s.ResourceCache.ListDynamicWithGroup
 // when the requested CRD isn't installed. If that wording changes,
 // graceful degradation breaks for clusters without ArgoCD/FluxCD —
@@ -37,27 +89,25 @@ func TestIsMissingCRDErr_PinsK8scoreErrorString(t *testing.T) {
 	}
 }
 
-func TestPackagesCacheKey_DistinguishesUserAndNamespaces(t *testing.T) {
-	// Same user, different namespace sets → different keys.
-	a := packagesCacheKeyFor("alice", []string{"prod"})
-	b := packagesCacheKeyFor("alice", []string{"staging"})
+func TestPackagesCacheKey_DistinguishesNamespaces(t *testing.T) {
+	// Different namespace sets → different keys.
+	a := packagesCacheKeyFor([]string{"prod"})
+	b := packagesCacheKeyFor([]string{"staging"})
 	if a == b {
 		t.Errorf("expected different keys for different namespaces, got %q", a)
 	}
-	// Different users, same namespaces → different keys.
-	c := packagesCacheKeyFor("bob", []string{"prod"})
-	if a == c {
-		t.Errorf("expected different keys for different users, got %q", a)
-	}
-	// nil namespaces vs empty slice should be different (empty = no access).
-	all := packagesCacheKeyFor("alice", nil)
-	none := packagesCacheKeyFor("alice", []string{})
+	// User identity is intentionally NOT part of the key — inventory
+	// reads run via the SA so two users with the same namespace scope
+	// share the entry. (See packagesCacheKeyFor godoc.)
+	// nil namespaces vs empty slice must differ (empty = no access).
+	all := packagesCacheKeyFor(nil)
+	none := packagesCacheKeyFor([]string{})
 	if all == none {
 		t.Errorf("nil (all namespaces) and empty slice (no access) must differ; both = %q", all)
 	}
 	// Order independence: same set in different orders → same key.
-	x := packagesCacheKeyFor("alice", []string{"a", "b"})
-	y := packagesCacheKeyFor("alice", []string{"b", "a"})
+	x := packagesCacheKeyFor([]string{"a", "b"})
+	y := packagesCacheKeyFor([]string{"b", "a"})
 	if x != y {
 		t.Errorf("namespace order should not affect key: %q vs %q", x, y)
 	}
@@ -144,56 +194,41 @@ func TestFilterByChartSubstring_CaseInsensitive(t *testing.T) {
 	}
 }
 
-// Behavioral guard against the most security-sensitive regression in
-// this module: two users hitting the same namespace must NOT see each
-// other's Helm rows. We pre-populate the cache with two distinct
-// (user, ns) entries and verify ListPackages returns each user's data
-// from their respective entry.
+// Inventory reads run via the SA (computePackagesInternal ignores user
+// identity), so two users with the same namespace scope must share a
+// cache entry — duplicating per-user wastes memory and triggers
+// premature LRU eviction in multi-user Cloud deployments. We populate
+// one entry, dispatch two requests under different user identities,
+// and verify both see the same rows.
 //
-// This catches: forgetting User in packagesCacheKeyFor; reordering the
-// cache lookup before the user is wired in; or any refactor that drops
-// user identity from the key path.
-func TestListPackages_UserScopedCacheReturnsDistinctData(t *testing.T) {
+// This catches: a regression that re-introduces user identity into
+// packagesCacheKeyFor (e.g. "let's scope per-user for safety" without
+// a corresponding return to per-user impersonation in
+// computePackagesInternal).
+func TestListPackages_SharedCacheAcrossUsers(t *testing.T) {
 	withCleanCache(t, func() {
-		now := time.Now()
-		aliceKey := packagesCacheKeyFor("alice", []string{"prod"})
-		bobKey := packagesCacheKeyFor("bob", []string{"prod"})
-
+		key := packagesCacheKeyFor([]string{"prod"})
+		shared := packagesCacheEntry{
+			at: time.Now(),
+			rows: []packages.PackageRow{{
+				Chart: "shared-chart", Namespace: "prod", ReleaseName: "shared-app",
+				Sources: []packages.SourceCode{packages.SourceHelm}, Health: packages.HealthHealthy,
+			}},
+		}
 		packagesCacheMu.Lock()
-		packagesCache[aliceKey] = packagesCacheEntry{
-			at: now,
-			rows: []packages.PackageRow{{
-				Chart: "alice-only-chart", Namespace: "prod", ReleaseName: "alice-app",
-				Sources: []packages.SourceCode{packages.SourceHelm}, Health: packages.HealthHealthy,
-			}},
-		}
-		packagesCache[bobKey] = packagesCacheEntry{
-			at: now,
-			rows: []packages.PackageRow{{
-				Chart: "bob-only-chart", Namespace: "prod", ReleaseName: "bob-app",
-				Sources: []packages.SourceCode{packages.SourceHelm}, Health: packages.HealthHealthy,
-			}},
-		}
+		packagesCache[key] = shared
 		packagesCacheMu.Unlock()
 
-		aliceResp, err := ListPackages(context.Background(), ListPackagesParams{
-			Namespaces: []string{"prod"}, User: "alice",
-		})
-		if err != nil {
-			t.Fatalf("alice ListPackages: %v", err)
-		}
-		if len(aliceResp.Packages) != 1 || aliceResp.Packages[0].Chart != "alice-only-chart" {
-			t.Fatalf("alice got %+v, want chart=alice-only-chart", aliceResp.Packages)
-		}
-
-		bobResp, err := ListPackages(context.Background(), ListPackagesParams{
-			Namespaces: []string{"prod"}, User: "bob",
-		})
-		if err != nil {
-			t.Fatalf("bob ListPackages: %v", err)
-		}
-		if len(bobResp.Packages) != 1 || bobResp.Packages[0].Chart != "bob-only-chart" {
-			t.Fatalf("bob got %+v, want chart=bob-only-chart", bobResp.Packages)
+		for _, user := range []string{"alice", "bob"} {
+			resp, err := ListPackages(context.Background(), ListPackagesParams{
+				Namespaces: []string{"prod"}, User: user,
+			})
+			if err != nil {
+				t.Fatalf("%s ListPackages: %v", user, err)
+			}
+			if len(resp.Packages) != 1 || resp.Packages[0].Chart != "shared-chart" {
+				t.Fatalf("%s got %+v, want chart=shared-chart from shared entry", user, resp.Packages)
+			}
 		}
 	})
 }
@@ -207,7 +242,7 @@ func TestListPackages_EmptyNamespacesShortCircuits(t *testing.T) {
 	withCleanCache(t, func() {
 		// Pre-populate "all namespaces" cache to make sure the
 		// short-circuit doesn't accidentally read it.
-		nilKey := packagesCacheKeyFor("alice", nil)
+		nilKey := packagesCacheKeyFor(nil)
 		packagesCacheMu.Lock()
 		packagesCache[nilKey] = packagesCacheEntry{
 			at: time.Now(),
@@ -233,7 +268,7 @@ func TestListPackages_EmptyNamespacesShortCircuits(t *testing.T) {
 			t.Errorf("want empty SourcesErrored, got %v", resp.SourcesErrored)
 		}
 		// Verify the empty-slice path didn't write a cache entry.
-		emptyKey := packagesCacheKeyFor("alice", []string{})
+		emptyKey := packagesCacheKeyFor([]string{})
 		packagesCacheMu.Lock()
 		_, hit := packagesCache[emptyKey]
 		packagesCacheMu.Unlock()
@@ -250,7 +285,7 @@ func TestListPackages_EmptyNamespacesShortCircuits(t *testing.T) {
 func TestListPackages_CachedResponseUsesEntryTimestamp(t *testing.T) {
 	withCleanCache(t, func() {
 		entryAt := time.Now().Add(-30 * time.Second)
-		key := packagesCacheKeyFor("alice", []string{"prod"})
+		key := packagesCacheKeyFor([]string{"prod"})
 		packagesCacheMu.Lock()
 		packagesCache[key] = packagesCacheEntry{
 			at:   entryAt,
@@ -304,10 +339,10 @@ func TestListPackages_CacheCapEnforcedAtInsert(t *testing.T) {
 		// Pre-fill cache to cap with stale-but-valid entries.
 		base := time.Now().Add(-30 * time.Second) // still fresh for TTL
 		packagesCacheMu.Lock()
-		oldestKey := packagesCacheKeyFor("u0", []string{"ns0"})
+		oldestKey := packagesCacheKeyFor([]string{"ns0"})
 		packagesCache[oldestKey] = packagesCacheEntry{at: base.Add(-time.Minute)}
 		for i := 1; i < packagesCacheMaxEntries; i++ {
-			k := packagesCacheKeyFor(fmt.Sprintf("u%d", i), []string{fmt.Sprintf("ns%d", i)})
+			k := packagesCacheKeyFor([]string{fmt.Sprintf("ns%d", i)})
 			packagesCache[k] = packagesCacheEntry{at: base.Add(time.Duration(i) * time.Second)}
 		}
 		if len(packagesCache) != packagesCacheMaxEntries {
@@ -324,7 +359,7 @@ func TestListPackages_CacheCapEnforcedAtInsert(t *testing.T) {
 		if len(packagesCache) >= packagesCacheMaxEntries {
 			evictOldestPackagesCacheEntry()
 		}
-		packagesCache[packagesCacheKeyFor("new-user", []string{"new-ns"})] = packagesCacheEntry{at: time.Now()}
+		packagesCache[packagesCacheKeyFor([]string{"new-ns"})] = packagesCacheEntry{at: time.Now()}
 		packagesCacheMu.Unlock()
 
 		// The oldest entry must have been evicted; cap respected.
@@ -367,4 +402,3 @@ func sourceCodesEqual(a, b []packages.SourceCode) bool {
 	}
 	return true
 }
-

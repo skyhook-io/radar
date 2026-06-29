@@ -1,16 +1,18 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { X, Package, ChevronRight, ChevronLeft, Play, Loader2, AlertTriangle, CheckCircle, User, BookOpen, Link as LinkIcon, Star, BadgeCheck, Shield, Globe, Building2, Plus, Minus, Terminal } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import yaml from 'yaml'
 import { createPatch } from 'diff'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChartDetail, useNamespaces, useArtifactHubChart, installChartWithProgress, type InstallProgressEvent } from '../../api/client'
-import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
+import { useCanHelmAct } from '../../api/client'
 import type { ChartSource, ChartDetail, ArtifactHubChartDetail } from '../../types'
 import { YamlEditor } from '../ui/YamlEditor'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
+import { validateHelmReleaseName, validateRFC1123Label } from '@skyhook-io/k8s-ui/utils/validators'
 
 // Deep merge two objects — values from `overrides` take priority
 function deepMerge(base: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
@@ -64,7 +66,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
   const progressEndRef = useRef<HTMLDivElement>(null)
 
   const queryClient = useQueryClient()
-  const canHelmWrite = useCanHelmWrite()
+  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
 
   // Choose the right data based on source
   const isLocal = source === 'local'
@@ -104,11 +106,11 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
       }
     }
     if (baseValues && defaultValues) {
-      setValuesYaml(yaml.stringify(deepMerge(baseValues, defaultValues)))
+      setValuesYaml(yaml.stringify(deepMerge(baseValues, defaultValues), { lineWidth: 0 }))
     } else if (defaultValues && !baseValues) {
-      setValuesYaml(yaml.stringify(defaultValues))
+      setValuesYaml(yaml.stringify(defaultValues, { lineWidth: 0 }))
     } else if (baseValues) {
-      setValuesYaml(yaml.stringify(baseValues))
+      setValuesYaml(yaml.stringify(baseValues, { lineWidth: 0 }))
     }
   }, [localChartDetail?.values, artifactHubDetail?.values, isLocal, defaultValues])
 
@@ -133,11 +135,20 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
     setInstallError(null)
     setProgressLogs([])
 
+    // Send the same trimmed values the validators ran on, not the
+    // raw input. Without this, a release name with trailing
+    // whitespace passes the client-side validator (which calls
+    // `.trim()`) but the server receives the untrimmed string and
+    // rejects it — exactly the surprise this validation layer
+    // exists to prevent.
+    const trimmedReleaseName = releaseName.trim()
+    const trimmedNamespace = namespace.trim()
+
     try {
       const release = await installChartWithProgress(
         {
-          releaseName,
-          namespace,
+          releaseName: trimmedReleaseName,
+          namespace: trimmedNamespace,
           chartName,
           version,
           repository,
@@ -168,7 +179,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
 
       // Wait a moment to show success, then close
       setTimeout(() => {
-        onSuccess(namespace, releaseName)
+        onSuccess(trimmedNamespace, trimmedReleaseName)
       }, 1500)
     } catch (err) {
       setInstallError(err instanceof Error ? err.message : 'Install failed')
@@ -180,9 +191,25 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
     } finally {
       setIsInstalling(false)
     }
-  }, [releaseName, namespace, chartName, version, repo, valuesYaml, createNamespace, onSuccess, isLocal, artifactHubDetail, queryClient])
+  }, [releaseName, namespace, chartName, version, repo, repoUrl, valuesYaml, createNamespace, onSuccess, isLocal, artifactHubDetail, queryClient])
 
-  const canProceedFromInfo = releaseName.trim() !== '' && namespace.trim() !== ''
+  // Validate release name + namespace before letting the user
+  // advance. Without this, a name like "Invalid Name With Spaces!"
+  // was accepted through to step 2 and only failed server-side at
+  // install time — the server returned a 422 the user couldn't
+  // connect back to anything they typed. K8s / Helm rules are
+  // pinned in packages/k8s-ui/src/utils/validators.ts.
+  const releaseNameValidation = useMemo(
+    () => validateHelmReleaseName(releaseName.trim()),
+    [releaseName],
+  )
+  const namespaceValidation = useMemo(
+    () => validateRFC1123Label(namespace.trim()),
+    [namespace],
+  )
+  const releaseNameError = releaseNameValidation.valid ? null : releaseNameValidation.error
+  const namespaceError = namespaceValidation.valid ? null : namespaceValidation.error
+  const canProceedFromInfo = releaseNameValidation.valid && namespaceValidation.valid
   const canInstall = canProceedFromInfo && !yamlError
 
   const steps: { id: WizardStep; label: string }[] = [
@@ -205,7 +232,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
               <img
                 src={isLocal ? (chartDetail as ChartDetail)?.icon : (chartDetail as ArtifactHubChartDetail)?.logoUrl}
                 alt=""
-                className="w-8 h-8 rounded object-contain bg-white/10 p-1"
+                className="w-8 h-8 rounded object-contain bg-theme-elevated p-1"
               />
             ) : (
               <Package className="w-8 h-8 text-purple-400" />
@@ -215,7 +242,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                 <h2 className="text-lg font-semibold text-theme-text-primary">Install {chartName}</h2>
                 {!isLocal && (
                   <Tooltip content="From ArtifactHub">
-                    <Globe className="w-4 h-4 text-blue-400" />
+                    <Globe className="w-4 h-4 text-accent" />
                   </Tooltip>
                 )}
               </div>
@@ -223,7 +250,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                 <span>{repo} / {version}</span>
                 {!isLocal && (chartDetail as ArtifactHubChartDetail)?.repository?.official && (
                   <Tooltip content="Official">
-                    <BadgeCheck className="w-3.5 h-3.5 text-blue-400" />
+                    <BadgeCheck className="w-3.5 h-3.5 text-accent" />
                   </Tooltip>
                 )}
                 {!isLocal && (chartDetail as ArtifactHubChartDetail)?.repository?.verifiedPublisher && (
@@ -263,7 +290,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                 >
                   <span className={clsx(
                     'w-5 h-5 rounded-full flex items-center justify-center text-xs font-medium',
-                    step === s.id ? 'bg-blue-500 text-white' : 'bg-theme-elevated text-theme-text-secondary'
+                    step === s.id ? 'bg-accent text-white' : 'bg-theme-elevated text-theme-text-secondary'
                   )}>
                     {i + 1}
                   </span>
@@ -277,10 +304,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
         {/* Content */}
         <div className="flex-1 overflow-auto p-4">
           {chartLoading ? (
-            <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
-              <Loader2 className="w-5 h-5 animate-spin mr-2" />
-              Loading chart details...
-            </div>
+            <PaneLoader label="Loading chart details…" className="h-32" />
           ) : (
             <>
               {step === 'info' && (
@@ -289,8 +313,10 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                   source={source}
                   releaseName={releaseName}
                   setReleaseName={setReleaseName}
+                  releaseNameError={releaseNameError}
                   namespace={namespace}
                   setNamespace={setNamespace}
+                  namespaceError={namespaceError}
                   namespaces={namespaces || []}
                   createNamespace={createNamespace}
                   setCreateNamespace={setCreateNamespace}
@@ -323,7 +349,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                   valuesYaml={valuesYaml}
                   defaultValuesYaml={
                     isLocal
-                      ? (localChartDetail?.values ? yaml.stringify(localChartDetail.values) : '')
+                      ? (localChartDetail?.values ? yaml.stringify(localChartDetail.values, { lineWidth: 0 }) : '')
                       : (artifactHubDetail?.values || '')
                   }
                 />
@@ -385,11 +411,11 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                   Cancel
                 </button>
                 {step === 'review' ? (
+                  <Tooltip content={!canHelmWrite ? helmActReason : ''}>
                   <button
                     onClick={handleInstall}
                     disabled={!canInstall || isInstalling || !canHelmWrite}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium btn-brand rounded-lg disabled:cursor-not-allowed"
-                    title={!canHelmWrite ? 'Helm write permissions required (rbac.helm=true)' : undefined}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium btn-brand rounded-lg disabled:cursor-not-allowed disabled:pointer-events-none"
                   >
                     {isInstalling ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -398,6 +424,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                     )}
                     Install
                   </button>
+                  </Tooltip>
                 ) : (
                   <button
                     onClick={() => setStep(step === 'info' ? 'values' : 'review')}
@@ -422,8 +449,10 @@ interface InfoStepProps {
   source: ChartSource
   releaseName: string
   setReleaseName: (name: string) => void
+  releaseNameError: string | null
   namespace: string
   setNamespace: (ns: string) => void
+  namespaceError: string | null
   namespaces: { name: string }[]
   createNamespace: boolean
   setCreateNamespace: (create: boolean) => void
@@ -436,8 +465,10 @@ function InfoStep({
   source,
   releaseName,
   setReleaseName,
+  releaseNameError,
   namespace,
   setNamespace,
+  namespaceError,
   namespaces,
   createNamespace,
   setCreateNamespace,
@@ -508,7 +539,7 @@ function InfoStep({
                   href={home}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+                  className="flex items-center gap-1 text-xs text-accent-text hover:underline"
                 >
                   <LinkIcon className="w-3.5 h-3.5" />
                   Homepage
@@ -535,11 +566,24 @@ function InfoStep({
           value={releaseName}
           onChange={(e) => setReleaseName(e.target.value)}
           placeholder="my-release"
-          className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
+          aria-invalid={releaseNameError ? true : undefined}
+          aria-describedby="release-name-help"
+          className={clsx(
+            'w-full px-3 py-2 bg-theme-elevated border rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2',
+            releaseNameError
+              ? 'border-red-500/60 focus:ring-red-500'
+              : 'border-theme-border-light focus:ring-accent',
+          )}
         />
-        <p className="mt-1 text-xs text-theme-text-tertiary">
-          A unique name for this release in the namespace
-        </p>
+        {releaseNameError ? (
+          <p id="release-name-help" className="mt-1 text-xs text-red-400">
+            Release name {releaseNameError}.
+          </p>
+        ) : (
+          <p id="release-name-help" className="mt-1 text-xs text-theme-text-tertiary">
+            A unique name for this release in the namespace
+          </p>
+        )}
       </div>
 
       {/* Namespace selection */}
@@ -553,8 +597,20 @@ function InfoStep({
           value={namespace}
           onChange={(e) => setNamespace(e.target.value)}
           placeholder="Enter namespace name"
-          className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
+          aria-invalid={namespaceError ? true : undefined}
+          aria-describedby="namespace-help"
+          className={clsx(
+            'w-full px-3 py-2 bg-theme-elevated border rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2',
+            namespaceError
+              ? 'border-red-500/60 focus:ring-red-500'
+              : 'border-theme-border-light focus:ring-accent',
+          )}
         />
+        {namespaceError && (
+          <p id="namespace-help" className="mt-1 text-xs text-red-400">
+            Namespace {namespaceError}.
+          </p>
+        )}
         <datalist id="namespace-suggestions">
           {namespaces.map(ns => (
             <option key={ns.name} value={ns.name} />
@@ -565,7 +621,7 @@ function InfoStep({
             type="checkbox"
             checked={createNamespace}
             onChange={(e) => setCreateNamespace(e.target.checked)}
-            className="rounded border-theme-border text-blue-500 focus:ring-blue-500"
+            className="rounded border-theme-border text-accent focus:ring-accent"
           />
           Create namespace if it doesn't exist
         </label>
@@ -576,7 +632,7 @@ function InfoStep({
         <div>
           <button
             onClick={() => setShowReadme(!showReadme)}
-            className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
+            className="flex items-center gap-2 text-sm text-accent-text hover:underline"
           >
             <BookOpen className="w-4 h-4" />
             {showReadme ? 'Hide' : 'Show'} Chart README
@@ -609,7 +665,7 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
   const ahDetail = chartDetail as ArtifactHubChartDetail | undefined
 
   const defaultValues = isLocal
-    ? (localDetail?.values ? yaml.stringify(localDetail.values) : '')
+    ? (localDetail?.values ? yaml.stringify(localDetail.values, { lineWidth: 0 }) : '')
     : (ahDetail?.values || '')
 
   const hasDefaults = Boolean(defaultValues)
@@ -621,8 +677,8 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
   return (
     <div className="space-y-4">
       {/* Info banner */}
-      <div className="flex items-start gap-3 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-        <CheckCircle className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
+      <div className="flex items-start gap-3 p-4 bg-accent-muted border border-accent/30 rounded-lg">
+        <CheckCircle className="w-5 h-5 text-accent shrink-0 mt-0.5" />
         <div>
           <p className="text-sm font-medium text-theme-text-primary">Ready to install with defaults</p>
           <p className="text-xs text-theme-text-secondary mt-1">
@@ -635,7 +691,7 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
               href={homeUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-2"
+              className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline mt-2"
             >
               <LinkIcon className="w-3 h-3" />
               View chart documentation
@@ -821,8 +877,8 @@ function ReviewStep({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-        <CheckCircle className="w-6 h-6 text-blue-400 shrink-0" />
+      <div className="flex items-center gap-3 p-4 bg-accent-muted border border-accent/30 rounded-lg">
+        <CheckCircle className="w-6 h-6 text-accent shrink-0" />
         <div>
           <p className="text-sm font-medium text-theme-text-primary">Ready to install</p>
           <p className="text-xs text-theme-text-secondary mt-0.5">
@@ -838,7 +894,7 @@ function ReviewStep({
           <div>
             <p className="text-sm font-medium text-amber-400">Installing from ArtifactHub</p>
             <p className="text-xs text-theme-text-secondary mt-1">
-              This chart will be installed from: <code className="bg-theme-elevated px-1 rounded">{artifactHubRepoUrl || repo}</code>
+              This chart will be installed from: <code className="inline-code">{artifactHubRepoUrl || repo}</code>
             </p>
           </div>
         </div>
@@ -875,7 +931,7 @@ function ReviewStep({
                 <>Local: {repo}</>
               ) : (
                 <>
-                  <Globe className="w-3.5 h-3.5 text-blue-400" />
+                  <Globe className="w-3.5 h-3.5 text-accent" />
                   ArtifactHub: {repo}
                 </>
               )}

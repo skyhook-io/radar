@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { HardDrive } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
@@ -5,6 +6,8 @@ import { Section, PropertyList, Property, ConditionsSection, AlertBanner, Resour
 interface PVCRendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  /** Optional host-provided section, used for a Prometheus-derived usage gauge. */
+  extraSections?: ReactNode
 }
 
 const accessModeShorthand: Record<string, string> = {
@@ -19,16 +22,16 @@ function formatAccessModes(modes: string[] | undefined): string | undefined {
   return modes.map(m => accessModeShorthand[m] || m).join(', ')
 }
 
-export function PVCRenderer({ data, onNavigate }: PVCRendererProps) {
+export function PVCRenderer({ data, onNavigate, extraSections }: PVCRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const annotations = data.metadata?.annotations || {}
   const phase = status.phase
 
-  // Problem detection
+  // Lost is a genuine failure (bound volume disappeared). Pending is a normal
+  // lifecycle state (provisioning / WaitForFirstConsumer), surfaced calmly below.
   const isLost = phase === 'Lost'
   const isPending = phase === 'Pending'
-  const hasProblems = isLost || isPending
 
   // Provisioner info from annotations
   const provisioner = annotations['volume.kubernetes.io/storage-provisioner']
@@ -39,7 +42,7 @@ export function PVCRenderer({ data, onNavigate }: PVCRendererProps) {
   return (
     <>
       {/* Problem alerts */}
-      {hasProblems && isLost && (
+      {isLost && (
         <AlertBanner
           variant="error"
           title="Issues Detected"
@@ -47,11 +50,11 @@ export function PVCRenderer({ data, onNavigate }: PVCRendererProps) {
         />
       )}
 
-      {hasProblems && isPending && (
+      {isPending && (
         <AlertBanner
-          variant="warning"
-          title="Issues Detected"
-          message="PVC is waiting to be bound to a volume"
+          variant="info"
+          title="Pending — awaiting binding"
+          message="Not yet bound to a volume. This is normal while provisioning, and expected indefinitely for a WaitForFirstConsumer StorageClass until a Pod that mounts this claim is scheduled."
         />
       )}
 
@@ -91,6 +94,8 @@ export function PVCRenderer({ data, onNavigate }: PVCRendererProps) {
           </PropertyList>
         </Section>
       )}
+
+      {extraSections}
 
       <ConditionsSection conditions={status.conditions} />
     </>

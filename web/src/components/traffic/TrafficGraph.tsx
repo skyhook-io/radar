@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState, useCallback, useRef } from 'react'
+import { useMemo, useEffect, useState, useCallback, useRef, type MutableRefObject } from 'react'
 import {
   ReactFlow,
   Background,
@@ -22,6 +22,7 @@ import { X, ArrowRight, Globe, Server, Activity, Puzzle } from 'lucide-react'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
+import { Tooltip } from '../ui/Tooltip'
 
 const elk = new ELK()
 
@@ -845,7 +846,9 @@ function DetailsPanel({
                     {edgeData.flow.topHTTPPaths.map((p, i) => (
                       <div key={i} className="flex items-center gap-1.5 text-[10px]">
                         <span className={clsx('shrink-0 px-1 py-0.5 rounded badge font-medium', SEVERITY_BADGE.info)}>{p.method}</span>
-                        <span className="text-theme-text-primary truncate flex-1" title={p.path}>{p.path || '/'}</span>
+                        <Tooltip content={p.path} wrapperClassName="min-w-0 flex-1">
+                        <span className="text-theme-text-primary truncate flex-1">{p.path || '/'}</span>
+                        </Tooltip>
                         <span className="shrink-0 text-theme-text-secondary">{p.count}</span>
                         {p.avgMs ? <span className="shrink-0 text-theme-text-tertiary">{formatLatency(p.avgMs)}</span> : null}
                         {p.errorPct ? <span className={clsx('shrink-0', p.errorPct > 10 ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning)}>{p.errorPct.toFixed(0)}%err</span> : null}
@@ -862,7 +865,9 @@ function DetailsPanel({
                   <div className="space-y-1 max-h-40 overflow-y-auto">
                     {edgeData.flow.topDNSQueries.map((q, i) => (
                       <div key={i} className="flex items-center gap-1.5 text-[10px]">
-                        <span className="text-theme-text-primary truncate flex-1" title={q.query}>{q.query}</span>
+                        <Tooltip content={q.query} wrapperClassName="min-w-0 flex-1">
+                        <span className="text-theme-text-primary truncate flex-1">{q.query}</span>
+                        </Tooltip>
                         <span className="shrink-0 text-theme-text-secondary">{q.count}</span>
                         {q.nxCount ? <span className={clsx('shrink-0', SEVERITY_TEXT.warning)}>NX:{q.nxCount}</span> : null}
                         {q.avgTTL ? <span className="shrink-0 text-theme-text-tertiary">TTL:{q.avgTTL}s</span> : null}
@@ -964,6 +969,33 @@ function AddonGroupNode({ data }: { data: { width: number; height: number } }) {
 const nodeTypes = {
   traffic: TrafficNode,
   addonGroup: AddonGroupNode,
+}
+
+// Fits the view once nodes have been laid out. Module-scope (not defined inside
+// TrafficGraph's render) so it keeps a stable identity — otherwise it remounts
+// every render and its effect churns. Must render inside <ReactFlow> for the
+// useReactFlow() context; the trigger state is passed in as props.
+function FitViewOnChange({
+  shouldFitViewRef,
+  layoutedNodes,
+}: {
+  shouldFitViewRef: MutableRefObject<boolean>
+  layoutedNodes: Node<TrafficNodeData>[]
+}) {
+  const { fitView } = useReactFlow()
+
+  useEffect(() => {
+    if (shouldFitViewRef.current && layoutedNodes.length > 0) {
+      // Small delay to ensure nodes are rendered
+      const timer = setTimeout(() => {
+        fitView({ padding: 0.2, duration: 200 })
+        shouldFitViewRef.current = false
+      }, 50)
+      return () => clearTimeout(timer)
+    }
+  }, [fitView, layoutedNodes, shouldFitViewRef])
+
+  return null
 }
 
 export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', onSelectionChange }: TrafficGraphProps) {
@@ -1264,9 +1296,13 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     try {
       const layoutResult = await elk.layout(elkGraph)
 
+      // Index ELK's positioned children by id once — a .find() per node here is
+      // O(nodes²) and bites on dense traffic graphs.
+      const elkPositions = new Map((layoutResult.children ?? []).map(n => [n.id, n]))
+
       // Apply positions from ELK to nodes
       let positionedNodes = rawNodes.map(node => {
-        const elkNode = layoutResult.children?.find(n => n.id === node.id)
+        const elkNode = elkPositions.get(node.id)
         return {
           ...node,
           position: {
@@ -1339,7 +1375,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       }
 
       // Build final edges list
-      let finalEdges = [...rawEdges]
+      const finalEdges = [...rawEdges]
 
       // Add edge from addon-internet to addon-group if we have one
       if (addonMode === 'group' && groupEdgeInfo) {
@@ -1483,24 +1519,6 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     onSelectionChange?.(null)
   }, [onSelectionChange])
 
-  // FitView handler component - must be inside ReactFlow
-  const FitViewOnChange = () => {
-    const { fitView } = useReactFlow()
-
-    useEffect(() => {
-      if (shouldFitViewRef.current && layoutedNodes.length > 0) {
-        // Small delay to ensure nodes are rendered
-        const timer = setTimeout(() => {
-          fitView({ padding: 0.2, duration: 200 })
-          shouldFitViewRef.current = false
-        }, 50)
-        return () => clearTimeout(timer)
-      }
-    }, [fitView, layoutedNodes])
-
-    return null
-  }
-
   return (
     <div className="w-full h-full relative">
       <ReactFlow
@@ -1526,7 +1544,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       >
         <Background />
         <Controls />
-        <FitViewOnChange />
+        <FitViewOnChange shouldFitViewRef={shouldFitViewRef} layoutedNodes={layoutedNodes} />
       </ReactFlow>
 
       {/* Legend */}

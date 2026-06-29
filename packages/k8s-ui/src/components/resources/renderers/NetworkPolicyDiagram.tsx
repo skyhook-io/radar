@@ -190,7 +190,7 @@ function FlowRow({
   const isIngress = direction === 'ingress'
 
   const sourceNodes = (
-    <div className="flex-1 min-w-0 space-y-1">
+    <div className="min-w-0 max-w-full shrink space-y-1">
       {sources.map((peer, i) => (
         <div key={i}>
           {i > 0 && (
@@ -199,13 +199,13 @@ function FlowRow({
           <Tooltip content={peer.sublabel ? `${peer.label}\n${peer.sublabel}` : peer.label} position="top">
             <div
               className={clsx(
-                'rounded-md border px-2 py-1.5',
+                'rounded-md border px-2 py-1.5 min-w-0 overflow-hidden',
                 PEER_STYLES[peer.type],
               )}
             >
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 min-w-0">
                 <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', PEER_DOT[peer.type])} />
-                <span className={clsx('text-[11px] font-medium truncate', denied && 'line-through text-red-400')}>
+                <span className={clsx('text-[11px] font-medium truncate min-w-0', denied && 'line-through text-red-400')}>
                   {peer.label}
                 </span>
               </div>
@@ -220,14 +220,16 @@ function FlowRow({
   )
 
   const targetNode = (
-    <Tooltip content={target} position="top">
-      <div className="rounded-md border border-indigo-500/30 bg-indigo-500/8 px-2 py-1.5 flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-indigo-500" />
-          <span className="text-[11px] font-medium truncate">{target}</span>
+    <div className="min-w-0 max-w-full shrink-[1000]">
+      <Tooltip content={target} position="top">
+        <div className="rounded-md border border-indigo-500/30 bg-indigo-500/8 px-2 py-1.5 min-w-0 max-w-full overflow-hidden">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-indigo-500" />
+            <span className="text-[11px] font-medium truncate min-w-0">{target}</span>
+          </div>
         </div>
-      </div>
-    </Tooltip>
+      </Tooltip>
+    </div>
   )
 
   const arrow = (

@@ -1,5 +1,6 @@
 import { FolderTree, ShieldCheck } from 'lucide-react'
 import type { TopologyMode, GroupingMode } from '../../types/core'
+import { Tooltip } from '../ui/Tooltip'
 
 interface TopologyControlsProps {
   viewMode: TopologyMode
@@ -11,6 +12,12 @@ interface TopologyControlsProps {
   onShowPolicyEffectChange?: (show: boolean) => void
   /** Show the "Fleet" button (CAPI cluster management view) */
   showFleetMode?: boolean
+  /**
+   * Navigate to the observed-traffic view. When provided, the "Network Flow"
+   * tooltip offers a link to it — disambiguating the config-derived flow graph
+   * here from the live, observed Traffic view. Omitted by hosts without one.
+   */
+  onNavigateToTraffic?: () => void
 }
 
 export function TopologyControls({
@@ -22,6 +29,7 @@ export function TopologyControls({
   showPolicyEffect = false,
   onShowPolicyEffectChange,
   showFleetMode = false,
+  onNavigateToTraffic,
 }: TopologyControlsProps) {
   return (
     <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
@@ -69,16 +77,40 @@ export function TopologyControls({
         >
           Resources
         </button>
-        <button
-          onClick={() => onViewModeChange('traffic')}
-          className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-            viewMode === 'traffic'
-              ? 'bg-skyhook-600 text-white'
-              : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
-          }`}
+        <Tooltip
+          position="bottom"
+          content={
+            <div className="space-y-1.5 text-left">
+              <p className="text-theme-text-secondary">
+                How requests <em>should</em> route, derived from Ingress, Services and
+                routing CRDs (Traefik, Gateway API, Istio…) — not observed packets.
+              </p>
+              {onNavigateToTraffic && (
+                <p className="text-theme-text-tertiary">
+                  Looking for observed, measured traffic?{' '}
+                  <button
+                    type="button"
+                    onClick={onNavigateToTraffic}
+                    className="text-skyhook-400 hover:text-skyhook-300 underline underline-offset-2"
+                  >
+                    Open Live Traffic →
+                  </button>
+                </p>
+              )}
+            </div>
+          }
         >
-          Traffic
-        </button>
+          <button
+            onClick={() => onViewModeChange('traffic')}
+            className={`px-2.5 py-1 text-xs rounded-md transition-colors whitespace-nowrap ${
+              viewMode === 'traffic'
+                ? 'bg-skyhook-600 text-white'
+                : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+            }`}
+          >
+            Network Flow <span className="opacity-70">(config)</span>
+          </button>
+        </Tooltip>
         {showFleetMode && (
           <button
             onClick={() => onViewModeChange('fleet')}

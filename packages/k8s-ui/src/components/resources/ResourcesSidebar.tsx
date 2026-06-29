@@ -34,7 +34,8 @@ export interface ResourcesSidebarProps {
   onSelectedKindChange: (kind: SelectedKindInfo) => void
   onKindChange?: () => void
   apiResources?: APIResource[]
-  resourceCounts?: Record<string, number>
+  resourceCounts?: Record<string, number | null>
+  resourceUnavailable?: string[]
   resourceForbidden?: string[]
   pinned?: PinnedItem[]
   togglePin?: (item: PinnedItem) => void
@@ -94,7 +95,9 @@ const CORE_RESOURCE_TYPES = [
 // Resource type button in sidebar
 interface ResourceTypeButtonProps {
   resource: APIResource
-  count: number
+  /** `null` means "count not loaded yet" — rendered as a placeholder so
+   *  the badge doesn't flicker to "0" while the API call is in flight. */
+  count: number | null
   isSelected: boolean
   /** Keyboard-highlight state (arrow nav in the filter input). */
   isHighlighted?: boolean
@@ -155,9 +158,11 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
             <span className={clsx(
               'text-xs py-0.5 rounded text-center font-mono',
               isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
-              count < 1000 ? 'w-8' : 'w-9'
+              count === null
+                ? 'w-8 text-theme-text-disabled'
+                : count < 1000 ? 'w-8' : 'w-9',
             )}>
-              {count}
+              {count === null ? '–' : count}
             </span>
           )}
         </div>
@@ -172,6 +177,7 @@ export function ResourcesSidebar({
   onKindChange,
   apiResources,
   resourceCounts,
+  resourceUnavailable,
   resourceForbidden,
   pinned = [],
   togglePin = () => {},
@@ -253,15 +259,32 @@ export function ResourcesSidebar({
     }))
   }, [categories])
 
+  const unavailableKinds = useMemo(() => new Set(resourceUnavailable ?? []), [resourceUnavailable])
+
+  // null for a key means "count unknown/unavailable" (rendered as a
+  // placeholder dash in the badge). 0 means "the API replied and
+  // confirmed there are zero of this kind".
   const counts = useMemo(() => {
-    if (!resourceCounts) return {} as Record<string, number>
-    const results: Record<string, number> = {}
+    const results: Record<string, number | null> = {}
+    if (!resourceCounts) {
+      for (const resource of resourcesToCount) {
+        const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
+        results[key] = null
+      }
+      return results
+    }
     for (const resource of resourcesToCount) {
       const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
-      results[key] = resourceCounts[key] ?? 0
+      if (unavailableKinds.has(key)) {
+        results[key] = null
+      } else if (key in resourceCounts) {
+        results[key] = resourceCounts[key] ?? null
+      } else {
+        results[key] = 0
+      }
     }
     return results
-  }, [resourcesToCount, resourceCounts])
+  }, [resourcesToCount, resourceCounts, unavailableKinds])
 
   // Track which resource kinds returned 403 Forbidden
   const forbiddenKinds = useMemo(() => {
@@ -276,16 +299,22 @@ export function ResourcesSidebar({
     let totalHiddenGroups = 0
 
     const withTotals = categories.map(category => {
+      // Coerce nulls (loading) to 0 for the category total — we still
+      // want to show *some* number on collapsed categories during
+      // load, just not "0" badges on every individual kind.
       const total = category.resources.reduce(
-        (sum, resource) => sum + (counts?.[(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)] ?? 0),
+        (sum, resource) => sum + (counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? 0),
         0
       )
 
-      // Filter resources: show if has instances, is core kind, or showEmptyKinds is true
+      // Filter resources: show if has instances, is core kind, has an
+      // unknown count (loading — don't pre-emptively hide), or
+      // showEmptyKinds is true.
       const visibleResources = category.resources.filter(resource => {
-        const count = counts?.[(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)] ?? 0
+        const count = counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind]
         const isCore = ALWAYS_SHOWN_KINDS.has(resource.kind)
-        const shouldShow = count > 0 || isCore || showEmptyKinds
+        const isLoading = count === null
+        const shouldShow = (count ?? 0) > 0 || isCore || isLoading || showEmptyKinds
         if (!shouldShow) totalHiddenKinds++
         return shouldShow
       })
@@ -438,7 +467,9 @@ export function ResourcesSidebar({
 
   return (
     <div className={clsx('w-56 2xl:w-72 bg-theme-surface dark:bg-theme-base border-r border-theme-border overflow-y-auto overflow-x-hidden shrink-0', className)}>
-      <div className="px-2 py-2 border-b border-theme-border">
+      {/* py-3 matches the table toolbar's vertical padding so the sidebar
+          header and the toolbar align (same band height + border line). */}
+      <div className="px-2 py-3 border-b border-theme-border">
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary" />
           <input
@@ -500,7 +531,7 @@ export function ResourcesSidebar({
                         key={`${p.name}-${p.group}`}
                         ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
                         resource={{ name: p.name, kind: p.kind, group: p.group, version: '', namespaced: true, isCrd: false, verbs: [] }}
-                        count={counts?.[(p.group ? `${p.group}/${p.kind}` : p.kind)] ?? 0}
+                        count={counts[p.group ? `${p.group}/${p.kind}` : p.kind] ?? null}
                         isSelected={isResourceSelected}
                         isHighlighted={highlighted}
                         isForbidden={forbiddenKinds.has(p.group ? `${p.group}/${p.kind}` : p.kind)}
@@ -556,7 +587,7 @@ export function ResourcesSidebar({
                           key={resource.name}
                           ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
                           resource={resource}
-                          count={counts?.[(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)] ?? 0}
+                          count={counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? null}
                           isSelected={showSelected}
                           isHighlighted={highlighted}
                           isForbidden={forbiddenKinds.has(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)}
@@ -581,7 +612,7 @@ export function ResourcesSidebar({
               ? type.label.slice(0, -1)
               : type.label
             const Icon = getResourceIcon(kindKey)
-            const count = counts?.[kindKey] ?? 0
+            const count = counts[kindKey] ?? null
             const isSelected = effectiveSelectedKind.name === type.kind && !effectiveSelectedKind.group
             return (
               <button
@@ -600,9 +631,10 @@ export function ResourcesSidebar({
                 <span className="flex-1 text-left">{type.label}</span>
                 <span className={clsx(
                   'badge font-mono',
-                  isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated'
+                  isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
+                  count === null && 'text-theme-text-disabled',
                 )}>
-                  {count}
+                  {count === null ? '–' : count}
                 </span>
               </button>
             )

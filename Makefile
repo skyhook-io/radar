@@ -141,6 +141,35 @@ test-e2e:
 test-chart:
 	./scripts/test-chart.sh
 
+# Bootstrap a kind cluster pre-loaded with curated GitOps scenarios
+# (Argo CD + Flux + healthy/suspended/app-of-apps/ApplicationSet/etc).
+# Useful for visual-testing GitOps UI changes against realistic state.
+# See scripts/gitops-demo/README.md for the full coverage matrix.
+gitops-demo:
+	./scripts/gitops-demo.sh up
+
+gitops-demo-down:
+	./scripts/gitops-demo.sh down
+
+gitops-demo-status:
+	./scripts/gitops-demo.sh status
+
+gitops-demo-drift:
+	./scripts/gitops-demo.sh drift
+
+# Bootstrap a kind cluster pre-loaded with curated Crossplane fixtures
+# (core + provider-kubernetes + function-patch-and-transform + XRD/Composition/XRs).
+# Useful for visual-testing Crossplane UI changes against realistic state.
+# See scripts/crossplane-demo/README.md for the full coverage matrix.
+crossplane-demo:
+	./scripts/crossplane-demo.sh up
+
+crossplane-demo-down:
+	./scripts/crossplane-demo.sh down
+
+crossplane-demo-status:
+	./scripts/crossplane-demo.sh status
+
 # Run linter
 lint:
 	go vet ./...

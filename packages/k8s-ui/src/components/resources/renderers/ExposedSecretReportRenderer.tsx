@@ -5,6 +5,7 @@ import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { formatAge } from '../resource-utils'
 import { SEVERITY_BADGE_COLORS, TrivyAlertBanner, formatTrivyImage } from './trivy-shared'
 import { pluralize } from '../../../utils/pluralize'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 interface ExposedSecretReportRendererProps {
   data: any
@@ -92,7 +93,7 @@ export function ExposedSecretReportRenderer({ data }: ExposedSecretReportRendere
                     <tr key={`${secret.ruleID || i}-${i}`} className="border-b border-theme-border/50 hover:bg-theme-hover/50">
                       <td className="py-1.5 px-1 text-theme-text-secondary font-mono">{secret.ruleID || '-'}</td>
                       <td className="py-1.5 px-1">
-                        <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium', SEVERITY_BADGE_COLORS[secret.severity] || 'bg-gray-500/20 text-gray-400')}>
+                        <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium', SEVERITY_BADGE_COLORS[secret.severity] || BADGE_INACTIVE)}>
                           {secret.severity || '-'}
                         </span>
                       </td>

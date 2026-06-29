@@ -441,9 +441,11 @@ func parseTailLines(str string, defaultVal int64) int64 {
 	return defaultVal
 }
 
-// collectLogsFromPods fetches logs from all pods concurrently
+// collectLogsFromPods fetches logs from all pods concurrently. Non-nil even
+// when nothing is retrievable (e.g. every pod is crashlooping) — a nil slice
+// marshals as JSON null and consumers expect an array.
 func collectLogsFromPods(ctx context.Context, client kubernetes.Interface, namespace string, pods []*corev1.Pod, container string, tailLines int64, sinceSeconds *int64) []workloadLogEntry {
-	var allLogs []workloadLogEntry
+	allLogs := []workloadLogEntry{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 

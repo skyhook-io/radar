@@ -33,7 +33,21 @@ func minifyDetail(obj runtime.Object) (map[string]any, error) {
 // minifyDetailUnstructured applies Detail-level pruning to an unstructured resource.
 func minifyDetailUnstructured(obj map[string]any) map[string]any {
 	pruneMapDetail(obj)
+	redactUnstructuredSecrets(obj)
 	return obj
+}
+
+// redactUnstructuredSecrets redacts inline secret-shaped values in a CRD's
+// spec/status. Core Secret bodies are handled structurally elsewhere; this is
+// the only value-level pass that reaches arbitrary CRD specs (e.g. a Traefik
+// Middleware basicAuth user) before they go to an LLM.
+func redactUnstructuredSecrets(obj map[string]any) {
+	if spec, ok := obj["spec"]; ok {
+		RedactInlineSecrets(spec)
+	}
+	if status, ok := obj["status"]; ok {
+		RedactInlineSecrets(status)
+	}
 }
 
 func pruneMapDetail(m map[string]any) {

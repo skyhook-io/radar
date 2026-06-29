@@ -3,7 +3,9 @@ package gitops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,17 +17,14 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// Annotation keys written by SetArgoAutoSync when suspending auto-sync, to remember
-// the original prune/selfHeal settings so they can be restored on resume.
-// Exported so consumers can identify or clean up these annotations independently.
+// Annotations written by SetArgoAutoSync when suspending auto-sync so that
+// the original prune/selfHeal settings can be restored on resume. Exported
+// so consumers can identify or clean these annotations up directly.
 //
-// Legacy* constants honor Applications suspended by older Radar builds so
-// resuming still restores their prune/selfHeal settings. Legacy keys are
-// cleared on resume and never re-written.
-//
-// TODO(2026-Q3): remove legacy constants once all installs have rolled
-// through at least one resume cycle past this release (paired with the
-// node-debug legacy-label cleanup in pkg/k8score/node_debug.go).
+// The legacy* keys are read on resume to honor Applications suspended by
+// older Radar builds; they're cleared on resume and never re-written. Safe
+// to drop once all installs have rolled through at least one resume cycle
+// past this release.
 const (
 	ArgoSuspendedPruneAnnotation    = "radarhq.io/suspended-prune"
 	ArgoSuspendedSelfHealAnnotation = "radarhq.io/suspended-selfheal"
@@ -33,6 +32,56 @@ const (
 	legacyArgoSuspendedPruneAnnotation    = "skyhook.io/suspended-prune"
 	legacyArgoSuspendedSelfHealAnnotation = "skyhook.io/suspended-selfheal"
 )
+
+// Sentinel errors so HTTP handlers can map operation outcomes to status
+// codes via errors.Is rather than fragile substring matching.
+var (
+	// ErrOperationInProgress: a sync/rollback couldn't start because the
+	// Application already has an in-flight operation. HTTP 409.
+	ErrOperationInProgress = errors.New("operation already in progress")
+	// ErrNoOperationInProgress: a terminate couldn't fire because there
+	// was no operation to remove. HTTP 400.
+	ErrNoOperationInProgress = errors.New("no operation in progress")
+	// ErrHistoryEntryNotFound: the requested rollback target id isn't in
+	// status.history. HTTP 404.
+	ErrHistoryEntryNotFound = errors.New("history entry not found")
+	// ErrResourceTerminating: the target resource has metadata.deletionTimestamp
+	// set, so any mutating operation against it is futile — the resource is
+	// being torn down and reconcile/sync/rollback will either no-op or be
+	// undone immediately. The HTTP layer maps this to 409 Conflict so the
+	// frontend can show a tailored "resource is pending deletion" toast
+	// instead of bubbling up a generic K8s error message. Read-only verbs
+	// (Argo Refresh) and op-cancel (Argo Terminate) are *not* gated by this
+	// check — refresh just re-reads from Git, terminate just clears an
+	// in-flight op record; both are harmless on a Terminating resource.
+	ErrResourceTerminating = errors.New("resource is pending deletion")
+)
+
+// assertNotTerminating returns ErrResourceTerminating wrapped with a
+// caller-friendly message when the object has metadata.deletionTimestamp
+// set. The returned error includes the kind+ns/name and finalizers so
+// the user sees, in one line, both *what* is terminating and *what's
+// blocking cleanup*. Returns nil for healthy (non-Terminating) objects.
+//
+// The deletionTimestamp check is the single source of truth K8s uses to
+// signal "this resource is being deleted, do not start new work on it".
+// API server still serves the object (so GETs succeed), but kubelet/the
+// owning controller stop accepting new operations against it.
+func assertNotTerminating(obj *unstructured.Unstructured, kind, namespace, name string) error {
+	if obj == nil {
+		return nil
+	}
+	dt := obj.GetDeletionTimestamp()
+	if dt == nil || dt.IsZero() {
+		return nil
+	}
+	finalizers := obj.GetFinalizers()
+	suffix := ""
+	if len(finalizers) > 0 {
+		suffix = fmt.Sprintf(" (finalizers: %s)", strings.Join(finalizers, ", "))
+	}
+	return fmt.Errorf("%s %s/%s is being deleted%s: %w", kind, namespace, name, suffix, ErrResourceTerminating)
+}
 
 // argoAppGVR is the GVR for ArgoCD Application resources.
 var argoAppGVR = schema.GroupVersionResource{
@@ -77,6 +126,7 @@ func ResolveFluxKind(kind string) (FluxKindEntry, error) {
 	for k := range fluxKinds {
 		supported = append(supported, k)
 	}
+	sort.Strings(supported)
 	return FluxKindEntry{}, fmt.Errorf("unknown FluxCD kind %q: supported kinds are %s", kind, strings.Join(supported, ", "))
 }
 
@@ -99,24 +149,115 @@ type SourceRef struct {
 	Name      string
 }
 
+// ArgoSyncResource identifies a resource selected for an ArgoCD selective sync.
+type ArgoSyncResource struct {
+	Group     string `json:"group,omitempty"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+}
+
+// ArgoSyncOptions controls an ArgoCD sync operation. Pointer-bool fields
+// let callers say "not set" via nil; DryRun/Force/ApplyOnly are only
+// written when non-nil so Argo's server default applies otherwise. Prune
+// is the exception — always written, defaulting to true when nil, to
+// match Argo's server default.
+type ArgoSyncOptions struct {
+	Resources   []ArgoSyncResource `json:"resources,omitempty"`
+	Revision    string             `json:"revision,omitempty"`
+	Prune       *bool              `json:"prune,omitempty"`
+	DryRun      *bool              `json:"dryRun,omitempty"`
+	Force       *bool              `json:"force,omitempty"`
+	ApplyOnly   *bool              `json:"applyOnly,omitempty"`
+	SyncOptions []string           `json:"syncOptions,omitempty"`
+}
+
+// ArgoRollbackOptions controls an ArgoCD rollback operation. ID is the
+// history entry to roll back to (matches HistoryItem.ID surfaced by the
+// insights builder). Argo's rollback uses the same operation slot as sync
+// — only one is in flight at a time.
+type ArgoRollbackOptions struct {
+	ID     int64 `json:"id"`
+	Prune  *bool `json:"prune,omitempty"`
+	DryRun *bool `json:"dryRun,omitempty"`
+}
+
 // --- ArgoCD operations ---
 
 // SyncArgoApp triggers a sync operation on an ArgoCD Application.
-func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (OperationResult, error) {
+func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string, opts ArgoSyncOptions) (OperationResult, error) {
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
 	}
 
+	if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+		return OperationResult{}, err
+	}
+
 	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
 	if found && phase == "Running" {
-		return OperationResult{}, fmt.Errorf("sync operation already in progress for %s/%s", namespace, name)
+		return OperationResult{}, fmt.Errorf("sync operation already in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
 	}
 
 	timestamp := time.Now().Format(time.RFC3339Nano)
+	prune := true
+	if opts.Prune != nil {
+		prune = *opts.Prune
+	}
+	sync := map[string]any{
+		"revision": opts.Revision,
+		"prune":    prune,
+	}
+	if opts.DryRun != nil {
+		sync["dryRun"] = *opts.DryRun
+	}
+	// Argo's syncStrategy is a oneof — `apply` skips PreSync/PostSync/SyncFail
+	// hooks entirely, while `hook` runs the full hook lifecycle. Force lives
+	// inside whichever strategy is in use. Three cases:
+	//   ApplyOnly: pick `apply` (hooks skipped, with optional force).
+	//   Force only: pick `hook` (default lifecycle, with force) — using
+	//     `apply` here would silently drop the user's hooks, which is the
+	//     opposite of what most operators want when force-syncing.
+	//   Neither: omit syncStrategy and let Argo use its default (hook).
+	applyOnly := opts.ApplyOnly != nil && *opts.ApplyOnly
+	force := opts.Force != nil && *opts.Force
+	switch {
+	case applyOnly:
+		applyMap := map[string]any{}
+		if force {
+			applyMap["force"] = true
+		}
+		sync["syncStrategy"] = map[string]any{"apply": applyMap}
+	case force:
+		sync["syncStrategy"] = map[string]any{"hook": map[string]any{"force": true}}
+	}
+	if len(opts.SyncOptions) > 0 {
+		// Argo accepts free-form key=value entries here (Replace=true,
+		// ServerSideApply=true, PruneLast=true, ApplyOutOfSyncOnly=true,
+		// etc). Caller is responsible for spelling them right.
+		sync["syncOptions"] = opts.SyncOptions
+	}
+	if len(opts.Resources) > 0 {
+		resources := make([]map[string]any, 0, len(opts.Resources))
+		for _, res := range opts.Resources {
+			if res.Kind == "" || res.Name == "" {
+				continue
+			}
+			resources = append(resources, map[string]any{
+				"group":     res.Group,
+				"kind":      res.Kind,
+				"namespace": res.Namespace,
+				"name":      res.Name,
+			})
+		}
+		if len(resources) > 0 {
+			sync["resources"] = resources
+		}
+	}
 	patch := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]string{
@@ -127,10 +268,7 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 			"initiatedBy": map[string]any{
 				"username": "radar",
 			},
-			"sync": map[string]any{
-				"revision": "",
-				"prune":    true,
-			},
+			"sync": sync,
 		},
 	}
 
@@ -154,9 +292,13 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
+	}
+
+	if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+		return OperationResult{}, err
 	}
 
 	var patch map[string]any
@@ -259,7 +401,7 @@ func RefreshArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace,
 
 	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to refresh Application %s/%s: %w", namespace, name, err)
 	}
@@ -280,14 +422,14 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
 	}
 
 	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
 	if !found || phase != "Running" {
-		return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s", namespace, name)
+		return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s: %w", namespace, name, ErrNoOperationInProgress)
 	}
 
 	patchBytes := []byte(`[{"op": "remove", "path": "/operation"}]`)
@@ -295,15 +437,13 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 		ctx, name, types.JSONPatchType, patchBytes, metav1.PatchOptions{},
 	)
 	if err != nil {
-		if strings.Contains(err.Error(), "nonexistent") {
-			return OperationResult{
-				Message:   fmt.Sprintf("No operation to terminate for ArgoCD Application %s/%s (may have already completed)", namespace, name),
-				Operation: "terminate",
-				Tool:      "argocd",
-				Kind:      "Application",
-				Namespace: namespace,
-				Name:      name,
-			}, nil
+		// Race: the operation completed (and was removed) between the GET
+		// above and this PATCH. K8s rejects the JSON-Patch with Invalid
+		// because the /operation path is gone — surface the same sentinel
+		// as the pre-flight check so the handler reports "nothing to
+		// terminate" honestly instead of a fake "Sync terminated".
+		if apierrors.IsInvalid(err) {
+			return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s (completed before terminate could fire): %w", namespace, name, ErrNoOperationInProgress)
 		}
 		return OperationResult{}, fmt.Errorf("failed to terminate sync for Application %s/%s: %w", namespace, name, err)
 	}
@@ -318,10 +458,107 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	}, nil
 }
 
+// RollbackArgoApp rolls an ArgoCD Application back to a prior revision
+// by ID (matches HistoryItem.ID surfaced by the insights builder). Like
+// sync, rollback uses the operation slot — fails if a sync is in flight.
+func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string, opts ArgoRollbackOptions) (OperationResult, error) {
+	if opts.ID <= 0 {
+		return OperationResult{}, fmt.Errorf("rollback requires a positive history id")
+	}
+	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
+		}
+		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
+	}
+
+	if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+		return OperationResult{}, err
+	}
+
+	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+	if found && phase == "Running" {
+		return OperationResult{}, fmt.Errorf("cannot rollback while another operation is in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
+	}
+
+	// Verify the requested history ID actually exists, otherwise Argo silently
+	// accepts the operation and never executes — confusing failure mode.
+	history, _, _ := unstructured.NestedSlice(app.Object, "status", "history")
+	matched := false
+	for _, item := range history {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch v := m["id"].(type) {
+		case int64:
+			if v == opts.ID {
+				matched = true
+			}
+		case float64:
+			if int64(v) == opts.ID {
+				matched = true
+			}
+		}
+	}
+	if !matched {
+		return OperationResult{}, fmt.Errorf("history entry id=%d not found on Application %s/%s: %w", opts.ID, namespace, name, ErrHistoryEntryNotFound)
+	}
+
+	timestamp := time.Now().Format(time.RFC3339Nano)
+	rollback := map[string]any{
+		"id": opts.ID,
+	}
+	if opts.Prune != nil {
+		rollback["prune"] = *opts.Prune
+	}
+	if opts.DryRun != nil {
+		rollback["dryRun"] = *opts.DryRun
+	}
+	patch := map[string]any{
+		"operation": map[string]any{
+			"initiatedBy": map[string]any{"username": "radar"},
+			"rollback":    rollback,
+		},
+	}
+
+	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
+		return OperationResult{}, fmt.Errorf("failed to rollback Application %s/%s: %w", namespace, name, err)
+	}
+
+	return OperationResult{
+		Message:     fmt.Sprintf("Rollback to history #%d initiated for ArgoCD Application %s/%s", opts.ID, namespace, name),
+		Operation:   "rollback",
+		Tool:        "argocd",
+		Kind:        "Application",
+		Namespace:   namespace,
+		Name:        name,
+		RequestedAt: timestamp,
+	}, nil
+}
+
 // --- FluxCD operations ---
 
 // ReconcileFlux triggers a reconciliation on a FluxCD resource.
 func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxKindEntry, namespace, name string) (OperationResult, error) {
+	// Pre-flight GET so we can return ErrResourceTerminating cleanly.
+	// Without this we patch a Terminating resource — the patch may even
+	// "succeed" (annotation lands), but the controller will skip the
+	// reconcile because it's processing finalizers, and the user gets a
+	// false-positive "Reconciliation triggered" toast. Costs one extra
+	// round-trip on the happy path; trade is correctness.
+	obj, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
+		}
+		return OperationResult{}, fmt.Errorf("failed to get %s %s/%s: %w", entry.Kind, namespace, name, err)
+	}
+	if err := assertNotTerminating(obj, "FluxCD "+entry.Kind, namespace, name); err != nil {
+		return OperationResult{}, err
+	}
+
 	timestamp := time.Now().Format(time.RFC3339Nano)
 	patch := map[string]any{
 		"metadata": map[string]any{
@@ -333,7 +570,7 @@ func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxK
 
 	if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, patch); err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found", entry.Kind, namespace, name)
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to reconcile %s %s/%s: %w", entry.Kind, namespace, name, err)
 	}
@@ -351,6 +588,17 @@ func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxK
 
 // SetFluxSuspend sets the suspend field on a FluxCD resource.
 func SetFluxSuspend(ctx context.Context, dynClient dynamic.Interface, entry FluxKindEntry, namespace, name string, suspend bool) (OperationResult, error) {
+	obj, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
+		}
+		return OperationResult{}, fmt.Errorf("failed to get %s %s/%s: %w", entry.Kind, namespace, name, err)
+	}
+	if err := assertNotTerminating(obj, "FluxCD "+entry.Kind, namespace, name); err != nil {
+		return OperationResult{}, err
+	}
+
 	patch := map[string]any{
 		"spec": map[string]any{
 			"suspend": suspend,
@@ -359,7 +607,7 @@ func SetFluxSuspend(ctx context.Context, dynClient dynamic.Interface, entry Flux
 
 	if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, patch); err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found", entry.Kind, namespace, name)
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to update %s %s/%s: %w", entry.Kind, namespace, name, err)
 	}
@@ -392,9 +640,12 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 	resource, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found", entry.Kind, namespace, name)
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to get %s %s/%s: %w", entry.Kind, namespace, name, err)
+	}
+	if err := assertNotTerminating(resource, "FluxCD "+entry.Kind, namespace, name); err != nil {
+		return OperationResult{}, err
 	}
 
 	// Extract sourceRef based on kind
@@ -447,15 +698,42 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		},
 	}
 
-	// First, reconcile the source
+	// Preflight the source for Terminating: a finalizer-stuck source receives
+	// the reconcile annotation but its controller will never act on it. Without
+	// this check the operator would see a green "Sync triggered" toast and
+	// believe progress is being made when the source is in fact a zombie.
+	sourceObj, err := dynClient.Resource(sourceEntry.GVR).Namespace(sourceNamespace).Get(ctx, sourceName, metav1.GetOptions{})
+	if err == nil {
+		if err := assertNotTerminating(sourceObj, "FluxCD "+sourceEntry.Kind, sourceNamespace, sourceName); err != nil {
+			return OperationResult{}, err
+		}
+	}
+	// (If the source can't be fetched here, fall through to the patch — the
+	// patch will surface the same error with a clearer "could not be patched"
+	// message below.)
+
+	// Source patch: K8s returns 404 for either a missing source resource
+	// (typo'd sourceRef.name, source already deleted) OR a missing source
+	// namespace (sourceRef points to a namespace that no longer exists, common
+	// when the source is a finalizer-stuck zombie). The error message is
+	// intentionally neutral about cause — leading the operator to one of
+	// the two possibilities by guessing wastes their time when it was the
+	// other case. The wrapped err preserves the apierrors chain so handlers
+	// still map this to 404.
 	if err := mergePatch(ctx, dynClient, sourceEntry.GVR, sourceNamespace, sourceName, reconcilePatch); err != nil {
+		if apierrors.IsNotFound(err) {
+			return OperationResult{}, fmt.Errorf(
+				"source %s %s/%s could not be patched (verify the resource and its namespace still exist; if the namespace was deleted, this resource may be a finalizer-stuck zombie): %w",
+				sourceEntry.Kind, sourceNamespace, sourceName, err,
+			)
+		}
 		return OperationResult{}, fmt.Errorf("failed to reconcile source %s %s/%s: %w", sourceEntry.Kind, sourceNamespace, sourceName, err)
 	}
 
 	// Then, reconcile the resource itself
 	if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, reconcilePatch); err != nil {
 		return OperationResult{}, fmt.Errorf("failed to reconcile %s %s/%s (note: source %s/%s was reconciled): %w",
-			entry.Kind, namespace, name, sourceName, sourceNamespace, err)
+			entry.Kind, namespace, name, sourceNamespace, sourceName, err)
 	}
 
 	return OperationResult{

@@ -12,40 +12,44 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // mockProvider implements ResourceProvider with configurable slices.
 type mockProvider struct {
-	pods         []*corev1.Pod
-	deployments  []*appsv1.Deployment
-	services     []*corev1.Service
-	daemonSets   []*appsv1.DaemonSet
-	statefulSets []*appsv1.StatefulSet
-	replicaSets  []*appsv1.ReplicaSet
-	jobs         []*batchv1.Job
-	cronJobs     []*batchv1.CronJob
-	ingresses    []*networkingv1.Ingress
-	configMaps   []*corev1.ConfigMap
-	secrets      []*corev1.Secret
-	pvcs         []*corev1.PersistentVolumeClaim
-	pvs          []*corev1.PersistentVolume
-	hpas         []*autoscalingv2.HorizontalPodAutoscaler
-	pdbs             []*policyv1.PodDisruptionBudget
-	networkPolicies  []*networkingv1.NetworkPolicy
-	nodes            []*corev1.Node
+	pods            []*corev1.Pod
+	deployments     []*appsv1.Deployment
+	services        []*corev1.Service
+	daemonSets      []*appsv1.DaemonSet
+	statefulSets    []*appsv1.StatefulSet
+	replicaSets     []*appsv1.ReplicaSet
+	jobs            []*batchv1.Job
+	cronJobs        []*batchv1.CronJob
+	ingresses       []*networkingv1.Ingress
+	configMaps      []*corev1.ConfigMap
+	secrets         []*corev1.Secret
+	pvcs            []*corev1.PersistentVolumeClaim
+	pvs             []*corev1.PersistentVolume
+	hpas            []*autoscalingv2.HorizontalPodAutoscaler
+	pdbs            []*policyv1.PodDisruptionBudget
+	networkPolicies []*networkingv1.NetworkPolicy
+	nodes           []*corev1.Node
 }
 
-func (m *mockProvider) Pods() ([]*corev1.Pod, error)                   { return m.pods, nil }
-func (m *mockProvider) Services() ([]*corev1.Service, error)           { return m.services, nil }
-func (m *mockProvider) Deployments() ([]*appsv1.Deployment, error)     { return m.deployments, nil }
-func (m *mockProvider) DaemonSets() ([]*appsv1.DaemonSet, error)       { return m.daemonSets, nil }
-func (m *mockProvider) StatefulSets() ([]*appsv1.StatefulSet, error)   { return m.statefulSets, nil }
-func (m *mockProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error)     { return m.replicaSets, nil }
-func (m *mockProvider) Jobs() ([]*batchv1.Job, error)                  { return m.jobs, nil }
-func (m *mockProvider) CronJobs() ([]*batchv1.CronJob, error)          { return m.cronJobs, nil }
-func (m *mockProvider) Ingresses() ([]*networkingv1.Ingress, error)    { return m.ingresses, nil }
-func (m *mockProvider) ConfigMaps() ([]*corev1.ConfigMap, error)       { return m.configMaps, nil }
-func (m *mockProvider) Secrets() ([]*corev1.Secret, error)             { return m.secrets, nil }
+func (m *mockProvider) Pods() ([]*corev1.Pod, error)                 { return m.pods, nil }
+func (m *mockProvider) Services() ([]*corev1.Service, error)         { return m.services, nil }
+func (m *mockProvider) Deployments() ([]*appsv1.Deployment, error)   { return m.deployments, nil }
+func (m *mockProvider) DaemonSets() ([]*appsv1.DaemonSet, error)     { return m.daemonSets, nil }
+func (m *mockProvider) StatefulSets() ([]*appsv1.StatefulSet, error) { return m.statefulSets, nil }
+func (m *mockProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error)   { return m.replicaSets, nil }
+func (m *mockProvider) Jobs() ([]*batchv1.Job, error)                { return m.jobs, nil }
+func (m *mockProvider) CronJobs() ([]*batchv1.CronJob, error)        { return m.cronJobs, nil }
+func (m *mockProvider) Ingresses() ([]*networkingv1.Ingress, error)  { return m.ingresses, nil }
+func (m *mockProvider) ConfigMaps() ([]*corev1.ConfigMap, error)     { return m.configMaps, nil }
+func (m *mockProvider) Secrets() ([]*corev1.Secret, error)           { return m.secrets, nil }
 func (m *mockProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
 	return m.pvcs, nil
 }
@@ -62,6 +66,57 @@ func (m *mockProvider) NetworkPolicies() ([]*networkingv1.NetworkPolicy, error) 
 func (m *mockProvider) Nodes() ([]*corev1.Node, error) { return m.nodes, nil }
 func (m *mockProvider) GetResourceStatus(kind, namespace, name string) *ResourceStatus {
 	return nil
+}
+
+type rolloutDynamicProvider struct {
+	gvr                 schema.GroupVersionResource
+	rollouts            []*unstructured.Unstructured
+	listCalls           int
+	listNamespacesCalls int
+}
+
+func (m *rolloutDynamicProvider) List(_ schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
+	m.listCalls++
+	return nil, nil
+}
+
+func (m *rolloutDynamicProvider) ListNamespaces(_ schema.GroupVersionResource, _ []string) ([]*unstructured.Unstructured, error) {
+	m.listNamespacesCalls++
+	return m.rollouts, nil
+}
+
+func (m *rolloutDynamicProvider) Get(_ schema.GroupVersionResource, _, _ string) (*unstructured.Unstructured, error) {
+	return nil, nil
+}
+
+func (m *rolloutDynamicProvider) GetWatchedResources() []schema.GroupVersionResource {
+	return nil
+}
+
+func (m *rolloutDynamicProvider) GetDiscoveryStatus() k8score.CRDDiscoveryStatus {
+	return k8score.CRDDiscoveryComplete
+}
+
+func (m *rolloutDynamicProvider) GetGVR(kindOrName string) (schema.GroupVersionResource, bool) {
+	if kindOrName == "Rollout" {
+		return m.gvr, true
+	}
+	return schema.GroupVersionResource{}, false
+}
+
+func (m *rolloutDynamicProvider) GetGVRWithGroup(kindOrName, _ string) (schema.GroupVersionResource, bool) {
+	return m.GetGVR(kindOrName)
+}
+
+func (m *rolloutDynamicProvider) GetKindForGVR(gvr schema.GroupVersionResource) string {
+	if gvr == m.gvr {
+		return "Rollout"
+	}
+	return ""
+}
+
+func (m *rolloutDynamicProvider) IsCRD(kind string) bool {
+	return kind == "Rollout"
 }
 
 // --- Generators ---
@@ -117,6 +172,70 @@ func smallProvider() *mockProvider {
 
 // --- Tests ---
 
+func TestBuildResourcesTopology_ReusesListedRolloutsForServiceEdges(t *testing.T) {
+	rolloutGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Rollout",
+		"metadata": map[string]any{
+			"name":      "web",
+			"namespace": "prod",
+		},
+		"spec": map[string]any{
+			"replicas": int64(1),
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{"app": "web"},
+				},
+			},
+		},
+	}}
+	dynamic := &rolloutDynamicProvider{
+		gvr:      rolloutGVR,
+		rollouts: []*unstructured.Unstructured{rollout},
+	}
+	provider := &mockProvider{
+		services: []*corev1.Service{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"},
+				Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "web"}},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "web-canary", Namespace: "prod"},
+				Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "web"}},
+			},
+		},
+	}
+
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if dynamic.listNamespacesCalls != 1 {
+		t.Fatalf("expected one Rollout ListNamespaces call, got %d", dynamic.listNamespacesCalls)
+	}
+	if dynamic.listCalls != 0 {
+		t.Fatalf("expected Service matching to reuse listed Rollouts without List calls, got %d", dynamic.listCalls)
+	}
+
+	wantTargets := map[string]bool{
+		"service/prod/web":        false,
+		"service/prod/web-canary": false,
+	}
+	for _, edge := range topo.Edges {
+		if edge.Type == EdgeExposes && edge.Target == "rollout/prod/web" {
+			if _, ok := wantTargets[edge.Source]; ok {
+				wantTargets[edge.Source] = true
+			}
+		}
+	}
+	for serviceID, found := range wantTargets {
+		if !found {
+			t.Fatalf("expected %s to expose rollout/prod/web; edges=%+v", serviceID, topo.Edges)
+		}
+	}
+}
+
 func TestLargeClusterDetection(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -168,7 +287,7 @@ func TestLargeClusterDetection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			b := NewBuilder(tt.provider)
 			opts := DefaultBuildOptions()
-			gotLarge, _ := b.detectLargeClusterAndOptimize(&opts)
+			gotLarge, _, _ := b.detectLargeClusterAndOptimize(&opts)
 			if gotLarge != tt.wantLarge {
 				t.Errorf("detectLargeClusterAndOptimize() = %v, want %v (%s)", gotLarge, tt.wantLarge, tt.description)
 			}
@@ -187,7 +306,7 @@ func TestLargeClusterOptimizations(t *testing.T) {
 		t.Fatal("precondition: IncludePVCs should default to true")
 	}
 
-	isLarge, hiddenKinds := b.detectLargeClusterAndOptimize(&opts)
+	isLarge, hiddenKinds, _ := b.detectLargeClusterAndOptimize(&opts)
 	if !isLarge {
 		t.Fatal("expected large cluster detection")
 	}
@@ -216,7 +335,7 @@ func TestSmallClusterUnaffected(t *testing.T) {
 	b := NewBuilder(smallProvider())
 	opts := DefaultBuildOptions()
 
-	isLarge, hiddenKinds := b.detectLargeClusterAndOptimize(&opts)
+	isLarge, hiddenKinds, _ := b.detectLargeClusterAndOptimize(&opts)
 	if isLarge {
 		t.Error("small cluster should not be detected as large")
 	}
@@ -339,7 +458,7 @@ func TestNamespaceFilterReducesEstimate(t *testing.T) {
 
 	// All namespaces → large
 	allOpts := DefaultBuildOptions()
-	isLarge, _ := b.detectLargeClusterAndOptimize(&allOpts)
+	isLarge, _, _ := b.detectLargeClusterAndOptimize(&allOpts)
 	if !isLarge {
 		t.Error("all-namespace should be detected as large (2000 deployments)")
 	}
@@ -347,7 +466,7 @@ func TestNamespaceFilterReducesEstimate(t *testing.T) {
 	// Single namespace → small
 	filteredOpts := DefaultBuildOptions()
 	filteredOpts.Namespaces = []string{"ns-0"}
-	isLarge, _ = b.detectLargeClusterAndOptimize(&filteredOpts)
+	isLarge, _, _ = b.detectLargeClusterAndOptimize(&filteredOpts)
 	if isLarge {
 		t.Error("single namespace (100 deployments) should NOT be detected as large")
 	}

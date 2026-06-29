@@ -2,6 +2,7 @@ package context
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -10,7 +11,13 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/pkg/cronsched"
+	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // ResourceSummary is the typed output for Summary-level minification.
@@ -23,73 +30,176 @@ type ResourceSummary struct {
 	Ready     string `json:"ready,omitempty"`
 	Issue     string `json:"issue,omitempty"`
 	Age       string `json:"age,omitempty"`
+	// Terminating signals that metadata.deletionTimestamp is set on the
+	// resource. AI assistants need this signal to avoid suggesting
+	// mutating actions that will fail (e.g. "run kubectl rollout restart"
+	// on a Pod that's being torn down) and to correctly diagnose "why is
+	// this stuck" scenarios where the resource is a finalizer-blocked
+	// zombie. Pruned when false.
+	Terminating bool `json:"terminating,omitempty"`
+	// Finalizers names the keys blocking deletion when Terminating is
+	// true. The owning controller is responsible for clearing each key
+	// during cleanup; if it doesn't, the resource lingers as a zombie.
+	// Pruned when empty.
+	Finalizers []string `json:"finalizers,omitempty"`
 
 	// Type-specific fields (only populated when relevant)
-	Image       string   `json:"image,omitempty"`
-	Ports       string   `json:"ports,omitempty"`
-	Schedule    string   `json:"schedule,omitempty"`
-	Type        string   `json:"type,omitempty"` // Service type, Secret type
-	Selector    string   `json:"selector,omitempty"`
-	ClusterIP   string   `json:"clusterIP,omitempty"`
-	Hosts       []string `json:"hosts,omitempty"`
-	Restarts    int32    `json:"restarts,omitempty"`
-	Node        string   `json:"node,omitempty"`
-	Strategy    string   `json:"strategy,omitempty"`
-	Completions string   `json:"completions,omitempty"`
-	Duration    string   `json:"duration,omitempty"`
+	Image         string   `json:"image,omitempty"`
+	Ports         string   `json:"ports,omitempty"`
+	Schedule      string   `json:"schedule,omitempty"`
+	Type          string   `json:"type,omitempty"` // Service type, Secret type
+	Selector      string   `json:"selector,omitempty"`
+	ClusterIP     string   `json:"clusterIP,omitempty"`
+	Hosts         []string `json:"hosts,omitempty"`
+	Restarts      int32    `json:"restarts,omitempty"`
+	Node          string   `json:"node,omitempty"`
+	Strategy      string   `json:"strategy,omitempty"`
+	Completions   string   `json:"completions,omitempty"`
+	Duration      string   `json:"duration,omitempty"`
 	Suspended     *bool    `json:"suspended,omitempty"`
 	Unschedulable *bool    `json:"unschedulable,omitempty"`
-	Active      int      `json:"active,omitempty"`
-	Target      string   `json:"target,omitempty"`
-	MinReplicas *int32   `json:"minReplicas,omitempty"`
-	MaxReplicas int32    `json:"maxReplicas,omitempty"`
-	Current     int32    `json:"current,omitempty"`
-	Desired     int32    `json:"desired,omitempty"`
-	Roles       []string `json:"roles,omitempty"`
-	Version     string   `json:"version,omitempty"`
-	Pressures   []string `json:"pressures,omitempty"`
-	Keys        []string `json:"keys,omitempty"`
-	StorageClass string  `json:"storageClass,omitempty"`
-	Capacity    string   `json:"capacity,omitempty"`
-	AccessModes []string `json:"accessModes,omitempty"`
-	Owner       string   `json:"owner,omitempty"`
+	Active        int      `json:"active,omitempty"`
+	Target        string   `json:"target,omitempty"`
+	MinReplicas   *int32   `json:"minReplicas,omitempty"`
+	MaxReplicas   int32    `json:"maxReplicas,omitempty"`
+	Current       int32    `json:"current,omitempty"`
+	Desired       int32    `json:"desired,omitempty"`
+	Roles         []string `json:"roles,omitempty"`
+	Version       string   `json:"version,omitempty"`
+	Pressures     []string `json:"pressures,omitempty"`
+	Keys          []string `json:"keys,omitempty"`
+	StorageClass  string   `json:"storageClass,omitempty"`
+	Capacity      string   `json:"capacity,omitempty"`
+	AccessModes   []string `json:"accessModes,omitempty"`
+	Owner         string   `json:"owner,omitempty"`
+
+	// SummaryContext is the per-row enrichment attached by AI-facing list
+	// surfaces (REST /api/ai/resources/{kind}, MCP list_resources, search
+	// hits). Populated by handlers post-minify via resourcecontext.BuildSummary;
+	// nil when the caller opted out (?context=none) or when no fields apply.
+	// Type is resourcecontext.ResourceSummaryContext — the field name keeps
+	// the shorter "SummaryContext" form to match the wire JSON tag.
+	SummaryContext *resourcecontext.ResourceSummaryContext `json:"summaryContext,omitempty"`
 }
 
-// summarize dispatches to the appropriate per-type extractor.
+// summarize dispatches to the appropriate per-type extractor and then
+// fills in lifecycle fields (Terminating, Finalizers) shared across all
+// kinds. Filling these once at the dispatch boundary avoids touching
+// every per-type summarizer; all K8s resource types implement
+// metav1.Object, so the cast is universal.
 func summarize(obj runtime.Object) (*ResourceSummary, error) {
+	// Typed-nil-through-interface trap: a (*v1.Pod)(nil) assigned to
+	// runtime.Object compares != nil but calling methods panics. Catch
+	// it once at the boundary so per-type summarizers and
+	// applyLifecycleFields can assume non-nil concrete values.
+	if isNilObject(obj) {
+		return &ResourceSummary{Kind: "Unknown"}, nil
+	}
+	var s *ResourceSummary
 	switch o := obj.(type) {
 	case *corev1.Pod:
-		return summarizePod(o), nil
+		s = summarizePod(o)
 	case *appsv1.Deployment:
-		return summarizeDeployment(o), nil
+		s = summarizeDeployment(o)
 	case *appsv1.StatefulSet:
-		return summarizeStatefulSet(o), nil
+		s = summarizeStatefulSet(o)
 	case *appsv1.DaemonSet:
-		return summarizeDaemonSet(o), nil
+		s = summarizeDaemonSet(o)
 	case *corev1.Service:
-		return summarizeService(o), nil
+		s = summarizeService(o)
 	case *networkingv1.Ingress:
-		return summarizeIngress(o), nil
+		s = summarizeIngress(o)
 	case *batchv1.Job:
-		return summarizeJob(o), nil
+		s = summarizeJob(o)
 	case *batchv1.CronJob:
-		return summarizeCronJob(o), nil
+		s = summarizeCronJob(o)
 	case *autoscalingv2.HorizontalPodAutoscaler:
-		return summarizeHPA(o), nil
+		s = summarizeHPA(o)
 	case *corev1.Node:
-		return summarizeNode(o), nil
+		s = summarizeNode(o)
 	case *corev1.ConfigMap:
-		return summarizeConfigMap(o), nil
+		s = summarizeConfigMap(o)
 	case *corev1.Secret:
-		return summarizeSecret(o), nil
+		s = summarizeSecret(o)
 	case *corev1.PersistentVolumeClaim:
-		return summarizePVC(o), nil
+		s = summarizePVC(o)
 	case *appsv1.ReplicaSet:
-		return summarizeReplicaSet(o), nil
+		s = summarizeReplicaSet(o)
 	case *corev1.Namespace:
-		return summarizeNamespace(o), nil
+		s = summarizeNamespace(o)
 	default:
-		return nil, fmt.Errorf("unsupported type for summary: %T", obj)
+		// Generic fallback is better than erroring — a single unsupported
+		// kind would otherwise break the whole MCP list_resources response.
+		// Add an explicit case above when richer per-kind output is worth
+		// maintaining.
+		s = summarizeGeneric(obj)
+	}
+	applyLifecycleFields(s, obj)
+	return s, nil
+}
+
+// summarizeGeneric is the default summarizer for kinds without a hand-written case.
+func summarizeGeneric(obj runtime.Object) *ResourceSummary {
+	if isNilObject(obj) {
+		return &ResourceSummary{Kind: "Unknown"}
+	}
+	s := &ResourceSummary{}
+	if kinder, ok := obj.(interface{ GetObjectKind() schema.ObjectKind }); ok {
+		s.Kind = kinder.GetObjectKind().GroupVersionKind().Kind
+	}
+	if s.Kind == "" {
+		// TypeMeta isn't populated on informer-cached objects. Fall back to
+		// the Go type name with the package qualifier stripped (e.g.
+		// "*v1.NetworkPolicy" → "NetworkPolicy").
+		typeName := fmt.Sprintf("%T", obj)
+		if i := strings.LastIndex(typeName, "."); i >= 0 {
+			typeName = typeName[i+1:]
+		}
+		s.Kind = typeName
+	}
+	mo, ok := obj.(interface {
+		GetName() string
+		GetNamespace() string
+		GetCreationTimestamp() metav1.Time
+	})
+	if !ok {
+		return s
+	}
+	s.Name = mo.GetName()
+	s.Namespace = mo.GetNamespace()
+	s.Age = age(mo.GetCreationTimestamp().Time)
+	return s
+}
+
+// isNilObject handles Go's typed-nil-in-interface trap: a (*v1.Pod)(nil)
+// assigned to a runtime.Object interface compares != nil but calling
+// methods on it panics. Reflection is the only way to detect this case.
+func isNilObject(obj runtime.Object) bool {
+	if obj == nil {
+		return true
+	}
+	v := reflect.ValueOf(obj)
+	return v.Kind() == reflect.Ptr && v.IsNil()
+}
+
+// applyLifecycleFields populates Terminating + Finalizers on a
+// ResourceSummary by reading metadata via the metav1.Object interface
+// that every K8s typed object implements. No-ops on a nil summary or
+// a non-metav1 object so it's safe to call from any caller.
+func applyLifecycleFields(s *ResourceSummary, obj runtime.Object) {
+	if s == nil {
+		return
+	}
+	mo, ok := obj.(interface {
+		GetDeletionTimestamp() *metav1.Time
+		GetFinalizers() []string
+	})
+	if !ok {
+		return
+	}
+	if dt := mo.GetDeletionTimestamp(); dt != nil && !dt.IsZero() {
+		s.Terminating = true
+		s.Finalizers = mo.GetFinalizers()
 	}
 }
 
@@ -313,9 +423,12 @@ func summarizeCronJob(cj *batchv1.CronJob) *ResourceSummary {
 	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 		s.Suspended = cj.Spec.Suspend
 	} else {
-		if cj.Status.LastScheduleTime != nil && time.Since(cj.Status.LastScheduleTime.Time) > 24*time.Hour {
+		// Staleness is relative to the schedule's cadence, not a flat day: a
+		// weekly job that ran on schedule 25h ago is healthy, not stale.
+		threshold := cronsched.StaleThreshold(cj.Spec.Schedule)
+		if cj.Status.LastScheduleTime != nil && time.Since(cj.Status.LastScheduleTime.Time) > threshold {
 			s.Issue = "no recent runs"
-		} else if cj.Status.LastScheduleTime == nil && time.Since(cj.CreationTimestamp.Time) > 24*time.Hour {
+		} else if cj.Status.LastScheduleTime == nil && time.Since(cj.CreationTimestamp.Time) > threshold {
 			s.Issue = "never scheduled"
 		}
 	}
@@ -339,8 +452,13 @@ func summarizeHPA(hpa *autoscalingv2.HorizontalPodAutoscaler) *ResourceSummary {
 		s.MinReplicas = hpa.Spec.MinReplicas
 	}
 
-	if hpa.Spec.MaxReplicas > 0 && hpa.Status.CurrentReplicas >= hpa.Spec.MaxReplicas && hpa.Status.DesiredReplicas >= hpa.Spec.MaxReplicas {
-		s.Issue = "maxed"
+	if diagnosis := hpadiag.Analyze(hpa); diagnosis != nil {
+		switch diagnosis.State {
+		case hpadiag.StateLimitedMax:
+			s.Issue = "maxed"
+		case hpadiag.StateMetricsUnavailable, hpadiag.StateUnableToScale:
+			s.Issue = diagnosis.Summary
+		}
 	}
 
 	return s

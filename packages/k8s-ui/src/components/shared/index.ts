@@ -2,3 +2,5 @@ export { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } f
 export { EditableYamlView, SaveSuccessAnimation } from './EditableYamlView'
 export { ResourceActionsBar, RevisionHistoryDialog } from './ResourceActionsBar'
 export { CreateResourceDialog, type CreateResourceDialogProps, type ApplyResult } from './CreateResourceDialog'
+export { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from './ManagedByChip'
+export { DetailShell, type DetailShellProps, type DetailShellTab } from './DetailShell'

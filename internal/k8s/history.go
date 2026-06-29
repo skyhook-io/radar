@@ -1,10 +1,17 @@
 package k8s
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
+	"reflect"
+	"sort"
 	"strings"
+	"sync"
 
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -12,6 +19,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
 )
 
 // Type aliases — canonical definitions live in pkg/k8score.
@@ -19,57 +27,73 @@ type OwnerInfo = k8score.OwnerInfo
 type DiffInfo = k8score.DiffInfo
 type FieldChange = k8score.FieldChange
 
-// ComputeDiff computes the diff between old and new objects based on kind
-// Returns nil if no meaningful changes detected or kind not supported
+// kindDiffFunc is the per-kind diff dispatcher signature used by diffFunctions.
+type kindDiffFunc func(oldObj, newObj any) ([]FieldChange, []string)
+
+// diffFunctions is the single source of truth for kinds with audited diff
+// coverage. ComputeDiff dispatches via this map, KindHasDiffer reads its
+// keys — no separate "kinds we know about" list to drift out of sync.
+//
+// Adding a kind here is a CONTRACT: the diff function MUST surface every
+// status field a user would care about, because for kinds in this map,
+// recordToTimelineStore drops update events when the diff is empty.
+var diffFunctions = map[string]kindDiffFunc{
+	"Deployment":                     diffDeployment,
+	"Pod":                            diffPod,
+	"Service":                        diffService,
+	"ConfigMap":                      diffConfigMap,
+	"Ingress":                        diffIngress,
+	"ReplicaSet":                     diffReplicaSet,
+	"DaemonSet":                      diffDaemonSet,
+	"StatefulSet":                    diffStatefulSet,
+	"HorizontalPodAutoscaler":        diffHPA,
+	"Job":                            diffJob,
+	"Node":                           diffNode,
+	"PersistentVolumeClaim":          diffPVC,
+	"Application":                    diffApplication,
+	"Kustomization":                  diffKustomization,
+	"HelmRelease":                    diffFluxHelmRelease,
+	"GitRepository":                  func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") },
+	"OCIRepository":                  func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "OCIRepository") },
+	"HelmRepository":                 func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") },
+	"Gateway":                        diffGateway,
+	"GatewayClass":                   diffGatewayClass,
+	"HTTPRoute":                      diffGatewayRoute,
+	"GRPCRoute":                      diffGatewayRoute,
+	"TCPRoute":                       diffGatewayRoute,
+	"TLSRoute":                       diffGatewayRoute,
+	"ReferenceGrant":                 diffReferenceGrant,
+	"ResourceQuota":                  diffResourceQuota,
+	"LimitRange":                     diffLimitRange,
+	"MutatingWebhookConfiguration":   diffAdmissionWebhookConfiguration,
+	"ValidatingWebhookConfiguration": diffAdmissionWebhookConfiguration,
+}
+
+// ComputeDiff computes the diff between old and new objects based on kind.
+// Returns nil if the kind has no audited diff function or if no meaningful
+// changes were detected.
 func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
-	var changes []FieldChange
-	var summaryParts []string
-
-	switch kind {
-	case "Deployment":
-		changes, summaryParts = diffDeployment(oldObj, newObj)
-	case "Pod":
-		changes, summaryParts = diffPod(oldObj, newObj)
-	case "Service":
-		changes, summaryParts = diffService(oldObj, newObj)
-	case "ConfigMap":
-		changes, summaryParts = diffConfigMap(oldObj, newObj)
-	case "Ingress":
-		changes, summaryParts = diffIngress(oldObj, newObj)
-	case "ReplicaSet":
-		changes, summaryParts = diffReplicaSet(oldObj, newObj)
-	case "DaemonSet":
-		changes, summaryParts = diffDaemonSet(oldObj, newObj)
-	case "StatefulSet":
-		changes, summaryParts = diffStatefulSet(oldObj, newObj)
-	case "HorizontalPodAutoscaler":
-		changes, summaryParts = diffHPA(oldObj, newObj)
-	case "Job":
-		changes, summaryParts = diffJob(oldObj, newObj)
-	case "Node":
-		changes, summaryParts = diffNode(oldObj, newObj)
-	case "PersistentVolumeClaim":
-		changes, summaryParts = diffPVC(oldObj, newObj)
-	case "Application":
-		changes, summaryParts = diffApplication(oldObj, newObj)
-	case "Kustomization":
-		changes, summaryParts = diffKustomization(oldObj, newObj)
-	case "HelmRelease":
-		changes, summaryParts = diffFluxHelmRelease(oldObj, newObj)
-	case "GitRepository", "OCIRepository", "HelmRepository":
-		changes, summaryParts = diffFluxSource(oldObj, newObj, kind)
-	case "Gateway":
-		changes, summaryParts = diffGateway(oldObj, newObj)
-	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
-		changes, summaryParts = diffGatewayRoute(oldObj, newObj)
-	default:
-		return nil
+	fn, ok := diffFunctions[kind]
+	if !ok {
+		oldU, newU, ok := unstructuredPair(oldObj, newObj)
+		if !ok {
+			return nil
+		}
+		changes, summaryParts := diffGenericUnstructured(oldU, newU)
+		if len(changes) == 0 {
+			return nil
+		}
+		return buildDiff(changes, summaryParts)
 	}
-
+	changes, summaryParts := fn(oldObj, newObj)
 	if len(changes) == 0 {
 		return nil
 	}
 
+	return buildDiff(changes, summaryParts)
+}
+
+func buildDiff(changes []FieldChange, summaryParts []string) *DiffInfo {
 	var summary strings.Builder
 	if len(summaryParts) > 0 {
 		for i, part := range summaryParts {
@@ -83,6 +107,153 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 	return &DiffInfo{
 		Fields:  changes,
 		Summary: summary.String(),
+	}
+}
+
+func unstructuredPair(oldObj, newObj any) (*unstructured.Unstructured, *unstructured.Unstructured, bool) {
+	oldU, ok1 := oldObj.(*unstructured.Unstructured)
+	newU, ok2 := newObj.(*unstructured.Unstructured)
+	return oldU, newU, ok1 && ok2 && oldU != nil && newU != nil
+}
+
+// typeAssertWarnedKinds dedups one-time warnings about type-assertion failures
+// inside the per-kind diff helpers. A failure means an informer for a kind in
+// KindHasDiffer is wired with the wrong factory — every update for that kind
+// would silently drop as "no diff." Logging once per kind keeps it diagnosable
+// without spamming.
+var typeAssertWarnedKinds sync.Map
+
+// warnUnstructuredAssertFailed logs once per kind when an unstructured diff
+// helper receives a non-unstructured object.
+func warnUnstructuredAssertFailed(kind string, got any) {
+	if _, loaded := typeAssertWarnedKinds.LoadOrStore(kind, true); loaded {
+		return
+	}
+	log.Printf("[history] WARN: %s diff received non-unstructured object (%T) — every %s update will silently drop. Likely informer wired to wrong factory.", kind, got, kind)
+}
+
+// KindHasDiffer reports whether the given kind has audited ComputeDiff
+// coverage. The no-diff drop only fires for kinds in this set.
+func KindHasDiffer(kind string) bool {
+	_, ok := diffFunctions[kind]
+	return ok
+}
+
+func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChange, []string) {
+	var changes []FieldChange
+	var summary []string
+
+	if oldGen, newGen := oldU.GetGeneration(), newU.GetGeneration(); oldGen != newGen && oldGen > 0 && newGen > 0 {
+		changes = append(changes, FieldChange{
+			Path:     "metadata.generation",
+			OldValue: oldGen,
+			NewValue: newGen,
+		})
+		summary = append(summary, fmt.Sprintf("spec changed (gen %d→%d, fields not specifically tracked)", oldGen, newGen))
+	}
+
+	for _, change := range genericConditionChanges(oldU, newU, "status", "conditions") {
+		changes = append(changes, change)
+		summary = append(summary, fmt.Sprintf("%s changed", change.Path))
+	}
+
+	if len(changes) > 0 {
+		return changes, summary
+	}
+
+	oldNorm := normalizedUnstructuredForTimeline(oldU)
+	newNorm := normalizedUnstructuredForTimeline(newU)
+	if reflect.DeepEqual(oldNorm, newNorm) {
+		return nil, nil
+	}
+
+	return []FieldChange{{
+		Path:     "resource",
+		OldValue: "changed",
+		NewValue: "changed",
+	}}, []string{"resource changed"}
+}
+
+func genericConditionChanges(oldU, newU *unstructured.Unstructured, fields ...string) []FieldChange {
+	oldConditions := genericConditionSignalMap(oldU.Object, fields...)
+	newConditions := genericConditionSignalMap(newU.Object, fields...)
+	keys := make(map[string]struct{}, len(oldConditions)+len(newConditions))
+	for k := range oldConditions {
+		keys[k] = struct{}{}
+	}
+	for k := range newConditions {
+		keys[k] = struct{}{}
+	}
+
+	var changes []FieldChange
+	for key := range keys {
+		oldVal, oldOK := oldConditions[key]
+		newVal, newOK := newConditions[key]
+		if oldOK != newOK || oldVal != newVal {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("%s[%s]", strings.Join(fields, "."), key),
+				OldValue: oldVal,
+				NewValue: newVal,
+			})
+		}
+	}
+	return changes
+}
+
+func genericConditionSignalMap(obj map[string]any, fields ...string) map[string]string {
+	conditions, found, _ := unstructured.NestedSlice(obj, fields...)
+	if !found {
+		return nil
+	}
+	out := make(map[string]string, len(conditions))
+	for _, item := range conditions {
+		cond, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ, _ := cond["type"].(string)
+		if typ == "" {
+			continue
+		}
+		status, _ := cond["status"].(string)
+		reason, _ := cond["reason"].(string)
+		out[typ] = status + "\x00" + reason
+	}
+	return out
+}
+
+func normalizedUnstructuredForTimeline(u *unstructured.Unstructured) map[string]any {
+	cp := u.DeepCopy().Object
+	normalizeTimelineObject(cp)
+	return cp
+}
+
+func normalizeTimelineObject(v any) {
+	switch typed := v.(type) {
+	case map[string]any:
+		for k, child := range typed {
+			if isTimelineNoiseKey(k) {
+				delete(typed, k)
+				continue
+			}
+			normalizeTimelineObject(child)
+		}
+	case []any:
+		for _, child := range typed {
+			normalizeTimelineObject(child)
+		}
+	}
+}
+
+func isTimelineNoiseKey(key string) bool {
+	switch key {
+	case "resourceVersion", "managedFields", "observedGeneration",
+		"lastTransitionTime", "lastUpdateTime", "lastHeartbeatTime", "lastProbeTime",
+		"lastReconcileTime", "lastReconciledTime", "lastSyncTime",
+		"lastHandledReconcileAt", "lastHandledRefresh":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -143,6 +314,10 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, "resources changed")
 	}
 
+	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldDep.Spec.Template.Spec, newDep.Spec.Template.Spec)
+	changes = append(changes, podTemplateChanges...)
+	summary = append(summary, podTemplateSummary...)
+
 	// Check paused state
 	if oldDep.Spec.Paused != newDep.Spec.Paused {
 		changes = append(changes, FieldChange{
@@ -177,6 +352,21 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 		// Only add to summary if not already showing ready replicas change
 		if oldDep.Status.ReadyReplicas == newDep.Status.ReadyReplicas {
 			summary = append(summary, fmt.Sprintf("updated: %d→%d", oldDep.Status.UpdatedReplicas, newDep.Status.UpdatedReplicas))
+		}
+	}
+
+	// Available=False = rollout failed minAvailable check; Progressing=False =
+	// rollout stalled / deadline exceeded. Replica counts alone don't reveal these.
+	for _, condType := range []appsv1.DeploymentConditionType{appsv1.DeploymentAvailable, appsv1.DeploymentProgressing} {
+		oldStatus := getDeploymentConditionStatus(oldDep, condType)
+		newStatus := getDeploymentConditionStatus(newDep, condType)
+		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldStatus,
+				NewValue: newStatus,
+			})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
 		}
 	}
 
@@ -279,7 +469,43 @@ func diffPod(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("IP: %s", newPod.Status.PodIP))
 	}
 
+	// Ephemeral containers (kubectl debug attach). Status surfaces them as a
+	// new EphemeralContainerStatuses entry — invisible to phase/restart/state.
+	if len(newPod.Status.EphemeralContainerStatuses) > len(oldPod.Status.EphemeralContainerStatuses) {
+		changes = append(changes, FieldChange{
+			Path:     "status.ephemeralContainerStatuses",
+			OldValue: len(oldPod.Status.EphemeralContainerStatuses),
+			NewValue: len(newPod.Status.EphemeralContainerStatuses),
+		})
+		summary = append(summary, fmt.Sprintf("debug container attached (%d total)", len(newPod.Status.EphemeralContainerStatuses)))
+	}
+
+	// PodReady and ContainersReady transitions. Probe failures on a Running
+	// container flip these without changing container state, so we'd otherwise
+	// miss them entirely.
+	for _, condType := range []corev1.PodConditionType{corev1.PodReady, corev1.ContainersReady} {
+		oldStatus := getPodConditionStatus(oldPod, condType)
+		newStatus := getPodConditionStatus(newPod, condType)
+		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldStatus,
+				NewValue: newStatus,
+			})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		}
+	}
+
 	return changes, summary
+}
+
+func getPodConditionStatus(p *corev1.Pod, condType corev1.PodConditionType) string {
+	for _, c := range p.Status.Conditions {
+		if c.Type == condType {
+			return string(c.Status)
+		}
+	}
+	return ""
 }
 
 // getContainerState returns a string describing the container's current state
@@ -399,7 +625,293 @@ func getLBAddresses(ingress []corev1.LoadBalancerIngress) []string {
 	return addrs
 }
 
-// diffConfigMap computes diff for ConfigMap resources
+// diffResourceQuota surfaces spec.hard changes ("quota tightened/loosened") —
+// the admission-relevant signal. status.used churns with normal pod lifecycle
+// and is deliberately excluded: used-only updates drop as empty diffs.
+func diffResourceQuota(oldObj, newObj any) ([]FieldChange, []string) {
+	oldRQ, ok1 := oldObj.(*corev1.ResourceQuota)
+	newRQ, ok2 := newObj.(*corev1.ResourceQuota)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	keys := map[string]struct{}{}
+	for k := range oldRQ.Spec.Hard {
+		keys[string(k)] = struct{}{}
+	}
+	for k := range newRQ.Spec.Hard {
+		keys[string(k)] = struct{}{}
+	}
+	names := make([]string, 0, len(keys))
+	for k := range keys {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		oldQ, oldOK := oldRQ.Spec.Hard[corev1.ResourceName(name)]
+		newQ, newOK := newRQ.Spec.Hard[corev1.ResourceName(name)]
+		oldVal, newVal := "", ""
+		if oldOK {
+			oldVal = oldQ.String()
+		}
+		if newOK {
+			newVal = newQ.String()
+		}
+		if oldVal == newVal {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     "spec.hard." + name,
+			OldValue: valueOrNil(oldVal, oldOK),
+			NewValue: valueOrNil(newVal, newOK),
+		})
+		summary = append(summary, fmt.Sprintf("quota %s: %s→%s", name, emptyAsNone(oldVal), emptyAsNone(newVal)))
+	}
+	return changes, summary
+}
+
+// diffLimitRange surfaces spec.limits changes as compact per-item renderings.
+func diffLimitRange(oldObj, newObj any) ([]FieldChange, []string) {
+	oldLR, ok1 := oldObj.(*corev1.LimitRange)
+	newLR, ok2 := newObj.(*corev1.LimitRange)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	oldItems := limitRangeItemRefs(oldLR.Spec.Limits)
+	newItems := limitRangeItemRefs(newLR.Spec.Limits)
+	if equalStringSlices(oldItems, newItems) {
+		return nil, nil
+	}
+	return []FieldChange{{
+		Path:     "spec.limits",
+		OldValue: oldItems,
+		NewValue: newItems,
+	}}, []string{"limit ranges changed"}
+}
+
+func limitRangeItemRefs(items []corev1.LimitRangeItem) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		parts := []string{string(item.Type)}
+		appendQuantities := func(label string, list corev1.ResourceList) {
+			if len(list) == 0 {
+				return
+			}
+			keys := make([]string, 0, len(list))
+			for k := range list {
+				keys = append(keys, string(k))
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				q := list[corev1.ResourceName(k)]
+				parts = append(parts, fmt.Sprintf("%s.%s=%s", label, k, q.String()))
+			}
+		}
+		appendQuantities("max", item.Max)
+		appendQuantities("min", item.Min)
+		appendQuantities("default", item.Default)
+		appendQuantities("defaultRequest", item.DefaultRequest)
+		out = append(out, strings.Join(parts, " "))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// diffAdmissionWebhookConfiguration surfaces changes to Mutating/Validating
+// webhook configurations — high-blast-radius cluster objects that gate or
+// silently rewrite admission for every matching resource. Per-webhook it
+// tracks failurePolicy, the backend (service ref or url), the CA bundle
+// presence/size, the operation/resource rules, and sideEffects. The caBundle
+// bytes are NEVER emitted — only its length, so a cert rotation shows as a
+// size change without leaking the cert. Keyed by webhook name so a webhook
+// added / removed / changed are distinct entries.
+func diffAdmissionWebhookConfiguration(oldObj, newObj any) ([]FieldChange, []string) {
+	oldU, newU, ok := unstructuredPair(oldObj, newObj)
+	if !ok {
+		warnUnstructuredAssertFailed("AdmissionWebhookConfiguration", oldObj)
+		return nil, nil
+	}
+
+	oldHooks := indexWebhooksByName(oldU)
+	newHooks := indexWebhooksByName(newU)
+
+	names := map[string]struct{}{}
+	for n := range oldHooks {
+		names[n] = struct{}{}
+	}
+	for n := range newHooks {
+		names[n] = struct{}{}
+	}
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+
+	var changes []FieldChange
+	var summary []string
+	for _, name := range sorted {
+		oldS, oldOK := oldHooks[name]
+		newS, newOK := newHooks[name]
+		if oldOK && newOK && oldS == newS {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     "webhooks[" + name + "]",
+			OldValue: valueOrNil(oldS, oldOK),
+			NewValue: valueOrNil(newS, newOK),
+		})
+		switch {
+		case !oldOK:
+			summary = append(summary, "webhook "+name+" added")
+		case !newOK:
+			summary = append(summary, "webhook "+name+" removed")
+		default:
+			summary = append(summary, "webhook "+name+" changed")
+		}
+	}
+	return changes, summary
+}
+
+// indexWebhooksByName maps each webhook's name to a compact, comparable summary
+// of the fields that matter for diagnosis. Unnamed entries are skipped.
+func indexWebhooksByName(u *unstructured.Unstructured) map[string]string {
+	out := map[string]string{}
+	hooks, _, _ := unstructured.NestedSlice(u.Object, "webhooks")
+	for _, h := range hooks {
+		hm, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(hm, "name")
+		if name == "" {
+			continue
+		}
+		out[name] = webhookSummary(hm)
+	}
+	return out
+}
+
+func webhookSummary(hm map[string]any) string {
+	var parts []string
+	if fp, ok, _ := unstructured.NestedString(hm, "failurePolicy"); ok {
+		parts = append(parts, "failurePolicy="+fp)
+	}
+	// Backend: a Service ref or a raw URL — both decide where admission calls go.
+	if svcName, ok, _ := unstructured.NestedString(hm, "clientConfig", "service", "name"); ok {
+		svcNS, _, _ := unstructured.NestedString(hm, "clientConfig", "service", "namespace")
+		backend := "service=" + svcNS + "/" + svcName
+		if port, ok, _ := unstructured.NestedInt64(hm, "clientConfig", "service", "port"); ok && port != 0 {
+			backend += fmt.Sprintf(":%d", port)
+		}
+		if path, ok, _ := unstructured.NestedString(hm, "clientConfig", "service", "path"); ok && path != "" {
+			backend += path
+		}
+		parts = append(parts, backend)
+	} else if url, ok, _ := unstructured.NestedString(hm, "clientConfig", "url"); ok {
+		parts = append(parts, "url="+url)
+	}
+	// CA bundle: a short non-reversible digest, NEVER the bytes. The digest (not
+	// length) catches a same-length cert rotation — the expired_tls/tls_mismatch
+	// fault class. The bundle is a public CA cert, so the digest leaks nothing.
+	if ca, ok, _ := unstructured.NestedString(hm, "clientConfig", "caBundle"); ok && ca != "" {
+		sum := sha256.Sum256([]byte(ca))
+		parts = append(parts, "caBundle=sha256:"+hex.EncodeToString(sum[:])[:12])
+	} else {
+		parts = append(parts, "caBundle=none")
+	}
+	if se, ok, _ := unstructured.NestedString(hm, "sideEffects"); ok {
+		parts = append(parts, "sideEffects="+se)
+	}
+	// matchPolicy/timeoutSeconds/reinvocationPolicy each change how/when the
+	// webhook fires; the drop-empty contract means an omitted field that changes
+	// alone would vanish from the feed, so summarize them.
+	if mp, ok, _ := unstructured.NestedString(hm, "matchPolicy"); ok {
+		parts = append(parts, "matchPolicy="+mp)
+	}
+	if to, ok, _ := unstructured.NestedInt64(hm, "timeoutSeconds"); ok {
+		parts = append(parts, fmt.Sprintf("timeoutSeconds=%d", to))
+	}
+	if rp, ok, _ := unstructured.NestedString(hm, "reinvocationPolicy"); ok {
+		parts = append(parts, "reinvocationPolicy="+rp)
+	}
+	// Selectors are the webhook's blast radius — a re-scoping change (e.g. now
+	// matching the prod namespace) must register. Without these, a selector-only
+	// update would diff empty and recordToTimelineStore would silently drop it.
+	if ns := webhookSelectorSummary(hm, "namespaceSelector"); ns != "" {
+		parts = append(parts, "namespaceSelector={"+ns+"}")
+	}
+	if objSel := webhookSelectorSummary(hm, "objectSelector"); objSel != "" {
+		parts = append(parts, "objectSelector={"+objSel+"}")
+	}
+	parts = append(parts, "rules="+webhookRulesSummary(hm))
+	return strings.Join(parts, " ")
+}
+
+// webhookSelectorSummary renders a namespaceSelector/objectSelector compactly as
+// sorted matchLabels + matchExpressions. Empty (match-everything) selector → "".
+func webhookSelectorSummary(hm map[string]any, field string) string {
+	matchLabels, _, _ := unstructured.NestedStringMap(hm, field, "matchLabels")
+	exprs, _, _ := unstructured.NestedSlice(hm, field, "matchExpressions")
+	if len(matchLabels) == 0 && len(exprs) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(matchLabels))
+	for k := range matchLabels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys)+len(exprs))
+	for _, k := range keys {
+		parts = append(parts, k+"="+matchLabels[k])
+	}
+	exprStrs := make([]string, 0, len(exprs))
+	for _, e := range exprs {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		key, _, _ := unstructured.NestedString(em, "key")
+		op, _, _ := unstructured.NestedString(em, "operator")
+		vals, _, _ := unstructured.NestedStringSlice(em, "values")
+		exprStrs = append(exprStrs, key+" "+op+" ["+strings.Join(vals, ",")+"]")
+	}
+	sort.Strings(exprStrs)
+	parts = append(parts, exprStrs...)
+	return strings.Join(parts, ",")
+}
+
+func webhookRulesSummary(hm map[string]any) string {
+	rules, _, _ := unstructured.NestedSlice(hm, "rules")
+	var out []string
+	for _, r := range rules {
+		rm, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		ops, _, _ := unstructured.NestedStringSlice(rm, "operations")
+		groups, _, _ := unstructured.NestedStringSlice(rm, "apiGroups")
+		versions, _, _ := unstructured.NestedStringSlice(rm, "apiVersions")
+		res, _, _ := unstructured.NestedStringSlice(rm, "resources")
+		// apiGroups/apiVersions/scope are part of the rule's match set — two
+		// rules differing only in apiGroup target different resources, so the
+		// full tuple must round-trip (resources alone would conflate them).
+		entry := strings.Join(ops, "/") + ":" +
+			strings.Join(groups, ",") + "/" + strings.Join(versions, ",") + "/" + strings.Join(res, ",")
+		if scope, ok, _ := unstructured.NestedString(rm, "scope"); ok && scope != "" {
+			entry += "[" + scope + "]"
+		}
+		out = append(out, entry)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ";")
+}
+
 func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 	oldCM, ok1 := oldObj.(*corev1.ConfigMap)
 	newCM, ok2 := newObj.(*corev1.ConfigMap)
@@ -435,15 +947,284 @@ func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("removed keys: %v", removedKeys))
 	}
 	if len(modifiedKeys) > 0 {
-		changes = append(changes, FieldChange{
-			Path:     "data (modified keys)",
-			OldValue: modifiedKeys,
-			NewValue: modifiedKeys,
-		})
-		summary = append(summary, fmt.Sprintf("modified keys: %v", modifiedKeys))
+		structured, structuredSummary, fallback := diffConfigMapModifiedKeys(oldCM.Data, newCM.Data, modifiedKeys)
+		changes = append(changes, structured...)
+		summary = append(summary, structuredSummary...)
+		if len(fallback) > 0 {
+			changes = append(changes, FieldChange{
+				Path:     "data (modified keys)",
+				OldValue: fallback,
+				NewValue: fallback,
+			})
+			summary = append(summary, fmt.Sprintf("modified keys: %v", fallback))
+		}
+	}
+
+	// binaryData (separate field for non-UTF-8 payloads). Same key-only semantic.
+	oldBinKeys := getBinaryMapKeys(oldCM.BinaryData)
+	newBinKeys := getBinaryMapKeys(newCM.BinaryData)
+	addedBin := diffStringSlices(newBinKeys, oldBinKeys)
+	removedBin := diffStringSlices(oldBinKeys, newBinKeys)
+	if len(addedBin) > 0 {
+		changes = append(changes, FieldChange{Path: "binaryData (added keys)", OldValue: nil, NewValue: addedBin})
+		summary = append(summary, fmt.Sprintf("added binaryData keys: %v", addedBin))
+	}
+	if len(removedBin) > 0 {
+		changes = append(changes, FieldChange{Path: "binaryData (removed keys)", OldValue: removedBin, NewValue: nil})
+		summary = append(summary, fmt.Sprintf("removed binaryData keys: %v", removedBin))
+	}
+
+	// Immutable flag flips are user-meaningful (locks the CM until recreated).
+	oldImmut := oldCM.Immutable != nil && *oldCM.Immutable
+	newImmut := newCM.Immutable != nil && *newCM.Immutable
+	if oldImmut != newImmut {
+		changes = append(changes, FieldChange{Path: "immutable", OldValue: oldImmut, NewValue: newImmut})
+		if newImmut {
+			summary = append(summary, "marked immutable")
+		} else {
+			summary = append(summary, "immutable cleared")
+		}
 	}
 
 	return changes, summary
+}
+
+const (
+	configMapStructuredValueBytes = 64 * 1024
+	configMapStructuredFieldCap   = 50
+	configMapStructuredDepthCap   = 8
+	configMapStructuredNodeCap    = 1000
+)
+
+func diffConfigMapModifiedKeys(oldData, newData map[string]string, keys []string) ([]FieldChange, []string, []string) {
+	var changes []FieldChange
+	var summary []string
+	var fallback []string
+	for _, key := range keys {
+		structured, ok := structuredConfigValueDiff(key, oldData[key], newData[key])
+		if !ok || len(structured) == 0 {
+			fallback = append(fallback, key)
+			continue
+		}
+		changes = append(changes, structured...)
+		if len(structured) == 1 {
+			summary = append(summary, fmt.Sprintf("%s changed", structured[0].Path))
+		} else {
+			summary = append(summary, fmt.Sprintf("%s: %d structured fields changed", key, len(structured)))
+		}
+	}
+	return changes, summary, fallback
+}
+
+func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool) {
+	if len(oldVal) > configMapStructuredValueBytes || len(newVal) > configMapStructuredValueBytes {
+		return nil, false
+	}
+	if !shouldParseStructuredConfigValue(key, oldVal, newVal) {
+		return nil, false
+	}
+	oldParsed, okOld := parseStructuredConfigValue(oldVal)
+	newParsed, okNew := parseStructuredConfigValue(newVal)
+	if !okOld || !okNew {
+		return nil, false
+	}
+	state := structuredDiffState{fieldCap: configMapStructuredFieldCap, nodeCap: configMapStructuredNodeCap}
+	state.diff(fmt.Sprintf("data.%s", key), oldParsed, newParsed, 0)
+	if state.capped {
+		return nil, false
+	}
+	return state.changes, true
+}
+
+func shouldParseStructuredConfigValue(key, oldVal, newVal string) bool {
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	if strings.HasSuffix(lowerKey, ".json") || strings.HasSuffix(lowerKey, ".yaml") || strings.HasSuffix(lowerKey, ".yml") {
+		return true
+	}
+	return looksLikeStructuredConfigValue(oldVal) && looksLikeStructuredConfigValue(newVal)
+}
+
+func looksLikeStructuredConfigValue(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
+}
+
+func parseStructuredConfigValue(value string) (any, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, false
+	}
+	var parsed any
+	if json.Unmarshal([]byte(trimmed), &parsed) == nil && structuredRoot(parsed) {
+		return normalizeStructuredValue(parsed), true
+	}
+	if yaml.Unmarshal([]byte(trimmed), &parsed) == nil && structuredRoot(parsed) {
+		return normalizeStructuredValue(parsed), true
+	}
+	return nil, false
+}
+
+func structuredRoot(value any) bool {
+	switch value.(type) {
+	case map[string]any, map[any]any, []any:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeStructuredValue(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, child := range typed {
+			out[k] = normalizeStructuredValue(child)
+		}
+		return out
+	case map[any]any:
+		out := make(map[string]any, len(typed))
+		for k, child := range typed {
+			out[fmt.Sprint(k)] = normalizeStructuredValue(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = normalizeStructuredValue(child)
+		}
+		return out
+	default:
+		return typed
+	}
+}
+
+type structuredDiffState struct {
+	changes  []FieldChange
+	fields   int
+	nodes    int
+	fieldCap int
+	nodeCap  int
+	capped   bool
+}
+
+func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
+	if s.capped {
+		return
+	}
+	s.nodes++
+	if s.nodes > s.nodeCap || depth > configMapStructuredDepthCap {
+		s.capped = true
+		return
+	}
+
+	oldMap, oldIsMap := oldVal.(map[string]any)
+	newMap, newIsMap := newVal.(map[string]any)
+	if oldIsMap && newIsMap {
+		keys := make(map[string]struct{}, len(oldMap)+len(newMap))
+		for k := range oldMap {
+			keys[k] = struct{}{}
+		}
+		for k := range newMap {
+			keys[k] = struct{}{}
+		}
+		sorted := make([]string, 0, len(keys))
+		for k := range keys {
+			sorted = append(sorted, k)
+		}
+		sort.Strings(sorted)
+		for _, k := range sorted {
+			s.diff(path+"."+k, oldMap[k], newMap[k], depth+1)
+		}
+		return
+	}
+
+	oldSlice, oldIsSlice := oldVal.([]any)
+	newSlice, newIsSlice := newVal.([]any)
+	if oldIsSlice && newIsSlice {
+		if len(oldSlice) != len(newSlice) {
+			s.add(path, oldVal, newVal)
+			return
+		}
+		for i := range oldSlice {
+			s.diff(fmt.Sprintf("%s[%d]", path, i), oldSlice[i], newSlice[i], depth+1)
+		}
+		return
+	}
+
+	if !reflect.DeepEqual(oldVal, newVal) {
+		s.add(path, oldVal, newVal)
+	}
+}
+
+func (s *structuredDiffState) add(path string, oldVal, newVal any) {
+	if s.fields >= s.fieldCap {
+		s.capped = true
+		return
+	}
+	s.fields++
+	s.changes = append(s.changes, FieldChange{
+		Path:     path,
+		OldValue: sanitizeConfigValue(path, oldVal),
+		NewValue: sanitizeConfigValue(path, newVal),
+	})
+}
+
+func sanitizeConfigValue(path string, value any) any {
+	if sensitivePath(path) {
+		return "[REDACTED]"
+	}
+	switch typed := value.(type) {
+	case string:
+		return truncateConfigScalar(aicontext.RedactSecrets(typed), 200)
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, child := range typed {
+			out[k] = sanitizeConfigValue(path+"."+k, child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = sanitizeConfigValue(fmt.Sprintf("%s[%d]", path, i), child)
+		}
+		return out
+	case nil:
+		return nil
+	default:
+		return typed
+	}
+}
+
+func sensitivePath(path string) bool {
+	if sensitivePathSegment(strings.ToLower(path)) {
+		return true
+	}
+	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '[' || r == ']' || r == '/' || r == '-' || r == '_' }) {
+		if sensitivePathSegment(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func sensitivePathSegment(segment string) bool {
+	segment = strings.ToLower(segment)
+	compact := strings.NewReplacer("-", "", "_", "", ".", "", "/", "").Replace(segment)
+	return strings.Contains(segment, "password") || strings.Contains(segment, "passwd") ||
+		strings.Contains(segment, "token") || strings.Contains(segment, "secret") ||
+		strings.Contains(segment, "credential") ||
+		strings.Contains(segment, "api_key") || strings.Contains(segment, "apikey") ||
+		strings.Contains(segment, "accesskey") || strings.Contains(segment, "privatekey") ||
+		strings.Contains(segment, "private_key") ||
+		strings.Contains(compact, "apikey") || strings.Contains(compact, "accesskey") ||
+		strings.Contains(compact, "privatekey") || strings.Contains(compact, "clientsecret")
+}
+
+func truncateConfigScalar(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	return value[:max-1] + "…"
 }
 
 // diffIngress computes diff for Ingress resources
@@ -585,6 +1366,29 @@ func diffReplicaSet(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("ready: %d→%d", oldRS.Status.ReadyReplicas, newRS.Status.ReadyReplicas))
 	}
 
+	if oldRS.Status.AvailableReplicas != newRS.Status.AvailableReplicas {
+		changes = append(changes, FieldChange{
+			Path:     "status.availableReplicas",
+			OldValue: oldRS.Status.AvailableReplicas,
+			NewValue: newRS.Status.AvailableReplicas,
+		})
+		if oldRS.Status.ReadyReplicas == newRS.Status.ReadyReplicas {
+			summary = append(summary, fmt.Sprintf("available: %d→%d", oldRS.Status.AvailableReplicas, newRS.Status.AvailableReplicas))
+		}
+	}
+
+	// ReplicaFailure=True surfaces pod-create failures (quota, image pull, scheduling).
+	oldRF := getReplicaSetConditionStatus(oldRS, appsv1.ReplicaSetReplicaFailure)
+	newRF := getReplicaSetConditionStatus(newRS, appsv1.ReplicaSetReplicaFailure)
+	if oldRF != newRF && (oldRF != "" || newRF != "") {
+		changes = append(changes, FieldChange{
+			Path:     "status.conditions[ReplicaFailure]",
+			OldValue: oldRF,
+			NewValue: newRF,
+		})
+		summary = append(summary, fmt.Sprintf("ReplicaFailure: %s→%s", oldRF, newRF))
+	}
+
 	return changes, summary
 }
 
@@ -614,6 +1418,10 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 			}
 		}
 	}
+
+	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldDS.Spec.Template.Spec, newDS.Spec.Template.Spec)
+	changes = append(changes, podTemplateChanges...)
+	summary = append(summary, podTemplateSummary...)
 
 	// Check desired/ready
 	if oldDS.Status.DesiredNumberScheduled != newDS.Status.DesiredNumberScheduled {
@@ -654,6 +1462,19 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 		})
 		if newDS.Status.NumberUnavailable > 0 {
 			summary = append(summary, fmt.Sprintf("unavailable: %d", newDS.Status.NumberUnavailable))
+		}
+	}
+
+	// NumberMisscheduled = pods running on nodes the selector now excludes
+	// (e.g. taint added). Real signal that a tolerations/selector change took effect.
+	if oldDS.Status.NumberMisscheduled != newDS.Status.NumberMisscheduled {
+		changes = append(changes, FieldChange{
+			Path:     "status.numberMisscheduled",
+			OldValue: oldDS.Status.NumberMisscheduled,
+			NewValue: newDS.Status.NumberMisscheduled,
+		})
+		if newDS.Status.NumberMisscheduled > 0 {
+			summary = append(summary, fmt.Sprintf("misscheduled: %d", newDS.Status.NumberMisscheduled))
 		}
 	}
 
@@ -705,6 +1526,10 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
+	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldSTS.Spec.Template.Spec, newSTS.Spec.Template.Spec)
+	changes = append(changes, podTemplateChanges...)
+	summary = append(summary, podTemplateSummary...)
+
 	// Check ready replicas
 	if oldSTS.Status.ReadyReplicas != newSTS.Status.ReadyReplicas {
 		changes = append(changes, FieldChange{
@@ -735,6 +1560,17 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 			NewValue: newSTS.Status.CurrentRevision,
 		})
 		summary = append(summary, "revision updated")
+	}
+
+	if oldSTS.Status.AvailableReplicas != newSTS.Status.AvailableReplicas {
+		changes = append(changes, FieldChange{
+			Path:     "status.availableReplicas",
+			OldValue: oldSTS.Status.AvailableReplicas,
+			NewValue: newSTS.Status.AvailableReplicas,
+		})
+		if oldSTS.Status.ReadyReplicas == newSTS.Status.ReadyReplicas {
+			summary = append(summary, fmt.Sprintf("available: %d→%d", oldSTS.Status.AvailableReplicas, newSTS.Status.AvailableReplicas))
+		}
 	}
 
 	return changes, summary
@@ -806,6 +1642,24 @@ func diffHPA(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
+	// Conditions: ScalingActive=False means HPA can't fetch metrics. AbleToScale=False
+	// means it's hit a cooldown / spec error. ScalingLimited=True means the policy
+	// capped the decision. All three are silent failures without this.
+	for _, condType := range []autoscalingv2.HorizontalPodAutoscalerConditionType{
+		autoscalingv2.ScalingActive, autoscalingv2.AbleToScale, autoscalingv2.ScalingLimited,
+	} {
+		oldStatus := getHPAConditionStatus(oldHPA, condType)
+		newStatus := getHPAConditionStatus(newHPA, condType)
+		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldStatus,
+				NewValue: newStatus,
+			})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		}
+	}
+
 	return changes, summary
 }
 
@@ -850,14 +1704,47 @@ func diffJob(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("failed: %d→%d", oldJob.Status.Failed, newJob.Status.Failed))
 	}
 
-	// Check completion
-	if oldJob.Status.CompletionTime == nil && newJob.Status.CompletionTime != nil {
+	// Check terminal conditions. CompletionTime alone misses Failed jobs
+	// (which never set CompletionTime) and the FailureTarget signal.
+	jobCondSummary := map[batchv1.JobConditionType]string{
+		batchv1.JobComplete:      "completed",
+		batchv1.JobFailed:        "failed",
+		batchv1.JobFailureTarget: "failure target",
+		batchv1.JobSuspended:     "suspended",
+	}
+	for _, condType := range []batchv1.JobConditionType{batchv1.JobComplete, batchv1.JobFailed, batchv1.JobSuspended, batchv1.JobFailureTarget} {
+		oldStatus := getJobConditionStatus(oldJob, condType)
+		newStatus := getJobConditionStatus(newJob, condType)
+		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldStatus,
+				NewValue: newStatus,
+			})
+			label := jobCondSummary[condType]
+			switch newStatus {
+			case "True":
+				summary = append(summary, label)
+			case "False":
+				if oldStatus == "True" {
+					summary = append(summary, "no longer "+label)
+				} else {
+					summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+				}
+			default:
+				summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+			}
+		}
+	}
+
+	// First scheduling — startTime fills in when the controller picks up the job.
+	if oldJob.Status.StartTime == nil && newJob.Status.StartTime != nil {
 		changes = append(changes, FieldChange{
-			Path:     "status.completionTime",
+			Path:     "status.startTime",
 			OldValue: nil,
-			NewValue: newJob.Status.CompletionTime.Time,
+			NewValue: newJob.Status.StartTime.Time,
 		})
-		summary = append(summary, "completed")
+		summary = append(summary, "started")
 	}
 
 	// Check suspended
@@ -923,16 +1810,58 @@ func diffNode(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
-	// Check Ready condition
-	oldReady := getNodeConditionStatus(oldNode, corev1.NodeReady)
-	newReady := getNodeConditionStatus(newNode, corev1.NodeReady)
-	if oldReady != newReady {
+	// Check pressure + ready conditions. MemoryPressure / DiskPressure /
+	// PIDPressure flips signal imminent eviction or scheduling failures —
+	// just as actionable as Ready, and previously missed entirely.
+	for _, condType := range []corev1.NodeConditionType{
+		corev1.NodeReady, corev1.NodeMemoryPressure, corev1.NodeDiskPressure,
+		corev1.NodePIDPressure, corev1.NodeNetworkUnavailable,
+	} {
+		oldStatus := getNodeConditionStatus(oldNode, condType)
+		newStatus := getNodeConditionStatus(newNode, condType)
+		if oldStatus != newStatus {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldStatus,
+				NewValue: newStatus,
+			})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		}
+	}
+
+	// Kubelet / kernel upgrades — captured by version flips on Node.Status.NodeInfo.
+	if oldNode.Status.NodeInfo.KubeletVersion != newNode.Status.NodeInfo.KubeletVersion {
 		changes = append(changes, FieldChange{
-			Path:     "status.conditions[Ready]",
-			OldValue: oldReady,
-			NewValue: newReady,
+			Path:     "status.nodeInfo.kubeletVersion",
+			OldValue: oldNode.Status.NodeInfo.KubeletVersion,
+			NewValue: newNode.Status.NodeInfo.KubeletVersion,
 		})
-		summary = append(summary, fmt.Sprintf("Ready: %s→%s", oldReady, newReady))
+		summary = append(summary, fmt.Sprintf("kubelet: %s→%s", oldNode.Status.NodeInfo.KubeletVersion, newNode.Status.NodeInfo.KubeletVersion))
+	}
+	if oldNode.Status.NodeInfo.KernelVersion != newNode.Status.NodeInfo.KernelVersion {
+		changes = append(changes, FieldChange{
+			Path:     "status.nodeInfo.kernelVersion",
+			OldValue: oldNode.Status.NodeInfo.KernelVersion,
+			NewValue: newNode.Status.NodeInfo.KernelVersion,
+		})
+		summary = append(summary, "kernel upgraded")
+	}
+
+	// Allocatable capacity (cpu / memory / pods). Reduction during draining or
+	// kubelet --reserved tuning is operator-relevant; expansion during hot-add
+	// likewise. Capacity is the underlying physical; Allocatable is what the
+	// scheduler sees and what changes more often, so we diff that one.
+	for _, res := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory, corev1.ResourcePods} {
+		oldVal := oldNode.Status.Allocatable[res]
+		newVal := newNode.Status.Allocatable[res]
+		if oldVal.Cmp(newVal) != 0 {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.allocatable.%s", res),
+				OldValue: oldVal.String(),
+				NewValue: newVal.String(),
+			})
+			summary = append(summary, fmt.Sprintf("allocatable %s: %s→%s", res, oldVal.String(), newVal.String()))
+		}
 	}
 
 	return changes, summary
@@ -981,6 +1910,24 @@ func diffPVC(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("capacity: %s→%s", oldCap.String(), newCap.String()))
 	}
 
+	// Resize lifecycle conditions — Resizing=True signals an in-flight expansion;
+	// FileSystemResizePending=True signals the volume needs a pod restart to grow.
+	for _, condType := range []corev1.PersistentVolumeClaimConditionType{
+		corev1.PersistentVolumeClaimResizing,
+		corev1.PersistentVolumeClaimFileSystemResizePending,
+	} {
+		oldStatus := getPVCConditionStatus(oldPVC, condType)
+		newStatus := getPVCConditionStatus(newPVC, condType)
+		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldStatus,
+				NewValue: newStatus,
+			})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		}
+	}
+
 	return changes, summary
 }
 
@@ -989,6 +1936,7 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 	oldApp, ok1 := oldObj.(*unstructured.Unstructured)
 	newApp, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("Application", oldObj)
 		return nil, nil
 	}
 
@@ -1146,6 +2094,56 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("destination ns: %s→%s", oldDestNS, newDestNS))
 	}
 
+	// status.conditions — Argo surfaces non-standard signals here:
+	// SyncError, ComparisonError, OrphanedResourceWarning, ExcludedResourceWarning,
+	// SharedResourceWarning, RepeatedResourceWarning. These flip on operator
+	// config issues that don't show in sync.status / health.status.
+	oldAppConds := getConditionMap(oldStatus, "conditions")
+	newAppConds := getConditionMap(newStatus, "conditions")
+	for condType, newCond := range newAppConds {
+		if oldAppConds[condType] != newCond {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldAppConds[condType],
+				NewValue: newCond,
+			})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldAppConds[condType], newCond))
+		}
+	}
+	for condType, oldCond := range oldAppConds {
+		if _, present := newAppConds[condType]; !present {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldCond,
+				NewValue: nil,
+			})
+			summary = append(summary, fmt.Sprintf("%s cleared", condType))
+		}
+	}
+
+	// Image rolls — an already-Synced+Healthy app can roll new images via auto-sync
+	// without flipping sync.status or health.status. Without this, those updates
+	// drop as no-diff and the timeline misses the actual deploy event.
+	oldImages, _, _ := unstructured.NestedStringSlice(oldStatus, "summary", "images")
+	newImages, _, _ := unstructured.NestedStringSlice(newStatus, "summary", "images")
+	if !equalStringSlices(oldImages, newImages) {
+		added := diffStringSlices(newImages, oldImages)
+		removed := diffStringSlices(oldImages, newImages)
+		changes = append(changes, FieldChange{
+			Path:     "status.summary.images",
+			OldValue: oldImages,
+			NewValue: newImages,
+		})
+		switch {
+		case len(added) > 0 && len(removed) == 0:
+			summary = append(summary, fmt.Sprintf("images +%d", len(added)))
+		case len(removed) > 0 && len(added) == 0:
+			summary = append(summary, fmt.Sprintf("images -%d", len(removed)))
+		default:
+			summary = append(summary, "images changed")
+		}
+	}
+
 	return changes, summary
 }
 
@@ -1170,6 +2168,7 @@ func diffKustomization(oldObj, newObj any) ([]FieldChange, []string) {
 	oldKs, ok1 := oldObj.(*unstructured.Unstructured)
 	newKs, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("Kustomization", oldObj)
 		return nil, nil
 	}
 
@@ -1201,6 +2200,14 @@ func diffKustomization(oldObj, newObj any) ([]FieldChange, []string) {
 		} else if oldReconciling == "True" && newReconciling == "False" {
 			summary = append(summary, "reconcile completed")
 		}
+	}
+
+	// Stalled=True means Flux gave up retrying — terminal failure that Ready alone hides.
+	oldStalled := getFluxConditionStatus(oldStatus, "Stalled")
+	newStalled := getFluxConditionStatus(newStatus, "Stalled")
+	if oldStalled != newStalled && (oldStalled != "" || newStalled != "") {
+		changes = append(changes, FieldChange{Path: "status.conditions[Stalled]", OldValue: oldStalled, NewValue: newStalled})
+		summary = append(summary, fmt.Sprintf("stalled: %s→%s", oldStalled, newStalled))
 	}
 
 	// Check last applied revision
@@ -1279,6 +2286,7 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 	oldHR, ok1 := oldObj.(*unstructured.Unstructured)
 	newHR, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("HelmRelease", oldObj)
 		return nil, nil
 	}
 
@@ -1299,6 +2307,17 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 			NewValue: newReady,
 		})
 		summary = append(summary, fmt.Sprintf("ready: %s→%s", oldReady, newReady))
+	}
+
+	// Released / Stalled conditions — Released=False is the canonical Helm install
+	// failure signal; Stalled=True is the give-up state that Ready alone obscures.
+	for _, condType := range []string{"Released", "Stalled"} {
+		oldCond := getFluxConditionStatus(oldStatus, condType)
+		newCond := getFluxConditionStatus(newStatus, condType)
+		if oldCond != newCond && (oldCond != "" || newCond != "") {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("status.conditions[%s]", condType), OldValue: oldCond, NewValue: newCond})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldCond, newCond))
+		}
 	}
 
 	// Check last applied revision (Helm chart version)
@@ -1386,6 +2405,7 @@ func diffFluxSource(oldObj, newObj any, kind string) ([]FieldChange, []string) {
 	oldSrc, ok1 := oldObj.(*unstructured.Unstructured)
 	newSrc, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed(kind, oldObj)
 		return nil, nil
 	}
 
@@ -1406,6 +2426,17 @@ func diffFluxSource(oldObj, newObj any, kind string) ([]FieldChange, []string) {
 			NewValue: newReady,
 		})
 		summary = append(summary, fmt.Sprintf("ready: %s→%s", oldReady, newReady))
+	}
+
+	// Stalled / FetchFailed — fetch errors flip these without flipping Ready
+	// the same way (Stalled implies give-up; FetchFailed is the upstream signal).
+	for _, condType := range []string{"Stalled", "FetchFailed"} {
+		oldCond := getFluxConditionStatus(oldStatus, condType)
+		newCond := getFluxConditionStatus(newStatus, condType)
+		if oldCond != newCond && (oldCond != "" || newCond != "") {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("status.conditions[%s]", condType), OldValue: oldCond, NewValue: newCond})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldCond, newCond))
+		}
 	}
 
 	// Check artifact revision (commit SHA or chart version)
@@ -1548,6 +2579,55 @@ func getNodeConditionStatus(node *corev1.Node, condType corev1.NodeConditionType
 	return "Unknown"
 }
 
+// Per-kind condition lookups. Each Conditions field on the typed K8s structs
+// has a different element type, so we can't share one generic helper without
+// reflection — and the per-kind helpers stay short.
+
+func getDeploymentConditionStatus(d *appsv1.Deployment, condType appsv1.DeploymentConditionType) string {
+	for _, c := range d.Status.Conditions {
+		if c.Type == condType {
+			return string(c.Status)
+		}
+	}
+	return ""
+}
+
+func getReplicaSetConditionStatus(rs *appsv1.ReplicaSet, condType appsv1.ReplicaSetConditionType) string {
+	for _, c := range rs.Status.Conditions {
+		if c.Type == condType {
+			return string(c.Status)
+		}
+	}
+	return ""
+}
+
+func getJobConditionStatus(j *batchv1.Job, condType batchv1.JobConditionType) string {
+	for _, c := range j.Status.Conditions {
+		if c.Type == condType {
+			return string(c.Status)
+		}
+	}
+	return ""
+}
+
+func getHPAConditionStatus(h *autoscalingv2.HorizontalPodAutoscaler, condType autoscalingv2.HorizontalPodAutoscalerConditionType) string {
+	for _, c := range h.Status.Conditions {
+		if c.Type == condType {
+			return string(c.Status)
+		}
+	}
+	return ""
+}
+
+func getPVCConditionStatus(pvc *corev1.PersistentVolumeClaim, condType corev1.PersistentVolumeClaimConditionType) string {
+	for _, c := range pvc.Status.Conditions {
+		if c.Type == condType {
+			return string(c.Status)
+		}
+	}
+	return ""
+}
+
 // Helper functions
 
 func getContainerImages(containers []corev1.Container) map[string]string {
@@ -1567,6 +2647,414 @@ func getContainerResources(containers []corev1.Container) map[string]any {
 		}
 	}
 	return resources
+}
+
+func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []string) {
+	oldContainers := containerConfigMap(oldSpec)
+	newContainers := containerConfigMap(newSpec)
+	keys := make(map[string]struct{}, len(oldContainers)+len(newContainers))
+	for name := range oldContainers {
+		keys[name] = struct{}{}
+	}
+	for name := range newContainers {
+		keys[name] = struct{}{}
+	}
+	names := make([]string, 0, len(keys))
+	for name := range keys {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var changes []FieldChange
+	var summary []string
+	for _, name := range names {
+		oldC, oldOK := oldContainers[name]
+		newC, newOK := newContainers[name]
+		// An added or removed container is itself the meaningful change — one
+		// row naming it (with its image), not a per-field fan-out of its
+		// entire config against nothing.
+		if !oldOK {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s]", name), OldValue: nil, NewValue: newC.Image})
+			summary = append(summary, fmt.Sprintf("container %s added (%s)", name, truncateImage(newC.Image)))
+			continue
+		}
+		if !newOK {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s]", name), OldValue: oldC.Image, NewValue: nil})
+			summary = append(summary, fmt.Sprintf("container %s removed", name))
+			continue
+		}
+		for _, change := range diffContainerEnv(name, oldC.Env, newC.Env) {
+			changes = append(changes, change)
+			summary = append(summary, envChangeSummary(change, name))
+		}
+		if oldEnvFrom, newEnvFrom := envFromRefs(oldC.EnvFrom), envFromRefs(newC.EnvFrom); !equalStringSlices(oldEnvFrom, newEnvFrom) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].envFrom", name), OldValue: oldEnvFrom, NewValue: newEnvFrom})
+			summary = append(summary, fmt.Sprintf("envFrom(%s) changed", name))
+		}
+		if oldC.ImagePullPolicy != newC.ImagePullPolicy {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("spec.template.spec.containers[%s].imagePullPolicy", name),
+				OldValue: string(oldC.ImagePullPolicy),
+				NewValue: string(newC.ImagePullPolicy),
+			})
+			summary = append(summary, fmt.Sprintf("imagePullPolicy(%s): %s→%s", name, oldC.ImagePullPolicy, newC.ImagePullPolicy))
+		}
+		for _, probeName := range []string{"readinessProbe", "livenessProbe", "startupProbe"} {
+			oldProbe := normalizedProbe(probeForName(oldC, probeName))
+			newProbe := normalizedProbe(probeForName(newC, probeName))
+			if !reflect.DeepEqual(oldProbe, newProbe) {
+				changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].%s", name, probeName), OldValue: oldProbe, NewValue: newProbe})
+				summary = append(summary, fmt.Sprintf("%s(%s) changed", probeName, name))
+			}
+		}
+		if !equalStringSlices(oldC.Command, newC.Command) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].command", name), OldValue: commandArgDisplayValues(oldC.Command), NewValue: commandArgDisplayValues(newC.Command)})
+			summary = append(summary, fmt.Sprintf("command(%s) changed", name))
+		}
+		if !equalStringSlices(oldC.Args, newC.Args) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].args", name), OldValue: commandArgDisplayValues(oldC.Args), NewValue: commandArgDisplayValues(newC.Args)})
+			summary = append(summary, fmt.Sprintf("args(%s) changed", name))
+		}
+		if oldMounts, newMounts := volumeMountRefs(oldC.VolumeMounts), volumeMountRefs(newC.VolumeMounts); !equalStringSlices(oldMounts, newMounts) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].volumeMounts", name), OldValue: oldMounts, NewValue: newMounts})
+			summary = append(summary, fmt.Sprintf("volumeMounts(%s) changed", name))
+		}
+		if oldPorts, newPorts := containerPortRefs(oldC.Ports), containerPortRefs(newC.Ports); !equalStringSlices(oldPorts, newPorts) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].ports", name), OldValue: oldPorts, NewValue: newPorts})
+			summary = append(summary, fmt.Sprintf("ports(%s) changed", name))
+		}
+		// Boolean-level only: securityContext values (capabilities, uids,
+		// seccomp profiles) are deep structures whose exact contents rarely
+		// matter to triage — that something changed does.
+		if !reflect.DeepEqual(oldC.SecurityContext, newC.SecurityContext) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].securityContext", name), OldValue: "changed", NewValue: "changed"})
+			summary = append(summary, fmt.Sprintf("securityContext(%s) changed", name))
+		}
+	}
+
+	// Pod-level fields. Volume diffs carry source references only (never
+	// contents); tolerations are summarized to compact strings; affinity is a
+	// bare "changed" marker — its tree is too large to diff usefully.
+	if oldVols, newVols := volumeSourceRefs(oldSpec.Volumes), volumeSourceRefs(newSpec.Volumes); !equalStringSlices(oldVols, newVols) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.volumes", OldValue: oldVols, NewValue: newVols})
+		summary = append(summary, "volumes changed")
+	}
+	if oldSpec.ServiceAccountName != newSpec.ServiceAccountName {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.serviceAccountName", OldValue: oldSpec.ServiceAccountName, NewValue: newSpec.ServiceAccountName})
+		summary = append(summary, fmt.Sprintf("serviceAccountName: %s→%s", emptyAsNone(oldSpec.ServiceAccountName), emptyAsNone(newSpec.ServiceAccountName)))
+	}
+	if !reflect.DeepEqual(oldSpec.NodeSelector, newSpec.NodeSelector) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.nodeSelector", OldValue: oldSpec.NodeSelector, NewValue: newSpec.NodeSelector})
+		summary = append(summary, "nodeSelector changed")
+	}
+	if oldTol, newTol := tolerationRefs(oldSpec.Tolerations), tolerationRefs(newSpec.Tolerations); !equalStringSlices(oldTol, newTol) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.tolerations", OldValue: oldTol, NewValue: newTol})
+		summary = append(summary, "tolerations changed")
+	}
+	if !reflect.DeepEqual(oldSpec.Affinity, newSpec.Affinity) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.affinity", OldValue: "changed", NewValue: "changed"})
+		summary = append(summary, "affinity changed")
+	}
+	if !reflect.DeepEqual(oldSpec.SecurityContext, newSpec.SecurityContext) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.securityContext", OldValue: "changed", NewValue: "changed"})
+		summary = append(summary, "pod securityContext changed")
+	}
+	return changes, summary
+}
+
+// volumeSourceRefs renders volumes as "name:sourceType/sourceName" references
+// — never volume contents.
+func volumeSourceRefs(vols []corev1.Volume) []string {
+	out := make([]string, 0, len(vols))
+	for _, v := range vols {
+		ref := "other"
+		switch {
+		case v.ConfigMap != nil:
+			ref = "configMap/" + v.ConfigMap.Name
+		case v.Secret != nil:
+			ref = "secret/" + v.Secret.SecretName
+		case v.PersistentVolumeClaim != nil:
+			ref = "pvc/" + v.PersistentVolumeClaim.ClaimName
+		case v.EmptyDir != nil:
+			ref = "emptyDir"
+		case v.HostPath != nil:
+			ref = "hostPath/" + v.HostPath.Path
+		case v.Projected != nil:
+			ref = "projected"
+		case v.DownwardAPI != nil:
+			ref = "downwardAPI"
+		case v.CSI != nil:
+			ref = "csi/" + v.CSI.Driver
+		}
+		out = append(out, v.Name+":"+ref)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func volumeMountRefs(mounts []corev1.VolumeMount) []string {
+	out := make([]string, 0, len(mounts))
+	for _, m := range mounts {
+		ref := m.Name + "→" + m.MountPath
+		if m.SubPath != "" {
+			ref += "/" + m.SubPath
+		}
+		if m.ReadOnly {
+			ref += "(ro)"
+		}
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containerPortRefs(ports []corev1.ContainerPort) []string {
+	out := make([]string, 0, len(ports))
+	for _, p := range ports {
+		proto := string(p.Protocol)
+		if proto == "" {
+			proto = "TCP"
+		}
+		ref := fmt.Sprintf("%d/%s", p.ContainerPort, proto)
+		if p.Name != "" {
+			ref += "(" + p.Name + ")"
+		}
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func tolerationRefs(tols []corev1.Toleration) []string {
+	out := make([]string, 0, len(tols))
+	for _, t := range tols {
+		ref := t.Key
+		if t.Operator == corev1.TolerationOpExists {
+			ref += " exists"
+		} else if t.Value != "" {
+			ref += "=" + t.Value
+		}
+		if t.Effect != "" {
+			ref += ":" + string(t.Effect)
+		}
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func emptyAsNone(s string) string {
+	if s == "" {
+		return "(default)"
+	}
+	return s
+}
+
+func containerConfigMap(spec corev1.PodSpec) map[string]corev1.Container {
+	out := make(map[string]corev1.Container, len(spec.InitContainers)+len(spec.Containers))
+	for _, c := range spec.InitContainers {
+		out[c.Name] = c
+	}
+	for _, c := range spec.Containers {
+		out[c.Name] = c
+	}
+	return out
+}
+
+func diffContainerEnv(container string, oldEnv, newEnv []corev1.EnvVar) []FieldChange {
+	oldMap := envVarMap(oldEnv)
+	newMap := envVarMap(newEnv)
+	keys := make(map[string]struct{}, len(oldMap)+len(newMap))
+	for name := range oldMap {
+		keys[name] = struct{}{}
+	}
+	for name := range newMap {
+		keys[name] = struct{}{}
+	}
+	names := make([]string, 0, len(keys))
+	for name := range keys {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var changes []FieldChange
+	for _, name := range names {
+		oldVal, oldOK := oldMap[name]
+		newVal, newOK := newMap[name]
+		if oldOK && newOK && oldVal == newVal {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     fmt.Sprintf("spec.template.spec.containers[%s].env[%s]", container, name),
+			OldValue: valueOrNil(oldVal, oldOK),
+			NewValue: valueOrNil(newVal, newOK),
+		})
+	}
+	return changes
+}
+
+func envVarMap(env []corev1.EnvVar) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, item := range env {
+		out[item.Name] = envVarDisplayValue(item)
+	}
+	return out
+}
+
+func envVarDisplayValue(env corev1.EnvVar) string {
+	if env.ValueFrom != nil {
+		return envValueFromDisplay(env.ValueFrom)
+	}
+	if envNameLooksSecret(env.Name) {
+		return "[REDACTED]"
+	}
+	return truncateConfigScalar(aicontext.RedactSecrets(env.Value), 200)
+}
+
+func envValueFromDisplay(from *corev1.EnvVarSource) string {
+	switch {
+	case from == nil:
+		return ""
+	case from.ConfigMapKeyRef != nil:
+		return fmt.Sprintf("configMapKeyRef:%s/%s", from.ConfigMapKeyRef.Name, from.ConfigMapKeyRef.Key)
+	case from.SecretKeyRef != nil:
+		return fmt.Sprintf("secretKeyRef:%s/%s", from.SecretKeyRef.Name, from.SecretKeyRef.Key)
+	case from.FieldRef != nil:
+		return fmt.Sprintf("fieldRef:%s", from.FieldRef.FieldPath)
+	case from.ResourceFieldRef != nil:
+		return fmt.Sprintf("resourceFieldRef:%s", from.ResourceFieldRef.Resource)
+	default:
+		return "valueFrom"
+	}
+}
+
+func envFromRefs(refs []corev1.EnvFromSource) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		prefix := ref.Prefix
+		switch {
+		case ref.ConfigMapRef != nil:
+			out = append(out, fmt.Sprintf("configMap:%s prefix=%s", ref.ConfigMapRef.Name, prefix))
+		case ref.SecretRef != nil:
+			out = append(out, fmt.Sprintf("secret:%s prefix=%s", ref.SecretRef.Name, prefix))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func probeForName(c corev1.Container, name string) *corev1.Probe {
+	switch name {
+	case "readinessProbe":
+		return c.ReadinessProbe
+	case "livenessProbe":
+		return c.LivenessProbe
+	case "startupProbe":
+		return c.StartupProbe
+	default:
+		return nil
+	}
+}
+
+func normalizedProbe(p *corev1.Probe) any {
+	if p == nil {
+		return nil
+	}
+	out := map[string]any{
+		"initialDelaySeconds": p.InitialDelaySeconds,
+		"timeoutSeconds":      p.TimeoutSeconds,
+		"periodSeconds":       p.PeriodSeconds,
+		"successThreshold":    p.SuccessThreshold,
+		"failureThreshold":    p.FailureThreshold,
+	}
+	if p.HTTPGet != nil {
+		// Port.String() handles both numeric and named ports — IntVal renders
+		// every named port as 0, hiding real edits and conflating distinct names.
+		out["handler"] = fmt.Sprintf("httpGet:%s:%s%s", p.HTTPGet.Scheme, p.HTTPGet.Port.String(), p.HTTPGet.Path)
+	} else if p.TCPSocket != nil {
+		out["handler"] = fmt.Sprintf("tcpSocket:%s", p.TCPSocket.Port.String())
+	} else if p.GRPC != nil {
+		service := ""
+		if p.GRPC.Service != nil {
+			service = *p.GRPC.Service
+		}
+		out["handler"] = fmt.Sprintf("grpc:%d/%s", p.GRPC.Port, service)
+	} else if p.Exec != nil {
+		out["handler"] = map[string]any{"exec": p.Exec.Command}
+	}
+	return out
+}
+
+func envChangeSummary(change FieldChange, container string) string {
+	name := change.Path
+	if idx := strings.LastIndex(name, ".env["); idx >= 0 {
+		name = strings.TrimSuffix(strings.TrimPrefix(name[idx+5:], "["), "]")
+	}
+	switch {
+	case change.OldValue == nil:
+		return fmt.Sprintf("env(%s/%s) added", container, name)
+	case change.NewValue == nil:
+		return fmt.Sprintf("env(%s/%s) removed", container, name)
+	default:
+		return fmt.Sprintf("env(%s/%s) changed", container, name)
+	}
+}
+
+func valueOrNil(v string, ok bool) any {
+	if !ok {
+		return nil
+	}
+	return v
+}
+
+func envNameLooksSecret(name string) bool {
+	return sensitivePathSegment(name)
+}
+
+func commandArgDisplayValues(values []string) []string {
+	out := make([]string, len(values))
+	redactNext := false
+	for i, value := range values {
+		if redactNext {
+			out[i] = "[REDACTED]"
+			redactNext = false
+			continue
+		}
+		out[i], redactNext = commandArgDisplayValue(value)
+	}
+	return out
+}
+
+func commandArgDisplayValue(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return value, false
+	}
+	if prefix, ok := splitInlineSecretArg(trimmed); ok {
+		return prefix + "[REDACTED]", false
+	}
+	if commandArgNameLooksSecret(trimmed) {
+		return trimmed, true
+	}
+	return truncateConfigScalar(aicontext.RedactSecrets(value), 200), false
+}
+
+func splitInlineSecretArg(value string) (string, bool) {
+	for _, sep := range []string{"=", ":"} {
+		if before, _, ok := strings.Cut(value, sep); ok && commandArgNameLooksSecret(before) {
+			return before + sep, true
+		}
+	}
+	return "", false
+}
+
+func commandArgNameLooksSecret(value string) bool {
+	name := strings.Trim(strings.TrimSpace(value), "\"'")
+	name = strings.TrimLeft(name, "-")
+	if name == "key" {
+		return true
+	}
+	return sensitivePathSegment(name)
 }
 
 func getTotalRestarts(statuses []corev1.ContainerStatus) int32 {
@@ -1590,6 +3078,16 @@ func getMapKeys(m map[string]string) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
+	return keys
+}
+
+func getBinaryMapKeys(m map[string][]byte) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	return keys
 }
 
@@ -1614,6 +3112,7 @@ func diffStringSlices(a, b []string) []string {
 			diff = append(diff, s)
 		}
 	}
+	sort.Strings(diff)
 	return diff
 }
 
@@ -1714,6 +3213,7 @@ func diffGateway(oldObj, newObj any) ([]FieldChange, []string) {
 	oldGW, ok1 := oldObj.(*unstructured.Unstructured)
 	newGW, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("Gateway", oldObj)
 		return nil, nil
 	}
 
@@ -1768,6 +3268,7 @@ func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 	oldRoute, ok1 := oldObj.(*unstructured.Unstructured)
 	newRoute, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("GatewayRoute", oldObj)
 		return nil, nil
 	}
 
@@ -1798,21 +3299,162 @@ func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("rules: %d→%d", len(oldRules), len(newRules)))
 	}
 
-	// Check parent acceptance status
+	// Per-parent per-condition diff. Counting "accepted parents" misses
+	// flips on Programmed / ResolvedRefs (which are how a route signals
+	// "config invalid" or "backend missing") — those leave Accepted=True
+	// while the route is functionally broken.
 	oldParents, _, _ := unstructured.NestedSlice(oldRoute.Object, "status", "parents")
 	newParents, _, _ := unstructured.NestedSlice(newRoute.Object, "status", "parents")
-	oldAccepted := countAcceptedParents(oldParents)
-	newAccepted := countAcceptedParents(newParents)
-	if oldAccepted != newAccepted || len(oldParents) != len(newParents) {
+	if len(oldParents) != len(newParents) {
 		changes = append(changes, FieldChange{
 			Path:     "status.parents",
-			OldValue: fmt.Sprintf("%d/%d accepted", oldAccepted, len(oldParents)),
-			NewValue: fmt.Sprintf("%d/%d accepted", newAccepted, len(newParents)),
+			OldValue: fmt.Sprintf("%d parents", len(oldParents)),
+			NewValue: fmt.Sprintf("%d parents", len(newParents)),
 		})
-		summary = append(summary, fmt.Sprintf("accepted: %d/%d→%d/%d", oldAccepted, len(oldParents), newAccepted, len(newParents)))
+		summary = append(summary, fmt.Sprintf("parents: %d→%d", len(oldParents), len(newParents)))
+	}
+	oldByParent := indexParentConditions(oldParents)
+	newByParent := indexParentConditions(newParents)
+
+	// Walk the union of parent keys so we catch parents that disappeared from
+	// the new snapshot too — a parent vanishing is a real signal even when
+	// total parent count is unchanged (one removed + one added).
+	parentKeys := make(map[string]struct{}, len(oldByParent)+len(newByParent))
+	for k := range oldByParent {
+		parentKeys[k] = struct{}{}
+	}
+	for k := range newByParent {
+		parentKeys[k] = struct{}{}
+	}
+	for parentKey := range parentKeys {
+		oldConds := oldByParent[parentKey]
+		newConds := newByParent[parentKey]
+		for _, condType := range []string{"Accepted", "ResolvedRefs", "Programmed"} {
+			oldStatus, oldHas := oldConds[condType]
+			newStatus, newHas := newConds[condType]
+			if !oldHas && !newHas {
+				continue
+			}
+			if oldStatus != newStatus {
+				changes = append(changes, FieldChange{
+					Path:     fmt.Sprintf("status.parents[%s].conditions[%s]", parentKey, condType),
+					OldValue: oldStatus,
+					NewValue: newStatus,
+				})
+				summary = append(summary, fmt.Sprintf("%s/%s: %s→%s", parentKey, condType, oldStatus, newStatus))
+			}
+		}
 	}
 
 	return changes, summary
+}
+
+// diffGatewayClass computes diff for Gateway-API GatewayClass resources.
+// GatewayClass is a cluster-scoped declaration that controllers reconcile;
+// status updates fire on every reconcile and are noise except when the
+// Accepted/SupportedVersion conditions flip or the controller name changes.
+func diffGatewayClass(oldObj, newObj any) ([]FieldChange, []string) {
+	oldGC, ok1 := oldObj.(*unstructured.Unstructured)
+	newGC, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("GatewayClass", oldObj)
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Controller name change (rebinding to a different implementation).
+	oldCtrl, _, _ := unstructured.NestedString(oldGC.Object, "spec", "controllerName")
+	newCtrl, _, _ := unstructured.NestedString(newGC.Object, "spec", "controllerName")
+	if oldCtrl != newCtrl && (oldCtrl != "" || newCtrl != "") {
+		changes = append(changes, FieldChange{Path: "spec.controllerName", OldValue: oldCtrl, NewValue: newCtrl})
+		summary = append(summary, fmt.Sprintf("controller: %s→%s", oldCtrl, newCtrl))
+	}
+
+	// Accepted / SupportedVersion conditions.
+	oldConditions := getConditionMap(oldGC.Object, "status", "conditions")
+	newConditions := getConditionMap(newGC.Object, "status", "conditions")
+	for _, condType := range []string{"Accepted", "SupportedVersion"} {
+		oldStatus := oldConditions[condType]
+		newStatus := newConditions[condType]
+		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("status.conditions.%s", condType), OldValue: oldStatus, NewValue: newStatus})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		}
+	}
+
+	return changes, summary
+}
+
+// diffReferenceGrant computes diff for Gateway-API ReferenceGrant resources.
+// ReferenceGrant is cross-namespace permission. The interesting state lives
+// entirely in spec.from / spec.to — everything else is reconcile noise.
+func diffReferenceGrant(oldObj, newObj any) ([]FieldChange, []string) {
+	oldRG, ok1 := oldObj.(*unstructured.Unstructured)
+	newRG, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("ReferenceGrant", oldObj)
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	oldFrom, _, _ := unstructured.NestedSlice(oldRG.Object, "spec", "from")
+	newFrom, _, _ := unstructured.NestedSlice(newRG.Object, "spec", "from")
+	if len(oldFrom) != len(newFrom) {
+		changes = append(changes, FieldChange{Path: "spec.from", OldValue: len(oldFrom), NewValue: len(newFrom)})
+		summary = append(summary, fmt.Sprintf("from: %d→%d", len(oldFrom), len(newFrom)))
+	}
+
+	oldTo, _, _ := unstructured.NestedSlice(oldRG.Object, "spec", "to")
+	newTo, _, _ := unstructured.NestedSlice(newRG.Object, "spec", "to")
+	if len(oldTo) != len(newTo) {
+		changes = append(changes, FieldChange{Path: "spec.to", OldValue: len(oldTo), NewValue: len(newTo)})
+		summary = append(summary, fmt.Sprintf("to: %d→%d", len(oldTo), len(newTo)))
+	}
+
+	return changes, summary
+}
+
+// indexParentConditions extracts {parentKey -> {conditionType -> status}} from
+// a Gateway-API route's status.parents. The parent key is
+// "<group>/<kind>/<ns>/<name>/<sectionName>/<port>" — Gateway API permits a
+// route to attach to the same Gateway twice via different listeners
+// disambiguated by sectionName / port, so omitting them collapses distinct
+// per-listener conditions into one bucket and silently loses flips on the
+// second listener.
+func indexParentConditions(parents []any) map[string]map[string]string {
+	out := make(map[string]map[string]string, len(parents))
+	for _, p := range parents {
+		pMap, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		group, _, _ := unstructured.NestedString(pMap, "parentRef", "group")
+		kind, _, _ := unstructured.NestedString(pMap, "parentRef", "kind")
+		ns, _, _ := unstructured.NestedString(pMap, "parentRef", "namespace")
+		name, _, _ := unstructured.NestedString(pMap, "parentRef", "name")
+		sectionName, _, _ := unstructured.NestedString(pMap, "parentRef", "sectionName")
+		port, _, _ := unstructured.NestedInt64(pMap, "parentRef", "port")
+		key := fmt.Sprintf("%s/%s/%s/%s/%s/%d", group, kind, ns, name, sectionName, port)
+		conds := make(map[string]string)
+		conditions, _, _ := unstructured.NestedSlice(pMap, "conditions")
+		for _, c := range conditions {
+			cMap, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			t, _ := cMap["type"].(string)
+			s, _ := cMap["status"].(string)
+			if t != "" {
+				conds[t] = s
+			}
+		}
+		out[key] = conds
+	}
+	return out
 }
 
 // getConditionMap extracts a map of condition type -> status from nested conditions
@@ -1831,27 +3473,4 @@ func getConditionMap(obj map[string]any, path ...string) map[string]string {
 		}
 	}
 	return result
-}
-
-// countAcceptedParents counts how many parent refs have Accepted=True condition
-func countAcceptedParents(parents []any) int {
-	count := 0
-	for _, p := range parents {
-		pMap, ok := p.(map[string]any)
-		if !ok {
-			continue
-		}
-		conditions, _, _ := unstructured.NestedSlice(pMap, "conditions")
-		for _, c := range conditions {
-			cMap, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			if cMap["type"] == "Accepted" && cMap["status"] == "True" {
-				count++
-				break
-			}
-		}
-	}
-	return count
 }

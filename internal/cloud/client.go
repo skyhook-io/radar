@@ -44,6 +44,17 @@ type Config struct {
 	// error if the field is absent when an upgrade is requested.
 	Namespace string
 
+	// APIServerURL is the externally-reachable URL of this cluster's
+	// kube-apiserver, sent to the hub so it can correlate this cluster
+	// with references from other surfaces (most notably Argo CD's
+	// `spec.destination.server`). Populated via DiscoverAPIServerURL
+	// from the kube-public/cluster-info ConfigMap when present; empty
+	// when the ConfigMap isn't there (managed K8s services frequently
+	// omit it) or RBAC denies the read. The hub stores whatever it
+	// receives and falls back to name-based correlation when the field
+	// is empty.
+	APIServerURL string
+
 	// Handler is the HTTP handler to serve over tunneled streams — typically
 	// Radar's Server.Handler() (chi router).
 	Handler http.Handler

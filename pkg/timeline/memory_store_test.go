@@ -115,6 +115,59 @@ func TestMemoryStore_Query_Kinds(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_Query_Names(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	events := []TimelineEvent{
+		{ID: "name-1", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeAdd, Source: SourceInformer},
+		{ID: "name-2", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-2", EventType: EventTypeAdd, Source: SourceInformer},
+		{ID: "name-3", Timestamp: time.Now(), Kind: "Service", Namespace: "default", Name: "deploy-1", EventType: EventTypeAdd, Source: SourceInformer},
+	}
+	_ = store.AppendBatch(ctx, events)
+
+	result, err := store.Query(ctx, QueryOptions{Names: []string{"deploy-1"}, Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 deploy-1 events, got %d", len(result))
+	}
+	for _, e := range result {
+		if e.Name != "deploy-1" {
+			t.Errorf("Expected name 'deploy-1', got %q", e.Name)
+		}
+	}
+}
+
+func TestMemoryStore_Query_EventTypes(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	events := []TimelineEvent{
+		{ID: "et-add", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeAdd, Source: SourceInformer, Reason: ReasonRecreated},
+		{ID: "et-update", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeUpdate, Source: SourceInformer},
+		{ID: "et-delete", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-2", EventType: EventTypeDelete, Source: SourceInformer},
+	}
+	_ = store.AppendBatch(ctx, events)
+
+	result, err := store.Query(ctx, QueryOptions{EventTypes: []EventType{EventTypeAdd, EventTypeDelete}, Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 add/delete events, got %d", len(result))
+	}
+	for _, e := range result {
+		if e.EventType == EventTypeUpdate {
+			t.Errorf("update event %q leaked through the EventTypes filter", e.ID)
+		}
+		if e.ID == "et-add" && e.Reason != ReasonRecreated {
+			t.Errorf("Reason = %q, want %q", e.Reason, ReasonRecreated)
+		}
+	}
+}
+
 func TestMemoryStore_Query_Since(t *testing.T) {
 	store := NewMemoryStore(100)
 	ctx := context.Background()
@@ -287,7 +340,7 @@ func TestMemoryStore_GetChangesForOwner(t *testing.T) {
 	_ = store.AppendBatch(ctx, events)
 
 	// Query for pods owned by my-deploy
-	result, err := store.GetChangesForOwner(ctx, "Deployment", "default", "my-deploy", time.Time{}, 10)
+	result, err := store.GetChangesForOwner(ctx, "Deployment", "default", "my-deploy", "", time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("GetChangesForOwner failed: %v", err)
 	}
@@ -365,6 +418,53 @@ func TestMemoryStore_IncludeManaged(t *testing.T) {
 	}
 	if len(result) != 2 {
 		t.Errorf("Expected 2 events with IncludeManaged, got %d", len(result))
+	}
+}
+
+func TestMemoryStore_DeletedFiltering(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+	now := time.Now()
+
+	events := []TimelineEvent{
+		{ID: "deploy-add", Timestamp: now, Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeAdd, Source: SourceInformer},
+		{ID: "deploy-delete", Timestamp: now.Add(time.Second), Kind: "Deployment", Namespace: "default", Name: "deploy-2", EventType: EventTypeDelete, Source: SourceInformer},
+		{
+			ID: "pod-delete", Timestamp: now.Add(2 * time.Second), Kind: "Pod", Namespace: "default", Name: "pod-1",
+			EventType: EventTypeDelete, Source: SourceInformer,
+			Owner: &OwnerInfo{Kind: "ReplicaSet", Name: "deploy-1-abc"},
+		},
+	}
+	_ = store.AppendBatch(ctx, events)
+
+	// Default: top-level deletes show, managed (Pod) deletes do not — they follow IncludeManaged.
+	result, err := store.Query(ctx, QueryOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("Expected Deployment add + Deployment delete, got %d: %+v", len(result), result)
+	}
+	if result[0].ID != "deploy-delete" || result[1].ID != "deploy-add" {
+		t.Fatalf("unexpected result order: %+v", result)
+	}
+
+	// ExcludeDeleted drops the top-level delete too.
+	result, err = store.Query(ctx, QueryOptions{Limit: 10, ExcludeDeleted: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 1 || result[0].ID != "deploy-add" {
+		t.Fatalf("Expected only Deployment add with ExcludeDeleted, got %+v", result)
+	}
+
+	// IncludeManaged surfaces the managed Pod delete alongside the rest.
+	result, err = store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 3 {
+		t.Fatalf("Expected all 3 events with IncludeManaged, got %d: %+v", len(result), result)
 	}
 }
 

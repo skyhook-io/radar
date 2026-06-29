@@ -4,6 +4,8 @@ import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
 import { parseContextName } from '../utils/context-name'
 import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
+import { useAuthMe } from '../api/client'
+import { Tooltip } from './ui/Tooltip'
 
 interface ConnectionErrorViewProps {
   connection: ConnectionState
@@ -136,18 +138,19 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
         {command}
       </code>
       {onRunInTerminal && (
+        <Tooltip content="Run in terminal" wrapperClassName="shrink-0">
         <button
           onClick={() => onRunInTerminal(command)}
           className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-          title="Run in terminal"
         >
           <TerminalSquare className="w-3.5 h-3.5" />
         </button>
+        </Tooltip>
       )}
+      <Tooltip content="Copy to clipboard" wrapperClassName="shrink-0">
       <button
         onClick={handleCopy}
         className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-        title="Copy to clipboard"
       >
         {copied ? (
           <Check className="w-3.5 h-3.5 text-green-400" />
@@ -155,6 +158,7 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
           <Copy className="w-3.5 h-3.5" />
         )}
       </button>
+      </Tooltip>
     </div>
   )
 }
@@ -165,14 +169,22 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const authInfo = isAuth ? getAuthHints(connection.context || '') : null
   const errorInfo = authInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
+  const { data: authMe } = useAuthMe()
 
-  // Build a command that auto-retries connection after successful auth
+  // Auto-retry after successful auth. The terminal shell runs on the server
+  // host, so the auth command itself fixes the server's credentials in every
+  // mode — but the chained retry curl carries no session cookie, so it 401s
+  // once /api/connection is auth-gated. Only chain it when auth is *known*
+  // disabled (authMe still loading → don't chain a doomed call).
   const retryCmd = `curl -s -X POST http://${window.location.host}/api/connection/retry > /dev/null`
 
   const handleAuthInTerminal = () => {
     if (!authInfo?.authCommand) return
+    const cmd = authMe?.authEnabled === false
+      ? `${authInfo.authCommand.command} && ${retryCmd}`
+      : authInfo.authCommand.command
     openLocalTerminal({
-      initialCommand: `${authInfo.authCommand.command} && ${retryCmd}`,
+      initialCommand: cmd,
       title: 'Auth',
     })
   }
@@ -197,13 +209,13 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             Context: {connection.context ? (
               <ClusterName name={connection.context} />
             ) : (
-              <span className="font-mono text-theme-text-primary">(none)</span>
+              <span className="inline-code">(none)</span>
             )}
           </p>
 
           {connection.clusterName && (
             <p className="text-sm text-theme-text-secondary mb-4">
-              Cluster: <span className="font-mono text-theme-text-primary">{connection.clusterName}</span>
+              Cluster: <span className="inline-code">{connection.clusterName}</span>
             </p>
           )}
 

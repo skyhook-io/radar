@@ -67,7 +67,7 @@ export function KnativeRevisionRenderer({ data }: KnativeRevisionRendererProps) 
                 <div className="text-xs text-theme-text-secondary truncate" title={c.image}>{c.image}</div>
                 {c.ports && c.ports.length > 0 && (
                   <div className="text-xs text-theme-text-tertiary mt-1">
-                    Ports: {c.ports.map((p: any) => `${p.containerPort}/${p.protocol || 'TCP'}`).join(', ')}
+                    Ports: {c.ports.map((p: any) => `${p.name ? `${p.name}: ` : ''}${p.containerPort}/${p.protocol || 'TCP'}`).join(', ')}
                   </div>
                 )}
                 {c.resources && (c.resources.requests || c.resources.limits) && (

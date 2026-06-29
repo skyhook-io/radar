@@ -1,4 +1,5 @@
 import { X, GitCompare } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 
 interface ManifestDiffViewerProps {
@@ -7,23 +8,21 @@ interface ManifestDiffViewerProps {
   revision1: number
   revision2: number
   onClose: () => void
+  title?: string
+  emptyLabel?: string
 }
 
-export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onClose }: ManifestDiffViewerProps) {
+export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onClose, title, emptyLabel }: ManifestDiffViewerProps) {
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
-        Computing diff...
-      </div>
-    )
+    return <PaneLoader label="Computing diff…" className="h-32" />
   }
 
-  if (!diff) {
+  if (!hasDiffBodyChange(diff)) {
     return (
       <div className="p-4">
         <div className="flex flex-col items-center justify-center h-32 text-theme-text-tertiary gap-2">
           <GitCompare className="w-8 h-8 text-theme-text-disabled" />
-          <span>No differences found</span>
+          <span>{emptyLabel || 'No differences found'}</span>
         </div>
       </div>
     )
@@ -35,7 +34,7 @@ export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onCl
         <div className="flex items-center gap-2">
           <GitCompare className="w-4 h-4 text-theme-text-secondary" />
           <span className="text-sm font-medium text-theme-text-secondary">
-            Comparing Revision {revision1} → {revision2}
+            {title || `Comparing Revision ${revision1} → ${revision2}`}
           </span>
         </div>
         <button
@@ -47,7 +46,7 @@ export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onCl
         </button>
       </div>
 
-      <div className="rounded-lg overflow-hidden max-h-[calc(100vh-300px)] overflow-auto bg-theme-base/50 font-mono text-xs">
+      <div className="rounded-lg max-h-[calc(100vh-300px)] overflow-auto bg-theme-base/50 font-mono text-xs">
         <div className="p-3">
           {diff.split('\n').map((line, index) => (
             <DiffLine key={index} line={line} />
@@ -68,6 +67,15 @@ export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onCl
       </div>
     </div>
   )
+}
+
+function hasDiffBodyChange(diff: string): boolean {
+  return diff.split('\n').some((line) => {
+    if (!line || line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')) {
+      return false
+    }
+    return line.startsWith('+') || line.startsWith('-')
+  })
 }
 
 function DiffLine({ line }: { line: string }) {

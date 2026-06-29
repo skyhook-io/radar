@@ -38,3 +38,15 @@ web/package.json.md5
 .env
 .env.local
 dist/
+
+# Visual-test + scratch artifacts
+.playwright-mcp/
+tmp/
+/radar-amd64
+/*.png
+/AGENTS.md
+
+# Local visual-test screenshot artifacts (never commit)
+vt-shots/
+vt-audit-shots/
+vt-issues-shots/

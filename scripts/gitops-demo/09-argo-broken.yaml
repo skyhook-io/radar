@@ -1,0 +1,75 @@
+# Failure-state Applications. These exist to cover the highest-pain
+# GitOps journeys ("why did this fail?", "why is this Missing?") that
+# don't show up in the happy-path fixtures.
+#
+#   guestbook-broken-path → ComparisonError condition (Argo can't even
+#                           load the desired state — typo'd path or
+#                           missing branch). Drives the
+#                           argoApplicationConditions detector and the
+#                           ScopeCondition Issue rendering.
+#   guestbook-broken-sync → Stable Failed sync phase (Argo loads desired
+#                           state but K8s rejects the apply). Drives
+#                           GitOpsFailureCard + parseArgoOperationError +
+#                           the retry/Cause/Stuck rendering.
+---
+# ComparisonError: targetRevision points at a tag that doesn't exist in
+# argocd-example-apps. Argo can't fetch the manifests, so it never even
+# attempts a sync — status.conditions[].type=ComparisonError, sync stays
+# Unknown forever. This is the most common real-world "why is my app
+# broken" question (typo in path or branch).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-broken-path
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: this-path-does-not-exist-on-purpose
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-broken-path
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Failed sync: targets a namespace that doesn't exist + CreateNamespace=false.
+# Argo loads the manifests fine (no ComparisonError), attempts sync,
+# K8s rejects with "namespaces 'demo-broken-sync' not found" → Argo
+# parks in Failed phase. parseArgoOperationError extracts the K8s error
+# context; retry behavior surfaces in RetryCount / Stuck on the Issue.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-broken-sync
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-broken-sync
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 1m
+    syncOptions:
+      - CreateNamespace=false

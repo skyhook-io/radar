@@ -207,6 +207,10 @@ func (a *topologyDynamicProvider) List(gvr schema.GroupVersionResource, namespac
 	return a.dynCache.List(gvr, namespace)
 }
 
+func (a *topologyDynamicProvider) ListNamespaces(gvr schema.GroupVersionResource, namespaces []string) ([]*unstructured.Unstructured, error) {
+	return a.dynCache.ListNamespaces(gvr, namespaces)
+}
+
 func (a *topologyDynamicProvider) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
 	return a.dynCache.Get(gvr, namespace, name)
 }

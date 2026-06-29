@@ -34,7 +34,7 @@ export function CostTrendChart() {
       <div className="rounded-lg border border-theme-border bg-theme-surface/50 p-4">
         <div className="flex items-center justify-center h-[200px] text-theme-text-tertiary">
           <Loader2 className="w-5 h-5 animate-spin mr-2" />
-          Loading cost trend...
+          Loading cost trend…
         </div>
       </div>
     )
@@ -164,7 +164,7 @@ function StackedAreaChart({ series }: { series: OpenCostTrendSeries[] }) {
     })
 
     return { timestamps, stacked, minTs, maxTs, yMax, seriesLookups, toX, toY, yTicks, xTicks, paths }
-  }, [series])
+  }, [series, plotHeight, plotWidth])
 
   // Hover data — depends on hoverX + chartData, must be a separate hook (called unconditionally)
   const hoverData = useMemo(() => {
@@ -193,7 +193,7 @@ function StackedAreaChart({ series }: { series: OpenCostTrendSeries[] }) {
     })
 
     return { ts: closestTs, x: toX(closestTs), total, points }
-  }, [hoverX, chartData, series])
+  }, [hoverX, chartData, series, plotWidth])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGRectElement>) => {
     const svg = svgRef.current

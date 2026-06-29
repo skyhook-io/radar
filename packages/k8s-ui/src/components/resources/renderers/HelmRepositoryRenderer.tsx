@@ -1,6 +1,6 @@
 import { Database, CheckCircle2, Shield } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
 import { formatAge } from '../resource-utils'
 import { formatBytes } from '../../../utils/format'
 import { GitOpsStatusBadge, SyncCountdown } from '../../gitops'
@@ -58,12 +58,9 @@ export function HelmRepositoryRenderer({ data }: HelmRepositoryRendererProps) {
           <Property
             label="Type"
             value={
-              <span className={clsx(
-                'badge',
-                isOCI ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'
-              )}>
+              <Badge tone={isOCI ? 'accent2' : 'accent1'}>
                 {isOCI ? 'OCI' : 'HTTP'}
-              </span>
+              </Badge>
             }
           />
           {spec.provider && <Property label="Provider" value={spec.provider} />}

@@ -5,6 +5,9 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
+import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
+import { TerminalClipboardToolbar } from './TerminalClipboardToolbar'
+import { useMultilinePasteConfirm } from './useMultilinePasteConfirm'
 
 export interface LocalTerminalTabProps {
   isActive?: boolean
@@ -30,6 +33,12 @@ export function LocalTerminalTab({
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [hasSelection, setHasSelection] = useState(false)
+  const { confirmPaste, pasteDialog } = useMultilinePasteConfirm()
+
+  const handleCopy = useCallback(() => {
+    if (xtermRef.current) copyTerminalSelection(xtermRef.current)
+  }, [])
 
   const connect = useCallback(() => {
     if (!terminalRef.current) return
@@ -82,6 +91,12 @@ export function LocalTerminalTab({
     xtermRef.current = xterm
     fitAddonRef.current = fitAddon
 
+    setHasSelection(false)
+    const disposeClipboard = setupTerminalClipboard(xterm, terminalRef.current, {
+      confirmPaste,
+      onSelectionChange: setHasSelection,
+    })
+
     const doFit = (ws?: WebSocket) => {
       const dims = fitAddon.proposeDimensions()
       if (dims) xterm.resize(dims.cols, dims.rows)
@@ -123,7 +138,10 @@ export function LocalTerminalTab({
       }, 100)
     })
     resizeObserver.observe(terminalRef.current)
-    cleanupRef.current = () => resizeObserver.disconnect()
+    cleanupRef.current = () => {
+      resizeObserver.disconnect()
+      disposeClipboard()
+    }
 
     createSessionRef.current()
       .then(({ wsUrl }) => {
@@ -229,6 +247,8 @@ export function LocalTerminalTab({
             Reconnect
           </button>
         )}
+
+        {!error && <TerminalClipboardToolbar hasSelection={hasSelection} onCopy={handleCopy} />}
       </div>
 
       {/* Terminal or error */}
@@ -247,6 +267,7 @@ export function LocalTerminalTab({
       ) : (
         <div key="terminal" ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       )}
+      {pasteDialog}
     </div>
   )
 }

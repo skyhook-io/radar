@@ -249,6 +249,77 @@ release_k8s_ui() {
   echo ""
 }
 
+release_radar_app() {
+  echo ""
+  echo -e "${BLUE}=========================================="
+  echo "  @skyhook-io/radar-app Release"
+  echo -e "==========================================${NC}"
+  echo ""
+  echo "This publishes @skyhook-io/radar-app to npm."
+  echo "Tags use the prefix 'radar-app-' (e.g. radar-app-v0.1.0)."
+  echo ""
+  warn "Reminder: radar-app's peerDependency on @skyhook-io/k8s-ui resolves"
+  warn "to '>=1.5.0'. If your changes rely on new k8s-ui exports, publish"
+  warn "the matching k8s-ui version FIRST (option 3)."
+  echo ""
+
+  git fetch --tags 2>/dev/null || true
+
+  LATEST_RADAR_APP_TAG=$(git tag -l 'radar-app-v*' --sort=-v:refname | head -n1)
+  LATEST_RADAR_APP_TAG=${LATEST_RADAR_APP_TAG:-radar-app-v0.0.0}
+  LATEST_RADAR_APP_VER=${LATEST_RADAR_APP_TAG#radar-app-}
+
+  info "Latest radar-app release: $LATEST_RADAR_APP_TAG"
+  echo ""
+  echo "Choose release version:"
+  echo "  1) Patch  radar-app-$(increment_version "$LATEST_RADAR_APP_VER" patch)"
+  echo "  2) Minor  radar-app-$(increment_version "$LATEST_RADAR_APP_VER" minor)"
+  echo "  3) Major  radar-app-$(increment_version "$LATEST_RADAR_APP_VER" major)"
+  echo "  4) Custom"
+  echo ""
+  read -p "Choice (1-4): " choice
+
+  case $choice in
+    1) RADAR_APP_VERSION="radar-app-$(increment_version "$LATEST_RADAR_APP_VER" patch)" ;;
+    2) RADAR_APP_VERSION="radar-app-$(increment_version "$LATEST_RADAR_APP_VER" minor)" ;;
+    3) RADAR_APP_VERSION="radar-app-$(increment_version "$LATEST_RADAR_APP_VER" major)" ;;
+    4) read -p "Enter version (e.g., radar-app-v0.2.0): " RADAR_APP_VERSION ;;
+    *) error "Invalid choice" ;;
+  esac
+
+  if [[ ! $RADAR_APP_VERSION =~ ^radar-app-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    error "Invalid version format: $RADAR_APP_VERSION (expected radar-app-vX.Y.Z)"
+  fi
+
+  if [ -n "$(git status --porcelain)" ]; then
+    warn "You have uncommitted changes"
+    git status --short
+    echo ""
+    read -p "Continue anyway? (y/n): " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] || exit 1
+  fi
+
+  echo ""
+  echo "  Tag: $RADAR_APP_VERSION"
+  echo ""
+  read -p "Proceed? (y/n): " -n 1 -r
+  echo
+  [[ $REPLY =~ ^[Yy]$ ]] || exit 1
+
+  git tag "$RADAR_APP_VERSION"
+  git push origin "$RADAR_APP_VERSION"
+
+  echo ""
+  info "Tag pushed! GitHub Actions will publish @skyhook-io/radar-app to npm."
+  echo ""
+  echo "  Consumers can now run:"
+  echo "    npm install @skyhook-io/radar-app@${RADAR_APP_VERSION#radar-app-v}"
+  echo ""
+  echo "  Watch progress: gh run watch"
+  echo ""
+}
+
 release_pkg() {
   echo ""
   echo -e "${BLUE}=========================================="
@@ -327,15 +398,17 @@ main() {
   echo -e "==========================================${NC}"
   echo ""
   echo "What would you like to release?"
-  echo "  1) Radar app      (v*.*.*)"
-  echo "  2) pkg module     (pkg/v*.*.*)"
+  echo "  1) Radar app          (v*.*.*)"
+  echo "  2) pkg module         (pkg/v*.*.*)"
   echo "  3) @skyhook-io/k8s-ui (k8s-ui-v*.*.*)"
+  echo "  4) @skyhook-io/radar-app (radar-app-v*.*.*)"
   echo ""
-  read -p "Choice (1-3): " release_choice
+  read -p "Choice (1-4): " release_choice
   case $release_choice in
     1) : ;; # continue to app release flow below
     2) release_pkg; exit 0 ;;
     3) release_k8s_ui; exit 0 ;;
+    4) release_radar_app; exit 0 ;;
     *) error "Invalid choice" ;;
   esac
 

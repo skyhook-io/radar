@@ -553,6 +553,13 @@ func parseCPU(s string) int64 {
 		}
 		return 0
 	}
+	if len(s) > 1 && s[len(s)-1] == 'u' {
+		var n int64
+		if _, err := fmt.Sscanf(s[:len(s)-1], "%d", &n); err == nil {
+			return n * 1000
+		}
+		return 0
+	}
 	if len(s) > 1 && s[len(s)-1] == 'm' {
 		var n int64
 		if _, err := fmt.Sscanf(s[:len(s)-1], "%d", &n); err == nil {

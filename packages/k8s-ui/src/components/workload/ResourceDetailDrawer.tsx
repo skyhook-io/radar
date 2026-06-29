@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { clsx } from 'clsx'
 import type { SelectedResource } from '../../types'
+import { useDockReservedHeight } from '../dock/DockContext'
 
 interface ResourceDetailDrawerProps {
   resource: SelectedResource
@@ -36,7 +37,7 @@ interface ResourceDetailDrawerProps {
   }) => ReactNode
 }
 
-const MIN_WIDTH = 400
+const MIN_WIDTH = 520
 const MAX_WIDTH_PERCENT = 0.7
 const DEFAULT_WIDTH = 550
 const WIDE_WIDTH = 750
@@ -111,21 +112,23 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   }, [expanded, onNavigateToResource, onNavigate])
 
   const headerHeight = headerHeightProp ?? 49
+  const dockInset = useDockReservedHeight()
 
   return (
     <div
       className={clsx(
-        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-drawer z-40',
+        'absolute right-0 bg-theme-surface border-l border-theme-border flex flex-col z-40',
         TRANSITION_DRAWER,
+        !expanded && 'shadow-drawer',
         isOpen
           ? 'translate-x-0 opacity-100'
           : 'translate-x-full opacity-0',
         expanded && '!border-l-0',
       )}
       style={{
-        width: expanded ? `calc(100vw - ${leftOffset}px)` : drawerWidth,
+        width: expanded ? `calc(100% - ${leftOffset}px)` : drawerWidth,
         top: headerHeight,
-        height: `calc(100vh - ${headerHeight}px)`,
+        height: `calc(100% - ${headerHeight}px - ${dockInset}px)`,
         // Collapse is instant — no animation, content and width snap together.
         // Expand + slide-in/out animate via TRANSITION_DRAWER class.
         ...(isCollapsing && { transition: 'none' }),

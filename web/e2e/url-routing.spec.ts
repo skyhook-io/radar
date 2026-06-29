@@ -4,9 +4,17 @@ test.describe('URL routing: kind in path', () => {
 
   test('/resources defaults to /resources/pods', async ({ page }) => {
     await page.goto('/resources')
-    // The redirect uses history.replaceState (not navigate), so use polling assertion
+    // Replace navigation — poll until canonical path appears.
     await expect(page).toHaveURL(/\/resources\/pods/, { timeout: 10000 })
     expect(page.url()).not.toContain('kind=')
+  })
+
+  test('/resources redirect preserves query string', async ({ page }) => {
+    await page.goto('/resources?namespaces=default&search=foo')
+    await expect(page).toHaveURL(/\/resources\/pods/, { timeout: 10000 })
+    const url = new URL(page.url())
+    expect(url.searchParams.get('namespaces')).toBe('default')
+    expect(url.searchParams.get('search')).toBe('foo')
   })
 
   test('query params are preserved alongside path-based kind', async ({ page }) => {

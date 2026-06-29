@@ -10,9 +10,11 @@ interface LogsViewerProps {
   podName: string
   containers: string[]
   initialContainer?: string
+  /** Start streaming on mount. Default true — callers pass false for terminal (completed/failed) pods. */
+  autoStream?: boolean
 }
 
-export function LogsViewer({ namespace, podName, containers, initialContainer }: LogsViewerProps) {
+export function LogsViewer({ namespace, podName, containers, initialContainer, autoStream = true }: LogsViewerProps) {
   const desktopDownload = useDesktopDownload()
   const { theme } = useTheme()
 
@@ -42,6 +44,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
       createStream={makeStream}
       overrideDownload={desktopDownload}
       forceDark={theme === 'dark' ? true : undefined}
+      autoStream={autoStream}
     />
   )
 }
