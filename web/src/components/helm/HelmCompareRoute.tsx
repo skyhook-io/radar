@@ -919,22 +919,27 @@ function ModifiedFieldRow({ field }: { field: ResourceDiff['modified'][number]['
   const newValue = formatDiffValue(field.newValue, field.path)
   if (isGenericContentChange(field, oldValue, newValue)) {
     return (
-      <div className="grid grid-cols-1 gap-1 rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs lg:grid-cols-[260px_minmax(0,1fr)]">
-        <code className="block min-w-0 font-mono text-theme-text-tertiary">contents</code>
-        <div className="min-w-0 text-theme-text-secondary">changed in rendered manifest</div>
+      <div className="rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <code className="font-mono text-theme-text-tertiary">contents</code>
+          <div className="min-w-0 text-theme-text-secondary">changed in rendered manifest</div>
+        </div>
       </div>
     )
   }
   return (
-    <div className="grid grid-cols-1 gap-1 rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs lg:grid-cols-[260px_minmax(0,1fr)]">
-      <Tooltip content={field.path} wrapperClassName="min-w-0">
-        <code className="block min-w-0 truncate font-mono text-theme-text-tertiary">{formatPathLabel(field.path)}</code>
-      </Tooltip>
-      <Tooltip content={`${oldValue} -> ${newValue}`} wrapperClassName="min-w-0">
-        <div className="min-w-0 truncate text-theme-text-secondary">
-          {oldValue} <span className="text-theme-text-tertiary">-&gt;</span> <span className="text-theme-text-primary">{newValue}</span>
-        </div>
-      </Tooltip>
+    <div className="rounded-md bg-theme-surface/70 px-2 py-1.5 text-xs">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+        <Tooltip content={field.path} wrapperClassName="min-w-0 max-w-full">
+          <code className="whitespace-normal break-words font-mono text-theme-text-tertiary">{formatPathLabel(field.path)}</code>
+        </Tooltip>
+        <Tooltip content={`${oldValue} -> ${newValue}`} wrapperClassName="min-w-0 max-w-full">
+          <div className="min-w-0 whitespace-normal break-words text-theme-text-secondary">
+            <span className="text-theme-text-tertiary">changed</span>{' '}
+            {oldValue} <span className="text-theme-text-tertiary">-&gt;</span> <span className="text-theme-text-primary">{newValue}</span>
+          </div>
+        </Tooltip>
+      </div>
     </div>
   )
 }
