@@ -1220,6 +1220,9 @@ func writeJSON(w http.ResponseWriter, data any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	if status >= 500 && k8s.MarkDisconnectedIfClusterUnreachable(message) {
+		status = http.StatusServiceUnavailable
+	}
 	if status >= 500 {
 		errorlog.Record("helm", "error", "%s", message)
 	}

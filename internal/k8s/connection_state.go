@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"errors"
 	"strings"
 	"sync"
 )
@@ -56,6 +57,35 @@ func SetConnectionStatus(status ConnectionStatus) {
 	for _, cb := range callbacks {
 		cb(status)
 	}
+}
+
+// MarkDisconnectedIfClusterUnreachable updates the shared connection state when
+// a live Kubernetes request proves that the current cluster endpoint is gone.
+func MarkDisconnectedIfClusterUnreachable(message string) bool {
+	if !isClusterUnreachableMessage(message) {
+		return false
+	}
+
+	current := GetConnectionStatus()
+	if current.State == StateDisconnected && current.Error == message {
+		return true
+	}
+
+	status := ConnectionStatus{
+		State:       StateDisconnected,
+		Context:     current.Context,
+		ClusterName: current.ClusterName,
+		Error:       message,
+		ErrorType:   ClassifyError(errors.New(message)),
+	}
+	SetConnectionStatus(status)
+	return true
+}
+
+func isClusterUnreachableMessage(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "kubernetes cluster unreachable") ||
+		strings.Contains(lower, "cluster unreachable")
 }
 
 // UpdateConnectionProgress updates the progress message while connecting

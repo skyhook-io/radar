@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { useRefreshAnimation } from './hooks/useRefreshAnimation'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
@@ -847,7 +846,7 @@ function AppInner() {
   // forceNamespaceFilter is only set for large clusters that require server-side filtering.
   // Fleet mode uses 'resources' topology on the backend — filtering is client-side
   const sseMode = topologyMode === 'fleet' ? 'resources' : topologyMode
-  const { topology, connected, reconnect: reconnectSSE } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
+  const { topology } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
     onContextChanged: () => {
@@ -884,7 +883,7 @@ function AppInner() {
     },
     onK8sEvent: handleK8sEvent,
   }, forceNamespaceFilter, showPolicyEffect)
-  const [reconnect, isReconnecting] = useRefreshAnimation(reconnectSSE)
+  const clusterConnected = connection.state === 'connected'
 
   // On large clusters (where the server requires namespace filtering), keep
   // SSE's server-side filter in lockstep with the user's namespace pick.
@@ -1397,8 +1396,8 @@ function AppInner() {
             <div className="flex items-center gap-1.5 ml-1">
               <Tooltip
                 content={
-                  !connected
-                    ? 'Disconnected'
+                  !clusterConnected
+                    ? 'Cluster disconnected'
                     : crdDiscoveryStatus === 'discovering'
                       ? 'Connected — discovering Custom Resources...'
                       : 'Connected'
@@ -1408,7 +1407,7 @@ function AppInner() {
               >
                 <span
                   className={`w-2 h-2 rounded-full ${
-                    !connected
+                    !clusterConnected
                       ? 'bg-red-500'
                       : crdDiscoveryStatus === 'discovering'
                         ? 'bg-amber-400 animate-pulse'
@@ -1422,19 +1421,19 @@ function AppInner() {
                   "Connected" text here would expand the left section and
                   collide with the absolute-centered nav block at xl, which
                   is the same breakpoint where nav labels appear. */}
-              {(!connected || crdDiscoveryStatus === 'discovering') && (
+              {(!clusterConnected || crdDiscoveryStatus === 'discovering') && (
                 <span className="text-[11px] text-theme-text-tertiary hidden xl:inline">
-                  {!connected ? 'Disconnected' : 'Discovering Custom Resources...'}
+                  {!clusterConnected ? 'Disconnected' : 'Discovering Custom Resources...'}
                 </span>
               )}
-              {!connected && (
+              {!clusterConnected && (
                 <Tooltip content="Reconnect">
                 <button
-                  onClick={reconnect}
-                  disabled={isReconnecting}
+                  onClick={retryConnection}
+                  disabled={isRetrying}
                   className="p-1 text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-50 disabled:pointer-events-none"
                 >
-                  <RefreshCw className={`w-3 h-3 ${isReconnecting ? 'animate-spin' : ''}`} />
+                  <RefreshCw className={`w-3 h-3 ${isRetrying ? 'animate-spin' : ''}`} />
                 </button>
                 </Tooltip>
               )}
