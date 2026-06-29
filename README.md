@@ -382,7 +382,7 @@ Considered for follow-ups, deliberately not in this pass — RBAC audit checks (
 
 Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants — Claude, Cursor, Copilot, and others — query your cluster through Radar.
 
-Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. Read tools are strictly read-only; write tools (restart, scale, sync) are clearly annotated and non-destructive.
+Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. Read tools are strictly read-only; write tools (restart, scale, sync, and the like) carry explicit destructive-action hints and run under your cluster's RBAC, so the apiserver enforces what each identity is allowed to do.
 
 Enabled by default. Disable with `--no-mcp`. See the **[MCP Guide](docs/mcp.md)** for setup instructions.
 

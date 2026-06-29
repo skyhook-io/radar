@@ -189,7 +189,7 @@ rbac:
 
 ### Graceful RBAC Degradation
 
-You see what you have access to — Radar doesn't require cluster-admin. Whatever your ServiceAccount (or the impersonated user, when auth is enabled) can list, Radar shows. Resource types you can't list show an "Access Restricted" message; namespaces you can't access don't appear.
+You see what you have access to — Radar doesn't require cluster-admin. Whatever your ServiceAccount (or the impersonated user, when auth is enabled) can list, Radar shows. Resource types you can't list show an actionable denied-state instead of a misleading "0 / None found": for a core cluster-scoped kind (Node, PV, StorageClass, and the like) your identity can't read, Radar shows a copyable `ClusterRole` + `ClusterRoleBinding` request to hand to a cluster admin (reason `rbac_denied`), and distinguishes that from a kind Radar's own ServiceAccount can't read, where a user-level grant wouldn't help (reason `unavailable`, no snippet). The "Your access on this cluster" dialog lists the core cluster-scoped kinds being hidden alongside your effective rules. Namespaces you can't access don't appear.
 
 A namespace-scoped ServiceAccount (RoleBinding without a ClusterRole) is fully supported — Radar detects this at startup and works within the permitted namespace.
 
@@ -315,6 +315,8 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.viewRBAC` | Show RBAC objects in resource browser | `false` |
 | `rbac.traffic` | Read Hubble TLS certs | `true` |
 | `rbac.crdGroups.all` | Wildcard CRD read access | `false` |
+
+**Response compression:** Radar gzip-compresses HTTP responses by default (streaming endpoints like SSE are excluded). The level defaults to `1` (best speed), since on large clusters peak response size coincides with peak CPU. Set the `RADAR_COMPRESS_LEVEL` environment variable (via the chart's pod `env`) to `0` to disable, or `2`-`9` to trade CPU for smaller bodies on bandwidth-bound deployments.
 
 ## Troubleshooting
 
