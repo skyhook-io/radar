@@ -683,24 +683,26 @@ func addSecretProducerContext(b *diagnosticContextBuilder, root Issue, edges *[]
 	linkBlastRadius(b, root, edges, pods, secretAttributableCategories, flatByResource, groupedByID,
 		factSecretNotReady, issuesapi.ConfidenceHigh,
 		"Pods referencing the Secret this resource manages are blocked by it.",
-		// The symptom must NAME the Secret — a pod can reference the Secret via env/
-		// envFrom/imagePullSecrets yet have a volume_mount_failed on an unrelated
-		// PVC/CSI volume, so (unlike PVC's mount edge) volume_mount_failed is NOT
-		// accepted unconditionally here.
+		// The symptom must name the Secret IN A SECRET CONTEXT — `Secret "foo"` —
+		// not a bare `"foo"`, so a pod that references Secret foo but actually fails
+		// on a ConfigMap/PVC also named foo isn't attributed here. (A pod can
+		// reference the Secret via env/envFrom yet fail on an unrelated volume, so
+		// volume_mount_failed is not accepted unconditionally either.)
 		func(symptom Issue) bool {
-			return mentionsQuotedName(symptom, secretName)
+			return symptomNamesSecret(symptom, secretName)
 		})
 }
 
-// mentionsQuotedName reports whether a symptom's text names the resource the way
-// Kubernetes prints it — quoted (`Secret "foo" not found`). A bare substring
-// would fire on any text containing a short name; the quotes anchor it.
-func mentionsQuotedName(symptom Issue, name string) bool {
+// symptomNamesSecret reports whether a symptom's text names the Secret in a
+// secret context — `secret "foo"`, the way the missing-ref detector and kubelet
+// print it. Requiring the word "secret" before the quoted name (not a bare
+// `"foo"`) keeps a pod that references Secret foo but fails on a ConfigMap/PVC
+// also named foo from being attributed to the Secret producer.
+func symptomNamesSecret(symptom Issue, name string) bool {
 	if name == "" {
 		return false
 	}
-	text := strings.ToLower(symptom.Message + " " + symptom.Reason)
-	return strings.Contains(text, `"`+strings.ToLower(name)+`"`)
+	return strings.Contains(strings.ToLower(symptom.Message+" "+symptom.Reason), `secret "`+strings.ToLower(name)+`"`)
 }
 
 // symptomMentionsVolume reports whether a scheduling / waiting symptom's text

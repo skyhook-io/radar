@@ -1960,14 +1960,20 @@ func TestSecretProducerContext(t *testing.T) {
 		Message: `Secret "web-tls-secret" referenced in volume does not exist`}
 	unrelated := Issue{ID: "cw-1", Kind: "Pod", Namespace: "prod", Name: "web-b", Category: issuesapi.CategoryContainerWaiting, Severity: SeverityWarning,
 		Reason: "ContainerCreating", Message: "waiting on something else entirely"}
+	// References Secret web-tls-secret but actually fails on a ConfigMap of the SAME
+	// name — the quoted name appears, but not in a `secret "…"` context, so it must
+	// NOT be attributed to the Certificate.
+	sameName := Issue{ID: "cm-1", Kind: "Pod", Namespace: "prod", Name: "web-c", Category: issuesapi.CategoryMissingConfigRef, Severity: SeverityCritical,
+		Message: `envFrom references ConfigMap "web-tls-secret" which does not exist`}
 
 	p := &fakeProvider{secretProducer: map[string]secretProducerResult{
 		"prod/web-tls": {name: "web-tls-secret", pods: []Ref{
 			{Kind: "Pod", Namespace: "prod", Name: "web-a"},
 			{Kind: "Pod", Namespace: "prod", Name: "web-b"},
+			{Kind: "Pod", Namespace: "prod", Name: "web-c"},
 		}},
 	}}
-	out := enrichDiagnosticContext([]Issue{cert, blocked, unrelated}, []Issue{cert, blocked, unrelated}, nil, p)
+	out := enrichDiagnosticContext([]Issue{cert, blocked, unrelated, sameName}, []Issue{cert, blocked, unrelated, sameName}, nil, p)
 
 	root := findByID(out, "cert-1")
 	var fact *issuesapi.DiagnosticFact
@@ -1984,5 +1990,8 @@ func TestSecretProducerContext(t *testing.T) {
 	}
 	if got := findByID(out, "cw-1"); got.IncidentParent != nil {
 		t.Fatalf("unrelated container-waiting pod must not be attributed, got %+v", *got.IncidentParent)
+	}
+	if got := findByID(out, "cm-1"); got.IncidentParent != nil {
+		t.Fatalf("same-named ConfigMap failure must not be attributed to the Secret, got %+v", *got.IncidentParent)
 	}
 }
