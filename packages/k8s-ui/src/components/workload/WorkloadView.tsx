@@ -76,8 +76,9 @@ interface WorkloadViewProps {
   active?: boolean
   /** Close the drawer (collapsed mode) */
   onClose?: () => void
-  /** Expand from drawer to full view */
-  onExpand?: () => void
+  /** Expand from drawer to full view. `opts.yaml` true when expanding from the
+   *  drawer's YAML view so the full view opens on the YAML tab (edits carry over). */
+  onExpand?: (opts?: { yaml?: boolean }) => void
   /** Initial view tab — 'yaml' opens YAML directly */
   initialTab?: 'detail' | 'yaml'
   /** API group for CRD resources */
@@ -590,7 +591,7 @@ export function WorkloadView({
             <div className="flex items-center gap-1">
               {onExpand && (
                 <button
-                  onClick={onExpand}
+                  onClick={() => onExpand({ yaml: showYaml })}
                   className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
                   title="Open full view"
                 >

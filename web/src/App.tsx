@@ -2124,17 +2124,22 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           expanded={expandedView}
           onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail') }}
           onNavigate={(res) => navigateToResource(res)}
-          onExpand={(res) => {
+          canCollapseToDrawer={!isMobile}
+          onExpand={(res, opts) => {
             // Over a resource list → grow into the over-list fullscreen overlay
             // (?full=1, pushed so Back collapses) and keep the list mounted
             // underneath. Over any other surface there's nothing to retain, so
-            // open the standalone fullscreen page.
+            // open the standalone fullscreen page. Carry the YAML tab when
+            // expanding from the drawer's YAML view so the editor (and its
+            // session-persisted draft) is right there, not behind the Overview tab.
             if (mainView === 'resources') {
               const p = new URLSearchParams(searchParams)
               p.set('full', '1')
+              if (opts?.yaml) p.set('tab', 'yaml')
               setSearchParams(p)
             } else {
-              navigate(buildWorkloadPath(res))
+              const base = buildWorkloadPath(res)
+              navigate(opts?.yaml ? `${base}${base.includes('?') ? '&' : '?'}tab=yaml` : base)
             }
           }}
           // On mobile there's no drawer to collapse back to, so the collapse/back

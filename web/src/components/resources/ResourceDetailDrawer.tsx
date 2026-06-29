@@ -14,8 +14,10 @@ interface ResourceDetailDrawerProps {
   expanded?: boolean
   /** Called when user clicks collapse in expanded mode */
   onCollapse?: () => void
-  /** Called when user clicks expand button */
-  onExpand?: (resource: SelectedResource) => void
+  /** Called when user clicks expand button (opts.yaml = expanding from YAML view) */
+  onExpand?: (resource: SelectedResource, opts?: { yaml?: boolean }) => void
+  /** Hide the collapse-to-drawer control (mobile: no drawer to collapse to). Default true. */
+  canCollapseToDrawer?: boolean
   /** Navigate to another resource within expanded WorkloadView */
   onNavigateToResource?: (resource: SelectedResource) => void
   /** Top offset for the drawer (px). Defaults to Radar's 49px header height;

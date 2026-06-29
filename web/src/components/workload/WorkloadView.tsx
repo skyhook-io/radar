@@ -164,7 +164,7 @@ interface WorkloadViewProps {
   /** false on the outgoing layer during an expand/collapse crossfade (default true) */
   active?: boolean
   onClose?: () => void
-  onExpand?: () => void
+  onExpand?: (opts?: { yaml?: boolean }) => void
   initialTab?: 'detail' | 'yaml'
   group?: string
 }

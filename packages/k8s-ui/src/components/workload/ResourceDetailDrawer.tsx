@@ -19,8 +19,13 @@ interface ResourceDetailDrawerProps {
   expanded?: boolean
   /** Called when user clicks collapse in expanded mode */
   onCollapse?: () => void
-  /** Called when user clicks expand button */
-  onExpand?: (resource: SelectedResource) => void
+  /** Called when user clicks expand button. `opts.yaml` is true when expanding
+   *  from the drawer's YAML view, so the host can open the full view on YAML. */
+  onExpand?: (resource: SelectedResource, opts?: { yaml?: boolean }) => void
+  /** Whether the expanded view can collapse back to a side drawer. False on
+   *  mobile (no room for a drawer) — the collapse-to-drawer control is hidden
+   *  there and the host's onCollapse should close instead. Default true. */
+  canCollapseToDrawer?: boolean
   /** Navigate to another resource within expanded WorkloadView */
   onNavigateToResource?: (resource: SelectedResource) => void
   /** Height of the host app's top navigation bar in px (default: 49) */
@@ -35,7 +40,7 @@ interface ResourceDetailDrawerProps {
     active: boolean
     initialTab?: 'detail' | 'yaml'
     onClose: () => void
-    onExpand?: () => void
+    onExpand?: (opts?: { yaml?: boolean }) => void
     onBack?: () => void
     onNavigateToResource?: (resource: SelectedResource) => void
     onCollapseToDrawer?: () => void
@@ -71,7 +76,7 @@ function usePrefersReducedMotion(): boolean {
   return reduced
 }
 
-export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, children }: ResourceDetailDrawerProps) {
+export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, canCollapseToDrawer = true, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, children }: ResourceDetailDrawerProps) {
   const [drawerWidth, setDrawerWidth] = useState(() => getDefaultWidth(resource.kind))
   const [isResizing, setIsResizing] = useState(false)
   const resizeStartX = useRef(0)
@@ -199,10 +204,12 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       active,
       initialTab,
       onClose,
-      onExpand: onExpand ? () => onExpand(resource) : undefined,
+      onExpand: onExpand ? (opts) => onExpand(resource, opts) : undefined,
       onBack: onCollapse ? () => onCollapse() : undefined,
       onNavigateToResource: handleNavigate,
-      onCollapseToDrawer: onCollapse ? () => onCollapse() : undefined,
+      // Hidden on mobile (no drawer to collapse to) — the host routes the
+      // back/close control through onCollapse instead.
+      onCollapseToDrawer: (canCollapseToDrawer && onCollapse) ? () => onCollapse() : undefined,
     })
 
   // While transitioning render both layers (outgoing = settled state, incoming
