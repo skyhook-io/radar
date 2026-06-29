@@ -3,7 +3,7 @@ import { Section } from '../ui/drawer-components'
 import { Badge } from '../ui/Badge'
 import type { Issue, IssueResourceRef } from './types'
 import { categoryLabel } from './severity'
-import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle } from './diagnostic'
+import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic'
 
 /**
  * ResourceIssuesSection — the compact "Operational Issues" block for the resource
@@ -63,6 +63,24 @@ export function ResourceIssuesSection({
                 <p className="mt-1 text-xs text-theme-text-tertiary">
                   Suggested fix: create namespace{' '}
                   <code className="rounded bg-theme-elevated px-1 font-mono">{issue.remediation_target}</code> — apply it from the GitOps detail page.
+                </p>
+              ) : null}
+              {issue.incident_parent ? (
+                <p className="mt-1 text-xs text-theme-text-tertiary">
+                  {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}:{' '}
+                  {onResourceClick ? (
+                    <button
+                      type="button"
+                      onClick={() => onResourceClick(issue.incident_parent!.ref)}
+                      className="group inline-flex items-center gap-1 text-left font-mono hover:text-theme-text-secondary"
+                      title={confidenceTitle(issue.incident_parent.confidence ?? '')}
+                    >
+                      {issue.incident_parent.ref.kind} / {issue.incident_parent.ref.name}
+                      <ExternalLink className="h-3 w-3 opacity-0 group-hover:opacity-100" />
+                    </button>
+                  ) : (
+                    <span className="font-mono">{issue.incident_parent.ref.kind} / {issue.incident_parent.ref.name}</span>
+                  )}
                 </p>
               ) : null}
               <CausalContext issue={issue} onResourceClick={onResourceClick} />

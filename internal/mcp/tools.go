@@ -329,7 +329,12 @@ func registerTools(server *mcp.Server) {
 			"claimName) — treat as fact; `medium` = inferred/co-located (e.g. pods ON a " +
 			"pressured node) — a lead to verify, NOT proof; `low` = heuristic. The fact's " +
 			"`role` (candidate = possible cause, affected, rollup, context) places the row " +
-			"in the causal picture. Use these links to walk from a symptom to its likely " +
+			"in the causal picture. The REVERSE is also provided: a symptom row may carry " +
+			"`incident_parent` (the root issue that explains it — id + ref + confidence + " +
+			"fact_type), so you can walk symptom→root directly without scanning every root's " +
+			"facts. It is set only when a single root is unambiguous (high beats medium; " +
+			"distinct same-confidence roots leave it unset). Use these links to walk from a " +
+			"symptom to its likely " +
 			"root, but confirm a medium link before acting on it. " +
 			"When `recent_changes` is present, consider it if the issue list does not " +
 			"explain the reported symptom; `recent_changes_reason` says why Radar " +
