@@ -1527,10 +1527,10 @@ func pdbBlocksEvictionsMessage(pdb *policyv1.PodDisruptionBudget) string {
 }
 
 // sharedRWOVolumeConflicts returns the names of PVCs the Deployment's pod
-// template MOUNTS whose access modes permit only single-node attach
-// (ReadWriteOnce / ReadWriteOncePod, no ReadWriteMany) — a hard conflict for a
-// multi-replica Deployment. Only PVCs present in cache with known access modes
-// are considered; an unverifiable PVC is skipped rather than guessed at.
+// template MOUNTS whose bound access modes permit only single-node attach
+// (ReadWriteOnce / ReadWriteOncePod, no ReadWriteMany). Pending PVCs are skipped
+// here because the binding/provisioning failure is the actionable blocker until a
+// real volume can attach.
 func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []string {
 	pvcl := cache.PersistentVolumeClaims()
 	if pvcl == nil {
@@ -1547,7 +1547,7 @@ func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []stri
 		if err != nil || pvc == nil {
 			continue
 		}
-		if pvcSingleNodeAccessOnly(pvc) {
+		if pvc.Status.Phase == corev1.ClaimBound && pvcSingleNodeAccessOnly(pvc) {
 			out = append(out, pvc.Name)
 		}
 	}

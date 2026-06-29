@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -627,14 +628,23 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 		return items
 	}
 
-	emit := func(kind, group, name, source, svcNS, svcName string, age time.Duration) Detection {
-		return withFix(missingRefProblem(kind, group, "", name,
-			"Missing webhook backend Service",
-			fmt.Sprintf("%s references Service %q in namespace %q which does not exist",
-				source, svcName, svcNS),
+	emit := func(kind, group, name, sourceRefPhrase, svcNS, svcName, severity, policySummary string, age time.Duration) Detection {
+		reason := "Missing webhook backend Service"
+		cause := fmt.Sprintf("Webhook backend Service %q in namespace %q doesn't exist.", svcName, svcNS)
+		if severity == "warning" {
+			cause += " One or more referencing webhooks use failurePolicy=Ignore, so admission proceeds but the webhook's validation or mutation is bypassed."
+		} else {
+			cause += " At least one referencing webhook uses failurePolicy=Fail (the Kubernetes default), so matching admission requests are blocked."
+		}
+		det := withFix(missingRefProblemSev(kind, group, "", name, severity,
+			reason,
+			fmt.Sprintf("%s Service %q in namespace %q which does not exist (%s)",
+				sourceRefPhrase, svcName, svcNS, policySummary),
 			age),
-			fmt.Sprintf("Webhook backend Service %q in namespace %q doesn't exist, so admission requests can't reach it — rules are bypassed (failurePolicy=Ignore) or admission is blocked (failurePolicy=Fail).", svcName, svcNS),
+			cause,
 			fmt.Sprintf("Restore Service %q and its endpoints in namespace %q, or fix clientConfig.service to point at the correct healthy Service.", svcName, svcNS))
+		det.Fingerprint = missingRefFingerprint(reason, "clientConfig.service:"+svcNS+"/"+svcName)
+		return det
 	}
 
 	checkWebhookList := func(items []*unstructured.Unstructured, ownerKind, ownerGroup, webhookPath string) []Detection {
@@ -645,7 +655,7 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 				continue
 			}
 			age := now.Sub(item.GetCreationTimestamp().Time)
-			seen := map[string]bool{}
+			missingByService := map[string]*webhookMissingBackend{}
 			for _, w := range webhooks {
 				wm, ok := w.(map[string]any)
 				if !ok {
@@ -660,16 +670,24 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 				if svcName == "" || svcNS == "" {
 					continue
 				}
-				key := svcNS + "/" + svcName
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
 				if _, err := svcLister.Services(svcNS).Get(svcName); err != nil {
 					whName, _ := wm["name"].(string)
-					source := fmt.Sprintf("webhook %q clientConfig.service", whName)
-					problems = append(problems, emit(ownerKind, ownerGroup, item.GetName(), source, svcNS, svcName, age))
+					policy := webhookFailurePolicy(wm)
+					key := svcNS + "/" + svcName
+					missing := missingByService[key]
+					if missing == nil {
+						missing = &webhookMissingBackend{
+							serviceNamespace: svcNS,
+							serviceName:      svcName,
+						}
+						missingByService[key] = missing
+					}
+					missing.addWebhook(whName, policy)
 				}
+			}
+			for _, key := range sortedWebhookMissingBackendKeys(missingByService) {
+				missing := missingByService[key]
+				problems = append(problems, emit(ownerKind, ownerGroup, item.GetName(), missing.sourceReferencePhrase(), missing.serviceNamespace, missing.serviceName, missing.severity, missing.policySummary(), age))
 			}
 		}
 		return problems
@@ -685,6 +703,76 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 		"MutatingWebhookConfiguration", "admissionregistration.k8s.io", "webhooks",
 	)...)
 	return out
+}
+
+type webhookMissingBackend struct {
+	serviceNamespace string
+	serviceName      string
+	severity         string
+	webhooks         []string
+	policies         map[string]bool
+}
+
+func (m *webhookMissingBackend) addWebhook(name string, policy string) {
+	if name == "" {
+		name = "<unnamed>"
+	}
+	m.webhooks = append(m.webhooks, name)
+	if m.policies == nil {
+		m.policies = map[string]bool{}
+	}
+	m.policies[policy] = true
+	severity := webhookFailurePolicySeverity(policy)
+	if m.severity == "" || severity == "critical" {
+		m.severity = severity
+	}
+}
+
+func (m *webhookMissingBackend) sourceReferencePhrase() string {
+	names := append([]string(nil), m.webhooks...)
+	sort.Strings(names)
+	quoted := make([]string, 0, len(names))
+	for _, name := range names {
+		quoted = append(quoted, fmt.Sprintf("%q", name))
+	}
+	if len(quoted) == 1 {
+		return fmt.Sprintf("webhook %s clientConfig.service references", quoted[0])
+	}
+	return fmt.Sprintf("webhooks %s clientConfig.service reference", strings.Join(quoted, ", "))
+}
+
+func (m *webhookMissingBackend) policySummary() string {
+	if m.policies["Fail"] {
+		if m.policies["Ignore"] {
+			return "failurePolicy=Fail/Ignore"
+		}
+		return "failurePolicy=Fail"
+	}
+	return "failurePolicy=Ignore"
+}
+
+func webhookFailurePolicy(wm map[string]any) string {
+	policy, _, _ := unstructured.NestedString(wm, "failurePolicy")
+	if strings.EqualFold(policy, "Ignore") {
+		return "Ignore"
+	}
+	return "Fail"
+}
+
+func webhookFailurePolicySeverity(policy string) string {
+	if policy == "Ignore" {
+		return "warning"
+	}
+	return "critical"
+}
+
+func sortedWebhookMissingBackendKeys(in map[string]*webhookMissingBackend) []string {
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // DetectMissingGatewayRefs scans Gateway API Routes for backend Service refs

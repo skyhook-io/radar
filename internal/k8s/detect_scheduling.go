@@ -122,7 +122,7 @@ func parseSchedulerMessage(msg string) (totalNodes int, reasons []SchedulingReas
 	}
 
 	for clause := range strings.SplitSeq(clauseStr, ", ") {
-		clause = strings.TrimSpace(clause)
+		clause = normalizeSchedulerClause(clause)
 		if clause == "" {
 			continue
 		}
@@ -133,11 +133,19 @@ func parseSchedulerMessage(msg string) (totalNodes int, reasons []SchedulingReas
 	return totalNodes, reasons
 }
 
+func normalizeSchedulerClause(clause string) string {
+	return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(clause), ",."))
+}
+
 // classifyClause maps one scheduler clause to a structured reason. The
 // substring checks are ordered so the more specific phrasings win (e.g.
 // "anti-affinity" before "affinity", "node affinity/selector" before the
 // bare "affinity" used by pod-affinity).
 func classifyClause(clause string) (SchedulingReason, bool) {
+	clause = normalizeSchedulerClause(clause)
+	if clause == "" {
+		return SchedulingReason{}, false
+	}
 	r := SchedulingReason{Raw: clause}
 	if m := reLeadingCount.FindStringSubmatch(clause); m != nil {
 		r.NodeCount, _ = strconv.Atoi(m[1])
@@ -183,6 +191,8 @@ func classifyClause(clause string) (SchedulingReason, bool) {
 	case strings.Contains(lower, "unbound") && strings.Contains(lower, "persistentvolumeclaim"),
 		strings.Contains(lower, "persistent volumes to bind"):
 		r.Class = SchedVolumeBinding
+	case isIgnoredSchedulerClause(clause):
+		return SchedulingReason{}, false
 	case strings.Contains(lower, "unschedulable"), strings.Contains(lower, "were not ready"):
 		r.Class = SchedNodeUnschedulable
 	default:
@@ -554,6 +564,12 @@ func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, rea
 		parts = append(parts, summary)
 	}
 	if len(parts) == 0 {
+		if total > 0 {
+			return fmt.Sprintf("Pod is unschedulable (0/%d nodes available)", total)
+		}
+		if schedulerMessageOnlyIgnoredNoise(schedMsg) {
+			return "Pod is unschedulable"
+		}
 		if msg := strings.TrimSpace(schedMsg); msg != "" {
 			return msg
 		}
@@ -564,6 +580,42 @@ func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, rea
 		msg = fmt.Sprintf("%s (0/%d nodes available)", msg, total)
 	}
 	return msg
+}
+
+func schedulerMessageOnlyIgnoredNoise(msg string) bool {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return false
+	}
+	if before, _, ok := strings.Cut(msg, ". preemption:"); ok {
+		msg = before
+	} else if before, _, ok := strings.Cut(msg, " preemption:"); ok {
+		msg = before
+	}
+	if _, rest, ok := strings.Cut(msg, ":"); ok {
+		msg = rest
+	}
+	msg = strings.TrimRight(strings.TrimSpace(msg), ".")
+	if msg == "" {
+		return false
+	}
+
+	sawIgnored := false
+	for clause := range strings.SplitSeq(msg, ", ") {
+		clause = normalizeSchedulerClause(clause)
+		if clause == "" {
+			continue
+		}
+		if !isIgnoredSchedulerClause(clause) {
+			return false
+		}
+		sawIgnored = true
+	}
+	return sawIgnored
+}
+
+func isIgnoredSchedulerClause(clause string) bool {
+	return strings.Contains(strings.ToLower(normalizeSchedulerClause(clause)), "no new claims to deallocate")
 }
 
 // unschedulableAction turns the parsed scheduler reasons into a concrete next
@@ -694,7 +746,7 @@ func summarizeReasons(reasons []SchedulingReason, skipAffinity bool) string {
 			}
 		}
 	}
-	return strings.Join(parts, ", ")
+	return strings.Join(nonEmptySchedulerSummaryParts(parts), ", ")
 }
 
 func nodesPhrase(n int) string {
@@ -702,6 +754,17 @@ func nodesPhrase(n int) string {
 		return "node(s)"
 	}
 	return fmt.Sprintf("%d node(s)", n)
+}
+
+func nonEmptySchedulerSummaryParts(parts []string) []string {
+	out := parts[:0]
+	for _, part := range parts {
+		part = normalizeSchedulerClause(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // extractPodPlacement pulls the pod's node-targeting constraints (nodeSelector

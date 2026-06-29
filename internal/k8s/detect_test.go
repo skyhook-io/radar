@@ -422,6 +422,51 @@ func TestDetectProblems_ConfigSignals(t *testing.T) {
 		}
 	})
 
+	t.Run("node address endpoint is not treated as missing service", func(t *testing.T) {
+		defer ResetTestState()
+
+		client := fake.NewClientset(
+			&corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "kind-node-1"},
+				Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+					{Type: corev1.NodeHostName, Address: "kind-node-1"},
+					{Type: corev1.NodeInternalDNS, Address: "radar-gitops-demo-control-plane"},
+				}},
+			},
+			&appsv1.DaemonSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "kindnet", Namespace: "kube-system", CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute))},
+				Spec: appsv1.DaemonSetSpec{
+					Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "kindnet",
+						Env: []corev1.EnvVar{{
+							Name:  "CONTROL_PLANE_ENDPOINT",
+							Value: "radar-gitops-demo-control-plane:6443",
+						}},
+					}}}},
+				},
+				Status: appsv1.DaemonSetStatus{
+					DesiredNumberScheduled: 1,
+					NumberUnavailable:      1,
+				},
+			},
+		)
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+
+		time.Sleep(200 * time.Millisecond)
+		for _, c := range FindEnvServiceRefChecks(GetResourceCache(), "kube-system") {
+			if c.Status == "missing_service" {
+				t.Fatalf("node address endpoint should not emit missing_service check: %+v", c)
+			}
+		}
+		for _, p := range DetectProblems(GetResourceCache(), "kube-system") {
+			if p.Reason == "Missing referenced Service" {
+				t.Fatalf("node address endpoint should not promote to Issue: %+v", p)
+			}
+		}
+	})
+
 	t.Run("cross namespace env service ref is not promoted to issue", func(t *testing.T) {
 		defer ResetTestState()
 
@@ -2037,20 +2082,25 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 			},
 		}
 	}
-	mkPVC := func(name string, mode corev1.PersistentVolumeAccessMode) *corev1.PersistentVolumeClaim {
+	mkPVCPhase := func(name string, phase corev1.PersistentVolumeClaimPhase, mode corev1.PersistentVolumeAccessMode) *corev1.PersistentVolumeClaim {
 		return &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod"},
 			Spec:       corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{mode}},
-			Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound, AccessModes: []corev1.PersistentVolumeAccessMode{mode}},
+			Status:     corev1.PersistentVolumeClaimStatus{Phase: phase, AccessModes: []corev1.PersistentVolumeAccessMode{mode}},
 		}
+	}
+	mkPVC := func(name string, mode corev1.PersistentVolumeAccessMode) *corev1.PersistentVolumeClaim {
+		return mkPVCPhase(name, corev1.ClaimBound, mode)
 	}
 
 	client := fake.NewClientset(
 		mkDeploy("conflict", &two, "rwo-pvc"), // 2 replicas + RWO → flagged
 		mkDeploy("single", &one, "rwo-pvc"),   // 1 replica + RWO → fine
 		mkDeploy("rwx", &three, "rwx-pvc"),    // 3 replicas + RWX → fine
+		mkDeploy("pending", &two, "pending-pvc"),
 		mkPVC("rwo-pvc", corev1.ReadWriteOnce),
 		mkPVC("rwx-pvc", corev1.ReadWriteMany),
+		mkPVCPhase("pending-pvc", corev1.ClaimPending, corev1.ReadWriteOnce),
 	)
 	if err := InitTestResourceCache(client); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
@@ -2073,6 +2123,9 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 	}
 	if hasProblem(problems, "Deployment", "rwx", reason) {
 		t.Errorf("multi-replica RWX mount should not be flagged: %+v", problems)
+	}
+	if hasProblem(problems, "Deployment", "pending", reason) {
+		t.Errorf("Pending RWO PVC should surface as a binding issue, not a replica access conflict: %+v", problems)
 	}
 }
 

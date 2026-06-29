@@ -639,6 +639,59 @@ func TestDetectMissingWebhookRefs(t *testing.T) {
 	}
 }
 
+func TestDetectMissingWebhookRefsFailurePolicySeverity(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+
+	now := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	client := fake.NewClientset()
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	vwhGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
+	scheme := runtime.NewScheme()
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		scheme,
+		map[schema.GroupVersionResource]string{vwhGVR: "ValidatingWebhookConfigurationList"},
+		webhookConfig("ValidatingWebhookConfiguration", "validate-policy", now, []any{
+			webhookWithServicePolicy("explicit-ignore", "hooks", "ignore-svc", "Ignore"),
+			webhookWithServicePolicy("explicit-fail", "hooks", "fail-svc", "Fail"),
+			webhookWithService("default-fail", "hooks", "default-svc"),
+			webhookWithServicePolicy("mixed-ignore", "hooks", "mixed-svc", "Ignore"),
+			webhookWithServicePolicy("mixed-fail", "hooks", "mixed-svc", "Fail"),
+			webhookWithURL("external"),
+		}),
+	)
+	if err := InitTestDynamicResourceCache(dynClient, []APIResource{
+		{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: "validatingwebhookconfigurations", Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	dynCache := GetDynamicResourceCache()
+	if err := dynCache.EnsureWatching(vwhGVR); err != nil {
+		t.Fatalf("EnsureWatching validating webhooks: %v", err)
+	}
+	if !dynCache.WaitForSync(vwhGVR, 2*time.Second) {
+		t.Fatal("validating webhook dynamic cache did not sync")
+	}
+
+	problems := DetectMissingWebhookRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "")
+	if len(problems) != 4 {
+		t.Fatalf("expected one row per missing backend Service, got %d: %+v", len(problems), problems)
+	}
+	assertWebhookBackendSeverity(t, problems, "ignore-svc", "warning", "failurePolicy=Ignore")
+	assertWebhookBackendSeverity(t, problems, "fail-svc", "critical", "failurePolicy=Fail")
+	assertWebhookBackendSeverity(t, problems, "default-svc", "critical", "failurePolicy=Fail")
+	assertWebhookBackendSeverity(t, problems, "mixed-svc", "critical", "failurePolicy=Fail/Ignore")
+	assertWebhookBackendMessage(t, problems, "mixed-svc", `webhooks "mixed-fail", "mixed-ignore" clientConfig.service reference Service`)
+	for _, p := range problems {
+		if hasSubstr(p.Message, "external") {
+			t.Errorf("URL-based webhook should not flag: %+v", p)
+		}
+	}
+}
+
 func TestDetectMissingGatewayRefs(t *testing.T) {
 	defer ResetTestState()
 	defer ResetTestDynamicState()
@@ -906,7 +959,11 @@ func gatewayReferenceGrant(name, namespace string, ts metav1.Time, fromGroup, fr
 }
 
 func webhookWithService(name, namespace, service string) map[string]any {
-	return map[string]any{
+	return webhookWithServicePolicy(name, namespace, service, "")
+}
+
+func webhookWithServicePolicy(name, namespace, service, failurePolicy string) map[string]any {
+	webhook := map[string]any{
 		"name": name,
 		"clientConfig": map[string]any{
 			"service": map[string]any{
@@ -915,6 +972,40 @@ func webhookWithService(name, namespace, service string) map[string]any {
 			},
 		},
 	}
+	if failurePolicy != "" {
+		webhook["failurePolicy"] = failurePolicy
+	}
+	return webhook
+}
+
+func assertWebhookBackendSeverity(t *testing.T, problems []Detection, service, severity, policyText string) {
+	t.Helper()
+	for _, p := range problems {
+		if !hasSubstr(p.Message, service) {
+			continue
+		}
+		if p.Severity != severity {
+			t.Fatalf("%s severity = %q, want %q: %+v", service, p.Severity, severity, p)
+		}
+		if !hasSubstr(p.Message, policyText) || !hasSubstr(p.Cause, "failurePolicy=") {
+			t.Fatalf("%s should name policy in message/cause, got message=%q cause=%q", service, p.Message, p.Cause)
+		}
+		return
+	}
+	t.Fatalf("missing webhook backend problem for Service %s: %+v", service, problems)
+}
+
+func assertWebhookBackendMessage(t *testing.T, problems []Detection, service, text string) {
+	t.Helper()
+	for _, p := range problems {
+		if hasSubstr(p.Message, service) {
+			if !hasSubstr(p.Message, text) {
+				t.Fatalf("%s message = %q, want substring %q", service, p.Message, text)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing webhook backend problem for Service %s: %+v", service, problems)
 }
 
 func webhookWithURL(name string) map[string]any {

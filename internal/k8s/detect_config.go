@@ -98,6 +98,7 @@ func suspiciousCoreDNSReason(corefile string) (string, bool) {
 type envServiceRef struct {
 	namespace string
 	name      string
+	host      string
 	port      int32
 	display   string
 }
@@ -174,6 +175,15 @@ func findEnvServiceRefChecks(cache *ResourceCache, workloads []envServiceWorkloa
 	if cache == nil || cache.Services() == nil {
 		return nil
 	}
+	var nodeHosts map[string]bool
+	nodeHostsLoaded := false
+	isNodeHost := func(host string) bool {
+		if !nodeHostsLoaded {
+			nodeHosts = envServiceNodeHosts(cache)
+			nodeHostsLoaded = true
+		}
+		return nodeHosts[strings.ToLower(host)]
+	}
 	var out []EnvServiceRefCheck
 	for _, wl := range workloads {
 		containers := make([]corev1.Container, 0, len(wl.spec.InitContainers)+len(wl.spec.Containers))
@@ -198,6 +208,9 @@ func findEnvServiceRefChecks(cache *ResourceCache, workloads []envServiceWorkloa
 				}
 				ref, ok := parseEnvServiceRef(value, wl.namespace)
 				if !ok {
+					continue
+				}
+				if isNodeHost(ref.host) {
 					continue
 				}
 				age := ageSeconds(now, wl.created)
@@ -627,7 +640,7 @@ func parseEnvServiceRef(value, defaultNamespace string) (envServiceRef, bool) {
 	}
 
 	parts := strings.Split(host, ".")
-	ref := envServiceRef{namespace: defaultNamespace, port: int32(port64), display: fmt.Sprintf("%s:%d", host, port64)}
+	ref := envServiceRef{namespace: defaultNamespace, host: host, port: int32(port64), display: fmt.Sprintf("%s:%d", host, port64)}
 	switch {
 	case len(parts) == 1:
 		ref.name = parts[0]
@@ -644,6 +657,31 @@ func parseEnvServiceRef(value, defaultNamespace string) (envServiceRef, bool) {
 		return envServiceRef{}, false
 	}
 	return ref, true
+}
+
+func envServiceNodeHosts(cache *ResourceCache) map[string]bool {
+	out := map[string]bool{}
+	if cache == nil || cache.Nodes() == nil {
+		return out
+	}
+	nodes, err := cache.Nodes().List(labels.Everything())
+	if err != nil {
+		logConfigListError("Node", "", err)
+		return out
+	}
+	add := func(value string) {
+		value = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(value), "."))
+		if value != "" {
+			out[value] = true
+		}
+	}
+	for _, node := range nodes {
+		add(node.Name)
+		for _, addr := range node.Status.Addresses {
+			add(addr.Address)
+		}
+	}
+	return out
 }
 
 func splitHostPort(value string) (string, string, bool) {

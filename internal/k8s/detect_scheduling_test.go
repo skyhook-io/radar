@@ -103,6 +103,44 @@ func TestParseSchedulerMessage_WholeMessageVariants(t *testing.T) {
 	}
 }
 
+func TestDescribeUnschedulable_DropsDRADeallocateJargon(t *testing.T) {
+	pod := &corev1.Pod{}
+	msg := describeUnschedulable(pod,
+		"0/1 nodes are available: no new claims to deallocate,, 1 node(s) didn't have free ports for the requested pod ports.",
+		nil)
+	if strings.Contains(msg, ",,") {
+		t.Fatalf("message should not contain double comma: %q", msg)
+	}
+	if strings.Contains(msg, "no new claims to deallocate") {
+		t.Fatalf("message should drop DRA scheduler jargon: %q", msg)
+	}
+	if !strings.Contains(msg, "1 node(s) no free host ports") {
+		t.Fatalf("message should retain the actionable host-port conflict: %q", msg)
+	}
+
+	draOnly := describeUnschedulable(pod,
+		"0/1 nodes are available: no new claims to deallocate.",
+		nil)
+	if strings.Contains(draOnly, "no new claims to deallocate") {
+		t.Fatalf("DRA-only message should not fall back to raw scheduler jargon: %q", draOnly)
+	}
+	if draOnly != "Pod is unschedulable (0/1 nodes available)" {
+		t.Fatalf("DRA-only message = %q, want generic node-count summary", draOnly)
+	}
+
+	draOnlyWithoutNodeCount := describeUnschedulable(pod, "no new claims to deallocate", nil)
+	if draOnlyWithoutNodeCount != "Pod is unschedulable" {
+		t.Fatalf("DRA-only message without node count = %q, want generic summary", draOnlyWithoutNodeCount)
+	}
+
+	repeatedDRAOnly := describeUnschedulable(pod,
+		"scheduler plugin details: no new claims to deallocate, no new claims to deallocate.",
+		nil)
+	if repeatedDRAOnly != "Pod is unschedulable" {
+		t.Fatalf("repeated DRA-only message = %q, want generic summary", repeatedDRAOnly)
+	}
+}
+
 func TestParseSchedulerMessage_Empty(t *testing.T) {
 	if total, reasons := parseSchedulerMessage(""); total != 0 || reasons != nil {
 		t.Errorf("empty message should yield 0/nil, got %d/%+v", total, reasons)
