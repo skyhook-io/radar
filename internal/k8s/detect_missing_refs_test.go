@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,6 +146,12 @@ func TestDetectMissingRefs(t *testing.T) {
 			},
 		},
 	}
+	ingMissingDefault := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "ing-default", Namespace: "prod", CreationTimestamp: now},
+		Spec: networkingv1.IngressSpec{
+			DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "missing-default-svc", Port: networkingv1.ServiceBackendPort{Number: 80}}},
+		},
+	}
 
 	// StatefulSet with missing headless service.
 	stsMissingSvc := &appsv1.StatefulSet{
@@ -193,7 +200,7 @@ func TestDetectMissingRefs(t *testing.T) {
 		existingSC, existingRole, existingClusterRole, existingDep,
 		podMissing, podHealthy, podDefaultSA,
 		hpaMissingTarget, hpaExistingTarget, hpaUnknownKind,
-		ingMixed,
+		ingMixed, ingMissingDefault,
 		stsMissingSvc, stsExistingSvc,
 		pvcExplicitMissingSC, pvcExistingSC, pvcDefaultSC,
 		rbMissing, rbExisting, crbMissing, crbExisting,
@@ -229,6 +236,7 @@ func TestDetectMissingRefs(t *testing.T) {
 		{"StatefulSet", "prod", "sts-bad", "Missing headless Service"},
 		{"HorizontalPodAutoscaler", "prod", "hpa-bad", "Missing scaleTargetRef"},
 		{"Ingress", "prod", "ing", "Missing backend Service"},
+		{"Ingress", "prod", "ing-default", "Missing backend Service"},
 		{"Ingress", "prod", "ing", "Missing backend Service port"},
 		{"Ingress", "prod", "ing", "Missing TLS Secret"},
 		{"PersistentVolumeClaim", "prod", "pvc-bad-sc", "Missing StorageClass"},
@@ -318,6 +326,29 @@ func TestDetectMissingRefs(t *testing.T) {
 			t.Errorf("missing-ref %q (%s/%s) has empty Action", p.Reason, p.Kind, p.Name)
 		}
 	}
+
+	assertProblemActionOrder(t, problems, "Pod", "prod", "broken", "Missing PVC", "missing-pvc", "existing PVC", "create PVC")
+	assertProblemActionContains(t, problems, "Pod", "prod", "broken", "Missing PVC", "pod template")
+	assertProblemActionContains(t, problems, "Pod", "prod", "broken", "Missing PVC", "recreate this Pod")
+	assertProblemActionOrder(t, problems, "Pod", "prod", "broken", "Missing ServiceAccount", "missing-sa", "existing ServiceAccount", "create ServiceAccount")
+	assertProblemActionContains(t, problems, "Pod", "prod", "broken", "Missing ServiceAccount", "pod template")
+	assertProblemActionOrder(t, problems, "Pod", "prod", "broken", "Missing imagePullSecret", "missing-pull", "existing pull Secret", "create pull Secret")
+	assertProblemActionContains(t, problems, "Pod", "prod", "broken", "Missing imagePullSecret", "pod template")
+	assertProblemActionOrder(t, problems, "HorizontalPodAutoscaler", "prod", "hpa-bad", "Missing scaleTargetRef", "missing-dep", "existing workload", "create Deployment")
+	assertProblemActionOrder(t, problems, "Ingress", "prod", "ing", "Missing backend Service", "missing-svc", "existing Service", "create Service")
+	assertProblemActionOrder(t, problems, "Ingress", "prod", "ing", "Missing backend Service port", "grpc-not-there", "already exposes", "add port")
+	assertProblemActionOrder(t, problems, "Ingress", "prod", "ing-default", "Missing backend Service", "missing-default-svc", "existing Service", "create Service")
+	assertProblemActionNotContains(t, problems, "Ingress", "prod", "ing-default", "Missing backend Service", "rule")
+	assertProblemActionNotContains(t, problems, "Ingress", "prod", "ing-default", "Missing backend Service", "route")
+	assertProblemActionOrder(t, problems, "Ingress", "prod", "ing", "Missing TLS Secret", "missing-tls", "existing kubernetes.io/tls Secret", "create TLS Secret")
+	assertProblemActionStarts(t, problems, "StatefulSet", "prod", "sts-bad", "Missing headless Service", "Create headless Service")
+	assertProblemActionContains(t, problems, "StatefulSet", "prod", "sts-bad", "Missing headless Service", "immutable")
+	assertProblemActionOrder(t, problems, "PersistentVolumeClaim", "prod", "pvc-bad-sc", "Missing StorageClass", "does-not-exist", "existing StorageClass", "create StorageClass")
+	assertProblemActionContains(t, problems, "PersistentVolumeClaim", "prod", "pvc-bad-sc", "Missing StorageClass", "immutable")
+	assertProblemActionOrder(t, problems, "RoleBinding", "prod", "rb-bad", "Missing roleRef target", "missing-role", "existing role", "create Role")
+	assertProblemActionContains(t, problems, "RoleBinding", "prod", "rb-bad", "Missing roleRef target", "immutable")
+	assertProblemActionOrder(t, problems, "ClusterRoleBinding", "", "crb-bad", "Missing roleRef target", "missing-cr", "existing role", "create ClusterRole")
+	assertProblemActionContains(t, problems, "ClusterRoleBinding", "", "crb-bad", "Missing roleRef target", "immutable")
 }
 
 func TestScaleTargetLookupResultDistinguishesErrors(t *testing.T) {
@@ -683,6 +714,9 @@ func TestDetectMissingGatewayRefs(t *testing.T) {
 	if len(problems) != 4 {
 		t.Fatalf("expected exactly 4 Gateway missing-ref problems, got %+v", problems)
 	}
+	assertProblemActionOrder(t, problems, "HTTPRoute", "prod", "broken", "Missing Gateway backend Service", "missing", "existing Service", "create Service")
+	assertProblemActionOrder(t, problems, "HTTPRoute", "prod", "broken", "Missing Gateway backend Service port", "9090", "already exposes", "add port")
+	assertProblemActionStarts(t, problems, "HTTPRoute", "prod", "broken", "Missing Gateway ReferenceGrant", "Create a ReferenceGrant")
 
 	scoped := DetectMissingGatewayRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "prod")
 	if len(scoped) != 4 {
@@ -765,6 +799,10 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 	if len(problems) != 4 {
 		t.Fatalf("expected exactly 4 curated CRD missing refs, got %+v", problems)
 	}
+	assertProblemActionOrder(t, problems, "Rollout", "prod", "checkout", "Missing Rollout Service", "missing-canary", "existing Service", "create Service")
+	assertProblemActionContains(t, problems, "Rollout", "prod", "checkout", "Missing Rollout Service", "spec.strategy.canary.canaryService")
+	assertProblemActionNotContains(t, problems, "Rollout", "prod", "checkout", "Missing Rollout Service", "traffic-routing")
+	assertProblemActionOrder(t, problems, "ScaledObject", "prod", "missing-target", "Missing scaleTargetRef", "ghost", "existing workload", "create Deployment")
 	for _, p := range problems {
 		if p.Severity != "warning" {
 			t.Errorf("curated CRD missing refs should be warning-level, got %+v", p)
@@ -912,6 +950,75 @@ func hasSubstr(s, sub string) bool {
 	return false
 }
 
+func assertProblemActionOrder(t *testing.T, ps []Detection, kind, ns, name, reason, actionSubstr, earlier, later string) {
+	t.Helper()
+	for _, p := range ps {
+		if p.Kind != kind || p.Namespace != ns || p.Name != name || p.Reason != reason {
+			continue
+		}
+		if actionSubstr != "" && !strings.Contains(p.Action, actionSubstr) {
+			continue
+		}
+		if strings.HasPrefix(p.Action, "Create ") {
+			t.Fatalf("action should not lead with create: %q", p.Action)
+		}
+		assertSubstringOrder(t, p.Action, earlier, later)
+		return
+	}
+	t.Fatalf("missing problem action for %s %s/%s reason %q action containing %q; got %+v", kind, ns, name, reason, actionSubstr, ps)
+}
+
+func assertProblemActionStarts(t *testing.T, ps []Detection, kind, ns, name, reason, prefix string) {
+	t.Helper()
+	for _, p := range ps {
+		if p.Kind == kind && p.Namespace == ns && p.Name == name && p.Reason == reason {
+			if !strings.HasPrefix(p.Action, prefix) {
+				t.Fatalf("action for %s %s/%s reason %q = %q, want prefix %q", kind, ns, name, reason, p.Action, prefix)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing problem action for %s %s/%s reason %q; got %+v", kind, ns, name, reason, ps)
+}
+
+func assertProblemActionContains(t *testing.T, ps []Detection, kind, ns, name, reason, substr string) {
+	t.Helper()
+	for _, p := range ps {
+		if p.Kind == kind && p.Namespace == ns && p.Name == name && p.Reason == reason {
+			if !strings.Contains(p.Action, substr) {
+				t.Fatalf("action for %s %s/%s reason %q = %q, want substring %q", kind, ns, name, reason, p.Action, substr)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing problem action for %s %s/%s reason %q; got %+v", kind, ns, name, reason, ps)
+}
+
+func assertProblemActionNotContains(t *testing.T, ps []Detection, kind, ns, name, reason, substr string) {
+	t.Helper()
+	for _, p := range ps {
+		if p.Kind == kind && p.Namespace == ns && p.Name == name && p.Reason == reason {
+			if strings.Contains(p.Action, substr) {
+				t.Fatalf("action for %s %s/%s reason %q = %q, should not contain %q", kind, ns, name, reason, p.Action, substr)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing problem action for %s %s/%s reason %q; got %+v", kind, ns, name, reason, ps)
+}
+
+func assertSubstringOrder(t *testing.T, text, earlier, later string) {
+	t.Helper()
+	first := strings.Index(text, earlier)
+	second := strings.Index(text, later)
+	if first < 0 || second < 0 {
+		t.Fatalf("action %q must contain %q and %q", text, earlier, later)
+	}
+	if first > second {
+		t.Fatalf("action should mention %q before %q: %q", earlier, later, text)
+	}
+}
+
 func TestRefDiagHelpers(t *testing.T) {
 	r, m, c, a := cmRefDiag("volume", "app-config", "prod")
 	if r != "Missing ConfigMap" {
@@ -926,6 +1033,10 @@ func TestRefDiagHelpers(t *testing.T) {
 	if !hasSubstr(a, "app-config") || !hasSubstr(a, "prod") {
 		t.Errorf("action should name target + namespace: %q", a)
 	}
+	if !hasSubstr(a, "pod template") || !hasSubstr(a, "recreate this Pod") {
+		t.Errorf("action should mention pod-template/recreate framing: %q", a)
+	}
+	assertSubstringOrder(t, a, "existing ConfigMap", "create ConfigMap")
 
 	r2, _, _, a2 := secretRefDiag("envFrom", "db-creds", "prod")
 	if r2 != "Missing Secret" {
@@ -934,4 +1045,8 @@ func TestRefDiagHelpers(t *testing.T) {
 	if !hasSubstr(a2, "db-creds") || !hasSubstr(a2, "prod") {
 		t.Errorf("secret action should name target + namespace: %q", a2)
 	}
+	if !hasSubstr(a2, "pod template") || !hasSubstr(a2, "recreate this Pod") {
+		t.Errorf("secret action should mention pod-template/recreate framing: %q", a2)
+	}
+	assertSubstringOrder(t, a2, "existing Secret", "create Secret")
 }
