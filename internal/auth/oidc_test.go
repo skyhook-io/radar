@@ -26,6 +26,20 @@ func newTestOIDCHandler() *OIDCHandler {
 	}
 }
 
+func TestSessionIssued(t *testing.T) {
+	issued := CreateSessionCookie(&User{Username: "alice"}, NewSessionID(), "", "secret", time.Hour, false)
+	if !sessionIssued(issued) {
+		t.Error("a normal session cookie set should be considered issued")
+	}
+	clearsOnly := []*http.Cookie{
+		{Name: DefaultCookieName, MaxAge: -1},
+		{Name: DefaultCookieName + "_chunks", MaxAge: -1},
+	}
+	if sessionIssued(clearsOnly) {
+		t.Error("a clearing-only set (oversized refusal) should not be considered issued")
+	}
+}
+
 func TestOIDCCallback_MissingStateCookie(t *testing.T) {
 	h := newTestOIDCHandler()
 	r := httptest.NewRequest("GET", "/auth/callback?state=abc&code=xyz", nil)
@@ -289,12 +303,12 @@ func newTLSOIDCServer() *httptest.Server {
 	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"issuer":                 srv.URL,
-			"authorization_endpoint": srv.URL + "/auth",
-			"token_endpoint":         srv.URL + "/token",
-			"jwks_uri":               srv.URL + "/jwks",
-			"response_types_supported": []string{"code"},
-			"subject_types_supported":  []string{"public"},
+			"issuer":                                srv.URL,
+			"authorization_endpoint":                srv.URL + "/auth",
+			"token_endpoint":                        srv.URL + "/token",
+			"jwks_uri":                              srv.URL + "/jwks",
+			"response_types_supported":              []string{"code"},
+			"subject_types_supported":               []string{"public"},
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 		})
 	}))
@@ -306,9 +320,9 @@ func TestNewOIDCHandler_FailsWithSelfSignedCert(t *testing.T) {
 	defer srv.Close()
 
 	_, err := NewOIDCHandler(context.Background(), Config{
-		Mode:         "oidc",
-		OIDCIssuer:   srv.URL,
-		OIDCClientID: "test",
+		Mode:             "oidc",
+		OIDCIssuer:       srv.URL,
+		OIDCClientID:     "test",
 		OIDCClientSecret: "secret",
 		OIDCRedirectURL:  "http://localhost/callback",
 	})

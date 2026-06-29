@@ -291,10 +291,32 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, c)
 	}
 
+	// CreateSessionCookie returns only clearing cookies (no value-bearing
+	// cookie) when the identity is too large to fit even when chunked. Don't
+	// redirect as if login succeeded — that loops back to /auth/login. Fail
+	// loudly so the user (and operator, via the [auth] ERROR log) can act.
+	if !sessionIssued(cookies) {
+		log.Printf("[oidc] Session for %s too large to store in cookies (groups: %d) — refusing login", username, len(groups))
+		http.Error(w, "Your identity has too many groups or claims to fit in a session cookie. Reduce OIDC group membership or token claims.", http.StatusRequestEntityTooLarge)
+		return
+	}
+
 	log.Printf("[oidc] User %s authenticated (groups: %v)", username, groups)
 
 	// Redirect to app
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// sessionIssued reports whether a CreateSessionCookie result actually
+// establishes a session (a value-bearing cookie) rather than only clearing
+// cookies returned when the identity is too large to store.
+func sessionIssued(cookies []*http.Cookie) bool {
+	for _, c := range cookies {
+		if c.Value != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // HandleLogout clears the local session and, when the IdP supports RP-Initiated
