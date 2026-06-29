@@ -241,6 +241,30 @@ func TestRelatedIssues_SubjectAndMember(t *testing.T) {
 	}
 }
 
+// TestRelatedIssues_PopulatesIncidentParent pins that the per-resource path runs
+// the grouped-mode enrichment, so a symptom returned for the drawer / get_resource
+// / diagnose carries the symptom→root incident_parent (not just the forward links).
+func TestRelatedIssues_PopulatesIncidentParent(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Reason: "Pending", Severity: "critical"},
+		},
+		scheduling: []k8s.Detection{
+			{Kind: "Pod", Namespace: "prod", Name: "db-0", Reason: "Unschedulable", Severity: "critical",
+				Message: "pod has unbound immediate PersistentVolumeClaims"},
+		},
+		podsMountingPVC: map[string][]Ref{"prod/data": {{Kind: "Pod", Namespace: "prod", Name: "db-0"}}},
+	}
+	got := RelatedIssues(p, nil, "", "Pod", "prod", "db-0")
+	if len(got) != 1 {
+		t.Fatalf("RelatedIssues(db-0) = %d, want 1", len(got))
+	}
+	ip := got[0].IncidentParent
+	if ip == nil || ip.Ref.Kind != "PersistentVolumeClaim" || ip.Ref.Name != "data" || ip.Confidence != issuesapi.ConfidenceHigh {
+		t.Fatalf("expected incident_parent → PVC/data (high), got %+v", ip)
+	}
+}
+
 // TestRelatedIssuesFrom_MatchesPrecomposed pins that the compose-once helper
 // returns the same matches as RelatedIssues when handed an already-composed
 // (flat, grouped) pair — the path the GitOps insights resolver uses to avoid a

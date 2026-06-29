@@ -19,6 +19,10 @@ func RelatedIssues(p Provider, namespaces []string, group, kind, namespace, name
 	// what makes member #11..#N in a large fan-out resolve correctly.
 	flat := Compose(p, Filters{Namespaces: namespaces, Limit: NoLimit})
 	grouped := GroupIssues(flat)
+	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
+	// issues get coverage-gated incident_parent pointers — GroupIssues alone only
+	// carries the representative's DiagnosticContext, never the reverse pointer.
+	grouped = enrichDiagnosticContext(grouped, flat, grouped, p)
 	return RelatedIssuesFrom(flat, grouped, group, kind, namespace, name)
 }
 
