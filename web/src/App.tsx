@@ -1947,6 +1947,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
             onClearNamespaces={clearAllNamespaces}
+            // While the fullscreen overlay (?full=1) covers the list, suppress its
+            // row-nav / Escape / action shortcuts so they don't fire on the hidden
+            // background list underneath.
+            shortcutsActive={!drawerExpanded}
           />
         )}
 

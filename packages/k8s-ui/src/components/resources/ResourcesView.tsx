@@ -1944,6 +1944,10 @@ interface ResourcesViewProps {
   isBulkRestarting?: boolean
   onBulkScale?: (items: BulkResourceItem[], replicas: number, options?: { onSuccess?: () => void }) => void
   isBulkScaling?: boolean
+  /** When false, this list's keyboard shortcuts are not registered — used when a
+   *  fullscreen detail overlay sits on top of the still-mounted list so its
+   *  row-nav / Escape / action keys don't fire on the hidden background. Default true. */
+  shortcutsActive?: boolean
 }
 
 // Default selected kind
@@ -2064,6 +2068,7 @@ function LastUpdatedLabel({ lastUpdated }: { lastUpdated: Date }) {
 
 export function ResourcesView({
   namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange,
+  shortcutsActive = true,
   apiResources: apiResourcesProp,
   resourceQueries: resourceQueriesProp,
   resourceCounts: resourceCountsProp,
@@ -2509,6 +2514,7 @@ export function ResourcesView({
     category: 'Search',
     scope: 'resources',
     handler: () => searchInputRef.current?.focus(),
+    enabled: shortcutsActive,
   })
 
   // Keyboard navigation: highlighted row state
@@ -2608,8 +2614,8 @@ export function ResourcesView({
     onResourceClick?.(isSelected ? null : stripped)
   }, [onRowSelect, onResourceClick, selectedKind.name, selectedKind.group])
 
-  // Register navigation shortcuts
-  useRegisterShortcuts([
+  // Register navigation shortcuts (suppressed while a fullscreen overlay covers the list)
+  useRegisterShortcuts(shortcutsActive ? [
     {
       id: 'resources-nav-down',
       keys: 'j',
@@ -2782,7 +2788,7 @@ export function ResourcesView({
         else searchInputRef.current?.blur()
       },
     },
-  ])
+  ] : [])
 
   // Refs for accessing filteredResources inside shortcuts (computed later in component)
   const filteredResourceCountRef = useRef(0)
@@ -2792,7 +2798,7 @@ export function ResourcesView({
   const flatKindListRef = useRef<SelectedKindInfo[]>([])
 
   // Sidebar kind navigation: [ = previous kind, ] = next kind
-  useRegisterShortcuts([
+  useRegisterShortcuts(shortcutsActive ? [
     {
       id: 'resources-prev-kind',
       keys: '[',
@@ -2825,7 +2831,7 @@ export function ResourcesView({
         onKindChange?.()
       },
     },
-  ])
+  ] : [])
 
   // Close dropdowns on outside click
   useEffect(() => {

@@ -36,6 +36,8 @@ interface ResourcesViewProps {
   onResourceClickYaml?: NavigateToResource
   onKindChange?: () => void
   onClearNamespaces?: () => void
+  /** When false, list keyboard shortcuts are suppressed (a fullscreen overlay covers the list). */
+  shortcutsActive?: boolean
 }
 
 type SelectedKindInfo = { name: string; kind: string; group: string } | null
@@ -59,7 +61,7 @@ function resourceCountKey(kind: NonNullable<SelectedKindInfo>): string {
   return kind.group ? `${kind.group}/${kind.kind}` : kind.kind
 }
 
-export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces }: ResourcesViewProps) {
+export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces, shortcutsActive }: ResourcesViewProps) {
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -320,6 +322,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       onResourceClickYaml={onResourceClickYaml}
       onKindChange={onKindChange}
       onClearNamespaces={onClearNamespaces}
+      shortcutsActive={shortcutsActive}
       // Injected data
       apiResources={apiResources}
       // Lightweight counts for sidebar (replaces 233 parallel queries)
