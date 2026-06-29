@@ -117,8 +117,9 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   return (
     <div
       className={clsx(
-        'absolute right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-drawer z-40',
+        'absolute right-0 bg-theme-surface border-l border-theme-border flex flex-col z-40',
         TRANSITION_DRAWER,
+        !expanded && 'shadow-drawer',
         isOpen
           ? 'translate-x-0 opacity-100'
           : 'translate-x-full opacity-0',
