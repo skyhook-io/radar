@@ -71,6 +71,10 @@ export interface IssueDiagnosticIssueRef {
   reason?: string;
   category?: string;
   severity?: IssueSeverity;
+  /** How many affected resources fold into this linked issue from the root's
+   *  perspective (e.g. 5 of a PVC's mounting pods under one Deployment issue).
+   *  Absent when the link covers a single resource. */
+  count?: number;
 }
 
 export type IssueDiagnosticConfidence = 'high' | 'medium' | 'low';

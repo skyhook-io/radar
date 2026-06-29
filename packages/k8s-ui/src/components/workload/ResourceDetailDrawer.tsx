@@ -215,10 +215,12 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
     <div
       ref={containerRef}
       className={clsx(
-        'absolute right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-drawer z-40',
+        'absolute right-0 bg-theme-surface border-l border-theme-border flex flex-col z-40',
         // Clip the wider layer only while morphing; keep overflow visible at idle
         // so drawer popovers/tooltips aren't clipped.
         transitioning && 'overflow-hidden',
+        // No drawer shadow in fullscreen — it's a full page, not a floating panel.
+        !expanded && 'shadow-drawer',
         isOpen
           ? 'translate-x-0 opacity-100'
           : 'translate-x-full opacity-0',

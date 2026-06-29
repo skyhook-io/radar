@@ -22,6 +22,7 @@ const (
 	factRestartCause        = "restart_cause"
 	factNodeBlastRadius     = "node_blast_radius"
 	factPVCBlastRadius      = "pvc_blast_radius"
+	factAPIServiceHPA       = "apiservice_hpa"
 )
 
 type serviceBackendIssueProvider interface {
@@ -191,6 +192,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 			addPVCBlastRadiusContext(&b, *i, pvcProvider, flatByResource, groupedByID)
 		}
 
+		if metricsAPIFamily(*i) != "" {
+			addAPIServiceHPAContext(&b, *i, flat, groupedByID)
+		}
+
 		if ctx := b.build(); ctx != nil {
 			i.DiagnosticContext = ctx
 		}
@@ -250,62 +255,200 @@ func addServiceBackendContext(b *diagnosticContextBuilder, issue Issue, serviceP
 }
 
 // linkBlastRadius adds a candidate-role fact linking a root issue to the
-// category-attributable issues of a set of affected pods (each flat pod issue
-// mapped to its grouped form). Non-destructive — it only annotates the root.
-// `accept` is an optional per-symptom guard beyond the category filter.
+// category-attributable issues of a set of affected pods. Multiple affected pods
+// routinely fold into ONE grouped issue (5 pods of a Deployment → one row); those
+// collapse to a single related entry carrying a Count of the distinct pods, rather
+// than repeating the same grouped issue per pod. Non-destructive — it only
+// annotates the root. `accept` is an optional per-symptom guard beyond the
+// category filter.
 func linkBlastRadius(b *diagnosticContextBuilder, pods []Ref, attributable map[issuesapi.Category]bool, flatByResource map[string][]Issue, groupedByID map[string]Issue, factType string, conf issuesapi.Confidence, message string, accept func(Issue) bool) {
 	if len(pods) == 0 {
 		return
 	}
-	// Keep each linked issue paired with the pod it came from, so ranking and
-	// capping act on the pair — otherwise the displayed pods (Refs) and the
-	// displayed issues (RelatedIssues) are sorted/capped independently and the
-	// two lists diverge past the cap.
-	type linked struct {
-		ref Ref
-		rel issuesapi.IssueRef
-	}
-	seenIDs := make(map[string]bool)
-	var links []linked
-	for _, pod := range pods {
-		key := resourceKey(pod.Group, pod.Kind, pod.Namespace, pod.Name)
-		for _, flatIssue := range flatByResource[key] {
-			if !attributable[flatIssue.Category] || seenIDs[flatIssue.ID] {
-				continue
+	related, refs, total := collectRelated(groupedByID, func(yield func(Ref, Issue)) {
+		for _, pod := range pods {
+			key := resourceKey(pod.Group, pod.Kind, pod.Namespace, pod.Name)
+			for _, flatIssue := range flatByResource[key] {
+				if !attributable[flatIssue.Category] {
+					continue
+				}
+				if accept != nil && !accept(flatIssue) {
+					continue
+				}
+				yield(pod, flatIssue)
 			}
-			if accept != nil && !accept(flatIssue) {
-				continue
-			}
-			grouped, ok := groupedByID[flatIssue.ID]
-			if !ok {
-				grouped = flatIssue
-			}
-			links = append(links, linked{ref: pod, rel: issueRef(grouped)})
-			seenIDs[flatIssue.ID] = true
 		}
-	}
-	if len(links) == 0 {
+	})
+	if len(related) == 0 {
 		return
-	}
-	// Rank by the linked issue's severity BEFORE capping, so the cap keeps the
-	// worst issues (and their pods), not whatever came first in iteration order.
-	sort.SliceStable(links, func(i, j int) bool { return lessIssueRef(links[i].rel, links[j].rel) })
-	if len(links) > maxDiagnosticIssueRefs {
-		links = links[:maxDiagnosticIssueRefs]
-	}
-	related := make([]issuesapi.IssueRef, 0, len(links))
-	refs := make([]Ref, 0, len(links))
-	for _, l := range links {
-		related = append(related, l.rel)
-		refs = append(refs, l.ref)
 	}
 	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
 		Type:          factType,
-		Message:       message,
+		Message:       withTruncationNote(message, len(related), total),
 		Confidence:    conf,
-		Refs:          limitRefs(dedupeRefs(refs), maxDiagnosticRefs),
+		Refs:          limitRefs(refs, maxDiagnosticRefs),
 		RelatedIssues: related,
 	})
+}
+
+// withTruncationNote appends an explicit "showing N of total" note when the
+// related-issue list was capped, so the annotation never silently understates a
+// blast radius (the full set still appears as its own rows in the queue).
+func withTruncationNote(message string, shown, total int) string {
+	if total <= shown {
+		return message
+	}
+	return fmt.Sprintf("%s Showing the %d most severe of %d affected.", message, shown, total)
+}
+
+// collectRelated folds a stream of (affected resource, flat symptom issue) pairs
+// into deduped related-issue refs. Pairs are grouped by the symptom's GROUPED
+// issue, and because folded members all share one issue ID, N pods of one
+// workload collapse to a single related row carrying Count = the distinct
+// affected resources (NOT deduping on the shared issue ID, which would drop pods
+// b..N and leave count=1). Groups are ranked worst-first, then capped; the
+// returned Refs are the affected resources backing the kept groups, so the
+// displayed Refs and RelatedIssues stay consistent past the cap. The emit closure
+// calls yield once per candidate pairing.
+func collectRelated(groupedByID map[string]Issue, emit func(yield func(affected Ref, symptom Issue))) ([]issuesapi.IssueRef, []Ref, int) {
+	type group struct {
+		rel  issuesapi.IssueRef
+		pods []Ref
+	}
+	byGroup := map[string]*group{}
+	var order []string
+	emit(func(affected Ref, symptom Issue) {
+		grouped, ok := groupedByID[symptom.ID]
+		if !ok {
+			grouped = symptom
+		}
+		g := byGroup[grouped.ID]
+		if g == nil {
+			g = &group{rel: issueRef(grouped)}
+			byGroup[grouped.ID] = g
+			order = append(order, grouped.ID)
+		}
+		g.pods = append(g.pods, affected)
+	})
+	if len(order) == 0 {
+		return nil, nil, 0
+	}
+	total := len(order)
+	groups := make([]*group, 0, len(order))
+	for _, id := range order {
+		groups = append(groups, byGroup[id])
+	}
+	// Rank by the linked issue's severity BEFORE capping, so the cap keeps the
+	// worst issues (and their resources), not iteration order.
+	sort.SliceStable(groups, func(i, j int) bool { return lessIssueRef(groups[i].rel, groups[j].rel) })
+	if len(groups) > maxDiagnosticIssueRefs {
+		groups = groups[:maxDiagnosticIssueRefs]
+	}
+	related := make([]issuesapi.IssueRef, 0, len(groups))
+	var refs []Ref
+	for _, g := range groups {
+		rel := g.rel
+		distinct := dedupeRefs(g.pods)
+		if len(distinct) > 1 {
+			rel.Count = len(distinct)
+		}
+		related = append(related, rel)
+		refs = append(refs, distinct...)
+	}
+	return related, dedupeRefs(refs), total
+}
+
+// addAPIServiceHPAContext links an unavailable metrics APIService to the HPAs that
+// can't scale because they can't read metrics. Unlike the node/PVC links there is
+// no declared edge from an HPA to the APIService — a down metrics-server starves
+// every metric-driven HPA cluster-wide — so this is a cluster-wide fan-in gated on
+// (a) the APIService being a metrics aggregation API and (b) the HPA's OWN failure
+// naming a metrics-fetch cause (a maxReplicas-capped HPA is excluded). Confidence
+// is medium: the categories and "can't fetch metrics" symptom line up, but we
+// can't prove a specific HPA consumed this exact API server.
+func addAPIServiceHPAContext(b *diagnosticContextBuilder, apisvc Issue, flat []Issue, groupedByID map[string]Issue) {
+	family := metricsAPIFamily(apisvc)
+	if family == "" {
+		return
+	}
+	related, _, total := collectRelated(groupedByID, func(yield func(Ref, Issue)) {
+		for _, f := range flat {
+			if hpaBlockedOnMetricFamily(f, family) {
+				yield(Ref{Group: f.Group, Kind: f.Kind, Namespace: f.Namespace, Name: f.Name}, f)
+			}
+		}
+	})
+	if len(related) == 0 {
+		return
+	}
+	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
+		Type:          factAPIServiceHPA,
+		Message:       withTruncationNote("Autoscalers that can't read "+family+" metrics may be blocked by this unavailable metrics API.", len(related), total),
+		Confidence:    issuesapi.ConfidenceMedium,
+		RelatedIssues: related,
+	})
+}
+
+// metricsAPIFamily classifies an apiservice_unavailable issue by which metrics
+// aggregation API it serves — the only APIServices whose outage starves HPAs.
+// The three families are distinct failure domains (resource = CPU/mem via
+// metrics.k8s.io; custom = pods/object metrics; external), so a down API in one
+// family must only link HPAs failing on THAT family — not every metric-blocked
+// HPA. Returns "" for non-metrics or non-APIService issues. APIService objects are
+// named "<version>.<group>", so the group lives in the object name (the issue's
+// own Group is apiregistration.k8s.io, the aggregator, not the aggregated API);
+// the more specific suffixes are checked first since they also end in
+// "metrics.k8s.io".
+func metricsAPIFamily(i Issue) string {
+	if i.Kind != "APIService" || i.Category != issuesapi.CategoryAPIServiceUnavailable {
+		return ""
+	}
+	// APIService objects are named "<version>.<group>"; exact-match the group so a
+	// spoofed/nested name like "v1.external.metrics.k8s.io.example.com" or
+	// "v1.foo.metrics.k8s.io" does NOT classify as a real metrics API.
+	_, group, ok := strings.Cut(strings.ToLower(i.Name), ".")
+	if !ok {
+		return ""
+	}
+	switch group {
+	case "metrics.k8s.io":
+		return "resource"
+	case "custom.metrics.k8s.io":
+		return "custom"
+	case "external.metrics.k8s.io":
+		return "external"
+	default:
+		return ""
+	}
+}
+
+// hpaBlockedOnMetricFamily reports whether an HPA's failure is a metrics-fetch
+// problem in the SAME family as the down APIService — keyed on the controller's
+// stable FailedGet*Metric condition reason. It deliberately excludes the
+// missing-resource-request case ("missing request for cpu"): that fails with the
+// same FailedGetResourceMetric reason but is a workload-config problem the metrics
+// API outage doesn't cause, so attributing it to the APIService would mislead.
+func hpaBlockedOnMetricFamily(i Issue, family string) bool {
+	if i.Kind != "HorizontalPodAutoscaler" || i.Category != issuesapi.CategoryHPALimitedOrFailed {
+		return false
+	}
+	text := strings.ToLower(i.Reason + " " + i.Message)
+	if strings.Contains(text, "missing request") {
+		return false // pod lacks resource requests — not an API-server outage
+	}
+	switch family {
+	case "resource":
+		// Match the exact controller condition-reason tokens (both served by
+		// metrics.k8s.io), not a bare "resourcemetric" substring that a custom/
+		// external metric NAMED "resourcemetric" could trip.
+		return strings.Contains(text, "failedgetresourcemetric") || strings.Contains(text, "failedgetcontainerresourcemetric")
+	case "custom":
+		return strings.Contains(text, "failedgetobjectmetric") || strings.Contains(text, "failedgetpodsmetric")
+	case "external":
+		return strings.Contains(text, "failedgetexternalmetric")
+	default:
+		return false
+	}
 }
 
 // addNodeBlastRadiusContext links a resource-pressured node to the pod issues

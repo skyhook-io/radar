@@ -113,6 +113,9 @@ function CausalContext({ issue, onResourceClick }: { issue: Issue; onResourceCli
                         {rel.ref.namespace ? `${rel.ref.namespace} / ` : ''}
                         {rel.ref.name}
                       </span>
+                      {rel.count && rel.count > 1 ? (
+                        <span className="ml-1 tabular-nums" title={`${rel.count} affected resources grouped under this issue`}>· {rel.count} affected</span>
+                      ) : null}
                     </>
                   )
                   return (

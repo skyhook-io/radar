@@ -1680,3 +1680,152 @@ func TestPVCBlastRadiusContext(t *testing.T) {
 		t.Fatalf("expected only the volume-evidenced unschedulable (db-0) linked, got %+v", fact.RelatedIssues)
 	}
 }
+
+func TestBlastRadiusCountsFoldedPods(t *testing.T) {
+	// Five pods of one Deployment all mount the PVC and all fail to mount it.
+	// GroupIssues folds them under one issue ID, so they collapse to ONE related
+	// row — but it must carry Count = the distinct affected pods, not silently
+	// drop pods 2..5 and show no count (the pre-fix behavior).
+	pvc := Issue{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical, Reason: "Pending"}
+	const groupID = "dep/prod/web/volume_mount_failed"
+	var flat []Issue
+	var pods []Ref
+	for _, name := range []string{"web-a", "web-b", "web-c", "web-d", "web-e"} {
+		flat = append(flat, Issue{ID: groupID, Kind: "Pod", Namespace: "prod", Name: name, Category: issuesapi.CategoryVolumeMountFailed, Severity: SeverityCritical, Reason: "FailedMount"})
+		pods = append(pods, Ref{Kind: "Pod", Namespace: "prod", Name: name})
+	}
+	// The grouped representative the folded pods resolve to (subject = the owning Deployment).
+	grouped := Issue{ID: groupID, Kind: "Deployment", Namespace: "prod", Name: "web", Category: issuesapi.CategoryVolumeMountFailed, Severity: SeverityCritical, Reason: "FailedMount"}
+
+	p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": pods}}
+	out := enrichDiagnosticContext([]Issue{pvc}, append([]Issue{pvc}, flat...), []Issue{grouped}, p)
+
+	var fact *issuesapi.DiagnosticFact
+	for i := range out[0].DiagnosticContext.Facts {
+		if out[0].DiagnosticContext.Facts[i].Type == factPVCBlastRadius {
+			fact = &out[0].DiagnosticContext.Facts[i]
+		}
+	}
+	if fact == nil {
+		t.Fatal("no pvc_blast_radius fact")
+	}
+	if len(fact.RelatedIssues) != 1 {
+		t.Fatalf("five folded pods must collapse to one related row, got %d", len(fact.RelatedIssues))
+	}
+	if fact.RelatedIssues[0].Ref.Kind != "Deployment" || fact.RelatedIssues[0].Ref.Name != "web" {
+		t.Errorf("related ref = %+v, want the grouped Deployment", fact.RelatedIssues[0].Ref)
+	}
+	if fact.RelatedIssues[0].Count != 5 {
+		t.Errorf("Count = %d, want 5 distinct affected pods", fact.RelatedIssues[0].Count)
+	}
+}
+
+func TestAPIServiceHPABlastRadius(t *testing.T) {
+	// A down metrics APIService links the HPAs that can't fetch metrics — but NOT
+	// an HPA merely capped at maxReplicas, and NOT a non-metrics aggregated API.
+	// Production shape: the HPA detector sets Reason to the problem class
+	// ("cannot-scale" / "maxed") and puts the controller condition reason
+	// (FailedGet*Metric: ...) in Message — the gate matches on Reason+Message.
+	apisvc := Issue{Kind: "APIService", Group: "apiregistration.k8s.io", Name: "v1beta1.metrics.k8s.io", Category: issuesapi.CategoryAPIServiceUnavailable, Severity: SeverityCritical, Reason: "FailedDiscoveryCheck"}
+	starved := Issue{ID: "hpa-1", Kind: "HorizontalPodAutoscaler", Namespace: "prod", Name: "web", Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityWarning,
+		Reason: "cannot-scale", Message: "FailedGetResourceMetric: unable to get metrics for resource cpu"}
+	capped := Issue{ID: "hpa-2", Kind: "HorizontalPodAutoscaler", Namespace: "prod", Name: "api", Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityWarning,
+		Reason: "maxed", Message: "3/3 replicas: HPA is capped at maxReplicas=3"}
+
+	p := &fakeProvider{}
+	out := enrichDiagnosticContext([]Issue{apisvc}, []Issue{apisvc, starved, capped}, nil, p)
+	ctx := out[0].DiagnosticContext
+	if ctx == nil {
+		t.Fatal("metrics APIService got no diagnostic context")
+	}
+	var fact *issuesapi.DiagnosticFact
+	for i := range ctx.Facts {
+		if ctx.Facts[i].Type == factAPIServiceHPA {
+			fact = &ctx.Facts[i]
+		}
+	}
+	if fact == nil {
+		t.Fatalf("no apiservice_hpa fact, got %+v", ctx.Facts)
+	}
+	if fact.Confidence != issuesapi.ConfidenceMedium {
+		t.Errorf("confidence = %q, want medium (no declared HPA→APIService edge)", fact.Confidence)
+	}
+	// Only the metrics-starved HPA links; the maxReplicas-capped one is not
+	// metrics-caused and must not be attributed to the APIService outage.
+	if len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != "web" {
+		t.Fatalf("expected only the metrics-starved HPA (web) linked, got %+v", fact.RelatedIssues)
+	}
+}
+
+func TestAPIServiceHPA_NonMetricsAPILinksNothing(t *testing.T) {
+	// A non-metrics aggregated APIService outage doesn't starve HPAs — no link,
+	// even with a metrics-starved HPA present.
+	apisvc := Issue{Kind: "APIService", Group: "apiregistration.k8s.io", Name: "v1.packages.operators.coreos.com", Category: issuesapi.CategoryAPIServiceUnavailable, Severity: SeverityCritical, Reason: "FailedDiscoveryCheck"}
+	starved := Issue{ID: "hpa-1", Kind: "HorizontalPodAutoscaler", Namespace: "prod", Name: "web", Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityWarning,
+		Reason: "cannot-scale", Message: "FailedGetResourceMetric: unable to get metrics for resource cpu"}
+	p := &fakeProvider{}
+	out := enrichDiagnosticContext([]Issue{apisvc}, []Issue{apisvc, starved}, nil, p)
+	if out[0].DiagnosticContext != nil {
+		t.Fatalf("a non-metrics APIService must not link HPAs, got %+v", out[0].DiagnosticContext)
+	}
+}
+
+func TestAPIServiceHPA_MetricFamilyMustMatch(t *testing.T) {
+	// The resource-metrics API (metrics.k8s.io) is down, but the only failing HPA
+	// fails on an EXTERNAL metric — a different failure domain. Linking them would
+	// point the operator at the wrong API, so nothing must link.
+	apisvc := Issue{Kind: "APIService", Group: "apiregistration.k8s.io", Name: "v1beta1.metrics.k8s.io", Category: issuesapi.CategoryAPIServiceUnavailable, Severity: SeverityCritical, Reason: "FailedDiscoveryCheck"}
+	external := Issue{ID: "hpa-x", Kind: "HorizontalPodAutoscaler", Namespace: "prod", Name: "queue", Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityWarning,
+		Reason: "cannot-scale", Message: "FailedGetExternalMetric: unable to get external metric prod/queue_depth"}
+	p := &fakeProvider{}
+	out := enrichDiagnosticContext([]Issue{apisvc}, []Issue{apisvc, external}, nil, p)
+	if out[0].DiagnosticContext != nil {
+		t.Fatalf("resource-metrics outage must not link an external-metric HPA, got %+v", out[0].DiagnosticContext)
+	}
+}
+
+func TestAPIServiceHPA_MissingRequestNotAttributed(t *testing.T) {
+	// metrics.k8s.io is down, but this HPA's FailedGetResourceMetric is really the
+	// missing-resource-request config case — the outage doesn't cause it, so it
+	// must not be attributed to the APIService.
+	apisvc := Issue{Kind: "APIService", Group: "apiregistration.k8s.io", Name: "v1beta1.metrics.k8s.io", Category: issuesapi.CategoryAPIServiceUnavailable, Severity: SeverityCritical, Reason: "FailedDiscoveryCheck"}
+	noReq := Issue{ID: "hpa-r", Kind: "HorizontalPodAutoscaler", Namespace: "prod", Name: "web", Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityWarning,
+		Reason: "cannot-scale", Message: "FailedGetResourceMetric: failed to get cpu utilization: missing request for cpu"}
+	p := &fakeProvider{}
+	out := enrichDiagnosticContext([]Issue{apisvc}, []Issue{apisvc, noReq}, nil, p)
+	if out[0].DiagnosticContext != nil {
+		t.Fatalf("a missing-request HPA failure must not be attributed to the metrics API, got %+v", out[0].DiagnosticContext)
+	}
+}
+
+func TestAPIServiceHPA_ContainerResourceMetric(t *testing.T) {
+	// ContainerResource HPA metrics fail with FailedGetContainerResourceMetric and
+	// are also served by metrics.k8s.io — they must link under the resource family.
+	apisvc := Issue{Kind: "APIService", Group: "apiregistration.k8s.io", Name: "v1beta1.metrics.k8s.io", Category: issuesapi.CategoryAPIServiceUnavailable, Severity: SeverityCritical, Reason: "FailedDiscoveryCheck"}
+	hpa := Issue{ID: "hpa-c", Kind: "HorizontalPodAutoscaler", Namespace: "prod", Name: "web", Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityWarning,
+		Reason: "cannot-scale", Message: "FailedGetContainerResourceMetric: unable to get container metric for cpu"}
+	p := &fakeProvider{}
+	out := enrichDiagnosticContext([]Issue{apisvc}, []Issue{apisvc, hpa}, nil, p)
+	if out[0].DiagnosticContext == nil {
+		t.Fatal("a FailedGetContainerResourceMetric HPA must link to the down metrics.k8s.io API")
+	}
+}
+
+func TestMetricsAPIFamily_ExactGroupMatch(t *testing.T) {
+	// A spoofed / nested name must NOT classify as a metrics API — the group is
+	// exact-matched, not substring-matched.
+	cases := map[string]string{
+		"v1beta1.metrics.k8s.io":              "resource",
+		"v1beta1.custom.metrics.k8s.io":       "custom",
+		"v1beta1.external.metrics.k8s.io":     "external",
+		"v1.external.metrics.k8s.io.evil.com": "",
+		"v1.foo.metrics.k8s.io":               "",
+		"v1.apps":                             "",
+	}
+	for name, want := range cases {
+		got := metricsAPIFamily(Issue{Kind: "APIService", Name: name, Category: issuesapi.CategoryAPIServiceUnavailable})
+		if got != want {
+			t.Errorf("metricsAPIFamily(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

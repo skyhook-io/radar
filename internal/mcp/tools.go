@@ -98,7 +98,8 @@ func registerTools(server *mcp.Server) {
 		Name: "get_resource",
 		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
-			"(relationships, refs, issue/audit/policy rollups). This is the drill-down " +
+			"(relationships, refs, issue/audit/policy rollups — issues carry " +
+			"diagnostic_context with cross-subject causal links + a confidence tier). This is the drill-down " +
 			"tool, not the best first call for broad incidents. Start with issues, " +
 			"get_dashboard, search, or list_resources to rank candidates; then call " +
 			"get_resource for the exact object. If you are looking for a string across " +
@@ -170,7 +171,8 @@ func registerTools(server *mcp.Server) {
 			"is broken — find the root cause / localize the failure'. For a single " +
 			"Pod/Deployment/StatefulSet/DaemonSet, bundles: the resource (Kubernetes-shaped detail) + diagnostic " +
 			"resourceContext (managedBy, exposes, selectedBy, uses, runsOn, " +
-			"issue/audit/policy rollups) + current AND previous container logs across the " +
+			"issue/audit/policy rollups — issues carry diagnostic_context with cross-subject " +
+			"causal links + a confidence tier to walk symptom→root) + current AND previous container logs across the " +
 			"workload's pods + recent Warning events filtered to this resource + a " +
 			"recentChanges section for the workload and directly referenced " +
 			"ConfigMaps (no Secret content) + a " +
@@ -318,9 +320,17 @@ func registerTools(server *mcp.Server) {
 			"Severity normalized to critical/warning. This is one curated stream — there is " +
 			"no source filter; each row carries a `source` label (problem|missing_ref|" +
 			"scheduling|condition) you can slice on via the CEL filter= if needed. Some " +
-			"rows include `diagnostic_context`: deterministic facts such as explicit " +
-			"missing refs, selected backend issues, or workload rollups; treat these as " +
-			"triage context, not proof of root cause. " +
+			"rows include `diagnostic_context`: deterministic facts AND cross-subject " +
+			"causal links — a failing root (Node under resource pressure, broken PVC, " +
+			"Service with no endpoints, unavailable metrics APIService) annotated with the " +
+			"downstream issues it may explain, in `facts[].related_issues` (each `count` " +
+			"is how many affected resources fold into that linked issue). Each causal link " +
+			"carries a `confidence`: `high` = a declared structural edge (selector, owner, " +
+			"claimName) — treat as fact; `medium` = inferred/co-located (e.g. pods ON a " +
+			"pressured node) — a lead to verify, NOT proof; `low` = heuristic. The fact's " +
+			"`role` (candidate = possible cause, affected, rollup, context) places the row " +
+			"in the causal picture. Use these links to walk from a symptom to its likely " +
+			"root, but confirm a medium link before acting on it. " +
 			"When `recent_changes` is present, consider it if the issue list does not " +
 			"explain the reported symptom; `recent_changes_reason` says why Radar " +
 			"attached it. It lists recent spec/config changes that may explain failures " +

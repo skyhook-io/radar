@@ -1637,7 +1637,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
               to the host's cookie/backend) and the user would see the theme
               bounce on every navigation between host routes and /c/:id. */}
           {!navCustomization.embedded && (
-            <div className="hidden md:block">
+            <div className="hidden md:flex items-center">
               <ThemeToggle />
             </div>
           )}

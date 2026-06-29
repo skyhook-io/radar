@@ -239,6 +239,12 @@ type IssueRef struct {
 	Reason   string   `json:"reason,omitempty"`
 	Category Category `json:"category,omitempty"`
 	Severity Severity `json:"severity,omitempty"`
+	// Count is how many affected resources fold into this referenced issue from
+	// the linking root's perspective — e.g. a PVC link points at one grouped
+	// Deployment issue that 5 of the PVC's mounting pods fall under, so Count=5.
+	// Omitted (0) when the link covers a single resource. It is the root-specific
+	// subset, NOT the grouped issue's total membership, which can be larger.
+	Count int `json:"count,omitempty"`
 }
 
 type ChangeContext struct {

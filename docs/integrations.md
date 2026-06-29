@@ -304,6 +304,29 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 
 **Resource Browser:** Smart columns show entry points, hosts (extracted from match expressions), route summaries, TLS status, and middleware counts. All 10 Traefik kinds have dedicated table columns — Middleware shows type, TraefikService shows type and targets, ServersTransport shows insecure/serverName, TLSOption shows min TLS version.
 
+**Middleware / MiddlewareTCP Detail View:** type-aware rendering — `chain` links its member middlewares, auth middlewares (basicAuth/digestAuth/forwardAuth) show **secret references only, never values**, `errors` shows its service and status mapping, and unknown/plugin types fall back to a key/value view with nested credential keys redacted.
+
+**TraefikService Detail View:** weighted backends with weight bars, mirroring (primary plus mirrors with percentages), and the load-balancing strategy.
+
+**TLSOption Detail View:** minimum/maximum TLS versions, cipher suites, and client-auth configuration.
+
+**ServersTransport / ServersTransportTCP Detail View:** SNI, an `insecureSkipVerify` warning banner, CA/client-cert secret references, and timeouts.
+
+**Secret safety:** inline credentials in a Traefik CRD spec are redacted in the AI/MCP context (`get_resource`) — credential keys and high-confidence secret patterns are masked — and the Middleware detail renderer shows secret *references* only, never values. Reference names (`secretName`, `basicAuth.secret`, `rootCAsSecrets`) are preserved so you can still diagnose a bad reference. The raw YAML view still shows the object as stored in the cluster.
+
+### Cluster Audit checks
+
+Traefik ships no admission webhook or linter, so a typo'd reference is accepted silently and the route or middleware just doesn't do what you wrote. Radar's Cluster Audit catches the common dangling-reference cases as **Reliability** checks:
+
+| Check | What it catches |
+|-------|-----------------|
+| `traefikRouteMissingService` | An IngressRoute referencing a Service or TraefikService that doesn't exist |
+| `traefikRouteMissingMiddleware` | An IngressRoute referencing a Middleware that doesn't exist |
+| `traefikChainMissingMiddleware` | A `chain` Middleware listing a member Middleware that doesn't exist |
+| `traefikErrorsMissingService` | An `errors` Middleware whose `errors.service` references a Service that doesn't exist |
+
+These checks are **inventory-authoritative**: a "missing X" finding is asserted only when that target kind is served by a cluster-wide synced informer, so a namespace-scoped (RBAC-limited) cache skips the check rather than fabricating a false positive. Matching is group-aware — a `traefik.io` reference is not satisfied by a `traefik.containo.us` object — and cross-namespace references resolve correctly.
+
 ### Supported CRDs
 
 | CRD | Group | Topology | Detail View | AI Summary |
@@ -311,13 +334,15 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 | IngressRoute | `traefik.io/v1alpha1` | Yes | Yes | — |
 | IngressRouteTCP | `traefik.io/v1alpha1` | Yes | Yes | — |
 | IngressRouteUDP | `traefik.io/v1alpha1` | Yes | Yes | — |
-| Middleware | `traefik.io/v1alpha1` | Yes | Generic | — |
-| MiddlewareTCP | `traefik.io/v1alpha1` | Yes | Generic | — |
-| TraefikService | `traefik.io/v1alpha1` | Yes | Generic | — |
-| ServersTransport | `traefik.io/v1alpha1` | Yes | Generic | — |
-| ServersTransportTCP | `traefik.io/v1alpha1` | Yes | Generic | — |
-| TLSOption | `traefik.io/v1alpha1` | Yes | Generic | — |
+| Middleware | `traefik.io/v1alpha1` | Yes | Yes | — |
+| MiddlewareTCP | `traefik.io/v1alpha1` | Yes | Yes | — |
+| TraefikService | `traefik.io/v1alpha1` | Yes | Yes | — |
+| ServersTransport | `traefik.io/v1alpha1` | Yes | Yes | — |
+| ServersTransportTCP | `traefik.io/v1alpha1` | Yes | Yes | — |
+| TLSOption | `traefik.io/v1alpha1` | Yes | Yes | — |
 | TLSStore | `traefik.io/v1alpha1` | Yes | Generic | — |
+
+The legacy `traefik.containo.us` API group (pre-v2.11) is warm-listed alongside `traefik.io` so older clusters don't pay first-list latency.
 
 ---
 

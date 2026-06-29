@@ -39,10 +39,10 @@ export function Markdown({ children, className }: MarkdownProps) {
           </a>
         ),
         ul: ({ children }) => (
-          <ul className="list-disc list-inside my-2 space-y-1 text-theme-text-secondary">{children}</ul>
+          <ul className="list-disc list-outside pl-4 my-2 space-y-1 text-theme-text-secondary">{children}</ul>
         ),
         ol: ({ children }) => (
-          <ol className="list-decimal list-inside my-2 space-y-1 text-theme-text-secondary">{children}</ol>
+          <ol className="list-decimal list-outside pl-4 my-2 space-y-1 text-theme-text-secondary">{children}</ol>
         ),
         li: ({ children }) => (
           <li className="leading-relaxed">{children}</li>
