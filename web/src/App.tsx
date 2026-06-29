@@ -460,24 +460,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   // Diagnostics overlay state
   const [showDiagnostics, setShowDiagnostics] = useState(false)
 
-  // Drawer "expanded" (grows to full width over the retained list) is URL-derived:
-  // ?full=1 on the resources route with a selected resource. Single source of truth
-  // so browser Back/Forward and refresh restore it with no parallel state to desync.
-  // Standalone fullscreen for non-list surfaces stays on the /workload route.
-  // Expanded = ?full=1 with a selected resource, on ANY view. The peek drawer (over
-  // the resources list, the topology graph, GitOps, Applications…) grows to
-  // fullscreen over whatever view is underneath, which stays mounted. URL-derived
-  // so Back/Forward/refresh behave (on non-list views the peek isn't URL-backed, so
-  // refresh drops the overlay gracefully — that's an accepted asymmetry).
+  // The peek drawer "expanded" into a fullscreen overlay = ?full=1 with a selected
+  // resource, on ANY view (resources list, topology graph, GitOps, Applications…) —
+  // the underlying view stays mounted. URL-derived so Back/Forward/refresh behave
+  // (non-list peeks aren't URL-backed, so refresh drops the overlay gracefully).
+  // Used by the routing effects below; the render uses `expandedView` (gated on what
+  // actually renders) — see further down.
   const drawerExpanded = !!selectedResource && searchParams.get('full') === '1'
 
-  // On mobile there's no room for the side drawer — a resource detail is always
-  // shown full-screen. `expandedView` is the effective fullscreen state (URL flag
-  // OR forced on mobile); it drives the drawer, the inert backdrop, and the
-  // view-level keyboard-shortcut suppression so the hidden page's keys don't fire.
+  // On mobile there's no room for the side drawer — a resource detail is always full-screen.
   const isMobile = useMediaQuery('(max-width: 639px)')
-  const expandedView = drawerExpanded || (isMobile && !!selectedResource)
-  useSuppressBaseShortcuts(expandedView)
 
   // On a history Pop (back/forward) the URL is authoritative. The URL-write
   // effect, running with not-yet-synced state, would otherwise write the stale
@@ -553,6 +545,19 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   const lastResourceRef = useRef(routeSelectedResource)
   if (routeSelectedResource) lastResourceRef.current = routeSelectedResource
   const drawerResource = routeSelectedResource || lastResourceRef.current
+
+  // Effective fullscreen state — keyed off the resource that's ACTUALLY rendering
+  // (routeSelectedResource), not the raw selection, so an orphaned/mismatched peek
+  // can't inert the shell with no visible drawer. ?full=1 on any view, or forced on
+  // mobile (no room for a side drawer). Drives the inert backdrop + shortcut suppression.
+  const expandedView = !!routeSelectedResource && (searchParams.get('full') === '1' || isMobile)
+  useSuppressBaseShortcuts(expandedView)
+  // Held value for the drawer's `expanded` prop so closing an expanded drawer slides
+  // it out at full size instead of running a collapse morph mid-dismiss. Tracks the
+  // live state while a resource is selected; frozen during the slide-out.
+  const lastExpandedRef = useRef(expandedView)
+  if (routeSelectedResource) lastExpandedRef.current = expandedView
+  const drawerExpandedProp = routeSelectedResource ? expandedView : lastExpandedRef.current
 
   const lastHelmReleaseRef = useRef(selectedHelmRelease)
   if (selectedHelmRelease) lastHelmReleaseRef.current = selectedHelmRelease
@@ -2124,7 +2129,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           // to the top of the content area instead of leaving a 49px gap.
           headerHeight={chromeless ? 0 : undefined}
           isOpen={resourceDrawer.isOpen}
-          expanded={expandedView}
+          expanded={drawerExpandedProp}
           onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail') }}
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
