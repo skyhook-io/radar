@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { ChevronUp, ChevronDown } from 'lucide-react'
+import { ChevronUp, ChevronDown, ArrowUpDown } from 'lucide-react'
 
 export type SortDir = 'asc' | 'desc'
 
-// Canonical dense-table header-cell styling, shared so the Applications and
-// GitOps tables (modeled on the Resources table) read as one table family.
+// Canonical dense-table header-cell styling, shared so the Applications,
+// GitOps, and Helm tables read as one family with the Resources table.
 export const TH_CLASS =
-  'border-b border-theme-border px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary'
+  'border-b border-theme-border px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-theme-text-secondary'
 
 // A clickable, sortable column header. Clicking fires onSort(sortKey); the
 // consumer owns the cycle (toggle dir, or asc→desc→off). One chevron marks the
@@ -42,16 +42,22 @@ export function SortableTh<K extends string>({
         type="button"
         onClick={() => onSort(sortKey)}
         className={clsx(
-          'inline-flex items-center gap-1 select-none hover:text-theme-text-primary focus-visible:outline-none focus-visible:text-theme-text-primary',
+          // `uppercase` is repeated here on purpose: Tailwind Preflight resets
+          // `button { text-transform: none }`, which would otherwise cancel the
+          // inherited uppercase from TH_CLASS and render sortable headers in
+          // title case while non-sortable <th> cells stay uppercase.
+          'inline-flex items-center gap-1 select-none uppercase hover:text-theme-text-primary focus-visible:outline-none focus-visible:text-theme-text-primary',
           align === 'right' && 'w-full justify-end',
         )}
       >
         {label}
-        {active ? (
-          direction === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
-        ) : (
-          <span className="w-3" />
-        )}
+        <span className="shrink-0 text-theme-text-tertiary">
+          {active ? (
+            direction === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ArrowUpDown className="h-3 w-3 opacity-50" />
+          )}
+        </span>
       </button>
     </th>
   )

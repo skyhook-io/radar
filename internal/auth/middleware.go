@@ -43,7 +43,9 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 				// Check if the session has been revoked (backchannel logout)
 				if cfg.Revoker != nil && cfg.Revoker.IsRevoked(session.SID) {
 					log.Printf("[auth] Revoked session rejected: user=%s sid=%s", session.User.Username, session.SID)
-					http.SetCookie(w, ClearSessionCookie())
+					for _, c := range ClearSessionCookie(r) {
+						http.SetCookie(w, c)
+					}
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusUnauthorized)
 					json.NewEncoder(w).Encode(map[string]string{
@@ -63,7 +65,10 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 						// Pre-upgrade cookie without sid — mint one on first sliding re-issue
 						sid = NewSessionID()
 					}
-					http.SetCookie(w, CreateSessionCookie(session.User, sid, session.IDToken, cfg.Secret, cfg.CookieTTL, secure))
+					cookies := CreateSessionCookie(session.User, sid, session.IDToken, cfg.Secret, cfg.CookieTTL, secure)
+					for _, c := range cookies {
+						http.SetCookie(w, c)
+					}
 					if remaining > cfg.CookieTTL {
 						log.Printf("[auth] TTL downgrade detected for user %q: cookie remaining %s exceeds configured TTL %s, snapping",
 							session.User.Username, remaining.Round(time.Second), cfg.CookieTTL)
@@ -88,11 +93,10 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 					}
 
 					user := &User{Username: username, Groups: groups}
-
-					// Set session cookie so subsequent requests don't need headers
-					// Header-auth creates a fresh session (new sid each time)
-					http.SetCookie(w, CreateSessionCookie(user, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, secure))
-
+					cookies := CreateSessionCookie(user, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, secure)
+					for _, c := range cookies {
+						http.SetCookie(w, c)
+					}
 					ctx := ContextWithUser(r.Context(), user)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return

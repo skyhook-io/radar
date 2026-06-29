@@ -234,6 +234,24 @@ const (
 	ConfidenceLow    Confidence = "low"
 )
 
+// IncidentParent links a SYMPTOM issue to the ROOT issue that explains it — the
+// reverse of DiagnosticContext's root→symptom facts. Set only for causal links
+// whose related issues are genuinely DOWNSTREAM of the root (a broken PVC, a
+// pressured node, an unavailable metrics API, a not-ready Secret producer);
+// never for selected_backend (where the related pods
+// are the cause, not the symptom). Carries the link's Confidence so the UI can
+// hedge a medium pointer ("related / verify") vs. a high one ("caused by"); it
+// deliberately carries NO "hide this row" flag — demotion is presentation policy,
+// not part of this contract. Assigned only when unambiguous: a single best root
+// by confidence tier; distinct roots at the same tier leave it unset.
+type IncidentParent struct {
+	ID         string     `json:"id"`                  // parent grouped-issue ID (within-cluster)
+	Ref        Ref        `json:"ref"`                 // parent subject, for display + deep-link
+	Category   Category   `json:"category,omitempty"`
+	Confidence Confidence `json:"confidence,omitempty"`
+	FactType   string     `json:"fact_type,omitempty"` // node_blast_radius | pvc_blast_radius | apiservice_hpa | secret_not_ready
+}
+
 type IssueRef struct {
 	Ref      Ref      `json:"ref"`
 	Reason   string   `json:"reason,omitempty"`
@@ -348,6 +366,7 @@ type Issue struct {
 	Members              []Ref              `json:"members,omitempty"`
 	MembersTruncated     bool               `json:"members_truncated,omitempty"`
 	DiagnosticContext    *DiagnosticContext `json:"diagnostic_context,omitempty"`
+	IncidentParent       *IncidentParent    `json:"incident_parent,omitempty"`
 	ChangeContext        *ChangeContext     `json:"change_context,omitempty"`
 	// IssueTiming is best-effort timing evidence for when this issue entered
 	// the failing state, derived from K8s-native signals (condition

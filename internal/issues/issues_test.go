@@ -32,7 +32,13 @@ type fakeProvider struct {
 	selectedPods    map[string][]Ref
 	podsOnNode      map[string][]Ref
 	podsMountingPVC map[string][]Ref
+	secretProducer  map[string]secretProducerResult
 	change          map[string]*issuesapi.ChangeContext
+}
+
+type secretProducerResult struct {
+	name string
+	pods []Ref
 }
 
 func (f *fakeProvider) DetectProblems(_ []string) []k8s.Detection       { return f.problems }
@@ -68,6 +74,10 @@ func (f *fakeProvider) PodsMountingPVC(namespace, pvcName string) []Ref {
 }
 func (f *fakeProvider) PodsOnNode(nodeName string) []Ref {
 	return f.podsOnNode[nodeName]
+}
+func (f *fakeProvider) PodsDependingOnSecretProducer(_, _, namespace, name string) (string, []Ref) {
+	r := f.secretProducer[namespace+"/"+name]
+	return r.name, r.pods
 }
 
 func (f *fakeProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext {
@@ -1826,6 +1836,198 @@ func TestMetricsAPIFamily_ExactGroupMatch(t *testing.T) {
 		got := metricsAPIFamily(Issue{Kind: "APIService", Name: name, Category: issuesapi.CategoryAPIServiceUnavailable})
 		if got != want {
 			t.Errorf("metricsAPIFamily(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func hi(id string) issuesapi.IncidentParent {
+	return issuesapi.IncidentParent{ID: id, Confidence: issuesapi.ConfidenceHigh}
+}
+func med(id string) issuesapi.IncidentParent {
+	return issuesapi.IncidentParent{ID: id, Confidence: issuesapi.ConfidenceMedium}
+}
+
+func TestBestIncidentParent(t *testing.T) {
+	cases := []struct {
+		name   string
+		ps     []issuesapi.IncidentParent
+		wantID string // "" = expect omit
+	}{
+		{"single high", []issuesapi.IncidentParent{hi("A")}, "A"},
+		{"high beats medium", []issuesapi.IncidentParent{med("B"), hi("A")}, "A"},
+		{"same root twice collapses", []issuesapi.IncidentParent{med("A"), med("A")}, "A"},
+		{"distinct same-tier omit (no severity tiebreak)", []issuesapi.IncidentParent{med("A"), med("B")}, ""},
+		{"distinct high tie omit", []issuesapi.IncidentParent{hi("A"), hi("B")}, ""},
+		{"empty omit", nil, ""},
+	}
+	for _, tc := range cases {
+		got, ok := bestIncidentParent(tc.ps)
+		if tc.wantID == "" {
+			if ok {
+				t.Errorf("%s: expected omit, got %q", tc.name, got.ID)
+			}
+			continue
+		}
+		if !ok || got.ID != tc.wantID {
+			t.Errorf("%s: got (%q, %v), want %q", tc.name, got.ID, ok, tc.wantID)
+		}
+	}
+}
+
+func findByID(out []Issue, id string) *Issue {
+	for i := range out {
+		if out[i].ID == id {
+			return &out[i]
+		}
+	}
+	return nil
+}
+
+func TestIncidentParent_PVCHighPointer(t *testing.T) {
+	pvc := Issue{ID: "pvc-1", Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical, Reason: "Pending"}
+	sym := Issue{ID: "sym-1", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical,
+		Message: "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims"}
+	p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": {{Kind: "Pod", Namespace: "prod", Name: "db-0"}}}}
+	out := enrichDiagnosticContext([]Issue{pvc, sym}, []Issue{pvc, sym}, []Issue{pvc, sym}, p)
+	got := findByID(out, "sym-1")
+	if got.IncidentParent == nil {
+		t.Fatal("symptom pod got no IncidentParent")
+	}
+	if got.IncidentParent.ID != "pvc-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceHigh || got.IncidentParent.FactType != factPVCBlastRadius {
+		t.Errorf("IncidentParent = %+v, want pvc-1/high/pvc_blast_radius", *got.IncidentParent)
+	}
+	// The root itself must NOT get a parent.
+	if findByID(out, "pvc-1").IncidentParent != nil {
+		t.Error("the PVC root must not get an IncidentParent")
+	}
+}
+
+func TestIncidentParent_FlatViewNoPointer(t *testing.T) {
+	// Ungrouped mode (?view=flat, per-resource regroup): grouped is nil, so the
+	// whole-row coverage gate can't be evaluated (members share an ID, Count 0).
+	// incident_parent must NOT be assigned — it's a grouped-model property.
+	pvc := Issue{ID: "pvc-1", Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical, Reason: "Pending"}
+	pod1 := Issue{ID: "g", Kind: "Pod", Namespace: "prod", Name: "db-0", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical, Message: "pod has unbound immediate PersistentVolumeClaims"}
+	pod2 := Issue{ID: "g", Kind: "Pod", Namespace: "prod", Name: "db-1", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical, Message: "pod has unbound immediate PersistentVolumeClaims"}
+	p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": {{Kind: "Pod", Namespace: "prod", Name: "db-0"}, {Kind: "Pod", Namespace: "prod", Name: "db-1"}}}}
+	out := enrichDiagnosticContext([]Issue{pvc, pod1, pod2}, []Issue{pvc, pod1, pod2}, nil, p) // grouped == nil → ungrouped path
+	for _, i := range out {
+		if i.IncidentParent != nil {
+			t.Fatalf("ungrouped mode must not assign incident_parent, got one on %s/%s", i.Kind, i.Name)
+		}
+	}
+}
+
+func TestIncidentParent_CoverageGate(t *testing.T) {
+	// A grouped Deployment unschedulable issue (3 member pods) gets the pointer
+	// only when ALL 3 are explained by the PVC; if only 2 mount it, the row is
+	// mixed-cause and the pointer is omitted (whole-row coverage).
+	mk := func(podsMounting int) []Issue {
+		pvc := Issue{ID: "pvc-1", Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Category: issuesapi.CategoryPVCPending, Severity: SeverityCritical, Reason: "Pending"}
+		dep := Issue{ID: "g", Kind: "Deployment", Namespace: "prod", Name: "web", Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical, Count: 3}
+		flat := []Issue{pvc}
+		var mounting []Ref
+		for n, name := range []string{"web-a", "web-b", "web-c"} {
+			flat = append(flat, Issue{ID: "g", Kind: "Pod", Namespace: "prod", Name: name, Category: issuesapi.CategoryUnschedulable, Severity: SeverityCritical,
+				Message: "pod has unbound immediate PersistentVolumeClaims"})
+			if n < podsMounting {
+				mounting = append(mounting, Ref{Kind: "Pod", Namespace: "prod", Name: name})
+			}
+		}
+		p := &fakeProvider{podsMountingPVC: map[string][]Ref{"prod/data": mounting}}
+		return enrichDiagnosticContext([]Issue{pvc, dep}, flat, []Issue{dep}, p)
+	}
+	if got := findByID(mk(3), "g").IncidentParent; got == nil || got.ID != "pvc-1" {
+		t.Errorf("full coverage (3/3) should link, got %+v", got)
+	}
+	if got := findByID(mk(2), "g").IncidentParent; got != nil {
+		t.Errorf("partial coverage (2/3) must omit the pointer, got %+v", *got)
+	}
+}
+
+func TestIncidentParent_NodeMediumPointer(t *testing.T) {
+	node := Issue{ID: "node-1", Kind: "Node", Name: "n1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
+	sym := Issue{ID: "oom-1", Kind: "Pod", Namespace: "prod", Name: "web-a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical}
+	p := &fakeProvider{podsOnNode: map[string][]Ref{"n1": {{Kind: "Pod", Namespace: "prod", Name: "web-a"}}}}
+	out := enrichDiagnosticContext([]Issue{node, sym}, []Issue{node, sym}, []Issue{node, sym}, p)
+	got := findByID(out, "oom-1")
+	if got.IncidentParent == nil || got.IncidentParent.ID != "node-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceMedium {
+		t.Fatalf("expected medium IncidentParent → node-1, got %+v", got.IncidentParent)
+	}
+}
+
+func TestIncidentParent_SelectedBackendNoPointer(t *testing.T) {
+	// A Service with no endpoints because its backend pods crashloop — the pods
+	// are the CAUSE, not a symptom of the Service, so NO reverse pointer.
+	svc := Issue{ID: "svc-1", Kind: "Service", Namespace: "prod", Name: "api", Category: issuesapi.CategoryServiceNoEndpoints, Severity: SeverityCritical, Reason: "0/2 selected pods ready"}
+	pod := Issue{ID: "crash-1", Kind: "Pod", Namespace: "prod", Name: "api-x", Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical}
+	p := &fakeProvider{selectedPods: map[string][]Ref{"prod/api": {{Kind: "Pod", Namespace: "prod", Name: "api-x"}}}}
+	out := enrichDiagnosticContext([]Issue{svc, pod}, []Issue{svc, pod}, nil, p)
+	if got := findByID(out, "crash-1"); got.IncidentParent != nil {
+		t.Fatalf("selected_backend must not create a reverse pointer (inverted direction), got %+v", *got.IncidentParent)
+	}
+}
+
+func TestSecretProducerContext(t *testing.T) {
+	// A not-ready Certificate links the pod whose missing-ref names its Secret,
+	// but NOT a pod that references the Secret yet fails for an unrelated reason.
+	cert := Issue{ID: "cert-1", Kind: "Certificate", Group: "cert-manager.io", Namespace: "prod", Name: "web-tls", Category: issuesapi.CategoryCertificateNotReady, Severity: SeverityCritical, Reason: "Issuing"}
+	blocked := Issue{ID: "mr-1", Kind: "Pod", Namespace: "prod", Name: "web-a", Category: issuesapi.CategoryMissingConfigRef, Severity: SeverityCritical,
+		Message: `Secret "web-tls-secret" referenced in volume does not exist`}
+	unrelated := Issue{ID: "cw-1", Kind: "Pod", Namespace: "prod", Name: "web-b", Category: issuesapi.CategoryContainerWaiting, Severity: SeverityWarning,
+		Reason: "ContainerCreating", Message: "waiting on something else entirely"}
+	// References Secret web-tls-secret but actually fails on a ConfigMap of the SAME
+	// name — the quoted name appears, but not in a `secret "…"` context, so it must
+	// NOT be attributed to the Certificate.
+	sameName := Issue{ID: "cm-1", Kind: "Pod", Namespace: "prod", Name: "web-c", Category: issuesapi.CategoryMissingConfigRef, Severity: SeverityCritical,
+		Message: `envFrom references ConfigMap "web-tls-secret" which does not exist`}
+
+	p := &fakeProvider{secretProducer: map[string]secretProducerResult{
+		"prod/web-tls": {name: "web-tls-secret", pods: []Ref{
+			{Kind: "Pod", Namespace: "prod", Name: "web-a"},
+			{Kind: "Pod", Namespace: "prod", Name: "web-b"},
+			{Kind: "Pod", Namespace: "prod", Name: "web-c"},
+		}},
+	}}
+	out := enrichDiagnosticContext([]Issue{cert, blocked, unrelated, sameName}, []Issue{cert, blocked, unrelated, sameName}, []Issue{cert, blocked, unrelated, sameName}, p)
+
+	root := findByID(out, "cert-1")
+	var fact *issuesapi.DiagnosticFact
+	for i := range root.DiagnosticContext.Facts {
+		if root.DiagnosticContext.Facts[i].Type == factSecretNotReady {
+			fact = &root.DiagnosticContext.Facts[i]
+		}
+	}
+	if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != "web-a" {
+		t.Fatalf("expected only the Secret-naming pod linked, got %+v", fact)
+	}
+	if got := findByID(out, "mr-1"); got.IncidentParent == nil || got.IncidentParent.ID != "cert-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceHigh {
+		t.Fatalf("blocked pod should point to the Certificate (high), got %+v", got.IncidentParent)
+	}
+	if got := findByID(out, "cw-1"); got.IncidentParent != nil {
+		t.Fatalf("unrelated container-waiting pod must not be attributed, got %+v", *got.IncidentParent)
+	}
+	if got := findByID(out, "cm-1"); got.IncidentParent != nil {
+		t.Fatalf("same-named ConfigMap failure must not be attributed to the Secret, got %+v", *got.IncidentParent)
+	}
+}
+
+func TestSymptomNamesSecret(t *testing.T) {
+	mk := func(msg, ns string) Issue { return Issue{Namespace: ns, Message: msg} }
+	cases := []struct {
+		msg, ns string
+		want    bool
+	}{
+		{`references Secret "foo" which does not exist`, "prod", true},
+		{`MountVolume.SetUp failed: secret "foo" not found`, "prod", true},
+		{`secrets "foo" not found`, "prod", true},                  // plural kubelet path
+		{`couldn't find key tls.crt in Secret prod/foo`, "prod", true}, // namespaced missing-key
+		{`references ConfigMap "foo" which does not exist`, "prod", false}, // same name, wrong kind
+		{`waiting on something else`, "prod", false},
+	}
+	for _, c := range cases {
+		if got := symptomNamesSecret(mk(c.msg, c.ns), "foo"); got != c.want {
+			t.Errorf("symptomNamesSecret(%q) = %v, want %v", c.msg, got, c.want)
 		}
 	}
 }

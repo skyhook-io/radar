@@ -134,7 +134,7 @@ func TestMiddleware_SessionCookie(t *testing.T) {
 
 	// Create a valid session cookie
 	user := &User{Username: "bob", Groups: []string{"ops"}}
-	cookie := CreateSessionCookie(user, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false)
+	cookie := CreateSessionCookie(user, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false)[0]
 
 	req := httptest.NewRequest("GET", "/api/topology", nil)
 	req.AddCookie(cookie)
@@ -159,7 +159,7 @@ func TestMiddleware_SessionCookie_TakesPrecedence(t *testing.T) {
 	handler := mw(http.HandlerFunc(echoUser))
 
 	// Cookie says "bob", proxy header says "alice"
-	cookie := CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false)
+	cookie := CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false)[0]
 
 	req := httptest.NewRequest("GET", "/api/topology", nil)
 	req.AddCookie(cookie)
@@ -196,7 +196,7 @@ func TestMiddleware_SoftAuthPath_WithUser(t *testing.T) {
 	handler := mw(http.HandlerFunc(echoUser))
 
 	// /api/auth/me with valid cookie should include user
-	cookie := CreateSessionCookie(&User{Username: "carol"}, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false)
+	cookie := CreateSessionCookie(&User{Username: "carol"}, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false)[0]
 	req := httptest.NewRequest("GET", "/api/auth/me", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -379,7 +379,7 @@ func makeCookieWithExpiry(user *User, sid, secret string, expiresAt time.Time) *
 	// Use the public constructor, but we need to craft a specific expiry.
 	// We compute the TTL that would produce the desired ExpiresAt from now.
 	ttl := time.Until(expiresAt)
-	return CreateSessionCookie(user, sid, "", secret, ttl, false)
+	return CreateSessionCookie(user, sid, "", secret, ttl, false)[0]
 }
 
 func TestMiddleware_SlidingTTL_ReissuesPastHalfLife(t *testing.T) {
@@ -523,7 +523,7 @@ func TestMiddleware_SlidingTTL_PreservesIDToken(t *testing.T) {
 	sid := NewSessionID()
 	idToken := "eyJhbGciOiJSUzI1NiJ9.test-payload.test-sig"
 	ttl := time.Until(time.Now().Add(10 * time.Minute))
-	cookie := CreateSessionCookie(&User{Username: "alice"}, sid, idToken, cfg.Secret, ttl, false)
+	cookie := CreateSessionCookie(&User{Username: "alice"}, sid, idToken, cfg.Secret, ttl, false)[0]
 
 	req := httptest.NewRequest("GET", "/api/topology", nil)
 	req.AddCookie(cookie)
@@ -644,7 +644,7 @@ func TestMiddleware_RevokedSession_Returns401(t *testing.T) {
 
 	// Create a valid session cookie
 	sid := "revoke-me-sid-1234567890abcdef"
-	cookie := CreateSessionCookie(&User{Username: "alice"}, sid, "", cfg.Secret, cfg.CookieTTL, false)
+	cookie := CreateSessionCookie(&User{Username: "alice"}, sid, "", cfg.Secret, cfg.CookieTTL, false)[0]
 
 	// Revoke the session
 	revoker.Revoke(sid, time.Now().Add(1*time.Hour))
@@ -686,7 +686,7 @@ func TestMiddleware_NonRevokedSession_PassesThrough(t *testing.T) {
 
 	// Create a valid session cookie (NOT revoked)
 	sid := NewSessionID()
-	cookie := CreateSessionCookie(&User{Username: "bob"}, sid, "", cfg.Secret, cfg.CookieTTL, false)
+	cookie := CreateSessionCookie(&User{Username: "bob"}, sid, "", cfg.Secret, cfg.CookieTTL, false)[0]
 
 	req := httptest.NewRequest("GET", "/api/topology", nil)
 	req.AddCookie(cookie)
@@ -708,7 +708,7 @@ func TestMiddleware_NoRevoker_SkipsCheck(t *testing.T) {
 	handler := mw(http.HandlerFunc(echoUser))
 
 	sid := NewSessionID()
-	cookie := CreateSessionCookie(&User{Username: "carol"}, sid, "", cfg.Secret, cfg.CookieTTL, false)
+	cookie := CreateSessionCookie(&User{Username: "carol"}, sid, "", cfg.Secret, cfg.CookieTTL, false)[0]
 
 	req := httptest.NewRequest("GET", "/api/topology", nil)
 	req.AddCookie(cookie)

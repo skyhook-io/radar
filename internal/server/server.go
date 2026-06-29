@@ -3601,7 +3601,9 @@ func (s *Server) requireConnected(w http.ResponseWriter) bool {
 // Auth handlers and helpers
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, auth.ClearSessionCookie())
+	for _, c := range auth.ClearSessionCookie(r) {
+		http.SetCookie(w, c)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]string{"status": "logged out"}
 	// Clearing Radar's cookie alone doesn't switch users: the proxy

@@ -44,8 +44,28 @@ export function diagnosticFactLabel(type: string): string {
       return 'Blocked pods';
     case 'apiservice_hpa':
       return 'Stalled autoscalers';
+    case 'secret_not_ready':
+      return 'Dependent pods';
     default:
       return type.replace(/_/g, ' ');
+  }
+}
+
+// Operator-facing lead-in for the symptom→root pointer chip. Honest per fact
+// type: a declared PVC/Secret edge is a cause; a co-located node is only
+// "related" (node pressure can be a shared victim, not the root), so it must not
+// claim "caused by".
+export function incidentParentLabel(factType?: string, confidence?: string): string {
+  switch (factType) {
+    case 'pvc_blast_radius':
+    case 'secret_not_ready':
+      return 'Caused by';
+    case 'apiservice_hpa':
+      return 'Likely cause';
+    case 'node_blast_radius':
+      return 'Related';
+    default:
+      return confidence === 'high' ? 'Caused by' : 'Possible cause';
   }
 }
 

@@ -317,15 +317,23 @@ export function GitOpsTableView({
     })
   }, [])
   const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
-  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'urgency', dir: 'asc' })
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>({ key: 'urgency', dir: 'asc' })
   // Shared refresh feedback (spin ≥400ms → checkmark) so clicking Refresh gives
   // the same visual confirmation as every other view, even when the refetch is
   // instant (the cache is already warm).
   const [triggerRefresh, , refreshPhase] = useRefreshAnimation(onRefresh ?? (() => {}))
-  // Clicking a column sorts by it (starting at the column's natural direction —
-  // e.g. last-sync newest-first); clicking the active column reverses.
+  // 3-state cycle: natural direction → reversed → off. The first click uses each
+  // column's natural direction (SORT_DEFAULT_DIR — e.g. Last Sync is newest-first)
+  // so the header cycle agrees with the tile-mode sort menu, which seeds the same
+  // default. "Off" (null) falls back to the urgency/health-worst-first ordering.
   const onSort = useCallback(
-    (key: SortKey) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: SORT_DEFAULT_DIR[key] })),
+    (key: SortKey) =>
+      setSort((prev) => {
+        const natural = SORT_DEFAULT_DIR[key]
+        if (!prev || prev.key !== key) return { key, dir: natural }
+        if (prev.dir === natural) return { key, dir: natural === 'asc' ? 'desc' : 'asc' }
+        return null
+      }),
     [],
   )
 
@@ -453,7 +461,8 @@ export function GitOpsTableView({
       }
       return true
     })
-    return [...rows].sort((a, b) => compareRows(a, b, sort.key) * (sort.dir === 'asc' ? 1 : -1))
+    const eff = sort ?? { key: 'urgency' as SortKey, dir: 'asc' as SortDir }
+    return [...rows].sort((a, b) => compareRows(a, b, eff.key) * (eff.dir === 'asc' ? 1 : -1))
   }, [allRows, automationFilters, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sort, syncFilters, destinationFilter])
 
   const terminatingCount = useMemo(() => allRows.filter((row) => row.terminating).length, [allRows])
@@ -678,7 +687,7 @@ export function GitOpsTableView({
                 pattern); tile mode has no headers, so it keeps a compact sort
                 control wired to the same sort state. */}
             {viewMode === 'tiles' && (
-              <GitOpsSortMenu sortKey={sort.key} onChange={(k) => setSort({ key: k, dir: SORT_DEFAULT_DIR[k] })} />
+              <GitOpsSortMenu sortKey={sort?.key ?? 'urgency'} onChange={(k) => setSort({ key: k, dir: SORT_DEFAULT_DIR[k] })} />
             )}
             {labels.length > 0 && (
               <LabelsDropdown
@@ -1187,7 +1196,7 @@ function GitOpsTable({
   pendingRowActions,
 }: {
   rows: GitOpsRow[]
-  sort: { key: SortKey; dir: SortDir }
+  sort: { key: SortKey; dir: SortDir } | null
   onSort: (key: SortKey) => void
   onOpen: (row: GitOpsRow, event?: ReactMouseEvent) => void
   hrefFor?: (row: GitOpsRow) => string
@@ -1202,13 +1211,13 @@ function GitOpsTable({
     <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-sm">
       <thead className="sticky top-0 z-10 bg-theme-base">
         <tr>
-          <SortableTh label="Application" sortKey="name" activeKey={sort.key} direction={sort.dir} onSort={onSort} className={showActions ? 'w-[16%]' : 'w-[22%]'} />
-          <SortableTh label="Project" sortKey="project" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
-          <SortableTh label="Sync" sortKey="sync" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
-          <SortableTh label="Health" sortKey="health" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
+          <SortableTh label="Application" sortKey="name" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className={showActions ? 'w-[16%]' : 'w-[22%]'} />
+          <SortableTh label="Project" sortKey="project" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[9%]" />
+          <SortableTh label="Sync" sortKey="sync" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[9%]" />
+          <SortableTh label="Health" sortKey="health" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[9%]" />
           <th className={clsx(TH_CLASS, showDestination ? 'w-[20%]' : 'w-[28%]')}>Source</th>
           {showDestination && <th className={clsx(TH_CLASS, 'w-[14%]')}>Destination</th>}
-          <SortableTh label="Last Sync" sortKey="lastSync" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[10%]" />
+          <SortableTh label="Last Sync" sortKey="lastSync" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[10%]" />
           {showActions && (
             <th className={clsx(TH_CLASS, 'w-[6%] text-right')}>
               <span className="sr-only">Actions</span>

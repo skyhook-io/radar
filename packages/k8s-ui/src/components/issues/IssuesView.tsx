@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from
 import { ChevronRight, CircleCheck, Clock, ExternalLink } from 'lucide-react';
 import { ClusterName, EmptyState } from '../ui';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
-import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle } from './diagnostic';
+import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
 import {
   ISSUE_SEVERITY_BADGE_CLASS,
   ISSUE_SEVERITY_LABEL,
@@ -209,6 +209,17 @@ export function IssueRow({
                 <span className="shrink-0 tabular-nums">{affected}</span>
               </>
             ) : null}
+            {issue.incident_parent ? (
+              <>
+                <span aria-hidden>·</span>
+                {/* Non-interactive signal (the header is the toggle — a nested
+                    button would be invalid); the clickable link lives in the body. */}
+                <span className="min-w-0 truncate text-theme-text-tertiary" title={confidenceTitle(issue.incident_parent.confidence ?? '')}>
+                  ↳ {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}{' '}
+                  <span className="font-medium text-theme-text-secondary">{issue.incident_parent.ref.kind} / {issue.incident_parent.ref.name}</span>
+                </span>
+              </>
+            ) : null}
             {renderMeta?.(slotCtx)}
           </div>
         </div>
@@ -249,6 +260,21 @@ export function IssueRow({
             <div className="border-t border-theme-border bg-theme-base/40 px-4 py-4 pl-11">
               <div className="flex flex-col gap-4">
                 <Diagnosis issue={issue} />
+                {issue.incident_parent ? (
+                  <section className="flex flex-col gap-1">
+                    <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                      {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}
+                      {issue.incident_parent.confidence ? (
+                        <span className="ml-2 badge-sm text-[10px] font-normal text-theme-text-tertiary" title={confidenceTitle(issue.incident_parent.confidence)}>
+                          {issue.incident_parent.confidence} confidence
+                        </span>
+                      ) : null}
+                    </h4>
+                    <ul className="flex flex-col gap-px">
+                      <ResourceLine refForLink={memberRef(issue, issue.incident_parent.ref)} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+                    </ul>
+                  </section>
+                ) : null}
                 <DiagnosticContext issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
                 <div className="border-t border-theme-border/70 pt-3">
                   <AffectedResources issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />

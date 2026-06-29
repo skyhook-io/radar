@@ -12,7 +12,7 @@ export {
   subjectRef,
   memberRef,
 } from './types';
-export type { Issue, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueChangeContext, IssueRecentChange, IssueRecentChangeField } from './types';
+export type { Issue, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueIncidentParent, IssueChangeContext, IssueRecentChange, IssueRecentChangeField } from './types';
 export {
   ISSUE_SEVERITY_LABEL,
   ISSUE_SEVERITY_BADGE_CLASS,

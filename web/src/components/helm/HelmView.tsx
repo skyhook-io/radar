@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'r
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
-import { PaneLoader, PageHeader } from '@skyhook-io/k8s-ui'
+import { PaneLoader, PageHeader, SortableTh, type SortDir } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
 import type { HelmOperation, HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
@@ -43,17 +43,34 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
   const isFullyLoaded = !isLoading && !upgradeLoading
 
   // Filter releases by search term
+  // Resources-table cycle: asc → desc → off (null restores the server's order).
+  const [sort, setSort] = useState<{ key: HelmSortKey; dir: SortDir } | null>(null)
+  const onSort = useCallback(
+    (key: HelmSortKey) =>
+      setSort((prev) => {
+        if (!prev || prev.key !== key) return { key, dir: 'asc' }
+        if (prev.dir === 'asc') return { key, dir: 'desc' }
+        return null
+      }),
+    [],
+  )
+
   const filteredReleases = useMemo(() => {
     if (!releases) return []
-    if (!searchTerm) return releases
-    const term = searchTerm.toLowerCase()
-    return releases.filter(
-      (r) =>
-        r.name.toLowerCase().includes(term) ||
-        r.namespace.toLowerCase().includes(term) ||
-        r.chart.toLowerCase().includes(term)
-    )
-  }, [releases, searchTerm])
+    const term = searchTerm.trim().toLowerCase()
+    const filtered = term
+      ? releases.filter(
+          (r) =>
+            r.name.toLowerCase().includes(term) ||
+            r.namespace.toLowerCase().includes(term) ||
+            r.chart.toLowerCase().includes(term)
+        )
+      : releases
+
+    if (!sort) return filtered
+    const factor = sort.dir === 'asc' ? 1 : -1
+    return [...filtered].sort((a, b) => compareReleases(a, b, sort.key) * factor)
+  }, [releases, searchTerm, sort])
 
   // Keyboard navigation state
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -62,8 +79,9 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
   const filteredReleasesCountRef = useRef(0)
   filteredReleasesCountRef.current = filteredReleases.length
 
-  // Reset highlight when search changes
-  useEffect(() => { setHighlightedIndex(-1) }, [searchTerm])
+  // Reset highlight when the visible order changes (search or sort) — otherwise
+  // the index would point at whatever release shifted into that row.
+  useEffect(() => { setHighlightedIndex(-1) }, [searchTerm, sort])
 
   // Scroll highlighted row into view
   useEffect(() => {
@@ -289,29 +307,15 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
                 </div>
               ) : (
                 <table className="w-full table-fixed">
-                  <thead className="bg-theme-surface sticky top-0 z-10">
+                  <thead className="bg-theme-base sticky top-0 z-10">
                     <tr>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-[28%]">
-                        Name
-                      </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-[18%]">
-                        Namespace
-                      </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-[22%]">
-                        Chart
-                      </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24 hidden xl:table-cell">
-                        App Version
-                      </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-40">
-                        Status
-                      </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-16">
-                        Rev
-                      </th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24">
-                        Updated
-                      </th>
+                      <SortableTh label="Name" sortKey="name" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[28%]" />
+                      <SortableTh label="Namespace" sortKey="namespace" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[18%]" />
+                      <SortableTh label="Chart" sortKey="chart" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[22%]" />
+                      <SortableTh label="App Version" sortKey="appVersion" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-24 hidden xl:table-cell" />
+                      <SortableTh label="Status" sortKey="status" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-40" />
+                      <SortableTh label="Rev" sortKey="revision" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-16" />
+                      <SortableTh label="Updated" sortKey="updated" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-24" />
                     </tr>
                   </thead>
                   <tbody className="table-divide-subtle">
@@ -358,6 +362,23 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
 
 function releaseIdentityKey(release: Pick<HelmRelease, 'namespace' | 'name' | 'storageNamespace'>): string {
   return `${release.storageNamespace || release.namespace}/${release.name}`
+}
+
+type HelmSortKey = 'name' | 'namespace' | 'chart' | 'appVersion' | 'status' | 'revision' | 'updated'
+
+function compareReleases(a: HelmRelease, b: HelmRelease, key: HelmSortKey): number {
+  let cmp: number
+  switch (key) {
+    case 'revision':
+      cmp = a.revision - b.revision
+      break
+    case 'updated':
+      cmp = (Date.parse(a.updated) || 0) - (Date.parse(b.updated) || 0)
+      break
+    default:
+      cmp = String(a[key] ?? '').localeCompare(String(b[key] ?? ''))
+  }
+  return cmp || a.name.localeCompare(b.name)
 }
 
 interface ReleaseRowProps {
