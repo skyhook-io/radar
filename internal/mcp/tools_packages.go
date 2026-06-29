@@ -46,10 +46,13 @@ func normalizeMCPPackageSourceFilter(source string) string {
 
 func handleListPackages(ctx context.Context, req *mcp.CallToolRequest, input listPackagesInput) (*mcp.CallToolResult, any, error) {
 	user, groups := userFromContext(ctx)
-	var namespaces []string
+	var requested []string
 	if input.Namespace != "" {
-		namespaces = []string{input.Namespace}
+		requested = []string{input.Namespace}
 	}
+	// Intersect the requested namespace(s) with the user's RBAC-allowed set.
+	// nil = all-namespace access; empty = no access (ListPackages returns empty).
+	namespaces := filterNamespacesForUser(ctx, requested)
 	resp, err := server.ListPackages(ctx, server.ListPackagesParams{
 		Namespaces: namespaces,
 		Source:     normalizeMCPPackageSourceFilter(input.Source),

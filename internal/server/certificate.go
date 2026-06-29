@@ -40,6 +40,24 @@ type CertExpiry = topology.CertExpiry
 // RBAC-allowed namespaces. Only public certificate metadata (issuer / domains
 // / expiry) is emitted — never tls.key. A cluster without cert-manager simply
 // contributes no CR rows; that's not an error.
+// secretReadableNamespaces returns the subset of `namespaces` in which the
+// calling user may list Secrets. The shared cache can hold every secret (the SA
+// may have cluster-wide secrets RBAC the user lacks), so secret-derived data
+// (TLS cert metadata) must be gated per-user even when the namespace is visible.
+// Mirrors the secrets gate in preflightResourceList:
+//   - nil in → all-namespace access: nil out (all) if the user can list secrets
+//     cluster-wide, else empty (none).
+//   - slice in → the per-namespace secrets-listable subset (possibly empty).
+func (s *Server) secretReadableNamespaces(r *http.Request, namespaces []string) []string {
+	if namespaces == nil {
+		if s.canRead(r, "", "secrets", "", "list") {
+			return nil
+		}
+		return []string{}
+	}
+	return s.filterNamespacesByCanRead(r, "", "secrets", "list", namespaces)
+}
+
 func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -84,11 +102,17 @@ func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 	// emit metadata; tls.key never leaves the cluster. A nil error with no
 	// secrets is a benign deferred-cache state; a non-nil error means we
 	// genuinely couldn't read secrets.
+	//
+	// The cache holds every secret (the SA can have cluster-wide secrets RBAC
+	// the calling user doesn't), so the TLS leg must respect per-user secrets
+	// RBAC — namespace visibility alone is not enough. secretNS is the subset
+	// of namespaces in which the user may list secrets (nil = all, empty = none).
+	secretNS := s.secretReadableNamespaces(r, namespaces)
 	secFailed := false
 	provider := k8s.NewTopologyResourceProvider(cache)
 	if secrets, err := provider.Secrets(); err == nil {
 		for _, sec := range secrets {
-			if !topology.MatchesNamespace(namespaces, sec.Namespace) {
+			if !topology.MatchesNamespace(secretNS, sec.Namespace) {
 				continue
 			}
 			if in, ok := secretToCertInput(sec); ok {
@@ -209,7 +233,8 @@ func (s *Server) handleSecretCertExpiry(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	result, err := topology.GetCertificateExpiry(provider, namespaces)
+	// Cert expiry is read from TLS Secrets — gate by per-user secrets RBAC.
+	result, err := topology.GetCertificateExpiry(provider, s.secretReadableNamespaces(r, namespaces))
 	if err != nil {
 		log.Printf("[certificate] Failed to get certificate expiry: %v", err)
 		s.writeError(w, http.StatusInternalServerError, "Failed to list secrets")

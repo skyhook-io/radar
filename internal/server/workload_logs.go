@@ -53,6 +53,11 @@ func (s *Server) handleWorkloadPods(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
+
 	pods, err := s.getWorkloadPods(kind, namespace, name)
 	if err != nil {
 		s.writeWorkloadError(w, err)

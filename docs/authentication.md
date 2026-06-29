@@ -17,6 +17,17 @@ User → [Auth Layer] → Radar Backend → K8s API (as user, via impersonation)
 
 Radar doesn't have its own role/permission system. It delegates everything to K8s RBAC, which means permissions are managed with standard K8s tooling (`kubectl`, Terraform, GitOps, etc.).
 
+### Read granularity: namespace-level
+
+For **namespaced** resources, reads are authorized at **namespace granularity**: if your RBAC lets you access a namespace, Radar shows the namespaced resources in it. Radar does **not** additionally check per-resource-kind RBAC for most namespaced kinds — so a user who can read Pods in a namespace also sees ConfigMaps, Services, etc. in that namespace through Radar, even if their RBAC wouldn't allow `kubectl get configmaps` directly. This is a deliberate tradeoff: Radar serves reads from a shared cache that the server populates once under its own ServiceAccount, and namespace membership is the per-user filter.
+
+Two kinds are gated more tightly, per-resource-kind, because the shared cache can hold data the user's own RBAC wouldn't grant:
+
+- **Secrets** (and Secret-derived data such as TLS certificate metadata) — shown only if the user can list Secrets in that namespace.
+- **Cluster-scoped resources** (Nodes, PersistentVolumes, ClusterRoles, cluster-scoped CRDs, etc.) — shown only if the user's RBAC permits listing that kind.
+
+If you need per-resource-kind authorization for namespaced resources, front Radar with an auth proxy and scope access per team, or run separate Radar instances per trust boundary.
+
 ## Auth Modes
 
 | Mode | Flag | When to Use |

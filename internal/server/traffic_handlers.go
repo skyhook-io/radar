@@ -10,6 +10,35 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
+// namespaceLookup builds a set for membership tests. A nil input (all-namespace
+// access from parseNamespacesForUser) returns nil, which flowVisibleForNamespaces
+// treats as "no restriction".
+func namespaceLookup(namespaces []string) map[string]bool {
+	if namespaces == nil {
+		return nil
+	}
+	set := make(map[string]bool, len(namespaces))
+	for _, ns := range namespaces {
+		set[ns] = true
+	}
+	return set
+}
+
+// flowVisibleForNamespaces reports whether a flow may be shown to a user whose
+// allowed namespaces are `allowed` (nil = all-namespace access). The traffic
+// source can only filter by a single namespace or none, so multi-namespace
+// users are filtered here: a flow is visible when either endpoint is in an
+// allowed namespace, so a user sees traffic to and from services in the
+// namespaces they can read. External/empty-namespace endpoints alone don't
+// make a flow visible.
+func flowVisibleForNamespaces(flow traffic.Flow, allowed map[string]bool) bool {
+	if allowed == nil {
+		return true
+	}
+	return (flow.Source.Namespace != "" && allowed[flow.Source.Namespace]) ||
+		(flow.Destination.Namespace != "" && allowed[flow.Destination.Namespace])
+}
+
 // handleGetTrafficSources returns available traffic sources and recommendations
 // GET /api/traffic/sources
 func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request) {
@@ -72,13 +101,26 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The source only filters by a single namespace; restrict multi-namespace
+	// users here so flows outside their allowed namespaces aren't returned.
+	flows := response.Flows
+	if allowed := namespaceLookup(namespaces); allowed != nil {
+		kept := make([]traffic.Flow, 0, len(flows))
+		for _, f := range flows {
+			if flowVisibleForNamespaces(f, allowed) {
+				kept = append(kept, f)
+			}
+		}
+		flows = kept
+	}
+
 	// Aggregate flows by service pair
-	aggregated := traffic.AggregateFlows(response.Flows)
+	aggregated := traffic.AggregateFlows(flows)
 
 	result := map[string]any{
 		"source":     response.Source,
 		"timestamp":  response.Timestamp,
-		"flows":      response.Flows,
+		"flows":      flows,
 		"aggregated": aggregated,
 	}
 	if response.Warning != "" {
@@ -98,12 +140,22 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Parse query parameters
-	namespace := r.URL.Query().Get("namespace")
+	// Enforce per-user namespace access (parseNamespacesForUser intersects the
+	// requested ?namespace= with the user's RBAC-allowed namespaces).
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		s.writeError(w, http.StatusForbidden, "no namespace access")
+		return
+	}
+	allowed := namespaceLookup(namespaces)
 
 	opts := traffic.FlowOptions{
-		Namespace: namespace,
-		Follow:    true,
+		Follow: true,
+	}
+	// The source filters by a single namespace; multi-namespace users are
+	// filtered per-flow below.
+	if len(namespaces) == 1 {
+		opts.Namespace = namespaces[0]
 	}
 
 	flowCh, err := manager.StreamFlows(ctx, opts)
@@ -143,6 +195,10 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 		case flow, ok := <-flowCh:
 			if !ok {
 				return
+			}
+
+			if !flowVisibleForNamespaces(flow, allowed) {
+				continue
 			}
 
 			data, err := json.Marshal(flow)

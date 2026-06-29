@@ -2181,6 +2181,11 @@ func (s *Server) handlePodMetrics(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
+
 	metrics, err := k8s.GetPodMetrics(r.Context(), namespace, name)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -2219,6 +2224,11 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
 
 	store := k8s.GetMetricsHistory()
 	if store == nil {
