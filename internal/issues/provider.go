@@ -205,6 +205,93 @@ func (p *CacheProvider) PodsMountingPVC(namespace, pvcName string) []Ref {
 	return refs
 }
 
+// PodsReferencingSecret returns the pods that reference the named Secret through
+// any declared spec edge — volume (secret or projected), envFrom, env valueFrom,
+// or imagePullSecrets — the same surfaces detect_missing_refs walks. The caller
+// intersects against the request-scoped issue set, so visibility is enforced there.
+func (p *CacheProvider) PodsReferencingSecret(namespace, secretName string) []Ref {
+	if p == nil || p.cache == nil || p.cache.Pods() == nil || namespace == "" || secretName == "" {
+		return nil
+	}
+	pods, err := p.cache.Pods().Pods(namespace).List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	var refs []Ref
+	for _, pod := range pods {
+		if podReferencesSecret(pod, secretName) {
+			refs = append(refs, Ref{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
+		}
+	}
+	sortRefs(refs)
+	return refs
+}
+
+func podReferencesSecret(pod *corev1.Pod, secretName string) bool {
+	for _, v := range pod.Spec.Volumes {
+		if v.Secret != nil && v.Secret.SecretName == secretName {
+			return true
+		}
+		if v.Projected != nil {
+			for _, src := range v.Projected.Sources {
+				if src.Secret != nil && src.Secret.Name == secretName {
+					return true
+				}
+			}
+		}
+	}
+	for _, ips := range pod.Spec.ImagePullSecrets {
+		if ips.Name == secretName {
+			return true
+		}
+	}
+	containers := append([]corev1.Container(nil), pod.Spec.InitContainers...)
+	containers = append(containers, pod.Spec.Containers...)
+	for _, c := range containers {
+		for _, ef := range c.EnvFrom {
+			if ef.SecretRef != nil && ef.SecretRef.Name == secretName {
+				return true
+			}
+		}
+		for _, e := range c.Env {
+			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == secretName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// PodsDependingOnSecretProducer resolves a Secret-producing CR (cert-manager
+// Certificate via spec.secretName, external-secrets ExternalSecret via
+// spec.target.name defaulting to its own name) to the pods that reference the
+// Secret it owns. The producer→Secret edge is declared in the CR spec and the
+// Pod→Secret edge is declared in the pod spec, so the chain is structural. Returns
+// nil when the CR can't be fetched or names no target.
+func (p *CacheProvider) PodsDependingOnSecretProducer(group, kind, namespace, name string) (string, []Ref) {
+	if p == nil || p.cache == nil || namespace == "" || name == "" {
+		return "", nil
+	}
+	u, err := p.cache.GetDynamicWithGroup(context.Background(), kind, namespace, name, group)
+	if err != nil || u == nil {
+		return "", nil
+	}
+	secretName := ""
+	switch kind {
+	case "Certificate":
+		secretName, _, _ = unstructured.NestedString(u.Object, "spec", "secretName")
+	case "ExternalSecret":
+		secretName, _, _ = unstructured.NestedString(u.Object, "spec", "target", "name")
+		if secretName == "" {
+			secretName = name // ExternalSecret defaults the target Secret to its own name
+		}
+	}
+	if secretName == "" {
+		return "", nil
+	}
+	return secretName, p.PodsReferencingSecret(namespace, secretName)
+}
+
 func (p *CacheProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext {
 	if p == nil || p.cache == nil {
 		return nil

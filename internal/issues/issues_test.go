@@ -32,7 +32,13 @@ type fakeProvider struct {
 	selectedPods    map[string][]Ref
 	podsOnNode      map[string][]Ref
 	podsMountingPVC map[string][]Ref
+	secretProducer  map[string]secretProducerResult
 	change          map[string]*issuesapi.ChangeContext
+}
+
+type secretProducerResult struct {
+	name string
+	pods []Ref
 }
 
 func (f *fakeProvider) DetectProblems(_ []string) []k8s.Detection       { return f.problems }
@@ -68,6 +74,10 @@ func (f *fakeProvider) PodsMountingPVC(namespace, pvcName string) []Ref {
 }
 func (f *fakeProvider) PodsOnNode(nodeName string) []Ref {
 	return f.podsOnNode[nodeName]
+}
+func (f *fakeProvider) PodsDependingOnSecretProducer(_, _, namespace, name string) (string, []Ref) {
+	r := f.secretProducer[namespace+"/"+name]
+	return r.name, r.pods
 }
 
 func (f *fakeProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext {
@@ -1912,6 +1922,41 @@ func TestIncidentParent_SelectedBackendNoPointer(t *testing.T) {
 	out := enrichDiagnosticContext([]Issue{svc, pod}, []Issue{svc, pod}, nil, p)
 	if got := findByID(out, "crash-1"); got.IncidentParent != nil {
 		t.Fatalf("selected_backend must not create a reverse pointer (inverted direction), got %+v", *got.IncidentParent)
+	}
+}
+
+func TestSecretProducerContext(t *testing.T) {
+	// A not-ready Certificate links the pod whose missing-ref names its Secret,
+	// but NOT a pod that references the Secret yet fails for an unrelated reason.
+	cert := Issue{ID: "cert-1", Kind: "Certificate", Group: "cert-manager.io", Namespace: "prod", Name: "web-tls", Category: issuesapi.CategoryCertificateNotReady, Severity: SeverityCritical, Reason: "Issuing"}
+	blocked := Issue{ID: "mr-1", Kind: "Pod", Namespace: "prod", Name: "web-a", Category: issuesapi.CategoryMissingConfigRef, Severity: SeverityCritical,
+		Message: `Secret "web-tls-secret" referenced in volume does not exist`}
+	unrelated := Issue{ID: "cw-1", Kind: "Pod", Namespace: "prod", Name: "web-b", Category: issuesapi.CategoryContainerWaiting, Severity: SeverityWarning,
+		Reason: "ContainerCreating", Message: "waiting on something else entirely"}
+
+	p := &fakeProvider{secretProducer: map[string]secretProducerResult{
+		"prod/web-tls": {name: "web-tls-secret", pods: []Ref{
+			{Kind: "Pod", Namespace: "prod", Name: "web-a"},
+			{Kind: "Pod", Namespace: "prod", Name: "web-b"},
+		}},
+	}}
+	out := enrichDiagnosticContext([]Issue{cert, blocked, unrelated}, []Issue{cert, blocked, unrelated}, nil, p)
+
+	root := findByID(out, "cert-1")
+	var fact *issuesapi.DiagnosticFact
+	for i := range root.DiagnosticContext.Facts {
+		if root.DiagnosticContext.Facts[i].Type == factSecretNotReady {
+			fact = &root.DiagnosticContext.Facts[i]
+		}
+	}
+	if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != "web-a" {
+		t.Fatalf("expected only the Secret-naming pod linked, got %+v", fact)
+	}
+	if got := findByID(out, "mr-1"); got.IncidentParent == nil || got.IncidentParent.ID != "cert-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceHigh {
+		t.Fatalf("blocked pod should point to the Certificate (high), got %+v", got.IncidentParent)
+	}
+	if got := findByID(out, "cw-1"); got.IncidentParent != nil {
+		t.Fatalf("unrelated container-waiting pod must not be attributed, got %+v", *got.IncidentParent)
 	}
 }
 

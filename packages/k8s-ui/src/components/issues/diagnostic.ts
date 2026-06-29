@@ -46,6 +46,8 @@ export function diagnosticFactLabel(type: string): string {
       return 'Stalled autoscalers';
     case 'node_provisioning':
       return 'Pods awaiting capacity';
+    case 'secret_not_ready':
+      return 'Dependent pods';
     default:
       return type.replace(/_/g, ' ');
   }

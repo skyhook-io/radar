@@ -24,6 +24,7 @@ const (
 	factPVCBlastRadius      = "pvc_blast_radius"
 	factAPIServiceHPA       = "apiservice_hpa"
 	factProvisioning        = "node_provisioning"
+	factSecretNotReady      = "secret_not_ready"
 )
 
 type serviceBackendIssueProvider interface {
@@ -38,11 +39,37 @@ type pvcBlastRadiusProvider interface {
 	PodsMountingPVC(namespace, pvcName string) []Ref
 }
 
+type secretProducerProvider interface {
+	// PodsDependingOnSecretProducer resolves the producer CR to its target Secret
+	// and the pods referencing it, returning (secretName, pods).
+	PodsDependingOnSecretProducer(group, kind, namespace, name string) (string, []Ref)
+}
+
 // pvcRootCategories are PVC-level problems that block the pods mounting the claim.
 var pvcRootCategories = map[issuesapi.Category]bool{
 	issuesapi.CategoryPVCPending:      true,
 	issuesapi.CategoryPVCLost:         true,
 	issuesapi.CategoryPVCResizeFailed: true,
+}
+
+// secretProducerRootCategories are the not-ready states of a Secret-producing CR
+// (cert-manager Certificate, external-secrets ExternalSecret) — when the producer
+// is failing, the Secret it owns is missing/stale and the pods referencing it
+// can't start.
+var secretProducerRootCategories = map[issuesapi.Category]bool{
+	issuesapi.CategoryCertificateNotReady: true,
+	issuesapi.CategorySecretSyncFailed:    true,
+}
+
+// secretAttributableCategories are the pod-side manifestations of a missing/stale
+// Secret: the structural missing-ref, a stuck container create, an init failure,
+// or a failed secret-volume mount. Broad runtime symptoms (crashloop, image pull)
+// are excluded — referencing the Secret doesn't make them the Secret's fault.
+var secretAttributableCategories = map[issuesapi.Category]bool{
+	issuesapi.CategoryMissingConfigRef:    true,
+	issuesapi.CategoryContainerWaiting:    true,
+	issuesapi.CategoryInitContainerFailed: true,
+	issuesapi.CategoryVolumeMountFailed:   true,
 }
 
 // pvcAttributableCategories are the pod-side manifestations of a broken PVC: the
@@ -115,6 +142,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 	var pvcProvider pvcBlastRadiusProvider
 	if pp, ok := p.(pvcBlastRadiusProvider); ok {
 		pvcProvider = pp
+	}
+	var secretProvider secretProducerProvider
+	if sp, ok := p.(secretProducerProvider); ok {
+		secretProvider = sp
 	}
 	var changeProvider changeContextProvider
 	if cp, ok := p.(changeContextProvider); ok {
@@ -200,6 +231,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 
 		if i.Category == issuesapi.CategoryNodeProvisioningFail {
 			addProvisioningContext(&b, *i, &incidentEdges, flat, groupedByID)
+		}
+
+		if secretProvider != nil && secretProducerRootCategories[i.Category] {
+			addSecretProducerContext(&b, *i, &incidentEdges, secretProvider, flatByResource, groupedByID)
 		}
 
 		if ctx := b.build(); ctx != nil {
@@ -670,6 +705,40 @@ func addPVCBlastRadiusContext(b *diagnosticContextBuilder, pvc Issue, edges *[]i
 			}
 			return symptomMentionsVolume(symptom, pvc.Name)
 		})
+}
+
+// addSecretProducerContext links a not-ready Secret-producing CR (Certificate /
+// ExternalSecret) to the pods that reference the Secret it owns and are failing
+// for a config/secret reason. The producer→Secret→Pod chain is declared, so a
+// pod failing on that exact Secret is high-confidence the producer's fault — but
+// a pod can reference the Secret yet fail for an unrelated reason, so the symptom
+// must NAME the Secret (or be a declared secret-volume mount failure), mirroring
+// the PVC volume-evidence gate.
+func addSecretProducerContext(b *diagnosticContextBuilder, root Issue, edges *[]incidentEdge, sp secretProducerProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
+	secretName, pods := sp.PodsDependingOnSecretProducer(root.Group, root.Kind, root.Namespace, root.Name)
+	if secretName == "" || len(pods) == 0 {
+		return
+	}
+	linkBlastRadius(b, root, edges, pods, secretAttributableCategories, flatByResource, groupedByID,
+		factSecretNotReady, issuesapi.ConfidenceHigh,
+		"Pods referencing the Secret this resource manages are blocked by it.",
+		func(symptom Issue) bool {
+			if symptom.Category == issuesapi.CategoryVolumeMountFailed {
+				return true
+			}
+			return mentionsQuotedName(symptom, secretName)
+		})
+}
+
+// mentionsQuotedName reports whether a symptom's text names the resource the way
+// Kubernetes prints it — quoted (`Secret "foo" not found`). A bare substring
+// would fire on any text containing a short name; the quotes anchor it.
+func mentionsQuotedName(symptom Issue, name string) bool {
+	if name == "" {
+		return false
+	}
+	text := strings.ToLower(symptom.Message + " " + symptom.Reason)
+	return strings.Contains(text, `"`+strings.ToLower(name)+`"`)
 }
 
 // symptomMentionsVolume reports whether a scheduling / waiting symptom's text
