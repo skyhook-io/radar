@@ -2,10 +2,12 @@ package audit
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -232,15 +234,19 @@ func tokenAutoMounted(namespace string, spec corev1.PodSpec, saByKey map[string]
 	if spec.AutomountServiceAccountToken != nil {
 		return *spec.AutomountServiceAccountToken
 	}
-	saName := spec.ServiceAccountName
-	if saName == "" {
-		saName = "default"
-	}
+	saName := podServiceAccountName(spec)
 	if sa, ok := saByKey[namespace+"/"+saName]; ok &&
 		sa.AutomountServiceAccountToken != nil && !*sa.AutomountServiceAccountToken {
 		return false
 	}
 	return true
+}
+
+func podServiceAccountName(spec corev1.PodSpec) string {
+	if spec.ServiceAccountName != "" {
+		return spec.ServiceAccountName
+	}
+	return "default"
 }
 
 // effectivelyNonRoot reports whether a container is guaranteed not to run as
@@ -355,14 +361,18 @@ func checkPodSpecVolumes(kind, namespace, name string, spec corev1.PodSpec) []Fi
 // Secret detection in ConfigMaps
 // ============================================================================
 
-// sensitiveKeyPatterns matches ConfigMap keys that likely contain secrets.
 var sensitiveKeyPatterns = []string{
-	"password", "passwd", "secret", "api_key", "apikey", "api-key",
-	"token", "private_key", "privatekey", "private-key",
-	"credential", "credentials", "auth", "authorization",
+	"password", "passwd", "api_key", "apikey", "api-key",
+	"private_key", "privatekey", "private-key",
 	"access_key", "accesskey", "access-key",
 	"secret_key", "secretkey", "secret-key",
 }
+
+var valueGatedSensitiveKeyPatterns = []string{
+	"secret", "token", "auth", "authorization", "credential", "credentials",
+}
+
+const configMapSensitiveValueMinLength = 24
 
 func checkSecretInConfigMap(configMaps []*corev1.ConfigMap) []Finding {
 	if len(configMaps) == 0 {
@@ -371,22 +381,131 @@ func checkSecretInConfigMap(configMaps []*corev1.ConfigMap) []Finding {
 
 	var findings []Finding
 	for _, cm := range configMaps {
-		for key := range cm.Data {
-			keyLower := strings.ToLower(key)
-			for _, pattern := range sensitiveKeyPatterns {
-				if strings.Contains(keyLower, pattern) {
-					findings = append(findings, Finding{
-						Kind: "ConfigMap", Namespace: cm.Namespace, Name: cm.Name,
-						CheckID:  "secretInConfigMap",
-						Category: CategorySecurity, Severity: SeverityWarning,
-						Message:  fmt.Sprintf("ConfigMap key %q may contain sensitive data — use a Secret instead", key),
-					})
-					break // one finding per key is enough
-				}
+		for key, value := range cm.Data {
+			if !configMapEntryLooksSensitive(key, value) {
+				continue
 			}
+			findings = append(findings, Finding{
+				Kind: "ConfigMap", Namespace: cm.Namespace, Name: cm.Name,
+				CheckID:  "secretInConfigMap",
+				Category: CategorySecurity, Severity: SeverityWarning,
+				Message: fmt.Sprintf("ConfigMap key %q may contain sensitive data — use a Secret instead", key),
+			})
 		}
 	}
 	return findings
+}
+
+func configMapEntryLooksSensitive(key, value string) bool {
+	keyLower := strings.ToLower(key)
+	if configMapKeyLooksSecretReference(keyLower) {
+		return false
+	}
+	if configMapKeyIsAlwaysSensitive(keyLower) {
+		return true
+	}
+	for _, pattern := range sensitiveKeyPatterns {
+		if strings.Contains(keyLower, pattern) {
+			return true
+		}
+	}
+	for _, pattern := range valueGatedSensitiveKeyPatterns {
+		if strings.Contains(keyLower, pattern) {
+			return configMapValueLooksSensitive(value)
+		}
+	}
+	return false
+}
+
+func configMapKeyLooksSecretReference(keyLower string) bool {
+	normalized := strings.NewReplacer("-", "_", ".", "_").Replace(keyLower)
+	return strings.HasSuffix(normalized, "secret_name") ||
+		strings.HasSuffix(normalized, "secret_names") ||
+		strings.HasSuffix(normalized, "secret_ref") ||
+		strings.HasSuffix(normalized, "secret_refs") ||
+		strings.HasSuffix(normalized, "secret_reference") ||
+		strings.HasSuffix(normalized, "secret_references")
+}
+
+func configMapKeyIsAlwaysSensitive(keyLower string) bool {
+	compact := strings.NewReplacer("_", "", "-", "", ".", "").Replace(keyLower)
+	if compact == "secret" || compact == "clientsecret" || strings.HasSuffix(compact, "clientsecret") {
+		return true
+	}
+	return false
+}
+
+func configMapValueLooksSensitive(value string) bool {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return false
+	}
+	switch strings.ToLower(v) {
+	case "true", "false", "yes", "no", "on", "off", "enabled", "disabled", "none", "null", "nil",
+		"basic", "bearer", "oauth", "oauth2", "oidc", "anonymous":
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(v), "bearer ") {
+		v = strings.TrimSpace(v[len("bearer "):])
+	}
+	if strings.HasPrefix(strings.ToLower(v), "basic ") {
+		v = strings.TrimSpace(v[len("basic "):])
+	}
+	if urlContainsUserInfo(v) {
+		return true
+	}
+	if strings.HasPrefix(v, "$(") || strings.HasPrefix(v, "${") || strings.HasPrefix(v, "/") || startsWithURLScheme(v) {
+		return false
+	}
+	if strings.Contains(v, "-----BEGIN ") {
+		return true
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) == 3 && strings.HasPrefix(parts[0], "eyJ") {
+		return true
+	}
+	if len(v) < 16 || strings.ContainsAny(v, " \t\r\n") {
+		return false
+	}
+
+	classes := 0
+	if strings.IndexFunc(v, func(r rune) bool { return r >= 'a' && r <= 'z' }) >= 0 {
+		classes++
+	}
+	if strings.IndexFunc(v, func(r rune) bool { return r >= 'A' && r <= 'Z' }) >= 0 {
+		classes++
+	}
+	if strings.IndexFunc(v, func(r rune) bool { return r >= '0' && r <= '9' }) >= 0 {
+		classes++
+	}
+	if strings.IndexFunc(v, func(r rune) bool {
+		return (r >= '!' && r <= '/') || (r >= ':' && r <= '@') || (r >= '[' && r <= '`') || (r >= '{' && r <= '~')
+	}) >= 0 {
+		classes++
+	}
+	return len(v) >= configMapSensitiveValueMinLength && classes >= 2
+}
+
+func startsWithURLScheme(value string) bool {
+	scheme, _, ok := strings.Cut(value, "://")
+	if !ok || scheme == "" {
+		return false
+	}
+	for _, r := range scheme {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '+' || r == '-' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func urlContainsUserInfo(value string) bool {
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User == nil {
+		return false
+	}
+	return u.User.Username() != ""
 }
 
 // ============================================================================
@@ -557,8 +676,8 @@ func checkIngressNoMatchingService(ingresses []*networkingv1.Ingress, servicesBy
 				if !servicesByName[svcKey] {
 					findings = append(findings, Finding{
 						Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name,
-						CheckID:  "ingressNoMatchingService", Category: CategoryReliability, Severity: SeverityWarning,
-						Message:  fmt.Sprintf("Ingress references non-existent Service %q", path.Backend.Service.Name),
+						CheckID: "ingressNoMatchingService", Category: CategoryReliability, Severity: SeverityWarning,
+						Message: fmt.Sprintf("Ingress references non-existent Service %q", path.Backend.Service.Name),
 					})
 				}
 			}
@@ -658,45 +777,10 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 	// Build set of referenced ConfigMap and Secret names (namespace/name)
 	referencedCMs := make(map[string]bool)
 	referencedSecrets := make(map[string]bool)
+	saByKey := indexServiceAccounts(input.ServiceAccounts)
 
-	for _, pod := range input.Pods {
-		ns := pod.Namespace
-		spec := pod.Spec
-		// Check all containers (init + regular)
-		for _, c := range spec.InitContainers {
-			collectContainerRefs(ns, c, referencedCMs, referencedSecrets)
-		}
-		for _, c := range spec.Containers {
-			collectContainerRefs(ns, c, referencedCMs, referencedSecrets)
-		}
-		// Volume references
-		for _, v := range spec.Volumes {
-			if v.ConfigMap != nil {
-				referencedCMs[ns+"/"+v.ConfigMap.Name] = true
-			}
-			if v.Secret != nil {
-				referencedSecrets[ns+"/"+v.Secret.SecretName] = true
-			}
-			if v.Projected != nil {
-				for _, src := range v.Projected.Sources {
-					if src.ConfigMap != nil {
-						referencedCMs[ns+"/"+src.ConfigMap.Name] = true
-					}
-					if src.Secret != nil {
-						referencedSecrets[ns+"/"+src.Secret.Name] = true
-					}
-				}
-			}
-		}
-		// ImagePullSecrets
-		for _, ips := range spec.ImagePullSecrets {
-			referencedSecrets[ns+"/"+ips.Name] = true
-		}
-		// ServiceAccount token secrets (referenced implicitly)
-		if spec.ServiceAccountName != "" {
-			// SA token secrets are named like "<sa-name>-token-xxxxx" — we can't match exactly,
-			// but we skip SA-related secrets via the type filter below
-		}
+	for _, refSpec := range input.configReferencePodSpecs() {
+		collectPodSpecRefs(refSpec.namespace, refSpec.spec, saByKey, referencedCMs, referencedSecrets)
 	}
 
 	// Ingress TLS secrets
@@ -720,10 +804,13 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 		if cm.Name == "kube-root-ca.crt" {
 			continue
 		}
+		if hasControllerOwnerReference(cm.OwnerReferences) {
+			continue
+		}
 		findings = append(findings, Finding{
 			Kind: "ConfigMap", Namespace: cm.Namespace, Name: cm.Name,
 			CheckID: "orphanConfigMapSecret", Category: CategoryEfficiency, Severity: SeverityWarning,
-			Message: fmt.Sprintf("ConfigMap %q is not referenced by any pod", cm.Name),
+			Message: fmt.Sprintf("ConfigMap %q is not referenced by any workload", cm.Name),
 		})
 	}
 
@@ -744,35 +831,189 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 		if sec.Labels != nil && sec.Labels["cert-manager.io/certificate-name"] != "" {
 			continue
 		}
+		if hasControllerOwnerReference(sec.OwnerReferences) {
+			continue
+		}
 		findings = append(findings, Finding{
 			Kind: "Secret", Namespace: sec.Namespace, Name: sec.Name,
 			CheckID: "orphanConfigMapSecret", Category: CategoryEfficiency, Severity: SeverityWarning,
-			Message: fmt.Sprintf("Secret %q is not referenced by any pod", sec.Name),
+			Message: fmt.Sprintf("Secret %q is not referenced by any workload or Ingress", sec.Name),
 		})
 	}
 
 	return findings
 }
 
+type configReferencePodSpec struct {
+	namespace string
+	spec      corev1.PodSpec
+}
+
+func (input *CheckInput) configReferencePodSpecs() []configReferencePodSpec {
+	var specs []configReferencePodSpec
+	for _, pod := range input.Pods {
+		if podIsTerminal(pod) {
+			continue
+		}
+		specs = append(specs, configReferencePodSpec{namespace: pod.Namespace, spec: pod.Spec})
+	}
+	for _, d := range input.Deployments {
+		specs = append(specs, configReferencePodSpec{namespace: d.Namespace, spec: d.Spec.Template.Spec})
+	}
+	for _, ss := range input.StatefulSets {
+		specs = append(specs, configReferencePodSpec{namespace: ss.Namespace, spec: ss.Spec.Template.Spec})
+	}
+	for _, ds := range input.DaemonSets {
+		specs = append(specs, configReferencePodSpec{namespace: ds.Namespace, spec: ds.Spec.Template.Spec})
+	}
+	for _, job := range input.Jobs {
+		if jobIsTerminal(job) {
+			continue
+		}
+		specs = append(specs, configReferencePodSpec{namespace: job.Namespace, spec: job.Spec.Template.Spec})
+	}
+	for _, cj := range input.CronJobs {
+		specs = append(specs, configReferencePodSpec{namespace: cj.Namespace, spec: cj.Spec.JobTemplate.Spec.Template.Spec})
+	}
+	return specs
+}
+
+func jobIsTerminal(job *batchv1.Job) bool {
+	for _, cond := range job.Status.Conditions {
+		if cond.Status != corev1.ConditionTrue {
+			continue
+		}
+		if cond.Type == batchv1.JobComplete || cond.Type == batchv1.JobFailed {
+			return true
+		}
+	}
+	return false
+}
+
+func podIsTerminal(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
+}
+
+func collectPodSpecRefs(ns string, spec corev1.PodSpec, saByKey map[string]*corev1.ServiceAccount, cms, secrets map[string]bool) {
+	for _, c := range spec.InitContainers {
+		collectContainerRefs(ns, c, cms, secrets)
+	}
+	for _, c := range spec.Containers {
+		collectContainerRefs(ns, c, cms, secrets)
+	}
+	for _, c := range spec.EphemeralContainers {
+		collectEnvRefs(ns, c.Env, c.EnvFrom, cms, secrets)
+	}
+	for _, v := range spec.Volumes {
+		collectVolumeRefs(ns, v, cms, secrets)
+	}
+	for _, ips := range spec.ImagePullSecrets {
+		addRef(secrets, ns, ips.Name)
+	}
+	// ServiceAccount admission defaults imagePullSecrets only when the PodSpec leaves them empty.
+	if len(spec.ImagePullSecrets) == 0 {
+		collectServiceAccountImagePullSecrets(ns, spec, saByKey, secrets)
+	}
+}
+
 func collectContainerRefs(ns string, c corev1.Container, cms, secrets map[string]bool) {
-	for _, env := range c.Env {
+	collectEnvRefs(ns, c.Env, c.EnvFrom, cms, secrets)
+}
+
+func collectEnvRefs(ns string, envs []corev1.EnvVar, envFroms []corev1.EnvFromSource, cms, secrets map[string]bool) {
+	for _, env := range envs {
 		if env.ValueFrom != nil {
 			if env.ValueFrom.ConfigMapKeyRef != nil {
-				cms[ns+"/"+env.ValueFrom.ConfigMapKeyRef.Name] = true
+				addRef(cms, ns, env.ValueFrom.ConfigMapKeyRef.Name)
 			}
 			if env.ValueFrom.SecretKeyRef != nil {
-				secrets[ns+"/"+env.ValueFrom.SecretKeyRef.Name] = true
+				addRef(secrets, ns, env.ValueFrom.SecretKeyRef.Name)
 			}
 		}
 	}
-	for _, envFrom := range c.EnvFrom {
+	for _, envFrom := range envFroms {
 		if envFrom.ConfigMapRef != nil {
-			cms[ns+"/"+envFrom.ConfigMapRef.Name] = true
+			addRef(cms, ns, envFrom.ConfigMapRef.Name)
 		}
 		if envFrom.SecretRef != nil {
-			secrets[ns+"/"+envFrom.SecretRef.Name] = true
+			addRef(secrets, ns, envFrom.SecretRef.Name)
 		}
 	}
+}
+
+func collectServiceAccountImagePullSecrets(ns string, spec corev1.PodSpec, saByKey map[string]*corev1.ServiceAccount, secrets map[string]bool) {
+	if len(saByKey) == 0 {
+		return
+	}
+	sa, ok := saByKey[ns+"/"+podServiceAccountName(spec)]
+	if !ok {
+		return
+	}
+	for _, ips := range sa.ImagePullSecrets {
+		addRef(secrets, ns, ips.Name)
+	}
+}
+
+func collectVolumeRefs(ns string, v corev1.Volume, cms, secrets map[string]bool) {
+	if v.ConfigMap != nil {
+		addRef(cms, ns, v.ConfigMap.Name)
+	}
+	if v.Secret != nil {
+		addRef(secrets, ns, v.Secret.SecretName)
+	}
+	if v.Projected != nil {
+		for _, src := range v.Projected.Sources {
+			if src.ConfigMap != nil {
+				addRef(cms, ns, src.ConfigMap.Name)
+			}
+			if src.Secret != nil {
+				addRef(secrets, ns, src.Secret.Name)
+			}
+		}
+	}
+	if v.CSI != nil && v.CSI.NodePublishSecretRef != nil {
+		addRef(secrets, ns, v.CSI.NodePublishSecretRef.Name)
+	}
+	if v.FlexVolume != nil && v.FlexVolume.SecretRef != nil {
+		addRef(secrets, ns, v.FlexVolume.SecretRef.Name)
+	}
+	if v.AzureFile != nil {
+		addRef(secrets, ns, v.AzureFile.SecretName)
+	}
+	if v.CephFS != nil && v.CephFS.SecretRef != nil {
+		addRef(secrets, ns, v.CephFS.SecretRef.Name)
+	}
+	if v.RBD != nil && v.RBD.SecretRef != nil {
+		addRef(secrets, ns, v.RBD.SecretRef.Name)
+	}
+	if v.Cinder != nil && v.Cinder.SecretRef != nil {
+		addRef(secrets, ns, v.Cinder.SecretRef.Name)
+	}
+	if v.ScaleIO != nil && v.ScaleIO.SecretRef != nil {
+		addRef(secrets, ns, v.ScaleIO.SecretRef.Name)
+	}
+	if v.ISCSI != nil && v.ISCSI.SecretRef != nil {
+		addRef(secrets, ns, v.ISCSI.SecretRef.Name)
+	}
+	if v.StorageOS != nil && v.StorageOS.SecretRef != nil {
+		addRef(secrets, ns, v.StorageOS.SecretRef.Name)
+	}
+}
+
+func addRef(refs map[string]bool, namespace, name string) {
+	if namespace == "" || name == "" {
+		return
+	}
+	refs[namespace+"/"+name] = true
+}
+
+func hasControllerOwnerReference(refs []metav1.OwnerReference) bool {
+	for _, ref := range refs {
+		if ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+	return false
 }
 
 // ============================================================================

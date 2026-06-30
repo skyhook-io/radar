@@ -5,6 +5,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -35,6 +36,8 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		Deployments:              listNamespaced(cache.Deployments(), namespaces),
 		StatefulSets:             listNamespaced(cache.StatefulSets(), namespaces),
 		DaemonSets:               listNamespaced(cache.DaemonSets(), namespaces),
+		Jobs:                     listNamespaced(cache.Jobs(), namespaces),
+		CronJobs:                 listNamespaced(cache.CronJobs(), namespaces),
 		Services:                 listNamespaced(cache.Services(), namespaces),
 		Ingresses:                listNamespaced(cache.Ingresses(), namespaces),
 		HorizontalPodAutoscalers: listNamespaced(cache.HorizontalPodAutoscalers(), namespaces),
@@ -347,6 +350,10 @@ func extractNamespace(obj any) string {
 	case *appsv1.StatefulSet:
 		return v.Namespace
 	case *appsv1.DaemonSet:
+		return v.Namespace
+	case *batchv1.Job:
+		return v.Namespace
+	case *batchv1.CronJob:
 		return v.Namespace
 	case *corev1.Service:
 		return v.Namespace

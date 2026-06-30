@@ -286,8 +286,8 @@ var CheckRegistry = map[string]CheckMeta{
 		ID:          "orphanConfigMapSecret",
 		Title:       "Unused ConfigMap or Secret",
 		Category:    CategoryEfficiency,
-		Description: "This ConfigMap or Secret is not referenced by any pod (env vars, volumes, or imagePullSecrets). It may be orphaned and safe to remove.",
-		Remediation: "Verify this resource is no longer needed and delete it, or add a reference from a pod spec if it should be in use.",
+		Description: "This ConfigMap or Secret is not referenced by any workload or Ingress (env vars, volumes, imagePullSecrets, or TLS). It may be orphaned and safe to remove.",
+		Remediation: "Verify this resource is no longer needed and delete it, or add a reference from a workload or Ingress if it should be in use.",
 		References:  []Reference{refConfigMaps, refSecrets},
 	},
 
