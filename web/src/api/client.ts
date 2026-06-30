@@ -93,13 +93,24 @@ export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403
 }
 
+const METRICS_API_GROUP_TOKENS = ['metrics', 'k8s', 'io'] as const
+
+function mentionsMetricsAPIGroup(message: string): boolean {
+  const tokens = message.split(/[^a-z0-9]+/).filter(Boolean)
+  return tokens.some((token, index) => (
+    token === METRICS_API_GROUP_TOKENS[0] &&
+    tokens[index + 1] === METRICS_API_GROUP_TOKENS[1] &&
+    tokens[index + 2] === METRICS_API_GROUP_TOKENS[2]
+  ))
+}
+
 export function isMetricsUnavailableMessage(message: unknown): boolean {
   if (typeof message !== 'string') return false
   const normalized = message.toLowerCase()
   if (!normalized) return false
   if (normalized.includes('metrics-server')) return true
   if (normalized.includes('could not find the requested resource')) return true
-  if (!normalized.includes('metrics.k8s.io')) return false
+  if (!mentionsMetricsAPIGroup(normalized)) return false
   return (
     normalized.includes('not found') ||
     normalized.includes('could not find the requested resource') ||
@@ -117,7 +128,7 @@ export function isMetricsUnavailableError(error: unknown): boolean {
     const normalized = message.toLowerCase()
     const hasMetricsSignal = (
       normalized.includes('metrics-server') ||
-      normalized.includes('metrics.k8s.io') ||
+      mentionsMetricsAPIGroup(normalized) ||
       normalized.includes('pod metrics') ||
       normalized.includes('node metrics')
     )
