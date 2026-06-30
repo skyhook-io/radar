@@ -76,7 +76,8 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
   const hasProblems = problems.length > 0
   const isCordoned = !!spec.unschedulable
   const hasMetricsHistory = !!metricsHistory?.dataPoints?.length
-  const showMetricsUnavailable = !!metricsUnavailable && !metrics?.usage && !hasMetricsHistory && !metricsHistory?.collectionError
+  const showMetricsUnavailable = !!metricsUnavailable && !hasMetricsHistory && !metricsHistory?.collectionError
+  const currentMetrics = metricsUnavailable ? undefined : metrics
 
   // Extract platform info from labels
   const instanceType = labels['node.kubernetes.io/instance-type']
@@ -125,13 +126,13 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
               label: 'CPU',
               capacity: capacity.cpu,
               allocatable: allocatable.cpu,
-              inUse: metrics?.usage?.cpu,
+              inUse: currentMetrics?.usage?.cpu,
             },
             {
               label: 'Memory',
               capacity: formatMemory(capacity.memory),
               allocatable: formatMemory(allocatable.memory),
-              inUse: metrics?.usage?.memory ? formatMemory(metrics.usage.memory) : undefined,
+              inUse: currentMetrics?.usage?.memory ? formatMemory(currentMetrics.usage.memory) : undefined,
             },
             {
               label: 'Pods',
@@ -185,7 +186,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
       </Section>
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && (metrics?.usage || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
+      {!hideMetricsServer && (currentMetrics?.usage || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {showMetricsUnavailable && (
             <div className="card-inner-lg text-xs text-theme-text-tertiary">
@@ -232,7 +233,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
                 />
               </div>
             </div>
-          ) : metrics?.usage ? (
+          ) : showMetricsUnavailable ? null : currentMetrics?.usage ? (
             /* Fallback to simple display if no history yet */
             <div className="space-y-3">
               <div className="card-inner-lg">
@@ -240,7 +241,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
                   <span className="text-sm font-medium text-theme-text-primary">CPU</span>
                 </div>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-lg font-medium text-blue-400">{metrics.usage.cpu}</span>
+                  <span className="text-lg font-medium text-blue-400">{currentMetrics.usage.cpu}</span>
                   <span className="text-sm text-theme-text-tertiary">
                     / {allocatable.cpu || capacity.cpu || '?'} allocatable
                   </span>
@@ -251,19 +252,19 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
                   <span className="text-sm font-medium text-theme-text-primary">Memory</span>
                 </div>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-lg font-medium text-purple-400">{formatMemory(metrics.usage.memory)}</span>
+                  <span className="text-lg font-medium text-purple-400">{formatMemory(currentMetrics.usage.memory)}</span>
                   <span className="text-sm text-theme-text-tertiary">
                     / {formatMemory(allocatable.memory) || formatMemory(capacity.memory) || '?'} allocatable
                   </span>
                 </div>
               </div>
             </div>
-          ) : showMetricsUnavailable ? null : (
+          ) : (
             <div className="text-xs text-theme-text-tertiary">Collecting metrics data...</div>
           )}
-          {metrics?.timestamp && (
+          {!showMetricsUnavailable && currentMetrics?.timestamp && (
             <div className="mt-2 text-xs text-theme-text-tertiary">
-              Last updated: {new Date(metrics.timestamp).toLocaleTimeString()}
+              Last updated: {new Date(currentMetrics.timestamp).toLocaleTimeString()}
             </div>
           )}
         </Section>

@@ -283,7 +283,8 @@ export function PodRenderer({
   const podProblems = getPodProblems(data)
   const hasProblems = podProblems.length > 0 && !operationalIssuesShown
   const hasMetricsHistory = !!metricsHistory?.containers?.length
-  const showMetricsUnavailable = !!metricsUnavailable && !metrics?.containers?.length && !hasMetricsHistory && !metricsHistory?.collectionError
+  const showMetricsUnavailable = !!metricsUnavailable && !hasMetricsHistory && !metricsHistory?.collectionError
+  const currentMetrics = metricsUnavailable ? undefined : metrics
 
   // Image filesystem modal state
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
@@ -722,7 +723,7 @@ export function PodRenderer({
       )}
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && !!(metrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
+      {!hideMetricsServer && !!(currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {showMetricsUnavailable && (
             <div className="card-inner-lg text-xs text-theme-text-tertiary">
@@ -737,9 +738,9 @@ export function PodRenderer({
           )}
           {!showMetricsUnavailable && (
             <div className="space-y-4">
-              {(metricsHistory?.containers || metrics?.containers || []).map((historyContainer) => {
+              {(metricsHistory?.containers || currentMetrics?.containers || []).map((historyContainer) => {
                 // Find current metrics for this container
-                const currentMetrics = metrics?.containers?.find(c => c.name === historyContainer.name)
+                const currentContainerMetrics = currentMetrics?.containers?.find(c => c.name === historyContainer.name)
                 // Find the container spec to compare against limits
                 const containerSpec = containers.find((c: any) => c.name === historyContainer.name)
                 const limits = containerSpec?.resources?.limits
@@ -779,13 +780,13 @@ export function PodRenderer({
                           />
                         </div>
                       </div>
-                    ) : currentMetrics ? (
+                    ) : currentContainerMetrics ? (
                       /* Fallback to simple display if no history yet */
                       <div className="grid grid-cols-2 gap-4 text-xs">
                         <div>
                           <div className="text-theme-text-tertiary mb-1">CPU</div>
                           <div className="flex items-baseline gap-1">
-                            <span className="text-sm font-medium text-blue-400">{currentMetrics.usage.cpu}</span>
+                            <span className="text-sm font-medium text-blue-400">{currentContainerMetrics.usage.cpu}</span>
                             {limits?.cpu && (
                               <span className="text-theme-text-tertiary">/ {limits.cpu} limit</span>
                             )}
@@ -794,7 +795,7 @@ export function PodRenderer({
                         <div>
                           <div className="text-theme-text-tertiary mb-1">Memory</div>
                           <div className="flex items-baseline gap-1">
-                            <span className="text-sm font-medium text-purple-400">{currentMetrics.usage.memory}</span>
+                            <span className="text-sm font-medium text-purple-400">{currentContainerMetrics.usage.memory}</span>
                             {limits?.memory && (
                               <span className="text-theme-text-tertiary">/ {limits.memory} limit</span>
                             )}
@@ -809,9 +810,9 @@ export function PodRenderer({
               })}
             </div>
           )}
-          {metrics?.timestamp && (
+          {!showMetricsUnavailable && currentMetrics?.timestamp && (
             <div className="mt-2 text-xs text-theme-text-tertiary">
-              Last updated: {new Date(metrics.timestamp).toLocaleTimeString()}
+              Last updated: {new Date(currentMetrics.timestamp).toLocaleTimeString()}
             </div>
           )}
         </Section>

@@ -126,6 +126,25 @@ describe('PodRenderer metrics', () => {
     expect(html).not.toContain('Collecting metrics data')
   })
 
+  it('does not let stale live metrics hide an unavailable state', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={pod}
+        onCopy={() => undefined}
+        copied={null}
+        metricsUnavailable
+        metrics={{
+          containers: [{ name: 'api', usage: { cpu: '100m', memory: '256Mi' } }],
+          timestamp: '2026-06-30T00:00:00Z',
+        }}
+      />,
+    )
+
+    expect(html).toContain('Metrics unavailable')
+    expect(html).not.toContain('100m')
+    expect(html).not.toContain('Last updated')
+  })
+
   it('keeps non-absence collection errors visible', () => {
     const html = renderToString(
       <PodRenderer

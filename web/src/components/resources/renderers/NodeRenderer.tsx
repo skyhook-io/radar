@@ -19,6 +19,7 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
   const liveMetricsEnabled = !historyMetricsUnavailable && (metricsHistoryQuery.isSuccess || metricsHistoryQuery.isError)
   const { data: metrics } = useNodeMetrics(nodeName, { enabled: liveMetricsEnabled })
   const metricsUnavailable = metrics === null || historyMetricsUnavailable
+  const visibleMetrics = historyMetricsUnavailable ? undefined : (metrics ?? undefined)
 
   // Determine whether to hide metrics-server section (Prometheus has data)
   const { data: prometheusStatus } = usePrometheusStatus()
@@ -40,7 +41,7 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
         params.set('filters', serializeColumnFilters({ node: [nodeName] }))
         navigate(`/resources/pods?${params.toString()}`)
       } : undefined}
-      metrics={metrics ?? undefined}
+      metrics={visibleMetrics}
       metricsHistory={metricsHistory}
       metricsUnavailable={metricsUnavailable}
       hideMetricsServer={hideMetricsServer}

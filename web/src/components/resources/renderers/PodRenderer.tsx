@@ -40,6 +40,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   const liveMetricsEnabled = !historyMetricsUnavailable && (metricsHistoryQuery.isSuccess || metricsHistoryQuery.isError)
   const { data: metrics } = usePodMetrics(namespace, podName, { enabled: liveMetricsEnabled })
   const metricsUnavailable = metrics === null || historyMetricsUnavailable
+  const visibleMetrics = historyMetricsUnavailable ? undefined : (metrics ?? undefined)
 
   // Hide metrics-server section when Prometheus has CPU data
   const { data: prometheusStatus } = usePrometheusStatus()
@@ -86,7 +87,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
           disabled={disabled}
         />
       )}
-      metrics={metrics ?? undefined}
+      metrics={visibleMetrics}
       metricsHistory={metricsHistory}
       metricsUnavailable={metricsUnavailable}
       hideMetricsServer={hideMetricsServer}
