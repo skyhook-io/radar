@@ -1300,6 +1300,64 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 	defer ResetTestState()
 
 	old := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	controller := true
+	dsOwner := func(name string) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "DaemonSet", Name: name, Controller: &controller}}
+	}
+	daemonSetTargetAffinity := func(nodeName string) *corev1.Affinity {
+		if nodeName == "" {
+			return nil
+		}
+		return &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchFields: []corev1.NodeSelectorRequirement{{
+						Key:      "metadata.name",
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   []string{nodeName},
+					}},
+				}},
+			},
+		}}
+	}
+	unschedulableDSPod := func(dsName, podName, targetNode, message string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: "prod", CreationTimestamp: old, OwnerReferences: dsOwner(dsName)},
+			Spec:       corev1.PodSpec{Affinity: daemonSetTargetAffinity(targetNode)},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				Conditions: []corev1.PodCondition{{
+					Type:    corev1.PodScheduled,
+					Status:  corev1.ConditionFalse,
+					Reason:  corev1.PodReasonUnschedulable,
+					Message: message,
+				}},
+			},
+		}
+	}
+	assignedUnreadyDSPod := func(dsName, podName, nodeName string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: "prod", CreationTimestamp: old, OwnerReferences: dsOwner(dsName)},
+			Spec: corev1.PodSpec{
+				NodeName:   nodeName,
+				Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{
+					{Type: corev1.ContainersReady, Status: corev1.ConditionFalse},
+					{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+				},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  "main",
+					Ready: false,
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		}
+	}
 	client := fake.NewClientset(
 		&appsv1.DaemonSet{
 			ObjectMeta: metav1.ObjectMeta{Name: "missing", Namespace: "prod", CreationTimestamp: old},
@@ -1318,6 +1376,81 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 				NumberUnavailable:      1,
 			},
 		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "design-taint", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberUnavailable:      1,
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "design-affinity", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberUnavailable:      1,
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "capacity", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberUnavailable:      1,
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "host-port", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberUnavailable:      1,
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "not-scheduled-design", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 3,
+				NumberUnavailable:      1,
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "partial-duplicate", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberUnavailable:      2,
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "extra-unknown-target", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberUnavailable:      1,
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "mixed-unready", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberUnavailable:      1,
+			},
+		},
+		unschedulableDSPod("design-taint", "design-taint-pod", "node-a", "0/4 nodes are available: 4 node(s) had untolerated taint {dedicated: infra}."),
+		unschedulableDSPod("design-affinity", "design-affinity-pod", "node-b", "0/4 nodes are available: 4 node(s) didn't match Pod's node affinity/selector."),
+		unschedulableDSPod("capacity", "capacity-pod", "node-c", "0/4 nodes are available: 4 Insufficient cpu."),
+		unschedulableDSPod("host-port", "host-port-pod", "node-d", "0/4 nodes are available: 4 node(s) didn't have free ports for the requested pod ports."),
+		unschedulableDSPod("not-scheduled-design", "not-scheduled-design-pod", "node-e", "0/4 nodes are available: 4 node(s) had untolerated taint {dedicated: infra}."),
+		unschedulableDSPod("partial-duplicate", "partial-duplicate-pod-a", "node-f", "0/4 nodes are available: 4 node(s) had untolerated taint {dedicated: infra}."),
+		unschedulableDSPod("partial-duplicate", "partial-duplicate-pod-b", "node-f", "0/4 nodes are available: 4 node(s) didn't match Pod's node affinity/selector."),
+		unschedulableDSPod("extra-unknown-target", "extra-unknown-target-known", "node-g", "0/4 nodes are available: 4 node(s) had untolerated taint {dedicated: infra}."),
+		unschedulableDSPod("extra-unknown-target", "extra-unknown-target-empty", "", "0/4 nodes are available: 4 node(s) didn't match Pod's node affinity/selector."),
+		unschedulableDSPod("mixed-unready", "mixed-unready-placement-pod", "node-h", "0/4 nodes are available: 4 node(s) had untolerated taint {dedicated: infra}."),
+		assignedUnreadyDSPod("mixed-unready", "mixed-unready-crashing-pod", "node-i"),
 	)
 
 	if err := InitTestResourceCache(client); err != nil {
@@ -1334,7 +1467,15 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 		problems = DetectProblems(cache, "prod")
 		if hasProblem(problems, "DaemonSet", "missing", "2 not scheduled") &&
 			hasProblem(problems, "DaemonSet", "wrong-node", "1 misscheduled") &&
-			hasProblem(problems, "DaemonSet", "wrong-node", "1 unavailable") {
+			hasProblem(problems, "DaemonSet", "wrong-node", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "design-taint", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "design-affinity", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "capacity", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "host-port", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "not-scheduled-design", "1 not scheduled") &&
+			hasProblem(problems, "DaemonSet", "partial-duplicate", "2 unavailable") &&
+			hasProblem(problems, "DaemonSet", "extra-unknown-target", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "mixed-unready", "1 unavailable") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1343,6 +1484,14 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 	assertProblem(t, problems, "DaemonSet", "missing", "2 not scheduled", "critical")
 	assertProblem(t, problems, "DaemonSet", "wrong-node", "1 misscheduled", "high")
 	assertProblem(t, problems, "DaemonSet", "wrong-node", "1 unavailable", "critical")
+	assertProblem(t, problems, "DaemonSet", "design-taint", "1 unavailable", "high")
+	assertProblem(t, problems, "DaemonSet", "design-affinity", "1 unavailable", "high")
+	assertProblem(t, problems, "DaemonSet", "capacity", "1 unavailable", "critical")
+	assertProblem(t, problems, "DaemonSet", "host-port", "1 unavailable", "critical")
+	assertProblem(t, problems, "DaemonSet", "not-scheduled-design", "1 not scheduled", "critical")
+	assertProblem(t, problems, "DaemonSet", "partial-duplicate", "2 unavailable", "critical")
+	assertProblem(t, problems, "DaemonSet", "extra-unknown-target", "1 unavailable", "high")
+	assertProblem(t, problems, "DaemonSet", "mixed-unready", "1 unavailable", "critical")
 }
 
 func TestDetectProblems_DeploymentReplicaFailure(t *testing.T) {

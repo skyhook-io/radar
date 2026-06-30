@@ -139,6 +139,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 		}
 	}
+	podsByNamespace := listPodsByNamespace(cache, namespace)
 
 	// Deployment problems: unavailableReplicas > 0
 	if depLister := cache.Deployments(); depLister != nil {
@@ -342,12 +343,15 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			if ds.Status.DesiredNumberScheduled > ds.Status.CurrentNumberScheduled {
 				appendDSProblem(fmt.Sprintf("%d not scheduled", ds.Status.DesiredNumberScheduled-ds.Status.CurrentNumberScheduled), "critical", "daemonset:not-scheduled")
 			} else if ds.Status.NumberUnavailable > 0 {
-				appendDSProblem(fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable), "critical", "daemonset:unavailable")
+				severity := "critical"
+				if daemonSetUnavailableIsByDesignUnschedulable(cache, ds, podsByNamespace) {
+					severity = "high"
+				}
+				appendDSProblem(fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable), severity, "daemonset:unavailable")
 			}
 		}
 	}
 
-	podsByNamespace := listPodsByNamespace(cache, namespace)
 	probeFailures := latestProbeFailures(cache, namespace, now)
 	pvcPendingFailures := latestPVCPendingFailures(cache, namespace)
 
@@ -1675,6 +1679,89 @@ func pvcAwaitsFirstConsumer(cache *ResourceCache, pvc *corev1.PersistentVolumeCl
 		}
 	}
 	return sc != nil && sc.VolumeBindingMode != nil && *sc.VolumeBindingMode == storagev1.VolumeBindingWaitForFirstConsumer
+}
+
+func daemonSetUnavailableIsByDesignUnschedulable(cache *ResourceCache, ds *appsv1.DaemonSet, podsByNamespace map[string][]*corev1.Pod) bool {
+	byDesignTargets := map[string]bool{}
+	for _, pod := range podsByNamespace[ds.Namespace] {
+		_, ownerKind, ownerName := podOwnerKindName(cache, pod)
+		if ownerKind != "DaemonSet" || ownerName != ds.Name {
+			continue
+		}
+		if daemonSetPodIsAssignedButUnavailable(pod) {
+			return false
+		}
+		cond := podScheduledCondition(pod)
+		if cond == nil || cond.Status != corev1.ConditionFalse || cond.Reason != corev1.PodReasonUnschedulable {
+			continue
+		}
+		_, reasons := parseSchedulerMessage(cond.Message)
+		if len(reasons) == 0 || !allDaemonSetByDesignPlacementReasons(reasons) {
+			return false
+		}
+		targetNode := daemonSetPodTargetNode(pod)
+		if targetNode == "" {
+			continue
+		}
+		byDesignTargets[targetNode] = true
+	}
+	return int32(len(byDesignTargets)) >= ds.Status.NumberUnavailable
+}
+
+func daemonSetPodIsAssignedButUnavailable(pod *corev1.Pod) bool {
+	if pod == nil || pod.Spec.NodeName == "" {
+		return false
+	}
+	for _, cond := range pod.Status.Conditions {
+		if (cond.Type == corev1.PodReady || cond.Type == corev1.ContainersReady) && cond.Status == corev1.ConditionFalse {
+			return true
+		}
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if !status.Ready || status.State.Waiting != nil || status.State.Terminated != nil {
+			return true
+		}
+	}
+	return pod.Status.Phase == corev1.PodFailed
+}
+
+func daemonSetPodTargetNode(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	if pod.Spec.NodeName != "" {
+		return pod.Spec.NodeName
+	}
+	if pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil {
+		return ""
+	}
+	required := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if required == nil {
+		return ""
+	}
+	for _, term := range required.NodeSelectorTerms {
+		for _, field := range term.MatchFields {
+			if field.Key == "metadata.name" && field.Operator == corev1.NodeSelectorOpIn && len(field.Values) == 1 {
+				return field.Values[0]
+			}
+		}
+	}
+	return ""
+}
+
+func allDaemonSetByDesignPlacementReasons(reasons []SchedulingReason) bool {
+	for _, reason := range reasons {
+		switch reason.Class {
+		case SchedNodeAffinitySelector:
+			continue
+		case SchedUntoleratedTaint:
+			if reason.TaintKey != "" && !isNodeLifecycleTaint(reason.TaintKey) {
+				continue
+			}
+		}
+		return false
+	}
+	return len(reasons) > 0
 }
 
 func listPodsByNamespace(cache *ResourceCache, namespace string) map[string][]*corev1.Pod {
