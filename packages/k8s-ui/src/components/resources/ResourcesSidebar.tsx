@@ -92,6 +92,25 @@ const CORE_RESOURCE_TYPES = [
   { kind: 'hpas', label: 'HPAs' },
 ] as const
 
+export function resourceMatchesSidebarFilter(resource: Pick<APIResource, 'kind' | 'name' | 'group'>, term: string): boolean {
+  const normalized = term.trim().toLowerCase()
+  if (!normalized) return true
+  return resource.kind.toLowerCase().includes(normalized) ||
+    resource.name.toLowerCase().includes(normalized) ||
+    resource.group.toLowerCase().includes(normalized)
+}
+
+export function rawCRDGroupTitle(resources: Pick<APIResource, 'group' | 'isCrd'>[]): string | undefined {
+  const groups = Array.from(new Set(
+    resources
+      .filter(resource => resource.isCrd && resource.group)
+      .map(resource => resource.group)
+  )).sort()
+
+  if (groups.length === 0) return undefined
+  return groups.length === 1 ? `API group: ${groups[0]}` : `API groups: ${groups.join(', ')}`
+}
+
 // Resource type button in sidebar
 interface ResourceTypeButtonProps {
   resource: APIResource
@@ -347,12 +366,10 @@ export function ResourcesSidebar({
     return sortedCategories
       .map(category => {
         const categoryMatches = category.name.toLowerCase().includes(term)
+        const rawGroupMatches = category.resources.some((resource: APIResource) => resource.group.toLowerCase().includes(term))
         // If the group name matches, show all its resources
-        if (categoryMatches) return category
-        const matchingResources = category.visibleResources.filter((resource: any) =>
-          resource.kind.toLowerCase().includes(term) ||
-          resource.name.toLowerCase().includes(term)
-        )
+        if (categoryMatches || rawGroupMatches) return category
+        const matchingResources = category.visibleResources.filter((resource: APIResource) => resourceMatchesSidebarFilter(resource, term))
         if (matchingResources.length === 0) return null
         return {
           ...category,
@@ -550,6 +567,7 @@ export function ResourcesSidebar({
           // Dynamic categories from API
           filteredCategories.map((category) => {
             const isExpanded = effectiveExpandedCategories.has(category.name)
+            const rawGroupTitle = rawCRDGroupTitle(category.resources)
             return (
               <div key={category.name} className="mb-2">
                 <button
@@ -561,7 +579,7 @@ export function ResourcesSidebar({
                   ) : (
                     <ChevronRight className="w-3 h-3" />
                   )}
-                  <span className="flex-1 text-left">{category.name}</span>
+                  <span className="flex-1 text-left truncate" title={rawGroupTitle}>{category.name}</span>
                   {!isExpanded && (
                     <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', category.total < 1000 ? 'w-8' : 'w-9')}>
                       {category.total}

@@ -13,6 +13,7 @@ const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisr
 const STORAGE_KINDS = ['PersistentVolumeClaim', 'PersistentVolume', 'StorageClass', 'VolumeAttachment']
 const ACCESS_CONTROL_KINDS = ['ServiceAccount', 'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding']
 const CLUSTER_KINDS = ['Node', 'Namespace', 'Event']
+const CORE_CATEGORY_NAMES = new Set(['Workloads', 'Networking', 'Configuration', 'Storage', 'Access Control', 'Cluster'])
 
 // Core resources that must always be present (fallback if API discovery misses them)
 export const CORE_RESOURCES: APIResource[] = [
@@ -112,6 +113,7 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
 export function formatGroupName(group: string): string {
   const knownGroups: Record<string, string> = {
     'argoproj.io': 'Argo',
+    'apiregistration.k8s.io': 'API Registration',
     'cert-manager.io': 'Cert Manager',
     'acme.cert-manager.io': 'Cert Manager',
     'istio.io': 'Istio',
@@ -119,10 +121,12 @@ export function formatGroupName(group: string): string {
     'security.istio.io': 'Istio',
     'telemetry.istio.io': 'Istio',
     'monitoring.coreos.com': 'Prometheus',
+    'monitoring.googleapis.com': 'Google Cloud Monitoring',
     'velero.io': 'Velero',
     'external-secrets.io': 'External Secrets',
     'keda.sh': 'KEDA',
     'gateway.networking.k8s.io': 'Gateway API',
+    'gateway.envoyproxy.io': 'Envoy Gateway',
     'traefik.io': 'Traefik',
     'traefik.containo.us': 'Traefik',
     'crossplane.io': 'Crossplane',
@@ -166,7 +170,11 @@ export function formatGroupName(group: string): string {
     'infrastructure.cluster.x-k8s.io': 'Cluster API',
     'ceph.rook.io': 'Rook',
     'kyverno.io': 'Kyverno',
+    'policies.kyverno.io': 'Kyverno',
     'k8s.nginx.org': 'NGINX',
+    'networking.gke.io': 'GKE Networking',
+    'warden.gke.io': 'GKE Warden',
+    'cloud.google.com': 'Google Cloud',
     'sparkoperator.k8s.io': 'Spark',
     'kubeflow.org': 'Kubeflow',
     'snapshot.storage.k8s.io': 'Snapshots',
@@ -177,6 +185,12 @@ export function formatGroupName(group: string): string {
     'resource.k8s.io': 'Dynamic Resource Allocation',
     'kueue.x-k8s.io': 'Kueue',
     'autoscaling.x-k8s.io': 'Cluster Autoscaler',
+    'crd.k8s.amazonaws.com': 'AWS VPC CNI',
+    'vpcresources.k8s.aws': 'AWS VPC CNI',
+    'elbv2.k8s.aws': 'AWS Load Balancer',
+    'eks.amazonaws.com': 'EKS',
+    'networking.k8s.aws': 'AWS Networking',
+    'acid.zalan.do': 'Zalando Postgres',
     'serving.kserve.io': 'KServe',
     'ray.io': 'KubeRay',
     'leaderworkerset.x-k8s.io': 'LeaderWorkerSet',
@@ -197,13 +211,66 @@ export function formatGroupName(group: string): string {
   // their own per-service groups like s3.aws.upbound.io, compute.gcp.upbound.io).
   if (group.endsWith('.upbound.io')) return 'Crossplane'
   if (group.endsWith('.crossplane.io')) return 'Crossplane'
-  return group
+  if (group === 'cluster.x-k8s.io' || group.endsWith('.cluster.x-k8s.io')) return 'Cluster API'
+  if (group.endsWith('.cnrm.cloud.google.com')) return 'Config Connector'
+  if (group.endsWith('.openshift.io')) return 'OpenShift'
+  return formatUnmappedGroupName(group)
 }
 
 export function shortenGroupName(group: string): string {
   return group
     .replace(/\.(io|com|org|dev|sh)$/, '')
     .replace(/\.k8s$/, '')
+}
+
+const GROUP_SUFFIX_LABELS = new Set([
+  'io', 'com', 'org', 'dev', 'sh', 'net', 'do', 'ai', 'cloud', 'co', 'app',
+  'k8s', 'x-k8s', 'k8s-sigs', 'sigs',
+])
+const GROUP_ACRONYMS: Record<string, string> = {
+  api: 'API',
+  aws: 'AWS',
+  amazonaws: 'AWS',
+  cnrm: 'CNRM',
+  crd: 'CRD',
+  csi: 'CSI',
+  dns: 'DNS',
+  gcp: 'GCP',
+  gke: 'GKE',
+  gpu: 'GPU',
+  hpa: 'HPA',
+  ipam: 'IPAM',
+  k8s: 'K8s',
+  nfd: 'NFD',
+  tcp: 'TCP',
+  tls: 'TLS',
+  udp: 'UDP',
+}
+
+function formatUnmappedGroupName(group: string): string {
+  const labels = group
+    .split('.')
+    .map(label => label.trim().toLowerCase())
+    .filter(label => label && !GROUP_SUFFIX_LABELS.has(label))
+
+  if (labels.length === 0) return group
+  if (labels.length === 1) return avoidCoreCategoryCollision(formatGroupToken(labels[0]))
+
+  const owner = labels[labels.length - 1]
+  const descriptors = labels.slice(0, -1)
+  return avoidCoreCategoryCollision([owner, ...descriptors].map(formatGroupToken).join(' '))
+}
+
+function avoidCoreCategoryCollision(label: string): string {
+  return CORE_CATEGORY_NAMES.has(label) ? `${label} APIs` : label
+}
+
+function formatGroupToken(token: string): string {
+  return token
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map(part => GROUP_ACRONYMS[part] ?? part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }
 
 function sortResources(resources: APIResource[]): APIResource[] {

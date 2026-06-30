@@ -3,7 +3,7 @@ import { Section } from '../ui/drawer-components'
 import { Badge } from '../ui/Badge'
 import type { Issue, IssueResourceRef } from './types'
 import { categoryLabel } from './severity'
-import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic'
+import { diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic'
 
 /**
  * ResourceIssuesSection — the compact "Operational Issues" block for the resource
@@ -108,7 +108,6 @@ function CausalContext({ issue, onResourceClick }: { issue: Issue; onResourceCli
     <div className="mt-2 border-t border-theme-border/60 pt-2">
       <div className="mb-1 flex items-center gap-2">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Context</span>
-        {ctx.role ? <span className="badge-sm text-[10px] text-theme-text-secondary">{diagnosticRoleLabel(ctx.role)}</span> : null}
       </div>
       <ul className="space-y-1.5">
         {links.map((fact, idx) => (

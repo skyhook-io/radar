@@ -53,8 +53,8 @@ export function PVCRenderer({ data, onNavigate, extraSections }: PVCRendererProp
       {isPending && (
         <AlertBanner
           variant="info"
-          title="Pending — awaiting binding"
-          message="Not yet bound to a volume. This is normal while provisioning, and expected indefinitely for a WaitForFirstConsumer StorageClass until a Pod that mounts this claim is scheduled."
+          title="Pending — not yet bound"
+          message="A PVC stays Pending while its volume is provisioned, or for a WaitForFirstConsumer StorageClass until a Pod that mounts it is scheduled. If it stays Pending, check the StorageClass, its provisioner, and storage quota."
         />
       )}
 

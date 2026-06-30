@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
 import { compareIssues, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
-import { categoryLabel, groupLabel } from './severity'
+import { categoryLabel, groupBadgeClass, groupLabel } from './severity'
 import { IssueRow } from './IssuesView'
 
 const base: Issue = {
@@ -17,6 +17,10 @@ const base: Issue = {
   reason: 'CrashLoopBackOff',
 }
 const mk = (o: Partial<Issue>): Issue => ({ ...base, ...o })
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('compareIssues', () => {
   it('orders critical before warning regardless of observed age', () => {
@@ -61,6 +65,46 @@ describe('category/group label fallbacks', () => {
   it('humanizes an unmapped group', () => {
     expect(groupLabel('runtime')).toBe('Runtime')
     expect(groupLabel('some_future_group')).toBe('Some future group')
+  })
+  it('keeps ordinary group chips neutral and emphasizes control-plane/unknown groups', () => {
+    expect(groupBadgeClass('runtime')).toContain('text-theme-text-secondary')
+    expect(groupBadgeClass('runtime')).not.toContain('ring-theme-border-light')
+    expect(groupBadgeClass('control_plane')).toContain('text-theme-text-primary')
+    expect(groupBadgeClass('control_plane')).toContain('ring-theme-border-light')
+    expect(groupBadgeClass('unknown')).toContain('ring-theme-border-light')
+    expect(groupBadgeClass('some_future_group')).toContain('text-theme-text-secondary')
+    expect(groupBadgeClass('some_future_group')).not.toContain('ring-theme-border-light')
+  })
+})
+
+describe('IssueRow', () => {
+  it('keeps relative age visible and adds since-deploy as a secondary tag', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        id: 'baseline',
+        first_seen: '2026-06-28T12:00:00Z',
+        issue_timing: 'started_at_resource_creation',
+      }),
+      open: false,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('2d')
+    expect(html).toContain('since deploy')
+  })
+
+  it('uses the category-group chip class in the queue row', () => {
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({ category_group: 'control_plane' }),
+      open: false,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('Control plane')
+    expect(html).toContain(groupBadgeClass('control_plane'))
   })
 })
 

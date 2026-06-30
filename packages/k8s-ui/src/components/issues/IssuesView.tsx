@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, ChevronRight, CircleCheck, Clock, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
-import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, NEUTRAL_CHIP_CLASS, TerminalBlock } from '../ui';
+import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
 import {
@@ -11,6 +11,7 @@ import {
   ISSUE_SEVERITY_SOLID_CLASS,
   ISSUE_SEVERITY_TEXT_CLASS,
   categoryLabel,
+  groupBadgeClass,
   groupLabel,
 } from './severity';
 import {
@@ -205,7 +206,7 @@ export function IssueRow({
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex min-w-0 items-baseline gap-2">
             <span className="shrink-0 text-sm font-medium text-theme-text-primary">{categoryLabel(issue.category)}</span>
-            <span className={`shrink-0 self-center ${NEUTRAL_CHIP_CLASS}`}>{groupLabel(issue.category_group)}</span>
+            <span className={`shrink-0 self-center ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
             {renderBadges?.(slotCtx)}
             {/* The detector reason rides the title row while COLLAPSED so the
                 key triage signal shows without expanding. When open, the full
@@ -257,14 +258,12 @@ export function IssueRow({
           </div>
         </div>
 
-        {/* Right cluster — severity pill THEN age, vertically centered as a
-            group and top-aligned with the title line. */}
+        {/* Right cluster — severity pill THEN age, vertically centered as a group. */}
         <div className="flex shrink-0 items-center gap-3">
           <span className={`badge-sm shrink-0 px-2.5 py-0.5 text-xs font-semibold ${open ? ISSUE_SEVERITY_SOLID_CLASS[severity] : ISSUE_SEVERITY_BADGE_CLASS[severity]}`}>
             {ISSUE_SEVERITY_LABEL[severity]}
           </span>
-          {/* Age chip: chronic-vs-acute signal. started_at_resource_creation →
-              "since deploy" (raw age misleads — present since creation). */}
+          {/* Age chip: keep recency visible; the deployment-start signal rides as a secondary tag. */}
           {issue.first_seen ? (
             <time
               dateTime={issue.first_seen}
@@ -272,9 +271,10 @@ export function IssueRow({
               className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
             >
               <Clock className="h-3 w-3" aria-hidden />
-              {issue.issue_timing === 'started_at_resource_creation'
-                ? 'since deploy'
-                : formatCompactAge(issue.first_seen)}
+              {formatCompactAge(issue.first_seen)}
+              {issue.issue_timing === 'started_at_resource_creation' ? (
+                <span className="badge-sm ml-1 text-[10px] text-theme-text-secondary">since deploy</span>
+              ) : null}
             </time>
           ) : null}
           {renderActions?.(slotCtx)}

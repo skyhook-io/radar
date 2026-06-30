@@ -359,11 +359,8 @@ function ProblemsPanel({
               <div className="divide-y divide-theme-border">
                 {issues.map((issue) => {
                   const ref = subjectRef(issue)
-                  const age = issue.first_seen
-                    ? issue.issue_timing === 'started_at_resource_creation'
-                      ? 'since deploy'
-                      : formatCompactAge(issue.first_seen)
-                    : ''
+                  const age = issue.first_seen ? formatCompactAge(issue.first_seen) : ''
+                  const startedAtDeploy = issue.issue_timing === 'started_at_resource_creation'
 
                   return (
                     <button
@@ -381,7 +378,12 @@ function ProblemsPanel({
                         <div className="flex items-center gap-1.5">
                           <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
                           <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
-                          {age && <span className="text-[10px] text-theme-text-tertiary ml-auto shrink-0">{age}</span>}
+                          {(age || startedAtDeploy) && (
+                            <span className="ml-auto flex shrink-0 items-center gap-1">
+                              {age && <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>}
+                              {startedAtDeploy && <span className="badge-sm text-[10px] text-theme-text-secondary">since deploy</span>}
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <span className="text-[11px] text-theme-text-secondary truncate">{categoryLabel(issue.category)}</span>

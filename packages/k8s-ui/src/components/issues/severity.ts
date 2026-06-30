@@ -1,5 +1,6 @@
 import type { IssueSeverity } from './types';
 import { BADGE_SEVERITY_COLORS as sev } from '../ui/Badge';
+import { NEUTRAL_CHIP_CLASS } from '../ui/CardSection';
 import {
   TONE_HEADER_BAND_CLASS,
   TONE_RAIL_CLASS,
@@ -38,6 +39,14 @@ export const ISSUE_SEVERITY_TEXT_CLASS = byTone(TONE_TEXT_CLASS);
 export const ISSUE_SEVERITY_RAIL_CLASS = byTone(TONE_RAIL_CLASS);
 export const ISSUE_SEVERITY_SOLID_CLASS = byTone(TONE_SOLID_CLASS);
 export const ISSUE_SEVERITY_HEADER_BAND_CLASS = byTone(TONE_HEADER_BAND_CLASS);
+
+const GROUP_CHIP_EMPHASIS_CLASS = 'inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold leading-tight bg-theme-elevated text-theme-text-primary ring-1 ring-theme-border-light';
+
+const EMPHASIZED_GROUPS = new Set(['control_plane', 'unknown']);
+
+export function groupBadgeClass(group: string): string {
+  return EMPHASIZED_GROUPS.has(group) ? GROUP_CHIP_EMPHASIS_CLASS : NEUTRAL_CHIP_CLASS;
+}
 
 // Display labels. The server emits raw snake_case category/group enums (so a
 // new category needs no frontend deploy to APPEAR); the UI humanizes for
