@@ -465,17 +465,20 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       'HTTPProxy', // Contour
     ])
 
-    // Group lanes by app label
+    // Group lanes by app label, scoped to namespace: the same app label in two
+    // namespaces (e.g. the same workload deployed to dev and staging) is two
+    // distinct apps and must not collapse into one lane.
     const appGroups = new Map<string, string[]>()
     for (const [laneId, lane] of laneMap) {
       if (laneParent.has(laneId)) continue
       if (!appLabelEligibleKinds.has(lane.kind)) continue
       const appLabel = laneAppLabels.get(laneId)
       if (!appLabel) continue
-      if (!appGroups.has(appLabel)) {
-        appGroups.set(appLabel, [])
+      const groupKey = `${lane.namespace}/${appLabel}`
+      if (!appGroups.has(groupKey)) {
+        appGroups.set(groupKey, [])
       }
-      appGroups.get(appLabel)!.push(laneId)
+      appGroups.get(groupKey)!.push(laneId)
     }
 
     // For each app group with multiple members, pick the best parent

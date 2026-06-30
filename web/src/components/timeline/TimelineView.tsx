@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef } from 'react'
-import { Network } from 'lucide-react'
+import { Network, AlertTriangle, RefreshCw } from 'lucide-react'
 import { TimelineList } from './TimelineList'
 import { TimelineSwimlanes } from './TimelineSwimlanes'
 import { useChanges, useTopology } from '../../api/client'
@@ -52,7 +52,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
 
   // Fetch all activity - zoom controls what's visible in the UI
   // Only fetch heavy 10k dataset for swimlanes; list view fetches its own 500
-  const { data: activity, isLoading } = useChanges({
+  const { data: activity, isLoading, isError, refetch } = useChanges({
     namespaces,
     timeRange: 'all',
     includeK8sEvents: true,
@@ -110,6 +110,30 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )
+    }
+
+    // A failed fetch must not render as the swimlane "No events yet" empty state —
+    // that reads as a quiet cluster rather than a load failure.
+    if (isError) {
+      return (
+        <div className="flex-1 flex flex-col">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border">
+            <div />
+            <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
+          </div>
+          <div className="flex-1 flex flex-col items-center justify-center text-theme-text-tertiary gap-3">
+            <AlertTriangle className="w-10 h-10 text-amber-400/70" />
+            <p className="text-base">Failed to load timeline data</p>
+            <button
+              onClick={() => refetch()}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg hover:bg-theme-hover transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Try again
+            </button>
           </div>
         </div>
       )

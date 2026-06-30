@@ -3,6 +3,7 @@ package timeline
 import (
 	"context"
 	"maps"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -327,7 +328,7 @@ func GetDiagnosis(kind, namespace, name string) DiagnoseResponse {
 			switch reason {
 			case DropReasonNoisyFilter:
 				resp.Recommendations = append(resp.Recommendations,
-					"Resource was filtered "+string(rune(count))+" times by noisy_filter - check isNoisyResource() patterns in cache.go")
+					"Resource was filtered "+strconv.Itoa(count)+" times by noisy_filter - check isNoisyResource() patterns in cache.go")
 			case DropReasonChannelFull:
 				resp.Recommendations = append(resp.Recommendations,
 					"Resource events dropped due to channel full - the system may be under heavy load")

@@ -99,6 +99,32 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     onQueryChange?.({ timeRange, kind: kindFilter || undefined })
   }, [timeRange, kindFilter, onQueryChange])
 
+  // Kind filter options: seed with common kinds, then accumulate every kind seen
+  // in the data so CRDs the cluster actually emits become filterable. The set only
+  // grows — selecting a kind narrows the server query to it, so deriving options
+  // from the current events alone would collapse the dropdown to that one kind.
+  const [seenKinds, setSeenKinds] = useState<Set<string>>(() => new Set(RESOURCE_KINDS))
+  useEffect(() => {
+    if (!events?.length) return
+    setSeenKinds((prev) => {
+      let next: Set<string> | null = null
+      for (const e of events) {
+        if (e.kind && !prev.has(e.kind)) {
+          if (!next) next = new Set(prev)
+          next.add(e.kind)
+        }
+      }
+      return next ?? prev
+    })
+  }, [events])
+  // Common kinds keep their curated order (most-used first); kinds discovered in
+  // the data that aren't in the seed (CRDs) are appended alphabetically.
+  const kindOptions = useMemo(() => {
+    const seeded = new Set<string>(RESOURCE_KINDS)
+    const extra = [...seenKinds].filter((k) => !seeded.has(k)).sort()
+    return [...RESOURCE_KINDS, ...extra]
+  }, [seenKinds])
+
 
   const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(onRefresh ?? (() => {}))
 
@@ -341,7 +367,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
           className="appearance-none bg-theme-elevated text-theme-text-primary text-sm rounded-lg px-3 py-2 border border-theme-border-light focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           <option value="">All Kinds</option>
-          {RESOURCE_KINDS.map((kind) => (
+          {kindOptions.map((kind) => (
             <option key={kind} value={kind}>
               {kind}
             </option>
