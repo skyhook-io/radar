@@ -282,8 +282,8 @@ export function PodRenderer({
   const operationalIssuesShown = useOperationalIssuesShown()
   const podProblems = getPodProblems(data)
   const hasProblems = podProblems.length > 0 && !operationalIssuesShown
-  const hasMetricsHistory = !!metricsHistory?.containers?.length
-  const showMetricsUnavailable = !!metricsUnavailable && !hasMetricsHistory && !metricsHistory?.collectionError
+  const showMetricsUnavailable = !!metricsUnavailable && !metricsHistory?.collectionError
+  const hasMetricsHistory = !showMetricsUnavailable && !!metricsHistory?.containers?.length
   const currentMetrics = metricsUnavailable ? undefined : metrics
 
   // Image filesystem modal state

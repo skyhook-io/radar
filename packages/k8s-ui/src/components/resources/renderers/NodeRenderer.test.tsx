@@ -50,6 +50,22 @@ describe('NodeRenderer metrics', () => {
     expect(html).not.toContain('Last updated')
   })
 
+  it('does not let stale historical metrics hide an unavailable state', () => {
+    const html = renderToString(
+      <NodeRenderer
+        data={node}
+        metricsUnavailable
+        metricsHistory={{
+          dataPoints: [{ timestamp: '2026-06-30T00:00:00Z', cpu: 100000000, memory: 268435456 }],
+        }}
+      />,
+    )
+
+    expect(html).toContain('Metrics unavailable')
+    expect(html).not.toContain('100m')
+    expect(html).not.toContain('256 MiB')
+  })
+
   it('keeps non-absence collection errors visible', () => {
     const html = renderToString(
       <NodeRenderer

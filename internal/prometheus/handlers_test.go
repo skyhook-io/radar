@@ -1,11 +1,64 @@
 package prometheus
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/pkg/prom"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestHandleConnectOptionalReturnsUnavailableStatus(t *testing.T) {
+	errorlog.Reset()
+	t.Cleanup(errorlog.Reset)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not prometheus", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	clientMu.Lock()
+	previous := globalClient
+	globalClient = &Client{
+		manualURL:   srv.URL,
+		contextName: "test-context",
+		httpClient:  &http.Client{Timeout: 5 * time.Second},
+	}
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		globalClient = previous
+		clientMu.Unlock()
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil)
+	rec := httptest.NewRecorder()
+	handleConnect(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var status prom.Status
+	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if status.Connected {
+		t.Fatal("Connected = true, want false")
+	}
+	if status.Error == "" {
+		t.Fatal("Error is empty, want connection failure detail")
+	}
+	for _, entry := range errorlog.GetEntries() {
+		if entry.Source == "prometheus" && entry.Level == "error" {
+			t.Fatalf("optional connect recorded error log entry: %+v", entry)
+		}
+	}
+}
 
 func TestAnyNodeUsesDocker(t *testing.T) {
 	tests := []struct {

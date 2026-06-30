@@ -5,13 +5,16 @@ import {
   isMetricsUnavailableMessage,
   normalizeNodeMetricsHistory,
   normalizePodMetricsHistory,
+  shouldFetchLiveMetrics,
 } from './client'
 
 describe('metrics unavailable classification', () => {
   it('recognizes metrics-server absence messages', () => {
     expect(isMetricsUnavailableMessage('Pod metrics not found (metrics-server may not be installed)')).toBe(true)
     expect(isMetricsUnavailableMessage('the server could not find the requested resource (get pods.metrics.k8s.io)')).toBe(true)
-    expect(isMetricsUnavailableMessage('the server could not find the requested resource')).toBe(true)
+    expect(isMetricsUnavailableMessage('no matches for kind "PodMetrics" in version "metrics.k8s.io/v1beta1"')).toBe(true)
+    expect(isMetricsUnavailableMessage('no resource matches "pods.metrics.k8s.io"')).toBe(true)
+    expect(isMetricsUnavailableMessage('the server could not find the requested resource')).toBe(false)
     expect(isMetricsUnavailableMessage('no access to nodes')).toBe(false)
   })
 
@@ -51,5 +54,21 @@ describe('metrics unavailable classification', () => {
     })
     expect(history.collectionError).toBe('forbidden: no access to nodes')
     expect(history.metricsUnavailable).toBeUndefined()
+  })
+
+  it('keeps generic not-found collection errors visible without a metrics API signal', () => {
+    const history = normalizeNodeMetricsHistory({
+      name: 'kind-worker',
+      dataPoints: [],
+      collectionError: 'the server could not find the requested resource',
+    })
+    expect(history.collectionError).toBe('the server could not find the requested resource')
+    expect(history.metricsUnavailable).toBeUndefined()
+  })
+
+  it('waits for history classification before live metrics fetches', () => {
+    expect(shouldFetchLiveMetrics(false, false)).toBe(false)
+    expect(shouldFetchLiveMetrics(true, false)).toBe(true)
+    expect(shouldFetchLiveMetrics(true, true)).toBe(false)
   })
 })

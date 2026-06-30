@@ -2226,7 +2226,13 @@ func isMetricsAPIUnavailable(err error) bool {
 	if !strings.Contains(msg, "metrics") {
 		return false
 	}
-	return strings.Contains(msg, "not found") || strings.Contains(msg, "could not find the requested resource")
+	return strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "could not find the requested resource") ||
+		strings.Contains(msg, "no matches for kind") ||
+		strings.Contains(msg, "no resource matches") ||
+		strings.Contains(msg, "no metrics known") ||
+		strings.Contains(msg, "not available") ||
+		strings.Contains(msg, "unable to fetch metrics")
 }
 
 // handlePodMetricsHistory returns historical metrics for a specific pod
@@ -2240,21 +2246,22 @@ func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	history := store.GetPodMetricsHistory(namespace, name)
+	history := podMetricsHistoryResponse(store.GetPodMetricsHistory(namespace, name), namespace, name, store.CollectionHealth())
+	s.writeJSON(w, history)
+}
+
+func podMetricsHistoryResponse(history *k8s.PodMetricsHistory, namespace, name string, health k8s.MetricsCollectionHealth) *k8s.PodMetricsHistory {
 	if history == nil {
-		// Return empty history — include collection error if metrics are failing
 		history = &k8s.PodMetricsHistory{
 			Namespace:  namespace,
 			Name:       name,
 			Containers: []k8s.ContainerMetricsHistory{},
 		}
-		health := store.CollectionHealth()
-		if health.PodMetrics.ConsecutiveErrors > 0 {
-			history.CollectionError = health.PodMetrics.LastError
-		}
 	}
-
-	s.writeJSON(w, history)
+	if health.PodMetrics.ConsecutiveErrors > 0 {
+		history.CollectionError = health.PodMetrics.LastError
+	}
+	return history
 }
 
 // handleNodeMetricsHistory returns historical metrics for a specific node
@@ -2271,19 +2278,21 @@ func (s *Server) handleNodeMetricsHistory(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	history := store.GetNodeMetricsHistory(name)
+	history := nodeMetricsHistoryResponse(store.GetNodeMetricsHistory(name), name, store.CollectionHealth())
+	s.writeJSON(w, history)
+}
+
+func nodeMetricsHistoryResponse(history *k8s.NodeMetricsHistory, name string, health k8s.MetricsCollectionHealth) *k8s.NodeMetricsHistory {
 	if history == nil {
 		history = &k8s.NodeMetricsHistory{
 			Name:       name,
 			DataPoints: []k8s.MetricsDataPoint{},
 		}
-		health := store.CollectionHealth()
-		if health.NodeMetrics.ConsecutiveErrors > 0 {
-			history.CollectionError = health.NodeMetrics.LastError
-		}
 	}
-
-	s.writeJSON(w, history)
+	if health.NodeMetrics.ConsecutiveErrors > 0 {
+		history.CollectionError = health.NodeMetrics.LastError
+	}
+	return history
 }
 
 // handleTopPods returns the latest metrics for all pods (bulk endpoint for table view)

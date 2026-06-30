@@ -1033,6 +1033,31 @@ func TestIsMetricsAPIUnavailable(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "metrics no matches for kind",
+			err:  errors.New(`failed to get pod metrics: no matches for kind "PodMetrics" in version "metrics.k8s.io/v1beta1"`),
+			want: true,
+		},
+		{
+			name: "metrics no resource matches",
+			err:  errors.New(`failed to get pod metrics: no resource matches "pods.metrics.k8s.io"`),
+			want: true,
+		},
+		{
+			name: "metrics not available",
+			err:  errors.New(`failed to get pod metrics: pods.metrics.k8s.io not available`),
+			want: true,
+		},
+		{
+			name: "no metrics known",
+			err:  errors.New(`failed to get pod metrics: no metrics known for pod "api" in pods.metrics.k8s.io`),
+			want: true,
+		},
+		{
+			name: "unable to fetch metrics",
+			err:  errors.New(`failed to get pod metrics: unable to fetch metrics from pods.metrics.k8s.io`),
+			want: true,
+		},
+		{
 			name: "non-metrics missing resource stays visible",
 			err:  errors.New("the server could not find the requested resource"),
 			want: false,
@@ -1050,6 +1075,47 @@ func TestIsMetricsAPIUnavailable(t *testing.T) {
 				t.Fatalf("isMetricsAPIUnavailable() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *testing.T) {
+	health := k8s.MetricsCollectionHealth{
+		PodMetrics: k8s.MetricsSourceHealth{
+			ConsecutiveErrors: 1,
+			LastError:         "the server could not find the requested resource (get pods.metrics.k8s.io)",
+		},
+		NodeMetrics: k8s.MetricsSourceHealth{
+			ConsecutiveErrors: 1,
+			LastError:         "the server could not find the requested resource (get nodes.metrics.k8s.io)",
+		},
+	}
+
+	podHistory := podMetricsHistoryResponse(&k8s.PodMetricsHistory{
+		Namespace: "default",
+		Name:      "api",
+		Containers: []k8s.ContainerMetricsHistory{{
+			Name: "api",
+			DataPoints: []k8s.MetricsDataPoint{{
+				Timestamp: time.Now(),
+				CPU:       100000000,
+				Memory:    268435456,
+			}},
+		}},
+	}, "default", "api", health)
+	if podHistory.CollectionError != health.PodMetrics.LastError {
+		t.Fatalf("pod collection error = %q, want %q", podHistory.CollectionError, health.PodMetrics.LastError)
+	}
+
+	nodeHistory := nodeMetricsHistoryResponse(&k8s.NodeMetricsHistory{
+		Name: "kind-worker",
+		DataPoints: []k8s.MetricsDataPoint{{
+			Timestamp: time.Now(),
+			CPU:       100000000,
+			Memory:    268435456,
+		}},
+	}, "kind-worker", health)
+	if nodeHistory.CollectionError != health.NodeMetrics.LastError {
+		t.Fatalf("node collection error = %q, want %q", nodeHistory.CollectionError, health.NodeMetrics.LastError)
 	}
 }
 

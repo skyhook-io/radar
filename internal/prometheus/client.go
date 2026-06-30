@@ -53,6 +53,17 @@ var (
 	clientMu     sync.RWMutex
 )
 
+type suppressDiscoveryDiagnosticsKey struct{}
+
+func withSuppressedDiscoveryDiagnostics(ctx context.Context) context.Context {
+	return context.WithValue(ctx, suppressDiscoveryDiagnosticsKey{}, true)
+}
+
+func discoveryDiagnosticsSuppressed(ctx context.Context) bool {
+	suppressed, _ := ctx.Value(suppressDiscoveryDiagnosticsKey{}).(bool)
+	return suppressed
+}
+
 // Initialize creates the global Prometheus client.
 func Initialize(client kubernetes.Interface, config *rest.Config, contextName string) {
 	clientMu.Lock()
@@ -296,7 +307,7 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 	tr.Headers = headers
 	ok, reason := prom.NewClient(tr).Probe(ctx)
 	if !ok {
-		logProbeRejection(addr, reason)
+		logProbeRejection(addr, reason, !discoveryDiagnosticsSuppressed(ctx))
 	}
 	return ok
 }
@@ -306,14 +317,18 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 // misconfiguration); empty instances get warning level (cluster state);
 // other failures use stdlib log so they appear in the discovery audit
 // trail without flooding errorlog.
-func logProbeRejection(addr string, reason prom.ProbeReason) {
+func logProbeRejection(addr string, reason prom.ProbeReason, recordDiagnostics bool) {
 	switch reason {
 	case prom.ProbeReasonAuthError:
-		errorlog.Record("prometheus", "error",
-			"endpoint %s rejected credentials (HTTP 401/403, check --prometheus-header)", addr)
+		if recordDiagnostics {
+			errorlog.Record("prometheus", "error",
+				"endpoint %s rejected credentials (HTTP 401/403, check --prometheus-header)", addr)
+		}
 	case prom.ProbeReasonEmptyInstance:
-		errorlog.Record("prometheus", "warning",
-			"endpoint %s has no active scrape targets (empty instance), skipping", addr)
+		if recordDiagnostics {
+			errorlog.Record("prometheus", "warning",
+				"endpoint %s has no active scrape targets (empty instance), skipping", addr)
+		}
 	case prom.ProbeReasonNotPrometheus:
 		log.Printf("[prometheus] endpoint %s responded but not in Prometheus format, skipping", addr)
 	case prom.ProbeReasonPromError:

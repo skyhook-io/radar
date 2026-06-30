@@ -75,8 +75,8 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
   const problems = getNodeProblems(data)
   const hasProblems = problems.length > 0
   const isCordoned = !!spec.unschedulable
-  const hasMetricsHistory = !!metricsHistory?.dataPoints?.length
-  const showMetricsUnavailable = !!metricsUnavailable && !hasMetricsHistory && !metricsHistory?.collectionError
+  const showMetricsUnavailable = !!metricsUnavailable && !metricsHistory?.collectionError
+  const hasMetricsHistory = !showMetricsUnavailable && !!metricsHistory?.dataPoints?.length
   const currentMetrics = metricsUnavailable ? undefined : metrics
 
   // Extract platform info from labels
@@ -199,7 +199,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
               <span className="break-all">{metricsHistory.collectionError}</span>
             </div>
           )}
-          {metricsHistory?.dataPoints && metricsHistory.dataPoints.length > 0 ? (
+          {!showMetricsUnavailable && metricsHistory?.dataPoints && metricsHistory.dataPoints.length > 0 ? (
             <div className="space-y-4">
               {/* CPU Usage with Chart */}
               <div className="card-inner-lg">

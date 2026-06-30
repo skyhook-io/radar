@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 )
@@ -163,6 +165,33 @@ func (rb *ringBuffer) GetAll() []MetricsDataPoint {
 	return result
 }
 
+func metricsCollectionErrorLevel(err error) string {
+	if metricsAPIUnavailable(err) {
+		return "warning"
+	}
+	return "error"
+}
+
+func metricsAPIUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsNotFound(err) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "metrics") {
+		return false
+	}
+	return strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "could not find the requested resource") ||
+		strings.Contains(msg, "no matches for kind") ||
+		strings.Contains(msg, "no resource matches") ||
+		strings.Contains(msg, "no metrics known") ||
+		strings.Contains(msg, "not available") ||
+		strings.Contains(msg, "unable to fetch metrics")
+}
+
 // NewMetricsHistoryStore creates a MetricsHistoryStore. Call Start() to begin polling.
 func NewMetricsHistoryStore(client dynamic.Interface) *MetricsHistoryStore {
 	return &MetricsHistoryStore{
@@ -249,7 +278,7 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 		if shouldReport {
 			log.Printf("[metrics] Pod metrics collection failed (count=%d): %v", count, err)
 			if s.OnError != nil {
-				s.OnError("metrics", "error", "pod metrics collection failed (count=%d): %v", count, err)
+				s.OnError("metrics", metricsCollectionErrorLevel(err), "pod metrics collection failed (count=%d): %v", count, err)
 			}
 		}
 		return
@@ -356,7 +385,7 @@ func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.T
 		if shouldReport {
 			log.Printf("[metrics] Node metrics collection failed (count=%d): %v", count, err)
 			if s.OnError != nil {
-				s.OnError("metrics", "error", "node metrics collection failed (count=%d): %v", count, err)
+				s.OnError("metrics", metricsCollectionErrorLevel(err), "node metrics collection failed (count=%d): %v", count, err)
 			}
 		}
 		return

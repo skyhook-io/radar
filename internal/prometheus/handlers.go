@@ -64,9 +64,20 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _, err := client.EnsureConnected(r.Context())
+	ctx := r.Context()
+	optional := r.URL.Query().Get("optional") == "true"
+	if optional {
+		ctx = withSuppressedDiscoveryDiagnostics(ctx)
+	}
+	_, _, err := client.EnsureConnected(ctx)
 	if err != nil {
 		log.Printf("[prometheus] Connection failed: %v", err)
+		if optional {
+			status := client.GetStatus()
+			status.Error = "Prometheus connection failed: " + err.Error()
+			writeJSON(w, http.StatusOK, status)
+			return
+		}
 		errorlog.Record("prometheus", "error", "connection failed: %v", err)
 		writeError(w, http.StatusBadGateway, "Prometheus connection failed: "+err.Error())
 		return

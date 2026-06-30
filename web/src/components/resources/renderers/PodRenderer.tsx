@@ -3,7 +3,7 @@ import type { CopyHandler } from '@skyhook-io/k8s-ui/components/ui/drawer-compon
 import type { ResolvedEnvFrom } from '@skyhook-io/k8s-ui'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
-import { usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
+import { shouldFetchLiveMetrics, usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
 import { useRBACSubject } from '../../../api/rbac'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { ImageFilesystemModal } from '../ImageFilesystemModal'
@@ -37,9 +37,9 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   const metricsHistoryQuery = usePodMetricsHistory(namespace, podName)
   const { data: metricsHistory } = metricsHistoryQuery
   const historyMetricsUnavailable = metricsHistory?.metricsUnavailable === true
-  const liveMetricsEnabled = !historyMetricsUnavailable && (metricsHistoryQuery.isSuccess || metricsHistoryQuery.isError)
+  const liveMetricsEnabled = shouldFetchLiveMetrics(metricsHistoryQuery.isFetched || metricsHistoryQuery.isError, historyMetricsUnavailable)
   const { data: metrics } = usePodMetrics(namespace, podName, { enabled: liveMetricsEnabled })
-  const metricsUnavailable = metrics === null || historyMetricsUnavailable
+  const metricsUnavailable = historyMetricsUnavailable
   const visibleMetrics = historyMetricsUnavailable ? undefined : (metrics ?? undefined)
 
   // Hide metrics-server section when Prometheus has CPU data

@@ -38,7 +38,9 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 			c.markConnected(addr, "")
 			return addr, "", nil
 		}
-		errorlog.Record("prometheus", "error", "manual Prometheus URL %s not reachable", addr)
+		if !discoveryDiagnosticsSuppressed(ctx) {
+			errorlog.Record("prometheus", "error", "manual Prometheus URL %s not reachable", addr)
+		}
 		return "", "", fmt.Errorf("manual Prometheus URL %s not reachable", addr)
 	}
 
@@ -67,7 +69,9 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 		log.Printf("[prometheus] Discover error: %v", err)
 	}
 	if len(candidates) == 0 {
-		errorlog.Record("prometheus", "warning", "no Prometheus service found in cluster")
+		if !discoveryDiagnosticsSuppressed(ctx) {
+			errorlog.Record("prometheus", "warning", "no Prometheus service found in cluster")
+		}
 		return "", "", fmt.Errorf("no Prometheus service found in cluster")
 	}
 
@@ -99,7 +103,9 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 		connInfo, pfErr := portforward.Start(ctx, cand.Namespace, cand.Name, cand.TargetPort, contextName)
 		if pfErr != nil {
 			lastErr = fmt.Errorf("port-forward to %s/%s failed: %w", cand.Namespace, cand.Name, pfErr)
-			errorlog.Record("prometheus", "error", "port-forward to %s/%s failed: %v", cand.Namespace, cand.Name, pfErr)
+			if !discoveryDiagnosticsSuppressed(ctx) {
+				errorlog.Record("prometheus", "error", "port-forward to %s/%s failed: %v", cand.Namespace, cand.Name, pfErr)
+			}
 			continue
 		}
 
@@ -111,7 +117,9 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 
 		portforward.Stop()
 		lastErr = fmt.Errorf("Prometheus at %s/%s not responding after port-forward", cand.Namespace, cand.Name)
-		errorlog.Record("prometheus", "error", "Prometheus at %s/%s not responding after port-forward", cand.Namespace, cand.Name)
+		if !discoveryDiagnosticsSuppressed(ctx) {
+			errorlog.Record("prometheus", "error", "Prometheus at %s/%s not responding after port-forward", cand.Namespace, cand.Name)
+		}
 	}
 
 	c.mu.Lock()
