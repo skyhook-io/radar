@@ -1,6 +1,6 @@
 # Helm Support
 
-Radar treats Helm as a release system, not just a set of Kubernetes objects. The Helm view combines release metadata, rendered resources, revision history, operation inference, and live Kubernetes evidence around failed hooks.
+Radar treats Helm as a release system, not just a set of Kubernetes objects. The Helm view combines release metadata, rendered resources, revision history, operation insight, revision comparison, and live Kubernetes evidence around failed hooks.
 
 ## Release List
 
@@ -19,14 +19,36 @@ When `storageNamespace` is present, use it for Helm detail/API/MCP calls. Helm s
 
 The drawer includes:
 
-- Overview: chart metadata, status, resource health, notes, dependencies, and Flux ownership.
+- Overview: chart metadata, status, resource health, notes, dependencies, Flux ownership, and operation insight when available.
 - History: revision status, description, update time, and operation classification.
-- Compare: revision-to-revision summary plus values diff, manifest diff, notes diff, and rendered resource set diff.
-- Manifest and values: available to member-level Cloud users because Helm manifests and values can contain inline Secret material.
+- Manifest and values: rendered output and values for the selected release, with values redacted in MCP responses.
 - Resources: live status for resources rendered by the current release.
 - Hooks: hook events, path, weight, status, run times, delete policies, output-log policies, and diagnostics for failed/running hooks.
 
-## Failed Upgrades And Atomic Rollback
+Compare opens a full-page workspace instead of rendering inside the drawer. The drawer links to Compare from history rows and operation banners when Radar can identify a useful revision pair.
+
+## Operation Insight
+
+Radar derives a Helm operation signal from release history and the current release status. It distinguishes:
+
+- Active failed upgrades.
+- Active pending or stuck installs/upgrades/rollbacks.
+- Explicit rollbacks.
+- Recovered rollback-after-failure flows.
+
+For active failed or stuck releases, Radar ranks the rendered live resources and surfaces the best resource to inspect when one is unhealthy or not ready. Workloads rank above leaf resources, but a Service or Ingress with a concrete issue can still be selected when it is the strongest signal.
+
+For recovered operations, Radar suggests the revision comparison most likely to explain the recovery:
+
+- Previous completed revision to failed upgrade revision.
+- Restored revision to failed upgrade revision for rollback-after-failure.
+- Previous completed revision to rollback revision for explicit rollbacks.
+
+Flux-owned Helm releases defer to Flux. Radar shows the owning `HelmRelease` and does not synthesize native Helm operation insight for releases managed by Flux's helm-controller, because the GitOps controller is the authoritative reconciler.
+
+Active native Helm failures and stuck pending operations also appear in the global Issues stream as `kind=HelmRelease`, `group=helm.sh`. Recovered rollbacks are deployment history, not live issues; use Helm detail or `get_changes` for those.
+
+## Failed Upgrades And Rollback Inference
 
 Helm history does not persist whether `helm upgrade --atomic` was set. Radar infers an atomic-style rollback from the revision sequence:
 
@@ -34,7 +56,25 @@ Helm history does not persist whether `helm upgrade --atomic` was set. Radar inf
 - Followed by a deployed rollback revision.
 - With revision descriptions/statuses that point back to the previously deployed release.
 
-Radar surfaces that as a Helm operation instead of making the operator infer it from raw revision rows. The UI and MCP response include the failed revision, rollback revision, target revision, and failure description when Helm recorded one.
+Radar surfaces that as a Helm operation instead of making the operator infer it from raw revision rows. The UI and MCP response include the failed revision, rollback revision, target revision, and failure description when Helm recorded one. Radar calls this an inferred rollback-after-failure pattern; it does not claim the exact Helm CLI flag that caused it.
+
+## Revision Compare
+
+The Helm Compare page is optimized for incident debugging. It starts with the rendered Kubernetes manifest diff as the source of truth, then keeps supporting evidence below it:
+
+- Rendered resources: a compact index of Kubernetes object identities and meaningful in-place field changes.
+- Values: key-aware redacted user values diff.
+- Hooks: stable hook definition diff, ignoring runtime timestamps and volatile hook status.
+- Notes: release notes diff.
+
+The rendered resource section is intentionally not a second manifest diff. It summarizes resource identities and selected field changes so operators can scan what moved:
+
+- Added and removed rendered objects.
+- Modified objects for known Kubernetes kinds.
+- Field summaries such as image, probe, selector, or workload template changes.
+- A low-confidence warning when old and new rendered object identities do not overlap, such as a chart rename.
+
+Use the manifest diff for exact YAML and for cases where a resource was renamed or the compact resource index cannot pair old and new objects.
 
 ## Hook Diagnostics
 
@@ -61,13 +101,15 @@ Use `get_helm_release` for detail:
 - `include=diff` returns manifest diff.
 - `include=values_diff` returns redacted user-supplied values diff.
 - `include=notes_diff` returns release notes diff.
-- `include=resource_diff` returns added/removed/unchanged rendered resource identities between revisions.
+- `include=resource_diff` returns added, removed, unchanged, and modified rendered resources between revisions.
 
-`get_changes` includes the Kubernetes-resource timeline plus recent native Helm release deployment and operation history (`source: helm`). Use it when an agent asks what changed before an incident. For full Helm revision history, operation details, hook diagnostics, values, and diffs, use the Helm MCP tools above.
+Use `issues` for currently broken native Helm releases: active failed and stuck pending releases are surfaced as live operational issues. Use `get_changes` when an agent asks what changed before an incident; it includes the Kubernetes-resource timeline plus recent native Helm release deployment and operation history (`source: helm`). For full Helm revision history, operation details, hook diagnostics, values, and diffs, use the Helm MCP tools above.
 
 ## Known Limits
 
 - Atomic rollback detection is inferred from Helm history because Helm does not persist the `--atomic` flag.
-- Resource diff is identity-level: added, removed, unchanged rendered resources. Use manifest/values diff for field-level changes.
+- Rendered resource diff is a compact summary. It can show field-level changes for known Kubernetes kinds, but the manifest diff remains the exact source of truth.
+- When rendered object identities do not overlap, Radar reports added/removed context instead of guessing a rename.
 - Hook evidence can disappear after Helm records the failure. Radar reports the absence and likely reasons, but cannot reconstruct deleted Job/Pod logs unless Kubernetes or Helm retained them.
 - Flux-managed releases should be changed through Flux. Radar links them to the owning `HelmRelease` and warns that direct `helm upgrade` changes may be reconciled back.
+- Upgrade source detection depends on source data available to the running Radar environment. Local OSS can use local Helm repo/OCI configuration; Radar Cloud should not assume that local repo config exists, so unresolved source states are reported explicitly.
