@@ -34,8 +34,12 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   const showPortForward = canPortForward || !isLocal
 
   // Metrics
-  const { data: metrics } = usePodMetrics(namespace, podName)
-  const { data: metricsHistory } = usePodMetricsHistory(namespace, podName)
+  const metricsHistoryQuery = usePodMetricsHistory(namespace, podName)
+  const { data: metricsHistory } = metricsHistoryQuery
+  const historyMetricsUnavailable = metricsHistory?.metricsUnavailable === true
+  const liveMetricsEnabled = !historyMetricsUnavailable && (metricsHistoryQuery.isSuccess || metricsHistoryQuery.isError)
+  const { data: metrics } = usePodMetrics(namespace, podName, { enabled: liveMetricsEnabled })
+  const metricsUnavailable = metrics === null || historyMetricsUnavailable
 
   // Hide metrics-server section when Prometheus has CPU data
   const { data: prometheusStatus } = usePrometheusStatus()
@@ -82,8 +86,9 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
           disabled={disabled}
         />
       )}
-      metrics={metrics}
+      metrics={metrics ?? undefined}
       metricsHistory={metricsHistory}
+      metricsUnavailable={metricsUnavailable}
       hideMetricsServer={hideMetricsServer}
       renderImageBrowser={({ image, namespace: ns, podName: pod, pullSecrets, onClose, onSwitchToPodFiles }) => (
         <ImageFilesystemModal

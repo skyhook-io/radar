@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1010,6 +1011,43 @@ func TestSmokeMetricsNilDynamicClient(t *testing.T) {
 			var body map[string]any
 			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 				t.Fatalf("expected valid JSON response (not a panic), got decode error: %v (status=%d)", err, resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestIsMetricsAPIUnavailable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "bare metrics API absence from apiserver",
+			err:  errors.New("failed to get node metrics: the server could not find the requested resource"),
+			want: true,
+		},
+		{
+			name: "metrics not found",
+			err:  errors.New(`failed to get pod metrics: pods.metrics.k8s.io "api" not found`),
+			want: true,
+		},
+		{
+			name: "non-metrics missing resource stays visible",
+			err:  errors.New("the server could not find the requested resource"),
+			want: false,
+		},
+		{
+			name: "metrics forbidden stays visible",
+			err:  errors.New("failed to get node metrics: forbidden"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isMetricsAPIUnavailable(tt.err); got != tt.want {
+				t.Fatalf("isMetricsAPIUnavailable() = %v, want %v", got, tt.want)
 			}
 		})
 	}

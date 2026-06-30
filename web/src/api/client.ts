@@ -93,6 +93,38 @@ export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403
 }
 
+export function isMetricsUnavailableMessage(message: unknown): boolean {
+  if (typeof message !== 'string') return false
+  const normalized = message.toLowerCase()
+  if (!normalized) return false
+  if (normalized.includes('metrics-server')) return true
+  if (normalized.includes('could not find the requested resource')) return true
+  if (!normalized.includes('metrics.k8s.io')) return false
+  return (
+    normalized.includes('not found') ||
+    normalized.includes('could not find the requested resource') ||
+    normalized.includes('no metrics known') ||
+    normalized.includes('not available') ||
+    normalized.includes('unable to fetch metrics')
+  )
+}
+
+export function isMetricsUnavailableError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false
+  if (error.status !== 404 && error.status !== 500) return false
+  return [error.message, error.data?.error].some((message) => {
+    if (typeof message !== 'string') return false
+    const normalized = message.toLowerCase()
+    const hasMetricsSignal = (
+      normalized.includes('metrics-server') ||
+      normalized.includes('metrics.k8s.io') ||
+      normalized.includes('pod metrics') ||
+      normalized.includes('node metrics')
+    )
+    return hasMetricsSignal && isMetricsUnavailableMessage(message)
+  })
+}
+
 export async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch(`${getApiBase()}${path}`, signal ? { signal } : undefined)
   if (!response.ok) {
@@ -1243,25 +1275,54 @@ export interface NodeMetrics {
   }
 }
 
+async function fetchMetricsOrNull<T>(path: string): Promise<T | null> {
+  try {
+    return await fetchJSON<T>(path)
+  } catch (error) {
+    if (isMetricsUnavailableError(error)) return null
+    throw error
+  }
+}
+
+function retryMetricsQuery(failureCount: number, error: unknown): boolean {
+  return !isMetricsUnavailableError(error) && failureCount < 1
+}
+
+function metricsRefetchInterval(query: { state: { data: unknown } }): number | false {
+  return query.state.data === null ? false : 30000
+}
+
+function metricsStaleTime(query: { state: { data: unknown } }): number {
+  return query.state.data === null ? Infinity : 15000
+}
+
+function refetchMetricsOnMount(query: { state: { data: unknown } }): boolean {
+  return query.state.data !== null
+}
+
 // Fetch metrics for a specific pod
-export function usePodMetrics(namespace: string, podName: string) {
-  return useQuery<PodMetrics>({
+export function usePodMetrics(namespace: string, podName: string, options?: { enabled?: boolean }) {
+  return useQuery<PodMetrics | null>({
     queryKey: ['pod-metrics', namespace, podName],
-    queryFn: () => fetchJSON(`/metrics/pods/${namespace}/${podName}`),
-    enabled: Boolean(namespace && podName),
-    staleTime: 15000, // Metrics are fresh for 15 seconds
-    refetchInterval: 30000, // Refresh every 30 seconds
+    queryFn: () => fetchMetricsOrNull<PodMetrics>(`/metrics/pods/${namespace}/${podName}`),
+    enabled: Boolean(namespace && podName) && (options?.enabled ?? true),
+    staleTime: metricsStaleTime,
+    refetchInterval: metricsRefetchInterval,
+    refetchOnMount: refetchMetricsOnMount,
+    retry: retryMetricsQuery,
   })
 }
 
 // Fetch metrics for a specific node
-export function useNodeMetrics(nodeName: string) {
-  return useQuery<NodeMetrics>({
+export function useNodeMetrics(nodeName: string, options?: { enabled?: boolean }) {
+  return useQuery<NodeMetrics | null>({
     queryKey: ['node-metrics', nodeName],
-    queryFn: () => fetchJSON(`/metrics/nodes/${nodeName}`),
-    enabled: Boolean(nodeName),
-    staleTime: 15000,
-    refetchInterval: 30000,
+    queryFn: () => fetchMetricsOrNull<NodeMetrics>(`/metrics/nodes/${nodeName}`),
+    enabled: Boolean(nodeName) && (options?.enabled ?? true),
+    staleTime: metricsStaleTime,
+    refetchInterval: metricsRefetchInterval,
+    refetchOnMount: refetchMetricsOnMount,
+    retry: retryMetricsQuery,
   })
 }
 
@@ -1285,19 +1346,33 @@ export interface PodMetricsHistory {
   name: string
   containers: ContainerMetricsHistory[]
   collectionError?: string
+  metricsUnavailable?: boolean
 }
 
 export interface NodeMetricsHistory {
   name: string
   dataPoints: MetricsDataPoint[]
   collectionError?: string
+  metricsUnavailable?: boolean
+}
+
+export function normalizePodMetricsHistory(history: PodMetricsHistory): PodMetricsHistory {
+  if (!isMetricsUnavailableMessage(history.collectionError)) return history
+  const { collectionError: _collectionError, ...rest } = history
+  return { ...rest, metricsUnavailable: true }
+}
+
+export function normalizeNodeMetricsHistory(history: NodeMetricsHistory): NodeMetricsHistory {
+  if (!isMetricsUnavailableMessage(history.collectionError)) return history
+  const { collectionError: _collectionError, ...rest } = history
+  return { ...rest, metricsUnavailable: true }
 }
 
 // Fetch historical metrics for a pod (last ~1 hour)
 export function usePodMetricsHistory(namespace: string, podName: string) {
   return useQuery<PodMetricsHistory>({
     queryKey: ['pod-metrics-history', namespace, podName],
-    queryFn: () => fetchJSON(`/metrics/pods/${namespace}/${podName}/history`),
+    queryFn: async () => normalizePodMetricsHistory(await fetchJSON<PodMetricsHistory>(`/metrics/pods/${namespace}/${podName}/history`)),
     enabled: Boolean(namespace && podName),
     staleTime: 25000, // Slightly less than poll interval
     refetchInterval: 30000, // Match the backend poll interval
@@ -1308,7 +1383,7 @@ export function usePodMetricsHistory(namespace: string, podName: string) {
 export function useNodeMetricsHistory(nodeName: string) {
   return useQuery<NodeMetricsHistory>({
     queryKey: ['node-metrics-history', nodeName],
-    queryFn: () => fetchJSON(`/metrics/nodes/${nodeName}/history`),
+    queryFn: async () => normalizeNodeMetricsHistory(await fetchJSON<NodeMetricsHistory>(`/metrics/nodes/${nodeName}/history`)),
     enabled: Boolean(nodeName),
     staleTime: 25000,
     refetchInterval: 30000,

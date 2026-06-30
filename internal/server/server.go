@@ -2183,7 +2183,7 @@ func (s *Server) handlePodMetrics(w http.ResponseWriter, r *http.Request) {
 
 	metrics, err := k8s.GetPodMetrics(r.Context(), namespace, name)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if isMetricsAPIUnavailable(err) {
 			s.writeError(w, http.StatusNotFound, "Pod metrics not found (metrics-server may not be installed)")
 			return
 		}
@@ -2204,7 +2204,7 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 
 	metrics, err := k8s.GetNodeMetrics(r.Context(), name)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if isMetricsAPIUnavailable(err) {
 			s.writeError(w, http.StatusNotFound, "Node metrics not found (metrics-server may not be installed)")
 			return
 		}
@@ -2213,6 +2213,20 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, metrics)
+}
+
+func isMetricsAPIUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsNotFound(err) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "metrics") {
+		return false
+	}
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "could not find the requested resource")
 }
 
 // handlePodMetricsHistory returns historical metrics for a specific pod

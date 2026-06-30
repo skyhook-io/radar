@@ -74,6 +74,7 @@ interface PodRendererProps {
   // Metrics data injection
   metrics?: { containers?: any[]; timestamp?: string }
   metricsHistory?: { containers?: any[]; collectionError?: string }
+  metricsUnavailable?: boolean
   hideMetricsServer?: boolean
   // Filesystem browser render props
   renderImageBrowser?: (props: { image: string; namespace: string; podName: string; pullSecrets: string[]; onClose: () => void; onSwitchToPodFiles?: () => void }) => ReactNode
@@ -257,6 +258,7 @@ export function PodRenderer({
   renderPortAction,
   metrics,
   metricsHistory,
+  metricsUnavailable,
   hideMetricsServer,
   renderImageBrowser,
   renderPodBrowser,
@@ -280,6 +282,8 @@ export function PodRenderer({
   const operationalIssuesShown = useOperationalIssuesShown()
   const podProblems = getPodProblems(data)
   const hasProblems = podProblems.length > 0 && !operationalIssuesShown
+  const hasMetricsHistory = !!metricsHistory?.containers?.length
+  const showMetricsUnavailable = !!metricsUnavailable && !metrics?.containers?.length && !hasMetricsHistory && !metricsHistory?.collectionError
 
   // Image filesystem modal state
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
@@ -718,86 +722,93 @@ export function PodRenderer({
       )}
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && !!(metrics?.containers?.length || metricsHistory?.containers?.length || metricsHistory?.collectionError) && (
+      {!hideMetricsServer && !!(metrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
-          {metricsHistory?.collectionError && !metricsHistory?.containers?.length && (
+          {showMetricsUnavailable && (
+            <div className="card-inner-lg text-xs text-theme-text-tertiary">
+              Metrics unavailable. Install metrics-server to show live CPU and memory usage.
+            </div>
+          )}
+          {metricsHistory?.collectionError && !hasMetricsHistory && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">
               <span className="font-medium">Metrics collection error:</span>{' '}
               <span className="break-all">{metricsHistory.collectionError}</span>
             </div>
           )}
-          <div className="space-y-4">
-            {(metricsHistory?.containers || metrics?.containers || []).map((historyContainer) => {
-              // Find current metrics for this container
-              const currentMetrics = metrics?.containers?.find(c => c.name === historyContainer.name)
-              // Find the container spec to compare against limits
-              const containerSpec = containers.find((c: any) => c.name === historyContainer.name)
-              const limits = containerSpec?.resources?.limits
-              const requests = containerSpec?.resources?.requests
+          {!showMetricsUnavailable && (
+            <div className="space-y-4">
+              {(metricsHistory?.containers || metrics?.containers || []).map((historyContainer) => {
+                // Find current metrics for this container
+                const currentMetrics = metrics?.containers?.find(c => c.name === historyContainer.name)
+                // Find the container spec to compare against limits
+                const containerSpec = containers.find((c: any) => c.name === historyContainer.name)
+                const limits = containerSpec?.resources?.limits
+                const requests = containerSpec?.resources?.requests
 
-              // Get historical data points (from history or empty)
-              const dataPoints = 'dataPoints' in historyContainer ? historyContainer.dataPoints : []
+                // Get historical data points (from history or empty)
+                const dataPoints = 'dataPoints' in historyContainer ? historyContainer.dataPoints : []
 
-              return (
-                <div key={historyContainer.name} className="card-inner-lg">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium text-theme-text-primary">{historyContainer.name}</span>
+                return (
+                  <div key={historyContainer.name} className="card-inner-lg">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm font-medium text-theme-text-primary">{historyContainer.name}</span>
+                    </div>
+
+                    {dataPoints && dataPoints.length > 0 ? (
+                      <div className="grid grid-cols-2 gap-6">
+                        <div>
+                          <div className="text-xs text-theme-text-tertiary mb-2">CPU</div>
+                          <MetricsChart
+                            dataPoints={dataPoints}
+                            type="cpu"
+                            height={80}
+                            showAxis={true}
+                            limit={limits?.cpu}
+                            request={requests?.cpu}
+                          />
+                        </div>
+                        <div>
+                          <div className="text-xs text-theme-text-tertiary mb-2">Memory</div>
+                          <MetricsChart
+                            dataPoints={dataPoints}
+                            type="memory"
+                            height={80}
+                            showAxis={true}
+                            limit={limits?.memory}
+                            request={requests?.memory}
+                          />
+                        </div>
+                      </div>
+                    ) : currentMetrics ? (
+                      /* Fallback to simple display if no history yet */
+                      <div className="grid grid-cols-2 gap-4 text-xs">
+                        <div>
+                          <div className="text-theme-text-tertiary mb-1">CPU</div>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-sm font-medium text-blue-400">{currentMetrics.usage.cpu}</span>
+                            {limits?.cpu && (
+                              <span className="text-theme-text-tertiary">/ {limits.cpu} limit</span>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-theme-text-tertiary mb-1">Memory</div>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-sm font-medium text-purple-400">{currentMetrics.usage.memory}</span>
+                            {limits?.memory && (
+                              <span className="text-theme-text-tertiary">/ {limits.memory} limit</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-theme-text-tertiary">Collecting metrics data...</div>
+                    )}
                   </div>
-
-                  {dataPoints && dataPoints.length > 0 ? (
-                    <div className="grid grid-cols-2 gap-6">
-                      <div>
-                        <div className="text-xs text-theme-text-tertiary mb-2">CPU</div>
-                        <MetricsChart
-                          dataPoints={dataPoints}
-                          type="cpu"
-                          height={80}
-                          showAxis={true}
-                          limit={limits?.cpu}
-                          request={requests?.cpu}
-                        />
-                      </div>
-                      <div>
-                        <div className="text-xs text-theme-text-tertiary mb-2">Memory</div>
-                        <MetricsChart
-                          dataPoints={dataPoints}
-                          type="memory"
-                          height={80}
-                          showAxis={true}
-                          limit={limits?.memory}
-                          request={requests?.memory}
-                        />
-                      </div>
-                    </div>
-                  ) : currentMetrics ? (
-                    /* Fallback to simple display if no history yet */
-                    <div className="grid grid-cols-2 gap-4 text-xs">
-                      <div>
-                        <div className="text-theme-text-tertiary mb-1">CPU</div>
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-sm font-medium text-blue-400">{currentMetrics.usage.cpu}</span>
-                          {limits?.cpu && (
-                            <span className="text-theme-text-tertiary">/ {limits.cpu} limit</span>
-                          )}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-theme-text-tertiary mb-1">Memory</div>
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-sm font-medium text-purple-400">{currentMetrics.usage.memory}</span>
-                          {limits?.memory && (
-                            <span className="text-theme-text-tertiary">/ {limits.memory} limit</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-xs text-theme-text-tertiary">Collecting metrics data...</div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
+                )
+              })}
+            </div>
+          )}
           {metrics?.timestamp && (
             <div className="mt-2 text-xs text-theme-text-tertiary">
               Last updated: {new Date(metrics.timestamp).toLocaleTimeString()}

@@ -1,0 +1,50 @@
+import { describe, expect, it } from 'vitest'
+import { renderToString } from 'react-dom/server'
+import { NodeRenderer } from './NodeRenderer'
+
+const node = {
+  metadata: { name: 'kind-worker', labels: {} },
+  spec: {},
+  status: {
+    nodeInfo: {
+      osImage: 'Container-Optimized OS',
+      architecture: 'amd64',
+      kernelVersion: '6.1.0',
+      containerRuntimeVersion: 'containerd://1.7',
+      kubeletVersion: 'v1.33.0',
+      kubeProxyVersion: 'v1.33.0',
+    },
+    capacity: { cpu: '4', memory: '8Gi', pods: '110' },
+    allocatable: { cpu: '4', memory: '7Gi', pods: '110' },
+    conditions: [],
+  },
+}
+
+describe('NodeRenderer metrics', () => {
+  it('renders a calm unavailable state when metrics-server is absent', () => {
+    const html = renderToString(
+      <NodeRenderer
+        data={node}
+        metricsUnavailable
+      />,
+    )
+
+    expect(html).toContain('Resource Usage')
+    expect(html).toContain('Metrics unavailable')
+    expect(html).toContain('Install metrics-server')
+    expect(html).not.toContain('Metrics collection error')
+    expect(html).not.toContain('Collecting metrics data')
+  })
+
+  it('keeps non-absence collection errors visible', () => {
+    const html = renderToString(
+      <NodeRenderer
+        data={node}
+        metricsHistory={{ dataPoints: [], collectionError: 'forbidden: no access to nodes' }}
+      />,
+    )
+
+    expect(html).toContain('Metrics collection error')
+    expect(html).toContain('forbidden: no access to nodes')
+  })
+})

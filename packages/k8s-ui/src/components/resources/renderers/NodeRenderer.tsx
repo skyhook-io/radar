@@ -12,6 +12,7 @@ interface NodeRendererProps {
   onViewPods?: () => void
   metrics?: { usage?: { cpu: string; memory: string }; timestamp?: string }
   metricsHistory?: { dataPoints?: MetricsDataPoint[]; collectionError?: string }
+  metricsUnavailable?: boolean
   hideMetricsServer?: boolean
 }
 
@@ -59,7 +60,7 @@ function getNodeProblems(data: any): string[] {
   return problems
 }
 
-export function NodeRenderer({ data, relationships, onViewPods, metrics, metricsHistory, hideMetricsServer }: NodeRendererProps) {
+export function NodeRenderer({ data, relationships, onViewPods, metrics, metricsHistory, metricsUnavailable, hideMetricsServer }: NodeRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const metadata = data.metadata || {}
@@ -74,6 +75,8 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
   const problems = getNodeProblems(data)
   const hasProblems = problems.length > 0
   const isCordoned = !!spec.unschedulable
+  const hasMetricsHistory = !!metricsHistory?.dataPoints?.length
+  const showMetricsUnavailable = !!metricsUnavailable && !metrics?.usage && !hasMetricsHistory && !metricsHistory?.collectionError
 
   // Extract platform info from labels
   const instanceType = labels['node.kubernetes.io/instance-type']
@@ -182,9 +185,14 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
       </Section>
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && (metrics?.usage || metricsHistory?.dataPoints?.length || metricsHistory?.collectionError) && (
+      {!hideMetricsServer && (metrics?.usage || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
-          {metricsHistory?.collectionError && !metricsHistory?.dataPoints?.length && (
+          {showMetricsUnavailable && (
+            <div className="card-inner-lg text-xs text-theme-text-tertiary">
+              Metrics unavailable. Install metrics-server to show live CPU and memory usage.
+            </div>
+          )}
+          {metricsHistory?.collectionError && !hasMetricsHistory && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">
               <span className="font-medium">Metrics collection error:</span>{' '}
               <span className="break-all">{metricsHistory.collectionError}</span>
@@ -250,7 +258,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
                 </div>
               </div>
             </div>
-          ) : (
+          ) : showMetricsUnavailable ? null : (
             <div className="text-xs text-theme-text-tertiary">Collecting metrics data...</div>
           )}
           {metrics?.timestamp && (

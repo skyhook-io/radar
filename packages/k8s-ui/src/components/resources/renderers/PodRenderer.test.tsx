@@ -107,3 +107,36 @@ describe('PodRenderer issues banner', () => {
     expect(html).toContain('min-w-0 break-words')
   })
 })
+
+describe('PodRenderer metrics', () => {
+  it('renders a calm unavailable state when metrics-server is absent', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={pod}
+        onCopy={() => undefined}
+        copied={null}
+        metricsUnavailable
+      />,
+    )
+
+    expect(html).toContain('Resource Usage')
+    expect(html).toContain('Metrics unavailable')
+    expect(html).toContain('Install metrics-server')
+    expect(html).not.toContain('Metrics collection error')
+    expect(html).not.toContain('Collecting metrics data')
+  })
+
+  it('keeps non-absence collection errors visible', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={pod}
+        onCopy={() => undefined}
+        copied={null}
+        metricsHistory={{ containers: [], collectionError: 'forbidden: no access to pods.metrics.k8s.io' }}
+      />,
+    )
+
+    expect(html).toContain('Metrics collection error')
+    expect(html).toContain('forbidden: no access to pods.metrics.k8s.io')
+  })
+})
