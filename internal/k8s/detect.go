@@ -710,6 +710,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:  severity,
 				Reason:    hp.Problem,
 				Message:   hp.Reason,
+				Cause:     hp.Cause,
+				Action:    hp.Action,
 				// One HPA can be BOTH maxed and unable-to-scale at once — distinct
 				// problems with distinct fixes. Fingerprint on the problem kind so
 				// they don't collapse into one hpa_limited_or_failed row.

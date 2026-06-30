@@ -152,6 +152,39 @@ func hasAllProblemTypes(problems []Detection) bool {
 	return seen["Deployment"] && seen["StatefulSet"] && seen["DaemonSet"] && seen["HorizontalPodAutoscaler"] && seen["Job"]
 }
 
+func TestDetectProblems_HPACannotScaleIncludesDiagnosis(t *testing.T) {
+	defer ResetTestState()
+
+	client := fake.NewClientset(&autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"},
+		Spec:       autoscalingv2.HorizontalPodAutoscalerSpec{MaxReplicas: 10},
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+			CurrentReplicas: 3,
+			DesiredReplicas: 3,
+			Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+				{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionFalse, Reason: "FailedGetResourceMetric", Message: "failed to get cpu utilization: missing request for cpu"},
+			},
+		},
+	})
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	p := waitForProblem(t, "prod", "cannot-scale")
+	if p.Kind != "HorizontalPodAutoscaler" || p.Name != "web" {
+		t.Fatalf("problem subject = %s/%s/%s, want HPA/prod/web: %+v", p.Kind, p.Namespace, p.Name, p)
+	}
+	if !strings.Contains(p.Message, "FailedGetResourceMetric") {
+		t.Fatalf("raw controller evidence was not preserved in Message: %+v", p)
+	}
+	if !strings.Contains(p.Cause, "CPU resource requests") {
+		t.Fatalf("HPA cause = %q, want missing CPU requests diagnosis", p.Cause)
+	}
+	if !strings.Contains(p.Action, "Add CPU resource requests") {
+		t.Fatalf("HPA action = %q, want request-setting next step", p.Action)
+	}
+}
+
 func TestDetectProblems_ConfigSignals(t *testing.T) {
 	t.Run("coredns service nxdomain override", func(t *testing.T) {
 		defer ResetTestState()
