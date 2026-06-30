@@ -1315,8 +1315,21 @@ func (s *Server) getDashboardTrafficSummary(ctx context.Context, namespaces []st
 		}
 	}
 
+	// The source only filters by a single namespace; restrict multi-namespace
+	// users here so the summary doesn't count flows outside their allowed set.
+	flows := response.Flows
+	if allowed := namespaceLookup(namespaces); allowed != nil {
+		kept := make([]traffic.Flow, 0, len(flows))
+		for _, f := range flows {
+			if flowVisibleForNamespaces(f, allowed) {
+				kept = append(kept, f)
+			}
+		}
+		flows = kept
+	}
+
 	// Aggregate flows
-	aggregated := traffic.AggregateFlows(response.Flows)
+	aggregated := traffic.AggregateFlows(flows)
 
 	// Sort by connection count
 	sort.Slice(aggregated, func(i, j int) bool {
