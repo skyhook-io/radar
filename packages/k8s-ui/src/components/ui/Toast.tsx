@@ -227,7 +227,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
               {toast.detail}
             </button>
           ) : (
-            <p className={clsx('mt-1 text-xs break-all', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
+            <p className={clsx('mt-1 text-xs break-words', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
               {toast.detail}
             </p>
           )
