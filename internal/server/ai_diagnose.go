@@ -203,12 +203,34 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, run)
 }
 
-// handleDiagnoseList returns all in-memory runs (newest first).
+// handleDiagnoseList returns all retained runs (newest first). historyDegraded
+// warns that persistence stopped working, so the UI can say history won't
+// survive a restart instead of letting the user believe otherwise.
 func (s *Server) handleDiagnoseList(w http.ResponseWriter, r *http.Request) {
 	if !s.aiReady(w) {
 		return
 	}
-	s.writeJSON(w, map[string]any{"runs": s.aiRuns.List()})
+	s.writeJSON(w, map[string]any{
+		"runs":            s.aiRuns.List(),
+		"historyDegraded": s.aiRuns.HistoryDegraded(),
+	})
+}
+
+// handleDiagnoseHistoryClear wipes the persisted investigation history (and
+// drops finished runs from memory). Live runs survive. POST, same-origin only.
+func (s *Server) handleDiagnoseHistoryClear(w http.ResponseWriter, r *http.Request) {
+	if !localOriginOK(r) {
+		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if !s.aiReady(w) {
+		return
+	}
+	if err := s.aiRuns.ClearHistory(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "couldn't clear history: "+err.Error())
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true})
 }
 
 // handleDiagnoseTurn adds a follow-up or apply turn to a run. POST {question?,

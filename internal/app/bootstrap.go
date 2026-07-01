@@ -57,6 +57,8 @@ type AppConfig struct {
 	PrometheusHeadersFromEnv map[string]string
 	Version                  string
 	MCPEnabled               bool
+	AIHistory                bool   // persist AI investigations across restarts
+	AIHistoryDBPath          string // "" = ~/.radar/ai-runs.db
 	AuthConfig               auth.Config
 }
 
@@ -263,6 +265,18 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
 		AuthConfig: cfg.AuthConfig,
+	}
+
+	// AI-history DB path: resolved here (like the timeline DB) so the server
+	// only sees a ready-to-open path. Only meaningful where the AI engine can
+	// actually enable (no-auth + MCP mounted) — the server checks that gate.
+	if cfg.AIHistory {
+		dbPath := cfg.AIHistoryDBPath
+		if dbPath == "" {
+			homeDir, _ := os.UserHomeDir()
+			dbPath = filepath.Join(homeDir, ".radar", "ai-runs.db")
+		}
+		serverCfg.AIHistoryDB = dbPath
 	}
 
 	if cfg.MCPEnabled {

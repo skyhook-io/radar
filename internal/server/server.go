@@ -125,6 +125,7 @@ type Config struct {
 	DiagConfig         *DiagConfig    // Sanitized config for diagnostics endpoint
 	EffectiveConfig    *config.Config // Running startup config for GET /api/config
 	AuthConfig         auth.Config    // Authentication configuration
+	AIHistoryDB        string         // AI run-history SQLite path ("" = memory-only runs)
 }
 
 // New creates a new server instance
@@ -159,7 +160,18 @@ func New(cfg Config) *Server {
 	if !s.authConfig.Enabled() && s.mcpHandler != nil {
 		if d, err := ai.NewDetected(context.Background()); err == nil {
 			s.aiDiagnoser = d
-			s.aiRuns = ai.NewRunManager(d, s.ActualPort, k8s.GetContextName)
+			// History store opens only when the engine actually enables, so a
+			// disabled feature never creates the DB. Open failure degrades to
+			// memory-only runs (the historical behavior), never blocks startup.
+			var store ai.RunStore
+			if cfg.AIHistoryDB != "" {
+				if st, err := ai.OpenRunStore(cfg.AIHistoryDB); err != nil {
+					log.Printf("[ai] run history disabled — could not open %s: %v", cfg.AIHistoryDB, err)
+				} else {
+					store = st
+				}
+			}
+			s.aiRuns = ai.NewRunManager(d, s.ActualPort, k8s.GetContextName, store)
 			log.Printf("[ai] diagnose enabled (default agent: %s)", d.DefaultAgent())
 		}
 	}
@@ -333,6 +345,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/diagnose/runs", s.handleDiagnoseList)
 			r.Post("/diagnose/runs/{id}/turns", s.handleDiagnoseTurn)
 			r.Post("/diagnose/runs/{id}/stop", s.handleDiagnoseStop)
+			r.Post("/diagnose/history/clear", s.handleDiagnoseHistoryClear)
 			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)

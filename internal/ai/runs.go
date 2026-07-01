@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,12 +41,17 @@ type RunManager struct {
 	// its own temp workspace per turn, losing cross-turn resume but staying correct).
 	workRoot string
 
+	// store persists runs + event logs across restarts (nil = memory-only,
+	// the historical behavior). Owned here: Shutdown closes it.
+	store RunStore
+
 	mu            sync.Mutex
 	runs          map[string]*Run
 	order         []string // insertion order, for eviction
 	nextID        int
-	maxRetained   int // total runs kept in memory (running + finished)
-	maxConcurrent int // concurrent IN-FLIGHT turns (= live agent processes)
+	maxRetained   int    // total runs kept in memory (running + finished)
+	maxConcurrent int    // concurrent IN-FLIGHT turns (= live agent processes)
+	sweptCtx      string // last kube-context the loaded-run staleness sweep ran for
 }
 
 // Run is one investigation: identity, status, the agent session to resume, and the
@@ -65,16 +71,24 @@ type Run struct {
 	Health    *ResourceHealthSignal
 	CreatedAt time.Time
 
+	// store mirrors RunManager.store (nil = memory-only) so the event hot path
+	// can persist without reaching back to the manager.
+	store RunStore
+
 	mu        sync.Mutex
 	status    string // running | done | error | stopped | stale
 	sessionID string
 	preview   string // last root cause, for the list
 	updatedAt time.Time
 	events    []RunEvent
-	inFlight  bool
-	subs      map[int]chan RunEvent
-	nextSub   int
-	cancel    context.CancelFunc
+	// hydrated marks that r.events holds the run's full log. Runs created live
+	// are born hydrated; runs loaded from the store hydrate lazily on first
+	// read/mutation (ensureHydrated) so startup doesn't pay for old transcripts.
+	hydrated bool
+	inFlight bool
+	subs     map[int]chan RunEvent
+	nextSub  int
+	cancel   context.CancelFunc
 }
 
 // RunEvent is a sequenced stream event. Seq drives SSE id: / Last-Event-ID replay.
@@ -118,8 +132,12 @@ var (
 )
 
 const (
-	defaultMaxConcurrent = 3  // running child processes
-	defaultMaxRetained   = 20 // total runs kept in memory
+	defaultMaxConcurrent = 3   // running child processes
+	defaultMaxRetained   = 100 // total runs kept (memory rows + store)
+
+	// defaultHistoryAge is how long finished runs are kept in the store; older
+	// ones are dropped at startup. Count-based eviction still applies first.
+	defaultHistoryAge = 30 * 24 * time.Hour
 
 	// defaultTurnTimeout bounds one agent turn's wall-clock time. Generous — a
 	// deep multi-tool investigation runs minutes, not tens of minutes — while
@@ -140,7 +158,9 @@ func turnTimeout() time.Duration {
 
 // NewRunManager builds a manager over a resolved Diagnoser. mcpPort/ctxLabel are
 // callbacks because the listener port and kube-context are only known at runtime.
-func NewRunManager(d *Diagnoser, mcpPort func() int, ctxLabel func() string) *RunManager {
+// store persists history across restarts (nil = memory-only); persisted runs are
+// hydrated into the manager here.
+func NewRunManager(d *Diagnoser, mcpPort func() int, ctxLabel func() string, store RunStore) *RunManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Best-effort: a failure here just means runs get no shared workdir (logged).
 	root, err := os.MkdirTemp("", "radar-ai-")
@@ -148,17 +168,93 @@ func NewRunManager(d *Diagnoser, mcpPort func() int, ctxLabel func() string) *Ru
 		log.Printf("[ai] could not create AI scratch root: %v (Cursor resume will be degraded)", err)
 		root = ""
 	}
-	return &RunManager{
+	m := &RunManager{
 		d:             d,
 		mcpPort:       mcpPort,
 		ctxLabel:      ctxLabel,
 		baseCtx:       ctx,
 		baseCancel:    cancel,
 		workRoot:      root,
+		store:         store,
 		runs:          map[string]*Run{},
 		maxRetained:   defaultMaxRetained,
 		maxConcurrent: defaultMaxConcurrent,
 	}
+	m.loadPersisted()
+	return m
+}
+
+// loadPersisted hydrates run ROWS from the store (event logs stay lazy — see
+// ensureHydrated) and normalizes state that can't carry across a process:
+//   - a persisted "running" run was interrupted by the restart → error, with a
+//     terminal event appended so replay still ends in a terminal marker;
+//   - Cursor sessions are workspace-scoped and the workspace was a process-
+//     lifetime temp dir → drop the sessionID so follow-ups report "no session"
+//     instead of spawning an agent guaranteed to fail;
+//   - nextID reseeds past every persisted id so new runs can't collide.
+func (m *RunManager) loadPersisted() {
+	if m.store == nil {
+		return
+	}
+	sums, err := m.store.LoadRuns()
+	if err != nil {
+		log.Printf("[ai] could not load run history: %v", err)
+		return
+	}
+	cutoff := nowUTC().Add(-defaultHistoryAge)
+	for _, s := range sums {
+		if s.ID == "" {
+			continue
+		}
+		if n := runIDNum(s.ID); n > m.nextID {
+			m.nextID = n
+		}
+		if s.UpdatedAt.Before(cutoff) {
+			m.store.DeleteRun(s.ID) // age-based retention
+			continue
+		}
+		if s.Agent == "cursor-agent" {
+			s.SessionID = ""
+		}
+		r := &Run{
+			ID: s.ID, Kind: s.Kind, Namespace: s.Namespace, Name: s.Name,
+			Context: s.Context, Agent: s.Agent, Isolated: s.Isolated,
+			Model: s.Model, Effort: s.Effort, ManagedBy: s.ManagedBy,
+			Health: s.Health, CreatedAt: s.CreatedAt,
+			store:  m.store,
+			status: s.Status, sessionID: s.SessionID, preview: s.Preview,
+			updatedAt: s.UpdatedAt,
+			subs:      map[int]chan RunEvent{},
+		}
+		if s.Status == "running" {
+			// Interrupted by the restart. Terminal statuses are written in the
+			// same transaction as their terminal event, so a "running" row means
+			// the log has no terminal marker yet — append one (store-assigned
+			// seq; the in-memory log stays lazy).
+			r.status = "error"
+			r.updatedAt = nowUTC()
+			sum := r.summaryLocked()
+			m.store.AppendEvent(r.ID, RunEvent{Event: StreamEvent{
+				Type:  "error",
+				Error: "Radar restarted while this investigation was running. Re-run Diagnose to analyze the current cluster.",
+			}}, &sum)
+		}
+		if r.status == "stale" {
+			r.subs = nil // stale runs were finalized — streams replay then close
+		}
+		m.runs[r.ID] = r
+		m.order = append(m.order, r.ID)
+	}
+	m.evictLocked() // the retention cap may have shrunk since the DB was written
+}
+
+// runIDNum extracts N from "run-N" ids ( 0 for anything else).
+func runIDNum(id string) int {
+	n, err := strconv.Atoi(strings.TrimPrefix(id, "run-"))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // runWorkDir is the per-run scratch dir under the manager's private root — stable
@@ -172,9 +268,11 @@ func (m *RunManager) runWorkDir(id string) string {
 }
 
 // Shutdown cancels every run (killing agent child processes) — called on server
-// stop so local agents don't outlive radar.
+// stop so local agents don't outlive radar. In-flight runs are marked stopped
+// BEFORE their contexts are cancelled so the run goroutines' terminal-status
+// guard keeps them from persisting a spurious "context canceled" error; the
+// store then drains and closes, and anything appended after that is a no-op.
 func (m *RunManager) Shutdown() {
-	m.baseCancel()
 	m.mu.Lock()
 	runs := make([]*Run, 0, len(m.runs))
 	for _, r := range m.runs {
@@ -183,11 +281,22 @@ func (m *RunManager) Shutdown() {
 	m.mu.Unlock()
 	for _, r := range runs {
 		r.mu.Lock()
+		if r.inFlight {
+			r.status = "stopped"
+			r.updatedAt = nowUTC()
+			if r.store != nil {
+				r.store.SaveRun(r.summaryLocked())
+			}
+		}
 		c := r.cancel
 		r.mu.Unlock()
 		if c != nil {
 			c()
 		}
+	}
+	m.baseCancel()
+	if m.store != nil {
+		m.store.Close()
 	}
 	// Drop every run's scratch in one shot — the process is going away.
 	if m.workRoot != "" {
@@ -269,13 +378,18 @@ func (m *RunManager) Start(kind, namespace, name, agent string, isolated bool, m
 		ID: id, Kind: kind, Namespace: namespace,
 		Name: name, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Isolated: isolated,
 		Model: model, Effort: effort, ManagedBy: managedBy, Health: health, CreatedAt: nowUTC(),
+		store:  m.store,
 		status: "running", inFlight: true, updatedAt: nowUTC(),
-		subs: map[int]chan RunEvent{},
+		hydrated: true, // born live — its full log is in memory by construction
+		subs:     map[int]chan RunEvent{},
 	}
 	m.runs[r.ID] = r
 	m.order = append(m.order, r.ID)
 	m.evictLocked()
 	m.mu.Unlock()
+	if m.store != nil {
+		m.store.SaveRun(r.Summary())
+	}
 
 	m.launchTurn(r, "", false, "", "")
 	return r.Summary(), nil
@@ -288,6 +402,9 @@ func (m *RunManager) AddTurn(id, question string, apply bool, fix string) error 
 	if r == nil {
 		return ErrRunNotFound
 	}
+	// A follow-up on a run loaded from history must extend the PERSISTED log —
+	// hydrate before beginTurn so the new turn's sequence numbers continue it.
+	r.ensureHydrated()
 	session, err := m.beginTurn(r, true)
 	if err != nil {
 		return err
@@ -364,6 +481,7 @@ func (m *RunManager) Stop(id string) error {
 	if r == nil {
 		return ErrRunNotFound
 	}
+	r.ensureHydrated() // an in-flight run is always hydrated; harmless otherwise
 	r.mu.Lock()
 	if !r.inFlight {
 		r.mu.Unlock()
@@ -392,6 +510,17 @@ func (m *RunManager) OnContextSwitch() {
 	for _, r := range runs {
 		r.mu.Lock()
 		c := r.cancel
+		inFlight := r.inFlight
+		hydrated := r.hydrated
+		r.mu.Unlock()
+		if !inFlight && !hydrated {
+			// Loaded, never-touched history: mark stale without paying to load
+			// its transcript (terminal markers get store-assigned seqs).
+			r.markStale()
+			r.removeWorkDir()
+			continue
+		}
+		r.mu.Lock()
 		r.status = "stale"
 		r.mu.Unlock()
 		if c != nil {
@@ -409,6 +538,7 @@ func (m *RunManager) Get(id string) *Run { return m.get(id) }
 func (m *RunManager) get(id string) *Run {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.sweepForeignLocked()
 	return m.runs[id]
 }
 
@@ -416,11 +546,78 @@ func (m *RunManager) get(id string) *Run {
 func (m *RunManager) List() []RunSummary {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.sweepForeignLocked()
 	out := make([]RunSummary, 0, len(m.order))
 	for i := len(m.order) - 1; i >= 0; i-- {
 		out = append(out, m.runs[m.order[i]].Summary())
 	}
 	return out
+}
+
+// HistoryDegraded reports that run persistence stopped working — history will
+// not survive a restart. Surfaced on the runs-list response so the UI can say so.
+func (m *RunManager) HistoryDegraded() bool {
+	return m.store != nil && m.store.Degraded()
+}
+
+// sweepForeignLocked marks runs loaded from a PREVIOUS process against a
+// different kube-context as stale — the same treatment OnContextSwitch gives
+// live runs when the context changes under them. Runs once per observed context
+// label; the label callback resolves only after the cluster connects, which is
+// why this can't happen at load time. Caller holds m.mu.
+func (m *RunManager) sweepForeignLocked() {
+	cur := m.ctx()
+	if cur == "" || cur == m.sweptCtx {
+		return
+	}
+	m.sweptCtx = cur
+	for _, r := range m.runs {
+		if r.Context != cur {
+			r.markStale()
+		}
+	}
+}
+
+// ClearHistory drops every terminal run from memory and the store. Live
+// (running) runs survive and are re-persisted so their rows aren't orphaned by
+// the wipe.
+func (m *RunManager) ClearHistory() error {
+	m.mu.Lock()
+	kept := make([]string, 0, len(m.order))
+	var keptRuns []*Run
+	for _, id := range m.order {
+		r := m.runs[id]
+		if r.snapshotStatus() == "running" {
+			kept = append(kept, id)
+			keptRuns = append(keptRuns, r)
+			continue
+		}
+		delete(m.runs, id)
+		r.finalize()
+		r.removeWorkDir()
+	}
+	m.order = kept
+	m.mu.Unlock()
+
+	if m.store == nil {
+		return nil
+	}
+	if err := m.store.Clear(); err != nil {
+		return err
+	}
+	// Re-persist the survivors: their summary rows and any events already in
+	// memory (live runs are always hydrated, so this is the complete log).
+	for _, r := range keptRuns {
+		r.mu.Lock()
+		sum := r.summaryLocked()
+		events := append([]RunEvent(nil), r.events...)
+		r.mu.Unlock()
+		m.store.SaveRun(sum)
+		for _, e := range events {
+			m.store.AppendEvent(r.ID, e, nil)
+		}
+	}
+	return nil
 }
 
 // evictLocked drops the oldest finished run when over the retention cap. Running
@@ -443,6 +640,9 @@ func (m *RunManager) evictLocked() {
 		m.order = append(m.order[:idx], m.order[idx+1:]...)
 		victim.finalize()
 		victim.removeWorkDir() // best-effort: drop the evicted run's scratch dir
+		if m.store != nil {
+			m.store.DeleteRun(id)
+		}
 	}
 }
 
@@ -458,6 +658,12 @@ func (r *Run) removeWorkDir() {
 func (r *Run) Summary() RunSummary {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.summaryLocked()
+}
+
+// summaryLocked builds the snapshot; the caller holds r.mu (or has exclusive
+// access to a not-yet-shared run).
+func (r *Run) summaryLocked() RunSummary {
 	return RunSummary{
 		ID: r.ID, Kind: r.Kind, Namespace: r.Namespace, Name: r.Name,
 		Context: r.Context, Agent: r.Agent, Isolated: r.Isolated,
@@ -466,6 +672,74 @@ func (r *Run) Summary() RunSummary {
 		Status: r.status, SessionID: r.sessionID,
 		Preview: r.preview, CreatedAt: r.CreatedAt, UpdatedAt: r.updatedAt,
 	}
+}
+
+// ensureHydrated loads the run's event log from the store on first touch. Every
+// path that reads or extends the log (Subscribe, follow-up turns, Stop) calls it
+// first, so sequence numbers always continue from the persisted log. Idempotent
+// and safe under concurrency: a racing second load just re-installs the same
+// immutable prefix before either appends.
+func (r *Run) ensureHydrated() {
+	if r.store == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.hydrated {
+		r.mu.Unlock()
+		return
+	}
+	r.mu.Unlock()
+	events, err := r.store.LoadEvents(r.ID) // outside r.mu — a DB read may wait on the writer
+	r.mu.Lock()
+	if !r.hydrated {
+		if err != nil {
+			log.Printf("[ai] could not load transcript for %s: %v", r.ID, err)
+		} else {
+			r.events = events
+		}
+		r.hydrated = true
+	}
+	r.mu.Unlock()
+}
+
+// markStale flips a non-running run to stale and finalizes its stream without
+// requiring hydration: the terminal error + closed markers are appended in the
+// STORE with store-assigned sequence numbers, and the in-memory log stays lazy —
+// the next Subscribe hydrates and replays them. Used for runs loaded from a
+// previous process whose kube-context no longer matches.
+func (r *Run) markStale() {
+	r.mu.Lock()
+	if r.status == "stale" || r.inFlight {
+		r.mu.Unlock()
+		return
+	}
+	r.status = "stale"
+	r.updatedAt = nowUTC()
+	sum := r.summaryLocked()
+	hydrated := r.hydrated
+	for id, ch := range r.subs {
+		delete(r.subs, id)
+		close(ch)
+	}
+	r.subs = nil
+	r.mu.Unlock()
+	if r.store == nil {
+		return
+	}
+	if hydrated {
+		// The in-memory log is authoritative — persist with explicit seqs so
+		// memory and store stay aligned.
+		r.mu.Lock()
+		stale := RunEvent{Seq: len(r.events) + 1, Event: StreamEvent{Type: "error", Error: "Cluster context changed — this investigation was about a different cluster."}}
+		closed := RunEvent{Seq: len(r.events) + 2, Event: StreamEvent{Type: "closed"}}
+		r.events = append(r.events, stale, closed)
+		r.mu.Unlock()
+		r.store.AppendEvent(r.ID, stale, nil)
+		r.store.AppendEvent(r.ID, closed, &sum)
+		return
+	}
+	r.store.AppendEvent(r.ID, RunEvent{Event: StreamEvent{Type: "error", Error: "Cluster context changed — this investigation was about a different cluster."}}, nil)
+	r.store.AppendEvent(r.ID, RunEvent{Event: StreamEvent{Type: "closed"}}, &sum)
 }
 
 // matchesTarget reports whether r is the same investigation as a Start request —
@@ -488,6 +762,7 @@ func (r *Run) snapshotStatus() string {
 // The channel is closed only when the run is finalized (stale/evicted) — NOT when
 // a turn completes, so the same subscription sees later turns.
 func (r *Run) Subscribe(afterSeq int) (backlog []RunEvent, ch <-chan RunEvent, cancel func()) {
+	r.ensureHydrated() // a run loaded from history replays its persisted transcript
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, e := range r.events {
@@ -515,11 +790,23 @@ func (r *Run) Subscribe(afterSeq int) (backlog []RunEvent, ch <-chan RunEvent, c
 
 // append records an event and fans it out non-blockingly. A subscriber whose buffer
 // is full is dropped (it reconnects with Last-Event-ID to replay).
+// Persistence rides along: the event is enqueued to the store under r.mu (enqueue
+// never blocks), and TERMINAL events ("done"/"error") carry the run's summary so
+// the status column and its terminal event commit in one transaction — crash
+// recovery can then trust that a "running" row has no terminal marker.
 func (r *Run) append(ev StreamEvent) {
 	r.mu.Lock()
 	re := RunEvent{Seq: len(r.events) + 1, Event: ev}
 	r.events = append(r.events, re)
 	r.updatedAt = nowUTC()
+	if r.store != nil {
+		var sum *RunSummary
+		if ev.Type == "done" || ev.Type == "error" {
+			s := r.summaryLocked()
+			sum = &s
+		}
+		r.store.AppendEvent(r.ID, re, sum)
+	}
 	for id, ch := range r.subs {
 		select {
 		case ch <- re:
@@ -545,6 +832,12 @@ func (r *Run) finalize() {
 	re := RunEvent{Seq: len(r.events) + 1, Event: StreamEvent{Type: "closed"}}
 	r.events = append(r.events, re)
 	r.updatedAt = nowUTC()
+	if r.store != nil && r.hydrated {
+		// Unhydrated finalize only happens on eviction, where the rows are
+		// deleted right after — persisting a wrong-seq sentinel would be noise.
+		sum := r.summaryLocked()
+		r.store.AppendEvent(r.ID, re, &sum)
+	}
 	for id, ch := range r.subs {
 		select {
 		case ch <- re:

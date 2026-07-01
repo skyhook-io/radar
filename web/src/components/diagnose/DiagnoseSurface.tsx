@@ -333,6 +333,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
               runs={d.runs}
               selectedId={d.activeRunId}
               onSelect={d.openRun}
+              historyDegraded={d.historyDegraded}
             />
           </aside>
         )}
@@ -345,6 +346,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
               agentLabel={d.agentLabel}
               runs={d.runs}
               onSelect={d.openRun}
+              historyDegraded={d.historyDegraded}
             />
           </div>
         ) : (

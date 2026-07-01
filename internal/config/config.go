@@ -36,6 +36,11 @@ type Config struct {
 	// pods. Empty falls back to busybox:latest; set it to a reachable mirror for
 	// air-gapped / private-registry clusters.
 	DebugImage string `json:"debugImage,omitempty"`
+	// AIHistory persists AI investigations (transcripts + verdicts) to a local
+	// SQLite file so they survive restarts. nil = default (true), false = off.
+	AIHistory *bool `json:"aiHistory,omitempty"`
+	// AIHistoryDBPath overrides the history DB location (default ~/.radar/ai-runs.db).
+	AIHistoryDBPath string `json:"aiHistoryDbPath,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent writes
@@ -127,6 +132,14 @@ func (c Config) HistoryLimitOr(def int) int {
 func (c Config) MCPEnabledOr(def bool) bool {
 	if c.MCP != nil {
 		return *c.MCP
+	}
+	return def
+}
+
+// AIHistoryOr returns *c.AIHistory if non-nil, otherwise the provided default.
+func (c Config) AIHistoryOr(def bool) bool {
+	if c.AIHistory != nil {
+		return *c.AIHistory
 	}
 	return def
 }

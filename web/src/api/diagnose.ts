@@ -148,16 +148,33 @@ export async function createRun(
   return res.json();
 }
 
+export interface RunsResponse {
+  runs: RunSummary[];
+  // Persistence stopped working (disk error) — history will NOT survive a
+  // restart; the UI should say so instead of letting the user assume otherwise.
+  historyDegraded?: boolean;
+}
+
 // listRuns returns all server-side runs (newest first) — the source of truth for
 // the recent-investigations list.
-export async function listRuns(signal?: AbortSignal): Promise<RunSummary[]> {
+export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   const res = await fetch(RUNS(), {
     credentials: getCredentialsMode(),
     signal,
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
   const d = await res.json();
-  return d.runs ?? [];
+  return { runs: d.runs ?? [], historyDegraded: !!d.historyDegraded };
+}
+
+// clearHistory wipes the persisted investigation history (finished runs); live
+// investigations survive.
+export async function clearHistory(): Promise<void> {
+  const res = await fetch(`${getApiBase()}/diagnose/history/clear`, {
+    method: "POST",
+    credentials: getCredentialsMode(),
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
 }
 
 // addTurn appends a follow-up (question) or an apply turn (apply + confirmed fix).

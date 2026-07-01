@@ -59,16 +59,29 @@ export function RecentList({
   runs,
   onSelect,
   selectedId,
+  historyDegraded = false,
 }: {
   agentLabel: string;
   runs: RunSummary[];
   onSelect: (id: string) => void;
   selectedId?: string | null;
+  historyDegraded?: boolean;
 }) {
   const now = Date.now();
 
+  // Persistence broke (disk error) — without this the user reasonably assumes
+  // their history survives a restart, and it won't.
+  const degradedNote = historyDegraded ? (
+    <div className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-theme-text-secondary">
+      History isn&apos;t being saved right now (disk error) — investigations
+      won&apos;t survive a restart.
+    </div>
+  ) : null;
+
   if (runs.length === 0) {
     return (
+      <div>
+      {degradedNote}
       <div className="flex flex-col items-center px-4 py-12 text-center">
         <Sparkles className="mb-3 h-7 w-7 text-accent" />
         <div className="text-sm font-medium text-theme-text-primary">
@@ -80,14 +93,16 @@ export function RecentList({
           action to investigate it with {agentLabel} —{" "}
           <span className="font-medium text-theme-text-secondary">Diagnose</span>{" "}
           a problem, or just ask about it. Investigations run in the background
-          and stay here until you restart Radar.
+          and are kept in your history here.
         </p>
+      </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-2">
+      {degradedNote}
       <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
         Investigations
       </div>

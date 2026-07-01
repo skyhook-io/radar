@@ -45,6 +45,7 @@ interface DiagnoseCtx {
   view: DiagnoseView;
   activeRunId: string | null;
   runs: RunSummary[];
+  historyDegraded: boolean; // persistence broke — history won't survive a restart
   needsConsent: boolean; // a start is pending the one-time consent
   startError: string | null;
   openInvestigation: (t: Target) => void;
@@ -179,6 +180,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [view, setView] = useState<DiagnoseView>("home");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [historyDegraded, setHistoryDegraded] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
@@ -265,7 +267,10 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const refreshRuns = useCallback(() => {
     if (!available) return;
     listRuns()
-      .then(setRuns)
+      .then((r) => {
+        setRuns(r.runs);
+        setHistoryDegraded(!!r.historyDegraded);
+      })
       .catch(() => {});
   }, [available]);
 
@@ -388,6 +393,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     view,
     activeRunId,
     runs,
+    historyDegraded,
     // pendingTarget is set ONLY when the current agent's consent is missing, and
     // cleared on approve/cancel — so its presence is exactly "consent needed now".
     needsConsent: !!pendingTarget,

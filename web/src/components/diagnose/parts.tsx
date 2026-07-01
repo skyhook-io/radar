@@ -518,7 +518,8 @@ export function ConsentCard({
         </span>{" "}
         on your machine — no Radar cloud, no API key, no account. Radar sends
         this resource&apos;s spec, recent events, and pod logs to it (and on to
-        its model provider under your account, not to Radar).
+        its model provider under your account, not to Radar). Transcripts are
+        kept in your local Radar history on this machine until cleared.
         {isolated && !isCursor && (
           <>
             {" "}

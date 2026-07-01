@@ -268,6 +268,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
               setAiDraft((d) => ({ ...d, ...patch }))
               setSaveMessage(null)
             }}
+            onHistoryCleared={diag.refreshRuns}
           />
 
           <SectionLabel>Radar configuration</SectionLabel>

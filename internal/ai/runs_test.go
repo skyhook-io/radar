@@ -1,7 +1,10 @@
 package ai
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -28,8 +31,8 @@ func TestRunWorkDirUnderPrivateRoot(t *testing.T) {
 // backlog after its last-seen seq, then live events, then a close on terminal.
 func TestRunSubscribeReplay(t *testing.T) {
 	r := &Run{subs: map[int]chan RunEvent{}}
-	r.append(StreamEvent{Type: "turn"})              // seq 1
-	r.append(StreamEvent{Type: "phase"})             // seq 2
+	r.append(StreamEvent{Type: "turn"})                 // seq 1
+	r.append(StreamEvent{Type: "phase"})                // seq 2
 	r.append(StreamEvent{Type: "thinking", Token: "x"}) // seq 3
 
 	backlog, ch, cancel := r.Subscribe(1) // everything after seq 1
@@ -167,5 +170,206 @@ func TestRunMatchesTarget(t *testing.T) {
 	}
 	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", true, "o3", "low") {
 		t.Error("different effort must NOT match")
+	}
+}
+
+// persistedManager builds a manager over a store with no live diagnoser — good
+// enough for persistence-path tests (nothing spawns an agent).
+func persistedManager(t *testing.T, store RunStore, ctx string) *RunManager {
+	t.Helper()
+	m := NewRunManager(nil, func() int { return 0 }, func() string { return ctx }, store)
+	t.Cleanup(func() {
+		// Don't let Shutdown close the shared test store between phases.
+		m.baseCancel()
+	})
+	return m
+}
+
+// TestPersistenceRestartRoundtrip pins the core promise: a finished run's
+// summary, transcript, and sessionId survive a "restart" (a second manager over
+// the same store), replay parity included.
+func TestPersistenceRestartRoundtrip(t *testing.T) {
+	st, _ := testStore(t)
+
+	m1 := persistedManager(t, st, "ctx-a")
+	r := &Run{
+		ID: "run-1", Kind: "Pod", Namespace: "ns", Name: "p", Context: "ctx-a",
+		Agent: "claude", store: st, status: "running", hydrated: true,
+		CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{},
+	}
+	m1.mu.Lock()
+	m1.runs[r.ID] = r
+	m1.order = append(m1.order, r.ID)
+	m1.nextID = 1
+	m1.mu.Unlock()
+	st.SaveRun(r.Summary())
+
+	r.append(StreamEvent{Type: "turn"})
+	r.append(StreamEvent{Type: "thinking", Token: "checking"})
+	r.mu.Lock()
+	r.status = "done"
+	r.sessionID = "sess-42"
+	r.preview = "bad image"
+	r.mu.Unlock()
+	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{RootCause: "bad image"}})
+	st.(*sqliteRunStore).barrier()
+
+	// "Restart": fresh manager, same store.
+	m2 := persistedManager(t, st, "ctx-a")
+	runs := m2.List()
+	if len(runs) != 1 || runs[0].Status != "done" || runs[0].SessionID != "sess-42" || runs[0].Preview != "bad image" {
+		t.Fatalf("restart lost state: %+v", runs)
+	}
+	// ID generation must not collide with the persisted run.
+	if m2.nextID != 1 {
+		t.Errorf("nextID = %d, want 1 (seeded from run-1)", m2.nextID)
+	}
+	// Replay parity: Subscribe hydrates the transcript from the store.
+	r2 := m2.Get("run-1")
+	backlog, _, cancel := r2.Subscribe(0)
+	defer cancel()
+	if len(backlog) != 3 || backlog[2].Event.Type != "done" || backlog[2].Event.Diag == nil {
+		t.Fatalf("replay after restart = %+v", backlog)
+	}
+}
+
+// TestPersistenceInterruptedRun pins crash recovery: a run persisted as
+// "running" loads as error with a terminal event appended, so replay still ends
+// in a terminal marker and Start won't focus the dead run.
+func TestPersistenceInterruptedRun(t *testing.T) {
+	st, _ := testStore(t)
+	st.SaveRun(RunSummary{ID: "run-3", Kind: "Pod", Name: "p", Context: "ctx-a",
+		Agent: "claude", Status: "running", CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+	st.AppendEvent("run-3", RunEvent{Seq: 1, Event: StreamEvent{Type: "turn"}}, nil)
+	st.(*sqliteRunStore).barrier()
+
+	m := persistedManager(t, st, "ctx-a")
+	runs := m.List()
+	if len(runs) != 1 || runs[0].Status != "error" {
+		t.Fatalf("interrupted run = %+v, want status error", runs)
+	}
+	r := m.Get("run-3")
+	backlog, _, cancel := r.Subscribe(0)
+	defer cancel()
+	last := backlog[len(backlog)-1]
+	if last.Event.Type != "error" || !strings.Contains(last.Event.Error, "restarted") {
+		t.Fatalf("replay must end in the restart marker, got %+v", last)
+	}
+}
+
+// TestPersistenceCursorNotResumable pins the accepted Cursor degradation: its
+// resume is workspace-scoped and the workspace died with the old process, so a
+// loaded Cursor run must refuse follow-ups via ErrNoSession — never spawn an
+// agent guaranteed to fail.
+func TestPersistenceCursorNotResumable(t *testing.T) {
+	st, _ := testStore(t)
+	st.SaveRun(RunSummary{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a",
+		Agent: "cursor-agent", Status: "done", SessionID: "cursor-sess",
+		CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+	st.(*sqliteRunStore).barrier()
+
+	m := persistedManager(t, st, "ctx-a")
+	if err := m.AddTurn("run-1", "and?", false, ""); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("cursor follow-up after restart = %v, want ErrNoSession", err)
+	}
+}
+
+// TestPersistenceForeignContextSweep pins that history from another kube-context
+// loads view-only: stale status, closed stream after replay, follow-ups refused.
+func TestPersistenceForeignContextSweep(t *testing.T) {
+	st, _ := testStore(t)
+	st.SaveRun(RunSummary{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-OLD",
+		Agent: "claude", Status: "done", SessionID: "s", CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+	st.AppendEvent("run-1", RunEvent{Seq: 1, Event: StreamEvent{Type: "turn"}}, nil)
+	st.(*sqliteRunStore).barrier()
+
+	m := persistedManager(t, st, "ctx-NEW")
+	runs := m.List() // sweep runs here (context label resolved)
+	if len(runs) != 1 || runs[0].Status != "stale" {
+		t.Fatalf("foreign-context run = %+v, want stale", runs)
+	}
+	if err := m.AddTurn("run-1", "and?", false, ""); !errors.Is(err, ErrStale) {
+		t.Fatalf("foreign-context follow-up = %v, want ErrStale", err)
+	}
+	st.(*sqliteRunStore).barrier()
+	// The persisted log gained terminal markers (store-assigned seqs), so a
+	// fresh subscribe replays and then CLOSES instead of hanging.
+	r := m.Get("run-1")
+	backlog, ch, cancel := r.Subscribe(0)
+	defer cancel()
+	last := backlog[len(backlog)-1]
+	if last.Event.Type != "closed" {
+		t.Fatalf("stale replay must end in closed, got %+v", backlog)
+	}
+	if _, ok := <-ch; ok {
+		t.Error("stale run's live channel must be closed")
+	}
+}
+
+// TestPersistenceEvictionDeletesRows pins that count-based eviction removes the
+// run from the store too — history and memory can't drift apart.
+func TestPersistenceEvictionDeletesRows(t *testing.T) {
+	st, _ := testStore(t)
+	m := persistedManager(t, st, "ctx-a")
+	m.maxRetained = 2
+	for i := 1; i <= 3; i++ {
+		id := fmt.Sprintf("run-%d", i)
+		r := &Run{ID: id, Kind: "Pod", Name: "p", Context: "ctx-a", store: st,
+			status: "done", hydrated: true, CreatedAt: nowUTC(), updatedAt: nowUTC(),
+			subs: map[int]chan RunEvent{}}
+		st.SaveRun(r.Summary())
+		m.mu.Lock()
+		m.runs[id] = r
+		m.order = append(m.order, id)
+		m.evictLocked()
+		m.mu.Unlock()
+	}
+	st.(*sqliteRunStore).barrier()
+	runs, _ := st.LoadRuns()
+	if len(runs) != 2 {
+		t.Fatalf("store kept %d runs after eviction, want 2", len(runs))
+	}
+	for _, r := range runs {
+		if r.ID == "run-1" {
+			t.Error("evicted run-1 still in store")
+		}
+	}
+}
+
+// TestClearHistoryKeepsRunning pins that Clear wipes finished runs (memory +
+// store) but a live investigation survives, fully re-persisted.
+func TestClearHistoryKeepsRunning(t *testing.T) {
+	st, _ := testStore(t)
+	m := persistedManager(t, st, "ctx-a")
+	mk := func(id, status string) *Run {
+		r := &Run{ID: id, Kind: "Pod", Name: "p", Context: "ctx-a", store: st,
+			status: status, hydrated: true, CreatedAt: nowUTC(), updatedAt: nowUTC(),
+			subs: map[int]chan RunEvent{}}
+		st.SaveRun(r.Summary())
+		m.mu.Lock()
+		m.runs[id] = r
+		m.order = append(m.order, id)
+		m.mu.Unlock()
+		return r
+	}
+	mk("run-1", "done")
+	live := mk("run-2", "running")
+	live.append(StreamEvent{Type: "turn"})
+
+	if err := m.ClearHistory(); err != nil {
+		t.Fatal(err)
+	}
+	st.(*sqliteRunStore).barrier()
+	runs := m.List()
+	if len(runs) != 1 || runs[0].ID != "run-2" {
+		t.Fatalf("memory after clear = %+v", runs)
+	}
+	stored, _ := st.LoadRuns()
+	if len(stored) != 1 || stored[0].ID != "run-2" {
+		t.Fatalf("store after clear = %+v", stored)
+	}
+	events, _ := st.LoadEvents("run-2")
+	if len(events) != 1 || events[0].Event.Type != "turn" {
+		t.Fatalf("live run's transcript not re-persisted: %+v", events)
 	}
 }
