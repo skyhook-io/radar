@@ -373,3 +373,104 @@ func TestClearHistoryKeepsRunning(t *testing.T) {
 		t.Fatalf("live run's transcript not re-persisted: %+v", events)
 	}
 }
+
+// TestPersistenceInterruptedFollowup pins crash recovery for a follow-up: the
+// running transition persists at beginTurn, so a crash mid-follow-up (after a
+// prior DONE verdict) still loads as error with a terminal restart marker —
+// never a done row hiding an unterminated turn.
+func TestPersistenceInterruptedFollowup(t *testing.T) {
+	st, _ := testStore(t)
+	m1 := persistedManager(t, st, "ctx-a")
+	r := &Run{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a", store: st,
+		status: "done", sessionID: "s", hydrated: true,
+		CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{}}
+	st.SaveRun(r.Summary())
+	r.append(StreamEvent{Type: "turn"})
+	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{Healthy: true}})
+	m1.mu.Lock()
+	m1.runs[r.ID] = r
+	m1.order = append(m1.order, r.ID)
+	m1.mu.Unlock()
+
+	// A follow-up begins (status flips to running + persists)… then Radar dies.
+	if _, err := m1.beginTurn(r, true); err != nil {
+		t.Fatal(err)
+	}
+	r.append(StreamEvent{Type: "turn", Question: "and?"})
+	st.(*sqliteRunStore).barrier()
+
+	m2 := persistedManager(t, st, "ctx-a")
+	runs := m2.List()
+	if len(runs) != 1 || runs[0].Status != "error" {
+		t.Fatalf("interrupted follow-up loaded as %+v, want error", runs)
+	}
+	backlog, _, cancel := m2.Get("run-1").Subscribe(0)
+	defer cancel()
+	last := backlog[len(backlog)-1].Event
+	if last.Type != "error" || !strings.Contains(last.Error, "restarted") {
+		t.Fatalf("replay must end terminal after interrupted follow-up, got %+v", last)
+	}
+}
+
+// TestPersistenceGracefulShutdown pins that Shutdown leaves an in-flight run's
+// persisted log ending in a terminal event (stopped status + marker in one tx),
+// so post-restart replay never leaves the UI spinning on an unterminated turn.
+func TestPersistenceGracefulShutdown(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ai-runs.db")
+	st, err := OpenRunStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewRunManager(nil, func() int { return 0 }, func() string { return "ctx-a" }, st)
+	r := &Run{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a", store: st,
+		status: "running", inFlight: true, hydrated: true,
+		CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{}}
+	st.SaveRun(r.Summary())
+	r.append(StreamEvent{Type: "turn"})
+	m.mu.Lock()
+	m.runs[r.ID] = r
+	m.order = append(m.order, r.ID)
+	m.mu.Unlock()
+
+	m.Shutdown() // marks stopped + appends terminal marker + drains and closes the store
+
+	st2, err := OpenRunStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	runs, _ := st2.LoadRuns()
+	if len(runs) != 1 || runs[0].Status != "stopped" {
+		t.Fatalf("after graceful shutdown: %+v, want stopped", runs)
+	}
+	events, _ := st2.LoadEvents("run-1")
+	last := events[len(events)-1].Event
+	if last.Type != "error" || !strings.Contains(last.Error, "shutting down") {
+		t.Fatalf("persisted log must end terminal after shutdown, got %+v", last)
+	}
+}
+
+// TestHydrationFailureRefusesAppends pins the transcript-protection rule: when
+// the persisted log can't be loaded, follow-ups are refused (never sequenced
+// against an unknown prefix) and the run stays retryable.
+func TestHydrationFailureRefusesAppends(t *testing.T) {
+	st, _ := testStore(t)
+	st.SaveRun(RunSummary{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a",
+		Agent: "claude", Status: "done", SessionID: "s", CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+	st.(*sqliteRunStore).barrier()
+	m := persistedManager(t, st, "ctx-a")
+	st.Close() // simulate the DB becoming unreadable before first hydration
+
+	if err := m.AddTurn("run-1", "and?", false, ""); !errors.Is(err, ErrHistoryUnavailable) {
+		t.Fatalf("AddTurn with unloadable transcript = %v, want ErrHistoryUnavailable", err)
+	}
+	// Subscribe degrades to an immediately-closed stream (client retries).
+	backlog, ch, cancel := m.Get("run-1").Subscribe(0)
+	defer cancel()
+	if len(backlog) != 0 {
+		t.Fatalf("backlog on failed hydration = %+v", backlog)
+	}
+	if _, ok := <-ch; ok {
+		t.Error("channel must be closed on failed hydration")
+	}
+}

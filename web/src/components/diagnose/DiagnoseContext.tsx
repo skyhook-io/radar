@@ -101,11 +101,13 @@ const MIN_W = 400;
 const MAX_W = 1100;
 const PANEL_BOUNDS = { min: MIN_W, max: MAX_W }; // stable ref for the layout context
 const WIDTH_KEY = "radar-ai-panel-width";
-const CONSENT_KEY = "radar-ai-consent-v2"; // v2: agent picker + isolation choice
+// v3: transcripts now persist to local Radar history (~/.radar) — a material
+// change to the disclosure, so prior consent doesn't carry over.
+const CONSENT_KEY = "radar-ai-consent-v3";
 // Cursor's trust model is materially different (it can't be isolated — the user's
 // own global MCP servers also load), so it gets its OWN consent: a user who already
 // approved Claude/Codex must still see Cursor's distinct disclosure before it runs.
-const CURSOR_CONSENT_KEY = "radar-ai-consent-cursor";
+const CURSOR_CONSENT_KEY = "radar-ai-consent-cursor-v2"; // v2: local history disclosure
 function consentKeyFor(agent: string): string {
   return agent === "cursor-agent" ? CURSOR_CONSENT_KEY : CONSENT_KEY;
 }

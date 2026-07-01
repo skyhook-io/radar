@@ -85,7 +85,7 @@ func TestStoreDeleteAndClear(t *testing.T) {
 	if len(runs) != 1 || runs[0].ID != "run-2" {
 		t.Fatalf("DeleteRun left %+v", runs)
 	}
-	if err := st.Clear(); err != nil {
+	if err := st.Clear(nil); err != nil {
 		t.Fatal(err)
 	}
 	runs, _ = st.LoadRuns()

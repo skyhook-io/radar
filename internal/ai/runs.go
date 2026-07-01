@@ -18,8 +18,9 @@ import (
 // so it keeps going when the browser closes the panel, navigates away, or refreshes.
 // Clients subscribe to a run's event stream (with replay) to watch live or catch up.
 //
-// In-memory only: runs are lost when the radar process restarts. The feature is
-// gated to no-auth standalone radar, so a single local user owns all runs.
+// Runs live in memory and (when a RunStore is configured) persist to SQLite so
+// history survives restarts. The feature is gated to no-auth standalone radar,
+// so a single local user owns all runs.
 //
 // Locking: the manager mutex (m.mu) guards the runs map/order. Each Run's mutable
 // state (status, session, events, subs, …) is guarded by r.mu. Immutable identity
@@ -129,6 +130,9 @@ var (
 	ErrNoSession = errors.New("investigation has no resumable session yet")
 	// ErrStale is returned when continuing a run whose cluster context changed.
 	ErrStale = errors.New("investigation ran against a different cluster")
+	// ErrHistoryUnavailable is returned when a run's persisted transcript can't
+	// be loaded — appending without it could overwrite stored history.
+	ErrHistoryUnavailable = errors.New("investigation history is unavailable right now — try again")
 )
 
 const (
@@ -281,15 +285,19 @@ func (m *RunManager) Shutdown() {
 	m.mu.Unlock()
 	for _, r := range runs {
 		r.mu.Lock()
-		if r.inFlight {
+		inFlight := r.inFlight
+		if inFlight {
 			r.status = "stopped"
 			r.updatedAt = nowUTC()
-			if r.store != nil {
-				r.store.SaveRun(r.summaryLocked())
-			}
 		}
 		c := r.cancel
 		r.mu.Unlock()
+		if inFlight {
+			// Terminal marker BEFORE cancelling: replay must never end mid-turn
+			// (the UI would spin forever), and the error-typed event carries the
+			// stopped summary in one store transaction.
+			r.append(StreamEvent{Type: "error", Error: "Investigation stopped — Radar was shutting down."})
+		}
 		if c != nil {
 			c()
 		}
@@ -339,6 +347,12 @@ func (m *RunManager) beginTurn(r *Run, requireSession bool) (string, error) {
 	r.inFlight = true
 	r.status = "running"
 	r.updatedAt = nowUTC()
+	// Persist the running transition NOW: if Radar dies mid-turn, restart
+	// recovery keys off the status column — a stale terminal status here would
+	// leave an unterminated turn in the replayed transcript with no repair.
+	if r.store != nil {
+		r.store.SaveRun(r.summaryLocked())
+	}
 	return r.sessionID, nil
 }
 
@@ -404,7 +418,11 @@ func (m *RunManager) AddTurn(id, question string, apply bool, fix string) error 
 	}
 	// A follow-up on a run loaded from history must extend the PERSISTED log —
 	// hydrate before beginTurn so the new turn's sequence numbers continue it.
-	r.ensureHydrated()
+	// Refusing on failure protects the stored transcript: appending against an
+	// unknown prefix would re-sequence from 1 and overwrite it.
+	if !r.ensureHydrated() {
+		return ErrHistoryUnavailable
+	}
 	session, err := m.beginTurn(r, true)
 	if err != nil {
 		return err
@@ -481,7 +499,9 @@ func (m *RunManager) Stop(id string) error {
 	if r == nil {
 		return ErrRunNotFound
 	}
-	r.ensureHydrated() // an in-flight run is always hydrated; harmless otherwise
+	// An in-flight run is always hydrated (born live); a loaded run can't be
+	// in-flight, so its early return below makes a failed hydration harmless.
+	r.ensureHydrated()
 	r.mu.Lock()
 	if !r.inFlight {
 		r.mu.Unlock()
@@ -584,12 +604,10 @@ func (m *RunManager) sweepForeignLocked() {
 func (m *RunManager) ClearHistory() error {
 	m.mu.Lock()
 	kept := make([]string, 0, len(m.order))
-	var keptRuns []*Run
 	for _, id := range m.order {
 		r := m.runs[id]
 		if r.snapshotStatus() == "running" {
 			kept = append(kept, id)
-			keptRuns = append(keptRuns, r)
 			continue
 		}
 		delete(m.runs, id)
@@ -602,22 +620,9 @@ func (m *RunManager) ClearHistory() error {
 	if m.store == nil {
 		return nil
 	}
-	if err := m.store.Clear(); err != nil {
-		return err
-	}
-	// Re-persist the survivors: their summary rows and any events already in
-	// memory (live runs are always hydrated, so this is the complete log).
-	for _, r := range keptRuns {
-		r.mu.Lock()
-		sum := r.summaryLocked()
-		events := append([]RunEvent(nil), r.events...)
-		r.mu.Unlock()
-		m.store.SaveRun(sum)
-		for _, e := range events {
-			m.store.AppendEvent(r.ID, e, nil)
-		}
-	}
-	return nil
+	// One transaction, deleting only the non-kept rows — a crash mid-clear can
+	// never lose a live investigation the user was told would survive.
+	return m.store.Clear(kept)
 }
 
 // evictLocked drops the oldest finished run when over the retention cap. Running
@@ -679,27 +684,32 @@ func (r *Run) summaryLocked() RunSummary {
 // first, so sequence numbers always continue from the persisted log. Idempotent
 // and safe under concurrency: a racing second load just re-installs the same
 // immutable prefix before either appends.
-func (r *Run) ensureHydrated() {
+//
+// On a load FAILURE the run stays un-hydrated (retryable) and callers must not
+// append: sequencing against an unknown prefix would restart at seq 1 and
+// overwrite the persisted transcript.
+func (r *Run) ensureHydrated() bool {
 	if r.store == nil {
-		return
+		return true
 	}
 	r.mu.Lock()
 	if r.hydrated {
 		r.mu.Unlock()
-		return
+		return true
 	}
 	r.mu.Unlock()
 	events, err := r.store.LoadEvents(r.ID) // outside r.mu — a DB read may wait on the writer
+	if err != nil {
+		log.Printf("[ai] could not load transcript for %s: %v", r.ID, err)
+		return false
+	}
 	r.mu.Lock()
 	if !r.hydrated {
-		if err != nil {
-			log.Printf("[ai] could not load transcript for %s: %v", r.ID, err)
-		} else {
-			r.events = events
-		}
+		r.events = events
 		r.hydrated = true
 	}
 	r.mu.Unlock()
+	return true
 }
 
 // markStale flips a non-running run to stale and finalizes its stream without
@@ -762,7 +772,14 @@ func (r *Run) snapshotStatus() string {
 // The channel is closed only when the run is finalized (stale/evicted) — NOT when
 // a turn completes, so the same subscription sees later turns.
 func (r *Run) Subscribe(afterSeq int) (backlog []RunEvent, ch <-chan RunEvent, cancel func()) {
-	r.ensureHydrated() // a run loaded from history replays its persisted transcript
+	// A run loaded from history replays its persisted transcript. On a load
+	// failure, return an immediately-closed stream WITHOUT registering — the
+	// client's EventSource reconnect retries hydration (it stayed un-hydrated).
+	if !r.ensureHydrated() {
+		c := make(chan RunEvent)
+		close(c)
+		return nil, c, func() {}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, e := range r.events {

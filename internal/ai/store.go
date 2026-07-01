@@ -35,8 +35,10 @@ type RunStore interface {
 	LoadEvents(runID string) ([]RunEvent, error)
 	// DeleteRun removes a run and its events.
 	DeleteRun(id string)
-	// Clear synchronously removes every persisted run and event.
-	Clear() error
+	// Clear synchronously removes persisted runs and events in ONE transaction,
+	// except the given run ids (live investigations that must survive a crash
+	// mid-clear).
+	Clear(keep []string) error
 	// Degraded reports that persistence has stopped working (disk error or a
 	// saturated write queue) — history will not survive a restart.
 	Degraded() bool
@@ -292,16 +294,39 @@ func (s *sqliteRunStore) DeleteRun(id string) {
 	})
 }
 
-func (s *sqliteRunStore) Clear() error {
+func (s *sqliteRunStore) Clear(keep []string) error {
 	var out error
 	s.enqueueWait(func(db *sql.DB) error {
-		if _, err := db.Exec(`DELETE FROM run_events`); err != nil {
+		tx, err := db.Begin()
+		if err != nil {
 			out = err
 			return err
 		}
-		_, err := db.Exec(`DELETE FROM runs`)
-		out = err
-		return err
+		defer func() { _ = tx.Rollback() }()
+		args := make([]any, len(keep))
+		ph := ""
+		for i, id := range keep {
+			if i > 0 {
+				ph += ","
+			}
+			ph += "?"
+			args[i] = id
+		}
+		evQ, runQ := `DELETE FROM run_events`, `DELETE FROM runs`
+		if len(keep) > 0 {
+			evQ += ` WHERE run_id NOT IN (` + ph + `)`
+			runQ += ` WHERE id NOT IN (` + ph + `)`
+		}
+		if _, err := tx.Exec(evQ, args...); err != nil {
+			out = err
+			return err
+		}
+		if _, err := tx.Exec(runQ, args...); err != nil {
+			out = err
+			return err
+		}
+		out = tx.Commit()
+		return out
 	})
 	return out
 }
