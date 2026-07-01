@@ -1,6 +1,11 @@
 {{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") (gt (int .Values.replicaCount) 1) }}
 {{- fail "replicaCount must be 1 when persistence.enabled=true and timeline.storage=sqlite: a single PVC cannot be safely shared across pods (RWO volumes won't attach to a second pod, RWX volumes risk SQLite corruption)" }}
 {{- end }}
+{{- $basePath := "" -}}
+{{- $trimmedBasePath := trimAll "/" (default "" .Values.basePath) -}}
+{{- if $trimmedBasePath -}}
+{{- $basePath = printf "/%s" $trimmedBasePath -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -49,6 +54,9 @@ spec:
             - --port={{ .Values.service.port }}
             - --listen-address=0.0.0.0
             - --no-browser
+            {{- if $basePath }}
+            - {{ printf "--base-path=%s" $basePath | quote }}
+            {{- end }}
             - --timeline-storage={{ .Values.timeline.storage }}
             {{- if eq .Values.timeline.storage "sqlite" }}
             - --timeline-db={{ .Values.timeline.dbPath }}
@@ -241,7 +249,7 @@ spec:
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: {{ printf "%s/api/health" $basePath | quote }}
               port: http
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
@@ -251,7 +259,7 @@ spec:
           {{- if .Values.probes.readiness.enabled }}
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: {{ printf "%s/api/health" $basePath | quote }}
               port: http
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}

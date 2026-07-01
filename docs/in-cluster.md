@@ -39,6 +39,26 @@ helm upgrade --install radar skyhook/radar \
   -n radar -f values.yaml
 ```
 
+### Subpath Ingress (No Strip-Prefix)
+
+If your ingress forwards `/radar/...` to the Radar service as `/radar/...`, set `basePath` to the same prefix:
+
+```yaml
+# values.yaml
+basePath: /radar
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: tools.your-domain.com
+      paths:
+        - path: /radar
+          pathType: Prefix
+```
+
+Then open `https://tools.your-domain.com/radar/`. Do not set `basePath` when your ingress already rewrites `/radar` to `/`.
+
 ### With Basic Authentication
 
 1. **Create the auth secret:**
@@ -300,6 +320,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `ingress.enabled` | Enable ingress | `false` |
 | `ingress.className` | Ingress class | `""` |
 | `service.port` | Service port | `9280` |
+| `basePath` | URL prefix Radar serves under, e.g. `/radar` for no-strip-prefix subpath ingress | `""` |
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |

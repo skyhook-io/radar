@@ -9,7 +9,7 @@ import {
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
-import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { apiUrl, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
 import {
   useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
 } from '../../api/client'
@@ -1119,7 +1119,7 @@ function MCPSection({
   const [copied, setCopied] = useState(false)
 
   const currentPort = Number(window.location.port) || 80
-  const mcpUrl = `http://localhost:${currentPort}/mcp`
+  const mcpUrl = `http://localhost:${currentPort}${routePath('/mcp')}`
 
   const handleCopy = () => {
     navigator.clipboard.writeText(mcpUrl)

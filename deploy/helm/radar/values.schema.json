@@ -116,6 +116,11 @@
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
       }
     },
+    "basePath": {
+      "type": "string",
+      "pattern": "^$|^/?[^:?#{}*]+$",
+      "description": "Optional URL path prefix served by Radar itself, e.g. /radar. Use when ingress forwards the subpath without stripping it."
+    },
     "ingress": {
       "type": "object",
       "additionalProperties": true,

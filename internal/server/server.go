@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"net/url"
+	pathpkg "path"
 	"reflect"
 	"runtime"
 	"slices"
@@ -68,6 +70,7 @@ type Server struct {
 	vitalsMetrics      vitalsMetricsMemo
 	port               int
 	listenAddress      string
+	basePath           string
 	startupLog         bool
 	remoteAccessHint   bool
 	devMode            bool
@@ -147,6 +150,7 @@ type Server struct {
 type Config struct {
 	Port               int
 	ListenAddress      string         // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
+	BasePath           string         // Optional URL path prefix for self-hosted subpath deployments
 	StartupLog         bool           // Emit the operator-facing startup block after a successful bind
 	RemoteAccessHint   bool           // Explain the explicit shared-listener opt-in (native CLI only)
 	DevMode            bool           // Serve frontend from filesystem instead of embedded
@@ -163,12 +167,17 @@ type Config struct {
 // New creates a new server instance
 func New(cfg Config) *Server {
 	cfg.AuthConfig.Defaults()
+	basePath, err := NormalizeBasePath(cfg.BasePath)
+	if err != nil {
+		log.Fatalf("Invalid base path %q: %v", cfg.BasePath, err)
+	}
 
 	s := &Server{
 		router:                chi.NewRouter(),
 		broadcaster:           NewSSEBroadcaster(),
 		port:                  cfg.Port,
 		listenAddress:         cfg.ListenAddress,
+		basePath:              basePath,
 		startupLog:            cfg.StartupLog,
 		remoteAccessHint:      cfg.RemoteAccessHint,
 		devMode:               cfg.DevMode,
@@ -306,7 +315,30 @@ func New(cfg Config) *Server {
 }
 
 func (s *Server) setupRoutes() {
-	r := s.router
+	if s.basePath != "" {
+		appRouter := chi.NewRouter()
+		s.setupAppRoutes(appRouter)
+		s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			target := s.basePath + "/"
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusFound)
+		})
+		s.router.Get(s.basePath, func(w http.ResponseWriter, r *http.Request) {
+			target := s.basePath + "/"
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+		})
+		s.router.Mount(s.basePath, appRouter)
+		return
+	}
+	s.setupAppRoutes(s.router)
+}
+
+func (s *Server) setupAppRoutes(r chi.Router) {
 
 	// Middleware (applied to all routes)
 	r.Use(middleware.Logger)
@@ -718,26 +750,75 @@ func (s *Server) setupRoutes() {
 
 	// Static files (frontend) - index.html fallback for client-side routes.
 	if s.staticFS != nil {
-		r.Handle("/*", frontendHandler(http.FS(s.staticFS)))
+		r.Handle("/*", frontendHandler(http.FS(s.staticFS), s.basePath))
 	} else if s.devMode {
 		// In dev mode, serve from web/dist
-		r.Handle("/*", frontendHandler(http.Dir("web/dist")))
+		r.Handle("/*", frontendHandler(http.Dir("web/dist"), s.basePath))
 	}
 }
 
+// NormalizeBasePath canonicalizes the optional URL prefix used when Radar is
+// served behind an ingress path like /radar. Empty and "/" mean root.
+func NormalizeBasePath(raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	if p == "" || p == "/" {
+		return "", nil
+	}
+	if strings.ContainsAny(p, "?#") {
+		return "", fmt.Errorf("must be a path only, without query or fragment")
+	}
+	if strings.ContainsAny(p, "{}*") {
+		return "", fmt.Errorf("must not contain route pattern characters")
+	}
+	if strings.Contains(p, "://") || strings.HasPrefix(p, "//") {
+		return "", fmt.Errorf("must be a path, not a URL")
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	for _, segment := range strings.Split(p, "/") {
+		if segment == "." || segment == ".." {
+			return "", fmt.Errorf("must not contain . or .. path segments")
+		}
+	}
+	clean := pathpkg.Clean(p)
+	if clean == "/" || clean == "." {
+		return "", nil
+	}
+	return clean, nil
+}
+
 // frontendHandler serves static files, falling back to index.html for client-side routing
-func frontendHandler(fsys http.FileSystem) http.Handler {
+func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 	fileServer := http.FileServer(fsys)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		serveReq := r
+		if basePath != "" {
+			switch {
+			case path == basePath:
+				path = "/"
+			case strings.HasPrefix(path, basePath+"/"):
+				path = strings.TrimPrefix(path, basePath)
+			}
+			if path != r.URL.Path {
+				serveReq = r.Clone(r.Context())
+				serveReq.URL = cloneURL(r.URL)
+				serveReq.URL.Path = path
+			}
+		}
+
+		if path == "/" || path == "/index.html" {
+			serveFrontendIndex(w, r, fsys, basePath)
+			return
+		}
 
 		// Try to open the file
 		f, err := fsys.Open(path)
 		if err != nil {
 			// File doesn't exist - serve index.html for client-side routing
-			r.URL.Path = "/"
-			fileServer.ServeHTTP(w, r)
+			serveFrontendIndex(w, r, fsys, basePath)
 			return
 		}
 		defer f.Close()
@@ -746,11 +827,74 @@ func frontendHandler(fsys http.FileSystem) http.Handler {
 		stat, err := f.Stat()
 		if err != nil || (stat.IsDir() && path != "/") {
 			// For directories without index.html, serve root index.html
-			r.URL.Path = "/"
+			serveFrontendIndex(w, r, fsys, basePath)
+			return
 		}
 
-		fileServer.ServeHTTP(w, r)
+		fileServer.ServeHTTP(w, serveReq)
 	})
+}
+
+func cloneURL(u *url.URL) *url.URL {
+	cloned := *u
+	return &cloned
+}
+
+func serveFrontendIndex(w http.ResponseWriter, r *http.Request, fsys http.FileSystem, basePath string) {
+	f, err := fsys.Open("/index.html")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "failed to read frontend index", http.StatusInternalServerError)
+		return
+	}
+	body = rewriteFrontendIndex(body, basePath)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	http.ServeContent(w, r, "index.html", stat.ModTime(), bytes.NewReader(body))
+}
+
+func rewriteFrontendIndex(body []byte, basePath string) []byte {
+	html := string(body)
+	if basePath != "" {
+		html = strings.ReplaceAll(html, `href="/`, `href="`+basePath+`/`)
+		html = strings.ReplaceAll(html, `src="/`, `src="`+basePath+`/`)
+	}
+	html = strings.ReplaceAll(html, `href="./`, `href="`+basePath+`/`)
+	html = strings.ReplaceAll(html, `src="./`, `src="`+basePath+`/`)
+	if basePath == "" {
+		return []byte(html)
+	}
+	cfg := struct {
+		BasePath  string `json:"basePath"`
+		ApiBase   string `json:"apiBase"`
+		AssetBase string `json:"assetBase"`
+	}{
+		BasePath:  basePath,
+		ApiBase:   basePath + "/api",
+		AssetBase: basePath,
+	}
+	cfgJSON, err := json.Marshal(cfg)
+	if err != nil {
+		return body
+	}
+
+	runtimeScript := `<script>window.__RADAR_RUNTIME_CONFIG__=` + string(cfgJSON) + `;</script>`
+	if strings.Contains(html, `<script type="module"`) {
+		html = strings.Replace(html, `<script type="module"`, runtimeScript+"\n    "+`<script type="module"`, 1)
+	} else {
+		html = strings.Replace(html, `</head>`, "    "+runtimeScript+"\n  </head>", 1)
+	}
+	return []byte(html)
 }
 
 // Start starts the server. If port is 0, an OS-assigned port is used.

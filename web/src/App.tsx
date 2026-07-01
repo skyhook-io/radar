@@ -9,7 +9,7 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, assetUrl } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -67,6 +67,8 @@ import { kindToPlural, pluralToKind, openExternal, apiVersionToGroup, relatedRes
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
 import type { ContextSwitcherHandle } from './components/ContextSwitcher'
+
+const radarLogoUrl = assetUrl('/images/radar/radar-icon.svg')
 
 // All possible node kinds (core + GitOps)
 const ALL_NODE_KINDS: NodeKind[] = [
@@ -2566,7 +2568,7 @@ function Logo() {
     <div className="flex items-center gap-2.5">
       <div className="relative w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-emerald-500/10 border border-emerald-500/20">
         <img
-          src="/images/radar/radar-icon.svg"
+          src={radarLogoUrl}
           alt=""
           aria-hidden
           className="w-full h-full p-0.5"

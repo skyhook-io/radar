@@ -23,6 +23,7 @@ const (
 type startupLogSummary struct {
 	listenAddress        string
 	port                 int
+	basePath             string
 	authMode             string
 	proxyUserHeader      string
 	proxyGroupsHeader    string
@@ -44,6 +45,7 @@ func (s *Server) logStartupSummaryBlock() {
 	summary := startupLogSummary{
 		listenAddress:        s.listenAddress,
 		port:                 s.ActualPort(),
+		basePath:             s.basePath,
 		authMode:             s.authConfig.Mode,
 		proxyUserHeader:      s.authConfig.UserHeader,
 		proxyGroupsHeader:    s.authConfig.GroupsHeader,
@@ -60,6 +62,16 @@ func (s *Server) logStartupSummaryBlock() {
 	for _, line := range formatStartupLogSummary(summary, color) {
 		log.Print(line)
 	}
+}
+
+// startupURLPath renders the URL path suffix for the startup block: a
+// normalized base path gets a trailing slash so the printed URL lands on the
+// app directly instead of bouncing through the root redirect.
+func startupURLPath(basePath string) string {
+	if basePath == "" {
+		return ""
+	}
+	return basePath + "/"
 }
 
 func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
@@ -83,7 +95,7 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 	loopback := cloud.IsLoopbackHostname(summary.listenAddress)
 	if loopback {
 		lines = append(lines,
-			row("URL", fmt.Sprintf("http://localhost:%d", summary.port)),
+			row("URL", fmt.Sprintf("http://localhost:%d%s", summary.port, startupURLPath(summary.basePath))),
 			row("Access", paint(startupANSICyan, "LOCAL ONLY")+" ("+summary.listenAddress+")"),
 		)
 	} else {
