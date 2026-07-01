@@ -254,7 +254,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
 
           {connection.error && (
             <div className="w-full bg-theme-elevated border border-theme-border rounded-lg p-3 mb-6 overflow-auto max-h-32">
-              <code className="text-xs text-red-400 font-mono whitespace-pre-wrap break-all">
+              <code className="text-xs text-red-400 font-mono whitespace-pre-wrap break-words">
                 {connection.error}
               </code>
             </div>
