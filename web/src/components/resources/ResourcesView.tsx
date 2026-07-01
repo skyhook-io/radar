@@ -6,6 +6,7 @@ import { isBadgeWorthy } from '../../utils/auditBadges'
 import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, getBasename } from '../../api/config'
 import { useAPIResources } from '../../api/apiResources'
+import { useConnection } from '../../context/ConnectionContext'
 import { initNavigationMap } from '@skyhook-io/k8s-ui'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
@@ -62,6 +63,7 @@ function resourceCountKey(kind: NonNullable<SelectedKindInfo>): string {
 export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces }: ResourcesViewProps) {
   const location = useLocation()
   const navigate = useNavigate()
+  const { connection } = useConnection()
 
   const { data: capabilities } = useCapabilities()
   const namespaceForCapabilities = namespaces.length === 1 ? namespaces[0] : undefined
@@ -328,6 +330,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       resourceReasons={countsData?.reasons}
       resourceUnavailable={countsData?.unavailable}
       selectedKindQuery={selectedKindQueryResult}
+      connectionState={connection.state}
       largeListGuard={largeListGuard}
       onSelectedKindChange={setSelectedKind}
       topPodMetrics={topPodMetrics}

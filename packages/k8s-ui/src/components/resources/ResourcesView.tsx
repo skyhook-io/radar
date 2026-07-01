@@ -1,6 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef, useContext, useId } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
-import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { PaneLoader } from '../ui/PaneLoader'
 import { RestrictedState } from '../ui/RestrictedState'
 import type { TopPodMetrics, TopNodeMetrics } from '../../types'
@@ -132,7 +131,7 @@ import { SEVERITY_BADGE, EVENT_TYPE_COLORS, SEVERITY_TEXT } from '../../utils/ba
 import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
-import { UpdatedAtLabel } from '../ui/UpdatedAtLabel'
+import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 // CRD-specific cell components (extracted)
@@ -1851,6 +1850,9 @@ interface ResourcesViewProps {
   resourceUnavailable?: string[]
   // Single query for the currently selected kind's full data
   selectedKindQuery?: ResourceQueryResult
+  // Cluster/SSE connection health — the list is SSE-invalidated ("Auto-updating"),
+  // so it must degrade to "Reconnecting…" when the stream drops.
+  connectionState?: FreshnessConnection
   largeListGuard?: LargeListGuardState | null
   topPodMetrics?: TopPodMetrics[]
   topNodeMetrics?: TopNodeMetrics[]
@@ -2026,6 +2028,7 @@ export function ResourcesView({
   resourceReasons,
   resourceUnavailable: resourceUnavailableProp,
   selectedKindQuery: selectedKindQueryProp,
+  connectionState,
   largeListGuard,
   topPodMetrics,
   topNodeMetrics,
@@ -2085,7 +2088,6 @@ export function ResourcesView({
   const [regexMode, setRegexMode] = useState(false)
   const [sortColumn, setSortColumn] = useState<string | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>(null)
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   // Filter state
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
   const [problemFilters, setProblemFilters] = useState<string[]>(initialFilters.problemFilters)
@@ -3205,22 +3207,6 @@ export function ResourcesView({
   const isLoading = selectedQuery?.isLoading ?? true
   const selectedQueryError = selectedQuery?.error
   const refetchFn = selectedQuery?.refetch
-  const dataUpdatedAt = selectedQuery?.dataUpdatedAt
-
-  const [refetch, isRefreshAnimating, refreshPhase] = useRefreshAnimation(() => refetchFn?.())
-
-  // React Query bumps dataUpdatedAt on no-op refetches (window focus,
-  // mount, sibling subscribers); structural sharing returns the same
-  // resources reference when data is byte-identical. Skip the timer
-  // reset in that case — otherwise opening a filter drawer looks like
-  // it triggered a real fetch.
-  const lastDataRef = useRef<unknown>(undefined)
-  useEffect(() => {
-    if (!dataUpdatedAt) return
-    if (resources === lastDataRef.current) return
-    lastDataRef.current = resources
-    setLastUpdated(new Date(dataUpdatedAt))
-  }, [dataUpdatedAt, resources])
 
   // Derive counts — prefer lightweight resourceCounts prop over full query data
   const counts = useMemo(() => {
@@ -4248,7 +4234,6 @@ export function ResourcesView({
             </Tooltip>
           )}
 
-          {lastUpdated && <UpdatedAtLabel dataUpdatedAt={lastUpdated.getTime()} />}
           {/* Column picker */}
           <div className="relative" ref={columnPickerRef}>
             <button
@@ -4366,20 +4351,13 @@ export function ResourcesView({
               </div>
             )}
           </div>
-          <button
-            onClick={refetch}
-            disabled={isRefreshAnimating}
-            className={clsx(
-              'p-2 hover:bg-theme-elevated rounded-lg disabled:opacity-50 transition-colors duration-500',
-              refreshPhase === 'success' ? 'text-emerald-400' : 'text-theme-text-secondary hover:text-theme-text-primary'
-            )}
-            title="Refresh"
-          >
-            {refreshPhase === 'success'
-              ? <Check className="w-4 h-4 stroke-[2.5]" />
-              : <RefreshCw className={clsx('w-4 h-4', refreshPhase === 'spinning' && 'animate-spin')} />
-            }
-          </button>
+          {/* The list is SSE-invalidated (near-real-time), so it reads
+              "Auto-updating" rather than a constantly-resetting age. */}
+          <FreshnessControl
+            mode="live"
+            onRefresh={() => refetchFn?.()}
+            connectionState={connectionState}
+          />
           {onCreateResource && (
             <Tooltip content={`Create ${selectedKind.kind || 'resource'}`}>
               <button
