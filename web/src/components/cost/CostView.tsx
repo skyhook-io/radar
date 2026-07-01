@@ -92,6 +92,9 @@ export function CostView({ onBack }: CostViewProps) {
             </button>
           </div>
           <div className="flex items-center gap-4">
+            {/* Tracks the headline $/hr summary (the primary query). Trend/node
+                breakdowns poll slower; the summary cadence is the representative
+                signal for the view. */}
             <FreshnessControl
               mode="polled"
               dataUpdatedAt={dataUpdatedAt}

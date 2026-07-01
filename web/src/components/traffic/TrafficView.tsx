@@ -421,6 +421,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const {
     data: flowsData,
     isFetching: flowsFetching,
+    dataUpdatedAt: flowsUpdatedAt,
     refetch: refetchFlowsRaw,
   } = useTrafficFlows({
     namespaces,
@@ -1125,9 +1126,12 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   <div className="flex items-center px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-tertiary tabular-nums">
                     {flowStats.shown}/{flowStats.total}
                   </div>
+                  {/* Flows are a REST snapshot (no poll, no stream), so this is
+                      an honest "Updated N ago" + manual refresh — not "live". */}
                   <div className="flex items-center rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border px-1.5 py-0.5">
                     <FreshnessControl
-                      mode="live"
+                      mode="polled"
+                      dataUpdatedAt={flowsUpdatedAt}
                       isFetching={flowsFetching}
                       onRefresh={() => refetchFlowsRaw()}
                     />

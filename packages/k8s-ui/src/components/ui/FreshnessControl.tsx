@@ -64,13 +64,15 @@ export function FreshnessControl({
   const [refresh, , phase] = useRefreshAnimation(() => onRefresh?.())
   const spinning = phase === 'spinning' || !!isFetching
 
-  const disconnected = connectionState === 'disconnected'
+  // Any non-connected state (disconnected OR mid-reconnect) must not claim
+  // currency — the signal degrades rather than showing a stale age/Live.
+  const degraded = connectionState !== 'connected'
 
-  let label: string
+  let label: string | null
   let tooltip: string
-  if (disconnected) {
+  if (degraded) {
     label = 'Reconnecting…'
-    tooltip = 'Disconnected from the cluster — data may be stale until the connection is restored.'
+    tooltip = 'Not connected to the cluster — data may be stale until the connection is restored.'
   } else if (mode === 'live' && paused) {
     label = 'Paused'
     tooltip = 'Live updates are paused — resume to keep this view current.'
@@ -84,38 +86,44 @@ export function FreshnessControl({
       // not a precise age (which is only one query's browser-fetch time).
       label = `Auto-refreshes every ${formatCadence(cadenceMs)}`
       tooltip = age ? `${label} · updated ${age}` : label
-    } else {
-      // No known cadence (e.g. a consumer that doesn't poll): don't claim
-      // auto-refresh — fall back to an honest age.
-      label = age ? `Updated ${age}` : 'Not yet loaded'
+    } else if (age) {
+      // No cadence but a real load time (e.g. a manual-refresh snapshot).
+      label = `Updated ${age}`
       tooltip = label
+    } else {
+      // Nothing to say (a consumer that only wires manual refresh, or before
+      // the first load) — render just the button, no misleading text.
+      label = null
+      tooltip = 'Refresh'
     }
   }
 
   // The secondary "· updated N ago" only rides alongside the cadence label.
   const ageSuffix =
-    !disconnected && mode === 'polled' && cadenceMs && showAge
+    !degraded && mode === 'polled' && cadenceMs && showAge
       ? formatUpdatedAgo(Date.now() - (dataUpdatedAt as number))
       : null
 
   return (
     <div className={clsx('flex items-center gap-1.5 whitespace-nowrap', className)}>
-      <Tooltip content={tooltip} delay={100} position="bottom">
-        <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">
-          {mode === 'live' && !disconnected && (
-            <span
-              className={clsx(
-                'w-1.5 h-1.5 rounded-full',
-                paused ? 'bg-amber-400' : 'bg-green-500 animate-pulse',
-              )}
-              aria-hidden
-            />
-          )}
-          <span className="tabular-nums">{label}</span>
-          {/* Age is secondary — it drops first on narrow toolbars; the tooltip keeps it. */}
-          {ageSuffix && <span className="hidden lg:inline tabular-nums">· updated {ageSuffix}</span>}
-        </span>
-      </Tooltip>
+      {label && (
+        <Tooltip content={tooltip} delay={100} position="bottom">
+          <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">
+            {mode === 'live' && !degraded && (
+              <span
+                className={clsx(
+                  'w-1.5 h-1.5 rounded-full',
+                  paused ? 'bg-amber-400' : 'bg-green-500 animate-pulse',
+                )}
+                aria-hidden
+              />
+            )}
+            <span className="tabular-nums">{label}</span>
+            {/* Age is secondary — it drops first on narrow toolbars; the tooltip keeps it. */}
+            {ageSuffix && <span className="hidden lg:inline tabular-nums">· updated {ageSuffix}</span>}
+          </span>
+        </Tooltip>
+      )}
       {onRefresh && (
         <Tooltip content="Refresh now" delay={100} position="bottom">
           <button
