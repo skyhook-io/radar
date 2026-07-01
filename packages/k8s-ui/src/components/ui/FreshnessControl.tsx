@@ -130,7 +130,10 @@ export function FreshnessControl({
           <button
             type="button"
             onClick={refresh}
-            disabled={spinning}
+            // Only disable during the button's own refresh animation (prevents
+            // double-trigger); stay clickable during background refetches/loads
+            // — the icon still spins to show that activity.
+            disabled={phase === 'spinning'}
             aria-label="Refresh now"
             className="p-1.5 rounded-lg text-theme-text-tertiary hover:text-theme-text-secondary hover:bg-theme-hover transition-colors disabled:opacity-50"
           >
