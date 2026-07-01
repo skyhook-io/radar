@@ -69,7 +69,7 @@
     "eslint-plugin-react-refresh": "^0.5.3",
     "globals": "^17.7.0",
     "lucide-react": "^1.16.0",
-    "postcss": "^8.5.14",
+    "postcss": "^8.5.16",
     "prettier": "^3.8.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
