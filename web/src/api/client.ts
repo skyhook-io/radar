@@ -44,6 +44,7 @@ export const AUDIT_REFRESH_INTERVAL_MS = 60_000
 export const ISSUES_REFRESH_INTERVAL_MS = 30_000
 export const COST_REFRESH_INTERVAL_MS = 60_000
 export const CHANGES_REFRESH_INTERVAL_MS = 60_000
+export const APPLICATIONS_REFRESH_INTERVAL_MS = 60_000
 
 // Wrapper around fetch that always includes credentials (for session cookies)
 // and handles 401 responses globally. Merges caller-provided headers with
@@ -964,7 +965,7 @@ export function useApplications(namespaces: string[]) {
     queryKey: ['applications', namespaces],
     queryFn: () => fetchJSON(`/applications${queryString ? `?${queryString}` : ''}`),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: APPLICATIONS_REFRESH_INTERVAL_MS,
   })
 }
 

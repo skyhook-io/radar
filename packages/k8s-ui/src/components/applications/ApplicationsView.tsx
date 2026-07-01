@@ -97,9 +97,11 @@ export interface ApplicationsViewProps {
   /** Rendered instead of the built-in EmptyState when there are zero entries
    *  pre-filter (the fleet host injects a coverage/offline-aware empty). */
   emptySlot?: ReactNode
+  /** Leading element in the header actions cluster (e.g. a freshness control). */
+  headerActions?: ReactNode
 }
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions }: ApplicationsViewProps) {
   const [textFilter, setTextFilter] = useState('')
   const [fHealth, setFHealth] = useState<Set<AppHealth>>(new Set())
   const [fEnv, setFEnv] = useState<Set<string>>(new Set())
@@ -294,6 +296,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
           description={description}
           actions={
             <>
+              {headerActions}
               <SummaryTile label={total === 1 ? 'application' : 'applications'} value={total} />
               {healthTile('unhealthy', 'error')}
               {healthTile('degraded', 'warning')}

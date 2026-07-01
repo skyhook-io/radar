@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
-import { useIssues } from '../../api/client'
+import { useIssues, ISSUES_REFRESH_INTERVAL_MS } from '../../api/client'
+import { useConnection } from '../../context/ConnectionContext'
 import type { SelectedResource } from '../../types'
 import {
   IssuesView,
   PaneLoader,
   PageHeader,
   SummaryTile,
+  FreshnessControl,
   ISSUE_SEVERITIES,
   ISSUE_SEVERITY_LABEL,
   type IssueResourceRef,
@@ -30,7 +32,8 @@ interface IssuesPaneProps {
 // the header status tiles (clickable → filter), matching the Applications /
 // GitOps header-tile pattern rather than Hub's fleet facet sidebar.
 export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps) {
-  const { data, isLoading, error } = useIssues(namespaces)
+  const { data, isLoading, error, isFetching, dataUpdatedAt, refetch } = useIssues(namespaces)
+  const { connection } = useConnection()
   const [severityFilter, setSeverityFilter] = useState<Set<IssueSeverity>>(new Set())
 
   const allIssues = useMemo(() => data?.issues ?? [], [data])
@@ -70,23 +73,33 @@ export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps
         title="Issues"
         description="Live cluster problems — crashes, scheduling failures, bad references — grouped by the resource they affect."
         actions={
-          allIssues.length > 0 ? (
-            <>
-              <SummaryTile label={allIssues.length === 1 ? 'issue' : 'issues'} value={allIssues.length} />
-              {ISSUE_SEVERITIES.map((s) =>
-                totals[s] > 0 || severityFilter.has(s) ? (
-                  <SummaryTile
-                    key={s}
-                    label={ISSUE_SEVERITY_LABEL[s]}
-                    value={totals[s]}
-                    tone={SEVERITY_TONE[s]}
-                    active={severityFilter.has(s)}
-                    onClick={() => toggleSeverity(s)}
-                  />
-                ) : null,
-              )}
-            </>
-          ) : undefined
+          <>
+            <FreshnessControl
+              mode="polled"
+              dataUpdatedAt={dataUpdatedAt}
+              cadenceMs={ISSUES_REFRESH_INTERVAL_MS}
+              isFetching={isFetching}
+              onRefresh={() => refetch()}
+              connectionState={connection.state}
+            />
+            {allIssues.length > 0 && (
+              <>
+                <SummaryTile label={allIssues.length === 1 ? 'issue' : 'issues'} value={allIssues.length} />
+                {ISSUE_SEVERITIES.map((s) =>
+                  totals[s] > 0 || severityFilter.has(s) ? (
+                    <SummaryTile
+                      key={s}
+                      label={ISSUE_SEVERITY_LABEL[s]}
+                      value={totals[s]}
+                      tone={SEVERITY_TONE[s]}
+                      active={severityFilter.has(s)}
+                      onClick={() => toggleSeverity(s)}
+                    />
+                  ) : null,
+                )}
+              </>
+            )}
+          </>
         }
       />
 
