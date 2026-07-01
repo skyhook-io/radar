@@ -37,10 +37,15 @@ export function TopologyControls({
 }: TopologyControlsProps) {
   return (
     <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+      {/* Freshness/liveness status — backed for legibility over the canvas but
+          borderless + divided off, so it reads as a status, not another control. */}
       {leadingSlot && (
-        <div className="flex items-center rounded-lg border border-theme-border bg-theme-surface/90 px-2 py-1.5 backdrop-blur">
-          {leadingSlot}
-        </div>
+        <>
+          <div className="flex items-center rounded-lg bg-theme-surface/80 px-2.5 py-1.5 backdrop-blur">
+            {leadingSlot}
+          </div>
+          <div className="h-5 w-px bg-theme-border/70" />
+        </>
       )}
       {/* Policy effect toggle */}
       {onShowPolicyEffectChange && (
