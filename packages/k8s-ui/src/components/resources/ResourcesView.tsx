@@ -3206,7 +3206,6 @@ export function ResourcesView({
   }, [resources])
   const isLoading = selectedQuery?.isLoading ?? true
   const selectedQueryError = selectedQuery?.error
-  const refetchFn = selectedQuery?.refetch
 
   // Derive counts — prefer lightweight resourceCounts prop over full query data
   const counts = useMemo(() => {
@@ -4352,12 +4351,9 @@ export function ResourcesView({
             )}
           </div>
           {/* The list is SSE-invalidated (near-real-time), so it reads
-              "Auto-updating" rather than a constantly-resetting age. */}
-          <FreshnessControl
-            mode="live"
-            onRefresh={() => refetchFn?.()}
-            connectionState={connectionState}
-          />
+              "Auto-updating" with no refresh button — the stream keeps it
+              current, so a manual refresh would only undercut the claim. */}
+          <FreshnessControl mode="live" connectionState={connectionState} />
           {onCreateResource && (
             <Tooltip content={`Create ${selectedKind.kind || 'resource'}`}>
               <button
