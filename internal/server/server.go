@@ -164,14 +164,21 @@ func New(cfg Config) *Server {
 			// disabled feature never creates the DB. Open failure degrades to
 			// memory-only runs (the historical behavior), never blocks startup.
 			var store ai.RunStore
+			historyBroken := false
 			if cfg.AIHistoryDB != "" {
 				if st, err := ai.OpenRunStore(cfg.AIHistoryDB); err != nil {
 					log.Printf("[ai] run history disabled — could not open %s: %v", cfg.AIHistoryDB, err)
+					historyBroken = true
 				} else {
 					store = st
 				}
 			}
 			s.aiRuns = ai.NewRunManager(d, s.ActualPort, k8s.GetContextName, store)
+			if historyBroken {
+				// Persistence was requested but isn't working — the UI must say
+				// history won't survive a restart, not just a log line.
+				s.aiRuns.MarkHistoryUnavailable()
+			}
 			log.Printf("[ai] diagnose enabled (default agent: %s)", d.DefaultAgent())
 		}
 	}

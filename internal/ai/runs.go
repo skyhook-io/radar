@@ -53,6 +53,10 @@ type RunManager struct {
 	maxRetained   int    // total runs kept in memory (running + finished)
 	maxConcurrent int    // concurrent IN-FLIGHT turns (= live agent processes)
 	sweptCtx      string // last kube-context the loaded-run staleness sweep ran for
+	// historyUnavailable marks that persistence was requested but is broken
+	// (store failed to open, or its existing contents couldn't be loaded) — the
+	// UI must say history won't survive a restart instead of implying it will.
+	historyUnavailable bool
 }
 
 // Run is one investigation: identity, status, the agent session to resume, and the
@@ -202,7 +206,13 @@ func (m *RunManager) loadPersisted() {
 	}
 	sums, err := m.store.LoadRuns()
 	if err != nil {
-		log.Printf("[ai] could not load run history: %v", err)
+		// Refusing the store entirely is the only safe response: with the
+		// existing contents unknown, new runs would mint colliding run-N ids and
+		// INSERT OR REPLACE would overwrite the stored transcripts.
+		log.Printf("[ai] could not load run history — running memory-only to protect it: %v", err)
+		m.store.Close()
+		m.store = nil
+		m.historyUnavailable = true
 		return
 	}
 	cutoff := nowUTC().Add(-defaultHistoryAge)
@@ -581,10 +591,23 @@ func (m *RunManager) List() []RunSummary {
 	return out
 }
 
-// HistoryDegraded reports that run persistence stopped working — history will
-// not survive a restart. Surfaced on the runs-list response so the UI can say so.
+// HistoryDegraded reports that run persistence isn't working — history will
+// not survive a restart. Surfaced on the runs-list response so the UI can say
+// so. True when the store broke mid-flight (write failures) OR never became
+// usable (open/load failure with persistence requested).
 func (m *RunManager) HistoryDegraded() bool {
-	return m.store != nil && m.store.Degraded()
+	m.mu.Lock()
+	unavailable := m.historyUnavailable
+	m.mu.Unlock()
+	return unavailable || (m.store != nil && m.store.Degraded())
+}
+
+// MarkHistoryUnavailable records that persistence was requested but couldn't be
+// set up (e.g. the DB failed to open) so the UI can surface it.
+func (m *RunManager) MarkHistoryUnavailable() {
+	m.mu.Lock()
+	m.historyUnavailable = true
+	m.mu.Unlock()
 }
 
 // sweepForeignLocked marks runs loaded from a PREVIOUS process against a

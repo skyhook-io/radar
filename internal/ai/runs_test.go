@@ -502,3 +502,31 @@ func TestContextSwitchIdempotentOnStale(t *testing.T) {
 		t.Fatalf("log must end in closed, got %+v", last)
 	}
 }
+
+// TestHistoryUnavailableSurfaces pins the degraded-visibility contract for the
+// two setup failure modes: a store that never opened (server marks it) and a
+// store whose existing contents couldn't be loaded (manager refuses it — new
+// runs must not mint colliding ids against unknown DB contents).
+func TestHistoryUnavailableSurfaces(t *testing.T) {
+	m := NewRunManager(nil, func() int { return 0 }, func() string { return "ctx" }, nil)
+	if m.HistoryDegraded() {
+		t.Error("memory-only by CONFIG must not read as degraded")
+	}
+	m.MarkHistoryUnavailable()
+	if !m.HistoryDegraded() {
+		t.Error("open failure must surface as degraded")
+	}
+
+	st, _ := testStore(t)
+	st.SaveRun(RunSummary{ID: "run-7", Kind: "Pod", Name: "p", Context: "ctx",
+		Status: "done", CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+	st.(*sqliteRunStore).barrier()
+	st.Close() // LoadRuns will fail in loadPersisted
+	m2 := NewRunManager(nil, func() int { return 0 }, func() string { return "ctx" }, st)
+	if !m2.HistoryDegraded() {
+		t.Error("load failure must surface as degraded")
+	}
+	if m2.store != nil {
+		t.Error("load failure must detach the store — writes against unknown contents overwrite history")
+	}
+}
