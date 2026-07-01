@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react'
-import { FolderTree, ShieldCheck } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { FolderTree, ShieldCheck, ChevronDown, Check } from 'lucide-react'
+import { clsx } from 'clsx'
 import type { TopologyMode, GroupingMode } from '../../types/core'
 import { Tooltip } from '../ui/Tooltip'
 
@@ -35,6 +36,29 @@ export function TopologyControls({
   onNavigateToTraffic,
   leadingSlot,
 }: TopologyControlsProps) {
+  const [groupOpen, setGroupOpen] = useState(false)
+  const groupRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!groupOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (groupRef.current && !groupRef.current.contains(e.target as Node)) setGroupOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setGroupOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [groupOpen])
+
+  const groupOptions: { value: GroupingMode; label: string }[] = [
+    ...(showNoGrouping ? [{ value: 'none' as GroupingMode, label: 'No Grouping' }] : []),
+    { value: 'namespace', label: 'By Namespace' },
+    { value: 'app', label: 'By App Label' },
+  ]
+  const currentGroupLabel = groupOptions.find((o) => o.value === groupingMode)?.label ?? 'Grouping'
+
   return (
     <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
       {/* Freshness/liveness status — backed for legibility over the canvas but
@@ -63,20 +87,36 @@ export function TopologyControls({
         </button>
       )}
 
-      {/* Grouping selector */}
-      <div className="flex items-center gap-1.5 px-2 py-1.5 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg">
-        <FolderTree className="w-3.5 h-3.5 text-theme-text-secondary" />
-        <select
-          value={groupingMode}
-          onChange={(e) => onGroupingModeChange(e.target.value as GroupingMode)}
-          className="appearance-none bg-transparent text-theme-text-primary text-xs focus:outline-none"
+      {/* Grouping selector — themed dropdown (not a native <select>). */}
+      <div ref={groupRef} className="relative">
+        <button
+          type="button"
+          onClick={() => setGroupOpen((v) => !v)}
+          aria-haspopup="menu"
+          aria-expanded={groupOpen}
+          className="flex items-center gap-1.5 px-2 py-1.5 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg text-xs text-theme-text-primary hover:bg-theme-elevated transition-colors"
         >
-          {showNoGrouping && (
-            <option value="none" className="bg-theme-surface">No Grouping</option>
-          )}
-          <option value="namespace" className="bg-theme-surface">By Namespace</option>
-          <option value="app" className="bg-theme-surface">By App Label</option>
-        </select>
+          <FolderTree className="w-3.5 h-3.5 text-theme-text-secondary" />
+          {currentGroupLabel}
+          <ChevronDown className="w-3 h-3 text-theme-text-tertiary" />
+        </button>
+        {groupOpen && (
+          <div role="menu" className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl">
+            {groupOptions.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={groupingMode === o.value}
+                onClick={() => { onGroupingModeChange(o.value); setGroupOpen(false) }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors"
+              >
+                <Check className={clsx('w-3.5 h-3.5 shrink-0', groupingMode === o.value ? 'opacity-100 text-skyhook-500' : 'opacity-0')} />
+                <span className="truncate">{o.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* View mode toggle */}
