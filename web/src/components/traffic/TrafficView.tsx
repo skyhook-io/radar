@@ -11,6 +11,7 @@ import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
 import { EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
+import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
 
 // Addon types for filtering
@@ -338,6 +339,7 @@ interface TrafficViewProps {
 }
 
 export function TrafficView({ namespaces }: TrafficViewProps) {
+  const { connection } = useConnection()
   const [wizardState, setWizardState] = useState<TrafficWizardState>('detecting')
   const [timeRange, setTimeRange] = useState<string>('5m')
   const [hideSystem, setHideSystem] = useState(true)
@@ -1134,6 +1136,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                       dataUpdatedAt={flowsUpdatedAt}
                       isFetching={flowsFetching}
                       onRefresh={() => refetchFlowsRaw()}
+                      connectionState={connection.state}
                     />
                   </div>
                 </div>

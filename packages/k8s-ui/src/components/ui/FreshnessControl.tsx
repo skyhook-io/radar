@@ -104,11 +104,11 @@ export function FreshnessControl({
     tooltip = null
   }
 
-  // The relative age is the dynamic trust detail, so it rides alongside every
-  // 'auto' label that has a load time — including "Reconnecting…" and "Paused",
-  // where "how stale is this?" matters most. (In 'snapshot' mode the age IS the
-  // label, so no suffix.)
-  const ageSuffix = mode === 'auto' && age ? age : null
+  // The relative age is the dynamic trust detail. It rides alongside every 'auto'
+  // label, and alongside a degraded label in either mode — "Reconnecting… ·
+  // updated 8m ago" is exactly when staleness matters most. (In connected
+  // 'snapshot' mode the age IS the label, so no suffix.)
+  const ageSuffix = age && (mode === 'auto' || degraded) ? age : null
 
   const labelNode = label ? (
     <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">

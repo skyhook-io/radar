@@ -33,7 +33,6 @@ import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { PaneLoader } from '../ui/PaneLoader'
-import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
@@ -192,14 +191,13 @@ export interface GitOpsTableViewProps {
   // the Scope-section mode tabs and the empty-state check.
   counts: Record<string, number>
   countsUnavailable?: string[]
-  // Caller refresh — typically invalidates its useQuery + refetches.
+  // @deprecated Superseded by `freshnessSlot` — kept for source compatibility
+  // with existing consumers; no longer drives any affordance here.
   onRefresh?: () => void
-  // Epoch ms of the last successful load (React Query's dataUpdatedAt) — feeds
-  // the FreshnessControl's "updated N ago" in the existing toolbar.
-  dataUpdatedAt?: number
-  // Cluster/SSE connection health, so freshness degrades to "Reconnecting…"
-  // instead of claiming currency while disconnected. Optional (Hub may omit).
-  connectionState?: FreshnessConnection
+  // Host-injected freshness/liveness control (e.g. a <FreshnessControl>),
+  // rendered leading the header actions. The host owns the mode + data, so this
+  // shared table makes no assumption about whether the view auto-updates.
+  freshnessSlot?: ReactNode
   // Row click — caller routes to its own detail page. When the host also
   // passes `rowHrefFor`, the callback receives the MouseEvent so it can
   // `preventDefault()` for same-tree nav (e.g. react-router) or skip the
@@ -281,9 +279,7 @@ export function GitOpsTableView({
   error,
   counts,
   countsUnavailable,
-  onRefresh,
-  dataUpdatedAt,
-  connectionState,
+  freshnessSlot,
   onRowClick,
   rowHrefFor,
   onDestinationClick,
@@ -611,14 +607,7 @@ export function GitOpsTableView({
           description="Applications and reconciliations with source, destination, sync, and health state."
           actions={
             <>
-              {(onRefresh || dataUpdatedAt != null) && (
-                <FreshnessControl
-                  mode="auto"
-                  dataUpdatedAt={dataUpdatedAt}
-                  onRefresh={onRefresh}
-                  connectionState={connectionState}
-                />
-              )}
+              {freshnessSlot}
               {summaryTiles.map((tile) => (
                 <SummaryTile
                   key={tile.key}

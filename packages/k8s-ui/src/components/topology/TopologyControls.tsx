@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { FolderTree, ShieldCheck, ChevronDown, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { TopologyMode, GroupingMode } from '../../types/core'
@@ -38,19 +38,8 @@ export function TopologyControls({
 }: TopologyControlsProps) {
   const [groupOpen, setGroupOpen] = useState(false)
   const groupRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!groupOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (groupRef.current && !groupRef.current.contains(e.target as Node)) setGroupOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setGroupOpen(false) }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [groupOpen])
+  const groupTriggerRef = useRef<HTMLButtonElement>(null)
+  const groupItemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   const groupOptions: { value: GroupingMode; label: string }[] = [
     ...(showNoGrouping ? [{ value: 'none' as GroupingMode, label: 'No Grouping' }] : []),
@@ -58,6 +47,37 @@ export function TopologyControls({
     { value: 'app', label: 'By App Label' },
   ]
   const currentGroupLabel = groupOptions.find((o) => o.value === groupingMode)?.label ?? 'Grouping'
+
+  const closeGroup = useCallback((restoreFocus = false) => {
+    setGroupOpen(false)
+    if (restoreFocus) groupTriggerRef.current?.focus()
+  }, [])
+
+  // On open, move focus onto the active option so the menu is keyboard-navigable
+  // (parity with the native <select> this replaced). Click-outside closes it.
+  useEffect(() => {
+    if (!groupOpen) return
+    const active = Math.max(0, groupOptions.findIndex((o) => o.value === groupingMode))
+    groupItemRefs.current[active]?.focus()
+    const onDown = (e: MouseEvent) => {
+      if (groupRef.current && !groupRef.current.contains(e.target as Node)) setGroupOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+    // groupOptions/groupingMode are read once at open; re-running on their
+    // identity change would steal focus mid-interaction.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupOpen])
+
+  const onGroupMenuKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const items = groupItemRefs.current.filter(Boolean) as HTMLButtonElement[]
+    const i = items.indexOf(document.activeElement as HTMLButtonElement)
+    if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus() }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus() }
+    else if (e.key === 'Home') { e.preventDefault(); items[0]?.focus() }
+    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1]?.focus() }
+    else if (e.key === 'Escape') { e.preventDefault(); closeGroup(true) }
+  }
 
   return (
     <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
@@ -90,6 +110,7 @@ export function TopologyControls({
       {/* Grouping selector — themed dropdown (not a native <select>). */}
       <div ref={groupRef} className="relative">
         <button
+          ref={groupTriggerRef}
           type="button"
           onClick={() => setGroupOpen((v) => !v)}
           aria-haspopup="menu"
@@ -101,15 +122,16 @@ export function TopologyControls({
           <ChevronDown className="w-3 h-3 text-theme-text-tertiary" />
         </button>
         {groupOpen && (
-          <div role="menu" className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl">
-            {groupOptions.map((o) => (
+          <div role="menu" onKeyDown={onGroupMenuKey} className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl">
+            {groupOptions.map((o, idx) => (
               <button
                 key={o.value}
+                ref={(el) => { groupItemRefs.current[idx] = el }}
                 type="button"
                 role="menuitemradio"
                 aria-checked={groupingMode === o.value}
-                onClick={() => { onGroupingModeChange(o.value); setGroupOpen(false) }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors"
+                onClick={() => { onGroupingModeChange(o.value); closeGroup(true) }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary focus:bg-theme-hover focus:text-theme-text-primary focus:outline-none transition-colors"
               >
                 <Check className={clsx('w-3.5 h-3.5 shrink-0', groupingMode === o.value ? 'opacity-100 text-skyhook-500' : 'opacity-0')} />
                 <span className="truncate">{o.label}</span>

@@ -8,6 +8,7 @@ import {
   GitOpsDetailLayout,
   GitOpsGraphFilterRail,
   GitOpsTableView as SharedGitOpsTableView,
+  FreshnessControl,
   GitOpsTreeGraph,
   RollbackDialog,
   SyncOptionsDialog,
@@ -287,9 +288,14 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         error={(rowsQuery.error as Error | null) ?? null}
         counts={countsQuery.data?.counts ?? {}}
         countsUnavailable={countsQuery.data?.unavailable}
-        dataUpdatedAt={rowsQuery.dataUpdatedAt}
-        connectionState={connection.state}
-        onRefresh={refetchTable}
+        freshnessSlot={
+          <FreshnessControl
+            mode="auto"
+            dataUpdatedAt={rowsQuery.dataUpdatedAt}
+            onRefresh={refetchTable}
+            connectionState={connection.state}
+          />
+        }
         onRowClick={(row) => {
           const ns = row.namespace || '_'
           const params = new URLSearchParams()
