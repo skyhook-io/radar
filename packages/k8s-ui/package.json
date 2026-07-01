@@ -85,7 +85,7 @@
     "yaml": ">=2.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.0.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@xterm/addon-fit": "^0.11.0",
@@ -95,7 +95,7 @@
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
     "elkjs": "^0.11.1",
-    "lucide-react": "^1.16.0",
+    "lucide-react": "^1.22.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^6.0.2",
