@@ -32,7 +32,7 @@ interface IssuesPaneProps {
 // the header status tiles (clickable → filter), matching the Applications /
 // GitOps header-tile pattern rather than Hub's fleet facet sidebar.
 export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps) {
-  const { data, isLoading, error, dataUpdatedAt } = useIssues(namespaces)
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useIssues(namespaces)
   const { connection } = useConnection()
   const [severityFilter, setSeverityFilter] = useState<Set<IssueSeverity>>(new Set())
 
@@ -77,6 +77,7 @@ export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps
             <FreshnessControl
               mode="auto"
               dataUpdatedAt={dataUpdatedAt}
+              onRefresh={() => refetch()}
               connectionState={connection.state}
             />
             {allIssues.length > 0 && (

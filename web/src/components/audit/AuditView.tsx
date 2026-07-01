@@ -19,7 +19,7 @@ interface AuditViewProps {
 // ~/.radar settings are this cluster's "policy" and the row hide-menu writes to
 // them.
 export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) {
-  const { data, isLoading, error, dataUpdatedAt } = useAudit(namespaces)
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useAudit(namespaces)
   const { data: auditSettings } = useAuditSettings()
   const updateSettings = useUpdateAuditSettings()
   // Audit policy is owner-gated (enforced server-side). Withhold the inline
@@ -86,6 +86,7 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
             <FreshnessControl
               mode="auto"
               dataUpdatedAt={dataUpdatedAt}
+              onRefresh={() => refetch()}
               connectionState={connection.state}
             />
             {ignoredCount > 0 && (

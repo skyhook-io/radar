@@ -10,17 +10,20 @@ export type FreshnessConnection = 'connected' | 'disconnected' | 'connecting'
 
 interface FreshnessControlProps {
   // 'auto'     — the view keeps itself current (polls or streams). Reads
-  //              "Auto-updating"; no manual refresh (it'd contradict the claim).
+  //              "Auto-updating". Pass onRefresh on slow polled views for a
+  //              "check now" hatch; omit it on instant stream-backed views.
   // 'snapshot' — a one-shot load that only changes on demand. Reads "Updated N
   //              ago" with a manual refresh button.
   mode: FreshnessMode
   // Epoch ms of the last successful load (React Query dataUpdatedAt). Optional
   // for 'auto' streams that have no per-fetch timestamp (e.g. topology).
   dataUpdatedAt?: number
-  // Spins the refresh icon during background refetches ('snapshot' only).
+  // Spins the refresh icon during background refetches (for views with a button).
   isFetching?: boolean
-  // Manual refresh ('snapshot' only). May return a promise — the refresh
-  // animation waits for it before showing success.
+  // Manual refresh. Provide it on polled + snapshot views where forcing a fetch
+  // is useful; omit on stream-backed 'auto' views (instant, so a refresh button
+  // would just undercut "Auto-updating"). May return a promise — the animation
+  // waits for it before showing success.
   onRefresh?: () => void | Promise<unknown>
   // Cluster/SSE connection health. When not connected, freshness must not claim
   // currency — it degrades to "Reconnecting…" instead of a stale age/Auto-updating.
@@ -69,9 +72,11 @@ export function FreshnessControl({
   // currency — the signal degrades rather than showing a stale age/Auto-updating.
   const degraded = connectionState !== 'connected'
 
-  // A self-refreshing view offers no manual refresh — a refresh button next to
-  // "Auto-updating" reads as a contradiction. Only snapshots get one.
-  const showRefresh = !!onRefresh && mode === 'snapshot'
+  // Show the refresh button whenever the host wired one. Stream-backed 'auto'
+  // views (Resources, Topology) deliberately omit onRefresh — they update
+  // instantly, so a manual refresh would only undercut "Auto-updating". Slow
+  // polled views keep it as a "check now" escape hatch.
+  const showRefresh = !!onRefresh
 
   const exact = showAge ? `Last updated ${new Date(dataUpdatedAt as number).toLocaleTimeString()}` : null
   const age = showAge ? formatUpdatedAgo(Date.now() - (dataUpdatedAt as number)) : null

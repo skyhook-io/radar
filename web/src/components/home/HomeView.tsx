@@ -41,7 +41,7 @@ interface HomeViewProps {
 }
 
 export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts }: HomeViewProps) {
-  const { data, isLoading, error, dataUpdatedAt } = useDashboard(namespaces)
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
   const { connection } = useConnection()
   const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError } = useIssues(namespaces)
   const issues = issuesData?.issues ?? []
@@ -115,6 +115,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
             <FreshnessControl
               mode="auto"
               dataUpdatedAt={dataUpdatedAt}
+              onRefresh={() => refetch()}
               connectionState={connection.state}
             />
           }

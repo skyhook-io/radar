@@ -37,6 +37,7 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
     <FreshnessControl
       mode="auto"
       dataUpdatedAt={query.dataUpdatedAt}
+      onRefresh={() => query.refetch()}
       connectionState={connection.state}
     />
   )

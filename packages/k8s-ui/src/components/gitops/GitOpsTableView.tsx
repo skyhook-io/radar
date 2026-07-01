@@ -744,6 +744,7 @@ export function GitOpsTableView({
               <FreshnessControl
                 mode="auto"
                 dataUpdatedAt={dataUpdatedAt}
+                onRefresh={onRefresh}
                 connectionState={connectionState}
               />
             )}

@@ -12,7 +12,7 @@ interface CostViewProps {
 }
 
 export function CostView({ onBack }: CostViewProps) {
-  const { data, isLoading, dataUpdatedAt } = useOpenCostSummary()
+  const { data, isLoading, dataUpdatedAt, refetch } = useOpenCostSummary()
   const { data: nodeData } = useOpenCostNodes()
   const { connection } = useConnection()
   const [showHelp, setShowHelp] = useState(false)
@@ -97,6 +97,7 @@ export function CostView({ onBack }: CostViewProps) {
             <FreshnessControl
               mode="auto"
               dataUpdatedAt={dataUpdatedAt}
+              onRefresh={() => refetch()}
               connectionState={connection.state}
             />
             {hasEfficiency && (
