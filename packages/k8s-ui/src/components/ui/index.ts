@@ -1,5 +1,7 @@
 export { Tooltip } from './Tooltip'
 export { UpdatedAtLabel } from './UpdatedAtLabel'
+export { FreshnessControl } from './FreshnessControl'
+export type { FreshnessMode, FreshnessConnection } from './FreshnessControl'
 export { PaneLoader } from './PaneLoader'
 export { ClusterName } from './ClusterName'
 export { MiddleEllipsis } from './MiddleEllipsis'

@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from 'react'
-import { useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, type IssuesResponse } from '../../api/client'
+import { useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, DASHBOARD_REFRESH_INTERVAL_MS, type IssuesResponse } from '../../api/client'
+import { useConnection } from '../../context/ConnectionContext'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
 import { TopologyPreview } from './TopologyPreview'
 import { HelmSummary } from './HelmSummary'
@@ -11,6 +12,7 @@ import { CostCard } from './CostCard'
 import { GitOpsControllersCard } from './GitOpsControllersCard'
 import {
   AuditCard,
+  FreshnessControl,
   PaneLoader,
   StatusDot,
   categoryLabel,
@@ -39,7 +41,8 @@ interface HomeViewProps {
 }
 
 export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts }: HomeViewProps) {
-  const { data, isLoading, error } = useDashboard(namespaces)
+  const { data, isLoading, error, isFetching, dataUpdatedAt, refetch } = useDashboard(namespaces)
+  const { connection } = useConnection()
   const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError } = useIssues(namespaces)
   const issues = issuesData?.issues ?? []
   const issueCount = issuesData?.total_matched ?? issuesData?.total ?? issues.length
@@ -108,6 +111,16 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
         )}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
+          freshness={
+            <FreshnessControl
+              mode="polled"
+              dataUpdatedAt={dataUpdatedAt}
+              cadenceMs={DASHBOARD_REFRESH_INTERVAL_MS}
+              isFetching={isFetching}
+              onRefresh={() => refetch()}
+              connectionState={connection.state}
+            />
+          }
           health={data.health}
           counts={data.resourceCounts}
           cluster={data.cluster}

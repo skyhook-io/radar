@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { DashboardResponse, DashboardMetrics, DashboardCRDCount } from '../../api/client'
 import { HealthRing } from './HealthRing'
 import {
@@ -30,6 +30,9 @@ interface ClusterHealthCardProps {
   onNavigateToView: () => void
   onWarningEventsClick?: () => void
   onIssuesClick?: () => void
+  // Freshness/refresh control for the dashboard poll — rendered under the
+  // cluster metadata so the overview carries a freshness signal without a band.
+  freshness?: ReactNode
 }
 
 function getMetricsInstallHint(platform: string): string {
@@ -121,6 +124,7 @@ export function ClusterHealthCard({
   onNavigateToView,
   onWarningEventsClick,
   onIssuesClick,
+  freshness,
 }: ClusterHealthCardProps) {
   void _topCRDs // Reserved for future CRD display
 
@@ -254,6 +258,7 @@ export function ClusterHealthCard({
                 </Tooltip>
               )}
             </div>
+            {freshness && <div className="mt-2">{freshness}</div>}
             {nodeVersionSkew && (
               <Tooltip
                 content={

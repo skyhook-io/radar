@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useTrafficSources, useTrafficFlows, useTrafficConnect, useSetTrafficSource } from '../../api/traffic'
 import { useClusterInfo } from '../../api/client'
 import type { TrafficWizardState, AggregatedFlow } from '../../types'
@@ -7,11 +6,11 @@ import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph, type TrafficGraphSelection } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
 import { TrafficFlowListProvider } from './TrafficFlowListContext'
-import { Loader2, RefreshCw, Filter, Plug, ChevronDown, List, Activity, AlertTriangle } from 'lucide-react'
+import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
-import { EmptyState, PaneLoader } from '@skyhook-io/k8s-ui'
+import { EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 
 // Addon types for filtering
@@ -421,7 +420,6 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
   const {
     data: flowsData,
-    isLoading: flowsLoading,
     isFetching: flowsFetching,
     refetch: refetchFlowsRaw,
   } = useTrafficFlows({
@@ -430,7 +428,6 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     // Only fetch flows when connected (not connecting and no connection error)
     enabled: wizardState === 'ready' && !isConnecting && !connectionError,
   })
-  const [refetchFlows, isRefreshAnimating] = useRefreshAnimation(refetchFlowsRaw)
 
   // Auto-retry when flows return with warning but no data (e.g., port-forward not ready yet)
   useEffect(() => {
@@ -1125,12 +1122,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                     </button>
                     </Tooltip>
                   )}
-                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-tertiary">
+                  <div className="flex items-center px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-tertiary tabular-nums">
                     {flowStats.shown}/{flowStats.total}
-                    <button onClick={refetchFlows} disabled={flowsLoading || isRefreshAnimating}
-                      className={clsx('p-0.5 rounded hover:text-theme-text-primary transition-colors', (flowsLoading || isRefreshAnimating) && 'opacity-50')}>
-                      {flowsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className={clsx('h-3 w-3', isRefreshAnimating && 'animate-spin')} />}
-                    </button>
+                  </div>
+                  <div className="flex items-center rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border px-1.5 py-0.5">
+                    <FreshnessControl
+                      mode="live"
+                      isFetching={flowsFetching}
+                      onRefresh={() => refetchFlowsRaw()}
+                    />
                   </div>
                 </div>
               </>

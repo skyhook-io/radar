@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { FolderTree, ShieldCheck } from 'lucide-react'
 import type { TopologyMode, GroupingMode } from '../../types/core'
 import { Tooltip } from '../ui/Tooltip'
@@ -18,6 +19,8 @@ interface TopologyControlsProps {
    * here from the live, observed Traffic view. Omitted by hosts without one.
    */
   onNavigateToTraffic?: () => void
+  /** Optional leading element (e.g. a freshness/liveness indicator). */
+  leadingSlot?: ReactNode
 }
 
 export function TopologyControls({
@@ -30,9 +33,15 @@ export function TopologyControls({
   onShowPolicyEffectChange,
   showFleetMode = false,
   onNavigateToTraffic,
+  leadingSlot,
 }: TopologyControlsProps) {
   return (
     <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+      {leadingSlot && (
+        <div className="flex items-center rounded-lg border border-theme-border bg-theme-surface/90 px-2 py-1.5 backdrop-blur">
+          {leadingSlot}
+        </div>
+      )}
       {/* Policy effect toggle */}
       {onShowPolicyEffectChange && (
         <button

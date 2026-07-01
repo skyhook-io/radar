@@ -13,7 +13,6 @@ import {
   ChevronDown,
   ChevronUp,
   ArrowUpDown,
-  Clock,
   ListFilter,
   X,
   Columns3,
@@ -133,7 +132,7 @@ import { SEVERITY_BADGE, EVENT_TYPE_COLORS, SEVERITY_TEXT } from '../../utils/ba
 import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
-import { formatLastUpdatedBucket, msToNextBucket } from '../../utils/format'
+import { UpdatedAtLabel } from '../ui/UpdatedAtLabel'
 import { Tooltip } from '../ui/Tooltip'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 // CRD-specific cell components (extracted)
@@ -2017,30 +2016,6 @@ function getInitialFiltersFromURL() {
 
 // Sort state type
 type SortDirection = 'asc' | 'desc' | null
-
-// Isolated subtree so re-renders don't cascade into the parent's
-// virtualized table.
-function LastUpdatedLabel({ lastUpdated }: { lastUpdated: Date }) {
-  const [, force] = useState(0)
-  useEffect(() => {
-    let id: ReturnType<typeof setTimeout>
-    function schedule() {
-      const delay = Math.max(1000, msToNextBucket(Date.now() - lastUpdated.getTime()))
-      id = setTimeout(() => {
-        force(t => t + 1)
-        schedule()
-      }, delay)
-    }
-    schedule()
-    return () => clearTimeout(id)
-  }, [lastUpdated])
-  return (
-    <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
-      <Clock className="w-3.5 h-3.5" />
-      <span>Updated {formatLastUpdatedBucket(Date.now() - lastUpdated.getTime())}</span>
-    </div>
-  )
-}
 
 export function ResourcesView({
   namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange,
@@ -4273,7 +4248,7 @@ export function ResourcesView({
             </Tooltip>
           )}
 
-          {lastUpdated && <LastUpdatedLabel lastUpdated={lastUpdated} />}
+          {lastUpdated && <UpdatedAtLabel dataUpdatedAt={lastUpdated.getTime()} />}
           {/* Column picker */}
           <div className="relative" ref={columnPickerRef}>
             <button

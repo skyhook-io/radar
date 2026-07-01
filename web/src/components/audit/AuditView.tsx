@@ -1,11 +1,12 @@
 import { useState, useCallback } from 'react'
 import { useAudit, useAuditSettings, useUpdateAuditSettings, useCloudRole } from '../../api/client'
 import type { SelectedResource } from '../../types'
-import { ChecksView, PaneLoader, PageHeader, UpdatedAtLabel, useRefreshAnimation, type CheckResourceRef } from '@skyhook-io/k8s-ui'
-import { ShieldCheck, Settings, RefreshCw } from 'lucide-react'
-import { clsx } from 'clsx'
+import { ChecksView, PaneLoader, PageHeader, FreshnessControl, type CheckResourceRef } from '@skyhook-io/k8s-ui'
+import { ShieldCheck, Settings } from 'lucide-react'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
 import { Tooltip } from '../ui/Tooltip'
+import { useConnection } from '../../context/ConnectionContext'
+import { AUDIT_REFRESH_INTERVAL_MS } from '../../api/client'
 
 interface AuditViewProps {
   namespaces: string[]
@@ -31,8 +32,7 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
 
   const ignoredCount = auditSettings?.ignoredNamespaces?.length ?? 0
 
-  const [refresh, isAnimating] = useRefreshAnimation(() => refetch())
-  const spinning = isFetching || isAnimating
+  const { connection } = useConnection()
 
   // Inline hide actions — persist to local settings immediately.
   const hideCheck = useCallback((checkID: string) => {
@@ -84,19 +84,14 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
         description="Security, reliability, and efficiency best practices (NSA/CISA, CIS, Polaris, Kubescape), grouped into a remediation queue."
         actions={
           <>
-            <div className="flex items-center gap-1.5">
-              <UpdatedAtLabel dataUpdatedAt={dataUpdatedAt} />
-              <Tooltip content="Refresh now">
-                <button
-                  onClick={refresh}
-                  disabled={spinning}
-                  className="p-2 rounded-lg hover:bg-theme-hover text-theme-text-tertiary hover:text-theme-text-secondary transition-colors disabled:opacity-50"
-                  aria-label="Refresh now"
-                >
-                  <RefreshCw className={clsx('w-4 h-4', spinning && 'animate-spin')} />
-                </button>
-              </Tooltip>
-            </div>
+            <FreshnessControl
+              mode="polled"
+              dataUpdatedAt={dataUpdatedAt}
+              cadenceMs={AUDIT_REFRESH_INTERVAL_MS}
+              isFetching={isFetching}
+              onRefresh={() => refetch()}
+              connectionState={connection.state}
+            />
             {ignoredCount > 0 && (
               <button onClick={() => setShowSettings(true)} className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors">{ignoredCount} {ignoredCount === 1 ? 'namespace' : 'namespaces'} hidden</button>
             )}

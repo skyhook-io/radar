@@ -33,8 +33,7 @@ import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { PaneLoader } from '../ui/PaneLoader'
-import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { UpdatedAtLabel } from '../ui/UpdatedAtLabel'
+import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
@@ -195,10 +194,14 @@ export interface GitOpsTableViewProps {
   countsUnavailable?: string[]
   // Caller refresh — typically invalidates its useQuery + refetches.
   onRefresh?: () => void
-  // When set, an "Updated N ago" freshness label renders next to the refresh
-  // button (epoch ms of the last successful load — e.g. React Query's
-  // dataUpdatedAt). Keeps freshness in the existing toolbar, no separate band.
+  // Epoch ms of the last successful load (React Query's dataUpdatedAt) — feeds
+  // the FreshnessControl's secondary "updated N ago" in the existing toolbar.
   dataUpdatedAt?: number
+  // The rows query's refetchInterval — the "Auto-refreshes every X" cadence.
+  cadenceMs?: number
+  // Cluster/SSE connection health, so freshness degrades to "Reconnecting…"
+  // instead of claiming currency while disconnected. Optional (Hub may omit).
+  connectionState?: FreshnessConnection
   // Spins the refresh button during background refetches (vs. `loading`, which
   // only covers the first load). Optional.
   isFetching?: boolean
@@ -285,6 +288,8 @@ export function GitOpsTableView({
   countsUnavailable,
   onRefresh,
   dataUpdatedAt,
+  cadenceMs,
+  connectionState,
   isFetching,
   onRowClick,
   rowHrefFor,
@@ -328,10 +333,6 @@ export function GitOpsTableView({
   }, [])
   const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>({ key: 'urgency', dir: 'asc' })
-  // Shared refresh feedback (spin ≥400ms → checkmark) so clicking Refresh gives
-  // the same visual confirmation as every other view, even when the refetch is
-  // instant (the cache is already warm).
-  const [triggerRefresh, , refreshPhase] = useRefreshAnimation(onRefresh ?? (() => {}))
   // 3-state cycle: natural direction → reversed → off. The first click uses each
   // column's natural direction (SORT_DEFAULT_DIR — e.g. Last Sync is newest-first)
   // so the header cycle agrees with the tile-mode sort menu, which seeds the same
@@ -746,19 +747,15 @@ export function GitOpsTableView({
               <GitOpsIconToggle active={viewMode === 'table'} label="Table view" icon={List} onClick={() => setViewMode('table')} />
               <GitOpsIconToggle active={viewMode === 'tiles'} label="Tiles view" icon={LayoutGrid} onClick={() => setViewMode('tiles')} />
             </div>
-            {dataUpdatedAt != null && <UpdatedAtLabel dataUpdatedAt={dataUpdatedAt} />}
-            {onRefresh && (
-              <Tooltip content="Refresh GitOps resources">
-                <button
-                  type="button"
-                  onClick={triggerRefresh}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-theme-border bg-theme-base text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
-                >
-                  {refreshPhase === 'success'
-                    ? <Check className="h-3.5 w-3.5 text-emerald-500" />
-                    : <RefreshCw className={clsx('h-3.5 w-3.5', (refreshPhase === 'spinning' || loading || isFetching) && 'animate-spin')} />}
-                </button>
-              </Tooltip>
+            {(onRefresh || dataUpdatedAt != null) && (
+              <FreshnessControl
+                mode="polled"
+                dataUpdatedAt={dataUpdatedAt}
+                cadenceMs={cadenceMs}
+                isFetching={isFetching || loading}
+                onRefresh={onRefresh}
+                connectionState={connectionState}
+              />
             )}
           </div>
         </div>

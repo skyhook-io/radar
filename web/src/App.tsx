@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
-import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, gitOpsRouteForKind, gitOpsRouteForResource } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useAPIResources } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -1977,6 +1977,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
                     onShowPolicyEffectChange={setShowPolicyEffect}
                     showFleetMode={displayedTopology?.nodes?.some(n => FLEET_MODE_KINDS.has(n.kind as NodeKind)) ?? false}
                     onNavigateToTraffic={() => setMainView('traffic')}
+                    leadingSlot={
+                      <FreshnessControl
+                        mode="live"
+                        paused={topologyPaused}
+                        connectionState={connection.state}
+                      />
+                    }
                   />
                 </div>
               </>
