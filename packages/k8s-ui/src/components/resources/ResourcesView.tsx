@@ -4235,16 +4235,17 @@ export function ResourcesView({
 
           {/* Column picker */}
           <div className="relative" ref={columnPickerRef}>
+            <Tooltip content="Configure columns">
             <button
               onClick={() => setShowColumnPicker(prev => !prev)}
               className={clsx(
                 'p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg',
                 showColumnPicker && 'bg-theme-elevated text-theme-text-primary'
               )}
-              title="Configure columns"
             >
               <Columns3 className="w-4 h-4" />
             </button>
+            </Tooltip>
             {showColumnPicker && (
               <div className="absolute right-0 top-full mt-1 z-50 bg-theme-surface border border-theme-border rounded-lg shadow-lg py-1 min-w-[200px] max-h-[400px] flex flex-col">
                 <div className="shrink-0 px-3 py-2 border-b border-theme-border flex items-center justify-between">
