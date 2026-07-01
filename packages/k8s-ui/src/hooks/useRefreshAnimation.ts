@@ -18,9 +18,14 @@ export function useRefreshAnimation(refetchFn: () => void | Promise<unknown>): [
   // Guards the async `finally`/timer callbacks from setting state after the
   // host unmounts — this hook now lives on routed views that mount/unmount.
   const mountedRef = useRef(true)
-  useEffect(() => () => {
-    mountedRef.current = false
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
+  useEffect(() => {
+    // Re-arm on (re)mount — Strict Mode's mount→cleanup→remount would otherwise
+    // leave this stuck false and freeze the spinner on the next refresh.
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (timeoutRef.current) clearTimeout(timeoutRef.current)
+    }
   }, [])
 
   const wrappedRefetch = useCallback(() => {
