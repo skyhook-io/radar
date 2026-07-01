@@ -1,19 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatCadence, formatUpdatedAgo, formatLastUpdatedBucket, msToNextBucket } from './format'
-
-describe('formatCadence', () => {
-  it('renders sub-minute intervals in seconds', () => {
-    expect(formatCadence(30_000)).toBe('30s')
-    expect(formatCadence(45_000)).toBe('45s')
-  })
-  it('renders minute intervals', () => {
-    expect(formatCadence(60_000)).toBe('1m')
-    expect(formatCadence(120_000)).toBe('2m')
-  })
-  it('renders hour intervals', () => {
-    expect(formatCadence(3_600_000)).toBe('1h')
-  })
-})
+import { formatUpdatedAgo, formatLastUpdatedBucket, msToNextBucket } from './format'
 
 describe('formatUpdatedAgo', () => {
   it('collapses the first minute to "just now"', () => {

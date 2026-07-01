@@ -195,16 +195,11 @@ export interface GitOpsTableViewProps {
   // Caller refresh — typically invalidates its useQuery + refetches.
   onRefresh?: () => void
   // Epoch ms of the last successful load (React Query's dataUpdatedAt) — feeds
-  // the FreshnessControl's secondary "updated N ago" in the existing toolbar.
+  // the FreshnessControl's "updated N ago" in the existing toolbar.
   dataUpdatedAt?: number
-  // The rows query's refetchInterval — the "Auto-refreshes every X" cadence.
-  cadenceMs?: number
   // Cluster/SSE connection health, so freshness degrades to "Reconnecting…"
   // instead of claiming currency while disconnected. Optional (Hub may omit).
   connectionState?: FreshnessConnection
-  // Spins the refresh button during background refetches (vs. `loading`, which
-  // only covers the first load). Optional.
-  isFetching?: boolean
   // Row click — caller routes to its own detail page. When the host also
   // passes `rowHrefFor`, the callback receives the MouseEvent so it can
   // `preventDefault()` for same-tree nav (e.g. react-router) or skip the
@@ -288,9 +283,7 @@ export function GitOpsTableView({
   countsUnavailable,
   onRefresh,
   dataUpdatedAt,
-  cadenceMs,
   connectionState,
-  isFetching,
   onRowClick,
   rowHrefFor,
   onDestinationClick,
@@ -749,11 +742,8 @@ export function GitOpsTableView({
             </div>
             {(onRefresh || dataUpdatedAt != null) && (
               <FreshnessControl
-                mode="polled"
+                mode="auto"
                 dataUpdatedAt={dataUpdatedAt}
-                cadenceMs={cadenceMs}
-                isFetching={isFetching || loading}
-                onRefresh={onRefresh}
                 connectionState={connectionState}
               />
             )}

@@ -18,7 +18,7 @@ import {
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
 import { Boxes } from 'lucide-react'
-import { useApplications, useTopology, APPLICATIONS_REFRESH_INTERVAL_MS } from '../../api/client'
+import { useApplications, useTopology } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import { kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
@@ -35,11 +35,8 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
 
   const freshness = (
     <FreshnessControl
-      mode="polled"
+      mode="auto"
       dataUpdatedAt={query.dataUpdatedAt}
-      cadenceMs={APPLICATIONS_REFRESH_INTERVAL_MS}
-      isFetching={query.isFetching}
-      onRefresh={() => query.refetch()}
       connectionState={connection.state}
     />
   )

@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
-import { useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, DASHBOARD_REFRESH_INTERVAL_MS, type IssuesResponse } from '../../api/client'
+import { useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, type IssuesResponse } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
 import { TopologyPreview } from './TopologyPreview'
@@ -41,7 +41,7 @@ interface HomeViewProps {
 }
 
 export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts }: HomeViewProps) {
-  const { data, isLoading, error, isFetching, dataUpdatedAt, refetch } = useDashboard(namespaces)
+  const { data, isLoading, error, dataUpdatedAt } = useDashboard(namespaces)
   const { connection } = useConnection()
   const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError } = useIssues(namespaces)
   const issues = issuesData?.issues ?? []
@@ -113,11 +113,8 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
         <ClusterHealthCard
           freshness={
             <FreshnessControl
-              mode="polled"
+              mode="auto"
               dataUpdatedAt={dataUpdatedAt}
-              cadenceMs={DASHBOARD_REFRESH_INTERVAL_MS}
-              isFetching={isFetching}
-              onRefresh={() => refetch()}
               connectionState={connection.state}
             />
           }

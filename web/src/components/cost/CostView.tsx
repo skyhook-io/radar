@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useOpenCostSummary, useOpenCostWorkloads, useOpenCostNodes, COST_REFRESH_INTERVAL_MS } from '../../api/client'
+import { useOpenCostSummary, useOpenCostWorkloads, useOpenCostNodes } from '../../api/client'
 import type { OpenCostNamespaceCost, OpenCostWorkloadCost, OpenCostNodeCost } from '../../api/client'
 import { ArrowLeft, ChevronDown, ChevronRight, DollarSign, HelpCircle, Loader2, Server, X } from 'lucide-react'
 import { PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
@@ -12,7 +12,7 @@ interface CostViewProps {
 }
 
 export function CostView({ onBack }: CostViewProps) {
-  const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useOpenCostSummary()
+  const { data, isLoading, dataUpdatedAt } = useOpenCostSummary()
   const { data: nodeData } = useOpenCostNodes()
   const { connection } = useConnection()
   const [showHelp, setShowHelp] = useState(false)
@@ -92,15 +92,11 @@ export function CostView({ onBack }: CostViewProps) {
             </button>
           </div>
           <div className="flex items-center gap-4">
-            {/* Tracks the headline $/hr summary (the primary query). Trend/node
-                breakdowns poll slower; the summary cadence is the representative
-                signal for the view. */}
+            {/* Tracks the headline $/hr summary (the primary query); its load
+                time is the representative freshness signal for the view. */}
             <FreshnessControl
-              mode="polled"
+              mode="auto"
               dataUpdatedAt={dataUpdatedAt}
-              cadenceMs={COST_REFRESH_INTERVAL_MS}
-              isFetching={isFetching}
-              onRefresh={() => refetch()}
               connectionState={connection.state}
             />
             {hasEfficiency && (

@@ -6,7 +6,6 @@ import { ShieldCheck, Settings } from 'lucide-react'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
 import { Tooltip } from '../ui/Tooltip'
 import { useConnection } from '../../context/ConnectionContext'
-import { AUDIT_REFRESH_INTERVAL_MS } from '../../api/client'
 
 interface AuditViewProps {
   namespaces: string[]
@@ -20,7 +19,7 @@ interface AuditViewProps {
 // ~/.radar settings are this cluster's "policy" and the row hide-menu writes to
 // them.
 export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) {
-  const { data, isLoading, error, isFetching, dataUpdatedAt, refetch } = useAudit(namespaces)
+  const { data, isLoading, error, dataUpdatedAt } = useAudit(namespaces)
   const { data: auditSettings } = useAuditSettings()
   const updateSettings = useUpdateAuditSettings()
   // Audit policy is owner-gated (enforced server-side). Withhold the inline
@@ -85,11 +84,8 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
         actions={
           <>
             <FreshnessControl
-              mode="polled"
+              mode="auto"
               dataUpdatedAt={dataUpdatedAt}
-              cadenceMs={AUDIT_REFRESH_INTERVAL_MS}
-              isFetching={isFetching}
-              onRefresh={() => refetch()}
               connectionState={connection.state}
             />
             {ignoredCount > 0 && (

@@ -1130,7 +1130,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                       an honest "Updated N ago" + manual refresh — not "live". */}
                   <div className="flex items-center rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border px-1.5 py-0.5">
                     <FreshnessControl
-                      mode="polled"
+                      mode="snapshot"
                       dataUpdatedAt={flowsUpdatedAt}
                       isFetching={flowsFetching}
                       onRefresh={() => refetchFlowsRaw()}

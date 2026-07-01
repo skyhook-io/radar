@@ -224,17 +224,6 @@ export function formatUpdatedAgo(elapsedMs: number): string {
   return `${bucket} ago`
 }
 
-// Poll cadence phrasing for "Auto-refreshes every X" — the behavior signal that
-// answers "does this stay current on its own?" without over-claiming a precise
-// data age. Rounds to whole s/m/h; a refetchInterval is always a round number.
-export function formatCadence(intervalMs: number): string {
-  const sec = Math.round(intervalMs / 1000)
-  if (sec < 60) return `${sec}s`
-  const min = Math.round(sec / 60)
-  if (min < 60) return `${min}m`
-  return `${Math.round(min / 60)}h`
-}
-
 export function formatRelativeAgeTime(value?: string, fallback = '-'): string {
   if (!value) return fallback
   const time = Date.parse(value)

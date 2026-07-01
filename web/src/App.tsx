@@ -1979,7 +1979,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
                     onNavigateToTraffic={() => setMainView('traffic')}
                     leadingSlot={
                       <FreshnessControl
-                        mode="live"
+                        mode="auto"
                         paused={topologyPaused}
                         connectionState={connection.state}
                       />

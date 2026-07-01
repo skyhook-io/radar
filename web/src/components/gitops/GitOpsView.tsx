@@ -288,9 +288,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         counts={countsQuery.data?.counts ?? {}}
         countsUnavailable={countsQuery.data?.unavailable}
         dataUpdatedAt={rowsQuery.dataUpdatedAt}
-        cadenceMs={GITOPS_ROWS_REFRESH_INTERVAL_MS}
         connectionState={connection.state}
-        isFetching={rowsQuery.isFetching || countsQuery.isFetching}
         onRefresh={refetchTable}
         onRowClick={(row) => {
           const ns = row.namespace || '_'

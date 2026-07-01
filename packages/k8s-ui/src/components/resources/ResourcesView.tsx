@@ -4353,7 +4353,7 @@ export function ResourcesView({
           {/* The list is SSE-invalidated (near-real-time), so it reads
               "Auto-updating" with no refresh button — the stream keeps it
               current, so a manual refresh would only undercut the claim. */}
-          <FreshnessControl mode="live" connectionState={connectionState} />
+          <FreshnessControl mode="auto" connectionState={connectionState} />
           {onCreateResource && (
             <Tooltip content={`Create ${selectedKind.kind || 'resource'}`}>
               <button
