@@ -474,3 +474,31 @@ func TestHydrationFailureRefusesAppends(t *testing.T) {
 		t.Error("channel must be closed on failed hydration")
 	}
 }
+
+// TestContextSwitchIdempotentOnStale pins that a SECOND context switch doesn't
+// re-terminalize an already-stale run — its log must keep ending in the closed
+// sentinel (now durable, so a violation would persist and break every replay).
+func TestContextSwitchIdempotentOnStale(t *testing.T) {
+	st, _ := testStore(t)
+	m := persistedManager(t, st, "ctx-b")
+	r := &Run{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a", store: st,
+		status: "done", hydrated: true, CreatedAt: nowUTC(), updatedAt: nowUTC(),
+		subs: map[int]chan RunEvent{}}
+	st.SaveRun(r.Summary())
+	r.append(StreamEvent{Type: "turn"})
+	m.mu.Lock()
+	m.runs[r.ID] = r
+	m.order = append(m.order, r.ID)
+	m.mu.Unlock()
+
+	m.OnContextSwitch() // ctx change #1: stale + error + closed
+	before, _ := st.LoadEvents("run-1")
+	m.OnContextSwitch() // ctx change #2: must be a no-op for this run
+	after, _ := st.LoadEvents("run-1")
+	if len(after) != len(before) {
+		t.Fatalf("second switch appended events: %d → %d", len(before), len(after))
+	}
+	if last := after[len(after)-1].Event; last.Type != "closed" {
+		t.Fatalf("log must end in closed, got %+v", last)
+	}
+}

@@ -532,7 +532,14 @@ func (m *RunManager) OnContextSwitch() {
 		c := r.cancel
 		inFlight := r.inFlight
 		hydrated := r.hydrated
+		alreadyStale := r.status == "stale"
 		r.mu.Unlock()
+		// A second switch (A→B→C) must not re-terminalize an already-stale run:
+		// its log already ends in the closed sentinel, and appending after it
+		// would break the replay contract (durably, now that logs persist).
+		if alreadyStale {
+			continue
+		}
 		if !inFlight && !hydrated {
 			// Loaded, never-touched history: mark stale without paying to load
 			// its transcript (terminal markers get store-assigned seqs).
@@ -602,27 +609,53 @@ func (m *RunManager) sweepForeignLocked() {
 // (running) runs survive and are re-persisted so their rows aren't orphaned by
 // the wipe.
 func (m *RunManager) ClearHistory() error {
+	// Snapshot which runs survive (live) vs go (terminal) under the lock.
 	m.mu.Lock()
 	kept := make([]string, 0, len(m.order))
+	var dropped []string
 	for _, id := range m.order {
-		r := m.runs[id]
-		if r.snapshotStatus() == "running" {
+		if m.runs[id].snapshotStatus() == "running" {
 			kept = append(kept, id)
+		} else {
+			dropped = append(dropped, id)
+		}
+	}
+	m.mu.Unlock()
+
+	// Store FIRST, memory second: if the delete fails, the UI must keep showing
+	// the runs — dropping memory first would show "cleared" while a restart
+	// resurrects everything from the intact DB. One transaction deleting only
+	// the non-kept rows, so a crash mid-clear can't lose a live investigation.
+	if m.store != nil {
+		if err := m.store.Clear(kept); err != nil {
+			return err
+		}
+	}
+
+	m.mu.Lock()
+	for _, id := range dropped {
+		r, ok := m.runs[id]
+		if !ok {
 			continue
 		}
 		delete(m.runs, id)
+		// Detach the store before finalizing: the run's rows were just deleted,
+		// and finalize's persisted closed-sentinel would re-create them.
+		r.mu.Lock()
+		r.store = nil
+		r.mu.Unlock()
 		r.finalize()
 		r.removeWorkDir()
 	}
-	m.order = kept
-	m.mu.Unlock()
-
-	if m.store == nil {
-		return nil
+	order := make([]string, 0, len(m.order))
+	for _, id := range m.order {
+		if _, ok := m.runs[id]; ok {
+			order = append(order, id)
+		}
 	}
-	// One transaction, deleting only the non-kept rows — a crash mid-clear can
-	// never lose a live investigation the user was told would survive.
-	return m.store.Clear(kept)
+	m.order = order
+	m.mu.Unlock()
+	return nil
 }
 
 // evictLocked drops the oldest finished run when over the retention cap. Running
