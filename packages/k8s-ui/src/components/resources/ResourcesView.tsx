@@ -4351,10 +4351,6 @@ export function ResourcesView({
               </div>
             )}
           </div>
-          {/* The list is SSE-invalidated (near-real-time), so it reads
-              "Auto-updating" with no refresh button — the stream keeps it
-              current, so a manual refresh would only undercut the claim. */}
-          <FreshnessControl mode="auto" connectionState={connectionState} />
           {onCreateResource && (
             <Tooltip content={`Create ${selectedKind.kind || 'resource'}`}>
               <button
@@ -4405,6 +4401,14 @@ export function ResourcesView({
               </button>
             </Tooltip>
           )}
+          {/* Freshness/liveness status — trailing and divided off from the action
+              buttons so it reads as a status, not another control. Resources has
+              no PageHeader, so this toolbar is its home. */}
+          <div className="mx-1 h-5 w-px bg-theme-border/60" />
+          {/* The list is SSE-invalidated (near-real-time), so it reads
+              "Auto-updating" with no refresh button — the stream keeps it
+              current, so a manual refresh would only undercut the claim. */}
+          <FreshnessControl mode="auto" connectionState={connectionState} />
         </div>
 
         {/* Bulk actions bar */}
