@@ -609,19 +609,31 @@ export function GitOpsTableView({
           icon={GitBranch}
           title="GitOps"
           description="Applications and reconciliations with source, destination, sync, and health state."
-          actions={summaryTiles.map((tile) => (
-            <SummaryTile
-              key={tile.key}
-              label={tile.label}
-              value={tile.value}
-              tone={tile.tone}
-              active={tile.active}
-              onClick={() => {
-                if (tile.active) tile.clear?.()
-                else tile.apply?.()
-              }}
-            />
-          ))}
+          actions={
+            <>
+              {(onRefresh || dataUpdatedAt != null) && (
+                <FreshnessControl
+                  mode="auto"
+                  dataUpdatedAt={dataUpdatedAt}
+                  onRefresh={onRefresh}
+                  connectionState={connectionState}
+                />
+              )}
+              {summaryTiles.map((tile) => (
+                <SummaryTile
+                  key={tile.key}
+                  label={tile.label}
+                  value={tile.value}
+                  tone={tile.tone}
+                  active={tile.active}
+                  onClick={() => {
+                    if (tile.active) tile.clear?.()
+                    else tile.apply?.()
+                  }}
+                />
+              ))}
+            </>
+          }
         />
       </div>
       <div
@@ -740,14 +752,6 @@ export function GitOpsTableView({
               <GitOpsIconToggle active={viewMode === 'table'} label="Table view" icon={List} onClick={() => setViewMode('table')} />
               <GitOpsIconToggle active={viewMode === 'tiles'} label="Tiles view" icon={LayoutGrid} onClick={() => setViewMode('tiles')} />
             </div>
-            {(onRefresh || dataUpdatedAt != null) && (
-              <FreshnessControl
-                mode="auto"
-                dataUpdatedAt={dataUpdatedAt}
-                onRefresh={onRefresh}
-                connectionState={connectionState}
-              />
-            )}
           </div>
         </div>
 
