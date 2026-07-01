@@ -99,9 +99,11 @@ export function FreshnessControl({
     tooltip = null
   }
 
-  // "Auto-updating" carries a secondary "· updated N ago" when a load time
-  // exists; it drops first on narrow headers (the tooltip keeps the exact time).
-  const ageSuffix = live && age ? age : null
+  // The relative age is the dynamic trust detail, so it rides alongside every
+  // 'auto' label that has a load time — including "Reconnecting…" and "Paused",
+  // where "how stale is this?" matters most. (In 'snapshot' mode the age IS the
+  // label, so no suffix.)
+  const ageSuffix = mode === 'auto' && age ? age : null
 
   const labelNode = label ? (
     <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">

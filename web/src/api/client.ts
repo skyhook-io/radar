@@ -36,15 +36,14 @@ import type { GitOpsOperationResponse } from '../types/gitops'
 import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath } from './config'
 import { pluralToKind } from '../utils/navigation'
 
-// Auto-refresh cadences (ms), exported as the single source of truth for both
-// each hook's refetchInterval AND the view's "Auto-refreshes every X" freshness
-// copy — so the signal can never drift from the actual poll.
-export const DASHBOARD_REFRESH_INTERVAL_MS = 30_000
-export const AUDIT_REFRESH_INTERVAL_MS = 60_000
-export const ISSUES_REFRESH_INTERVAL_MS = 30_000
-export const COST_REFRESH_INTERVAL_MS = 60_000
-export const CHANGES_REFRESH_INTERVAL_MS = 60_000
-export const APPLICATIONS_REFRESH_INTERVAL_MS = 60_000
+// Auto-refresh cadences (ms) — named constants for each polled hook's
+// refetchInterval below, so the poll rate reads clearly at each call site.
+const DASHBOARD_REFRESH_INTERVAL_MS = 30_000
+const AUDIT_REFRESH_INTERVAL_MS = 60_000
+const ISSUES_REFRESH_INTERVAL_MS = 30_000
+const COST_REFRESH_INTERVAL_MS = 60_000
+const CHANGES_REFRESH_INTERVAL_MS = 60_000
+const APPLICATIONS_REFRESH_INTERVAL_MS = 60_000
 
 // Wrapper around fetch that always includes credentials (for session cookies)
 // and handles 401 responses globally. Merges caller-provided headers with
