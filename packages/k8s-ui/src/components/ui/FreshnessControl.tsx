@@ -18,8 +18,9 @@ interface FreshnessControlProps {
   cadenceMs?: number
   // True while a fetch is in flight — spins the refresh icon for background refetches too.
   isFetching?: boolean
-  // Manual refresh. Omit to render the signal without a button.
-  onRefresh?: () => void
+  // Manual refresh. Omit to render the signal without a button. May return a
+  // promise — the refresh animation waits for it before showing success.
+  onRefresh?: () => void | Promise<unknown>
   // Cluster/SSE connection health. When disconnected, freshness must not claim
   // currency — both modes degrade to "Reconnecting…" instead of a stale age/Live.
   connectionState?: FreshnessConnection

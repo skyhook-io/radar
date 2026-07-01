@@ -210,10 +210,9 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   // an already-current cache) and once shortly after to catch the propagated
   // update; refetch() forces a fetch regardless of staleTime. The toolbar's
   // manual refresh reuses refetchTable so rows + counts stay in sync.
-  const refetchTable = () => {
-    rowsQuery.refetch()
-    countsQuery.refetch()
-  }
+  // Return the combined promise so the toolbar's refresh animation waits for the
+  // real fetches to settle before showing its success checkmark.
+  const refetchTable = () => Promise.all([rowsQuery.refetch(), countsQuery.refetch()])
   const refetchTableAfterMutation = () => {
     refetchTable()
     window.setTimeout(refetchTable, 1200)
