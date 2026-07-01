@@ -199,7 +199,6 @@ export function InvestigationView({
               {
                 question: ev.question,
                 timeline: [],
-                answer: "",
                 diagnosis: null,
                 error: null,
                 status: "running",
@@ -219,13 +218,6 @@ export function InvestigationView({
               updateLast((t) => ({
                 ...t,
                 timeline: upsertTool(t.timeline, ev.step!),
-              }));
-            break;
-          case "token":
-            if (ev.token)
-              updateLast((t) => ({
-                ...t,
-                answer: (t.answer + ev.token).slice(-4000),
               }));
             break;
           case "done": {

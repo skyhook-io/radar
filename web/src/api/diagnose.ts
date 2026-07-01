@@ -56,7 +56,6 @@ export interface DiagnoseStreamEvent {
     | "turn"
     | "phase"
     | "step"
-    | "token"
     | "thinking"
     | "done"
     | "error"
@@ -226,7 +225,6 @@ export function subscribeRun(
     "turn",
     "phase",
     "step",
-    "token",
     "thinking",
     "done",
     "error",

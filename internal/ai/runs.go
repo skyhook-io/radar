@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -119,7 +120,23 @@ var (
 const (
 	defaultMaxConcurrent = 3  // running child processes
 	defaultMaxRetained   = 20 // total runs kept in memory
+
+	// defaultTurnTimeout bounds one agent turn's wall-clock time. Generous — a
+	// deep multi-tool investigation runs minutes, not tens of minutes — while
+	// guaranteeing a hung CLI eventually frees its concurrency slot.
+	defaultTurnTimeout = 15 * time.Minute
 )
+
+// turnTimeout returns the per-turn wall-clock ceiling (RADAR_AI_TURN_TIMEOUT
+// accepts a Go duration, e.g. "30m", for unusually slow setups).
+func turnTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("RADAR_AI_TURN_TIMEOUT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultTurnTimeout
+}
 
 // NewRunManager builds a manager over a resolved Diagnoser. mcpPort/ctxLabel are
 // callbacks because the listener port and kube-context are only known at runtime.
@@ -281,9 +298,13 @@ func (m *RunManager) AddTurn(id, question string, apply bool, fix string) error 
 
 // launchTurn emits a turn marker then runs the agent in a manager-owned goroutine.
 // The caller has already marked the run in-flight (atomically with the cap check).
-// Subscribers stay attached across turns — only stop / stale / evict closes them.
+// Subscribers stay attached across turns — only stale / evict closes them (a
+// stopped run can still take follow-up turns, so Stop leaves streams open).
 func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, session string) {
-	ctx, cancel := context.WithCancel(m.baseCtx)
+	// Wall-clock ceiling per turn: a wedged CLI would otherwise hold one of the
+	// maxConcurrent slots forever (maxTurns caps model turns, not real time).
+	timeout := turnTimeout()
+	ctx, cancel := context.WithTimeout(m.baseCtx, timeout)
 	r.mu.Lock()
 	r.cancel = cancel
 	r.mu.Unlock()
@@ -312,7 +333,11 @@ func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, sessio
 		if err != nil {
 			r.status = "error"
 			r.mu.Unlock()
-			r.append(StreamEvent{Type: "error", Error: err.Error()})
+			msg := err.Error()
+			if errors.Is(err, context.DeadlineExceeded) {
+				msg = fmt.Sprintf("The investigation timed out after %s and was stopped. Re-run Diagnose, or ask a narrower follow-up.", timeout)
+			}
+			r.append(StreamEvent{Type: "error", Error: msg})
 			return
 		}
 		// Keep the read-only investigation session as the canonical resume target.
@@ -508,15 +533,27 @@ func (r *Run) append(ev StreamEvent) {
 
 // finalize emits a terminal sentinel and closes all subscribers; further Subscribe
 // calls replay the log then close. Used when a run can no longer produce turns.
+// Idempotent: a context-switched (stale) run can later age past the retention cap
+// and be finalized again by eviction — the second call must not append a second
+// "closed" sentinel to the replay log.
 func (r *Run) finalize() {
-	r.append(StreamEvent{Type: "closed"})
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.subs == nil {
+		return
+	}
+	re := RunEvent{Seq: len(r.events) + 1, Event: StreamEvent{Type: "closed"}}
+	r.events = append(r.events, re)
+	r.updatedAt = nowUTC()
 	for id, ch := range r.subs {
+		select {
+		case ch <- re:
+		default: // full buffer — the close below still ends the stream
+		}
 		delete(r.subs, id)
 		close(ch)
 	}
 	r.subs = nil
-	r.mu.Unlock()
 }
 
 func nowUTC() time.Time { return time.Now().UTC() }

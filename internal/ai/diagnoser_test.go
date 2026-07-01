@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 )
@@ -319,8 +320,6 @@ func TestParseStream_InterleavesNarration(t *testing.T) {
 		switch ev.Type {
 		case "thinking":
 			narrations = append(narrations, ev.Token)
-		case "token":
-			t.Errorf("Claude narration should not emit token events anymore, got %q", ev.Token)
 		case "step":
 			if ev.Step != nil && ev.Step.Status == "running" {
 				toolSeen = true
@@ -338,5 +337,47 @@ func TestParseStream_InterleavesNarration(t *testing.T) {
 	}
 	if !toolSeen {
 		t.Error("expected the tool step")
+	}
+}
+
+// TestDiagnoseStream_NonzeroExit pins the failure-honesty contract: a nonzero
+// agent exit is forgiven only when a STRUCTURED verdict parsed (the trailing
+// JSON block) — free-text alone means the process died mid-stream and must
+// surface as an error, never as a calm "done".
+func TestDiagnoseStream_NonzeroExit(t *testing.T) {
+	mkCLI := func(t *testing.T, resultLine string) string {
+		t.Helper()
+		dir := t.TempDir()
+		bin := dir + "/claude"
+		// printf %s, not echo — sh's echo may expand \n escapes inside the JSON.
+		script := "#!/bin/sh\nprintf '%s\\n' '" + resultLine + "'\nexit 3\n"
+		if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return bin
+	}
+	run := func(t *testing.T, bin string) (Diagnosis, error) {
+		t.Helper()
+		d, err := New(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.DiagnoseStream(context.Background(), Request{
+			Kind: "Pod", Namespace: "ns", Name: "p", MCPPort: 1,
+		}, nil)
+	}
+
+	freeText := `{"type":"result","result":"got halfway through checking the pod","num_turns":1}`
+	if _, err := run(t, mkCLI(t, freeText)); err == nil {
+		t.Error("nonzero exit with free-text-only output must return an error")
+	}
+
+	structured := "{\"type\":\"result\",\"result\":\"```json\\n{\\\"root_cause\\\":\\\"bad tag\\\",\\\"remediation\\\":[\\\"fix it\\\"]}\\n```\",\"num_turns\":1}"
+	diag, err := run(t, mkCLI(t, structured))
+	if err != nil {
+		t.Fatalf("nonzero exit with a complete structured verdict should be forgiven, got %v", err)
+	}
+	if diag.RootCause != "bad tag" {
+		t.Errorf("structured verdict not preserved: %q", diag.RootCause)
 	}
 }

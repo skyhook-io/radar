@@ -337,7 +337,6 @@ export function AgentControls({
 export type Turn = {
   question?: string;
   timeline: TimelineItem[];
-  answer: string;
   diagnosis: Diagnosis | null;
   error: string | null;
   status: "running" | "done" | "error";
@@ -347,7 +346,7 @@ export type Turn = {
 };
 
 // TimelineItem is one ordered transcript entry: agent reasoning, or a tool call.
-export type TimelineItem =
+type TimelineItem =
   | { kind: "thinking"; text: string }
   | {
       kind: "tool";
@@ -451,13 +450,6 @@ export function TurnView({
         followup={followup}
         synthLabel={synthLabel}
       />
-      {turn.status === "running" && turn.answer && !synthLabel && (
-        // Live narration as the agent works (Claude streams its reasoning as text).
-        // Rendered as markdown so its **bold**/lists read cleanly, not raw markers.
-        <AIMarkdown className="rounded-md border border-theme-border bg-theme-base/50 p-2 text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-secondary [&_p]:my-1 [&_strong]:font-medium [&_strong]:text-theme-text-primary">
-          {stripJsonBlock(turn.answer)}
-        </AIMarkdown>
-      )}
       {turn.status === "done" &&
         (hideVerdict && hasVerdict ? null : hasVerdict ? (
           <ResultCard
@@ -469,14 +461,6 @@ export function TurnView({
             reveal={reveal}
             onCheckStatus={onCheckStatus}
           />
-        ) : stripJsonBlock(turn.answer).trim() ? (
-          // No structured verdict, but the agent narrated something — show it
-          // rather than a blank card.
-          <div className="mt-1 rounded-lg border border-theme-border bg-theme-elevated p-3">
-            <AIMarkdown className="text-sm text-theme-text-secondary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-              {stripJsonBlock(turn.answer)}
-            </AIMarkdown>
-          </div>
         ) : (
           <EmptyResult />
         ))}
@@ -556,6 +540,13 @@ export function ConsentCard({
           <li>
             • Isolated: only Radar&apos;s read-only investigation tools — your
             other CLI config and MCP servers are excluded.
+            {agent === "codex" && (
+              <>
+                {" "}
+                Codex&apos;s sandboxed shell can still <em>read</em> files on
+                your machine (it cannot write or reach the network).
+              </>
+            )}
           </li>
         ) : (
           <li>
@@ -1522,12 +1513,8 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export function prettyTool(tool: string): string {
+function prettyTool(tool: string): string {
   return tool.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function stripJsonBlock(text: string): string {
-  return text.replace(/```json[\s\S]*?```/g, "").trimEnd();
 }
 
 // A coarse band, not a precise %: a two-sig-fig confidence on an LLM judgement

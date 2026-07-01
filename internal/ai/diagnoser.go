@@ -126,7 +126,7 @@ type Diagnosis struct {
 // "turn" marks the start of a new turn (carries Question/Apply) so a connecting
 // or reconnecting client can reconstruct turn boundaries from the event log.
 type StreamEvent struct {
-	Type     string     `json:"type"` // "turn"|"phase"|"step"|"token"|"thinking"|"done"|"error"|"closed"
+	Type     string     `json:"type"` // "turn"|"phase"|"step"|"thinking"|"done"|"error"|"closed"
 	Phase    string     `json:"phase,omitempty"`
 	Step     *StepInfo  `json:"step,omitempty"`
 	Token    string     `json:"token,omitempty"`
@@ -405,11 +405,21 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		if ctx.Err() != nil {
 			return Diagnosis{}, ctx.Err()
 		}
-		if diag.RootCause == "" && diag.Report == "" {
+		// A nonzero exit is forgiven ONLY when the agent completed a structured
+		// verdict (the trailing JSON block parsed) — then the exit noise is
+		// incidental. Free-text alone means the process died mid-stream; showing
+		// that as a calm "done" would pass a failure off as a finished analysis.
+		if !diag.structured() {
 			return Diagnosis{}, agentExitError(agent.Name(), stderr.String())
 		}
 	}
 	return diag, nil
+}
+
+// structured reports whether the verdict JSON actually parsed into a conclusion —
+// a root cause, remediation steps, or an explicit healthy/inconclusive call.
+func (d Diagnosis) structured() bool {
+	return d.RootCause != "" || len(d.Remediation) > 0 || d.Healthy || d.Inconclusive
 }
 
 func taskPrompt(req Request) string {

@@ -344,21 +344,6 @@ body {
   transform-origin: left;
   animation: underline-sweep 460ms cubic-bezier(0.16, 1, 0.3, 1) 120ms both;
 }
-@keyframes verdict-glow {
-  0% {
-    box-shadow: 0 0 0 0 transparent;
-  }
-  35% {
-    box-shadow: 0 0 16px 1px color-mix(in oklab, var(--accent) 35%, transparent);
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-  }
-}
-.animate-verdict-glow {
-  animation: verdict-glow 1100ms ease-out 120ms both;
-}
-
 /* Richer verdict reveal — a colored ring around the border plus an UNEVEN, breathing
    outer glow (two soft peaks), held longer (~2.4s). Tinted per verdict via --glow
    (amber root-cause, emerald healthy, accent remediation, slate inconclusive). */
@@ -402,7 +387,6 @@ body {
   .animate-synth-pulse,
   .animate-result-in,
   .animate-underline-sweep,
-  .animate-verdict-glow,
   .animate-verdict-reveal {
     animation: none;
   }

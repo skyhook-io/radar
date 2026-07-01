@@ -602,6 +602,7 @@ func (s *Server) setupRoutes() {
 	// letting the MCP handler answer with 405.
 	r.Handle("/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp/.well-known/*", http.NotFoundHandler())
+	r.Handle("/mcp-readonly/.well-known/*", http.NotFoundHandler())
 
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {

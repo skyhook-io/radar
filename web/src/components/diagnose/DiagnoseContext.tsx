@@ -300,8 +300,12 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const selectedAgentRef = useRef(selectedAgent);
   selectedAgentRef.current = selectedAgent;
 
+  // Monotonic token so an earlier createRun that resolves late can't steal focus
+  // from a later click on a different resource (only the latest start wins).
+  const startSeqRef = useRef(0);
   const startRunRef = useRef<(t: Target) => void>(() => {});
   startRunRef.current = (t: Target) => {
+    const seq = ++startSeqRef.current;
     createRun(t, {
       agent: selectedAgent || undefined,
       isolated,
@@ -309,13 +313,15 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       effort: effort || undefined,
     })
       .then((run) => {
-        setActiveRunId(run.id);
-        setView("investigation");
         setRuns((prev) =>
           prev.some((r) => r.id === run.id) ? prev : [run, ...prev],
         );
+        if (seq !== startSeqRef.current) return;
+        setActiveRunId(run.id);
+        setView("investigation");
       })
       .catch((e) => {
+        if (seq !== startSeqRef.current) return;
         setStartError(
           e instanceof DiagnoseError
             ? e.message

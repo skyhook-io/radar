@@ -30,7 +30,7 @@ func TestRunSubscribeReplay(t *testing.T) {
 	r := &Run{subs: map[int]chan RunEvent{}}
 	r.append(StreamEvent{Type: "turn"})              // seq 1
 	r.append(StreamEvent{Type: "phase"})             // seq 2
-	r.append(StreamEvent{Type: "token", Token: "x"}) // seq 3
+	r.append(StreamEvent{Type: "thinking", Token: "x"}) // seq 3
 
 	backlog, ch, cancel := r.Subscribe(1) // everything after seq 1
 	defer cancel()
