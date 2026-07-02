@@ -17,10 +17,10 @@ export function MetricsUnavailableNotice({ rawError }: MetricsUnavailableNoticeP
             content={(
               <span className="space-y-1">
                 <span className="block">
-                  Check metrics-server and the metrics.k8s.io APIService.
+                  This panel uses Kubernetes metrics.k8s.io for live CPU and memory; Prometheus data does not fill it.
                 </span>
                 <span className="block">
-                  Prometheus is separate.
+                  Check that metrics-server is installed and healthy, and that the v1beta1.metrics.k8s.io APIService is Available.
                 </span>
                 <span className="block">
                   Raw error: <span className="font-mono break-words">{rawError}</span>
