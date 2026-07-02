@@ -35,19 +35,21 @@ type ContainerMetricsHistory struct {
 
 // PodMetricsHistory holds historical metrics for a pod.
 type PodMetricsHistory struct {
-	Namespace          string                    `json:"namespace"`
-	Name               string                    `json:"name"`
-	Containers         []ContainerMetricsHistory `json:"containers"`
-	CollectionError    string                    `json:"collectionError,omitempty"`
-	RawCollectionError string                    `json:"rawCollectionError,omitempty"`
+	Namespace                   string                    `json:"namespace"`
+	Name                        string                    `json:"name"`
+	Containers                  []ContainerMetricsHistory `json:"containers"`
+	CollectionError             string                    `json:"collectionError,omitempty"`
+	RawCollectionError          string                    `json:"rawCollectionError,omitempty"`
+	MetricsUnavailableDiagnosis string                    `json:"metricsUnavailableDiagnosis,omitempty"`
 }
 
 // NodeMetricsHistory holds historical metrics for a node.
 type NodeMetricsHistory struct {
-	Name               string             `json:"name"`
-	DataPoints         []MetricsDataPoint `json:"dataPoints"`
-	CollectionError    string             `json:"collectionError,omitempty"`
-	RawCollectionError string             `json:"rawCollectionError,omitempty"`
+	Name                        string             `json:"name"`
+	DataPoints                  []MetricsDataPoint `json:"dataPoints"`
+	CollectionError             string             `json:"collectionError,omitempty"`
+	RawCollectionError          string             `json:"rawCollectionError,omitempty"`
+	MetricsUnavailableDiagnosis string             `json:"metricsUnavailableDiagnosis,omitempty"`
 }
 
 // TopPodMetrics holds the latest metrics snapshot for a single pod.

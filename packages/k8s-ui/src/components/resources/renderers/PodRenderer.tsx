@@ -74,7 +74,7 @@ interface PodRendererProps {
   renderPortAction?: (props: { namespace: string; podName: string; port: number; protocol: string; disabled?: boolean }) => ReactNode
   // Metrics data injection
   metrics?: { containers?: any[]; timestamp?: string }
-  metricsHistory?: { containers?: any[]; collectionError?: string; metricsUnavailableReason?: string }
+  metricsHistory?: { containers?: any[]; collectionError?: string; metricsUnavailableReason?: string; metricsUnavailableDiagnosis?: string }
   metricsUnavailable?: boolean
   hideMetricsServer?: boolean
   // Filesystem browser render props
@@ -727,7 +727,7 @@ export function PodRenderer({
       {!hideMetricsServer && !!(currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {showMetricsUnavailable && (
-            <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} />
+            <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} diagnosis={metricsHistory?.metricsUnavailableDiagnosis} />
           )}
           {metricsHistory?.collectionError && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">

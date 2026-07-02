@@ -38,22 +38,26 @@ describe('metrics unavailable classification', () => {
       containers: [],
       collectionError: 'the server could not find the requested resource (get pods.metrics.k8s.io)',
       rawCollectionError: 'the server could not find the requested resource',
+      metricsUnavailableDiagnosis: 'The v1beta1.metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService.',
     })
     expect(podHistory.collectionError).toBeUndefined()
     expect(podHistory.rawCollectionError).toBeUndefined()
     expect(podHistory.metricsUnavailable).toBe(true)
     expect(podHistory.metricsUnavailableReason).toBe('the server could not find the requested resource')
+    expect(podHistory.metricsUnavailableDiagnosis).toBe('The v1beta1.metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService.')
 
     const nodeHistory = normalizeNodeMetricsHistory({
       name: 'kind-worker',
       dataPoints: [],
       collectionError: 'Node metrics not found (metrics-server may not be installed)',
       rawCollectionError: 'the server could not find the requested resource',
+      metricsUnavailableDiagnosis: 'The v1beta1.metrics.k8s.io APIService is not Available (FailedDiscoveryCheck). Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.',
     })
     expect(nodeHistory.collectionError).toBeUndefined()
     expect(nodeHistory.rawCollectionError).toBeUndefined()
     expect(nodeHistory.metricsUnavailable).toBe(true)
     expect(nodeHistory.metricsUnavailableReason).toBe('the server could not find the requested resource')
+    expect(nodeHistory.metricsUnavailableDiagnosis).toBe('The v1beta1.metrics.k8s.io APIService is not Available (FailedDiscoveryCheck). Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.')
   })
 
   it('keeps non-metrics collection errors visible', () => {

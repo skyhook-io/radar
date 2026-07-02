@@ -12,7 +12,7 @@ interface NodeRendererProps {
   relationships?: { pods?: any[] }
   onViewPods?: () => void
   metrics?: { usage?: { cpu: string; memory: string }; timestamp?: string }
-  metricsHistory?: { dataPoints?: MetricsDataPoint[]; collectionError?: string; metricsUnavailableReason?: string }
+  metricsHistory?: { dataPoints?: MetricsDataPoint[]; collectionError?: string; metricsUnavailableReason?: string; metricsUnavailableDiagnosis?: string }
   metricsUnavailable?: boolean
   hideMetricsServer?: boolean
 }
@@ -190,7 +190,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
       {!hideMetricsServer && (currentMetrics?.usage || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {showMetricsUnavailable && (
-            <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} />
+            <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} diagnosis={metricsHistory?.metricsUnavailableDiagnosis} />
           )}
           {metricsHistory?.collectionError && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">

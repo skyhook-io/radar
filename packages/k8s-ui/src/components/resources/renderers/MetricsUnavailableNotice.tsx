@@ -3,9 +3,10 @@ import { Tooltip } from '../../ui/Tooltip'
 
 interface MetricsUnavailableNoticeProps {
   rawError?: string
+  diagnosis?: string
 }
 
-export function MetricsUnavailableNotice({ rawError }: MetricsUnavailableNoticeProps) {
+export function MetricsUnavailableNotice({ rawError, diagnosis }: MetricsUnavailableNoticeProps) {
   return (
     <div className="card-inner-lg text-xs text-theme-text-tertiary">
       <div className="flex items-start gap-1.5">
@@ -20,7 +21,7 @@ export function MetricsUnavailableNotice({ rawError }: MetricsUnavailableNoticeP
                   This panel uses Kubernetes metrics.k8s.io for live CPU and memory; Prometheus data does not fill it.
                 </span>
                 <span className="block">
-                  Check that metrics-server is installed and healthy, and that the v1beta1.metrics.k8s.io APIService is Available.
+                  {diagnosis || 'Check that metrics-server is installed and healthy, and that the v1beta1.metrics.k8s.io APIService is Available.'}
                 </span>
                 <span className="block">
                   Raw error: <span className="font-mono break-words">{rawError}</span>

@@ -20,6 +20,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
@@ -1095,7 +1096,7 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 		},
 	}
 
-	podHistory := podMetricsHistoryResponse(&k8s.PodMetricsHistory{
+	podHistory := podMetricsHistoryResponse(context.Background(), &k8s.PodMetricsHistory{
 		Namespace: "default",
 		Name:      "api",
 		Containers: []k8s.ContainerMetricsHistory{{
@@ -1114,7 +1115,7 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 		t.Fatalf("pod raw collection error = %q, want %q", podHistory.RawCollectionError, health.PodMetrics.LastError)
 	}
 
-	nodeHistory := nodeMetricsHistoryResponse(&k8s.NodeMetricsHistory{
+	nodeHistory := nodeMetricsHistoryResponse(context.Background(), &k8s.NodeMetricsHistory{
 		Name: "kind-worker",
 		DataPoints: []k8s.MetricsDataPoint{{
 			Timestamp: time.Now(),
@@ -1142,20 +1143,74 @@ func TestMetricsHistoryResponseKeepsNonAbsenceCollectionErrors(t *testing.T) {
 		},
 	}
 
-	podHistory := podMetricsHistoryResponse(nil, "default", "api", health)
+	podHistory := podMetricsHistoryResponse(context.Background(), nil, "default", "api", health)
 	if podHistory.CollectionError != health.PodMetrics.LastError {
 		t.Fatalf("pod collection error = %q, want %q", podHistory.CollectionError, health.PodMetrics.LastError)
 	}
 	if podHistory.RawCollectionError != "" {
 		t.Fatalf("pod raw collection error = %q, want empty", podHistory.RawCollectionError)
 	}
+	if podHistory.MetricsUnavailableDiagnosis != "" {
+		t.Fatalf("pod metrics unavailable diagnosis = %q, want empty", podHistory.MetricsUnavailableDiagnosis)
+	}
 
-	nodeHistory := nodeMetricsHistoryResponse(nil, "kind-worker", health)
+	nodeHistory := nodeMetricsHistoryResponse(context.Background(), nil, "kind-worker", health)
 	if nodeHistory.CollectionError != health.NodeMetrics.LastError {
 		t.Fatalf("node collection error = %q, want %q", nodeHistory.CollectionError, health.NodeMetrics.LastError)
 	}
 	if nodeHistory.RawCollectionError != "" {
 		t.Fatalf("node raw collection error = %q, want empty", nodeHistory.RawCollectionError)
+	}
+	if nodeHistory.MetricsUnavailableDiagnosis != "" {
+		t.Fatalf("node metrics unavailable diagnosis = %q, want empty", nodeHistory.MetricsUnavailableDiagnosis)
+	}
+}
+
+func TestMetricsAPIServiceDiagnosis(t *testing.T) {
+	tests := []struct {
+		name      string
+		condition map[string]any
+		want      string
+	}{
+		{
+			name: "available true points away from installation",
+			condition: map[string]any{
+				"type":   "Available",
+				"status": "True",
+			},
+			want: "The v1beta1.metrics.k8s.io APIService is Available, but metrics reads still fail. Check metrics-server logs and API aggregation errors.",
+		},
+		{
+			name: "available false includes reason",
+			condition: map[string]any{
+				"type":   "Available",
+				"status": "False",
+				"reason": "FailedDiscoveryCheck",
+			},
+			want: "The v1beta1.metrics.k8s.io APIService is not Available (FailedDiscoveryCheck). Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
+		},
+		{
+			name: "available unknown includes reason",
+			condition: map[string]any{
+				"type":   "Available",
+				"status": "Unknown",
+				"reason": "ServiceNotFound",
+			},
+			want: "The v1beta1.metrics.k8s.io APIService is not Available (ServiceNotFound). Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiService := &unstructured.Unstructured{Object: map[string]any{
+				"status": map[string]any{
+					"conditions": []any{tt.condition},
+				},
+			}}
+			if got := metricsAPIServiceDiagnosis(apiService); got != tt.want {
+				t.Fatalf("metricsAPIServiceDiagnosis() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

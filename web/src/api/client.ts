@@ -1363,6 +1363,7 @@ export interface PodMetricsHistory {
   containers: ContainerMetricsHistory[]
   collectionError?: string
   rawCollectionError?: string
+  metricsUnavailableDiagnosis?: string
   metricsUnavailable?: boolean
   metricsUnavailableReason?: string
 }
@@ -1372,6 +1373,7 @@ export interface NodeMetricsHistory {
   dataPoints: MetricsDataPoint[]
   collectionError?: string
   rawCollectionError?: string
+  metricsUnavailableDiagnosis?: string
   metricsUnavailable?: boolean
   metricsUnavailableReason?: string
 }
