@@ -1082,11 +1082,11 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 	health := k8s.MetricsCollectionHealth{
 		PodMetrics: k8s.MetricsSourceHealth{
 			ConsecutiveErrors: 1,
-			LastError:         "the server could not find the requested resource (get pods.metrics.k8s.io)",
+			LastError:         "the server could not find the requested resource",
 		},
 		NodeMetrics: k8s.MetricsSourceHealth{
 			ConsecutiveErrors: 1,
-			LastError:         "the server could not find the requested resource (get nodes.metrics.k8s.io)",
+			LastError:         "the server could not find the requested resource",
 		},
 	}
 
@@ -1102,8 +1102,8 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 			}},
 		}},
 	}, "default", "api", health)
-	if podHistory.CollectionError != health.PodMetrics.LastError {
-		t.Fatalf("pod collection error = %q, want %q", podHistory.CollectionError, health.PodMetrics.LastError)
+	if podHistory.CollectionError != "Pod metrics not found (metrics-server may not be installed)" {
+		t.Fatalf("pod collection error = %q", podHistory.CollectionError)
 	}
 
 	nodeHistory := nodeMetricsHistoryResponse(&k8s.NodeMetricsHistory{
@@ -1114,6 +1114,29 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 			Memory:    268435456,
 		}},
 	}, "kind-worker", health)
+	if nodeHistory.CollectionError != "Node metrics not found (metrics-server may not be installed)" {
+		t.Fatalf("node collection error = %q", nodeHistory.CollectionError)
+	}
+}
+
+func TestMetricsHistoryResponseKeepsNonAbsenceCollectionErrors(t *testing.T) {
+	health := k8s.MetricsCollectionHealth{
+		PodMetrics: k8s.MetricsSourceHealth{
+			ConsecutiveErrors: 1,
+			LastError:         "forbidden: no access to pods.metrics.k8s.io",
+		},
+		NodeMetrics: k8s.MetricsSourceHealth{
+			ConsecutiveErrors: 1,
+			LastError:         "forbidden: no access to nodes.metrics.k8s.io",
+		},
+	}
+
+	podHistory := podMetricsHistoryResponse(nil, "default", "api", health)
+	if podHistory.CollectionError != health.PodMetrics.LastError {
+		t.Fatalf("pod collection error = %q, want %q", podHistory.CollectionError, health.PodMetrics.LastError)
+	}
+
+	nodeHistory := nodeMetricsHistoryResponse(nil, "kind-worker", health)
 	if nodeHistory.CollectionError != health.NodeMetrics.LastError {
 		t.Fatalf("node collection error = %q, want %q", nodeHistory.CollectionError, health.NodeMetrics.LastError)
 	}

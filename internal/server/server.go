@@ -2235,6 +2235,16 @@ func isMetricsAPIUnavailable(err error) bool {
 		strings.Contains(msg, "unable to fetch metrics")
 }
 
+func metricsHistoryCollectionError(source, errMsg string) string {
+	if errMsg == "" {
+		return ""
+	}
+	if isMetricsAPIUnavailable(fmt.Errorf("failed to get %s metrics: %s", strings.ToLower(source), errMsg)) {
+		return fmt.Sprintf("%s metrics not found (metrics-server may not be installed)", source)
+	}
+	return errMsg
+}
+
 // handlePodMetricsHistory returns historical metrics for a specific pod
 func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
@@ -2259,7 +2269,7 @@ func podMetricsHistoryResponse(history *k8s.PodMetricsHistory, namespace, name s
 		}
 	}
 	if health.PodMetrics.ConsecutiveErrors > 0 {
-		history.CollectionError = health.PodMetrics.LastError
+		history.CollectionError = metricsHistoryCollectionError("Pod", health.PodMetrics.LastError)
 	}
 	return history
 }
@@ -2290,7 +2300,7 @@ func nodeMetricsHistoryResponse(history *k8s.NodeMetricsHistory, name string, he
 		}
 	}
 	if health.NodeMetrics.ConsecutiveErrors > 0 {
-		history.CollectionError = health.NodeMetrics.LastError
+		history.CollectionError = metricsHistoryCollectionError("Node", health.NodeMetrics.LastError)
 	}
 	return history
 }
