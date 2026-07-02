@@ -177,7 +177,7 @@ func New(cfg Config) *Server {
 			if historyBroken {
 				// Persistence was requested but isn't working — the UI must say
 				// history won't survive a restart, not just a log line.
-				s.aiRuns.MarkHistoryUnavailable()
+				s.aiRuns.MarkHistoryUnavailable(cfg.AIHistoryDB)
 			}
 			log.Printf("[ai] diagnose enabled (default agent: %s)", d.DefaultAgent())
 		}

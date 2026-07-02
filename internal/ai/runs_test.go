@@ -3,6 +3,7 @@ package ai
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -512,9 +513,12 @@ func TestHistoryUnavailableSurfaces(t *testing.T) {
 	if m.HistoryDegraded() {
 		t.Error("memory-only by CONFIG must not read as degraded")
 	}
-	m.MarkHistoryUnavailable()
+	m.MarkHistoryUnavailable("/nonexistent/ai-runs.db")
 	if !m.HistoryDegraded() {
 		t.Error("open failure must surface as degraded")
+	}
+	if err := m.ClearHistory(); err != nil {
+		t.Errorf("clearing an already-missing broken DB must succeed, got %v", err)
 	}
 
 	st, _ := testStore(t)
@@ -528,5 +532,13 @@ func TestHistoryUnavailableSurfaces(t *testing.T) {
 	}
 	if m2.store != nil {
 		t.Error("load failure must detach the store — writes against unknown contents overwrite history")
+	}
+	// Clear must honor the user's intent even for a detached DB: remove the
+	// files so a later healthy startup can't resurrect "cleared" history.
+	if err := m2.ClearHistory(); err != nil {
+		t.Fatalf("clear with detached store: %v", err)
+	}
+	if _, err := os.Stat(m2.brokenDBPath); !os.IsNotExist(err) {
+		t.Error("broken history DB file must be removed by clear")
 	}
 }

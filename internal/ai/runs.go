@@ -57,6 +57,10 @@ type RunManager struct {
 	// (store failed to open, or its existing contents couldn't be loaded) — the
 	// UI must say history won't survive a restart instead of implying it will.
 	historyUnavailable bool
+	// brokenDBPath is the unusable history DB's location. Kept so ClearHistory
+	// can still honor the user's intent by removing the files — otherwise a
+	// later healthy startup would resurrect investigations they "cleared".
+	brokenDBPath string
 }
 
 // Run is one investigation: identity, status, the agent session to resume, and the
@@ -210,6 +214,7 @@ func (m *RunManager) loadPersisted() {
 		// existing contents unknown, new runs would mint colliding run-N ids and
 		// INSERT OR REPLACE would overwrite the stored transcripts.
 		log.Printf("[ai] could not load run history — running memory-only to protect it: %v", err)
+		m.brokenDBPath = m.store.Path()
 		m.store.Close()
 		m.store = nil
 		m.historyUnavailable = true
@@ -603,10 +608,12 @@ func (m *RunManager) HistoryDegraded() bool {
 }
 
 // MarkHistoryUnavailable records that persistence was requested but couldn't be
-// set up (e.g. the DB failed to open) so the UI can surface it.
-func (m *RunManager) MarkHistoryUnavailable() {
+// set up (the DB at dbPath failed to open) so the UI can surface it — and so
+// ClearHistory can still remove the files.
+func (m *RunManager) MarkHistoryUnavailable(dbPath string) {
 	m.mu.Lock()
 	m.historyUnavailable = true
+	m.brokenDBPath = dbPath
 	m.mu.Unlock()
 }
 
@@ -652,6 +659,19 @@ func (m *RunManager) ClearHistory() error {
 	if m.store != nil {
 		if err := m.store.Clear(kept); err != nil {
 			return err
+		}
+	}
+	// A broken (detached) history DB still holds investigations on disk — a
+	// later healthy startup would resurrect what the user just "cleared".
+	// Removing the files IS the recovery for an unopenable/unloadable DB.
+	m.mu.Lock()
+	broken := m.brokenDBPath
+	m.mu.Unlock()
+	if broken != "" {
+		for _, f := range []string{broken, broken + "-wal", broken + "-shm"} {
+			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("history DB is unusable and couldn't be removed: %w", err)
+			}
 		}
 	}
 

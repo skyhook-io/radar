@@ -42,6 +42,9 @@ type RunStore interface {
 	// Degraded reports that persistence has stopped working (disk error or a
 	// saturated write queue) — history will not survive a restart.
 	Degraded() bool
+	// Path returns the DB file path (so a detached/broken store's files can
+	// still be removed when the user clears history).
+	Path() string
 	// Close drains pending writes and closes the DB.
 	Close()
 }
@@ -66,6 +69,7 @@ CREATE TABLE IF NOT EXISTS run_events (
 // goroutine. Writes are enqueued (non-blocking) and applied in order; reads use
 // the same connection and may briefly wait on the writer (busy_timeout).
 type sqliteRunStore struct {
+	path string
 	db   *sql.DB
 	ops  chan func(db *sql.DB) error
 	done chan struct{}
@@ -117,6 +121,7 @@ func OpenRunStore(dbPath string) (RunStore, error) {
 	}
 
 	s := &sqliteRunStore{
+		path: dbPath,
 		db:   db,
 		ops:  make(chan func(db *sql.DB) error, 4096),
 		done: make(chan struct{}),
@@ -332,6 +337,8 @@ func (s *sqliteRunStore) Clear(keep []string) error {
 }
 
 func (s *sqliteRunStore) Degraded() bool { return s.degraded.Load() }
+
+func (s *sqliteRunStore) Path() string { return s.path }
 
 // Close drains pending writes and closes the DB. Late writers (agent goroutines
 // finishing after shutdown began) become no-ops via the closed flag; the flag
