@@ -1,6 +1,7 @@
 package diagnosecli
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -12,6 +13,7 @@ import (
 
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"golang.org/x/term"
+	"k8s.io/klog/v2"
 
 	"github.com/skyhook-io/radar/internal/app"
 )
@@ -25,6 +27,16 @@ import (
 func bootEphemeral(kubeconfig string, quiet bool) (base string, shutdown func(), err error) {
 	tail := &tailBuffer{limit: 64 << 10}
 	log.SetOutput(tail) // for the whole process — request logs would drown the transcript
+	// client-go logs through klog, which writes DIRECTLY to stderr by default
+	// (bypassing stdlib log) — e.g. apiserver deprecation warnings fired by the
+	// agent's list calls would stomp the transcript mid-spinner. The server
+	// path tames this in main(); the subcommand exits before reaching it, so
+	// repeat it here, pointed at the tail buffer.
+	klog.InitFlags(nil)
+	_ = flag.Set("v", "0")
+	_ = flag.Set("logtostderr", "false")
+	_ = flag.Set("alsologtostderr", "false")
+	klog.SetOutput(tail)
 	// chi's request logger holds its OWN logger bound to os.Stdout at package
 	// init — redirect it too, or every API call the CLI makes prints a line
 	// into the transcript. Must happen before CreateServer builds the router.
