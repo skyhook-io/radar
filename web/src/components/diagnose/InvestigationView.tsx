@@ -25,6 +25,7 @@ import {
   TurnView,
   ResultCard,
   ApplyDialog,
+  RunContextCard,
   appendThinking,
   upsertTool,
   type Turn,
@@ -490,6 +491,7 @@ export function InvestigationView({
                 </button>
               </div>
             )}
+            <RunContextCard run={run} />
             {turns.map((t, i) => {
               const isLast = i === turns.length - 1;
               const canApply = i === lastRemediationIdx && !stale;

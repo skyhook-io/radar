@@ -26,7 +26,9 @@ import {
   type Diagnosis,
   type DiagnoseStep,
   type AgentInfo,
+  type RunSummary,
 } from "../../api/diagnose";
+import { StatusDot } from "@skyhook-io/k8s-ui";
 import { Markdown } from "../ui/Markdown";
 
 // Segmented two-or-more-way selector — shared shape for the agent picker and the
@@ -470,6 +472,72 @@ export function TurnView({
           <span>{turn.error}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// RunContextCard opens every investigation with what RADAR already knows — the
+// health frame the server captured at run start. It renders instantly (no agent
+// round-trip), so the agent's boot time reads as "context, then deepening"
+// instead of dead air — and it anchors the verdict against Radar's own signal.
+export function RunContextCard({ run }: { run: RunSummary }) {
+  const h = run.health;
+  const issueCount = h?.issueCount ?? 0;
+  const lines: ReactNode[] = [];
+  if (issueCount > 0) {
+    lines.push(
+      <span key="issues">
+        <StatusDot tone="unhealthy" className="mr-1.5 inline-block" />
+        {issueCount} active issue{issueCount === 1 ? "" : "s"}
+        {h?.topReason ? (
+          <>
+            {" — "}
+            <span className="text-theme-text-primary">{h.topReason}</span>
+          </>
+        ) : null}
+      </span>,
+    );
+  } else if (h?.health === "healthy") {
+    lines.push(
+      <span key="healthy">
+        <StatusDot tone="healthy" className="mr-1.5 inline-block" />
+        Reported healthy — 0 active issues
+      </span>,
+    );
+  } else if (h) {
+    lines.push(
+      <span key="none">
+        <StatusDot tone="unknown" className="mr-1.5 inline-block" />
+        0 active issues{h.health ? ` — status ${h.health}` : ""}
+      </span>,
+    );
+  }
+  if ((h?.auditCount ?? 0) > 0) {
+    lines.push(
+      <span key="audit" className="text-theme-text-tertiary">
+        {h!.auditCount} configuration finding{h!.auditCount === 1 ? "" : "s"} from
+        cluster audit{h?.topFinding ? ` — ${h.topFinding}` : ""}
+      </span>,
+    );
+  }
+  if (run.managedBy) {
+    lines.push(
+      <span key="managed" className="text-theme-text-tertiary">
+        Managed by {run.managedBy}
+      </span>,
+    );
+  }
+  if (lines.length === 0) return null;
+  return (
+    <div className="rounded-md border border-theme-border/60 bg-theme-base/40 px-2.5 py-2">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+        Radar&apos;s read at start
+      </div>
+      <div className="space-y-0.5 text-xs text-theme-text-secondary">
+        {lines.map((l, i) => (
+          <div key={i}>{l}</div>
+        ))}
+      </div>
     </div>
   );
 }

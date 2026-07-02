@@ -353,6 +353,30 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     setView("investigation");
     setOpen(true);
   }, []);
+
+  // Deep link: ?ai-run=<id> opens the panel focused on that investigation —
+  // the URL `radar diagnose --open` prints/opens. Consumed once (then stripped)
+  // so back/forward and copied URLs don't keep re-opening the panel.
+  useEffect(() => {
+    if (!available) return;
+    let id: string | null = null;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      id = params.get("ai-run");
+      if (id) {
+        params.delete("ai-run");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash,
+        );
+      }
+    } catch {
+      /* URL APIs unavailable — skip the deep link */
+    }
+    if (id) openRun(id);
+  }, [available, openRun]);
   const openHome = useCallback(() => {
     setView("home");
     setOpen(true);

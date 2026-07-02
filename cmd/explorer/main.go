@@ -19,6 +19,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/diagnosecli"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	"github.com/skyhook-io/radar/internal/server"
@@ -32,6 +33,14 @@ var (
 )
 
 func main() {
+	// Subcommand dispatch (before flag parsing — subcommands own their flags).
+	// `radar diagnose <kind>/<name>` is a thin client for a RUNNING instance.
+	if len(os.Args) > 1 && os.Args[1] == "diagnose" {
+		os.Exit(diagnosecli.Run(os.Args[2:], func(url string) {
+			app.OpenBrowser(url, "")
+		}))
+	}
+
 	startupStart := time.Now()
 
 	// Propagate the build-time version to the cloud dialer so the agent
