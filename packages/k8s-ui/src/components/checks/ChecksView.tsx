@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, ExternalLink, EyeOff, MoreHorizontal, Search, ShieldCheck, Wrench, X } from 'lucide-react'
 import { ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip } from '../ui'
+import { useFilterState, defineFilterSchema } from '../../filter-state'
 import type { CheckMeta, CheckReference } from '../audit'
 import { CHECK_SEVERITIES, CHECK_SEVERITY_RANK, type Check, type CheckSeverity, type EffectiveCheckFinding, type CheckResourceRef } from './types'
 import {
@@ -79,11 +80,24 @@ interface FleetCheck {
   clusters: Check[]
 }
 
+const CHECKS_FILTER_SCHEMA = defineFilterSchema({
+  severity: { param: 'severity', type: 'set' },
+  category: { param: 'category', type: 'set' },
+  framework: { param: 'framework', type: 'set' },
+  q: { param: 'q', type: 'text' },
+})
+
 export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceClick, clusterLabel, clusterLabelById, clusterFilter: clusterFilterProp, onClusterFilterChange, emptyAction, onHideCheck, onHideCategory }: ChecksViewProps) {
-  const [severityFilter, setSeverityFilter] = useState<Set<CheckSeverity>>(new Set())
-  const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set())
-  const [frameworkFilter, setFrameworkFilter] = useState<Set<string>>(new Set())
-  const [search, setSearch] = useState('')
+  // Severity / category / framework / search live in the URL (shareable,
+  // bookmarkable audit links) via the shared filter-state contract. The cluster
+  // facet is deliberately NOT here — it's a host-controlled seam (see
+  // onClusterFilterChange) for the multi-cluster/fleet case and isn't shown in
+  // single-cluster OSS, so it stays on its own controlled/internal path.
+  const filters = useFilterState(CHECKS_FILTER_SCHEMA)
+  const severityFilter = filters.values.severity as Set<CheckSeverity>
+  const categoryFilter = filters.values.category
+  const frameworkFilter = filters.values.framework
+  const search = filters.values.q
   const [openId, setOpenId] = useState<string | null>(null)
 
   // Cluster facet is controlled when the host opts in (onClusterFilterChange);
@@ -209,13 +223,10 @@ export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceC
       return next
     })
 
-  const hasFilters = severityFilter.size > 0 || categoryFilter.size > 0 || frameworkFilter.size > 0 || clusterFilter.size > 0 || search !== ''
+  const hasFilters = filters.isActive || clusterFilter.size > 0
   const clearAll = () => {
-    setSeverityFilter(new Set())
-    setCategoryFilter(new Set())
-    setFrameworkFilter(new Set())
+    filters.clearAll()
     setClusterFilter(new Set())
-    setSearch('')
   }
 
   return (
@@ -239,13 +250,13 @@ export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceC
               type="text"
               placeholder="Search checks…"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => filters.setString('q', e.target.value)}
               className="w-64 rounded-lg border border-theme-border-light bg-theme-base py-1.5 pl-9 pr-8 text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-[var(--color-radar-accent)]"
             />
             {search && (
               <button
                 type="button"
-                onClick={() => setSearch('')}
+                onClick={() => filters.setString('q', '')}
                 aria-label="Clear search"
                 className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
               >
@@ -259,17 +270,17 @@ export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceC
 
         <div className="flex flex-wrap items-center gap-1.5">
           {CHECK_SEVERITIES.map((s) => (
-            <CheckSeverityChip key={s} severity={s} count={totals[s]} active={severityFilter.has(s)} onClick={() => toggle(setSeverityFilter, s)} />
+            <CheckSeverityChip key={s} severity={s} count={totals[s]} active={severityFilter.has(s)} onClick={() => filters.toggle('severity', s)} />
           ))}
           <span className="mx-1.5 h-5 w-px bg-theme-border" />
           {CATEGORIES.map((c) => (
-            <FilterPill key={c} label={c} active={categoryFilter.has(c)} onClick={() => toggle(setCategoryFilter, c)} />
+            <FilterPill key={c} label={c} active={categoryFilter.has(c)} onClick={() => filters.toggle('category', c)} />
           ))}
           {frameworks.length > 0 && (
             <>
               <span className="mx-1.5 h-5 w-px bg-theme-border" />
               {frameworks.map((fw) => (
-                <FilterPill key={fw} label={fw} active={frameworkFilter.has(fw)} onClick={() => toggle(setFrameworkFilter, fw)} />
+                <FilterPill key={fw} label={fw} active={frameworkFilter.has(fw)} onClick={() => filters.toggle('framework', fw)} />
               ))}
             </>
           )}

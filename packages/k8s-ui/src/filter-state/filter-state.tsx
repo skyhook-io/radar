@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   decodeFilters,
   isFilterActive,
@@ -71,7 +71,26 @@ export interface FilterState<S extends FilterSchema> {
 }
 
 export function useFilterState<S extends FilterSchema>(schema: S): FilterState<S> {
-  const { searchParams, update } = useFilterLocation()
+  const ctx = useContext(FilterLocationContext)
+
+  // Graceful fallback: without a provider, keep filter state locally (still
+  // works, just not URL-synced). This lets a shared view adopt the contract
+  // before every host has wired a FilterLocationBridge — a host that hasn't
+  // (e.g. Radar Hub, until it picks up a published build) keeps its prior local
+  // behavior instead of crashing. A one-time warning flags the missing wiring.
+  const [localParams, setLocalParams] = useState(() => new URLSearchParams())
+  const warned = useRef(false)
+  useEffect(() => {
+    if (!ctx && !warned.current) {
+      warned.current = true
+      console.warn('[k8s-ui] useFilterState: no <FilterLocationProvider> ancestor — filters are local, not URL-synced.')
+    }
+  }, [ctx])
+  const fallback = useMemo<FilterLocation>(
+    () => ({ searchParams: localParams, update: (u) => setLocalParams((prev) => u(new URLSearchParams(prev))) }),
+    [localParams],
+  )
+  const { searchParams, update } = ctx ?? fallback
 
   // Depend on the serialized string, not the URLSearchParams object identity, so
   // a router adapter that returns a mutated/unstable instance can't stale the memo.
