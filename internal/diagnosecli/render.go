@@ -5,16 +5,27 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/term"
 )
 
 // renderer writes the live transcript + verdict to the terminal. In --json mode
 // everything human goes to stderr so stdout stays a clean JSON document.
+// A single mutex serializes event writes with the spinner goroutine: the model
+// goes quiet for long stretches (its own thinking + slow tools), and without a
+// live indicator a silent terminal reads as a hang.
 type renderer struct {
-	w          *os.File
-	color      bool
-	inThinking bool
+	w     *os.File
+	color bool
+
+	mu          sync.Mutex
+	inThinking  bool
+	spinnerOn   bool      // spinner line currently drawn (must be erased before real output)
+	lastEvent   time.Time // last real output, for the quiet-gap threshold
+	stopSpin    chan struct{}
+	spinStopped bool
 }
 
 func newRenderer(jsonMode bool) *renderer {
@@ -22,7 +33,63 @@ func newRenderer(jsonMode bool) *renderer {
 	if jsonMode {
 		w = os.Stderr
 	}
-	return &renderer{w: w, color: term.IsTerminal(int(w.Fd())) && os.Getenv("NO_COLOR") == ""}
+	return &renderer{
+		w:         w,
+		color:     term.IsTerminal(int(w.Fd())) && os.Getenv("NO_COLOR") == "",
+		lastEvent: time.Now(),
+		stopSpin:  make(chan struct{}),
+	}
+}
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// startSpinner shows "⠙ thinking… 12s" after a second of silence — only on a
+// real terminal (it repaints its own line), and never mid-thinking-line.
+func (r *renderer) startSpinner() {
+	if !r.color {
+		return
+	}
+	go func() {
+		t := time.NewTicker(120 * time.Millisecond)
+		defer t.Stop()
+		frame := 0
+		for {
+			select {
+			case <-r.stopSpin:
+				return
+			case <-t.C:
+			}
+			r.mu.Lock()
+			quiet := time.Since(r.lastEvent)
+			if quiet > time.Second && !r.inThinking {
+				fmt.Fprintf(r.w, "[K%s%s %s thinking… %ds%s",
+					cDim, spinnerFrames[frame%len(spinnerFrames)], cAmber+"·"+cReset+cDim, int(quiet.Seconds()), cReset)
+				r.spinnerOn = true
+				frame++
+			}
+			r.mu.Unlock()
+		}
+	}()
+}
+
+func (r *renderer) stopSpinner() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.spinStopped {
+		return
+	}
+	r.spinStopped = true
+	close(r.stopSpin)
+	r.clearSpinnerLocked()
+}
+
+// clearSpinnerLocked erases the spinner line before real output. Caller holds r.mu.
+func (r *renderer) clearSpinnerLocked() {
+	if r.spinnerOn {
+		fmt.Fprint(r.w, "[K")
+		r.spinnerOn = false
+	}
+	r.lastEvent = time.Now()
 }
 
 const (
@@ -49,7 +116,28 @@ func (r *renderer) header(run runSummary, base string) {
 	}
 	target += run.Name
 	fmt.Fprintf(r.w, "%s %s\n", r.c(cBold, "◉ Investigating"), target)
-	fmt.Fprintf(r.w, "%s\n\n", r.c(cDim, fmt.Sprintf("run %s · via %s · watch: %s/?ai-run=%s", run.ID, agentDisplay(run.Agent), base, run.ID)))
+	fmt.Fprintf(r.w, "%s\n", r.c(cDim, fmt.Sprintf("run %s · via %s · watch: %s/?ai-run=%s", run.ID, agentDisplay(run.Agent), base, run.ID)))
+	// Radar's read at start — the concrete issue rows the server captured, shown
+	// before the agent produces anything (its boot is the longest silent gap).
+	if h := run.Health; h != nil {
+		for _, line := range h.Issues {
+			sev := r.c(cRed, "●")
+			if line.Severity != "critical" {
+				sev = r.c(cAmber, "●")
+			}
+			fmt.Fprintf(r.w, "%s %s — %s\n", sev, r.c(cBold, line.Reason), line.Message)
+		}
+		if extra := h.IssueCount - len(h.Issues); extra > 0 {
+			fmt.Fprintf(r.w, "%s\n", r.c(cDim, fmt.Sprintf("  +%d more active issues", extra)))
+		}
+		for _, f := range h.AuditFindings {
+			fmt.Fprintf(r.w, "%s\n", r.c(cDim, fmt.Sprintf("  audit: %s — %s", f.Reason, f.Message)))
+		}
+	}
+	if run.ManagedBy != "" {
+		fmt.Fprintf(r.w, "%s\n", r.c(cDim, "  managed by "+run.ManagedBy))
+	}
+	fmt.Fprintln(r.w)
 }
 
 func agentDisplay(name string) string {
@@ -69,6 +157,9 @@ func (r *renderer) thinking(token string) {
 	if token == "" {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clearSpinnerLocked()
 	if r.color {
 		fmt.Fprint(r.w, cDim+token+cReset)
 	} else {
@@ -77,7 +168,8 @@ func (r *renderer) thinking(token string) {
 	r.inThinking = !strings.HasSuffix(token, "\n")
 }
 
-func (r *renderer) breakThinking() {
+// breakThinkingLocked ends a partial reasoning line. Caller holds r.mu.
+func (r *renderer) breakThinkingLocked() {
 	if r.inThinking {
 		fmt.Fprintln(r.w)
 		r.inThinking = false
@@ -86,7 +178,10 @@ func (r *renderer) breakThinking() {
 
 // step prints one completed tool call: "  ✓ get resource {"name":"web"} · 233ms".
 func (r *renderer) step(s stepInfo) {
-	r.breakThinking()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clearSpinnerLocked()
+	r.breakThinkingLocked()
 	line := "  " + r.c(cGreen, "✓") + " " + prettyTool(s.Tool)
 	if s.Summary != "" {
 		line += " " + r.c(cDim, compact(s.Summary, 80))
@@ -110,12 +205,18 @@ func compact(s string, max int) string {
 }
 
 func (r *renderer) errorLine(msg string) {
-	r.breakThinking()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clearSpinnerLocked()
+	r.breakThinkingLocked()
 	fmt.Fprintf(r.w, "\n%s %s\n", r.c(cRed, "✗"), msg)
 }
 
 func (r *renderer) verdict(d diagnosis) {
-	r.breakThinking()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clearSpinnerLocked()
+	r.breakThinkingLocked()
 	fmt.Fprintln(r.w)
 	switch {
 	case d.Healthy && d.RootCause == "":

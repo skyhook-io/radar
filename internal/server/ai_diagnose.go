@@ -49,8 +49,8 @@ func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name
 	if canonicalKind == "" {
 		canonicalKind = kind
 	}
-	issueSum := computeIssueSummaryForResource(cache, gvk.Group, canonicalKind, namespace, name)
-	auditSum := computeAuditSummaryForResource(cache, gvk.Group, canonicalKind, namespace, name)
+	issueSum, issueRows := computeIssueSummaryAndRows(cache, gvk.Group, canonicalKind, namespace, name)
+	auditSum, auditRows := computeAuditSummaryAndRows(cache, gvk.Group, canonicalKind, namespace, name)
 
 	var issueCount int
 	signal := &ai.ResourceHealthSignal{}
@@ -59,6 +59,13 @@ func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name
 		signal.IssueCount = issueSum.Count
 		signal.HighestSeverity = issueSum.HighestSeverity
 		signal.TopReason = issueSum.TopReason
+		for _, row := range issueRows[:min(len(issueRows), maxHealthLines)] {
+			signal.Issues = append(signal.Issues, ai.HealthLine{
+				Severity: string(row.Severity),
+				Reason:   row.Reason,
+				Message:  capHealthMessage(row.Message),
+			})
+		}
 	}
 	if summary := resourcecontext.BuildSummary(obj, resourcecontext.SummaryOptions{IssueCount: issueCount}); summary != nil {
 		signal.Health = summary.Health
@@ -67,8 +74,31 @@ func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name
 		signal.AuditCount = auditSum.Count
 		signal.AuditSeverity = auditSum.HighestSeverity
 		signal.TopFinding = auditSum.TopFinding
+		for _, row := range auditRows[:min(len(auditRows), maxHealthAuditLines)] {
+			signal.AuditFindings = append(signal.AuditFindings, ai.HealthLine{
+				Severity: normalizeAuditSeverity(row.Severity),
+				Reason:   row.CheckID,
+				Message:  capHealthMessage(row.Message),
+			})
+		}
 	}
 	return signal
+}
+
+const (
+	// maxHealthLines / maxHealthAuditLines cap the rows carried on the health
+	// frame: enough to make the context card + prompt concrete, small enough to
+	// stay a frame rather than a report (the agent reads the full state itself).
+	maxHealthLines      = 3
+	maxHealthAuditLines = 2
+)
+
+func capHealthMessage(msg string) string {
+	const max = 220
+	if len(msg) <= max {
+		return msg
+	}
+	return msg[:max-1] + "…"
 }
 
 func managedByFromMeta(obj *unstructured.Unstructured) string {

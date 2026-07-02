@@ -279,6 +279,20 @@ type runSummary struct {
 	Name      string `json:"name"`
 	Agent     string `json:"agent"`
 	SessionID string `json:"sessionId"`
+	ManagedBy string `json:"managedBy"`
+	Health    *struct {
+		IssueCount int `json:"issueCount"`
+		AuditCount int `json:"auditCount"`
+		Issues     []struct {
+			Severity string `json:"severity"`
+			Reason   string `json:"reason"`
+			Message  string `json:"message"`
+		} `json:"issues"`
+		AuditFindings []struct {
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"auditFindings"`
+	} `json:"health"`
 }
 
 func startRun(base, kind, namespace, name, agent string) (runSummary, error) {
@@ -343,6 +357,8 @@ func streamRun(base, id string, out *renderer) (json.RawMessage, bool) {
 		return nil, false
 	}
 
+	out.startSpinner()
+	defer out.stopSpinner()
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
 	steps := map[string]stepInfo{}

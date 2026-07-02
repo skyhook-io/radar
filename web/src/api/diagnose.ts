@@ -41,14 +41,22 @@ export interface Diagnosis {
   sessionId?: string;
 }
 
+export interface HealthLine {
+  severity?: string;
+  reason?: string; // issue Reason / audit CheckID
+  message?: string;
+}
+
 export interface ResourceHealthSignal {
   health?: string;
   issueCount?: number;
   highestSeverity?: string;
   topReason?: string;
+  issues?: HealthLine[];
   auditCount?: number;
   auditSeverity?: string;
   topFinding?: string;
+  auditFindings?: HealthLine[];
 }
 
 export interface DiagnoseStreamEvent {
