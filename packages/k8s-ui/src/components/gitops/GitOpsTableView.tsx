@@ -36,6 +36,7 @@ import { PaneLoader } from '../ui/PaneLoader'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
+import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
 
 // =============================================================================
@@ -273,6 +274,16 @@ export interface GitOpsTableViewProps {
 
 // ----- Main component --------------------------------------------------------
 
+const GITOPS_FILTER_SCHEMA = defineFilterSchema({
+  q: { param: 'q', type: 'text' },
+  sync: { param: 'sync', type: 'set' },
+  health: { param: 'health', type: 'set' },
+  project: { param: 'project', type: 'set' },
+  automation: { param: 'automation', type: 'set' },
+  labels: { param: 'labels', type: 'set' },
+  lifecycle: { param: 'lifecycle', type: 'single', default: 'all' },
+})
+
 export function GitOpsTableView({
   rows: allRowsInput,
   loading,
@@ -300,27 +311,24 @@ export function GitOpsTableView({
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [mode, setMode] = useState<GitOpsMode>('applications')
   const [viewMode, setViewMode] = useState<GitOpsViewMode>('table')
-  const [search, setSearch] = useState('')
-  const [syncFilters, setSyncFilters] = useState<Set<string>>(new Set())
-  const [healthFilters, setHealthFilters] = useState<Set<string>>(new Set())
-  const [projectFilters, setProjectFilters] = useState<Set<string>>(new Set())
+  // Sync / health / project / automation / labels / lifecycle + search live in
+  // the URL (shareable, bookmarkable) via the shared filter-state contract.
+  // Deliberate divergences kept on their own state: `namespace` (entangled with
+  // the host globalNamespaces seam + the header scope pill — a separate product
+  // decision), `sort` (a compound view-preference, not a filter), and the
+  // destination filter (host-controlled, below).
+  const filters = useFilterState(GITOPS_FILTER_SCHEMA)
+  const search = filters.values.q
+  const syncFilters = filters.values.sync
+  const healthFilters = filters.values.health
+  const projectFilters = filters.values.project
+  const labelFilters = filters.values.labels
+  const automationFilters = filters.values.automation as Set<'auto' | 'manual' | 'suspended'>
+  const lifecycleFilter = filters.values.lifecycle as 'all' | 'terminating' | 'active'
+  const toggleAutomation = useCallback((value: 'auto' | 'manual' | 'suspended') => filters.toggle('automation', value), [filters.toggle])
   const [namespaceFilters, setNamespaceFilters] = useState<Set<string>>(new Set())
-  const [labelFilters, setLabelFilters] = useState<Set<string>>(new Set())
   const [showLabelsDropdown, setShowLabelsDropdown] = useState(false)
   const [labelSearch, setLabelSearch] = useState('')
-  // Auto-sync / Manual / Suspended are INDEPENDENT row attributes (a Flux app can
-  // be auto-reconciling AND suspended), so this is a multi-select facet like Sync
-  // and Health — not the old single-select that conflated the mode (auto vs
-  // manual) with the orthogonal suspended state.
-  const [automationFilters, setAutomationFilters] = useState<Set<'auto' | 'manual' | 'suspended'>>(new Set())
-  const toggleAutomation = useCallback((value: 'auto' | 'manual' | 'suspended') => {
-    setAutomationFilters((prev) => {
-      const next = new Set(prev)
-      next.has(value) ? next.delete(value) : next.add(value)
-      return next
-    })
-  }, [])
-  const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>({ key: 'urgency', dir: 'asc' })
   // 3-state cycle: natural direction → reversed → off. The first click uses each
   // column's natural direction (SORT_DEFAULT_DIR — e.g. Last Sync is newest-first)
@@ -468,16 +476,12 @@ export function GitOpsTableView({
   const terminatingCount = useMemo(() => allRows.filter((row) => row.terminating).length, [allRows])
 
   const clearAllFilters = useCallback(() => {
-    setSearch('')
-    setSyncFilters(new Set())
-    setHealthFilters(new Set())
-    setProjectFilters(new Set())
+    filters.clearAll()
     setNamespaceFilters(new Set())
-    setLabelFilters(new Set())
-    setAutomationFilters(new Set())
-    setLifecycleFilter('all')
     onClearNamespaces?.()
     onDestinationFilterChange?.('all')
+    // filters.clearAll is a stable ref from the hook.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClearNamespaces, onDestinationFilterChange])
 
   // True when nothing is filtered at all — backs the Total tile's active state.
@@ -552,8 +556,8 @@ export function GitOpsTableView({
       value: statusSummary.outOfSync,
       tone: 'warning',
       active: syncFilters.size === 1 && syncFilters.has('OutOfSync'),
-      apply: () => setSyncFilters(new Set(['OutOfSync'])),
-      clear: () => setSyncFilters(new Set()),
+      apply: () => filters.setSet('sync', ['OutOfSync']),
+      clear: () => filters.setSet('sync', []),
     },
     {
       key: 'degraded',
@@ -561,8 +565,8 @@ export function GitOpsTableView({
       value: statusSummary.degraded,
       tone: 'error',
       active: healthFilters.size === 1 && healthFilters.has('Degraded'),
-      apply: () => setHealthFilters(new Set(['Degraded'])),
-      clear: () => setHealthFilters(new Set()),
+      apply: () => filters.setSet('health', ['Degraded']),
+      clear: () => filters.setSet('health', []),
     },
     {
       key: 'suspended',
@@ -570,8 +574,8 @@ export function GitOpsTableView({
       value: statusSummary.suspended,
       tone: 'warning',
       active: automationFilters.size === 1 && automationFilters.has('suspended'),
-      apply: () => setAutomationFilters(new Set(['suspended'])),
-      clear: () => setAutomationFilters(new Set()),
+      apply: () => filters.setSet('automation', ['suspended']),
+      clear: () => filters.setSet('automation', []),
     },
     {
       key: 'reconciling',
@@ -579,8 +583,8 @@ export function GitOpsTableView({
       value: syncCounts.get('Reconciling') ?? 0,
       tone: 'info',
       active: syncFilters.size === 1 && syncFilters.has('Reconciling'),
-      apply: () => setSyncFilters(new Set(['Reconciling'])),
-      clear: () => setSyncFilters(new Set()),
+      apply: () => filters.setSet('sync', ['Reconciling']),
+      clear: () => filters.setSet('sync', []),
     },
     ...(showCrossClusterTile
       ? [
@@ -637,19 +641,19 @@ export function GitOpsTableView({
         modeCounts={modeCounts}
         syncCounts={syncCounts}
         syncFilters={syncFilters}
-        onToggleSync={(value) => toggleSet(syncFilters, setSyncFilters, value)}
+        onToggleSync={(value) => filters.toggle('sync', value)}
         healthCounts={healthCounts}
         healthFilters={healthFilters}
-        onToggleHealth={(value) => toggleSet(healthFilters, setHealthFilters, value)}
+        onToggleHealth={(value) => filters.toggle('health', value)}
         automationFilters={automationFilters}
         automationCounts={automationCounts}
         onToggleAutomation={toggleAutomation}
         lifecycleFilter={lifecycleFilter}
-        onLifecycleFilterChange={setLifecycleFilter}
+        onLifecycleFilterChange={(v) => filters.setString('lifecycle', v)}
         terminatingCount={terminatingCount}
         projects={projects}
         projectFilters={projectFilters}
-        onToggleProject={(value) => toggleSet(projectFilters, setProjectFilters, value)}
+        onToggleProject={(value) => filters.toggle('project', value)}
         namespaces={rowNamespaces}
         namespaceFilters={namespaceFilters}
         onToggleNamespace={(value) => toggleSet(namespaceFilters, setNamespaceFilters, value)}
@@ -678,7 +682,7 @@ export function GitOpsTableView({
               <input
                 ref={searchInputRef}
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => filters.setString('q', e.target.value)}
                 placeholder="Search applications, repos, paths..."
                 className="h-8 w-full rounded-md border border-theme-border bg-theme-base pl-8 pr-3 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:ring-1 focus:ring-blue-500/50"
               />
@@ -698,8 +702,8 @@ export function GitOpsTableView({
               <LabelsDropdown
                 labels={labels}
                 activeLabels={labelFilters}
-                onToggle={(value) => toggleSet(labelFilters, setLabelFilters, value)}
-                onClear={() => setLabelFilters(new Set())}
+                onToggle={(value) => filters.toggle('labels', value)}
+                onClear={() => filters.setSet('labels', [])}
                 open={showLabelsDropdown}
                 onOpenChange={setShowLabelsDropdown}
                 search={labelSearch}
