@@ -215,7 +215,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
             <button
               onClick={toast.onDetailClick}
               className={clsx(
-                'mt-1.5 block text-xs font-mono break-all text-left rounded px-1.5 py-1 -ml-1.5 transition-colors',
+                'mt-1.5 block text-xs font-mono break-words text-left rounded px-1.5 py-1 -ml-1.5 transition-colors',
                 isError
                   ? 'text-red-300 hover:bg-red-900/50'
                   : isSuccess
@@ -227,7 +227,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
               {toast.detail}
             </button>
           ) : (
-            <p className={clsx('mt-1 text-xs break-all', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
+            <p className={clsx('mt-1 text-xs break-words', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
               {toast.detail}
             </p>
           )

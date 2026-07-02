@@ -10,23 +10,20 @@ export function MetricsUnavailableNotice({ rawError }: MetricsUnavailableNoticeP
     <div className="card-inner-lg text-xs text-theme-text-tertiary">
       <div className="flex items-start gap-1.5">
         <span className="min-w-0">
-          Metrics unavailable. Radar could not read metrics.k8s.io. Install or repair metrics-server and its APIService to show live CPU and memory usage.
+          Metrics unavailable. Radar cannot read metrics.k8s.io.
         </span>
         {rawError && (
           <Tooltip
             content={(
               <span className="space-y-1">
                 <span className="block">
-                  This state only means Radar could not read Kubernetes metrics.k8s.io. Check the v1beta1.metrics.k8s.io APIService and metrics-server health.
+                  Check metrics-server and the metrics.k8s.io APIService.
                 </span>
                 <span className="block">
-                  On EKS or self-managed clusters, metrics-server may need to be installed. On managed platforms where it is bundled, check that it was not disabled or unhealthy.
+                  Prometheus is separate.
                 </span>
                 <span className="block">
-                  Prometheus is a separate metrics source; its availability does not make metrics.k8s.io available.
-                </span>
-                <span className="block">
-                  Raw metrics error: <span className="font-mono break-all">{rawError}</span>
+                  Raw error: <span className="font-mono break-words">{rawError}</span>
                 </span>
               </span>
             )}

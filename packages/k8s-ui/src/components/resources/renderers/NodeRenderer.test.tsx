@@ -35,9 +35,9 @@ describe('NodeRenderer metrics', () => {
 
     expect(html).toContain('Resource Usage')
     expect(html).toContain('Metrics unavailable')
-    expect(html).toContain('Radar could not read metrics.k8s.io')
-    expect(html).toContain('Install or repair metrics-server and its APIService')
+    expect(html).toContain('Radar cannot read metrics.k8s.io')
     expect(html).toContain('Metrics error details')
+    expect(html).not.toContain('Install or repair metrics-server and its APIService')
     expect(html).not.toContain('Metrics collection error')
     expect(html).not.toContain('Collecting metrics data')
   })
