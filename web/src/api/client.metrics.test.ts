@@ -14,16 +14,20 @@ describe('metrics unavailable classification', () => {
     expect(isMetricsUnavailableMessage('the server could not find the requested resource (get pods.metrics.k8s.io)')).toBe(true)
     expect(isMetricsUnavailableMessage('no matches for kind "PodMetrics" in version "metrics.k8s.io/v1beta1"')).toBe(true)
     expect(isMetricsUnavailableMessage('no resource matches "pods.metrics.k8s.io"')).toBe(true)
+    expect(isMetricsUnavailableMessage('the server is currently unable to handle the request (get pods.metrics.k8s.io)')).toBe(true)
     expect(isMetricsUnavailableMessage('the server could not find the requested resource')).toBe(false)
     expect(isMetricsUnavailableMessage('no access to nodes')).toBe(false)
+    expect(isMetricsUnavailableMessage('metrics-server forbidden')).toBe(false)
   })
 
   it('only treats metrics-shaped API failures as metrics unavailable', () => {
     expect(isMetricsUnavailableError(new ApiError('Node metrics not found (metrics-server may not be installed)', 404))).toBe(true)
     expect(isMetricsUnavailableError(new ApiError('the server could not find the requested resource (get nodes.metrics.k8s.io)', 500))).toBe(true)
     expect(isMetricsUnavailableError(new ApiError('failed to get node metrics: the server could not find the requested resource', 500))).toBe(true)
+    expect(isMetricsUnavailableError(new ApiError('the server is currently unable to handle the request (get nodes.metrics.k8s.io)', 500))).toBe(true)
     expect(isMetricsUnavailableError(new ApiError('the server could not find the requested resource', 500))).toBe(false)
     expect(isMetricsUnavailableError(new ApiError('no access to nodes', 403))).toBe(false)
+    expect(isMetricsUnavailableError(new ApiError('metrics-server forbidden', 500))).toBe(false)
     expect(isMetricsUnavailableError(new ApiError('database unavailable', 500))).toBe(false)
   })
 
@@ -33,17 +37,23 @@ describe('metrics unavailable classification', () => {
       name: 'api',
       containers: [],
       collectionError: 'the server could not find the requested resource (get pods.metrics.k8s.io)',
+      rawCollectionError: 'the server could not find the requested resource',
     })
     expect(podHistory.collectionError).toBeUndefined()
+    expect(podHistory.rawCollectionError).toBeUndefined()
     expect(podHistory.metricsUnavailable).toBe(true)
+    expect(podHistory.metricsUnavailableReason).toBe('the server could not find the requested resource')
 
     const nodeHistory = normalizeNodeMetricsHistory({
       name: 'kind-worker',
       dataPoints: [],
       collectionError: 'Node metrics not found (metrics-server may not be installed)',
+      rawCollectionError: 'the server could not find the requested resource',
     })
     expect(nodeHistory.collectionError).toBeUndefined()
+    expect(nodeHistory.rawCollectionError).toBeUndefined()
     expect(nodeHistory.metricsUnavailable).toBe(true)
+    expect(nodeHistory.metricsUnavailableReason).toBe('the server could not find the requested resource')
   })
 
   it('keeps non-metrics collection errors visible', () => {

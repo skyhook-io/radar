@@ -26,12 +26,18 @@ describe('NodeRenderer metrics', () => {
       <NodeRenderer
         data={node}
         metricsUnavailable
+        metricsHistory={{
+          dataPoints: [],
+          metricsUnavailableReason: 'the server could not find the requested resource',
+        }}
       />,
     )
 
     expect(html).toContain('Resource Usage')
     expect(html).toContain('Metrics unavailable')
-    expect(html).toContain('Install metrics-server')
+    expect(html).toContain('Radar could not read metrics.k8s.io')
+    expect(html).toContain('Install or repair metrics-server and its APIService')
+    expect(html).toContain('Metrics error details')
     expect(html).not.toContain('Metrics collection error')
     expect(html).not.toContain('Collecting metrics data')
   })
@@ -76,5 +82,21 @@ describe('NodeRenderer metrics', () => {
 
     expect(html).toContain('Metrics collection error')
     expect(html).toContain('forbidden: no access to nodes')
+  })
+
+  it('warns about non-absence collection errors even when historical samples exist', () => {
+    const html = renderToString(
+      <NodeRenderer
+        data={node}
+        metricsHistory={{
+          collectionError: 'forbidden: no access to nodes',
+          dataPoints: [{ timestamp: '2026-06-30T00:00:00Z', cpu: 100000000, memory: 268435456 }],
+        }}
+      />,
+    )
+
+    expect(html).toContain('Metrics collection error')
+    expect(html).toContain('forbidden: no access to nodes')
+    expect(html).toContain('CPU')
   })
 })

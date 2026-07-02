@@ -5,13 +5,14 @@ import { MetricsChart } from '../../ui/MetricsChart'
 import { formatMemoryString } from '../../../utils/format'
 import { getExtendedCapacityRows } from '../../../utils/extended-resources'
 import type { MetricsDataPoint } from '../../../types/core'
+import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 
 interface NodeRendererProps {
   data: any
   relationships?: { pods?: any[] }
   onViewPods?: () => void
   metrics?: { usage?: { cpu: string; memory: string }; timestamp?: string }
-  metricsHistory?: { dataPoints?: MetricsDataPoint[]; collectionError?: string }
+  metricsHistory?: { dataPoints?: MetricsDataPoint[]; collectionError?: string; metricsUnavailableReason?: string }
   metricsUnavailable?: boolean
   hideMetricsServer?: boolean
 }
@@ -189,11 +190,9 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
       {!hideMetricsServer && (currentMetrics?.usage || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {showMetricsUnavailable && (
-            <div className="card-inner-lg text-xs text-theme-text-tertiary">
-              Metrics unavailable. Install metrics-server to show live CPU and memory usage.
-            </div>
+            <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} />
           )}
-          {metricsHistory?.collectionError && !hasMetricsHistory && (
+          {metricsHistory?.collectionError && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">
               <span className="font-medium">Metrics collection error:</span>{' '}
               <span className="break-all">{metricsHistory.collectionError}</span>

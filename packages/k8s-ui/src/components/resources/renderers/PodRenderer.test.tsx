@@ -116,12 +116,18 @@ describe('PodRenderer metrics', () => {
         onCopy={() => undefined}
         copied={null}
         metricsUnavailable
+        metricsHistory={{
+          containers: [],
+          metricsUnavailableReason: 'the server could not find the requested resource',
+        }}
       />,
     )
 
     expect(html).toContain('Resource Usage')
     expect(html).toContain('Metrics unavailable')
-    expect(html).toContain('Install metrics-server')
+    expect(html).toContain('Radar could not read metrics.k8s.io')
+    expect(html).toContain('Install or repair metrics-server and its APIService')
+    expect(html).toContain('Metrics error details')
     expect(html).not.toContain('Metrics collection error')
     expect(html).not.toContain('Collecting metrics data')
   })
@@ -178,5 +184,26 @@ describe('PodRenderer metrics', () => {
 
     expect(html).toContain('Metrics collection error')
     expect(html).toContain('forbidden: no access to pods.metrics.k8s.io')
+  })
+
+  it('warns about non-absence collection errors even when historical samples exist', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={pod}
+        onCopy={() => undefined}
+        copied={null}
+        metricsHistory={{
+          collectionError: 'forbidden: no access to pods.metrics.k8s.io',
+          containers: [{
+            name: 'api',
+            dataPoints: [{ timestamp: '2026-06-30T00:00:00Z', cpu: 100000000, memory: 268435456 }],
+          }],
+        }}
+      />,
+    )
+
+    expect(html).toContain('Metrics collection error')
+    expect(html).toContain('forbidden: no access to pods.metrics.k8s.io')
+    expect(html).toContain('CPU')
   })
 })

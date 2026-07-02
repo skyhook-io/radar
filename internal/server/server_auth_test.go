@@ -305,6 +305,26 @@ func newAuthTestServer(t *testing.T) *authTestEnv {
 	return &authTestEnv{ts: ts, srv: srv}
 }
 
+func TestProxyAuth_PodMetricsNamespaceGated(t *testing.T) {
+	paths := []string{
+		"/api/metrics/pods/default/web-0",
+		"/api/metrics/pods/default/web-0/history",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			env := newAuthTestServer(t)
+			env.srv.permCache.Set("carol", &auth.UserPermissions{AllowedNamespaces: []string{"other"}})
+
+			resp := env.authGet(t, path, "carol", "")
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("%s: status = %d, want %d", path, resp.StatusCode, http.StatusForbidden)
+			}
+		})
+	}
+}
+
 // authPost sends a POST with proxy auth headers and a JSON body.
 func (e *authTestEnv) authPost(t *testing.T, path, user, groups, body string) *http.Response {
 	t.Helper()

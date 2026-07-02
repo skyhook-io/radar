@@ -106,13 +106,15 @@ function mentionsMetricsAPIGroup(message: string): boolean {
 
 function hasMetricsUnavailablePhrase(message: string): boolean {
   return (
+    message.includes('may not be installed') ||
     message.includes('not found') ||
     message.includes('could not find the requested resource') ||
     message.includes('no matches for kind') ||
     message.includes('no resource matches') ||
     message.includes('no metrics known') ||
     message.includes('not available') ||
-    message.includes('unable to fetch metrics')
+    message.includes('unable to fetch metrics') ||
+    message.includes('currently unable to handle the request')
   )
 }
 
@@ -120,9 +122,13 @@ export function isMetricsUnavailableMessage(message: unknown): boolean {
   if (typeof message !== 'string') return false
   const normalized = message.toLowerCase()
   if (!normalized) return false
-  if (normalized.includes('metrics-server')) return true
-  if (!mentionsMetricsAPIGroup(normalized)) return false
-  return hasMetricsUnavailablePhrase(normalized)
+  const hasMetricsSignal = (
+    mentionsMetricsAPIGroup(normalized) ||
+    normalized.includes('pod metrics') ||
+    normalized.includes('node metrics') ||
+    normalized.includes('metrics-server')
+  )
+  return hasMetricsSignal && hasMetricsUnavailablePhrase(normalized)
 }
 
 export function isMetricsUnavailableError(error: unknown): boolean {
@@ -137,7 +143,7 @@ export function isMetricsUnavailableError(error: unknown): boolean {
       normalized.includes('pod metrics') ||
       normalized.includes('node metrics')
     )
-    return hasMetricsSignal && (normalized.includes('metrics-server') || hasMetricsUnavailablePhrase(normalized))
+    return hasMetricsSignal && hasMetricsUnavailablePhrase(normalized)
   })
 }
 
@@ -1356,30 +1362,35 @@ export interface PodMetricsHistory {
   name: string
   containers: ContainerMetricsHistory[]
   collectionError?: string
+  rawCollectionError?: string
   metricsUnavailable?: boolean
+  metricsUnavailableReason?: string
 }
 
 export interface NodeMetricsHistory {
   name: string
   dataPoints: MetricsDataPoint[]
   collectionError?: string
+  rawCollectionError?: string
   metricsUnavailable?: boolean
+  metricsUnavailableReason?: string
 }
 
-function withoutCollectionError<T extends { collectionError?: string }>(history: T): T {
+function withoutCollectionError<T extends { collectionError?: string; rawCollectionError?: string }>(history: T): T {
   const next = { ...history }
   delete next.collectionError
+  delete next.rawCollectionError
   return next
 }
 
 export function normalizePodMetricsHistory(history: PodMetricsHistory): PodMetricsHistory {
   if (!isMetricsUnavailableMessage(history.collectionError)) return history
-  return { ...withoutCollectionError(history), metricsUnavailable: true }
+  return { ...withoutCollectionError(history), metricsUnavailable: true, metricsUnavailableReason: history.rawCollectionError || history.collectionError }
 }
 
 export function normalizeNodeMetricsHistory(history: NodeMetricsHistory): NodeMetricsHistory {
   if (!isMetricsUnavailableMessage(history.collectionError)) return history
-  return { ...withoutCollectionError(history), metricsUnavailable: true }
+  return { ...withoutCollectionError(history), metricsUnavailable: true, metricsUnavailableReason: history.rawCollectionError || history.collectionError }
 }
 
 export function shouldFetchLiveMetrics(historySettled: boolean, metricsUnavailable: boolean): boolean {

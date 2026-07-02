@@ -15,6 +15,7 @@ import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
 import type { ResolvedEnvFrom, RBACSubjectResponse, RBACPolicyRule } from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
 import { MetricsChart } from '../../ui/MetricsChart'
+import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 
 function parseValidDate(dateStr: string): Date | null {
   const d = new Date(dateStr)
@@ -73,7 +74,7 @@ interface PodRendererProps {
   renderPortAction?: (props: { namespace: string; podName: string; port: number; protocol: string; disabled?: boolean }) => ReactNode
   // Metrics data injection
   metrics?: { containers?: any[]; timestamp?: string }
-  metricsHistory?: { containers?: any[]; collectionError?: string }
+  metricsHistory?: { containers?: any[]; collectionError?: string; metricsUnavailableReason?: string }
   metricsUnavailable?: boolean
   hideMetricsServer?: boolean
   // Filesystem browser render props
@@ -726,11 +727,9 @@ export function PodRenderer({
       {!hideMetricsServer && !!(currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {showMetricsUnavailable && (
-            <div className="card-inner-lg text-xs text-theme-text-tertiary">
-              Metrics unavailable. Install metrics-server to show live CPU and memory usage.
-            </div>
+            <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} />
           )}
-          {metricsHistory?.collectionError && !hasMetricsHistory && (
+          {metricsHistory?.collectionError && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">
               <span className="font-medium">Metrics collection error:</span>{' '}
               <span className="break-all">{metricsHistory.collectionError}</span>

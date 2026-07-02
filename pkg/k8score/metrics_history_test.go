@@ -45,6 +45,11 @@ func TestMetricsCollectionErrorLevel(t *testing.T) {
 			want: "warning",
 		},
 		{
+			name: "metrics APIService unavailable",
+			err:  errors.New("the server is currently unable to handle the request (get pods.metrics.k8s.io)"),
+			want: "warning",
+		},
+		{
 			name: "non metrics missing resource",
 			err:  errors.New("the server could not find the requested resource"),
 			want: "error",

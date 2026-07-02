@@ -2181,6 +2181,11 @@ func (s *Server) handlePodMetrics(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
+
 	metrics, err := k8s.GetPodMetrics(r.Context(), namespace, name)
 	if err != nil {
 		if isMetricsAPIUnavailable(err) {
@@ -2226,29 +2231,38 @@ func isMetricsAPIUnavailable(err error) bool {
 	if !strings.Contains(msg, "metrics") {
 		return false
 	}
+	if apierrors.IsServiceUnavailable(err) {
+		return true
+	}
 	return strings.Contains(msg, "not found") ||
 		strings.Contains(msg, "could not find the requested resource") ||
 		strings.Contains(msg, "no matches for kind") ||
 		strings.Contains(msg, "no resource matches") ||
 		strings.Contains(msg, "no metrics known") ||
 		strings.Contains(msg, "not available") ||
-		strings.Contains(msg, "unable to fetch metrics")
+		strings.Contains(msg, "unable to fetch metrics") ||
+		strings.Contains(msg, "currently unable to handle the request")
 }
 
-func metricsHistoryCollectionError(source, errMsg string) string {
+func metricsHistoryCollectionError(source, errMsg string) (string, string) {
 	if errMsg == "" {
-		return ""
+		return "", ""
 	}
 	if isMetricsAPIUnavailable(fmt.Errorf("failed to get %s metrics: %s", strings.ToLower(source), errMsg)) {
-		return fmt.Sprintf("%s metrics not found (metrics-server may not be installed)", source)
+		return fmt.Sprintf("%s metrics not found (metrics-server may not be installed)", source), errMsg
 	}
-	return errMsg
+	return errMsg, ""
 }
 
 // handlePodMetricsHistory returns historical metrics for a specific pod
 func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
 
 	store := k8s.GetMetricsHistory()
 	if store == nil {
@@ -2269,7 +2283,7 @@ func podMetricsHistoryResponse(history *k8s.PodMetricsHistory, namespace, name s
 		}
 	}
 	if health.PodMetrics.ConsecutiveErrors > 0 {
-		history.CollectionError = metricsHistoryCollectionError("Pod", health.PodMetrics.LastError)
+		history.CollectionError, history.RawCollectionError = metricsHistoryCollectionError("Pod", health.PodMetrics.LastError)
 	}
 	return history
 }
@@ -2300,7 +2314,7 @@ func nodeMetricsHistoryResponse(history *k8s.NodeMetricsHistory, name string, he
 		}
 	}
 	if health.NodeMetrics.ConsecutiveErrors > 0 {
-		history.CollectionError = metricsHistoryCollectionError("Node", health.NodeMetrics.LastError)
+		history.CollectionError, history.RawCollectionError = metricsHistoryCollectionError("Node", health.NodeMetrics.LastError)
 	}
 	return history
 }

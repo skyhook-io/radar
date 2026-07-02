@@ -35,17 +35,19 @@ type ContainerMetricsHistory struct {
 
 // PodMetricsHistory holds historical metrics for a pod.
 type PodMetricsHistory struct {
-	Namespace       string                    `json:"namespace"`
-	Name            string                    `json:"name"`
-	Containers      []ContainerMetricsHistory `json:"containers"`
-	CollectionError string                    `json:"collectionError,omitempty"`
+	Namespace          string                    `json:"namespace"`
+	Name               string                    `json:"name"`
+	Containers         []ContainerMetricsHistory `json:"containers"`
+	CollectionError    string                    `json:"collectionError,omitempty"`
+	RawCollectionError string                    `json:"rawCollectionError,omitempty"`
 }
 
 // NodeMetricsHistory holds historical metrics for a node.
 type NodeMetricsHistory struct {
-	Name            string             `json:"name"`
-	DataPoints      []MetricsDataPoint `json:"dataPoints"`
-	CollectionError string             `json:"collectionError,omitempty"`
+	Name               string             `json:"name"`
+	DataPoints         []MetricsDataPoint `json:"dataPoints"`
+	CollectionError    string             `json:"collectionError,omitempty"`
+	RawCollectionError string             `json:"rawCollectionError,omitempty"`
 }
 
 // TopPodMetrics holds the latest metrics snapshot for a single pod.
@@ -183,13 +185,17 @@ func metricsAPIUnavailable(err error) bool {
 	if !strings.Contains(msg, "metrics") {
 		return false
 	}
+	if apierrors.IsServiceUnavailable(err) {
+		return true
+	}
 	return strings.Contains(msg, "not found") ||
 		strings.Contains(msg, "could not find the requested resource") ||
 		strings.Contains(msg, "no matches for kind") ||
 		strings.Contains(msg, "no resource matches") ||
 		strings.Contains(msg, "no metrics known") ||
 		strings.Contains(msg, "not available") ||
-		strings.Contains(msg, "unable to fetch metrics")
+		strings.Contains(msg, "unable to fetch metrics") ||
+		strings.Contains(msg, "currently unable to handle the request")
 }
 
 // NewMetricsHistoryStore creates a MetricsHistoryStore. Call Start() to begin polling.

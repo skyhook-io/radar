@@ -1058,6 +1058,11 @@ func TestIsMetricsAPIUnavailable(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "metrics APIService unavailable",
+			err:  errors.New(`failed to get pod metrics: the server is currently unable to handle the request (get pods.metrics.k8s.io)`),
+			want: true,
+		},
+		{
 			name: "non-metrics missing resource stays visible",
 			err:  errors.New("the server could not find the requested resource"),
 			want: false,
@@ -1105,6 +1110,9 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 	if podHistory.CollectionError != "Pod metrics not found (metrics-server may not be installed)" {
 		t.Fatalf("pod collection error = %q", podHistory.CollectionError)
 	}
+	if podHistory.RawCollectionError != health.PodMetrics.LastError {
+		t.Fatalf("pod raw collection error = %q, want %q", podHistory.RawCollectionError, health.PodMetrics.LastError)
+	}
 
 	nodeHistory := nodeMetricsHistoryResponse(&k8s.NodeMetricsHistory{
 		Name: "kind-worker",
@@ -1116,6 +1124,9 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 	}, "kind-worker", health)
 	if nodeHistory.CollectionError != "Node metrics not found (metrics-server may not be installed)" {
 		t.Fatalf("node collection error = %q", nodeHistory.CollectionError)
+	}
+	if nodeHistory.RawCollectionError != health.NodeMetrics.LastError {
+		t.Fatalf("node raw collection error = %q, want %q", nodeHistory.RawCollectionError, health.NodeMetrics.LastError)
 	}
 }
 
@@ -1135,10 +1146,16 @@ func TestMetricsHistoryResponseKeepsNonAbsenceCollectionErrors(t *testing.T) {
 	if podHistory.CollectionError != health.PodMetrics.LastError {
 		t.Fatalf("pod collection error = %q, want %q", podHistory.CollectionError, health.PodMetrics.LastError)
 	}
+	if podHistory.RawCollectionError != "" {
+		t.Fatalf("pod raw collection error = %q, want empty", podHistory.RawCollectionError)
+	}
 
 	nodeHistory := nodeMetricsHistoryResponse(nil, "kind-worker", health)
 	if nodeHistory.CollectionError != health.NodeMetrics.LastError {
 		t.Fatalf("node collection error = %q, want %q", nodeHistory.CollectionError, health.NodeMetrics.LastError)
+	}
+	if nodeHistory.RawCollectionError != "" {
+		t.Fatalf("node raw collection error = %q, want empty", nodeHistory.RawCollectionError)
 	}
 }
 
