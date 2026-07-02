@@ -6,6 +6,7 @@ import { StatusDot, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
 import { EmptyState } from '../ui/EmptyState'
 import { SearchBox } from '../ui/SearchBox'
+import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { Facet, type FacetTone } from '../ui/Facet'
@@ -101,14 +102,29 @@ export interface ApplicationsViewProps {
   headerActions?: ReactNode
 }
 
+const APPS_FILTER_SCHEMA = defineFilterSchema({
+  health: { param: 'health', type: 'set' },
+  class: { param: 'class', type: 'set' },
+  type: { param: 'type', type: 'set' },
+  env: { param: 'env', type: 'set' },
+  source: { param: 'source', type: 'set' },
+  q: { param: 'q', type: 'text' },
+  system: { param: 'system', type: 'boolean' },
+})
+
 export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions }: ApplicationsViewProps) {
-  const [textFilter, setTextFilter] = useState('')
-  const [fHealth, setFHealth] = useState<Set<AppHealth>>(new Set())
-  const [fEnv, setFEnv] = useState<Set<string>>(new Set())
-  const [fSource, setFSource] = useState<Set<AppSource>>(new Set())
-  const [fClass, setFClass] = useState<Set<AppWorkloadClass>>(new Set())
-  const [fType, setFType] = useState<Set<AppCategory>>(new Set())
-  const [showSystem, setShowSystem] = useState(false)
+  // Facets + search + show-system live in the URL (shareable, bookmarkable) via
+  // the shared filter-state contract. Sort stays local: it's a compound
+  // {key, dir} view-preference, not a result-narrowing filter, so it isn't
+  // forced into the filter vocabulary.
+  const filters = useFilterState(APPS_FILTER_SCHEMA)
+  const textFilter = filters.values.q
+  const fHealth = filters.values.health as Set<AppHealth>
+  const fEnv = filters.values.env
+  const fSource = filters.values.source as Set<AppSource>
+  const fClass = filters.values.class as Set<AppWorkloadClass>
+  const fType = filters.values.type as Set<AppCategory>
+  const showSystem = filters.values.system
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>(null)
 
   // The Show-system toggle keys off per-entry workload namespaces, which only
@@ -244,12 +260,6 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     return { health, env, source, workloadClass, category }
   }, [all])
 
-  const toggle = <T,>(set: Set<T>, setter: (s: Set<T>) => void, v: T) => {
-    const next = new Set(set)
-    next.has(v) ? next.delete(v) : next.add(v)
-    setter(next)
-  }
-
   // asc → desc → off (null = default health-worst-first sort).
   const onSort = (key: SortKey) => {
     setSort((prev) => {
@@ -267,20 +277,14 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // Clickable status tile wired to the health facet — tap to filter to that tier.
   const healthTile = (h: AppHealth, tone: SummaryTone) =>
     counts.health[h] ? (
-      <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h]} tone={tone} active={fHealth.has(h)} onClick={() => toggle(fHealth, setFHealth, h)} />
+      <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h]} tone={tone} active={fHealth.has(h)} onClick={() => filters.toggle('health', h)} />
     ) : null
 
   // showSystem lives in the Filters rail, so Clear resets it too (and its
   // non-default ON state counts as an active filter that surfaces the button).
-  const anyFilterActive = !!(textFilter || fHealth.size || fClass.size || fType.size || fSource.size || fEnv.size || showSystem)
+  const anyFilterActive = filters.isActive
   const clearAllFilters = () => {
-    setTextFilter('')
-    setFHealth(new Set())
-    setFClass(new Set())
-    setFType(new Set())
-    setFSource(new Set())
-    setFEnv(new Set())
-    setShowSystem(false)
+    filters.clearAll()
   }
 
   return (
@@ -326,14 +330,14 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
             )}
           </div>
           <div className="flex-1 overflow-y-auto">
-            <Facet icon={HeartPulse} title="Availability" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => toggle(fHealth, setFHealth, v)} />
-            <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => toggle(fClass, setFClass, v)} />
-            <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => toggle(fType, setFType, v)} />
-            <Facet icon={Globe} title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => toggle(fEnv, setFEnv, v)} />
-            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => toggle(fSource, setFSource, v)} />
+            <Facet icon={HeartPulse} title="Availability" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => filters.toggle('health', v)} />
+            <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => filters.toggle('class', v)} />
+            <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
+            <Facet icon={Globe} title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => filters.toggle('env', v)} />
+            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => filters.toggle('source', v)} />
             {systemCount > 0 && (
               <label className="flex cursor-pointer items-center gap-2 border-b border-theme-border px-3 py-2 text-[11px] text-theme-text-secondary hover:bg-theme-hover">
-                <input type="checkbox" checked={showSystem} onChange={(e) => setShowSystem(e.target.checked)} className="accent-skyhook-500" />
+                <input type="checkbox" checked={showSystem} onChange={(e) => filters.setBoolean('system', e.target.checked)} className="accent-skyhook-500" />
                 <span>Show system namespaces</span>
                 <span className="ml-auto tabular-nums text-theme-text-tertiary">{systemCount}</span>
               </label>
@@ -346,7 +350,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
           <div className="flex shrink-0 items-center gap-3 border-b border-theme-border px-4 py-3">
             <SearchBox
               value={textFilter}
-              onChange={setTextFilter}
+              onChange={(v) => filters.setString('q', v)}
               scope="applications"
               shortcutId="applications-search"
               className="max-w-md flex-1"
