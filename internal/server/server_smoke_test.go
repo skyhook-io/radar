@@ -19,11 +19,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -1107,7 +1112,7 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 				Memory:    268435456,
 			}},
 		}},
-	}, "default", "api", health)
+	}, "default", "api", health, true)
 	if podHistory.CollectionError != "Pod metrics not found (metrics-server may not be installed)" {
 		t.Fatalf("pod collection error = %q", podHistory.CollectionError)
 	}
@@ -1122,7 +1127,7 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 			CPU:       100000000,
 			Memory:    268435456,
 		}},
-	}, "kind-worker", health)
+	}, "kind-worker", health, true)
 	if nodeHistory.CollectionError != "Node metrics not found (metrics-server may not be installed)" {
 		t.Fatalf("node collection error = %q", nodeHistory.CollectionError)
 	}
@@ -1143,7 +1148,7 @@ func TestMetricsHistoryResponseKeepsNonAbsenceCollectionErrors(t *testing.T) {
 		},
 	}
 
-	podHistory := podMetricsHistoryResponse(context.Background(), nil, "default", "api", health)
+	podHistory := podMetricsHistoryResponse(context.Background(), nil, "default", "api", health, true)
 	if podHistory.CollectionError != health.PodMetrics.LastError {
 		t.Fatalf("pod collection error = %q, want %q", podHistory.CollectionError, health.PodMetrics.LastError)
 	}
@@ -1154,7 +1159,7 @@ func TestMetricsHistoryResponseKeepsNonAbsenceCollectionErrors(t *testing.T) {
 		t.Fatalf("pod metrics unavailable diagnosis = %q, want empty", podHistory.MetricsUnavailableDiagnosis)
 	}
 
-	nodeHistory := nodeMetricsHistoryResponse(context.Background(), nil, "kind-worker", health)
+	nodeHistory := nodeMetricsHistoryResponse(context.Background(), nil, "kind-worker", health, true)
 	if nodeHistory.CollectionError != health.NodeMetrics.LastError {
 		t.Fatalf("node collection error = %q, want %q", nodeHistory.CollectionError, health.NodeMetrics.LastError)
 	}
@@ -1190,6 +1195,34 @@ func TestMetricsAPIServiceDiagnosis(t *testing.T) {
 			want: "The v1beta1.metrics.k8s.io APIService is not Available (FailedDiscoveryCheck). Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
 		},
 		{
+			name: "available false includes compact condition message",
+			condition: map[string]any{
+				"type":    "Available",
+				"status":  "False",
+				"reason":  "FailedDiscoveryCheck",
+				"message": "failing or missing response from https://10.96.142.7:443/apis/metrics.k8s.io/v1beta1: Get \"https://10.96.142.7\": connect: connection refused",
+			},
+			want: "The v1beta1.metrics.k8s.io APIService is not Available (FailedDiscoveryCheck): failing or missing response from https://10.96.142.7:443/apis/metrics.k8s.io/v1beta1: Get \"https://10.96.142.7\": connect: connection refused. Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
+		},
+		{
+			name: "available false preserves ellipsis in condition message",
+			condition: map[string]any{
+				"type":    "Available",
+				"status":  "False",
+				"message": "timed out waiting...",
+			},
+			want: "The v1beta1.metrics.k8s.io APIService is not Available: timed out waiting... Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
+		},
+		{
+			name: "available false trims dangling condition punctuation",
+			condition: map[string]any{
+				"type":    "Available",
+				"status":  "False",
+				"message": "connection refused:",
+			},
+			want: "The v1beta1.metrics.k8s.io APIService is not Available: connection refused. Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
+		},
+		{
 			name: "available unknown includes reason",
 			condition: map[string]any{
 				"type":   "Available",
@@ -1207,11 +1240,189 @@ func TestMetricsAPIServiceDiagnosis(t *testing.T) {
 					"conditions": []any{tt.condition},
 				},
 			}}
-			if got := metricsAPIServiceDiagnosis(apiService); got != tt.want {
+			if got := metricsAPIServiceDiagnosis(apiService, true); got != tt.want {
 				t.Fatalf("metricsAPIServiceDiagnosis() = %q, want %q", got, tt.want)
 			}
 		})
 	}
+}
+
+func TestMetricsAPIServiceDiagnosisCanHideConditionMessage(t *testing.T) {
+	apiService := &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{
+					"type":    "Available",
+					"status":  "False",
+					"reason":  "FailedDiscoveryCheck",
+					"message": "failing or missing response from https://10.96.142.7:443/apis/metrics.k8s.io/v1beta1",
+				},
+			},
+		},
+	}}
+	want := "The v1beta1.metrics.k8s.io APIService is not Available (FailedDiscoveryCheck). Check the metrics-server Service, endpoints, and API aggregation/TLS configuration."
+	if got := metricsAPIServiceDiagnosis(apiService, false); got != want {
+		t.Fatalf("metricsAPIServiceDiagnosis() = %q, want %q", got, want)
+	}
+}
+
+func TestMetricsAPIServiceDiagnosisWithoutAvailableCondition(t *testing.T) {
+	apiService := &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "ServiceHealthy", "status": "True"},
+			},
+		},
+	}}
+	want := "The v1beta1.metrics.k8s.io APIService exists but has no Available condition. Check metrics-server and API aggregation status."
+	if got := metricsAPIServiceDiagnosis(apiService, true); got != want {
+		t.Fatalf("metricsAPIServiceDiagnosis() = %q, want %q", got, want)
+	}
+}
+
+func TestMetricsAPIServiceLookupDiagnosisWhenMissing(t *testing.T) {
+	err := apierrors.NewNotFound(schema.GroupResource{Group: metricsAPIServiceGroup, Resource: "apiservices"}, metricsAPIServiceName)
+	want := "The v1beta1.metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService."
+	if got := metricsAPIServiceLookupDiagnosis(nil, err, true); got != want {
+		t.Fatalf("metricsAPIServiceLookupDiagnosis() = %q, want %q", got, want)
+	}
+}
+
+func TestMetricsUnavailableDiagnosisWhenAPIServiceMissing(t *testing.T) {
+	resetMetricsAPIServiceDiagnosisMemoForTest(t)
+	defer k8s.ResetTestDynamicState()
+
+	gvr := schema.GroupVersionResource{Group: metricsAPIServiceGroup, Version: "v1", Resource: "apiservices"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "APIServiceList"},
+	)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{
+		Group:      metricsAPIServiceGroup,
+		Version:    "v1",
+		Kind:       metricsAPIServiceKind,
+		Name:       "apiservices",
+		Namespaced: false,
+	}}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+
+	want := "The v1beta1.metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService."
+	if got := metricsUnavailableDiagnosis(context.Background(), true); got != want {
+		t.Fatalf("metricsUnavailableDiagnosis() = %q, want %q", got, want)
+	}
+}
+
+func TestMetricsUnavailableDiagnosisMemoizesAPIServiceLookup(t *testing.T) {
+	resetMetricsAPIServiceDiagnosisMemoForTest(t)
+	defer k8s.ResetTestDynamicState()
+
+	gvr := schema.GroupVersionResource{Group: metricsAPIServiceGroup, Version: "v1", Resource: "apiservices"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "APIServiceList"},
+	)
+	gets := 0
+	dyn.Fake.PrependReactor("get", "apiservices", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{
+		Group:      metricsAPIServiceGroup,
+		Version:    "v1",
+		Kind:       metricsAPIServiceKind,
+		Name:       "apiservices",
+		Namespaced: false,
+	}}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+
+	for range 2 {
+		if got := metricsUnavailableDiagnosis(context.Background(), true); got == "" {
+			t.Fatalf("metricsUnavailableDiagnosis() returned empty diagnosis")
+		}
+	}
+	if gets != 1 {
+		t.Fatalf("APIService GET count = %d, want 1", gets)
+	}
+}
+
+func TestMetricsUnavailableDiagnosisMemoizesByConditionDetailFlag(t *testing.T) {
+	resetMetricsAPIServiceDiagnosisMemoForTest(t)
+	defer k8s.ResetTestDynamicState()
+
+	gvr := schema.GroupVersionResource{Group: metricsAPIServiceGroup, Version: "v1", Resource: "apiservices"}
+	apiService := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apiregistration.k8s.io/v1",
+		"kind":       metricsAPIServiceKind,
+		"metadata": map[string]any{
+			"name": metricsAPIServiceName,
+		},
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{
+					"type":    "Available",
+					"status":  "False",
+					"reason":  "FailedDiscoveryCheck",
+					"message": "failing or missing response from https://10.96.142.7:443/apis/metrics.k8s.io/v1beta1",
+				},
+			},
+		},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "APIServiceList"},
+		apiService,
+	)
+	gets := 0
+	dyn.Fake.PrependReactor("get", "apiservices", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{
+		Group:      metricsAPIServiceGroup,
+		Version:    "v1",
+		Kind:       metricsAPIServiceKind,
+		Name:       "apiservices",
+		Namespaced: false,
+	}}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+
+	detailed := metricsUnavailableDiagnosis(context.Background(), true)
+	if !strings.Contains(detailed, "10.96.142.7") {
+		t.Fatalf("detailed diagnosis = %q, want condition message", detailed)
+	}
+	redacted := metricsUnavailableDiagnosis(context.Background(), false)
+	if strings.Contains(redacted, "10.96.142.7") {
+		t.Fatalf("redacted diagnosis leaked condition message: %q", redacted)
+	}
+
+	_ = metricsUnavailableDiagnosis(context.Background(), true)
+	_ = metricsUnavailableDiagnosis(context.Background(), false)
+	if gets != 2 {
+		t.Fatalf("APIService GET count = %d, want 2 for two memo detail slots", gets)
+	}
+}
+
+func resetMetricsAPIServiceDiagnosisMemoForTest(t *testing.T) {
+	t.Helper()
+	metricsAPIServiceDiagnosisMemo.mu.Lock()
+	metricsAPIServiceDiagnosisMemo.entries = nil
+	metricsAPIServiceDiagnosisMemo.mu.Unlock()
+
+	metricsAPIServiceDiagnosisMemo.logMu.Lock()
+	metricsAPIServiceDiagnosisMemo.loggedErrors = nil
+	metricsAPIServiceDiagnosisMemo.logMu.Unlock()
+	t.Cleanup(func() {
+		metricsAPIServiceDiagnosisMemo.mu.Lock()
+		metricsAPIServiceDiagnosisMemo.entries = nil
+		metricsAPIServiceDiagnosisMemo.mu.Unlock()
+
+		metricsAPIServiceDiagnosisMemo.logMu.Lock()
+		metricsAPIServiceDiagnosisMemo.loggedErrors = nil
+		metricsAPIServiceDiagnosisMemo.logMu.Unlock()
+	})
 }
 
 // --- Settings & Config endpoints ---

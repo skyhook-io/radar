@@ -901,6 +901,8 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)
 	} else if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
 		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)
+	} else if gvr.Group == "apiregistration.k8s.io" && gvr.Resource == "apiservices" {
+		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)
 	} else if preserveLastApplied {
 		u, err = dynamicCache.GetDirectPreserveLastApplied(ctx, gvr, namespace, name)
 	} else {
