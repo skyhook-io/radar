@@ -1023,6 +1023,10 @@ func TestSmokeMetricsNilDynamicClient(t *testing.T) {
 }
 
 func TestIsMetricsAPIUnavailable(t *testing.T) {
+	// These cases cover typed Kubernetes API errors first, then message shapes
+	// emitted by apimachinery discovery/restmapper, kubectl top-style metrics
+	// failures, and API aggregation 503s. Keep broad phrases gated by a
+	// metrics-specific signal so unrelated NotFound/Unavailable errors stay visible.
 	tests := []struct {
 		name string
 		err  error
