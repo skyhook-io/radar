@@ -7,6 +7,7 @@ package diagnosecli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,6 +20,8 @@ import (
 	"time"
 
 	"golang.org/x/term"
+
+	"github.com/skyhook-io/radar/internal/ai"
 )
 
 // kindAliases maps kubectl-style short/plural names to the canonical Kind.
@@ -55,12 +58,14 @@ func normalizeKind(k string) string {
 }
 
 type options struct {
-	namespace string
-	agent     string
-	server    string
-	jsonOut   bool
-	open      bool
-	yes       bool
+	namespace  string
+	agent      string
+	server     string
+	kubeconfig string
+	standalone bool
+	jsonOut    bool
+	open       bool
+	yes        bool
 }
 
 func newFlagSet() (*flag.FlagSet, *options) {
@@ -73,6 +78,8 @@ func newFlagSet() (*flag.FlagSet, *options) {
 	fs.BoolVar(&o.jsonOut, "json", false, "Print the final verdict as JSON on stdout (progress goes to stderr)")
 	fs.BoolVar(&o.open, "open", false, "Also open the investigation in the Radar UI")
 	fs.BoolVar(&o.yes, "yes", false, "Skip the first-run consent prompt")
+	fs.BoolVar(&o.standalone, "standalone", false, "Run against a temporary in-process Radar instead of a running instance (slower: connects to the cluster first)")
+	fs.StringVar(&o.kubeconfig, "kubeconfig", "", "Kubeconfig for --standalone (default: ~/.kube/config)")
 	return fs, o
 }
 
@@ -130,18 +137,52 @@ Flags:
 
 	out := newRenderer(o.jsonOut)
 
-	base, err := resolveServer(o.server)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+	// Resolve the engine: an explicit --server, else the running instance from
+	// ~/.radar/mcp-port, else fall back to a temporary in-process Radar (what
+	// --standalone forces). Cold start pays a cluster connect up front — the
+	// running-instance path stays the fast default.
+	standalone := o.standalone
+	var base string
+	if !standalone {
+		var err error
+		base, err = resolveServer(o.server)
+		if err != nil || !probeListening(base) {
+			if o.server != "" {
+				// An explicit --server that isn't answering is an error, not a
+				// cue to boot something else.
+				fmt.Fprintf(os.Stderr, "nothing is listening at %s\n", o.server)
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, "no running Radar found — starting a temporary one for this investigation (use --server to target a running instance)")
+			standalone = true
+		}
 	}
+
+	if standalone {
+		// Consent BEFORE the boot: nobody wants to answer a prompt after
+		// watching a cluster connect for 30 seconds.
+		if !o.yes && !consentGiven() {
+			if !promptConsent(localAgentLabel(o.agent)) {
+				fmt.Fprintln(os.Stderr, "aborted")
+				return 1
+			}
+		}
+		b, shutdown, err := bootEphemeral(o.kubeconfig, false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		defer shutdown()
+		base = b
+	}
+
 	agents, err := fetchAgents(base)
 	if err != nil {
 		// A 404 here means SOMETHING answered but has no /api/agents — almost
 		// always an older Radar (or a stale ~/.radar/mcp-port pointing at one
 		// when several instances ran). Say that, not just "404".
 		if strings.Contains(err.Error(), "404") {
-			fmt.Fprintf(os.Stderr, "the Radar at %s doesn't support AI diagnosis — it's likely an older version (or a stale ~/.radar/mcp-port from another instance). Upgrade/restart it, or pass --server for the right instance.\n", base)
+			fmt.Fprintf(os.Stderr, "the Radar at %s doesn't support AI diagnosis — it's likely an older version (or a stale ~/.radar/mcp-port from another instance). Upgrade/restart it, pass --server for the right instance, or use --standalone.\n", base)
 		} else {
 			fmt.Fprintf(os.Stderr, "found Radar at %s but couldn't query it: %v\n", base, err)
 		}
@@ -182,6 +223,20 @@ Flags:
 		})
 	}
 	return 0
+}
+
+// localAgentLabel names the agent for the standalone consent prompt by probing
+// PATH directly — there's no server to ask yet.
+func localAgentLabel(pick string) string {
+	for _, info := range ai.DetectAgents(context.Background(), false) {
+		if !info.Supported {
+			continue
+		}
+		if pick == "" || info.Name == pick {
+			return info.Label
+		}
+	}
+	return "your agent CLI"
 }
 
 // --- server discovery -------------------------------------------------------
