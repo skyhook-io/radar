@@ -137,7 +137,14 @@ Flags:
 	}
 	agents, err := fetchAgents(base)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "found Radar at %s but couldn't query it: %v\n", base, err)
+		// A 404 here means SOMETHING answered but has no /api/agents — almost
+		// always an older Radar (or a stale ~/.radar/mcp-port pointing at one
+		// when several instances ran). Say that, not just "404".
+		if strings.Contains(err.Error(), "404") {
+			fmt.Fprintf(os.Stderr, "the Radar at %s doesn't support AI diagnosis — it's likely an older version (or a stale ~/.radar/mcp-port from another instance). Upgrade/restart it, or pass --server for the right instance.\n", base)
+		} else {
+			fmt.Fprintf(os.Stderr, "found Radar at %s but couldn't query it: %v\n", base, err)
+		}
 		return 1
 	}
 	if !agents.Enabled {
