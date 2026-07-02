@@ -12,12 +12,16 @@ export function SummaryTile({
   tone = 'neutral',
   onClick,
   active = false,
+  loading = false,
 }: {
   label: string
   value: number
   tone?: SummaryTone
   onClick?: () => void
   active?: boolean
+  /** First fetch in flight — render a pulse instead of the value. A tile
+   *  that reads "0" while loading is a false zero, not a count. */
+  loading?: boolean
 }) {
   const toneClass = {
     neutral: 'text-theme-text-primary',
@@ -33,7 +37,11 @@ export function SummaryTile({
     error: 'border-red-500',
     info: 'border-sky-500',
   }[tone]
-  const value$ = <div className={`text-sm font-semibold ${toneClass}`}>{value}</div>
+  const value$ = loading ? (
+    <div className="my-1 h-3.5 w-8 animate-pulse rounded bg-theme-hover" aria-hidden />
+  ) : (
+    <div className={`text-sm font-semibold ${toneClass}`}>{value}</div>
+  )
   const label$ = <div className="text-xs text-theme-text-tertiary">{label}</div>
   if (!onClick) {
     return (
