@@ -389,7 +389,9 @@ func streamRun(base, id string, out *renderer) (json.RawMessage, bool) {
 			cur.Ms = ev.Step.Ms
 			cur.Status = ev.Step.Status
 			steps[ev.Step.ID] = cur
-			if ev.Step.Status == "done" {
+			if ev.Step.Status == "running" {
+				out.toolStarted(cur.Tool)
+			} else if ev.Step.Status == "done" {
 				out.step(cur)
 			}
 		case "done":
