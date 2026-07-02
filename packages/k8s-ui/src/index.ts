@@ -61,6 +61,10 @@ export * from './components/namespace-switcher'
 // segments into one unit (OSS header + Radar Hub cluster top bar)
 export * from './components/scope-pill'
 
+// Filter-state contract — shared URL-synced filter state for list views (OSS +
+// Hub), router-agnostic via an injected FilterLocation adapter
+export * from './filter-state'
+
 // Applications (shared host-agnostic list + detail shell for the deployable-
 // software surface; OSS renders single-cluster, Cloud adds the fleet layer)
 export * from './components/applications'

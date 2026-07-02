@@ -25,6 +25,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider, showApiError, showApiSuccess } from './components/ui/Toast';
 import { setApiBase, setBasename } from './api/config';
 import { NavCustomizationProvider } from './context/NavCustomization';
+import { FilterLocationBridge } from './filter/FilterLocationBridge';
 import type { NavCustomization } from './context/NavCustomization';
 
 // Declare the shape of mutation meta here — inlined rather than in a
@@ -153,7 +154,9 @@ export function RadarApp({
       <QueryClientProvider client={client}>
         <ToastProvider>
           <NavCustomizationProvider value={navSlots}>
-            <App manageDocumentTitle={manageDocumentTitle} documentTitleSuffix={documentTitleSuffix} />
+            <FilterLocationBridge>
+              <App manageDocumentTitle={manageDocumentTitle} documentTitleSuffix={documentTitleSuffix} />
+            </FilterLocationBridge>
           </NavCustomizationProvider>
         </ToastProvider>
       </QueryClientProvider>
