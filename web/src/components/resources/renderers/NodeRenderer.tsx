@@ -1,6 +1,6 @@
 import { NodeRenderer as BaseNodeRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/NodeRenderer'
 import { useNavigate } from 'react-router-dom'
-import { shouldFetchLiveMetrics, useNodeMetrics, useNodeMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
+import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, useNodeMetrics, useNodeMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
 import { serializeColumnFilters } from '../resource-utils'
 
 interface NodeRendererProps {
@@ -18,8 +18,8 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
   const historyMetricsUnavailable = metricsHistory?.metricsUnavailable === true
   const liveMetricsEnabled = shouldFetchLiveMetrics(metricsHistoryQuery.isFetched || metricsHistoryQuery.isError, historyMetricsUnavailable)
   const { data: metrics } = useNodeMetrics(nodeName, { enabled: liveMetricsEnabled })
-  const metricsUnavailable = historyMetricsUnavailable
-  const visibleMetrics = historyMetricsUnavailable ? undefined : (metrics ?? undefined)
+  const metricsUnavailable = historyMetricsUnavailable || isLiveMetricsUnavailable(liveMetricsEnabled, metrics)
+  const visibleMetrics = getVisibleLiveMetrics(liveMetricsEnabled, metricsUnavailable, metrics)
 
   // Determine whether to hide metrics-server section (Prometheus has data)
   const { data: prometheusStatus } = usePrometheusStatus()

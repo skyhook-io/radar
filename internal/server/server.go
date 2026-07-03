@@ -2269,10 +2269,14 @@ func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditi
 	if c.entries == nil {
 		c.entries = make(map[bool]metricsAPIServiceDiagnosisEntry, 2)
 	}
+	now := time.Now()
+	if entry, ok := c.entries[includeConditionMessage]; ok && entry.contextName != contextName && now.Before(entry.expiresAt) {
+		return diagnosis
+	}
 	c.entries[includeConditionMessage] = metricsAPIServiceDiagnosisEntry{
 		contextName: contextName,
 		diagnosis:   diagnosis,
-		expiresAt:   time.Now().Add(c.ttl),
+		expiresAt:   now.Add(c.ttl),
 	}
 	return diagnosis
 }
@@ -2296,12 +2300,15 @@ func metricsUnavailableDiagnosis(ctx context.Context, includeAPIServiceCondition
 	contextName := k8s.GetContextName()
 	return metricsAPIServiceDiagnosisMemo.get(contextName, includeAPIServiceConditionMessage, func() (string, bool) {
 		apiService, err := cache.GetDynamicWithGroup(ctx, metricsAPIServiceKind, "", metricsAPIServiceName, metricsAPIServiceGroup)
-		return metricsAPIServiceLookupDiagnosis(apiService, err, includeAPIServiceConditionMessage), isMetricsAPIServiceLookupCacheable(err)
+		return metricsAPIServiceLookupDiagnosis(apiService, err, includeAPIServiceConditionMessage), isMetricsAPIServiceLookupCacheable(apiService, err)
 	})
 }
 
-func isMetricsAPIServiceLookupCacheable(err error) bool {
-	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+func isMetricsAPIServiceLookupCacheable(apiService *unstructured.Unstructured, err error) bool {
+	if err == nil {
+		return apiService != nil
+	}
+	return apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound)
 }
 
 func metricsAPIServiceLookupDiagnosis(apiService *unstructured.Unstructured, err error, includeConditionMessage bool) string {

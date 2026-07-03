@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   ApiError,
+  getVisibleLiveMetrics,
   isMetricsUnavailableError,
+  isLiveMetricsUnavailable,
   normalizeNodeMetricsHistory,
   normalizePodMetricsHistory,
   shouldFetchLiveMetrics,
@@ -87,5 +89,18 @@ describe('metrics unavailable classification', () => {
     expect(shouldFetchLiveMetrics(false, false)).toBe(false)
     expect(shouldFetchLiveMetrics(true, false)).toBe(true)
     expect(shouldFetchLiveMetrics(true, true)).toBe(false)
+  })
+
+  it('does not expose cached live metrics while the live query is disabled', () => {
+    const cachedMetrics = { usage: { cpu: '10m', memory: '20Mi' } }
+    expect(getVisibleLiveMetrics(false, false, cachedMetrics)).toBeUndefined()
+    expect(getVisibleLiveMetrics(true, true, cachedMetrics)).toBeUndefined()
+    expect(getVisibleLiveMetrics(true, false, cachedMetrics)).toBe(cachedMetrics)
+  })
+
+  it('treats null live metrics as unavailable only after live fetch is enabled', () => {
+    expect(isLiveMetricsUnavailable(false, null)).toBe(false)
+    expect(isLiveMetricsUnavailable(true, null)).toBe(true)
+    expect(isLiveMetricsUnavailable(true, undefined)).toBe(false)
   })
 })

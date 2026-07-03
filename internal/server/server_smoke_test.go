@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1361,6 +1362,95 @@ func TestMetricsUnavailableDiagnosisMemoizesAPIServiceLookup(t *testing.T) {
 	}
 	if gets != 1 {
 		t.Fatalf("APIService GET count = %d, want 1", gets)
+	}
+}
+
+func TestMetricsUnavailableDiagnosisDoesNotMemoizeTransientAPIServiceLookupError(t *testing.T) {
+	resetMetricsAPIServiceDiagnosisMemoForTest(t)
+	defer k8s.ResetTestDynamicState()
+
+	gvr := schema.GroupVersionResource{Group: metricsAPIServiceGroup, Version: "v1", Resource: "apiservices"}
+	apiService := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apiregistration.k8s.io/v1",
+		"kind":       metricsAPIServiceKind,
+		"metadata": map[string]any{
+			"name": metricsAPIServiceName,
+		},
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{
+					"type":   "Available",
+					"status": "False",
+					"reason": "FailedDiscoveryCheck",
+				},
+			},
+		},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "APIServiceList"},
+		apiService,
+	)
+	gets := 0
+	dyn.Fake.PrependReactor("get", "apiservices", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets == 1 {
+			return true, nil, fmt.Errorf("temporary apiservice lookup failure")
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{
+		Group:      metricsAPIServiceGroup,
+		Version:    "v1",
+		Kind:       metricsAPIServiceKind,
+		Name:       "apiservices",
+		Namespaced: false,
+	}}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+
+	if got := metricsUnavailableDiagnosis(context.Background(), true); got != "" {
+		t.Fatalf("first metricsUnavailableDiagnosis() = %q, want empty transient diagnosis", got)
+	}
+	if got := metricsUnavailableDiagnosis(context.Background(), true); got == "" {
+		t.Fatalf("second metricsUnavailableDiagnosis() returned empty diagnosis after transient error")
+	}
+	if gets != 2 {
+		t.Fatalf("APIService GET count = %d, want 2", gets)
+	}
+}
+
+func TestMetricsAPIServiceDiagnosisCacheDoesNotOverwriteDifferentContext(t *testing.T) {
+	cache := metricsAPIServiceDiagnosisCache{ttl: time.Minute}
+	startedA := make(chan struct{})
+	releaseA := make(chan struct{})
+	resultA := make(chan string, 1)
+
+	go func() {
+		resultA <- cache.get("ctx-a", true, func() (string, bool) {
+			close(startedA)
+			<-releaseA
+			return "ctx-a diagnosis", true
+		})
+	}()
+
+	<-startedA
+	if got := cache.get("ctx-b", true, func() (string, bool) {
+		return "ctx-b diagnosis", true
+	}); got != "ctx-b diagnosis" {
+		t.Fatalf("ctx-b diagnosis = %q, want ctx-b diagnosis", got)
+	}
+
+	close(releaseA)
+	if got := <-resultA; got != "ctx-a diagnosis" {
+		t.Fatalf("ctx-a diagnosis = %q, want ctx-a diagnosis", got)
+	}
+
+	if got := cache.get("ctx-b", true, func() (string, bool) {
+		t.Fatal("ctx-b cache entry was overwritten by ctx-a")
+		return "", false
+	}); got != "ctx-b diagnosis" {
+		t.Fatalf("cached ctx-b diagnosis = %q, want ctx-b diagnosis", got)
 	}
 }
 

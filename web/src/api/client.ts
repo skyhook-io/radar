@@ -1382,6 +1382,15 @@ export function shouldFetchLiveMetrics(historySettled: boolean, metricsUnavailab
   return historySettled && !metricsUnavailable
 }
 
+export function isLiveMetricsUnavailable(liveMetricsEnabled: boolean, metrics: unknown): boolean {
+  return liveMetricsEnabled && metrics === null
+}
+
+export function getVisibleLiveMetrics<T>(liveMetricsEnabled: boolean, metricsUnavailable: boolean, metrics: T | null | undefined): T | undefined {
+  if (!liveMetricsEnabled || metricsUnavailable) return undefined
+  return metrics ?? undefined
+}
+
 // Fetch historical metrics for a pod (last ~1 hour)
 export function usePodMetricsHistory(namespace: string, podName: string) {
   return useQuery<PodMetricsHistory>({
