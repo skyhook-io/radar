@@ -2,24 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   ApiError,
   isMetricsUnavailableError,
-  isMetricsUnavailableMessage,
   normalizeNodeMetricsHistory,
   normalizePodMetricsHistory,
   shouldFetchLiveMetrics,
 } from './client'
 
 describe('metrics unavailable classification', () => {
-  it('recognizes metrics-server absence messages', () => {
-    expect(isMetricsUnavailableMessage('Pod metrics not found (metrics-server may not be installed)')).toBe(true)
-    expect(isMetricsUnavailableMessage('the server could not find the requested resource (get pods.metrics.k8s.io)')).toBe(true)
-    expect(isMetricsUnavailableMessage('no matches for kind "PodMetrics" in version "metrics.k8s.io/v1beta1"')).toBe(true)
-    expect(isMetricsUnavailableMessage('no resource matches "pods.metrics.k8s.io"')).toBe(true)
-    expect(isMetricsUnavailableMessage('the server is currently unable to handle the request (get pods.metrics.k8s.io)')).toBe(true)
-    expect(isMetricsUnavailableMessage('the server could not find the requested resource')).toBe(false)
-    expect(isMetricsUnavailableMessage('no access to nodes')).toBe(false)
-    expect(isMetricsUnavailableMessage('metrics-server forbidden')).toBe(false)
-  })
-
   it('only treats metrics-shaped API failures as metrics unavailable', () => {
     expect(isMetricsUnavailableError(new ApiError('Node metrics not found (metrics-server may not be installed)', 404))).toBe(true)
     expect(isMetricsUnavailableError(new ApiError('the server could not find the requested resource (get nodes.metrics.k8s.io)', 500))).toBe(true)

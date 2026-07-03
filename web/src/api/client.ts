@@ -118,19 +118,6 @@ function hasMetricsUnavailablePhrase(message: string): boolean {
   )
 }
 
-export function isMetricsUnavailableMessage(message: unknown): boolean {
-  if (typeof message !== 'string') return false
-  const normalized = message.toLowerCase()
-  if (!normalized) return false
-  const hasMetricsSignal = (
-    mentionsMetricsAPIGroup(normalized) ||
-    normalized.includes('pod metrics') ||
-    normalized.includes('node metrics') ||
-    normalized.includes('metrics-server')
-  )
-  return hasMetricsSignal && hasMetricsUnavailablePhrase(normalized)
-}
-
 export function isMetricsUnavailableError(error: unknown): boolean {
   if (!(error instanceof ApiError)) return false
   if (error.status !== 404 && error.status !== 500) return false
@@ -1310,17 +1297,13 @@ function retryMetricsQuery(failureCount: number, error: unknown): boolean {
   return !isMetricsUnavailableError(error) && failureCount < 1
 }
 
-function metricsStaleTime(query: { state: { data: unknown } }): number {
-  return query.state.data === null ? 0 : 15000
-}
-
 // Fetch metrics for a specific pod
 export function usePodMetrics(namespace: string, podName: string, options?: { enabled?: boolean }) {
   return useQuery<PodMetrics | null>({
     queryKey: ['pod-metrics', namespace, podName],
     queryFn: () => fetchMetricsOrNull<PodMetrics>(`/metrics/pods/${namespace}/${podName}`),
     enabled: Boolean(namespace && podName) && (options?.enabled ?? true),
-    staleTime: metricsStaleTime,
+    staleTime: 15000,
     refetchInterval: 30000,
     refetchOnMount: 'always',
     refetchOnReconnect: 'always',
@@ -1334,7 +1317,7 @@ export function useNodeMetrics(nodeName: string, options?: { enabled?: boolean }
     queryKey: ['node-metrics', nodeName],
     queryFn: () => fetchMetricsOrNull<NodeMetrics>(`/metrics/nodes/${nodeName}`),
     enabled: Boolean(nodeName) && (options?.enabled ?? true),
-    staleTime: metricsStaleTime,
+    staleTime: 15000,
     refetchInterval: 30000,
     refetchOnMount: 'always',
     refetchOnReconnect: 'always',
