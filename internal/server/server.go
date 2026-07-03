@@ -2251,17 +2251,23 @@ func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditi
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.entries == nil {
 		c.entries = make(map[bool]metricsAPIServiceDiagnosisEntry, 2)
 	}
 	if entry, ok := c.entries[includeConditionMessage]; ok && entry.contextName == contextName && time.Now().Before(entry.expiresAt) {
+		c.mu.Unlock()
 		return entry.diagnosis
 	}
+	c.mu.Unlock()
 
 	diagnosis, cacheable := build()
 	if !cacheable {
 		return diagnosis
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[bool]metricsAPIServiceDiagnosisEntry, 2)
 	}
 	c.entries[includeConditionMessage] = metricsAPIServiceDiagnosisEntry{
 		contextName: contextName,
@@ -2271,14 +2277,14 @@ func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditi
 	return diagnosis
 }
 
-func metricsHistoryCollectionError(ctx context.Context, source, errMsg string, includeAPIServiceConditionMessage bool) (string, string, string) {
+func metricsHistoryCollectionError(ctx context.Context, source, errMsg string, includeAPIServiceConditionMessage bool) (string, string, string, bool) {
 	if errMsg == "" {
-		return "", "", ""
+		return "", "", "", false
 	}
 	if k8score.MetricsAPIUnavailable(fmt.Errorf("failed to get %s metrics: %s", strings.ToLower(source), errMsg)) {
-		return fmt.Sprintf("%s metrics not found (metrics-server may not be installed)", source), errMsg, metricsUnavailableDiagnosis(ctx, includeAPIServiceConditionMessage)
+		return fmt.Sprintf("%s metrics not found (metrics-server may not be installed)", source), errMsg, metricsUnavailableDiagnosis(ctx, includeAPIServiceConditionMessage), true
 	}
-	return errMsg, "", ""
+	return errMsg, "", "", false
 }
 
 func metricsUnavailableDiagnosis(ctx context.Context, includeAPIServiceConditionMessage bool) string {
@@ -2414,7 +2420,7 @@ func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHisto
 		}
 	}
 	if health.PodMetrics.ConsecutiveErrors > 0 {
-		history.CollectionError, history.RawCollectionError, history.MetricsUnavailableDiagnosis = metricsHistoryCollectionError(ctx, "Pod", health.PodMetrics.LastError, includeAPIServiceConditionMessage)
+		history.CollectionError, history.RawCollectionError, history.MetricsUnavailableDiagnosis, history.MetricsUnavailable = metricsHistoryCollectionError(ctx, "Pod", health.PodMetrics.LastError, includeAPIServiceConditionMessage)
 	}
 	return history
 }
@@ -2446,7 +2452,7 @@ func nodeMetricsHistoryResponse(ctx context.Context, history *k8s.NodeMetricsHis
 		}
 	}
 	if health.NodeMetrics.ConsecutiveErrors > 0 {
-		history.CollectionError, history.RawCollectionError, history.MetricsUnavailableDiagnosis = metricsHistoryCollectionError(ctx, "Node", health.NodeMetrics.LastError, includeAPIServiceConditionMessage)
+		history.CollectionError, history.RawCollectionError, history.MetricsUnavailableDiagnosis, history.MetricsUnavailable = metricsHistoryCollectionError(ctx, "Node", health.NodeMetrics.LastError, includeAPIServiceConditionMessage)
 	}
 	return history
 }

@@ -1124,6 +1124,9 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 	if podHistory.RawCollectionError != health.PodMetrics.LastError {
 		t.Fatalf("pod raw collection error = %q, want %q", podHistory.RawCollectionError, health.PodMetrics.LastError)
 	}
+	if !podHistory.MetricsUnavailable {
+		t.Fatalf("pod metrics unavailable = false, want true")
+	}
 
 	nodeHistory := nodeMetricsHistoryResponse(context.Background(), &k8s.NodeMetricsHistory{
 		Name: "kind-worker",
@@ -1138,6 +1141,9 @@ func TestMetricsHistoryResponseCarriesCollectionErrorWithBufferedHistory(t *test
 	}
 	if nodeHistory.RawCollectionError != health.NodeMetrics.LastError {
 		t.Fatalf("node raw collection error = %q, want %q", nodeHistory.RawCollectionError, health.NodeMetrics.LastError)
+	}
+	if !nodeHistory.MetricsUnavailable {
+		t.Fatalf("node metrics unavailable = false, want true")
 	}
 }
 
@@ -1163,6 +1169,9 @@ func TestMetricsHistoryResponseKeepsNonAbsenceCollectionErrors(t *testing.T) {
 	if podHistory.MetricsUnavailableDiagnosis != "" {
 		t.Fatalf("pod metrics unavailable diagnosis = %q, want empty", podHistory.MetricsUnavailableDiagnosis)
 	}
+	if podHistory.MetricsUnavailable {
+		t.Fatalf("pod metrics unavailable = true, want false")
+	}
 
 	nodeHistory := nodeMetricsHistoryResponse(context.Background(), nil, "kind-worker", health, true)
 	if nodeHistory.CollectionError != health.NodeMetrics.LastError {
@@ -1173,6 +1182,9 @@ func TestMetricsHistoryResponseKeepsNonAbsenceCollectionErrors(t *testing.T) {
 	}
 	if nodeHistory.MetricsUnavailableDiagnosis != "" {
 		t.Fatalf("node metrics unavailable diagnosis = %q, want empty", nodeHistory.MetricsUnavailableDiagnosis)
+	}
+	if nodeHistory.MetricsUnavailable {
+		t.Fatalf("node metrics unavailable = true, want false")
 	}
 }
 

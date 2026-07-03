@@ -1386,12 +1386,12 @@ function withoutCollectionError<T extends { collectionError?: string; rawCollect
 }
 
 export function normalizePodMetricsHistory(history: PodMetricsHistory): PodMetricsHistory {
-  if (!isMetricsUnavailableMessage(history.collectionError)) return history
+  if (history.metricsUnavailable !== true) return history
   return { ...withoutCollectionError(history), metricsUnavailable: true, metricsUnavailableReason: history.rawCollectionError || history.collectionError }
 }
 
 export function normalizeNodeMetricsHistory(history: NodeMetricsHistory): NodeMetricsHistory {
-  if (!isMetricsUnavailableMessage(history.collectionError)) return history
+  if (history.metricsUnavailable !== true) return history
   return { ...withoutCollectionError(history), metricsUnavailable: true, metricsUnavailableReason: history.rawCollectionError || history.collectionError }
 }
 

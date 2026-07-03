@@ -284,7 +284,7 @@ export function PodRenderer({
   const podProblems = getPodProblems(data)
   const hasProblems = podProblems.length > 0 && !operationalIssuesShown
   const showMetricsUnavailable = !!metricsUnavailable && !metricsHistory?.collectionError
-  const hasMetricsHistory = !showMetricsUnavailable && !!metricsHistory?.containers?.length
+  const hasMetricsHistory = !!metricsHistory?.containers?.length
   const currentMetrics = metricsUnavailable ? undefined : metrics
 
   // Image filesystem modal state
@@ -735,7 +735,7 @@ export function PodRenderer({
               <span className="break-all">{metricsHistory.collectionError}</span>
             </div>
           )}
-          {!showMetricsUnavailable && (
+          {(hasMetricsHistory || !showMetricsUnavailable) && (
             <div className="space-y-4">
               {(metricsHistory?.containers || currentMetrics?.containers || []).map((historyContainer) => {
                 // Find current metrics for this container

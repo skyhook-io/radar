@@ -41,6 +41,7 @@ type PodMetricsHistory struct {
 	CollectionError             string                    `json:"collectionError,omitempty"`
 	RawCollectionError          string                    `json:"rawCollectionError,omitempty"`
 	MetricsUnavailableDiagnosis string                    `json:"metricsUnavailableDiagnosis,omitempty"`
+	MetricsUnavailable          bool                      `json:"metricsUnavailable,omitempty"`
 }
 
 // NodeMetricsHistory holds historical metrics for a node.
@@ -50,6 +51,7 @@ type NodeMetricsHistory struct {
 	CollectionError             string             `json:"collectionError,omitempty"`
 	RawCollectionError          string             `json:"rawCollectionError,omitempty"`
 	MetricsUnavailableDiagnosis string             `json:"metricsUnavailableDiagnosis,omitempty"`
+	MetricsUnavailable          bool               `json:"metricsUnavailable,omitempty"`
 }
 
 // TopPodMetrics holds the latest metrics snapshot for a single pod.

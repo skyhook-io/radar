@@ -56,7 +56,7 @@ describe('NodeRenderer metrics', () => {
     expect(html).not.toContain('Last updated')
   })
 
-  it('does not let stale historical metrics hide an unavailable state', () => {
+  it('keeps buffered historical charts visible under an unavailable notice', () => {
     const html = renderToString(
       <NodeRenderer
         data={node}
@@ -68,8 +68,9 @@ describe('NodeRenderer metrics', () => {
     )
 
     expect(html).toContain('Metrics unavailable')
-    expect(html).not.toContain('100m')
-    expect(html).not.toContain('256 MiB')
+    expect(html).toContain('CPU')
+    expect(html).toContain('Memory')
+    expect(html).not.toContain('Last updated')
   })
 
   it('keeps non-absence collection errors visible', () => {
