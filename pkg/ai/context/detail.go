@@ -1,6 +1,8 @@
 package context
 
 import (
+	"github.com/skyhook-io/radar/pkg/prune"
+
 	"encoding/json"
 	"strings"
 
@@ -52,47 +54,30 @@ func redactUnstructuredSecrets(obj map[string]any) {
 
 func pruneMapDetail(m map[string]any) {
 	// Prune metadata — strip noise keys but keep ALL annotations and labels
-	if meta, ok := m["metadata"].(map[string]any); ok {
-		pruneMetadataCommon(meta)
-		// At Detail level: annotations are NOT filtered (all kept)
-	}
-
-	// Prune spec — strip noisy pod spec fields
+	// Flat drops via the shared mechanism (annotations NOT filtered at
+	// Detail level — that conditional stays out of the profile). Per-slice-
+	// element pruning (containers, env redaction) can't be a path drop and
+	// stays in the local traversal below.
+	prune.ApplyInPlace(m, detailBaseProfile)
 	if spec, ok := m["spec"].(map[string]any); ok {
-		pruneSpecDetail(spec)
+		pruneSpecElements(spec)
 	}
 
-	// Per-type status pruning
 	kind, _ := m["kind"].(string)
-	if status, ok := m["status"].(map[string]any); ok {
-		pruneStatusForKind(strings.ToLower(kind), status)
+	if p, ok := statusProfileByKind[strings.ToLower(kind)]; ok {
+		prune.ApplyInPlace(m, p)
 	}
 }
 
-func pruneSpecDetail(spec map[string]any) {
-	// Strip noisy pod spec fields
-	for key := range stripPodSpecFields {
-		delete(spec, key)
-	}
-
-	// Prune template.spec (for Deployments, StatefulSets, etc.)
+// pruneSpecElements handles what path drops can't: per-element pruning
+// inside container slices (flat key drops ride detailBaseProfile).
+func pruneSpecElements(spec map[string]any) {
 	if template, ok := spec["template"].(map[string]any); ok {
 		if tSpec, ok := template["spec"].(map[string]any); ok {
 			prunePodSpec(tSpec)
 		}
 	}
-
-	// Direct pod spec (for Pod resources)
 	pruneContainersInSpec(spec)
-}
-
-func pruneStatusForKind(kind string, status map[string]any) {
-	switch kind {
-	case "pod":
-		pruneStatusPod(status)
-	case "deployment", "statefulset", "daemonset", "replicaset":
-		pruneStatusWorkload(status)
-	}
 }
 
 func minifySecretDetail(secret *corev1.Secret) map[string]any {

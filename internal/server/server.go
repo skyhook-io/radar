@@ -1377,6 +1377,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := normalizeKind(chi.URLParam(r, "kind"))
 	group := r.URL.Query().Get("group") // API group for CRD disambiguation
+	// include follows /api/search's body-verbosity vocabulary: "summary" =
+	// same shape with heavy subtrees stripped per kind profile (see
+	// resource_summary.go), "raw" or absent = full objects. Unknown values
+	// fall back to raw — additive contract, safe for older callers.
+	includeSummary := r.URL.Query().Get("include") == "summary"
 
 	// parseNamespacesForUser primes the per-user perm cache (triggers
 	// DiscoverNamespaces if needed). canRead below relies on it.
@@ -1484,6 +1489,9 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if includeSummary {
+			result = applySummaryStrip(result, summaryFallbackKey(group, kind))
+		}
 		s.writeJSON(w, result)
 		return
 	}
@@ -1785,6 +1793,9 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if includeSummary {
+		result = applySummaryStrip(result, summaryFallbackKey(group, kind))
+	}
 	s.writeJSON(w, result)
 }
 

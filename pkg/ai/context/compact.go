@@ -1,6 +1,8 @@
 package context
 
 import (
+	"github.com/skyhook-io/radar/pkg/prune"
+
 	"encoding/json"
 	"strings"
 
@@ -39,33 +41,27 @@ func minifyCompactUnstructured(obj map[string]any) map[string]any {
 
 func pruneMapCompact(m map[string]any) {
 	// Prune metadata — strip noise keys AND filter annotations
+	// Flat drops via the shared mechanism (pkg/prune); annotation filtering
+	// is conditional policy and stays local.
+	prune.ApplyInPlace(m, detailBaseProfile)
+	prune.ApplyInPlace(m, compactExtraProfile)
 	if meta, ok := m["metadata"].(map[string]any); ok {
-		pruneMetadataCommon(meta)
 		pruneAnnotationsCompact(meta)
 	}
-
-	// Aggressively prune spec
 	if spec, ok := m["spec"].(map[string]any); ok {
-		pruneSpecCompact(spec)
+		pruneSpecElementsCompact(spec)
 	}
 
 	// Per-type status pruning (same as Detail — savings come from spec)
 	kind, _ := m["kind"].(string)
-	if status, ok := m["status"].(map[string]any); ok {
-		pruneStatusForKind(strings.ToLower(kind), status)
+	if p, ok := statusProfileByKind[strings.ToLower(kind)]; ok {
+		prune.ApplyInPlace(m, p)
 	}
 }
 
-func pruneSpecCompact(spec map[string]any) {
-	// Strip all noisy pod spec fields (basic + compact)
-	for key := range stripPodSpecFields {
-		delete(spec, key)
-	}
-	for key := range stripPodSpecFieldsCompact {
-		delete(spec, key)
-	}
-
-	// Prune template.spec (for Deployments, StatefulSets, etc.)
+// pruneSpecElementsCompact handles per-element container pruning; flat key
+// drops ride the shared profiles.
+func pruneSpecElementsCompact(spec map[string]any) {
 	if template, ok := spec["template"].(map[string]any); ok {
 		if tSpec, ok := template["spec"].(map[string]any); ok {
 			prunePodSpecCompact(tSpec)

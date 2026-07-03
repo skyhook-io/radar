@@ -23,8 +23,8 @@ func TestMinifyResource_Pod(t *testing.T) {
 			Labels:          map[string]string{"app": "web"},
 			Annotations: map[string]string{
 				"kubectl.kubernetes.io/last-applied-configuration": `{"big":"json"}`,
-				"kubernetes.io/ingress.class":                     "nginx",
-				"some-random-annotation":                          "value",
+				"kubernetes.io/ingress.class":                      "nginx",
+				"some-random-annotation":                           "value",
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{Kind: "ReplicaSet", Name: "my-rs"},
@@ -484,7 +484,7 @@ func TestMinify_DetailKeepsAllAnnotations(t *testing.T) {
 			Name:      "detail-test",
 			Namespace: "default",
 			Annotations: map[string]string{
-				"custom.example.com/note": "important",
+				"custom.example.com/note":     "important",
 				"kubernetes.io/ingress.class": "nginx",
 			},
 		},
@@ -514,7 +514,7 @@ func TestMinify_CompactStripsCustomAnnotations(t *testing.T) {
 			Name:      "compact-test",
 			Namespace: "default",
 			Annotations: map[string]string{
-				"custom.example.com/note": "important",
+				"custom.example.com/note":     "important",
 				"kubernetes.io/ingress.class": "nginx",
 			},
 		},

@@ -1,5 +1,11 @@
 package context
 
+import (
+	"strings"
+
+	"github.com/skyhook-io/radar/pkg/prune"
+)
+
 // Metadata keys to strip at all levels (beyond what cache.dropManagedFields already removes)
 var stripMetadataKeys = map[string]bool{
 	"resourceVersion":            true,
@@ -30,13 +36,13 @@ var stripContainerFields = map[string]bool{
 
 // Pod spec fields to strip at all levels
 var stripPodSpecFields = map[string]bool{
-	"tolerations":      true,
-	"dnsPolicy":        true,
-	"schedulerName":    true,
-	"priority":         true,
-	"priorityClassName": true,
-	"preemptionPolicy": true,
-	"nodeName":         true,
+	"tolerations":        true,
+	"dnsPolicy":          true,
+	"schedulerName":      true,
+	"priority":           true,
+	"priorityClassName":  true,
+	"preemptionPolicy":   true,
+	"nodeName":           true,
 	"enableServiceLinks": true,
 }
 
@@ -57,14 +63,14 @@ var stripContainerFieldsCompact = map[string]bool{
 
 // Additional pod spec fields to strip at Compact level
 var stripPodSpecFieldsCompact = map[string]bool{
-	"volumes":            true,
-	"serviceAccountName": true,
-	"serviceAccount":     true,
-	"securityContext":    true,
-	"hostNetwork":        true,
-	"hostPID":            true,
-	"hostIPC":            true,
-	"affinity":           true,
+	"volumes":                   true,
+	"serviceAccountName":        true,
+	"serviceAccount":            true,
+	"securityContext":           true,
+	"hostNetwork":               true,
+	"hostPID":                   true,
+	"hostIPC":                   true,
+	"affinity":                  true,
 	"topologySpreadConstraints": true,
 }
 
@@ -79,16 +85,9 @@ var stripPodStatusFields = map[string]bool{
 
 // Workload status fields to strip at Detail and Compact levels (Deployment, StatefulSet, DaemonSet)
 var stripWorkloadStatusFields = map[string]bool{
-	"observedGeneration":       true,
-	"collisionCount":           true,
-	"updatedNumberScheduled":   true,
-}
-
-// pruneMetadataCommon strips metadata fields common to all levels.
-func pruneMetadataCommon(meta map[string]any) {
-	for key := range stripMetadataKeys {
-		delete(meta, key)
-	}
+	"observedGeneration":     true,
+	"collisionCount":         true,
+	"updatedNumberScheduled": true,
 }
 
 // pruneAnnotationsCompact filters annotations at Compact level: only keeps known prefixes.
@@ -243,16 +242,38 @@ func redactEnvValues(container map[string]any) {
 	}
 }
 
-// pruneStatusPod strips noisy fields from pod status.
-func pruneStatusPod(status map[string]any) {
-	for key := range stripPodStatusFields {
-		delete(status, key)
+// The flat drop tables above are POLICY; the tree surgery executing them is
+// pkg/prune (shared with the resources API's include=summary profiles —
+// internal/server/resource_summary.go). Conditional logic (annotation
+// filtering, secret redaction) stays in this package; only path deletion
+// routes through the shared mechanism.
+func profileFromTables(tables map[string]map[string]bool) prune.Profile {
+	var p prune.Profile
+	for subtree, keys := range tables {
+		base := strings.Split(subtree, ".")
+		for key := range keys {
+			path := append(append([]string(nil), base...), key)
+			p.Drop = append(p.Drop, path)
+		}
 	}
+	return p
 }
 
-// pruneStatusWorkload strips noisy fields from workload status (Deployment, StatefulSet, DaemonSet).
-func pruneStatusWorkload(status map[string]any) {
-	for key := range stripWorkloadStatusFields {
-		delete(status, key)
+var (
+	detailBaseProfile = profileFromTables(map[string]map[string]bool{
+		"metadata":           stripMetadataKeys,
+		"spec":               stripPodSpecFields,
+		"spec.template.spec": stripPodSpecFields,
+	})
+	compactExtraProfile = profileFromTables(map[string]map[string]bool{
+		"spec":               stripPodSpecFieldsCompact,
+		"spec.template.spec": stripPodSpecFieldsCompact,
+	})
+	statusProfileByKind = map[string]prune.Profile{
+		"pod":         profileFromTables(map[string]map[string]bool{"status": stripPodStatusFields}),
+		"deployment":  profileFromTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
+		"statefulset": profileFromTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
+		"daemonset":   profileFromTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
+		"replicaset":  profileFromTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
 	}
-}
+)

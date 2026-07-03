@@ -145,10 +145,10 @@ func TestRedactInlineSecrets_PreservesSecretReferences(t *testing.T) {
 	// survive so a reader can diagnose a missing/wrong reference. Value-bearing
 	// keys (password) must still be redacted.
 	spec := map[string]any{
-		"basicAuth":   map[string]any{"secret": "web-users"},          // Traefik: a reference
-		"tls":         map[string]any{"secretName": "tls-cert"},       // reference
-		"rootCAsSecrets": []any{"internal-ca"},                        // reference list
-		"oauth":       map[string]any{"password": "hunter2pass"},      // inline value → redact
+		"basicAuth":      map[string]any{"secret": "web-users"},     // Traefik: a reference
+		"tls":            map[string]any{"secretName": "tls-cert"},  // reference
+		"rootCAsSecrets": []any{"internal-ca"},                      // reference list
+		"oauth":          map[string]any{"password": "hunter2pass"}, // inline value → redact
 	}
 	RedactInlineSecrets(spec)
 
