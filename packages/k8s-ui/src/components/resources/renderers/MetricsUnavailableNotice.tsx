@@ -9,8 +9,8 @@ interface MetricsUnavailableNoticeProps {
 export function MetricsUnavailableNotice({ rawError, diagnosis }: MetricsUnavailableNoticeProps) {
   return (
     <div className="card-inner-lg text-xs text-theme-text-tertiary">
-      <div className="flex items-baseline gap-1.5">
-        <span className="min-w-0">
+      <div className="flex items-center gap-1.5">
+        <span className="min-w-0 leading-5">
           Metrics unavailable. Radar cannot read metrics.k8s.io.
         </span>
         {rawError && (
@@ -33,7 +33,7 @@ export function MetricsUnavailableNotice({ rawError, diagnosis }: MetricsUnavail
           >
             <button
               type="button"
-              className="inline-flex shrink-0 cursor-help items-center gap-1 text-[11px] font-medium leading-none text-theme-text-tertiary hover:text-theme-text-secondary"
+              className="inline-flex shrink-0 cursor-help items-center gap-1 text-xs font-medium leading-5 text-theme-text-tertiary hover:text-theme-text-secondary"
               aria-label="Metrics error details"
             >
               <Info className="h-3.5 w-3.5" />
