@@ -69,7 +69,6 @@ func GroupByResource(findings []Finding) []ResourceGroup {
 	return groups
 }
 
-
 // ApplySettings filters audit results based on ignored namespaces (with wildcard
 // patterns like *-system) and disabled checks. This is the shared implementation
 // used by all consumers (HTTP handlers, MCP, skyhook-connector).
@@ -137,14 +136,42 @@ func ApplySettings(results *ScanResults, ignoredNamespaces, disabledChecks []str
 		totalDanger += cs.Danger
 	}
 
+	// Filter the evaluation denominators onto fresh maps — the input is the
+	// server's shared cached scan, so mutating its maps would corrupt every
+	// other consumer for the cache TTL.
+	var evalByNS map[string]map[string]int
+	if results.EvaluatedByNamespace != nil {
+		evalByNS = make(map[string]map[string]int, len(results.EvaluatedByNamespace))
+		for id, byNS := range results.EvaluatedByNamespace {
+			if disabled[id] {
+				continue
+			}
+			nsCopy := make(map[string]int, len(byNS))
+			for ns, n := range byNS {
+				if matchesIgnoredNS(ns) {
+					continue
+				}
+				nsCopy[ns] = n
+			}
+			if len(nsCopy) > 0 {
+				evalByNS[id] = nsCopy
+			}
+		}
+	}
+	checkCounts, totalPassing := deriveCheckCounts(evalByNS, filtered, categories)
+
 	return &ScanResults{
 		Summary: ScanSummary{
+			Passing:    totalPassing,
 			Warning:    totalWarning,
 			Danger:     totalDanger,
 			Categories: categories,
 		},
-		Findings: filtered,
-		Groups:   groups,
-		Checks:   results.Checks,
+		Findings:             filtered,
+		Groups:               groups,
+		Checks:               results.Checks,
+		CheckCounts:          checkCounts,
+		EvaluatedByNamespace: evalByNS,
+		MissingInputs:        results.MissingInputs,
 	}
 }

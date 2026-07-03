@@ -28,6 +28,12 @@ type CheckInput struct {
 	ConfigMaps               []*corev1.ConfigMap
 	Secrets                  []*corev1.Secret
 	ServiceAccounts          []*corev1.ServiceAccount
+	// ServiceAccountsNamespace is non-empty when the SA inventory covers only
+	// that single namespace (namespace-scoped cache fallback). Workloads in
+	// other namespaces must not have SA-dependent checks evaluated against
+	// this partial inventory. Empty = cluster-wide authority (when
+	// ServiceAccounts is non-nil).
+	ServiceAccountsNamespace string
 	LimitRanges              []*corev1.LimitRange
 	// ClusterVersion is the K8s server version (e.g. "1.30"). Used for deprecated API checks.
 	ClusterVersion string
@@ -100,6 +106,20 @@ type ScanResults struct {
 	Findings []Finding            `json:"findings"`
 	Groups   []ResourceGroup      `json:"groups"`
 	Checks   map[string]CheckMeta `json:"checks"`
+	// CheckCounts maps checkID → evaluated/passed subject counts. A check
+	// appears only when it evaluated at least one subject; checks whose
+	// prerequisite inputs were unavailable are absent (see MissingInputs) so
+	// consumers never mistake "couldn't check" for "all passing".
+	CheckCounts map[string]CheckCount `json:"checkCounts,omitempty"`
+	// EvaluatedByNamespace maps checkID → namespace → distinct subjects
+	// evaluated ("" namespace for cluster-scoped subjects). It exists so
+	// ApplySettings can subtract ignored namespaces from the denominators
+	// without re-running the scan.
+	EvaluatedByNamespace map[string]map[string]int `json:"evaluatedByNamespace,omitempty"`
+	// MissingInputs lists prerequisite inputs that were nil (RBAC denied or
+	// unavailable), e.g. "poddisruptionbudgets", "configmaps", "podmetrics".
+	// Checks depending on them did not run and are absent from CheckCounts.
+	MissingInputs []string `json:"missingInputs,omitempty"`
 	// GroupedChecks is the per-check remediation-queue rollup (one Check per
 	// failing check). Populated by the HTTP audit handler post local-settings —
 	// not by RunChecks, which doesn't carry the request context BuildChecks
@@ -121,6 +141,15 @@ type ResourceGroup struct {
 	Warning   int       `json:"warning"`
 	Danger    int       `json:"danger"`
 	Findings  []Finding `json:"findings"`
+}
+
+// CheckCount is the evaluated/passed tally for a single check. Evaluated
+// counts distinct subjects at the same (resource, checkID) grain the finding
+// merge uses — per-container findings collapse to their workload here too, so
+// evaluated, passed, and the failing remainder all speak the same unit.
+type CheckCount struct {
+	Evaluated int `json:"evaluated"`
+	Passed    int `json:"passed"`
 }
 
 // ScanSummary provides aggregate counts.

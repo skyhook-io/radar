@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	bp "github.com/skyhook-io/radar/pkg/audit"
 )
 
@@ -45,6 +46,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		ConfigMaps:               listNamespaced(cache.ConfigMaps(), namespaces),
 		Secrets:                  listNamespaced(cache.Secrets(), namespaces),
 		ServiceAccounts:          listNamespaced(cache.ServiceAccounts(), namespaces),
+		ServiceAccountsNamespace: serviceAccountScopeNamespace(),
 		LimitRanges:              listNamespaced(cache.LimitRanges(), namespaces),
 	}
 
@@ -317,7 +319,13 @@ type lister[T any] interface {
 	List(selector labels.Selector) ([]*T, error)
 }
 
-// listNamespaced fetches all objects from a lister, optionally filtered by namespaces.
+// listNamespaced fetches all objects from a lister, optionally filtered by
+// namespaces. Returns nil ONLY for a nil lister (kind disabled / RBAC denied);
+// an available lister with zero matches returns an empty non-nil slice.
+// CheckInput distinguishes the two — nil skips the dependent checks and lands
+// in ScanResults.MissingInputs, so conflating "none exist" with "couldn't
+// list" would both suppress findings (e.g. missingPDB on a PDB-less cluster)
+// and misreport scan completeness.
 func listNamespaced[T any, L lister[T]](l L, namespaces []string) []*T {
 	var zero L
 	if any(l) == any(zero) {
@@ -325,6 +333,9 @@ func listNamespaced[T any, L lister[T]](l L, namespaces []string) []*T {
 	}
 	if len(namespaces) == 0 {
 		items, _ := l.List(labels.Everything())
+		if items == nil {
+			items = []*T{}
+		}
 		return items
 	}
 	// For namespace-filtered queries we rely on the global list + filter approach
@@ -335,7 +346,7 @@ func listNamespaced[T any, L lister[T]](l L, namespaces []string) []*T {
 	for _, ns := range namespaces {
 		nsSet[ns] = true
 	}
-	var filtered []*T
+	filtered := []*T{}
 	for _, item := range all {
 		if ns := extractNamespace(item); ns == "" || nsSet[ns] {
 			filtered = append(filtered, item)
@@ -375,6 +386,21 @@ func extractNamespace(obj any) string {
 		return v.Namespace
 	case *corev1.LimitRange:
 		return v.Namespace
+	}
+	return ""
+}
+
+// serviceAccountScopeNamespace reports the single namespace the SA informer
+// is scoped to when the startup probe fell back from cluster-wide, or ""
+// for cluster-wide coverage. Checks use it to avoid evaluating SA-dependent
+// subjects outside the inventory's reach.
+func serviceAccountScopeNamespace() string {
+	perm := k8s.GetCachedPermissionResult()
+	if perm == nil {
+		return ""
+	}
+	if scope, ok := perm.Scopes[k8score.ServiceAccounts]; ok && scope.Enabled {
+		return scope.Namespace
 	}
 	return ""
 }

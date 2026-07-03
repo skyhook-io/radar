@@ -27,6 +27,8 @@ func RunChecks(input *CheckInput) *ScanResults {
 	}
 
 	var findings []Finding
+	var missingInputs []string
+	tr := newEvalTracker()
 
 	// Build indexes needed by cross-resource checks
 	podsBySelector := indexPodsByLabels(input.Pods)
@@ -35,31 +37,96 @@ func RunChecks(input *CheckInput) *ScanResults {
 	servicesByName := indexServicesByName(input.Services)
 
 	// --- Security checks (container-level, attributed to owning workload) ---
-	findings = append(findings, checkWorkloadPodSpecs(input)...)
+	findings = append(findings, checkWorkloadPodSpecs(tr, input)...)
+	if input.ServiceAccounts == nil {
+		missingInputs = append(missingInputs, "serviceaccounts")
+	}
+	// Nil SUBJECT inventories matter too: zero evaluated subjects from an
+	// unlisted kind must read as incomplete, not clean.
+	if input.Deployments == nil {
+		missingInputs = append(missingInputs, "deployments")
+	}
+	if input.StatefulSets == nil {
+		missingInputs = append(missingInputs, "statefulsets")
+	}
+	if input.DaemonSets == nil {
+		missingInputs = append(missingInputs, "daemonsets")
+	}
+	if input.LimitRanges == nil {
+		missingInputs = append(missingInputs, "limitranges")
+	}
 
 	// --- Reliability checks ---
-	findings = append(findings, checkSingleReplica(input.Deployments, hpaTargets)...)
+	// singleReplica's eligibility filter (HPA-managed deployments are out of
+	// scope) needs the HPA inventory to be authoritative — nil means
+	// unlisted, and an HPA-managed 1-replica deployment would otherwise be a
+	// false positive counted from incomplete prerequisites.
+	if input.HorizontalPodAutoscalers != nil {
+		findings = append(findings, checkSingleReplica(tr, input.Deployments, hpaTargets)...)
+	} else {
+		missingInputs = append(missingInputs, "horizontalpodautoscalers")
+	}
 	// Only check PDB coverage if we can actually list PDBs (nil = RBAC denied, not "none exist")
 	if input.PodDisruptionBudgets != nil {
-		findings = append(findings, checkMissingPDB(input.Deployments, input.StatefulSets, pdbSelectors)...)
+		findings = append(findings, checkMissingPDB(tr, input.Deployments, input.StatefulSets, pdbSelectors)...)
+	} else {
+		missingInputs = append(missingInputs, "poddisruptionbudgets")
 	}
-	findings = append(findings, checkMissingTopologySpread(input.Deployments, input.StatefulSets)...)
-	findings = append(findings, checkPodHARisk(input.Pods, input.Deployments)...)
+	findings = append(findings, checkMissingTopologySpread(tr, input.Deployments, input.StatefulSets)...)
+	// HA-risk placement needs the pod inventory — nil pods would make every
+	// deployment look risk-free (or falsely clustered), not "no pods".
+	if input.Pods != nil {
+		findings = append(findings, checkPodHARisk(tr, input.Pods, input.Deployments)...)
+	} else {
+		missingInputs = append(missingInputs, "pods")
+	}
 
 	// --- Efficiency checks are included in checkWorkloadPodSpecs ---
-	findings = append(findings, checkOrphanConfigMapsSecrets(input)...)
-	findings = append(findings, checkSecretInConfigMap(input.ConfigMaps)...)
+	// nil ConfigMaps = RBAC denied, not "none exist" — the ConfigMap-subject
+	// checks must neither run nor count anything as evaluated.
+	// Orphan detection audits ConfigMaps AND Secrets — a nil side means that
+	// KIND is unlisted, not that the whole check is off. References come from
+	// the whole workload inventory (configReferencePodSpecs — pods AND
+	// deployments/statefulsets/daemonsets/jobs) plus Ingress TLS refs; missing
+	// reference inventory surfaces via missingInputs above, so the check runs
+	// on whatever is visible.
+	if input.ConfigMaps != nil || input.Secrets != nil {
+		findings = append(findings, checkOrphanConfigMapsSecrets(tr, input)...)
+	}
+	if input.ConfigMaps != nil {
+		findings = append(findings, checkSecretInConfigMap(tr, input.ConfigMaps)...)
+	} else {
+		missingInputs = append(missingInputs, "configmaps")
+	}
+	if input.Secrets == nil {
+		missingInputs = append(missingInputs, "secrets")
+	}
 
-	// --- Cross-resource checks ---
-	findings = append(findings, checkServiceNoMatchingPods(input.Services, podsBySelector)...)
-	findings = append(findings, checkIngressNoMatchingService(input.Ingresses, servicesByName)...)
-	findings = append(findings, checkTraefikDanglingRefs(input)...)
+	// --- Cross-resource checks --- each needs BOTH sides of its relationship
+	// listed; a nil side would flag every subject as dangling.
+	if input.Services != nil && input.Pods != nil {
+		findings = append(findings, checkServiceNoMatchingPods(tr, input.Services, podsBySelector)...)
+	}
+	if input.Ingresses != nil && input.Services != nil {
+		findings = append(findings, checkIngressNoMatchingService(tr, input.Ingresses, servicesByName)...)
+	}
+	if input.Services == nil {
+		missingInputs = append(missingInputs, "services")
+	}
+	if input.Ingresses == nil {
+		missingInputs = append(missingInputs, "ingresses")
+	}
+	findings = append(findings, checkTraefikDanglingRefs(tr, input)...)
 
 	// --- Utilization checks (optional, only when metrics provided) ---
-	findings = append(findings, checkResourceUtilization(input.PodMetrics)...)
+	if input.PodMetrics != nil {
+		findings = append(findings, checkResourceUtilization(tr, input.PodMetrics)...)
+	} else {
+		missingInputs = append(missingInputs, "podmetrics")
+	}
 
 	// --- Deprecated API checks ---
-	findings = append(findings, checkDeprecatedAPIs(input.ServedAPIs, input.ClusterVersion)...)
+	findings = append(findings, checkDeprecatedAPIs(tr, input.ServedAPIs, input.ClusterVersion)...)
 
 	// --- Lifecycle: stuck terminating resources ---
 	// Catches the "zombie awaiting finalizer cleanup" pattern across every
@@ -67,14 +134,52 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// Terminating chip + insight; the audit surface broadens coverage to
 	// non-GitOps resources (stuck Pods on failed nodes, Deployments
 	// blocked by webhook finalizers, etc.).
-	findings = append(findings, checkStuckTerminating(input)...)
+	findings = append(findings, checkStuckTerminating(tr, input)...)
 
 	// --- Crossplane: MRs/XRs/Claims stuck Ready=False or Synced=False ---
 	// Same severity ramp as stuckTerminating (5min warning, 30min danger) so
 	// operators see the same "long enough to flag" semantics across surfaces.
-	findings = append(findings, checkCrossplaneStuck(input)...)
+	findings = append(findings, checkCrossplaneStuck(tr, input)...)
 
-	return buildResults(findings)
+	return buildResults(findings, tr, missingInputs)
+}
+
+// ============================================================================
+// Evaluation tracking
+// ============================================================================
+
+// evalTracker accumulates how many distinct subjects each check evaluated,
+// per namespace. Subjects are counted at the same (resource, checkID) grain
+// the finding merge uses — per-container checks record once per workload —
+// so buildResults can derive passed = evaluated - failed without unit
+// mismatch. Distinctness comes from call discipline: every check iterates
+// each of its subjects exactly once and records exactly once per subject
+// that passed the check's own eligibility filters.
+type evalTracker struct {
+	counts map[string]map[string]int // checkID → namespace → subjects evaluated
+}
+
+func newEvalTracker() *evalTracker {
+	return &evalTracker{counts: make(map[string]map[string]int)}
+}
+
+// record counts one evaluated subject for checkID. Cluster-scoped subjects
+// use namespace "".
+func (t *evalTracker) record(checkID, namespace string) {
+	byNS := t.counts[checkID]
+	if byNS == nil {
+		byNS = make(map[string]int)
+		t.counts[checkID] = byNS
+	}
+	byNS[namespace]++
+}
+
+// recordAll counts one evaluated subject for every checkID in ids — used by
+// check families that evaluate several checkIDs against the same subject.
+func (t *evalTracker) recordAll(ids []string, namespace string) {
+	for _, id := range ids {
+		t.record(id, namespace)
+	}
 }
 
 // ============================================================================
@@ -82,7 +187,7 @@ func RunChecks(input *CheckInput) *ScanResults {
 // Applied to workload pod templates; falls back to bare pods.
 // ============================================================================
 
-func checkWorkloadPodSpecs(input *CheckInput) []Finding {
+func checkWorkloadPodSpecs(tr *evalTracker, input *CheckInput) []Finding {
 	var findings []Finding
 
 	// Collect pod specs from workloads (attributed to the workload, not individual pods)
@@ -113,13 +218,48 @@ func checkWorkloadPodSpecs(input *CheckInput) []Finding {
 	saByKey := indexServiceAccounts(input.ServiceAccounts)
 	limitsByNs := indexLimitRangesByNamespace(input.LimitRanges)
 
+	lrAuthoritative := input.LimitRanges != nil
+	saCovers := func(ns string) bool {
+		if input.ServiceAccounts == nil {
+			return false
+		}
+		return input.ServiceAccountsNamespace == "" || input.ServiceAccountsNamespace == ns
+	}
 	for _, w := range specs {
-		findings = append(findings, checkPodSpecSecurity(w.kind, w.namespace, w.name, w.spec, saByKey)...)
-		findings = append(findings, checkPodSpecReliability(w.kind, w.namespace, w.name, w.spec)...)
-		findings = append(findings, checkPodSpecEfficiency(w.kind, w.namespace, w.name, w.spec, limitsByNs[w.namespace])...)
-		findings = append(findings, checkPodSpecVolumes(w.kind, w.namespace, w.name, w.spec)...)
+		findings = append(findings, checkPodSpecSecurity(tr, w.kind, w.namespace, w.name, w.spec, saByKey, saCovers(w.namespace))...)
+		findings = append(findings, checkPodSpecReliability(tr, w.kind, w.namespace, w.name, w.spec)...)
+		findings = append(findings, checkPodSpecEfficiency(tr, w.kind, w.namespace, w.name, w.spec, limitsByNs[w.namespace], lrAuthoritative)...)
+		findings = append(findings, checkPodSpecVolumes(tr, w.kind, w.namespace, w.name, w.spec)...)
 	}
 	return findings
+}
+
+// Every checkID a pod-spec family member can emit. Each family function
+// records its whole list once per workload spec — container-level findings
+// merge to the workload, so the workload is the subject unit here.
+var (
+	podSpecSecurityCheckIDs = []string{
+		"hostNetwork", "hostPID", "hostIPC", "automountServiceAccountToken",
+		"runAsRoot", "privileged", "privilegeEscalation", "readOnlyRootFs",
+		"dangerousCapabilities", "insecureCapabilities",
+	}
+	podSpecReliabilityCheckIDs = []string{
+		"readinessProbeMissing", "livenessProbeMissing", "imageTagLatest", "pullPolicyNotAlways",
+	}
+	podSpecEfficiencyCheckIDs = []string{
+		"cpuRequestMissing", "memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing",
+	}
+	podSpecVolumeCheckIDs = []string{"dockerSocketMount", "sensitiveHostPath"}
+)
+
+func withoutID(ids []string, drop string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != drop {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // indexServiceAccounts returns a map keyed by "namespace/name".
@@ -184,7 +324,17 @@ func containerDefaultsFromLimitRanges(lrs []*corev1.LimitRange) containerDefault
 // Security checks
 // ============================================================================
 
-func checkPodSpecSecurity(kind, namespace, name string, spec corev1.PodSpec, saByKey map[string]*corev1.ServiceAccount) []Finding {
+func checkPodSpecSecurity(tr *evalTracker, kind, namespace, name string, spec corev1.PodSpec, saByKey map[string]*corev1.ServiceAccount, saAuthoritative bool) []Finding {
+	// The automount check needs the SA inventory only when the POD leaves
+	// the field unset (SA-level opt-outs then decide). A pod-level explicit
+	// value is evaluable regardless — skipping those too would drop real
+	// detections.
+	autoCheckable := saAuthoritative || spec.AutomountServiceAccountToken != nil
+	ids := podSpecSecurityCheckIDs
+	if !autoCheckable {
+		ids = withoutID(ids, "automountServiceAccountToken")
+	}
+	tr.recordAll(ids, namespace)
 	var findings []Finding
 	f := func(checkID, severity, msg string) {
 		findings = append(findings, Finding{
@@ -208,7 +358,7 @@ func checkPodSpecSecurity(kind, namespace, name string, spec corev1.PodSpec, saB
 	// Pod-level takes precedence. If neither is explicitly false, the token is
 	// auto-mounted. Only flag when the effective value is true (or unset, which
 	// defaults to true per K8s).
-	if tokenAutoMounted(namespace, spec, saByKey) {
+	if autoCheckable && tokenAutoMounted(namespace, spec, saByKey) {
 		f("automountServiceAccountToken", SeverityWarning, "Service account token is auto-mounted")
 	}
 
@@ -318,7 +468,8 @@ func checkContainerSecurity(f func(string, string, string), c *corev1.Container,
 // sensitiveHostPaths lists host paths that should not be mounted into containers.
 var sensitiveHostPaths = []string{"/etc", "/proc", "/sys", "/var/run", "/var/log", "/root"}
 
-func checkPodSpecVolumes(kind, namespace, name string, spec corev1.PodSpec) []Finding {
+func checkPodSpecVolumes(tr *evalTracker, kind, namespace, name string, spec corev1.PodSpec) []Finding {
+	tr.recordAll(podSpecVolumeCheckIDs, namespace)
 	var findings []Finding
 	f := func(checkID, severity, msg string) {
 		findings = append(findings, Finding{
@@ -374,13 +525,14 @@ var valueGatedSensitiveKeyPatterns = []string{
 
 const configMapSensitiveValueMinLength = 24
 
-func checkSecretInConfigMap(configMaps []*corev1.ConfigMap) []Finding {
+func checkSecretInConfigMap(tr *evalTracker, configMaps []*corev1.ConfigMap) []Finding {
 	if len(configMaps) == 0 {
 		return nil
 	}
 
 	var findings []Finding
 	for _, cm := range configMaps {
+		tr.record("secretInConfigMap", cm.Namespace)
 		for key, value := range cm.Data {
 			if !configMapEntryLooksSensitive(key, value) {
 				continue
@@ -515,7 +667,8 @@ func urlContainsUserInfo(value string) bool {
 // Reliability checks
 // ============================================================================
 
-func checkPodSpecReliability(kind, namespace, name string, spec corev1.PodSpec) []Finding {
+func checkPodSpecReliability(tr *evalTracker, kind, namespace, name string, spec corev1.PodSpec) []Finding {
+	tr.recordAll(podSpecReliabilityCheckIDs, namespace)
 	var findings []Finding
 	f := func(checkID, severity, msg string) {
 		findings = append(findings, Finding{
@@ -545,14 +698,20 @@ func checkPodSpecReliability(kind, namespace, name string, spec corev1.PodSpec) 
 	return findings
 }
 
-func checkSingleReplica(deployments []*appsv1.Deployment, hpaTargets map[string]bool) []Finding {
+func checkSingleReplica(tr *evalTracker, deployments []*appsv1.Deployment, hpaTargets map[string]bool) []Finding {
 	var findings []Finding
 	for _, d := range deployments {
+		// HPA-managed deployments are out of scope, not passing — the HPA
+		// owns the replica count, so counting them would inflate "passed".
+		if hpaTargets[hpaKey("Deployment", d.Namespace, d.Name)] {
+			continue
+		}
+		tr.record("singleReplica", d.Namespace)
 		replicas := int32(1)
 		if d.Spec.Replicas != nil {
 			replicas = *d.Spec.Replicas
 		}
-		if replicas <= 1 && !hpaTargets[hpaKey("Deployment", d.Namespace, d.Name)] {
+		if replicas <= 1 {
 			findings = append(findings, Finding{
 				Kind: "Deployment", Namespace: d.Namespace, Name: d.Name,
 				CheckID: "singleReplica", Category: CategoryReliability, Severity: SeverityWarning,
@@ -563,7 +722,7 @@ func checkSingleReplica(deployments []*appsv1.Deployment, hpaTargets map[string]
 	return findings
 }
 
-func checkMissingPDB(deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet, pdbSelectors []namespacedSelector) []Finding {
+func checkMissingPDB(tr *evalTracker, deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet, pdbSelectors []namespacedSelector) []Finding {
 	var findings []Finding
 
 	check := func(kind, namespace, name string, replicas *int32, matchLabels map[string]string) {
@@ -574,6 +733,7 @@ func checkMissingPDB(deployments []*appsv1.Deployment, statefulSets []*appsv1.St
 		if r <= 1 {
 			return // PDB only matters for multi-replica workloads
 		}
+		tr.record("missingPDB", namespace)
 		podLabels := labels.Set(matchLabels)
 		for _, ns := range pdbSelectors {
 			if ns.namespace == namespace && ns.selector.Matches(podLabels) {
@@ -600,7 +760,14 @@ func checkMissingPDB(deployments []*appsv1.Deployment, statefulSets []*appsv1.St
 // Efficiency checks
 // ============================================================================
 
-func checkPodSpecEfficiency(kind, namespace, name string, spec corev1.PodSpec, lrs []*corev1.LimitRange) []Finding {
+func checkPodSpecEfficiency(tr *evalTracker, kind, namespace, name string, spec corev1.PodSpec, lrs []*corev1.LimitRange, lrAuthoritative bool) []Finding {
+	if !lrAuthoritative {
+		// LimitRange defaults suppress these findings; without the inventory
+		// every emission would be a potential false positive. Skip the whole
+		// family rather than report on data Radar couldn't see.
+		return nil
+	}
+	tr.recordAll(podSpecEfficiencyCheckIDs, namespace)
 	var findings []Finding
 	f := func(checkID, severity, msg string) {
 		findings = append(findings, Finding{
@@ -636,7 +803,7 @@ func checkPodSpecEfficiency(kind, namespace, name string, spec corev1.PodSpec, l
 // Cross-resource checks (Radar-native)
 // ============================================================================
 
-func checkServiceNoMatchingPods(services []*corev1.Service, podsBySelector map[string][]*corev1.Pod) []Finding {
+func checkServiceNoMatchingPods(tr *evalTracker, services []*corev1.Service, podsBySelector map[string][]*corev1.Pod) []Finding {
 	var findings []Finding
 	for _, svc := range services {
 		if len(svc.Spec.Selector) == 0 {
@@ -645,6 +812,7 @@ func checkServiceNoMatchingPods(services []*corev1.Service, podsBySelector map[s
 		if svc.Spec.Type == corev1.ServiceTypeExternalName {
 			continue
 		}
+		tr.record("serviceNoMatchingPods", svc.Namespace)
 		sel := labels.SelectorFromSet(labels.Set(svc.Spec.Selector))
 		found := false
 		for _, pod := range podsBySelector[svc.Namespace] {
@@ -664,9 +832,10 @@ func checkServiceNoMatchingPods(services []*corev1.Service, podsBySelector map[s
 	return findings
 }
 
-func checkIngressNoMatchingService(ingresses []*networkingv1.Ingress, servicesByName map[string]bool) []Finding {
+func checkIngressNoMatchingService(tr *evalTracker, ingresses []*networkingv1.Ingress, servicesByName map[string]bool) []Finding {
 	var findings []Finding
 	for _, ing := range ingresses {
+		eligible := false
 		for _, rule := range ing.Spec.Rules {
 			if rule.HTTP == nil {
 				continue
@@ -675,6 +844,7 @@ func checkIngressNoMatchingService(ingresses []*networkingv1.Ingress, servicesBy
 				if path.Backend.Service == nil {
 					continue
 				}
+				eligible = true
 				svcKey := ing.Namespace + "/" + path.Backend.Service.Name
 				if !servicesByName[svcKey] {
 					findings = append(findings, Finding{
@@ -685,6 +855,9 @@ func checkIngressNoMatchingService(ingresses []*networkingv1.Ingress, servicesBy
 				}
 			}
 		}
+		if eligible {
+			tr.record("ingressNoMatchingService", ing.Namespace)
+		}
 	}
 	return findings
 }
@@ -693,7 +866,7 @@ func checkIngressNoMatchingService(ingresses []*networkingv1.Ingress, servicesBy
 // Topology spread + HA checks
 // ============================================================================
 
-func checkMissingTopologySpread(deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet) []Finding {
+func checkMissingTopologySpread(tr *evalTracker, deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet) []Finding {
 	var findings []Finding
 
 	check := func(kind, namespace, name string, replicas *int32, spec corev1.PodSpec) {
@@ -704,6 +877,7 @@ func checkMissingTopologySpread(deployments []*appsv1.Deployment, statefulSets [
 		if r <= 1 {
 			return
 		}
+		tr.record("missingTopologySpread", namespace)
 		if len(spec.TopologySpreadConstraints) > 0 {
 			return
 		}
@@ -723,7 +897,7 @@ func checkMissingTopologySpread(deployments []*appsv1.Deployment, statefulSets [
 	return findings
 }
 
-func checkPodHARisk(pods []*corev1.Pod, deployments []*appsv1.Deployment) []Finding {
+func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.Deployment) []Finding {
 	var findings []Finding
 	for _, d := range deployments {
 		replicas := int32(1)
@@ -737,6 +911,7 @@ func checkPodHARisk(pods []*corev1.Pod, deployments []*appsv1.Deployment) []Find
 		if err != nil {
 			continue
 		}
+		tr.record("podHARisk", d.Namespace)
 		nodeSet := make(map[string]bool)
 		matchCount := 0
 		for _, pod := range pods {
@@ -772,7 +947,7 @@ func checkPodHARisk(pods []*corev1.Pod, deployments []*appsv1.Deployment) []Find
 // Orphan resource checks
 // ============================================================================
 
-func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
+func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding {
 	if len(input.ConfigMaps) == 0 && len(input.Secrets) == 0 {
 		return nil
 	}
@@ -807,10 +982,6 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 
 	// Check ConfigMaps
 	for _, cm := range input.ConfigMaps {
-		key := cm.Namespace + "/" + cm.Name
-		if referencedCMs[key] {
-			continue
-		}
 		// Skip well-known system ConfigMaps
 		if cm.Name == "kube-root-ca.crt" {
 			continue
@@ -819,6 +990,11 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 			continue
 		}
 		if hasControllerOwnerReference(cm.OwnerReferences) {
+			continue
+		}
+		// In scope — count as evaluated before the referenced (pass) check.
+		tr.record("orphanConfigMapSecret", cm.Namespace)
+		if referencedCMs[cm.Namespace+"/"+cm.Name] {
 			continue
 		}
 		findings = append(findings, Finding{
@@ -830,10 +1006,6 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 
 	// Check Secrets
 	for _, sec := range input.Secrets {
-		key := sec.Namespace + "/" + sec.Name
-		if referencedSecrets[key] {
-			continue
-		}
 		// Skip service account tokens and Helm release secrets
 		if sec.Type == corev1.SecretTypeServiceAccountToken {
 			continue
@@ -849,6 +1021,10 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 			continue
 		}
 		if hasControllerOwnerReference(sec.OwnerReferences) {
+			continue
+		}
+		tr.record("orphanConfigMapSecret", sec.Namespace)
+		if referencedSecrets[sec.Namespace+"/"+sec.Name] {
 			continue
 		}
 		findings = append(findings, Finding{
@@ -1239,13 +1415,18 @@ func hasControllerOwnerReference(refs []metav1.OwnerReference) bool {
 // Resource utilization checks
 // ============================================================================
 
-func checkResourceUtilization(metrics []PodMetricsInput) []Finding {
+func checkResourceUtilization(tr *evalTracker, metrics []PodMetricsInput) []Finding {
 	if len(metrics) == 0 {
 		return nil
 	}
 
 	var findings []Finding
 	for _, m := range metrics {
+		// Pods with no requests at all can't be measured against anything —
+		// they're out of scope, not passing.
+		if m.CPURequest > 0 || m.MemoryRequest > 0 {
+			tr.record("resourceUtilization", m.Namespace)
+		}
 		// CPU utilization
 		if m.CPURequest > 0 {
 			cpuPct := float64(m.CPUUsage) / float64(m.CPURequest) * 100
@@ -1291,7 +1472,7 @@ func checkResourceUtilization(metrics []PodMetricsInput) []Finding {
 // Deprecated API checks
 // ============================================================================
 
-func checkDeprecatedAPIs(servedAPIs []string, clusterVersion string) []Finding {
+func checkDeprecatedAPIs(tr *evalTracker, servedAPIs []string, clusterVersion string) []Finding {
 	if len(servedAPIs) == 0 || clusterVersion == "" {
 		return nil
 	}
@@ -1300,21 +1481,24 @@ func checkDeprecatedAPIs(servedAPIs []string, clusterVersion string) []Finding {
 	var findings []Finding
 
 	for _, gv := range servedAPIs {
+		tr.record("deprecatedAPIVersion", "")
 		entries, ok := deprecations[gv]
 		if !ok {
 			continue
 		}
 		for _, entry := range entries {
-			kindLabel := gv
 			msg := fmt.Sprintf("API %s is deprecated (since %s, removed in %s) — use %s",
 				gv, entry.DeprecatedIn, entry.RemovedIn, entry.Replacement)
 			if entry.Kind != "" {
-				kindLabel = entry.Kind
 				msg = fmt.Sprintf("API %s %s is deprecated (since %s, removed in %s) — use %s",
 					gv, entry.Kind, entry.DeprecatedIn, entry.RemovedIn, entry.Replacement)
 			}
+			// One evaluated subject per served group/version, so all of a
+			// gv's deprecated kinds share one finding key (standard merge
+			// joins the messages) — keeps failed <= evaluated by
+			// construction instead of relying on the clamp.
 			findings = append(findings, Finding{
-				Kind:     kindLabel,
+				Kind:     "APIVersion",
 				Name:     gv,
 				CheckID:  "deprecatedAPIVersion",
 				Category: CategoryReliability,
@@ -1390,7 +1574,7 @@ func indexServicesByName(services []*corev1.Service) map[string]bool {
 // Result aggregation
 // ============================================================================
 
-func buildResults(findings []Finding) *ScanResults {
+func buildResults(findings []Finding, tr *evalTracker, missingInputs []string) *ScanResults {
 	categories := map[string]CategorySummary{}
 	// Initialize all categories
 	for _, cat := range []string{CategorySecurity, CategoryReliability, CategoryEfficiency} {
@@ -1437,6 +1621,8 @@ func buildResults(findings []Finding) *ScanResults {
 		totalDanger += cs.Danger
 	}
 
+	checkCounts, totalPassing := deriveCheckCounts(tr.counts, dedupFindings, categories)
+
 	// Include full registry so settings dialog can show all checks (including disabled ones)
 	checks := make(map[string]CheckMeta, len(CheckRegistry))
 	for id, meta := range CheckRegistry {
@@ -1445,14 +1631,56 @@ func buildResults(findings []Finding) *ScanResults {
 
 	return &ScanResults{
 		Summary: ScanSummary{
+			Passing:    totalPassing,
 			Warning:    totalWarning,
 			Danger:     totalDanger,
 			Categories: categories,
 		},
-		Findings: dedupFindings,
-		Groups:   GroupByResource(dedupFindings),
-		Checks:   checks,
+		Findings:             dedupFindings,
+		Groups:               GroupByResource(dedupFindings),
+		Checks:               checks,
+		CheckCounts:          checkCounts,
+		EvaluatedByNamespace: tr.counts,
+		MissingInputs:        missingInputs,
 	}
+}
+
+// deriveCheckCounts turns per-namespace evaluation tallies plus MERGED
+// findings into per-check evaluated/passed counts, accumulating each check's
+// passed into its registry category's Passing (categories is mutated). Both
+// sides count distinct subjects, so passed = evaluated - failed; the zero
+// clamp absorbs the one legitimate mismatch — a deprecated group/version
+// serving several deprecated kinds yields one evaluated subject but one
+// merged finding per kind.
+func deriveCheckCounts(evalByNS map[string]map[string]int, mergedFindings []Finding, categories map[string]CategorySummary) (map[string]CheckCount, int) {
+	failedByCheck := make(map[string]int)
+	for _, f := range mergedFindings {
+		failedByCheck[f.CheckID]++
+	}
+
+	checkCounts := make(map[string]CheckCount, len(evalByNS))
+	totalPassing := 0
+	for id, byNS := range evalByNS {
+		evaluated := 0
+		for _, n := range byNS {
+			evaluated += n
+		}
+		if evaluated == 0 {
+			continue
+		}
+		passed := evaluated - failedByCheck[id]
+		if passed < 0 {
+			passed = 0
+		}
+		checkCounts[id] = CheckCount{Evaluated: evaluated, Passed: passed}
+		totalPassing += passed
+		if meta, ok := CheckRegistry[id]; ok {
+			cs := categories[meta.Category]
+			cs.Passing += passed
+			categories[meta.Category] = cs
+		}
+	}
+	return checkCounts, totalPassing
 }
 
 // ============================================================================
@@ -1505,13 +1733,14 @@ const (
 // Audit surfaces the *list* up-front; a per-resource insight only
 // helps once they've drilled into a specific app. The two surfaces
 // are complementary, not redundant.
-func checkStuckTerminating(input *CheckInput) []Finding {
+func checkStuckTerminating(tr *evalTracker, input *CheckInput) []Finding {
 	if input == nil {
 		return nil
 	}
 	var findings []Finding
 	now := time.Now()
 	emit := func(kind string, obj metav1.Object) {
+		tr.record("stuckTerminating", obj.GetNamespace())
 		dt := obj.GetDeletionTimestamp()
 		if dt == nil || dt.IsZero() {
 			return
@@ -1593,7 +1822,7 @@ func checkStuckTerminating(input *CheckInput) []Finding {
 // The check inspects status.conditions on each unstructured object directly
 // — Crossplane condition semantics are stable across every provider (Ready,
 // Synced) so we don't need per-provider knowledge.
-func checkCrossplaneStuck(input *CheckInput) []Finding {
+func checkCrossplaneStuck(tr *evalTracker, input *CheckInput) []Finding {
 	if input == nil {
 		return nil
 	}
@@ -1611,6 +1840,7 @@ func checkCrossplaneStuck(input *CheckInput) []Finding {
 		if u.GetAnnotations()["crossplane.io/paused"] == "true" {
 			return
 		}
+		tr.record("crossplaneStuck", u.GetNamespace())
 		cond, ok := findFalseCrossplaneCondition(u)
 		if !ok {
 			return
