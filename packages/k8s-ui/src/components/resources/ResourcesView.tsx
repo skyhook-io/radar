@@ -1709,8 +1709,16 @@ function isLikelyCrossplaneMRGroup(kind: string, group: string): boolean {
   if (k === 'providerconfig' || k === 'providerconfigs') return false
   if (group.endsWith('.upbound.io')) return true
   if (group === 'kubernetes.crossplane.io' || group === 'helm.crossplane.io') return true
-  // Reserved Crossplane core groups — never MRs.
-  if (group === 'crossplane.io' || group === 'pkg.crossplane.io' || group === 'apiextensions.crossplane.io') {
+  // Reserved Crossplane core groups — never MRs. protection.crossplane.io
+  // (Usage/ClusterUsage) and ops.crossplane.io (Operations) are Crossplane v2's
+  // new core groups: lifecycle/orchestration objects, not provider resources.
+  if (
+    group === 'crossplane.io' ||
+    group === 'pkg.crossplane.io' ||
+    group === 'apiextensions.crossplane.io' ||
+    group === 'protection.crossplane.io' ||
+    group === 'ops.crossplane.io'
+  ) {
     return false
   }
   // Any other *.crossplane.io subgroup is presumed to be a provider's MR group.
