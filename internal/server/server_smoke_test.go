@@ -238,6 +238,65 @@ func TestMain(m *testing.M) {
 			ObjectMeta: metav1.ObjectMeta{Name: "nginx-tls", Namespace: "default"},
 			Type:       corev1.SecretTypeOpaque,
 		},
+		// Argo cluster-secret fixtures for /api/argo/destinations: one valid,
+		// one malformed (no server) that the endpoint must skip.
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster-prod", Namespace: "argocd",
+				Labels: map[string]string{"argocd.argoproj.io/secret-type": "cluster"},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"name":   []byte("prod-us-east1"),
+				"server": []byte("https://34.10.0.1"),
+				"config": []byte(`{"bearerToken":"SUPER-SECRET-TOKEN"}`),
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster-broken", Namespace: "argocd",
+				Labels: map[string]string{"argocd.argoproj.io/secret-type": "cluster"},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{"name": []byte("half-configured")},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster-hostile", Namespace: "argocd",
+				Labels: map[string]string{"argocd.argoproj.io/secret-type": "cluster"},
+			},
+			Type: corev1.SecretTypeOpaque,
+			// server is not a URL — a mislabeled/hostile row whose bytes must
+			// not be reflected by /api/argo/destinations.
+			Data: map[string][]byte{
+				"name":   []byte("hostile"),
+				"server": []byte("Bearer NOT-A-URL-TOKEN xyz"),
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster-userinfo", Namespace: "argocd",
+				Labels: map[string]string{"argocd.argoproj.io/secret-type": "cluster"},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"name":   []byte("userinfo-cluster"),
+				"server": []byte("https://EMBEDDED-CRED-TOKEN@apiserver.example"),
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster-querytoken", Namespace: "argocd",
+				Labels: map[string]string{"argocd.argoproj.io/secret-type": "cluster"},
+			},
+			Type: corev1.SecretTypeOpaque,
+			// Credentials hidden in the query string — the endpoint must
+			// reconstruct scheme://host, never reflect these bytes.
+			Data: map[string][]byte{
+				"name":   []byte("querytoken-cluster"),
+				"server": []byte("https://apiserver2.example/?token=QUERY-CRED-TOKEN#FRAG-CRED"),
+			},
+		},
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "system-token", Namespace: "kube-system"},
 			Type:       corev1.SecretTypeOpaque,

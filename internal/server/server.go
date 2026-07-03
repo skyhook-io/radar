@@ -450,6 +450,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/flux/{kind}/{namespace}/{name}/resume", s.handleFluxResume)
 
 			// ArgoCD routes
+			r.Get("/argo/destinations", s.handleArgoDestinations)
 			r.Post("/argo/applications/{namespace}/{name}/sync", s.handleArgoSync)
 			r.Post("/argo/applications/{namespace}/{name}/refresh", s.handleArgoRefresh)
 			r.Post("/argo/applications/{namespace}/{name}/rollback", s.handleArgoRollback)
