@@ -1,7 +1,5 @@
 # AI Integration (MCP)
 
-> **Beta** — This feature is new and may evolve. Feedback welcome via [GitHub Issues](https://github.com/skyhook-io/radar/issues).
-
 Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants query your Kubernetes cluster.
 
 ## Why MCP instead of raw kubectl?

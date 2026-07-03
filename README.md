@@ -378,7 +378,7 @@ Inspect what any ServiceAccount can actually do — without three `kubectl descr
 
 Considered for follow-ups, deliberately not in this pass — RBAC audit checks (wildcard / cluster-admin / orphan-binding / unused-role detection, Kubescape-aligned), a verb × resource matrix view on the SA page (rakkess-style), a "Subject Explorer" top-level page for browsing Users / Groups without a detail page today, a graph topology view of Subject → Binding → Role → Rule (`rbac-tool viz` style), in-UI binding edits, and a "can-i" free-form query UI. Read-only visibility ships first; we'll come back once we see how operators use the reverse-lookup.
 
-### AI Integration (MCP) <sup>beta</sup>
+### AI Integration (MCP)
 
 Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants — Claude, Cursor, Copilot, and others — query your cluster through Radar.
 
