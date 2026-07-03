@@ -170,13 +170,13 @@ func (rb *ringBuffer) GetAll() []MetricsDataPoint {
 }
 
 func metricsCollectionErrorLevel(err error) string {
-	if metricsAPIUnavailable(err) {
+	if MetricsAPIUnavailable(err) {
 		return "warning"
 	}
 	return "error"
 }
 
-func metricsAPIUnavailable(err error) bool {
+func MetricsAPIUnavailable(err error) bool {
 	if err == nil {
 		return false
 	}

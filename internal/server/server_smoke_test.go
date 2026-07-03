@@ -32,6 +32,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 var (
@@ -1022,7 +1023,7 @@ func TestSmokeMetricsNilDynamicClient(t *testing.T) {
 	}
 }
 
-func TestIsMetricsAPIUnavailable(t *testing.T) {
+func TestMetricsAPIUnavailable(t *testing.T) {
 	// These cases cover typed Kubernetes API errors first, then message shapes
 	// emitted by apimachinery discovery/restmapper, kubectl top-style metrics
 	// failures, and API aggregation 503s. Keep broad phrases gated by a
@@ -1086,8 +1087,8 @@ func TestIsMetricsAPIUnavailable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isMetricsAPIUnavailable(tt.err); got != tt.want {
-				t.Fatalf("isMetricsAPIUnavailable() = %v, want %v", got, tt.want)
+			if got := k8score.MetricsAPIUnavailable(tt.err); got != tt.want {
+				t.Fatalf("MetricsAPIUnavailable() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -1414,18 +1415,10 @@ func resetMetricsAPIServiceDiagnosisMemoForTest(t *testing.T) {
 	metricsAPIServiceDiagnosisMemo.mu.Lock()
 	metricsAPIServiceDiagnosisMemo.entries = nil
 	metricsAPIServiceDiagnosisMemo.mu.Unlock()
-
-	metricsAPIServiceDiagnosisMemo.logMu.Lock()
-	metricsAPIServiceDiagnosisMemo.loggedErrors = nil
-	metricsAPIServiceDiagnosisMemo.logMu.Unlock()
 	t.Cleanup(func() {
 		metricsAPIServiceDiagnosisMemo.mu.Lock()
 		metricsAPIServiceDiagnosisMemo.entries = nil
 		metricsAPIServiceDiagnosisMemo.mu.Unlock()
-
-		metricsAPIServiceDiagnosisMemo.logMu.Lock()
-		metricsAPIServiceDiagnosisMemo.loggedErrors = nil
-		metricsAPIServiceDiagnosisMemo.logMu.Unlock()
 	})
 }
 

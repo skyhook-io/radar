@@ -2190,7 +2190,7 @@ func (s *Server) handlePodMetrics(w http.ResponseWriter, r *http.Request) {
 
 	metrics, err := k8s.GetPodMetrics(r.Context(), namespace, name)
 	if err != nil {
-		if isMetricsAPIUnavailable(err) {
+		if k8score.MetricsAPIUnavailable(err) {
 			s.writeError(w, http.StatusNotFound, "Pod metrics not found (metrics-server may not be installed)")
 			return
 		}
@@ -2211,7 +2211,7 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 
 	metrics, err := k8s.GetNodeMetrics(r.Context(), name)
 	if err != nil {
-		if isMetricsAPIUnavailable(err) {
+		if k8score.MetricsAPIUnavailable(err) {
 			s.writeError(w, http.StatusNotFound, "Node metrics not found (metrics-server may not be installed)")
 			return
 		}
@@ -2222,30 +2222,6 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, metrics)
 }
 
-func isMetricsAPIUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	if apierrors.IsNotFound(err) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	if !strings.Contains(msg, "metrics") {
-		return false
-	}
-	if apierrors.IsServiceUnavailable(err) {
-		return true
-	}
-	return strings.Contains(msg, "not found") ||
-		strings.Contains(msg, "could not find the requested resource") ||
-		strings.Contains(msg, "no matches for kind") ||
-		strings.Contains(msg, "no resource matches") ||
-		strings.Contains(msg, "no metrics known") ||
-		strings.Contains(msg, "not available") ||
-		strings.Contains(msg, "unable to fetch metrics") ||
-		strings.Contains(msg, "currently unable to handle the request")
-}
-
 const (
 	metricsAPIServiceKind  = "APIService"
 	metricsAPIServiceGroup = "apiregistration.k8s.io"
@@ -2253,18 +2229,13 @@ const (
 )
 
 var metricsAPIServiceDiagnosisMemo = metricsAPIServiceDiagnosisCache{
-	ttl:    5 * time.Second,
-	logTTL: time.Minute,
+	ttl: 5 * time.Second,
 }
 
 type metricsAPIServiceDiagnosisCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration
 	entries map[bool]metricsAPIServiceDiagnosisEntry
-
-	logMu        sync.Mutex
-	logTTL       time.Duration
-	loggedErrors map[string]time.Time
 }
 
 type metricsAPIServiceDiagnosisEntry struct {
@@ -2300,43 +2271,11 @@ func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditi
 	return diagnosis
 }
 
-func (c *metricsAPIServiceDiagnosisCache) shouldLogLookupError(contextName string, err error) bool {
-	if c == nil || c.logTTL <= 0 || err == nil {
-		return true
-	}
-
-	c.logMu.Lock()
-	defer c.logMu.Unlock()
-	now := time.Now()
-	if c.loggedErrors == nil {
-		c.loggedErrors = make(map[string]time.Time)
-	}
-	for key, expiresAt := range c.loggedErrors {
-		if !now.Before(expiresAt) {
-			delete(c.loggedErrors, key)
-		}
-	}
-	key := metricsAPIServiceLookupLogKey(contextName, err)
-	if expiresAt, ok := c.loggedErrors[key]; ok && now.Before(expiresAt) {
-		return false
-	}
-	c.loggedErrors[key] = now.Add(c.logTTL)
-	return true
-}
-
-func metricsAPIServiceLookupLogKey(contextName string, err error) string {
-	if statusErr, ok := err.(apierrors.APIStatus); ok {
-		status := statusErr.Status()
-		return fmt.Sprintf("%s\x00apiStatus\x00%d\x00%s\x00%s", contextName, status.Code, status.Reason, status.Status)
-	}
-	return fmt.Sprintf("%s\x00%T", contextName, err)
-}
-
 func metricsHistoryCollectionError(ctx context.Context, source, errMsg string, includeAPIServiceConditionMessage bool) (string, string, string) {
 	if errMsg == "" {
 		return "", "", ""
 	}
-	if isMetricsAPIUnavailable(fmt.Errorf("failed to get %s metrics: %s", strings.ToLower(source), errMsg)) {
+	if k8score.MetricsAPIUnavailable(fmt.Errorf("failed to get %s metrics: %s", strings.ToLower(source), errMsg)) {
 		return fmt.Sprintf("%s metrics not found (metrics-server may not be installed)", source), errMsg, metricsUnavailableDiagnosis(ctx, includeAPIServiceConditionMessage)
 	}
 	return errMsg, "", ""
@@ -2367,9 +2306,7 @@ func metricsAPIServiceLookupDiagnosis(apiService *unstructured.Unstructured, err
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return ""
 		}
-		if metricsAPIServiceDiagnosisMemo.shouldLogLookupError(k8s.GetContextName(), err) {
-			log.Printf("[metrics] Failed to inspect %s APIService for metrics unavailable diagnosis: %v", metricsAPIServiceName, err)
-		}
+		log.Printf("[metrics] Failed to inspect %s APIService for metrics unavailable diagnosis: %v", metricsAPIServiceName, err)
 		return ""
 	}
 	if apiService == nil {
