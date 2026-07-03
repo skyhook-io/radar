@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -1442,11 +1441,6 @@ func (s *Server) countWarningEvents(cache *k8s.ResourceCache, namespace string) 
 	return count
 }
 
-// metricsServerTimeout bounds the metrics-server query so a slow or unreachable
-// metrics endpoint can't consume the dashboard's whole request budget (the
-// handler runs this in a goroutine and blocks on it in wg.Wait()).
-const metricsServerTimeout = 8 * time.Second
-
 func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []string) *DashboardMetrics {
 	// Node capacity and pod requests come from the cache — they don't need
 	// metrics-server. Live usage does. Compute the cached values first and
@@ -1465,84 +1459,21 @@ func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []st
 		return nil
 	}
 
-	// Sum capacity across all nodes (cached)
-	var cpuCapacityMillis int64
-	var memCapacityBytes int64
-	for _, n := range nodes {
-		cpuCapacityMillis += n.Status.Capacity.Cpu().MilliValue()
-		memCapacityBytes += n.Status.Capacity.Memory().Value()
-	}
-
-	// Sum requests across pods the user can see (cached). For namespace-
-	// restricted users this scopes to allowedNamespaces — without it, the
-	// dashboard would expose aggregate pod-resource totals from namespaces they
-	// have no read access to.
-	var cpuRequestsMillis int64
-	var memRequestsBytes int64
-	var metricPods []*corev1.Pod
-	if podLister := cache.Pods(); podLister != nil {
-		if allowedNamespaces == nil {
-			metricPods, _ = podLister.List(labels.Everything())
-		} else {
-			for _, ns := range allowedNamespaces {
-				items, _ := podLister.Pods(ns).List(labels.Everything())
-				metricPods = append(metricPods, items...)
-			}
-		}
-	}
-	for _, pod := range metricPods {
-		// Skip completed/failed pods
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			continue
-		}
-		for _, container := range pod.Spec.Containers {
-			if container.Resources.Requests != nil {
-				if cpu, ok := container.Resources.Requests[corev1.ResourceCPU]; ok {
-					cpuRequestsMillis += cpu.MilliValue()
-				}
-				if mem, ok := container.Resources.Requests[corev1.ResourceMemory]; ok {
-					memRequestsBytes += mem.Value()
-				}
-			}
-		}
-	}
+	// Capacity + scheduled-pod requests via the shared informer-derived
+	// computation (node_metrics.go). Namespace scoping keeps restricted users
+	// from seeing aggregate totals of namespaces they can't read.
+	cr := computeCapacityRequests(nodes, listPodsScoped(cache.Pods(), allowedNamespaces))
+	cpuCapacityMillis := cr.cpuCapMillis
+	memCapacityBytes := cr.memCapBytes
+	cpuRequestsMillis := cr.cpuReqMillis
+	memRequestsBytes := cr.memReqBytes
 
 	// Live usage from metrics-server — best-effort. Query via raw REST to avoid
 	// adding k8s.io/metrics dependency; metrics-server forwards impersonation
 	// headers, so a user without metrics.k8s.io/nodes access gets a 403. A
 	// missing, forbidden, or slow metrics-server leaves usageAvailable false
 	// rather than discarding the capacity/request data computed above.
-	var cpuUsageMillis int64
-	var memUsageBytes int64
-	usageAvailable := false
-	if client := k8s.ClientFromContext(ctx); client != nil {
-		mctx, cancel := context.WithTimeout(ctx, metricsServerTimeout)
-		defer cancel()
-		data, err := client.CoreV1().RESTClient().Get().
-			AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
-			DoRaw(mctx)
-		if err != nil {
-			log.Printf("[dashboard] node metrics unavailable (showing requests/capacity only): %v", err)
-		} else {
-			var nodeMetricsList struct {
-				Items []struct {
-					Usage struct {
-						CPU    string `json:"cpu"`
-						Memory string `json:"memory"`
-					} `json:"usage"`
-				} `json:"items"`
-			}
-			if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
-				log.Printf("[dashboard] failed to parse node metrics: %v", err)
-			} else if len(nodeMetricsList.Items) > 0 {
-				for _, item := range nodeMetricsList.Items {
-					cpuUsageMillis += parseCPUToMillis(item.Usage.CPU)
-					memUsageBytes += parseMemoryToBytes(item.Usage.Memory)
-				}
-				usageAvailable = true
-			}
-		}
-	}
+	cpuUsageMillis, memUsageBytes, usageAvailable := s.fetchNodeUsage(ctx)
 
 	metrics := &DashboardMetrics{UsageAvailable: usageAvailable}
 	if cpuCapacityMillis > 0 {
@@ -1570,12 +1501,6 @@ func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []st
 
 	return metrics
 }
-
-// parseCPUToMillis delegates to k8s.ParseCPUToMillis.
-func parseCPUToMillis(s string) int64 { return k8s.ParseCPUToMillis(s) }
-
-// parseMemoryToBytes delegates to k8s.ParseMemoryToBytes.
-func parseMemoryToBytes(s string) int64 { return k8s.ParseMemoryToBytes(s) }
 
 // Helper functions
 

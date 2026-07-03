@@ -59,6 +59,7 @@ import (
 type Server struct {
 	router          *chi.Mux
 	broadcaster     *SSEBroadcaster
+	vitalsMetrics   vitalsMetricsMemo
 	port            int
 	devMode         bool
 	staticFS        fs.FS
@@ -291,6 +292,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)
 			r.Get("/dashboard", s.handleDashboard)
+			r.Get("/vitals", s.handleVitals)
 			r.Get("/dashboard/crds", s.handleDashboardCRDs)
 			r.Get("/dashboard/helm", s.handleDashboardHelm)
 			r.Get("/cluster-info", s.handleClusterInfo)

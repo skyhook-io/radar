@@ -121,6 +121,7 @@ func (s *Server) finalizePostContextSwitch() {
 	k8s.InvalidateUserCapabilitiesCache()
 	clearPackagesCache()
 	clearApplicationsCache()
+	s.vitalsMetrics.clear()
 	s.clearAllNamespacePreferences()
 }
 
