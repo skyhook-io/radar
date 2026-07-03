@@ -1409,6 +1409,22 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 			},
 		},
 		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "lifecycle-taint", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberUnavailable:      1,
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "unparsed", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberUnavailable:      1,
+			},
+		},
+		&appsv1.DaemonSet{
 			ObjectMeta: metav1.ObjectMeta{Name: "not-scheduled-design", Namespace: "prod", CreationTimestamp: old},
 			Status: appsv1.DaemonSetStatus{
 				DesiredNumberScheduled: 4,
@@ -1444,6 +1460,8 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 		unschedulableDSPod("design-affinity", "design-affinity-pod", "node-b", "0/4 nodes are available: 4 node(s) didn't match Pod's node affinity/selector."),
 		unschedulableDSPod("capacity", "capacity-pod", "node-c", "0/4 nodes are available: 4 Insufficient cpu."),
 		unschedulableDSPod("host-port", "host-port-pod", "node-d", "0/4 nodes are available: 4 node(s) didn't have free ports for the requested pod ports."),
+		unschedulableDSPod("lifecycle-taint", "lifecycle-taint-pod", "node-l", "0/4 nodes are available: 4 node(s) had untolerated taint {node.kubernetes.io/not-ready: }."),
+		unschedulableDSPod("unparsed", "unparsed-pod", "node-u", "0/4 nodes are available: 4 future scheduler predicate we do not parse yet."),
 		unschedulableDSPod("not-scheduled-design", "not-scheduled-design-pod", "node-e", "0/4 nodes are available: 4 node(s) had untolerated taint {dedicated: infra}."),
 		unschedulableDSPod("partial-duplicate", "partial-duplicate-pod-a", "node-f", "0/4 nodes are available: 4 node(s) had untolerated taint {dedicated: infra}."),
 		unschedulableDSPod("partial-duplicate", "partial-duplicate-pod-b", "node-f", "0/4 nodes are available: 4 node(s) didn't match Pod's node affinity/selector."),
@@ -1472,6 +1490,8 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 			hasProblem(problems, "DaemonSet", "design-affinity", "1 unavailable") &&
 			hasProblem(problems, "DaemonSet", "capacity", "1 unavailable") &&
 			hasProblem(problems, "DaemonSet", "host-port", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "lifecycle-taint", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "unparsed", "1 unavailable") &&
 			hasProblem(problems, "DaemonSet", "not-scheduled-design", "1 not scheduled") &&
 			hasProblem(problems, "DaemonSet", "partial-duplicate", "2 unavailable") &&
 			hasProblem(problems, "DaemonSet", "extra-unknown-target", "1 unavailable") &&
@@ -1488,6 +1508,8 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 	assertProblem(t, problems, "DaemonSet", "design-affinity", "1 unavailable", "high")
 	assertProblem(t, problems, "DaemonSet", "capacity", "1 unavailable", "critical")
 	assertProblem(t, problems, "DaemonSet", "host-port", "1 unavailable", "critical")
+	assertProblem(t, problems, "DaemonSet", "lifecycle-taint", "1 unavailable", "critical")
+	assertProblem(t, problems, "DaemonSet", "unparsed", "1 unavailable", "critical")
 	assertProblem(t, problems, "DaemonSet", "not-scheduled-design", "1 not scheduled", "critical")
 	assertProblem(t, problems, "DaemonSet", "partial-duplicate", "2 unavailable", "critical")
 	assertProblem(t, problems, "DaemonSet", "extra-unknown-target", "1 unavailable", "high")
