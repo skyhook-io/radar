@@ -32,6 +32,7 @@ import { FacetSection, FacetButton } from '../ui/Facet'
 import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
+import { BoardTableSkeleton, BoardRailSkeleton } from '../ui/BoardSkeleton'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
@@ -766,7 +767,7 @@ export function GitOpsTableView({
               {modeLabel(mode)} view is queued behind the application list.
             </div>
           ) : initialLoading ? (
-            <GitOpsTableSkeleton />
+            <BoardTableSkeleton />
           ) : error ? (
             <div className="p-4 text-sm text-red-500">Failed to load GitOps applications: {error.message}</div>
           ) : filteredRows.length === 0 ? (
@@ -815,60 +816,6 @@ export function GitOpsTableView({
 // Subcomponents — kept private to the file; they're tightly coupled to
 // GitOpsTableView's visual language and not generally useful elsewhere.
 // =============================================================================
-
-// Shape-stable loading stand-ins. Both mirror the loaded anatomy so data
-// resolves in place: rows appear inside the table frame, facets inside the
-// rail — no half-height rail dangling next to a centered spinner, no layout
-// jump when the response lands.
-function GitOpsTableSkeleton() {
-  return (
-    <div aria-live="polite" aria-label="Loading GitOps applications…" className="divide-y divide-theme-border-light">
-      {Array.from({ length: 10 }, (_, i) => (
-        <div key={i} className="flex items-center gap-6 px-4 py-3" style={{ opacity: 1 - i * 0.09 }}>
-          <div className="min-w-0 flex-[2] space-y-2">
-            <div className="h-4 w-2/3 animate-pulse rounded bg-theme-hover" />
-            <div className="h-3 w-1/2 animate-pulse rounded bg-theme-hover" />
-          </div>
-          <div className="hidden h-4 flex-1 animate-pulse rounded bg-theme-hover md:block" />
-          <div className="h-5 w-20 animate-pulse rounded-full bg-theme-hover" />
-          <div className="h-5 w-20 animate-pulse rounded-full bg-theme-hover" />
-          <div className="hidden h-4 flex-[1.5] animate-pulse rounded bg-theme-hover lg:block" />
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function GitOpsSidebarSkeleton() {
-  // Section stubs sized like the loaded rail (Sync ~4 rows, Health ~5,
-  // Automation ~3, Projects/Namespaces a few each) so the rail keeps its
-  // height while counts are unknown — showing real facet buttons with "0"
-  // counts would be false zeros.
-  const sections: Array<[string, number]> = [
-    ['Sync', 4],
-    ['Health', 5],
-    ['Automation', 3],
-    ['Projects', 4],
-    ['Namespaces', 4],
-  ]
-  return (
-    <div aria-hidden>
-      {sections.map(([title, rows]) => (
-        <div key={title} className="border-b border-theme-border-light px-3 py-3">
-          <div className="mb-2 h-3 w-24 animate-pulse rounded bg-theme-hover" />
-          <div className="space-y-1.5">
-            {Array.from({ length: rows }, (_, i) => (
-              <div key={i} className="flex items-center justify-between px-1.5 py-1">
-                <div className="h-3.5 animate-pulse rounded bg-theme-hover" style={{ width: `${52 - i * 6}%` }} />
-                <div className="h-3.5 w-6 animate-pulse rounded bg-theme-hover" />
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
 
 function GitOpsFilterSidebar({
   loading,
@@ -936,7 +883,15 @@ function GitOpsFilterSidebar({
       </div>
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <GitOpsSidebarSkeleton />
+          <BoardRailSkeleton
+            sections={[
+              ['Sync', 4],
+              ['Health', 5],
+              ['Automation', 3],
+              ['Projects', 4],
+              ['Namespaces', 4],
+            ]}
+          />
         ) : (
           <>
         {AVAILABLE_MODES.length > 1 && (

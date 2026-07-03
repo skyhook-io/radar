@@ -83,7 +83,14 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
   // the page header from vanishing while loading / on error, the wrapper shows
   // the same header bar above those states. (Keep title + description in sync
   // with ApplicationsList's PageHeader.)
-  if (query.isLoading || query.error) {
+  if (query.isLoading) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <ApplicationsList apps={[]} onSelect={selectApp} headerActions={freshness} loading />
+      </div>
+    )
+  }
+  if (query.error) {
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="shrink-0 border-b border-theme-border px-4 py-4">
@@ -93,11 +100,7 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
             description="Deployable software in this cluster — your services, workers, and jobs, grouped by app/release evidence."
           />
         </div>
-        {query.isLoading ? (
-          <CenteredEmpty icon={Boxes} headline="Loading applications…" />
-        ) : (
-          <CenteredEmpty tone="filtered" icon={Boxes} headline="Failed to load applications" body={(query.error as Error).message} />
-        )}
+        <CenteredEmpty tone="filtered" icon={Boxes} headline="Failed to load applications" body={(query.error as Error).message} />
       </div>
     )
   }

@@ -13,9 +13,11 @@ export interface ApplicationsListProps {
   onSelect: (key: string) => void
   /** Leading element in the header actions (e.g. a freshness control). */
   headerActions?: ReactNode
+  /** First fetch in flight — chassis renders its shape-stable skeleton. */
+  loading?: boolean
 }
 
-export function ApplicationsList({ apps, onSelect, headerActions }: ApplicationsListProps) {
+export function ApplicationsList({ apps, onSelect, headerActions, loading }: ApplicationsListProps) {
   // Env tokens this CLUSTER proved (identity classifications on the wire) feed
   // the namespace heuristic, so sibling-less rows in discovered env namespaces
   // still label without any hardcoded vocabulary.
@@ -24,6 +26,7 @@ export function ApplicationsList({ apps, onSelect, headerActions }: Applications
 
   return (
     <ApplicationsView
+      loading={loading}
       variant="single"
       entries={entries}
       onSelect={onSelect}

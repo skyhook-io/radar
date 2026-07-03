@@ -5,6 +5,7 @@ import { clsx } from 'clsx'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
 import { EmptyState } from '../ui/EmptyState'
+import { BoardTableSkeleton, BoardRailSkeleton } from '../ui/BoardSkeleton'
 import { SearchBox } from '../ui/SearchBox'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { PageHeader } from '../ui/PageHeader'
@@ -100,6 +101,9 @@ export interface ApplicationsViewProps {
   emptySlot?: ReactNode
   /** Leading element in the header actions cluster (e.g. a freshness control). */
   headerActions?: ReactNode
+  /** First fetch in flight — render the shape-stable skeleton (pulsing tiles,
+   *  rail stubs, table rows) instead of collapsing the chassis. */
+  loading?: boolean
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -112,7 +116,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -274,9 +278,16 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     .sort((a, b) => (envRank(b[0] === 'none' ? undefined : b[0]) ?? -1) - (envRank(a[0] === 'none' ? undefined : a[0]) ?? -1))
     .map(([env, count]) => ({ value: env, label: env === 'none' ? 'unlabeled' : env, count }))
 
+  // First fetch, nothing to show yet: drive the shape-stable skeleton. The
+  // loaded state hides zero-count health tiles, so without this the header
+  // (tiles + distribution bar), rail, and table would all pop in at once.
+  const initialLoading = Boolean(loading) && allEntries.length === 0
+
   // Clickable status tile wired to the health facet — tap to filter to that tier.
   const healthTile = (h: AppHealth, tone: SummaryTone) =>
-    counts.health[h] ? (
+    initialLoading && (h === 'healthy' || h === 'degraded' || h === 'unhealthy') ? (
+      <SummaryTile key={h} label={HEALTH_META[h].label} value={0} tone={tone} loading />
+    ) : counts.health[h] ? (
       <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h]} tone={tone} active={fHealth.has(h)} onClick={() => filters.toggle('health', h)} />
     ) : null
 
@@ -301,7 +312,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
           actions={
             <>
               {headerActions}
-              <SummaryTile label={total === 1 ? 'application' : 'applications'} value={total} />
+              <SummaryTile label={total === 1 ? 'application' : 'applications'} value={total} loading={initialLoading} />
               {healthTile('unhealthy', 'error')}
               {healthTile('degraded', 'warning')}
               {healthTile('healthy', 'success')}
@@ -310,11 +321,15 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
             </>
           }
         />
-        <DistributionBar
-          className="mt-3"
-          ariaLabel="Health distribution"
-          segments={HEALTH_ORDER.map((h) => ({ key: h, count: counts.health[h] ?? 0, fillClass: HEALTH_META[h].bar }))}
-        />
+        {initialLoading ? (
+          <div className="mt-3 h-1.5 w-full animate-pulse rounded-full bg-theme-hover" aria-hidden />
+        ) : (
+          <DistributionBar
+            className="mt-3"
+            ariaLabel="Health distribution"
+            segments={HEALTH_ORDER.map((h) => ({ key: h, count: counts.health[h] ?? 0, fillClass: HEALTH_META[h].bar }))}
+          />
+        )}
       </div>
 
       {/* Body: filter sidebar | content (toolbar + table). */}
@@ -330,6 +345,18 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
             )}
           </div>
           <div className="flex-1 overflow-y-auto">
+            {initialLoading ? (
+              <BoardRailSkeleton
+                sections={[
+                  ['Availability', 5],
+                  ['Class', 3],
+                  ['Type', 4],
+                  ['Environment', 3],
+                  ['Source', 3],
+                ]}
+              />
+            ) : (
+              <>
             <Facet icon={HeartPulse} title="Availability" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => filters.toggle('health', v)} />
             <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => filters.toggle('class', v)} />
             <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
@@ -341,6 +368,8 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                 <span>Show system namespaces</span>
                 <span className="ml-auto tabular-nums text-theme-text-tertiary">{systemCount}</span>
               </label>
+            )}
+              </>
             )}
           </div>
         </aside>
@@ -369,7 +398,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
           </div>
 
           <div className="min-w-0 flex-1 overflow-auto bg-theme-base">
-          {entries.length === 0 ? (
+          {initialLoading ? (
+            <BoardTableSkeleton />
+          ) : entries.length === 0 ? (
             emptySlot && allEntries.length === 0 ? (
               emptySlot
             ) : (
