@@ -1,13 +1,13 @@
 package context
 
 import (
-	"github.com/skyhook-io/radar/pkg/prune"
-
 	"encoding/json"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/prune"
 )
 
 // minifyDetail strips metadata noise and per-type status noise, but keeps full spec
@@ -53,15 +53,11 @@ func redactUnstructuredSecrets(obj map[string]any) {
 }
 
 func pruneMapDetail(m map[string]any) {
-	// Prune metadata — strip noise keys but keep ALL annotations and labels
-	// Flat drops via the shared mechanism (annotations NOT filtered at
-	// Detail level — that conditional stays out of the profile). Per-slice-
-	// element pruning (containers, env redaction) can't be a path drop and
-	// stays in the local traversal below.
+	// Metadata/spec/container key drops via the shared profiles (annotations
+	// NOT filtered at Detail level). Per-container conditional pruning
+	// (imagePullPolicy rule, env redaction) can't be a path drop — below.
 	prune.ApplyInPlace(m, detailBaseProfile)
-	if spec, ok := m["spec"].(map[string]any); ok {
-		pruneSpecElements(spec)
-	}
+	pruneSpecElements(m)
 
 	kind, _ := m["kind"].(string)
 	if p, ok := statusProfileByKind[strings.ToLower(kind)]; ok {
@@ -69,15 +65,11 @@ func pruneMapDetail(m map[string]any) {
 	}
 }
 
-// pruneSpecElements handles what path drops can't: per-element pruning
-// inside container slices (flat key drops ride detailBaseProfile).
-func pruneSpecElements(spec map[string]any) {
-	if template, ok := spec["template"].(map[string]any); ok {
-		if tSpec, ok := template["spec"].(map[string]any); ok {
-			prunePodSpec(tSpec)
-		}
-	}
-	pruneContainersInSpec(spec)
+// pruneSpecElements handles what the shared profiles can't: conditional
+// per-element pruning inside container slices (unconditional key drops ride
+// detailBaseProfile's Drop + ElementDrops).
+func pruneSpecElements(m map[string]any) {
+	forEachContainer(m, pruneContainerConditional)
 }
 
 func minifySecretDetail(secret *corev1.Secret) map[string]any {

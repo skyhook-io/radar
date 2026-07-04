@@ -1,7 +1,7 @@
 package context
 
 import (
-	"strings"
+	"sort"
 
 	"github.com/skyhook-io/radar/pkg/prune"
 )
@@ -118,82 +118,30 @@ func shouldKeepAnnotation(key string) bool {
 	return false
 }
 
-// prunePodSpec strips noisy fields from a pod spec (direct or template.spec).
-func prunePodSpec(spec map[string]any) {
-	for key := range stripPodSpecFields {
-		delete(spec, key)
+// pruneContainerList applies the CONDITIONAL per-container pruning at Detail
+// level; unconditional key drops (stripContainerFields) ride the shared
+// profiles' ElementDrops.
+func pruneContainerConditional(container map[string]any) {
+	// Strip imagePullPolicy unless it's "Never"
+	if policy, ok := container["imagePullPolicy"].(string); ok && policy != "Never" {
+		delete(container, "imagePullPolicy")
 	}
-	pruneContainersInSpec(spec)
+	// Redact inline env values
+	redactEnvValues(container)
 }
 
-// prunePodSpecCompact additionally strips fields only removed at Compact level.
-func prunePodSpecCompact(spec map[string]any) {
-	for key := range stripPodSpecFields {
-		delete(spec, key)
-	}
-	for key := range stripPodSpecFieldsCompact {
-		delete(spec, key)
-	}
-	pruneContainersCompact(spec, "containers")
-	pruneContainersCompact(spec, "initContainers")
-}
-
-func pruneContainersInSpec(spec map[string]any) {
-	pruneContainerList(spec, "containers")
-	pruneContainerList(spec, "initContainers")
-}
-
-// pruneContainerList strips noise from containers at Detail level.
-// Keeps full spec (command, args, probes, etc.) — only strips terminationMessage* and simplifies imagePullPolicy.
-func pruneContainerList(spec map[string]any, key string) {
-	containers, ok := spec[key].([]any)
-	if !ok {
-		return
-	}
-	for _, c := range containers {
-		container, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		for field := range stripContainerFields {
-			delete(container, field)
-		}
-		// Strip imagePullPolicy unless it's "Never"
-		if policy, ok := container["imagePullPolicy"].(string); ok && policy != "Never" {
-			delete(container, "imagePullPolicy")
-		}
-		// Redact inline env values
-		redactEnvValues(container)
-	}
-}
-
-// pruneContainersCompact aggressively strips container fields at Compact level.
+// pruneContainersCompact applies the CONDITIONAL per-container pruning at
+// Compact level; unconditional key drops (stripContainerFields +
+// stripContainerFieldsCompact) ride the shared profiles' ElementDrops.
 // Keeps: image, resources, env names (not values), ports.
-func pruneContainersCompact(spec map[string]any, key string) {
-	containers, ok := spec[key].([]any)
-	if !ok {
-		return
+func pruneContainerConditionalCompact(container map[string]any) {
+	// Strip imagePullPolicy unless it's "Never"
+	if policy, ok := container["imagePullPolicy"].(string); ok && policy != "Never" {
+		delete(container, "imagePullPolicy")
 	}
-	for _, c := range containers {
-		container, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		for field := range stripContainerFields {
-			delete(container, field)
-		}
-		for field := range stripContainerFieldsCompact {
-			delete(container, field)
-		}
-		// Strip imagePullPolicy unless it's "Never"
-		if policy, ok := container["imagePullPolicy"].(string); ok && policy != "Never" {
-			delete(container, "imagePullPolicy")
-		}
-		// Simplify volumeMounts: keep names only
-		simplifyVolumeMounts(container)
-		// Simplify env: keep names only (strip values for token savings)
-		simplifyEnvToNames(container)
-	}
+	// Simplify volumeMounts + env: keep names only (strip values for tokens)
+	simplifyVolumeMounts(container)
+	simplifyEnvToNames(container)
 }
 
 func simplifyVolumeMounts(container map[string]any) {
@@ -245,35 +193,84 @@ func redactEnvValues(container map[string]any) {
 // The flat drop tables above are POLICY; the tree surgery executing them is
 // pkg/prune (shared with the resources API's include=summary profiles —
 // internal/server/resource_summary.go). Conditional logic (annotation
-// filtering, secret redaction) stays in this package; only path deletion
-// routes through the shared mechanism.
-func profileFromTables(tables map[string]map[string]bool) prune.Profile {
-	var p prune.Profile
-	for subtree, keys := range tables {
-		base := strings.Split(subtree, ".")
-		for key := range keys {
-			path := append(append([]string(nil), base...), key)
-			p.Drop = append(p.Drop, path)
+// filtering, imagePullPolicy, env simplification/redaction) stays in this
+// package; unconditional key deletion — including per-container-element
+// drops — routes through the shared mechanism.
+
+// containerElementPaths covers both direct pod specs (Pod) and workload
+// template specs (Deployment/StatefulSet/DaemonSet/ReplicaSet/Job).
+var containerElementPaths = [][]string{
+	{"spec", "containers"},
+	{"spec", "initContainers"},
+	{"spec", "template", "spec", "containers"},
+	{"spec", "template", "spec", "initContainers"},
+}
+
+// forEachContainer runs fn over every container map at each known container
+// location (containerElementPaths — the SAME source the declarative
+// ElementDrops derive from, so the conditional walk can't drift from the
+// key-drop paths). Missing/non-slice locations are skipped.
+func forEachContainer(m map[string]any, fn func(container map[string]any)) {
+	for _, path := range containerElementPaths {
+		cur := m
+		ok := true
+		for _, seg := range path[:len(path)-1] {
+			cur, ok = cur[seg].(map[string]any)
+			if !ok {
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		list, ok := cur[path[len(path)-1]].([]any)
+		if !ok {
+			continue
+		}
+		for _, c := range list {
+			if container, ok := c.(map[string]any); ok {
+				fn(container)
+			}
 		}
 	}
-	return p
+}
+
+func containerElementDrops(table map[string]bool) []prune.ElementDrop {
+	keys := make([]string, 0, len(table))
+	for key := range table {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	drops := make([]prune.ElementDrop, 0, len(containerElementPaths))
+	for _, path := range containerElementPaths {
+		drops = append(drops, prune.ElementDrop{Path: path, Keys: keys})
+	}
+	return drops
 }
 
 var (
-	detailBaseProfile = profileFromTables(map[string]map[string]bool{
-		"metadata":           stripMetadataKeys,
-		"spec":               stripPodSpecFields,
-		"spec.template.spec": stripPodSpecFields,
-	})
-	compactExtraProfile = profileFromTables(map[string]map[string]bool{
-		"spec":               stripPodSpecFieldsCompact,
-		"spec.template.spec": stripPodSpecFieldsCompact,
-	})
+	detailBaseProfile = func() prune.Profile {
+		p := prune.FromDropTables(map[string]map[string]bool{
+			"metadata":           stripMetadataKeys,
+			"spec":               stripPodSpecFields,
+			"spec.template.spec": stripPodSpecFields,
+		})
+		p.ElementDrops = containerElementDrops(stripContainerFields)
+		return p
+	}()
+	compactExtraProfile = func() prune.Profile {
+		p := prune.FromDropTables(map[string]map[string]bool{
+			"spec":               stripPodSpecFieldsCompact,
+			"spec.template.spec": stripPodSpecFieldsCompact,
+		})
+		p.ElementDrops = containerElementDrops(stripContainerFieldsCompact)
+		return p
+	}()
 	statusProfileByKind = map[string]prune.Profile{
-		"pod":         profileFromTables(map[string]map[string]bool{"status": stripPodStatusFields}),
-		"deployment":  profileFromTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
-		"statefulset": profileFromTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
-		"daemonset":   profileFromTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
-		"replicaset":  profileFromTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
+		"pod":         prune.FromDropTables(map[string]map[string]bool{"status": stripPodStatusFields}),
+		"deployment":  prune.FromDropTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
+		"statefulset": prune.FromDropTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
+		"daemonset":   prune.FromDropTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
+		"replicaset":  prune.FromDropTables(map[string]map[string]bool{"status": stripWorkloadStatusFields}),
 	}
 )

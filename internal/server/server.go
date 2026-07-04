@@ -1380,8 +1380,12 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	// include follows /api/search's body-verbosity vocabulary: "summary" =
 	// same shape with heavy subtrees stripped per kind profile (see
 	// resource_summary.go), "raw" or absent = full objects. Unknown values
-	// fall back to raw — additive contract, safe for older callers.
-	includeSummary := r.URL.Query().Get("include") == "summary"
+	// are rejected with 400 — same posture as /api/search's parseInclude.
+	includeSummary, err := parseResourcesInclude(r.URL.Query().Get("include"))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	// parseNamespacesForUser primes the per-user perm cache (triggers
 	// DiscoverNamespaces if needed). canRead below relies on it.
@@ -1404,7 +1408,6 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var result any
-	var err error
 
 	// listPerNs is a helper that merges results across multiple namespaces.
 	// listAll returns all items; listNs returns items for a single namespace.
@@ -1490,7 +1493,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if includeSummary {
-			result = applySummaryStrip(result, summaryFallbackKey(group, kind))
+			result = applySummaryStrip(result)
 		}
 		s.writeJSON(w, result)
 		return
@@ -1794,7 +1797,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if includeSummary {
-		result = applySummaryStrip(result, summaryFallbackKey(group, kind))
+		result = applySummaryStrip(result)
 	}
 	s.writeJSON(w, result)
 }

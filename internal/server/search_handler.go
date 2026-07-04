@@ -189,6 +189,12 @@ func parseLimit(v string) int {
 	return n
 }
 
+// parseInclude maps search's include values. Default (absent) is summary.
+//
+// NB: search's summary/raw are TRANSFORMED representations from the
+// ai/context layer (LevelSummary micro-shape / Detail-minified body), NOT
+// the same-schema strip that /api/resources/{kind}?include=summary returns.
+// Same word, different shape contract — don't cross-assume.
 func parseInclude(v string) (search.IncludeMode, error) {
 	switch v {
 	case "", "summary":

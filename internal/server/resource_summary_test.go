@@ -261,27 +261,22 @@ func assertPathAbsent(t *testing.T, obj map[string]any, path ...string) {
 	}
 }
 
-func stripViaList(t *testing.T, fixture *unstructured.Unstructured) *unstructured.Unstructured {
+// stripViaList strips a COPY of the fixture through the handler-shaped path
+// (applySummaryStrip is in-place; the handler always feeds owned copies).
+// Returns (stripped, pristineSnapshot) so callers assert keep-list fields
+// survived against the untouched original.
+func stripViaList(t *testing.T, fixture *unstructured.Unstructured) (*unstructured.Unstructured, *unstructured.Unstructured) {
 	t.Helper()
-	out, ok := applySummaryStrip([]*unstructured.Unstructured{fixture}, "").([]*unstructured.Unstructured)
-	if !ok || len(out) != 1 {
-		t.Fatalf("applySummaryStrip returned unexpected shape: %T", out)
-	}
-	return out[0]
+	snapshot := fixture.DeepCopy()
+	target := fixture.DeepCopy()
+	applySummaryStrip([]*unstructured.Unstructured{target})
+	return target, snapshot
 }
 
 func TestSummaryStripArgoApplication(t *testing.T) {
 	fixture := argoApplicationFixture()
-	snapshot := fixture.DeepCopy()
 
-	stripped := stripViaList(t, fixture)
-
-	if stripped == fixture {
-		t.Fatal("profiled kind must be deep-copied, not returned as-is")
-	}
-	if !reflect.DeepEqual(fixture.Object, snapshot.Object) {
-		t.Fatal("input object was mutated — informer cache objects must never be modified")
-	}
+	stripped, snapshot := stripViaList(t, fixture)
 
 	assertPathsPreserved(t, snapshot, stripped, [][]string{
 		{"metadata", "name"},
@@ -331,7 +326,7 @@ func TestSummaryStripArgoApplicationSparse(t *testing.T) {
 		"metadata":   map[string]any{"name": "bare-app", "namespace": "argocd"},
 		"spec":       map[string]any{"project": "default"},
 	}}
-	stripped := stripViaList(t, sparse)
+	stripped, _ := stripViaList(t, sparse)
 	if got := mustNested(t, stripped.Object, "metadata", "name"); got != "bare-app" {
 		t.Errorf("metadata.name = %v", got)
 	}
@@ -340,16 +335,8 @@ func TestSummaryStripArgoApplicationSparse(t *testing.T) {
 
 func TestSummaryStripFluxKustomization(t *testing.T) {
 	fixture := fluxKustomizationFixture()
-	snapshot := fixture.DeepCopy()
 
-	stripped := stripViaList(t, fixture)
-
-	if stripped == fixture {
-		t.Fatal("profiled kind must be deep-copied, not returned as-is")
-	}
-	if !reflect.DeepEqual(fixture.Object, snapshot.Object) {
-		t.Fatal("input object was mutated — informer cache objects must never be modified")
-	}
+	stripped, snapshot := stripViaList(t, fixture)
 
 	assertPathsPreserved(t, snapshot, stripped, [][]string{
 		{"metadata", "name"},
@@ -373,16 +360,8 @@ func TestSummaryStripFluxKustomization(t *testing.T) {
 
 func TestSummaryStripFluxHelmRelease(t *testing.T) {
 	fixture := fluxHelmReleaseFixture()
-	snapshot := fixture.DeepCopy()
 
-	stripped := stripViaList(t, fixture)
-
-	if stripped == fixture {
-		t.Fatal("profiled kind must be deep-copied, not returned as-is")
-	}
-	if !reflect.DeepEqual(fixture.Object, snapshot.Object) {
-		t.Fatal("input object was mutated — informer cache objects must never be modified")
-	}
+	stripped, snapshot := stripViaList(t, fixture)
 
 	assertPathsPreserved(t, snapshot, stripped, [][]string{
 		{"metadata", "name"},
@@ -412,9 +391,9 @@ func TestSummaryStripUnprofiledKindPassesThrough(t *testing.T) {
 		"spec":       map[string]any{"url": "https://github.com/example-org/shop-backend-gitops"},
 		"status":     map[string]any{"artifact": map[string]any{"revision": "main@sha1:f3c9a1d7"}},
 	}}
-	out := stripViaList(t, gitRepo)
-	if out != gitRepo {
-		t.Error("kind without a strip profile must be returned unchanged (same object)")
+	stripped, snapshot := stripViaList(t, gitRepo)
+	if !reflect.DeepEqual(stripped.Object, snapshot.Object) {
+		t.Error("kind without a strip profile must be returned unchanged")
 	}
 }
 
@@ -425,14 +404,12 @@ func TestSummaryStripMergedAnySlice(t *testing.T) {
 		"kind":       "GitRepository",
 		"metadata":   map[string]any{"name": "shop-backend-gitops", "namespace": "flux-system"},
 	}}
-	out, ok := applySummaryStrip([]any{app, gitRepo}, "").([]any)
+	appCopy := app.DeepCopy()
+	out, ok := applySummaryStrip([]any{appCopy, gitRepo}).([]any)
 	if !ok || len(out) != 2 {
 		t.Fatalf("unexpected shape: %T", out)
 	}
 	strippedApp := out[0].(*unstructured.Unstructured)
-	if strippedApp == app {
-		t.Error("profiled item in []any must be deep-copied")
-	}
 	assertPathAbsent(t, strippedApp.Object, "status", "resources")
 	if out[1] != any(gitRepo) {
 		t.Error("unprofiled item in []any must pass through unchanged")
@@ -441,11 +418,11 @@ func TestSummaryStripMergedAnySlice(t *testing.T) {
 
 func TestSummaryStripNonUnstructuredResultUnchanged(t *testing.T) {
 	result := []any{"not-an-unstructured"}
-	out := applySummaryStrip(result, "").([]any)
+	out := applySummaryStrip(result).([]any)
 	if out[0] != "not-an-unstructured" {
 		t.Error("non-unstructured items must pass through unchanged")
 	}
-	if got := applySummaryStrip(42, ""); got != 42 {
+	if got := applySummaryStrip(42); got != 42 {
 		t.Error("non-slice results must pass through unchanged")
 	}
 }
@@ -456,7 +433,7 @@ func TestSummaryStripSizeReduction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stripped := stripViaList(t, fixture)
+	stripped, _ := stripViaList(t, fixture)
 	after, err := json.Marshal(stripped.Object)
 	if err != nil {
 		t.Fatal(err)
@@ -464,24 +441,5 @@ func TestSummaryStripSizeReduction(t *testing.T) {
 	if len(after)*10 >= len(before)*3 {
 		t.Errorf("summary should shrink the heavy Application below 30%%: before=%d after=%d (%.1f%%)",
 			len(before), len(after), float64(len(after))*100/float64(len(before)))
-	}
-}
-func TestSummaryStrip_MissingTypeMetaUsesFallbackKey(t *testing.T) {
-	app := argoApplicationFixture()
-	app.SetAPIVersion("")
-	app.SetKind("")
-	// The fallback key comes from summaryFallbackKey with the URL's
-	// lowercased-plural segment — the exact shape the handler passes.
-	out := applySummaryStrip([]*unstructured.Unstructured{app}, summaryFallbackKey("argoproj.io", "applications"))
-	items := out.([]*unstructured.Unstructured)
-	if _, found, _ := unstructured.NestedSlice(items[0].Object, "status", "resources"); found {
-		t.Fatalf("status.resources survived: fallback profile key not applied")
-	}
-	// Wrong fallback (empty group) must leave the object untouched rather
-	// than guessing.
-	out2 := applySummaryStrip([]*unstructured.Unstructured{app}, "/Application")
-	items2 := out2.([]*unstructured.Unstructured)
-	if _, found, _ := unstructured.NestedSlice(items2[0].Object, "status", "resources"); !found {
-		t.Fatalf("unmatched fallback key stripped anyway")
 	}
 }

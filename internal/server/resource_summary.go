@@ -1,8 +1,10 @@
 package server
 
 import (
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"fmt"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/prune"
 )
@@ -37,63 +39,69 @@ var summaryStripProfiles = map[string]prune.Profile{
 	},
 }
 
-var summaryKindAliases = func() map[string]string {
-	aliases := map[string]string{}
+// Profiles must target CRD kinds (group contains a dot): the summary strip
+// only runs on the dynamic (unstructured) list path — a typed-kind profile
+// would be accepted and silently never apply. Fail loudly at init instead.
+func init() {
 	for key := range summaryStripProfiles {
-		_, kind, ok := strings.Cut(key, "/")
-		if !ok {
-			continue
+		if !strings.Contains(key, ".") {
+			panic("resource summary profile for a non-CRD kind will silently never apply: " + key)
 		}
-		aliases[strings.ToLower(kind)] = kind
-		aliases[strings.ToLower(kind)+"s"] = kind
 	}
-	return aliases
-}()
-
-// summaryFallbackKey builds the profile key from request params when list
-// items carry no TypeMeta.
-func summaryFallbackKey(group, kind string) string {
-	if k, ok := summaryKindAliases[strings.ToLower(kind)]; ok {
-		return group + "/" + k
-	}
-	return group + "/" + kind
 }
 
-func applySummaryStrip(result any, fallbackKey string) any {
+// parseResourcesInclude maps the resource list endpoint's include values.
+// Default (absent) is raw; unknown values are a caller bug and 400, matching
+// /api/search's validation posture — but NOT its semantics: here summary is
+// a same-schema strip (heavy subtrees removed, object shape intact), whereas
+// search's summary/raw are transformed ai/context representations. Same
+// word, different shape contract; don't assume one from the other.
+func parseResourcesInclude(v string) (summary bool, err error) {
+	switch v {
+	case "", "raw":
+		return false, nil
+	case "summary":
+		return true, nil
+	default:
+		return false, fmt.Errorf("unknown include=%q (want: summary, raw)", v)
+	}
+}
+
+// applySummaryStrip summarizes every unstructured item in a dynamic list
+// IN PLACE. Its only callers are the two handleListResources dynamic-list
+// exits, and every item there is already an owned deep copy — the dynamic
+// cache returns StripUnstructuredFields(u) results (List + ListDirect both
+// DeepCopy). Mutating in place avoids a redundant second copy of objects
+// we're about to shrink, on the heaviest payload path. The informer cache
+// is never touched (proven by the handler e2e test); do NOT call this with
+// objects you don't own.
+//
+// Typed-cache lists (the default: arm) bypass summary by construction —
+// profiled kinds are all CRDs, guaranteed by the init check above. Dynamic
+// informers preserve apiVersion/kind, so each item keys on its own GVK; an
+// item that lacks a profile is left untouched (fail open).
+func applySummaryStrip(result any) any {
 	switch items := result.(type) {
 	case []*unstructured.Unstructured:
-		out := make([]*unstructured.Unstructured, len(items))
-		for i, item := range items {
-			out[i] = summarizeUnstructured(item, fallbackKey)
+		for _, item := range items {
+			summarizeUnstructuredInPlace(item)
 		}
-		return out
 	case []any:
-		out := make([]any, len(items))
-		for i, item := range items {
+		for _, item := range items {
 			if u, ok := item.(*unstructured.Unstructured); ok {
-				out[i] = summarizeUnstructured(u, fallbackKey)
-			} else {
-				out[i] = item
+				summarizeUnstructuredInPlace(u)
 			}
 		}
-		return out
-	default:
-		return result
 	}
+	return result
 }
 
-func summarizeUnstructured(obj *unstructured.Unstructured, fallbackKey string) *unstructured.Unstructured {
+func summarizeUnstructuredInPlace(obj *unstructured.Unstructured) {
 	if obj == nil {
-		return nil
+		return
 	}
 	gvk := obj.GroupVersionKind()
-	key := gvk.Group + "/" + gvk.Kind
-	if gvk.Kind == "" {
-		key = fallbackKey
+	if profile, ok := summaryStripProfiles[gvk.Group+"/"+gvk.Kind]; ok {
+		prune.ApplyInPlace(obj.Object, profile)
 	}
-	profile, ok := summaryStripProfiles[key]
-	if !ok {
-		return obj
-	}
-	return prune.Apply(obj, profile)
 }
