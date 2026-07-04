@@ -265,10 +265,46 @@ func TestRelatedIssues_PopulatesIncidentParent(t *testing.T) {
 	}
 }
 
+// TestRelatedIssues_IncidentParentCoverageGate pins that the per-resource path
+// honors the whole-row coverage gate: when a root explains only SOME members of
+// a grouped symptom (2 of 3 unschedulable pods mount the Pending PVC), the row
+// gets no incident_parent — attributing a mixed-cause row to one root would
+// over-claim. Guards the grouped argument at the RelatedIssues enrichment call:
+// passing flat rows there would satisfy the happy-path test but break this one.
+func TestRelatedIssues_IncidentParentCoverageGate(t *testing.T) {
+	sched := make([]k8s.Detection, 0, 3)
+	for _, pod := range []string{"db-0", "db-1", "db-2"} {
+		sched = append(sched, k8s.Detection{
+			Kind: "Pod", Namespace: "prod", Name: pod, Reason: "Unschedulable", Severity: "critical",
+			Message:    "pod has unbound immediate PersistentVolumeClaims",
+			OwnerGroup: "apps", OwnerKind: "StatefulSet", OwnerName: "db",
+		})
+	}
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Reason: "Pending", Severity: "critical"},
+		},
+		scheduling: sched,
+		podsMountingPVC: map[string][]Ref{"prod/data": {
+			{Kind: "Pod", Namespace: "prod", Name: "db-0"},
+			{Kind: "Pod", Namespace: "prod", Name: "db-1"},
+		}},
+	}
+	got := RelatedIssues(p, nil, "", "Pod", "prod", "db-0")
+	if len(got) != 1 {
+		t.Fatalf("RelatedIssues(db-0) = %d, want 1", len(got))
+	}
+	if got[0].IncidentParent != nil {
+		t.Fatalf("partially-covered row (2 of 3 members mount the PVC) must not carry incident_parent, got %+v", got[0].IncidentParent)
+	}
+}
+
 // TestRelatedIssuesFrom_MatchesPrecomposed pins that the compose-once helper
-// returns the same matches as RelatedIssues when handed an already-composed
+// returns the same MATCH SET as RelatedIssues when handed an already-composed
 // (flat, grouped) pair — the path the GitOps insights resolver uses to avoid a
-// full Compose per managed resource.
+// full Compose per managed resource. Row payload is a different contract: it
+// reflects whatever pair the caller passes (see
+// TestRelatedIssuesFrom_NoIncidentParentOnBarePair).
 func TestRelatedIssuesFrom_MatchesPrecomposed(t *testing.T) {
 	p := &fakeProvider{problems: []k8s.Detection{
 		{Kind: "Pod", Namespace: "prod", Name: "web-abc-1", Reason: "CrashLoopBackOff", Severity: "critical",
@@ -281,6 +317,33 @@ func TestRelatedIssuesFrom_MatchesPrecomposed(t *testing.T) {
 	}
 	if got := RelatedIssuesFrom(flat, grouped, "apps", "Deployment", "prod", "other"); len(got) != 0 {
 		t.Errorf("RelatedIssuesFrom(unrelated) = %d, want 0", len(got))
+	}
+}
+
+// TestRelatedIssuesFrom_NoIncidentParentOnBarePair pins the contract split
+// between the two entry points: RelatedIssues enriches its grouped set, so the
+// same scenario carries incident_parent there (TestRelatedIssues_PopulatesIncidentParent),
+// while a caller handing RelatedIssuesFrom a bare GroupIssues pair gets rows
+// without the pointer — grouped-mode enrichment is the caller's responsibility.
+func TestRelatedIssuesFrom_NoIncidentParentOnBarePair(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "data", Reason: "Pending", Severity: "critical"},
+		},
+		scheduling: []k8s.Detection{
+			{Kind: "Pod", Namespace: "prod", Name: "db-0", Reason: "Unschedulable", Severity: "critical",
+				Message: "pod has unbound immediate PersistentVolumeClaims"},
+		},
+		podsMountingPVC: map[string][]Ref{"prod/data": {{Kind: "Pod", Namespace: "prod", Name: "db-0"}}},
+	}
+	flat := Compose(p, Filters{Limit: NoLimit})
+	grouped := GroupIssues(flat)
+	got := RelatedIssuesFrom(flat, grouped, "", "Pod", "prod", "db-0")
+	if len(got) != 1 {
+		t.Fatalf("RelatedIssuesFrom(db-0) = %d, want 1", len(got))
+	}
+	if got[0].IncidentParent != nil {
+		t.Fatalf("bare GroupIssues pair must not carry incident_parent, got %+v", got[0].IncidentParent)
 	}
 }
 

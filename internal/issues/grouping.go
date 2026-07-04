@@ -31,6 +31,8 @@ func RelatedIssues(p Provider, namespaces []string, group, kind, namespace, name
 // related issues for MANY resources in one request (e.g. the GitOps insights
 // resolver enriching every degraded managed resource) can Compose once and
 // match repeatedly, instead of running a full cluster Compose per resource.
+// It only matches — grouped-mode enrichment is the caller's responsibility, so
+// a bare GroupIssues pair yields rows without incident_parent.
 func RelatedIssuesFrom(flat, grouped []Issue, group, kind, namespace, name string) []Issue {
 	// Normalize the query group so a caller passing a raw API group — e.g. the
 	// GitOps L4 bridge forwarding Argo's status.resources[].group, which is ""
@@ -193,9 +195,11 @@ func foldGroup(members []Issue) Issue {
 
 	// IncidentParent is deliberately NOT carried through foldGroup: members of one
 	// grouped symptom share an issue ID, so carrying a member's pointer can't honor
-	// the whole-row coverage check. Both paths instead assign it AFTER grouping, in
+	// the whole-row coverage check. It is assigned AFTER grouping instead, in
 	// enrichDiagnosticContext's grouped mode — the cluster path inline, the
 	// per-resource RelatedIssues path via a second enrichment over its grouped set.
+	// Precomposed RelatedIssuesFrom callers that skip that enrichment (the GitOps
+	// insights resolver) get rows without the pointer.
 
 	// Count is the affected-resource fan-out — the non-subject members under
 	// this subject (the subject is shown separately as the header, not under

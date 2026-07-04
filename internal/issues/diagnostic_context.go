@@ -241,9 +241,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 	// coverage gate needs the grouped fan-out (Count), and a grouped subject has a
 	// unique ID. Only assign when called in grouped mode (grouped != nil) — the
 	// cluster Issues path, and the per-resource RelatedIssues path which re-runs
-	// this enrichment over its grouped set. The ungrouped ?view=flat call passes
-	// grouped == nil (members share issue IDs, Count 0, so coverage can't be
-	// checked and the pointer would attach arbitrarily) and leaves it unset.
+	// this enrichment over its grouped set. Ungrouped calls (?view=flat, the flat
+	// pass inside RelatedIssues, the GitOps resolver's Compose) pass grouped ==
+	// nil — members share issue IDs and Count 0, so coverage can't be checked and
+	// the pointer would attach arbitrarily — and leave it unset.
 	if len(grouped) > 0 {
 		assignIncidentParents(out, incidentEdges)
 	}
