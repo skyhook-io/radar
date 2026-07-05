@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -121,6 +122,7 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 		"pods": true, "services": true, "ingresses": true,
 		"horizontalpodautoscalers": true,
 		"statefulsets": true, "daemonsets": true,
+		"jobs": true, "cronjobs": true,
 	}
 	if len(results.MissingInputs) != len(want) {
 		t.Fatalf("MissingInputs = %v, want exactly %v", results.MissingInputs, want)
@@ -144,6 +146,8 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 	input.HorizontalPodAutoscalers = []*autoscalingv2.HorizontalPodAutoscaler{}
 	input.StatefulSets = []*appsv1.StatefulSet{}
 	input.DaemonSets = []*appsv1.DaemonSet{}
+	input.Jobs = []*batchv1.Job{}
+	input.CronJobs = []*batchv1.CronJob{}
 	results = RunChecks(input)
 	if len(results.MissingInputs) != 0 {
 		t.Errorf("MissingInputs = %v, want none when inputs are non-nil", results.MissingInputs)

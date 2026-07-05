@@ -52,6 +52,15 @@ func RunChecks(input *CheckInput) *ScanResults {
 	if input.DaemonSets == nil {
 		missingInputs = append(missingInputs, "daemonsets")
 	}
+	// Jobs/CronJobs are ConfigMap/Secret reference sources too
+	// (configReferencePodSpecs): unlisted means orphan detection can't see
+	// refs from them, so their absence must read as incomplete, not clean.
+	if input.Jobs == nil {
+		missingInputs = append(missingInputs, "jobs")
+	}
+	if input.CronJobs == nil {
+		missingInputs = append(missingInputs, "cronjobs")
+	}
 	if input.LimitRanges == nil {
 		missingInputs = append(missingInputs, "limitranges")
 	}
