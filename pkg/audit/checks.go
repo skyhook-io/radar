@@ -782,6 +782,14 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 	for _, refSpec := range input.configReferencePodSpecs() {
 		collectPodSpecRefs(refSpec.namespace, refSpec.spec, saByKey, referencedCMs, referencedSecrets)
 	}
+	for _, ref := range input.ConfigObjectRefs {
+		switch ref.Kind {
+		case "ConfigMap":
+			addRef(referencedCMs, ref.Namespace, ref.Name)
+		case "Secret":
+			addRef(referencedSecrets, ref.Namespace, ref.Name)
+		}
+	}
 
 	// Ingress TLS secrets
 	for _, ing := range input.Ingresses {
@@ -810,7 +818,7 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 		findings = append(findings, Finding{
 			Kind: "ConfigMap", Namespace: cm.Namespace, Name: cm.Name,
 			CheckID: "orphanConfigMapSecret", Category: CategoryEfficiency, Severity: SeverityWarning,
-			Message: fmt.Sprintf("ConfigMap %q is not referenced by any workload", cm.Name),
+			Message: fmt.Sprintf("ConfigMap %q is not referenced by any workload or supported controller config", cm.Name),
 		})
 	}
 
@@ -837,7 +845,7 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 		findings = append(findings, Finding{
 			Kind: "Secret", Namespace: sec.Namespace, Name: sec.Name,
 			CheckID: "orphanConfigMapSecret", Category: CategoryEfficiency, Severity: SeverityWarning,
-			Message: fmt.Sprintf("Secret %q is not referenced by any workload or Ingress", sec.Name),
+			Message: fmt.Sprintf("Secret %q is not referenced by any workload, Ingress, or supported controller config", sec.Name),
 		})
 	}
 

@@ -37,6 +37,9 @@ type CheckInput struct {
 	// PodMetrics provides live CPU/memory usage for utilization checks.
 	// Optional — check is skipped when nil/empty. Callers populate from metrics-server or equivalent.
 	PodMetrics []PodMetricsInput
+	// ConfigObjectRefs lists ConfigMaps and Secrets referenced by non-core
+	// resources that the typed Kubernetes structs above do not cover.
+	ConfigObjectRefs []ConfigObjectRef
 
 	// Crossplane resources arrive unstructured because every provider ships
 	// its own CRDs — there's no typed Go schema to share across them. The
@@ -67,6 +70,13 @@ type CheckInput struct {
 	// AllServices is the cluster-wide Service list (all namespaces) for resolving
 	// Traefik route → Service references, including cross-namespace ones.
 	AllServices []*corev1.Service
+}
+
+// ConfigObjectRef identifies a ConfigMap or Secret dependency.
+type ConfigObjectRef struct {
+	Kind      string
+	Namespace string
+	Name      string
 }
 
 // PodMetricsInput provides metrics data for resource utilization checks.

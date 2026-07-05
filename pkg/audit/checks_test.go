@@ -1528,6 +1528,33 @@ func TestOrphanConfigMapSecretEphemeralContainerRefs(t *testing.T) {
 	}
 }
 
+func TestOrphanConfigMapSecretAdditionalRefs(t *testing.T) {
+	input := &CheckInput{
+		ConfigObjectRefs: []ConfigObjectRef{
+			{Kind: "ConfigMap", Namespace: "default", Name: "crd-config"},
+			{Kind: "Secret", Namespace: "default", Name: "crd-secret"},
+			{Kind: "Service", Namespace: "default", Name: "ignored"},
+			{Kind: "Secret", Namespace: "", Name: "ignored-no-namespace"},
+		},
+		ConfigMaps: []*corev1.ConfigMap{
+			{ObjectMeta: metav1.ObjectMeta{Name: "crd-config", Namespace: "default"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "actual-orphan-config", Namespace: "default"}},
+		},
+		Secrets: []*corev1.Secret{
+			{ObjectMeta: metav1.ObjectMeta{Name: "crd-secret", Namespace: "default"}, Type: corev1.SecretTypeOpaque},
+			{ObjectMeta: metav1.ObjectMeta{Name: "actual-orphan-secret", Namespace: "default"}, Type: corev1.SecretTypeOpaque},
+		},
+	}
+
+	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	if orphans["crd-config"] || orphans["crd-secret"] {
+		t.Fatalf("additional refs should suppress orphan findings, got %+v", orphans)
+	}
+	if !orphans["actual-orphan-config"] || !orphans["actual-orphan-secret"] {
+		t.Fatalf("unreferenced resources should still be flagged, got %+v", orphans)
+	}
+}
+
 func TestDeprecatedAPIVersion(t *testing.T) {
 	input := &CheckInput{
 		ClusterVersion: "1.30",
