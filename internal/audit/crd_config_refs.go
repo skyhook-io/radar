@@ -97,6 +97,10 @@ func dynamicConfigRefHandlerFor(gvr schema.GroupVersionResource) dynamicConfigRe
 		if gvr.Resource == "httpproxies" {
 			return contourHTTPProxyConfigRefs
 		}
+	case "networking.istio.io":
+		if gvr.Resource == "gateways" {
+			return istioGatewayConfigRefs
+		}
 	case "cert-manager.io":
 		switch gvr.Resource {
 		case "issuers":
@@ -252,6 +256,22 @@ func traefikTLSStoreConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRe
 func contourHTTPProxyConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
 	addSecret(&refs, u.GetNamespace(), stringAt(u.Object, "spec", "virtualhost", "tls", "secretName"))
+	return refs
+}
+
+func istioGatewayConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
+	var refs []bp.ConfigObjectRef
+	ns := u.GetNamespace()
+	for _, server := range mapsAt(u.Object, "spec", "servers") {
+		tls, ok, _ := unstructured.NestedMap(server, "tls")
+		if !ok {
+			continue
+		}
+		addSecret(&refs, ns, stringAt(tls, "credentialName"))
+		for _, name := range stringsAt(tls, "credentialNames") {
+			addSecret(&refs, ns, name)
+		}
+	}
 	return refs
 }
 

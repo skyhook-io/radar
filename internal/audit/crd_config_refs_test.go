@@ -66,6 +66,17 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 			want: refs(secret("edge", "contour-cert")),
 		},
 		{
+			name: "istio gateway tls credentials",
+			gvr:  gvr("networking.istio.io", "v1", "gateways"),
+			ns:   "istio-system",
+			obj: map[string]any{"spec": map[string]any{"servers": []any{
+				map[string]any{"tls": map[string]any{"credentialName": "gateway-cert"}},
+				map[string]any{"tls": map[string]any{"credentialNames": []any{"api-cert", map[string]any{"name": "admin-cert"}}}},
+				map[string]any{"port": map[string]any{"number": int64(80)}},
+			}}},
+			want: refs(secret("istio-system", "gateway-cert"), secret("istio-system", "api-cert"), secret("istio-system", "admin-cert")),
+		},
+		{
 			name: "cert-manager issuer acme refs",
 			gvr:  gvr("cert-manager.io", "v1", "issuers"),
 			ns:   "certs",
