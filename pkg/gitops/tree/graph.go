@@ -128,7 +128,7 @@ func refFromTopologyNode(n topology.Node) ResourceRef {
 
 func infoFromTopology(n topology.Node) []InfoItem {
 	switch string(n.Kind) {
-	case "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet":
+	case "Deployment", "Rollout", "StatefulSet", "DaemonSet", "ReplicaSet":
 		if summary, ok := n.Data["statusSummary"].(string); ok && summary != "" {
 			return []InfoItem{{Name: "Status", Value: summary}}
 		}
@@ -258,7 +258,7 @@ func kindPriority(kind string) int {
 		"CustomResourceDefinition": 5,
 		"ClusterRole":              6, "ClusterRoleBinding": 7, "Role": 8, "RoleBinding": 9,
 		"Service":    10,
-		"Deployment": 11, "StatefulSet": 11, "DaemonSet": 11,
+		"Deployment": 11, "Rollout": 11, "StatefulSet": 11, "DaemonSet": 11,
 		"ReplicaSet": 12, "Pod": 13,
 		"Ingress": 14, "Gateway": 14, "HTTPRoute": 15,
 	}

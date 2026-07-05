@@ -217,7 +217,7 @@ func DefaultFilterPresets() map[string]FilterPreset {
 		"workloads": {
 			Name: "workloads",
 			IncludeKinds: []string{
-				"Deployment", "DaemonSet", "StatefulSet", "ReplicaSet",
+				"Deployment", "Rollout", "DaemonSet", "StatefulSet", "ReplicaSet",
 				"Job", "CronJob", "Pod",
 			},
 			IncludeManaged: true,

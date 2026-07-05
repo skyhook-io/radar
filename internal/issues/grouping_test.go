@@ -63,6 +63,32 @@ func TestGroupIssues_FoldsMembersUnderOwner(t *testing.T) {
 	}
 }
 
+func TestGroupIssues_RolloutSubjectIsWorkload(t *testing.T) {
+	ro := Ref{Group: "argoproj.io", Kind: "Rollout", Namespace: "ns", Name: "web"}
+	i := Issue{
+		Source: SourceProblem, Group: "apps", Kind: "ReplicaSet", Namespace: "ns", Name: "web-abc123",
+		Reason: "ReplicaFailure", Severity: SeverityCritical, Owner: ro,
+		FirstSeen: time.Unix(1000, 0), LastSeen: time.Unix(1000, 0), Count: 1,
+	}
+	classifyIssue(&i)
+	enrichIdentity(&i)
+
+	got := GroupIssues([]Issue{i})
+	if len(got) != 1 {
+		t.Fatalf("want 1 grouped row, got %d", len(got))
+	}
+	g := got[0]
+	if g.GroupingScope != issuesapi.ScopeWorkload {
+		t.Fatalf("rollout scope = %q, want workload", g.GroupingScope)
+	}
+	if g.Group != "argoproj.io" || g.Kind != "Rollout" || g.Name != "web" {
+		t.Fatalf("subject = %s/%s/%s, want argoproj.io/Rollout/web", g.Group, g.Kind, g.Name)
+	}
+	if g.Count != 1 || g.Affected.Workloads != 1 {
+		t.Fatalf("count=%d affected.workloads=%d, want 1/1", g.Count, g.Affected.Workloads)
+	}
+}
+
 // TestGroupIssues_CarriesAgreedDiagnosis pins that a single-member group (e.g.
 // a GitOps Application, which is its own subject) carries the parsed
 // cause/remediation onto the grouped row — without this foldGroup would emit

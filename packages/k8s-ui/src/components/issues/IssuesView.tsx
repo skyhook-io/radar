@@ -3,6 +3,7 @@ import { AlertOctagon, AlertTriangle, ArrowRight, ChevronRight, CircleCheck, Clo
 import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
+import { issueTiming } from './issue-timing';
 import {
   ISSUE_SEVERITY_BADGE_CLASS,
   ISSUE_SEVERITY_HEADER_BAND_CLASS,
@@ -155,6 +156,7 @@ export function IssueRow({
   const severity = normalizeIssueSeverity(issue.severity);
   const SeverityIcon = ISSUE_SEVERITY_ICON[severity];
   const slotCtx = { issue, open };
+  const timing = issueTiming(issue);
 
   useEffect(() => {
     if (open) {
@@ -272,8 +274,8 @@ export function IssueRow({
             >
               <Clock className="h-3 w-3" aria-hidden />
               {formatCompactAge(issue.first_seen)}
-              {issue.issue_timing === 'started_at_resource_creation' ? (
-                <span className="badge-sm ml-1 text-[10px] text-theme-text-secondary">since deploy</span>
+              {timing ? (
+                <span className="badge-sm ml-1 text-[10px] text-theme-text-secondary" title={timing.tooltip}>{timing.chip}</span>
               ) : null}
             </time>
           ) : null}
@@ -343,6 +345,7 @@ function Diagnosis({ issue }: { issue: Issue }) {
   // present, else headline+detail) rather than a string that may never appear.
   const visibleMessage = [headline, detail].filter(Boolean).join(' ');
   const shownText = issue.cause ?? visibleMessage;
+  const timing = issueTiming(issue);
   const rawError = [
     ...new Set(
       [issue.raw_message ?? (issue.cause ? issue.message : undefined), detail].filter(
@@ -359,15 +362,13 @@ function Diagnosis({ issue }: { issue: Issue }) {
   else if (issue.operation_retry_count) meta.push('Retrying');
   if (issue.operation_retry_count) meta.push(`retried ${issue.operation_retry_count}×`);
   if (crash) meta.push(crash);
+  if (timing) {
+    meta.push(timing.meta);
+  } else if (issue.first_seen) {
+    meta.push(`started ${formatRelativeAgeTime(issue.first_seen)}`);
+  }
   if (issue.first_seen) {
-    meta.push(
-      issue.issue_timing === 'started_at_resource_creation'
-        ? 'present since deployment'
-        : issue.issue_timing === 'started_after_resource_was_healthy'
-          ? `started ${formatRelativeAgeTime(issue.first_seen)} · was previously healthy`
-          : `started ${formatRelativeAgeTime(issue.first_seen)}`,
-    );
-    if (issue.last_seen && issue.issue_timing !== 'started_at_resource_creation') meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);
+    if (issue.last_seen && timing?.kind !== 'creation') meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);
   }
   if (issue.change_context) meta.push(changeContextText(issue.change_context));
 
@@ -496,11 +497,8 @@ function DiagnosticContext({
 // freshness, the two facts the compact "2h" hides.
 function ageTitle(issue: Issue): string {
   const parts: string[] = [];
-  if (issue.issue_timing === 'started_at_resource_creation') {
-    parts.push('Present since deployment — treat as baseline');
-  } else if (issue.issue_timing === 'started_after_resource_was_healthy') {
-    parts.push('Resource was previously healthy');
-  }
+  const timing = issueTiming(issue);
+  if (timing) parts.push(timing.tooltip);
   if (issue.first_seen) parts.push(`First seen ${new Date(issue.first_seen).toLocaleString()}`);
   if (issue.last_seen) parts.push(`Last seen ${formatRelativeAgeTime(issue.last_seen)}`);
   return parts.join('\n');

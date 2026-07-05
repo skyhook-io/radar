@@ -10,6 +10,7 @@ import { CertificateHealthCard } from './CertificateHealthCard'
 import { NetworkPolicyCoverageCard } from './NetworkPolicyCoverageCard'
 import { CostCard } from './CostCard'
 import { GitOpsControllersCard } from './GitOpsControllersCard'
+import { Tooltip } from '../ui/Tooltip'
 import {
   AuditCard,
   FreshnessControl,
@@ -17,6 +18,7 @@ import {
   StatusDot,
   categoryLabel,
   groupLabel,
+  issueTiming,
   subjectRef,
   type Issue,
 } from '@skyhook-io/k8s-ui'
@@ -360,7 +362,7 @@ function ProblemsPanel({
                 {issues.map((issue) => {
                   const ref = subjectRef(issue)
                   const age = issue.first_seen ? formatCompactAge(issue.first_seen) : ''
-                  const startedAtDeploy = issue.issue_timing === 'started_at_resource_creation'
+                  const timing = issueTiming(issue)
 
                   return (
                     <button
@@ -378,10 +380,14 @@ function ProblemsPanel({
                         <div className="flex items-center gap-1.5">
                           <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
                           <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
-                          {(age || startedAtDeploy) && (
+                          {(age || timing) && (
                             <span className="ml-auto flex shrink-0 items-center gap-1">
                               {age && <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>}
-                              {startedAtDeploy && <span className="badge-sm text-[10px] text-theme-text-secondary">since deploy</span>}
+                              {timing && (
+                                <Tooltip content={timing.tooltip} delay={100}>
+                                  <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
+                                </Tooltip>
+                              )}
                             </span>
                           )}
                         </div>

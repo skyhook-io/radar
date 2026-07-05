@@ -339,6 +339,20 @@ export function isWorkloadKind(kind: string): boolean {
   ].includes(kind)
 }
 
+export function isDeploymentLikeWorkloadKind(kind: string, group = ''): boolean {
+  switch (kind) {
+    case 'Deployment':
+    case 'ReplicaSet':
+    case 'StatefulSet':
+    case 'DaemonSet':
+      return group === '' || group === 'apps'
+    case 'Rollout':
+      return group === '' || group === 'argoproj.io'
+    default:
+      return false
+  }
+}
+
 // Check if a resource kind is typically managed by another
 export function isManagedKind(kind: string): boolean {
   return ['ReplicaSet', 'Pod', 'Event'].includes(kind)

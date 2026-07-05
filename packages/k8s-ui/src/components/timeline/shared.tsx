@@ -8,7 +8,7 @@
 import { clsx } from 'clsx'
 import { ZoomIn, ZoomOut } from 'lucide-react'
 import type { TimelineEvent } from '../../types/core'
-import { isChangeEvent, isHistoricalEvent } from '../../types/core'
+import { isChangeEvent, isDeploymentLikeWorkloadKind, isHistoricalEvent } from '../../types/core'
 import { isProblematicEvent } from '../../utils/resource-hierarchy'
 
 // ============================================================================
@@ -495,12 +495,11 @@ export interface HealthSpanResult {
  * Rollout signals include:
  * - Diff summary contains "updated:" (indicating replica count or image changes)
  * - Diff summary mentions image changes
- * - Event is for Deployment/StatefulSet/DaemonSet with degraded health
+ * - Event is for a deployment-like workload with degraded health
  */
 function isRolloutEvent(event: TimelineEvent): boolean {
-  // Only workload kinds can have rollouts
-  const rolloutKinds = new Set(['Deployment', 'StatefulSet', 'DaemonSet', 'Rollout', 'ReplicaSet'])
-  if (!rolloutKinds.has(event.kind)) return false
+  // Only deployment-like workload controllers can have rollout transitions.
+  if (!isDeploymentLikeWorkloadKind(event.kind)) return false
 
   // Check diff summary for rollout signals
   if (event.diff?.summary) {

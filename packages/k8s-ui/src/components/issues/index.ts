@@ -5,6 +5,8 @@
 export { IssueRow, IssuesView } from './IssuesView';
 export type { IssueRowProps, IssueRowSlotContext, IssuesViewProps } from './IssuesView';
 export { ResourceIssuesSection } from './ResourceIssuesSection';
+export { issueTiming } from './issue-timing';
+export type { IssueTimingDisplay, IssueTimingDisplayKind } from './issue-timing';
 export {
   ISSUE_SEVERITIES,
   ISSUE_SEVERITY_RANK,
