@@ -61,7 +61,10 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	mrs, xrs := listCrossplaneDynamic(namespaces)
 	input.ManagedResources = mrs
 	input.CompositeResources = xrs
-	input.ConfigObjectRefs = listDynamicConfigObjectRefs(namespaces)
+	input.ConfigObjectRefs = listDynamicConfigObjectRefs(namespaces, dynamicConfigRefOptions{
+		ServiceAccounts: input.ServiceAccounts,
+		Deployments:     listNamespaced(cache.Deployments(), nil),
+	})
 
 	// Traefik routers + their reference targets for the dangling-reference checks.
 	// Routes are scoped to the audited namespaces (they're the subjects we report

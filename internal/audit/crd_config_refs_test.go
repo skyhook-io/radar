@@ -7,6 +7,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -217,14 +219,18 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 		{
 			name: "crossplane helm release explicit refs",
 			gvr:  gvr("helm.crossplane.io", "v1beta1", "releases"),
+			ns:   "crossplane-system",
 			obj: map[string]any{"spec": map[string]any{"forProvider": map[string]any{
-				"chart": map[string]any{"pullSecretRef": map[string]any{"namespace": "charts", "name": "oci-pull"}},
+				"chart": map[string]any{"pullSecretRef": map[string]any{"name": "oci-pull"}},
 				"valuesFrom": []any{
 					map[string]any{"configMapKeyRef": map[string]any{"namespace": "charts", "name": "values"}},
-					map[string]any{"secretKeyRef": map[string]any{"namespace": "charts", "name": "values-secret"}},
+					map[string]any{"secretKeyRef": map[string]any{"name": "values-secret"}},
+				},
+				"patchesFrom": []any{
+					map[string]any{"valueFrom": map[string]any{"configMapKeyRef": map[string]any{"name": "patches"}}},
 				},
 			}}},
-			want: refs(secret("charts", "oci-pull"), configMap("charts", "values"), secret("charts", "values-secret")),
+			want: refs(secret("crossplane-system", "oci-pull"), configMap("charts", "values"), secret("crossplane-system", "values-secret"), configMap("crossplane-system", "patches")),
 		},
 		{
 			name: "rollout pod template refs",
@@ -340,8 +346,102 @@ func TestListDynamicConfigObjectRefsFiltersByTargetNamespace(t *testing.T) {
 		t.Fatalf("expected Gateway in dynamic cache, got none")
 	}
 
-	got := listDynamicConfigObjectRefs([]string{"infra"})
+	got := listDynamicConfigObjectRefs([]string{"infra"}, dynamicConfigRefOptions{})
 	assertRefSet(t, got, refs(secret("infra", "shared-cert")))
+}
+
+func TestListDynamicConfigObjectRefsAddsServiceAccountImagePullSecretsForPodTemplates(t *testing.T) {
+	rolloutGVR := gvr("argoproj.io", "v1alpha1", "rollouts")
+	rollout := testUnstructured("argoproj.io/v1alpha1", "Rollout", "app", "web", map[string]any{
+		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{
+			"serviceAccountName": "builder",
+			"containers": []any{map[string]any{
+				"name":  "web",
+				"image": "example.com/web:latest",
+			}},
+		}}},
+	})
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{rolloutGVR: "RolloutList"},
+	)
+	if _, err := dynClient.Resource(rolloutGVR).Namespace("app").Create(context.Background(), rollout, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create Rollout fixture: %v", err)
+	}
+	if err := k8s.InitTestDynamicResourceCache(dynClient, []k8s.APIResource{
+		{Group: "argoproj.io", Version: "v1alpha1", Kind: "Rollout", Name: "rollouts", Namespaced: true, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	defer k8s.ResetTestDynamicState()
+
+	dynCache := k8s.GetDynamicResourceCache()
+	if err := dynCache.EnsureWatching(rolloutGVR); err != nil {
+		t.Fatalf("EnsureWatching: %v", err)
+	}
+	if !dynCache.WaitForSync(rolloutGVR, 2*time.Second) {
+		t.Fatal("dynamic Rollout cache did not sync")
+	}
+
+	got := listDynamicConfigObjectRefs([]string{"app"}, dynamicConfigRefOptions{
+		ServiceAccounts: []*corev1.ServiceAccount{{
+			ObjectMeta: metav1.ObjectMeta{Name: "builder", Namespace: "app"},
+			ImagePullSecrets: []corev1.LocalObjectReference{
+				{Name: "registry-creds"},
+			},
+		}},
+	})
+	assertRefSet(t, got, refs(secret("app", "registry-creds")))
+}
+
+func TestListDynamicConfigObjectRefsUsesCertManagerClusterResourceNamespace(t *testing.T) {
+	clusterIssuerGVR := gvr("cert-manager.io", "v1", "clusterissuers")
+	clusterIssuer := testUnstructured("cert-manager.io/v1", "ClusterIssuer", "", "letsencrypt", map[string]any{
+		"spec": map[string]any{"acme": map[string]any{
+			"privateKeySecretRef": map[string]any{"name": "issuer-account-key"},
+			"solvers": []any{map[string]any{"dns01": map[string]any{"cloudDNS": map[string]any{
+				"serviceAccountSecretRef": map[string]any{"name": "cloud-dns-key"},
+			}}}},
+		}},
+	})
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{clusterIssuerGVR: "ClusterIssuerList"},
+	)
+	if _, err := dynClient.Resource(clusterIssuerGVR).Create(context.Background(), clusterIssuer, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create ClusterIssuer fixture: %v", err)
+	}
+	if err := k8s.InitTestDynamicResourceCache(dynClient, []k8s.APIResource{
+		{Group: "cert-manager.io", Version: "v1", Kind: "ClusterIssuer", Name: "clusterissuers", Namespaced: false, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	defer k8s.ResetTestDynamicState()
+
+	dynCache := k8s.GetDynamicResourceCache()
+	if err := dynCache.EnsureWatching(clusterIssuerGVR); err != nil {
+		t.Fatalf("EnsureWatching: %v", err)
+	}
+	if !dynCache.WaitForSync(clusterIssuerGVR, 2*time.Second) {
+		t.Fatal("dynamic ClusterIssuer cache did not sync")
+	}
+
+	got := listDynamicConfigObjectRefs([]string{"certs-system"}, dynamicConfigRefOptions{
+		Deployments: []*appsv1.Deployment{{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "cert-manager",
+				Namespace: "cert-manager",
+				Labels:    map[string]string{"app.kubernetes.io/name": "cert-manager"},
+			},
+			Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "cert-manager",
+					Args: []string{"--cluster-resource-namespace=certs-system"},
+				}},
+			}}},
+		}},
+	})
+	assertRefSet(t, got, refs(secret("certs-system", "issuer-account-key"), secret("certs-system", "cloud-dns-key")))
 }
 
 func assertRefSet(t *testing.T, got, want []bp.ConfigObjectRef) {

@@ -6,6 +6,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -15,11 +17,22 @@ type dynamicConfigRefHandler func(*unstructured.Unstructured) []bp.ConfigObjectR
 
 const certManagerDefaultClusterResourceNamespace = "cert-manager"
 
-func listDynamicConfigObjectRefs(namespaces []string) []bp.ConfigObjectRef {
+type dynamicConfigRefOptions struct {
+	ServiceAccounts []*corev1.ServiceAccount
+	Deployments     []*appsv1.Deployment
+}
+
+type dynamicConfigRefContext struct {
+	serviceAccountImagePullSecrets    map[string][]string
+	certManagerClusterResourceNSNames []string
+}
+
+func listDynamicConfigObjectRefs(namespaces []string, opts dynamicConfigRefOptions) []bp.ConfigObjectRef {
 	cache := k8s.GetDynamicResourceCache()
 	if cache == nil {
 		return nil
 	}
+	ctx := newDynamicConfigRefContext(opts)
 
 	nsSet := make(map[string]bool, len(namespaces))
 	for _, ns := range namespaces {
@@ -66,12 +79,40 @@ func listDynamicConfigObjectRefs(namespaces []string) []bp.ConfigObjectRef {
 			if len(nsSet) > 0 && !handlerCanCrossNamespace && u.GetNamespace() != "" && !nsSet[u.GetNamespace()] {
 				continue
 			}
-			for _, ref := range handler(u) {
+			itemRefs := handler(u)
+			if gvr.Group == "cert-manager.io" && gvr.Resource == "clusterissuers" {
+				itemRefs = certManagerClusterIssuerConfigRefsForNamespaces(u, ctx.certManagerClusterResourceNSNames)
+			}
+			itemRefs = append(itemRefs, dynamicConfigRefExtraRefs(gvr, u, ctx)...)
+			for _, ref := range itemRefs {
 				add(ref)
 			}
 		}
 	}
 	return refs
+}
+
+func newDynamicConfigRefContext(opts dynamicConfigRefOptions) dynamicConfigRefContext {
+	return dynamicConfigRefContext{
+		serviceAccountImagePullSecrets:    serviceAccountImagePullSecrets(opts.ServiceAccounts),
+		certManagerClusterResourceNSNames: certManagerClusterResourceNamespaces(opts.Deployments),
+	}
+}
+
+func serviceAccountImagePullSecrets(sas []*corev1.ServiceAccount) map[string][]string {
+	out := map[string][]string{}
+	for _, sa := range sas {
+		if sa == nil || sa.Namespace == "" || sa.Name == "" || len(sa.ImagePullSecrets) == 0 {
+			continue
+		}
+		key := sa.Namespace + "/" + sa.Name
+		for _, ref := range sa.ImagePullSecrets {
+			if ref.Name != "" {
+				out[key] = append(out[key], ref.Name)
+			}
+		}
+	}
+	return out
 }
 
 func dynamicConfigRefHandlerFor(gvr schema.GroupVersionResource) dynamicConfigRefHandler {
@@ -284,10 +325,15 @@ func certManagerIssuerConfigRefs(u *unstructured.Unstructured) []bp.ConfigObject
 }
 
 func certManagerClusterIssuerConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
+	return certManagerClusterIssuerConfigRefsForNamespaces(u, []string{certManagerDefaultClusterResourceNamespace})
+}
+
+func certManagerClusterIssuerConfigRefsForNamespaces(u *unstructured.Unstructured, namespaces []string) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
-	ns := certManagerDefaultClusterResourceNamespace
-	addSecret(&refs, ns, stringAt(u.Object, "spec", "acme", "privateKeySecretRef", "name"))
-	addCertManagerACMESolverRefs(&refs, ns, u.Object)
+	for _, ns := range namespaces {
+		addSecret(&refs, ns, stringAt(u.Object, "spec", "acme", "privateKeySecretRef", "name"))
+		addCertManagerACMESolverRefs(&refs, ns, u.Object)
+	}
 	return refs
 }
 
@@ -439,14 +485,15 @@ func crossplaneProviderConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjec
 
 func crossplaneHelmReleaseConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
-	addExplicitSecret(&refs, u.Object, "spec", "forProvider", "chart", "pullSecretRef")
+	ns := u.GetNamespace()
+	addExplicitSecretWithDefault(&refs, ns, u.Object, "spec", "forProvider", "chart", "pullSecretRef")
 	for _, ref := range mapsAt(u.Object, "spec", "forProvider", "valuesFrom") {
-		addExplicitKeySelectorRefs(&refs, ref)
+		addExplicitKeySelectorRefsWithDefault(&refs, ns, ref)
 	}
 	for _, ref := range mapsAt(u.Object, "spec", "forProvider", "patchesFrom") {
-		addExplicitKeySelectorRefs(&refs, ref)
+		addExplicitKeySelectorRefsWithDefault(&refs, ns, ref)
 		if valueFrom, ok, _ := unstructured.NestedMap(ref, "valueFrom"); ok {
-			addExplicitKeySelectorRefs(&refs, valueFrom)
+			addExplicitKeySelectorRefsWithDefault(&refs, ns, valueFrom)
 		}
 	}
 	return refs
@@ -557,6 +604,54 @@ func podSpecLikeConfigRefs(ns string, spec map[string]any) []bp.ConfigObjectRef 
 	return refs
 }
 
+func dynamicConfigRefExtraRefs(gvr schema.GroupVersionResource, u *unstructured.Unstructured, ctx dynamicConfigRefContext) []bp.ConfigObjectRef {
+	spec, ok := dynamicPodSpecFor(gvr, u)
+	if !ok {
+		return nil
+	}
+	return podSpecLikeServiceAccountImagePullRefs(u.GetNamespace(), spec, ctx.serviceAccountImagePullSecrets)
+}
+
+func dynamicPodSpecFor(gvr schema.GroupVersionResource, u *unstructured.Unstructured) (map[string]any, bool) {
+	switch gvr.Group {
+	case "argoproj.io":
+		if gvr.Resource == "rollouts" {
+			spec, ok, _ := unstructured.NestedMap(u.Object, "spec", "template", "spec")
+			return spec, ok
+		}
+	case "serving.knative.dev":
+		switch gvr.Resource {
+		case "services", "configurations":
+			spec, ok, _ := unstructured.NestedMap(u.Object, "spec", "template", "spec")
+			return spec, ok
+		case "revisions":
+			spec, ok, _ := unstructured.NestedMap(u.Object, "spec")
+			return spec, ok
+		}
+	case "sources.knative.dev":
+		if gvr.Resource == "containersources" {
+			spec, ok, _ := unstructured.NestedMap(u.Object, "spec", "template", "spec")
+			return spec, ok
+		}
+	}
+	return nil, false
+}
+
+func podSpecLikeServiceAccountImagePullRefs(ns string, spec map[string]any, saImagePullSecrets map[string][]string) []bp.ConfigObjectRef {
+	if len(saImagePullSecrets) == 0 || len(stringsAt(spec, "imagePullSecrets")) > 0 {
+		return nil
+	}
+	saName := stringAt(spec, "serviceAccountName")
+	if saName == "" {
+		saName = "default"
+	}
+	var refs []bp.ConfigObjectRef
+	for _, name := range saImagePullSecrets[ns+"/"+saName] {
+		addSecret(&refs, ns, name)
+	}
+	return refs
+}
+
 func collectContainerLikeRefs(refs *[]bp.ConfigObjectRef, ns string, c map[string]any) {
 	for _, env := range mapsAt(c, "env") {
 		addConfigMap(refs, ns, stringAt(env, "valueFrom", "configMapKeyRef", "name"))
@@ -642,6 +737,57 @@ func collectCertManagerSecretRefs(refs *[]bp.ConfigObjectRef, ns string, obj any
 	}
 }
 
+func certManagerClusterResourceNamespaces(deployments []*appsv1.Deployment) []string {
+	seen := map[string]bool{}
+	var namespaces []string
+	add := func(ns string) {
+		if ns == "" || seen[ns] {
+			return
+		}
+		seen[ns] = true
+		namespaces = append(namespaces, ns)
+	}
+	for _, deploy := range deployments {
+		if !isCertManagerDeployment(deploy) {
+			continue
+		}
+		ns := deploy.Namespace
+		for _, c := range deploy.Spec.Template.Spec.Containers {
+			if c.Name != "cert-manager" && len(deploy.Spec.Template.Spec.Containers) > 1 {
+				continue
+			}
+			if argNS := clusterResourceNamespaceArg(append(c.Command, c.Args...)); argNS != "" {
+				ns = argNS
+				break
+			}
+		}
+		add(ns)
+	}
+	if len(namespaces) == 0 {
+		add(certManagerDefaultClusterResourceNamespace)
+	}
+	return namespaces
+}
+
+func isCertManagerDeployment(deploy *appsv1.Deployment) bool {
+	if deploy == nil {
+		return false
+	}
+	return deploy.Labels["app.kubernetes.io/name"] == "cert-manager" || deploy.Labels["app"] == "cert-manager"
+}
+
+func clusterResourceNamespaceArg(args []string) string {
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "--cluster-resource-namespace=") {
+			return strings.TrimSpace(strings.TrimPrefix(arg, "--cluster-resource-namespace="))
+		}
+		if arg == "--cluster-resource-namespace" && i+1 < len(args) {
+			return strings.TrimSpace(args[i+1])
+		}
+	}
+	return ""
+}
+
 func addExplicitConfigMap(refs *[]bp.ConfigObjectRef, obj map[string]any, path ...string) {
 	ns := stringAt(obj, append(path, "namespace")...)
 	name := stringAt(obj, append(path, "name")...)
@@ -650,6 +796,29 @@ func addExplicitConfigMap(refs *[]bp.ConfigObjectRef, obj map[string]any, path .
 
 func addExplicitSecret(refs *[]bp.ConfigObjectRef, obj map[string]any, path ...string) {
 	ns := stringAt(obj, append(path, "namespace")...)
+	name := stringAt(obj, append(path, "name")...)
+	addSecret(refs, ns, name)
+}
+
+func addExplicitKeySelectorRefsWithDefault(refs *[]bp.ConfigObjectRef, defaultNS string, obj map[string]any) {
+	addExplicitConfigMapWithDefault(refs, defaultNS, obj, "configMapKeyRef")
+	addExplicitSecretWithDefault(refs, defaultNS, obj, "secretKeyRef")
+}
+
+func addExplicitConfigMapWithDefault(refs *[]bp.ConfigObjectRef, defaultNS string, obj map[string]any, path ...string) {
+	ns := stringAt(obj, append(path, "namespace")...)
+	if ns == "" {
+		ns = defaultNS
+	}
+	name := stringAt(obj, append(path, "name")...)
+	addConfigMap(refs, ns, name)
+}
+
+func addExplicitSecretWithDefault(refs *[]bp.ConfigObjectRef, defaultNS string, obj map[string]any, path ...string) {
+	ns := stringAt(obj, append(path, "namespace")...)
+	if ns == "" {
+		ns = defaultNS
+	}
 	name := stringAt(obj, append(path, "name")...)
 	addSecret(refs, ns, name)
 }
