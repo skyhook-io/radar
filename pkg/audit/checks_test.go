@@ -1365,6 +1365,36 @@ func TestOrphanConfigMapSecretSkipsKnownPlatformArtifacts(t *testing.T) {
 				Namespace: "default",
 				Labels:    map[string]string{"app.kubernetes.io/managed-by": "Helm"},
 			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "kube-prometheus-stack-alertmanager-overview",
+				Namespace: "monitoring",
+				Labels:    map[string]string{"grafana_dashboard": "1"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "kube-prometheus-stack-grafana-datasource",
+				Namespace: "monitoring",
+				Labels:    map[string]string{"grafana_datasource": "true"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "kube-prometheus-stack-rules",
+				Namespace: "monitoring",
+				Labels:    map[string]string{"prometheus_rule": "yes"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "fluentd-extra-config",
+				Namespace: "logging",
+				Labels:    map[string]string{"fluentd_config": "enabled"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "k8sgpt-dynamic-config",
+				Namespace: "k8sgpt",
+				Labels:    map[string]string{"k8sgpt.ai/dynamically-loaded": "true"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:        "datadog-operator-lock",
+				Namespace:   "datadog",
+				Annotations: map[string]string{"control-plane.alpha.kubernetes.io/leader": `{"holderIdentity":"datadog-operator"}`},
+			}},
 		},
 		Secrets: []*corev1.Secret{
 			{ObjectMeta: metav1.ObjectMeta{
@@ -1403,6 +1433,14 @@ func TestOrphanConfigMapSecretSkipsKnownPlatformArtifacts(t *testing.T) {
 				Labels:    map[string]string{"app.kubernetes.io/managed-by": "cert-manager"},
 			}, Type: corev1.SecretTypeOpaque},
 			{ObjectMeta: metav1.ObjectMeta{Name: "alertmanager", Namespace: "gmp-public"}, Type: corev1.SecretTypeOpaque},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "webhook-tls",
+				Namespace: "gmp-system",
+				Labels: map[string]string{
+					"addonmanager.kubernetes.io/mode":  "Reconcile",
+					"components.gke.io/component-name": "managed-prometheus",
+				},
+			}, Type: corev1.SecretTypeTLS},
 			{ObjectMeta: metav1.ObjectMeta{Name: "crossplane-root-ca", Namespace: "crossplane-system"}, Type: corev1.SecretTypeTLS},
 			{ObjectMeta: metav1.ObjectMeta{Name: "cert-manager-webhook-ca", Namespace: "default"}, Type: corev1.SecretTypeTLS},
 			{ObjectMeta: metav1.ObjectMeta{
@@ -1450,6 +1488,12 @@ func TestOrphanConfigMapSecretSkipsKnownPlatformArtifacts(t *testing.T) {
 		"ConfigMap/argo-rollouts/argo-rollouts-notification-configmap",
 		"ConfigMap/kyverno/kyverno",
 		"ConfigMap/kyverno/kyverno-metrics",
+		"ConfigMap/monitoring/kube-prometheus-stack-alertmanager-overview",
+		"ConfigMap/monitoring/kube-prometheus-stack-grafana-datasource",
+		"ConfigMap/monitoring/kube-prometheus-stack-rules",
+		"ConfigMap/logging/fluentd-extra-config",
+		"ConfigMap/k8sgpt/k8sgpt-dynamic-config",
+		"ConfigMap/datadog/datadog-operator-lock",
 		"Secret/sealed-secrets/sealed-secrets-keyabc",
 		"Secret/argocd/repo-creds",
 		"Secret/argocd/argocd-secret",
@@ -1458,6 +1502,7 @@ func TestOrphanConfigMapSecretSkipsKnownPlatformArtifacts(t *testing.T) {
 		"Secret/cert-manager/cert-manager-other-webhook-ca",
 		"Secret/cert-manager/letsencrypt-account-key",
 		"Secret/gmp-public/alertmanager",
+		"Secret/gmp-system/webhook-tls",
 		"Secret/crossplane-system/crossplane-root-ca",
 	} {
 		if orphans[key] {
@@ -1489,6 +1534,22 @@ func TestOrphanConfigMapSecretKnownPlatformArtifactNegativeCases(t *testing.T) {
 				Namespace: "ingress-nginx",
 				Labels:    map[string]string{"app.kubernetes.io/name": "not-ingress-nginx"},
 			}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "koala-grafana-dashboards", Namespace: "default"}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "disabled-grafana-dashboard",
+				Namespace: "default",
+				Labels:    map[string]string{"grafana_dashboard": "false"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "disabled-k8sgpt-dynamic-config",
+				Namespace: "k8sgpt",
+				Labels:    map[string]string{"k8sgpt.ai/dynamically-loaded": "false"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:        "empty-leader-lock",
+				Namespace:   "default",
+				Annotations: map[string]string{"control-plane.alpha.kubernetes.io/leader": ""},
+			}},
 		},
 		Secrets: []*corev1.Secret{
 			{ObjectMeta: metav1.ObjectMeta{Name: "argocd-secret", Namespace: "argocd"}, Type: corev1.SecretTypeOpaque},
@@ -1502,6 +1563,15 @@ func TestOrphanConfigMapSecretKnownPlatformArtifactNegativeCases(t *testing.T) {
 				Namespace: "cert-manager",
 				Labels:    map[string]string{"app.kubernetes.io/managed-by": "Helm"},
 			}, Type: corev1.SecretTypeOpaque},
+			{ObjectMeta: metav1.ObjectMeta{Name: "webhook-tls", Namespace: "gmp-system"}, Type: corev1.SecretTypeTLS},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "webhook-tls",
+				Namespace: "default",
+				Labels: map[string]string{
+					"addonmanager.kubernetes.io/mode":  "Reconcile",
+					"components.gke.io/component-name": "managed-prometheus",
+				},
+			}, Type: corev1.SecretTypeTLS},
 		},
 	}
 
@@ -1510,9 +1580,15 @@ func TestOrphanConfigMapSecretKnownPlatformArtifactNegativeCases(t *testing.T) {
 		"ConfigMap/custom-argocd/argocd-rbac-cm",
 		"ConfigMap/kyverno/kyverno-metrics",
 		"ConfigMap/ingress-nginx/ingress-nginx-controller",
+		"ConfigMap/default/koala-grafana-dashboards",
+		"ConfigMap/default/disabled-grafana-dashboard",
+		"ConfigMap/k8sgpt/disabled-k8sgpt-dynamic-config",
+		"ConfigMap/default/empty-leader-lock",
 		"Secret/argocd/argocd-secret",
 		"Secret/cert-manager/cert-manager-webhook-ca",
 		"Secret/cert-manager/letsencrypt-account-key",
+		"Secret/gmp-system/webhook-tls",
+		"Secret/default/webhook-tls",
 	} {
 		if !orphans[key] {
 			t.Errorf("%s should still be flagged as orphan", key)

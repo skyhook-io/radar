@@ -866,6 +866,15 @@ func isKnownPlatformConfigMap(cm *corev1.ConfigMap) bool {
 		return false
 	}
 
+	if isDynamicLoaderConfigMap(cm) {
+		return true
+	}
+
+	// Leader-election locks are controller state and often have no owner ref.
+	if strings.TrimSpace(labelsValue(cm.Annotations, "control-plane.alpha.kubernetes.io/leader")) != "" {
+		return true
+	}
+
 	switch cm.Namespace + "/" + cm.Name {
 	case "kube-system/extension-apiserver-authentication",
 		"kube-system/kube-apiserver-legacy-service-account-token-tracking",
@@ -967,6 +976,15 @@ func isKnownPlatformSecret(sec *corev1.Secret) bool {
 		return true
 	}
 
+	if sec.Namespace == "gmp-system" && sec.Name == "webhook-tls" {
+		if metadataValueEqual(sec.Labels, sec.Annotations, "addonmanager.kubernetes.io/mode", "Reconcile") {
+			return true
+		}
+		if hasMetadataKeyPrefix(sec.Labels, sec.Annotations, "components.gke.io/") {
+			return true
+		}
+	}
+
 	if sec.Namespace == "crossplane-system" && sec.Name == "crossplane-root-ca" {
 		return true
 	}
@@ -974,11 +992,67 @@ func isKnownPlatformSecret(sec *corev1.Secret) bool {
 	return false
 }
 
+func isDynamicLoaderConfigMap(cm *corev1.ConfigMap) bool {
+	// Sidecar loaders watch these label conventions instead of object refs.
+	for _, key := range []string{
+		"grafana_dashboard",
+		"grafana_datasource",
+		"prometheus_rule",
+		"fluentd_config",
+	} {
+		if metadataValueEnabled(labelsValue(cm.Labels, key)) {
+			return true
+		}
+	}
+
+	return metadataValueTruthy(labelsValue(cm.Labels, "k8sgpt.ai/dynamically-loaded"))
+}
+
 func labelsValue(labels map[string]string, key string) string {
 	if labels == nil {
 		return ""
 	}
 	return labels[key]
+}
+
+func metadataValueEnabled(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	switch strings.ToLower(value) {
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+func metadataValueTruthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func metadataValueEqual(labels, annotations map[string]string, key, want string) bool {
+	return strings.EqualFold(labelsValue(labels, key), want) || strings.EqualFold(labelsValue(annotations, key), want)
+}
+
+func hasMetadataKeyPrefix(labels, annotations map[string]string, prefix string) bool {
+	for key := range labels {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	for key := range annotations {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type configReferencePodSpec struct {
