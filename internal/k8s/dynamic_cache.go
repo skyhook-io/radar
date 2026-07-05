@@ -163,6 +163,8 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "workflows", Kind: "Workflow", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "cronworkflows", Kind: "CronWorkflow", Namespaced: true},
 	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "certificates", Kind: "Certificate", Namespaced: true},
+	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "issuers", Kind: "Issuer", Namespaced: true},
+	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "clusterissuers", Kind: "ClusterIssuer", Namespaced: false},
 	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "certificaterequests", Kind: "CertificateRequest", Namespaced: true},
 	{Group: "acme.cert-manager.io", Versions: []string{"v1"}, Resource: "orders", Kind: "Order", Namespaced: true},
 	{Group: "acme.cert-manager.io", Versions: []string{"v1"}, Resource: "challenges", Kind: "Challenge", Namespaced: true},

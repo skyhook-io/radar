@@ -1274,6 +1274,116 @@ func TestOrphanConfigMapSecret(t *testing.T) {
 	}
 }
 
+func TestOrphanConfigMapSecretSkipsKnownPlatformArtifacts(t *testing.T) {
+	input := &CheckInput{
+		ConfigMaps: []*corev1.ConfigMap{
+			{ObjectMeta: metav1.ObjectMeta{Name: "aws-auth", Namespace: "kube-system"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "amazon-vpc-cni", Namespace: "kube-system"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "extension-apiserver-authentication", Namespace: "kube-system"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-legacy-service-account-token-tracking", Namespace: "kube-system"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "gke-common-webhook-lock", Namespace: "kube-system"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "kube-dns-autoscaler", Namespace: "kube-system"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "config-images", Namespace: "gmp-system"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "cluster-autoscaler-status", Namespace: "cluster-autoscaler"}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "argocd-rbac-cm",
+				Namespace: "argocd",
+				Labels:    map[string]string{"app.kubernetes.io/part-of": "argocd"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "argocd-dex-cm", Namespace: "argocd"}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "ingress-nginx-controller",
+				Namespace: "ingress-nginx",
+				Labels:    map[string]string{"app.kubernetes.io/name": "ingress-nginx"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "argo-rollouts-config", Namespace: "argo-rollouts"}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "kyverno-metrics",
+				Namespace: "kyverno",
+				Labels:    map[string]string{"app.kubernetes.io/part-of": "kyverno"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "ordinary-helm-config",
+				Namespace: "default",
+				Labels:    map[string]string{"app.kubernetes.io/managed-by": "Helm"},
+			}},
+		},
+		Secrets: []*corev1.Secret{
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "sealed-secrets-keyabc",
+				Namespace: "sealed-secrets",
+				Labels:    map[string]string{"sealedsecrets.bitnami.com/sealed-secrets-key": "active"},
+			}, Type: corev1.SecretTypeTLS},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "repo-creds",
+				Namespace: "argocd",
+				Labels:    map[string]string{"argocd.argoproj.io/secret-type": "repo-creds"},
+			}, Type: corev1.SecretTypeOpaque},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "argocd-secret",
+				Namespace: "argocd",
+				Labels:    map[string]string{"app.kubernetes.io/part-of": "argocd"},
+			}, Type: corev1.SecretTypeOpaque},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "cert-manager-webhook-ca",
+				Namespace: "cert-manager",
+				Labels:    map[string]string{"app.kubernetes.io/managed-by": "cert-manager-webhook"},
+			}, Type: corev1.SecretTypeTLS},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:        "cert-manager-other-webhook-ca",
+				Namespace:   "cert-manager",
+				Annotations: map[string]string{"cert-manager.io/allow-direct-injection": "true"},
+			}, Type: corev1.SecretTypeOpaque},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "letsencrypt-account-key",
+				Namespace: "cert-manager",
+				Labels:    map[string]string{"app.kubernetes.io/managed-by": "cert-manager"},
+			}, Type: corev1.SecretTypeOpaque},
+			{ObjectMeta: metav1.ObjectMeta{Name: "alertmanager", Namespace: "gmp-public"}, Type: corev1.SecretTypeOpaque},
+			{ObjectMeta: metav1.ObjectMeta{Name: "crossplane-root-ca", Namespace: "crossplane-system"}, Type: corev1.SecretTypeTLS},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "ordinary-helm-secret",
+				Namespace: "default",
+				Labels:    map[string]string{"app.kubernetes.io/managed-by": "Helm"},
+			}, Type: corev1.SecretTypeOpaque},
+		},
+	}
+
+	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	for _, name := range []string{
+		"aws-auth",
+		"amazon-vpc-cni",
+		"extension-apiserver-authentication",
+		"kube-apiserver-legacy-service-account-token-tracking",
+		"gke-common-webhook-lock",
+		"kube-dns-autoscaler",
+		"config-images",
+		"cluster-autoscaler-status",
+		"argocd-rbac-cm",
+		"argocd-dex-cm",
+		"ingress-nginx-controller",
+		"argo-rollouts-config",
+		"kyverno-metrics",
+		"sealed-secrets-keyabc",
+		"repo-creds",
+		"argocd-secret",
+		"cert-manager-webhook-ca",
+		"cert-manager-other-webhook-ca",
+		"letsencrypt-account-key",
+		"alertmanager",
+		"crossplane-root-ca",
+	} {
+		if orphans[name] {
+			t.Errorf("%s should not be flagged as orphan", name)
+		}
+	}
+	for _, name := range []string{"ordinary-helm-config", "ordinary-helm-secret"} {
+		if !orphans[name] {
+			t.Errorf("%s should still be flagged as orphan", name)
+		}
+	}
+}
+
 func TestOrphanConfigMapSecretPrecision(t *testing.T) {
 	controller := true
 	ownerRefs := []metav1.OwnerReference{{APIVersion: "example.io/v1", Kind: "Widget", Name: "owner", Controller: &controller}}

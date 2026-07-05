@@ -66,6 +66,29 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 			want: refs(secret("edge", "contour-cert")),
 		},
 		{
+			name: "cert-manager issuer acme refs",
+			gvr:  gvr("cert-manager.io", "v1", "issuers"),
+			ns:   "certs",
+			obj: map[string]any{"spec": map[string]any{"acme": map[string]any{
+				"privateKeySecretRef": map[string]any{"name": "issuer-account-key"},
+				"solvers": []any{map[string]any{"dns01": map[string]any{"cloudDNS": map[string]any{
+					"serviceAccountSecretRef": map[string]any{"name": "cloud-dns-key", "key": "key.json"},
+				}}}},
+			}}},
+			want: refs(secret("certs", "issuer-account-key"), secret("certs", "cloud-dns-key")),
+		},
+		{
+			name: "cert-manager clusterissuer acme refs",
+			gvr:  gvr("cert-manager.io", "v1", "clusterissuers"),
+			obj: map[string]any{"spec": map[string]any{"acme": map[string]any{
+				"privateKeySecretRef": map[string]any{"name": "cluster-account-key"},
+				"solvers": []any{map[string]any{"dns01": map[string]any{"route53": map[string]any{
+					"secretAccessKeySecretRef": map[string]any{"name": "route53-secret", "key": "secret-access-key"},
+				}}}},
+			}}},
+			want: refs(secret("cert-manager", "cluster-account-key"), secret("cert-manager", "route53-secret")),
+		},
+		{
 			name: "flux kustomization refs",
 			gvr:  gvr("kustomize.toolkit.fluxcd.io", "v1", "kustomizations"),
 			ns:   "gitops",

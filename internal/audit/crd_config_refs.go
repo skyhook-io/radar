@@ -13,6 +13,8 @@ import (
 
 type dynamicConfigRefHandler func(*unstructured.Unstructured) []bp.ConfigObjectRef
 
+const certManagerDefaultClusterResourceNamespace = "cert-manager"
+
 func listDynamicConfigObjectRefs(namespaces []string) []bp.ConfigObjectRef {
 	cache := k8s.GetDynamicResourceCache()
 	if cache == nil {
@@ -94,6 +96,13 @@ func dynamicConfigRefHandlerFor(gvr schema.GroupVersionResource) dynamicConfigRe
 	case "projectcontour.io":
 		if gvr.Resource == "httpproxies" {
 			return contourHTTPProxyConfigRefs
+		}
+	case "cert-manager.io":
+		switch gvr.Resource {
+		case "issuers":
+			return certManagerIssuerConfigRefs
+		case "clusterissuers":
+			return certManagerClusterIssuerConfigRefs
 		}
 	case "source.toolkit.fluxcd.io":
 		switch gvr.Resource {
@@ -243,6 +252,22 @@ func traefikTLSStoreConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRe
 func contourHTTPProxyConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
 	addSecret(&refs, u.GetNamespace(), stringAt(u.Object, "spec", "virtualhost", "tls", "secretName"))
+	return refs
+}
+
+func certManagerIssuerConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
+	var refs []bp.ConfigObjectRef
+	ns := u.GetNamespace()
+	addSecret(&refs, ns, stringAt(u.Object, "spec", "acme", "privateKeySecretRef", "name"))
+	addCertManagerACMESolverRefs(&refs, ns, u.Object)
+	return refs
+}
+
+func certManagerClusterIssuerConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
+	var refs []bp.ConfigObjectRef
+	ns := certManagerDefaultClusterResourceNamespace
+	addSecret(&refs, ns, stringAt(u.Object, "spec", "acme", "privateKeySecretRef", "name"))
+	addCertManagerACMESolverRefs(&refs, ns, u.Object)
 	return refs
 }
 
@@ -567,6 +592,34 @@ func addCNPGSQLRefs(refs *[]bp.ConfigObjectRef, ns string, obj map[string]any, p
 func addExplicitKeySelectorRefs(refs *[]bp.ConfigObjectRef, obj map[string]any) {
 	addExplicitConfigMap(refs, obj, "configMapKeyRef")
 	addExplicitSecret(refs, obj, "secretKeyRef")
+}
+
+func addCertManagerACMESolverRefs(refs *[]bp.ConfigObjectRef, ns string, obj map[string]any) {
+	for _, solver := range mapsAt(obj, "spec", "acme", "solvers") {
+		dns01, ok, _ := unstructured.NestedMap(solver, "dns01")
+		if !ok {
+			continue
+		}
+		collectCertManagerSecretRefs(refs, ns, dns01)
+	}
+}
+
+func collectCertManagerSecretRefs(refs *[]bp.ConfigObjectRef, ns string, obj any) {
+	switch v := obj.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if strings.HasSuffix(key, "SecretRef") {
+				if ref, ok := child.(map[string]any); ok {
+					addSecret(refs, ns, stringValue(ref["name"]))
+				}
+			}
+			collectCertManagerSecretRefs(refs, ns, child)
+		}
+	case []any:
+		for _, child := range v {
+			collectCertManagerSecretRefs(refs, ns, child)
+		}
+	}
 }
 
 func addExplicitConfigMap(refs *[]bp.ConfigObjectRef, obj map[string]any, path ...string) {

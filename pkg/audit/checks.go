@@ -815,6 +815,9 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 		if cm.Name == "kube-root-ca.crt" {
 			continue
 		}
+		if isKnownPlatformConfigMap(cm) {
+			continue
+		}
 		if hasControllerOwnerReference(cm.OwnerReferences) {
 			continue
 		}
@@ -842,6 +845,9 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 		if sec.Labels != nil && sec.Labels["cert-manager.io/certificate-name"] != "" {
 			continue
 		}
+		if isKnownPlatformSecret(sec) {
+			continue
+		}
 		if hasControllerOwnerReference(sec.OwnerReferences) {
 			continue
 		}
@@ -853,6 +859,126 @@ func checkOrphanConfigMapsSecrets(input *CheckInput) []Finding {
 	}
 
 	return findings
+}
+
+func isKnownPlatformConfigMap(cm *corev1.ConfigMap) bool {
+	if cm == nil {
+		return false
+	}
+
+	switch cm.Namespace + "/" + cm.Name {
+	case "kube-system/extension-apiserver-authentication",
+		"kube-system/kube-apiserver-legacy-service-account-token-tracking",
+		"kube-system/aws-auth",
+		"kube-system/amazon-vpc-cni":
+		return true
+	}
+
+	if cm.Name == "cluster-autoscaler-status" && (cm.Namespace == "kube-system" || cm.Namespace == "cluster-autoscaler") {
+		return true
+	}
+
+	if cm.Namespace == "kube-system" {
+		switch cm.Name {
+		case "cluster-kubestore",
+			"clustermetrics",
+			"gke-common-webhook-heartbeat",
+			"gke-common-webhook-lock",
+			"ingress-uid",
+			"kube-dns-autoscaler",
+			"konnectivity-agent-autoscaler-config",
+			"kubedns-config-images",
+			"pdcsi-metrics-collector-config-map":
+			return true
+		}
+	}
+	if cm.Namespace == "gmp-system" {
+		switch cm.Name {
+		case "config-images", "scheduled-jobs":
+			return true
+		}
+	}
+
+	if cm.Namespace == "argocd" || labelsValue(cm.Labels, "app.kubernetes.io/part-of") == "argocd" {
+		switch cm.Name {
+		case "argocd-cm",
+			"argocd-cmd-params-cm",
+			"argocd-dex-cm",
+			"argocd-gpg-keys-cm",
+			"argocd-notifications-cm",
+			"argocd-rbac-cm",
+			"argocd-ssh-known-hosts-cm",
+			"argocd-tls-certs-cm":
+			return true
+		}
+	}
+
+	if labelsValue(cm.Labels, "app.kubernetes.io/name") == "ingress-nginx" {
+		return true
+	}
+
+	if cm.Namespace == "argo-rollouts" {
+		switch cm.Name {
+		case "argo-rollouts-config", "argo-rollouts-notification-configmap":
+			return true
+		}
+	}
+
+	if labelsValue(cm.Labels, "app.kubernetes.io/part-of") == "kyverno" {
+		switch cm.Name {
+		case "kyverno", "kyverno-metrics":
+			return true
+		}
+	}
+
+	return false
+}
+
+func isKnownPlatformSecret(sec *corev1.Secret) bool {
+	if sec == nil {
+		return false
+	}
+
+	if labelsValue(sec.Labels, "sealedsecrets.bitnami.com/sealed-secrets-key") != "" {
+		return true
+	}
+
+	if labelsValue(sec.Labels, "argocd.argoproj.io/secret-type") != "" {
+		return true
+	}
+	if labelsValue(sec.Labels, "app.kubernetes.io/part-of") == "argocd" {
+		switch sec.Name {
+		case "argocd-secret", "argocd-notifications-secret":
+			return true
+		}
+	}
+
+	if labelsValue(sec.Labels, "app.kubernetes.io/managed-by") == "cert-manager-webhook" && strings.Contains(sec.Name, "webhook-ca") {
+		return true
+	}
+	if sec.Annotations != nil && sec.Annotations["cert-manager.io/allow-direct-injection"] == "true" && strings.Contains(sec.Name, "webhook-ca") {
+		return true
+	}
+	if labelsValue(sec.Labels, "app.kubernetes.io/managed-by") == "cert-manager" && strings.Contains(sec.Name, "account-key") {
+		return true
+	}
+
+	if sec.Namespace == "gmp-public" && sec.Name == "alertmanager" {
+		return true
+	}
+
+	if sec.Namespace == "crossplane-system" && sec.Name == "crossplane-root-ca" {
+		return true
+	}
+
+	return false
+}
+
+func labelsValue(labels map[string]string, key string) string {
+	if labels == nil {
+		return ""
+	}
+	return labels[key]
 }
 
 type configReferencePodSpec struct {
