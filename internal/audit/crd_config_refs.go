@@ -56,11 +56,12 @@ func listDynamicConfigObjectRefs(namespaces []string) []bp.ConfigObjectRef {
 			}
 			continue
 		}
+		handlerCanCrossNamespace := dynamicConfigRefHandlerCanCrossNamespace(gvr)
 		for _, u := range items {
 			if u == nil {
 				continue
 			}
-			if len(nsSet) > 0 && u.GetNamespace() != "" && !nsSet[u.GetNamespace()] {
+			if len(nsSet) > 0 && !handlerCanCrossNamespace && u.GetNamespace() != "" && !nsSet[u.GetNamespace()] {
 				continue
 			}
 			for _, ref := range handler(u) {
@@ -520,6 +521,16 @@ func collectContainerLikeRefs(refs *[]bp.ConfigObjectRef, ns string, c map[strin
 		addConfigMap(refs, ns, stringAt(envFrom, "configMapRef", "name"))
 		addSecret(refs, ns, stringAt(envFrom, "secretRef", "name"))
 	}
+}
+
+func dynamicConfigRefHandlerCanCrossNamespace(gvr schema.GroupVersionResource) bool {
+	switch gvr.Group {
+	case "gateway.networking.k8s.io":
+		return gvr.Resource == "gateways"
+	case "kubernetes.crossplane.io", "helm.crossplane.io":
+		return gvr.Resource == "providerconfigs" || gvr.Resource == "releases"
+	}
+	return false
 }
 
 func collectVolumeLikeRefs(refs *[]bp.ConfigObjectRef, ns string, v map[string]any) {

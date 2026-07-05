@@ -1,11 +1,17 @@
 package audit
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 )
 
 func TestDynamicConfigObjectRefs(t *testing.T) {
@@ -260,6 +266,50 @@ func TestDynamicConfigObjectRefsUnhandledKinds(t *testing.T) {
 	}
 }
 
+func TestListDynamicConfigObjectRefsFiltersByTargetNamespace(t *testing.T) {
+	gatewayGVR := gvr("gateway.networking.k8s.io", "v1", "gateways")
+	gateway := testUnstructured("gateway.networking.k8s.io/v1", "Gateway", "edge", "public-gw", map[string]any{
+		"spec": map[string]any{"listeners": []any{
+			map[string]any{"tls": map[string]any{"certificateRefs": []any{
+				map[string]any{"name": "edge-cert"},
+				map[string]any{"name": "shared-cert", "namespace": "infra", "kind": "Secret"},
+				map[string]any{"name": "shared-cert", "namespace": "infra", "kind": "Secret"},
+			}}},
+		}},
+	})
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gatewayGVR: "GatewayList"},
+	)
+	if _, err := dynClient.Resource(gatewayGVR).Namespace("edge").Create(context.Background(), gateway, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create Gateway fixture: %v", err)
+	}
+	if err := k8s.InitTestDynamicResourceCache(dynClient, []k8s.APIResource{
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Name: "gateways", Namespaced: true, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	defer k8s.ResetTestDynamicState()
+
+	dynCache := k8s.GetDynamicResourceCache()
+	if err := dynCache.EnsureWatching(gatewayGVR); err != nil {
+		t.Fatalf("EnsureWatching: %v", err)
+	}
+	if !dynCache.WaitForSync(gatewayGVR, 2*time.Second) {
+		t.Fatal("dynamic Gateway cache did not sync")
+	}
+	items, err := dynCache.ListWatched(gatewayGVR)
+	if err != nil {
+		t.Fatalf("ListWatched: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatalf("expected Gateway in dynamic cache, got none")
+	}
+
+	got := listDynamicConfigObjectRefs([]string{"infra"})
+	assertRefSet(t, got, refs(secret("infra", "shared-cert")))
+}
+
 func assertRefSet(t *testing.T, got, want []bp.ConfigObjectRef) {
 	t.Helper()
 	gotSet := refSet(got)
@@ -301,4 +351,14 @@ func configMap(ns, name string) bp.ConfigObjectRef {
 
 func secret(ns, name string) bp.ConfigObjectRef {
 	return bp.ConfigObjectRef{Kind: "Secret", Namespace: ns, Name: name}
+}
+
+func testUnstructured(apiVersion, kind, ns, name string, obj map[string]any) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: obj}
+	u.SetAPIVersion(apiVersion)
+	u.SetKind(kind)
+	u.SetNamespace(ns)
+	u.SetName(name)
+	u.SetCreationTimestamp(metav1.Now())
+	return u
 }

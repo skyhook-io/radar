@@ -1769,6 +1769,10 @@ func TestSecretInConfigMap(t *testing.T) {
 				Data:       map[string]string{"db_credentials": "postgres://app:s3cretpass@db:5432/app"},
 			},
 			{
+				ObjectMeta: metav1.ObjectMeta{Name: "password-only-url-credentials", Namespace: "default"},
+				Data:       map[string]string{"cache_credentials": "redis://:s3cretpass@redis:6379/0"},
+			},
+			{
 				ObjectMeta: metav1.ObjectMeta{Name: "token-config", Namespace: "default"},
 				Data:       map[string]string{"api_token": "qH7mN2pR9sT4uV6wX8yZ0aB1cD3eF5gH"},
 			},
@@ -1814,6 +1818,9 @@ func TestSecretInConfigMap(t *testing.T) {
 	}
 	if !found["connection-url-credentials"] {
 		t.Error("expected secretInConfigMap finding for credential URL with embedded userinfo")
+	}
+	if !found["password-only-url-credentials"] {
+		t.Error("expected secretInConfigMap finding for credential URL with password-only userinfo")
 	}
 	if !found["token-config"] {
 		t.Error("expected secretInConfigMap finding for token-config (token-looking value)")

@@ -505,6 +505,9 @@ func urlContainsUserInfo(value string) bool {
 	if err != nil || u.Scheme == "" || u.Host == "" || u.User == nil {
 		return false
 	}
+	if _, ok := u.User.Password(); ok {
+		return true
+	}
 	return u.User.Username() != ""
 }
 
