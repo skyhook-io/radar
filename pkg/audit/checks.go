@@ -940,6 +940,14 @@ func isKnownPlatformConfigMap(cm *corev1.ConfigMap) bool {
 		}
 	}
 
+	if cm.Name == "argo-workflows-workflow-controller-configmap" && labelsValue(cm.Labels, "app.kubernetes.io/part-of") == "argo-workflows" {
+		return true
+	}
+
+	if cm.Name == "cnpg-controller-manager-config" && labelsValue(cm.Labels, "app.kubernetes.io/name") == "cloudnative-pg" {
+		return true
+	}
+
 	return false
 }
 

@@ -1395,6 +1395,16 @@ func TestOrphanConfigMapSecretSkipsKnownPlatformArtifacts(t *testing.T) {
 				Namespace:   "datadog",
 				Annotations: map[string]string{"control-plane.alpha.kubernetes.io/leader": `{"holderIdentity":"datadog-operator"}`},
 			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "argo-workflows-workflow-controller-configmap",
+				Namespace: "argo-workflows",
+				Labels:    map[string]string{"app.kubernetes.io/part-of": "argo-workflows"},
+			}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "cnpg-controller-manager-config",
+				Namespace: "cloud-native-pg",
+				Labels:    map[string]string{"app.kubernetes.io/name": "cloudnative-pg"},
+			}},
 		},
 		Secrets: []*corev1.Secret{
 			{ObjectMeta: metav1.ObjectMeta{
@@ -1494,6 +1504,8 @@ func TestOrphanConfigMapSecretSkipsKnownPlatformArtifacts(t *testing.T) {
 		"ConfigMap/logging/fluentd-extra-config",
 		"ConfigMap/k8sgpt/k8sgpt-dynamic-config",
 		"ConfigMap/datadog/datadog-operator-lock",
+		"ConfigMap/argo-workflows/argo-workflows-workflow-controller-configmap",
+		"ConfigMap/cloud-native-pg/cnpg-controller-manager-config",
 		"Secret/sealed-secrets/sealed-secrets-keyabc",
 		"Secret/argocd/repo-creds",
 		"Secret/argocd/argocd-secret",
@@ -1550,6 +1562,12 @@ func TestOrphanConfigMapSecretKnownPlatformArtifactNegativeCases(t *testing.T) {
 				Namespace:   "default",
 				Annotations: map[string]string{"control-plane.alpha.kubernetes.io/leader": ""},
 			}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "argo-workflows-workflow-controller-configmap", Namespace: "argo-workflows"}},
+			{ObjectMeta: metav1.ObjectMeta{
+				Name:      "cnpg-controller-manager-config",
+				Namespace: "cloud-native-pg",
+				Labels:    map[string]string{"app.kubernetes.io/name": "not-cloudnative-pg"},
+			}},
 		},
 		Secrets: []*corev1.Secret{
 			{ObjectMeta: metav1.ObjectMeta{Name: "argocd-secret", Namespace: "argocd"}, Type: corev1.SecretTypeOpaque},
@@ -1584,6 +1602,8 @@ func TestOrphanConfigMapSecretKnownPlatformArtifactNegativeCases(t *testing.T) {
 		"ConfigMap/default/disabled-grafana-dashboard",
 		"ConfigMap/k8sgpt/disabled-k8sgpt-dynamic-config",
 		"ConfigMap/default/empty-leader-lock",
+		"ConfigMap/argo-workflows/argo-workflows-workflow-controller-configmap",
+		"ConfigMap/cloud-native-pg/cnpg-controller-manager-config",
 		"Secret/argocd/argocd-secret",
 		"Secret/cert-manager/cert-manager-webhook-ca",
 		"Secret/cert-manager/letsencrypt-account-key",
