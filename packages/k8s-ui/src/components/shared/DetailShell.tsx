@@ -52,9 +52,9 @@ export function DetailShell<TId extends string = string>({
   const visibleTabs = tabs.filter((t) => !t.hidden)
 
   return (
-    <div className="flex flex-col h-full w-full bg-theme-surface">
+    <div className="flex flex-col h-full w-full bg-theme-base">
       {/* Header */}
-      <div className="shrink-0 border-b border-theme-border bg-theme-surface">
+      <div className="shrink-0 border-b border-theme-border bg-theme-base">
         {!compactHeader && (
           <>
             {breadcrumb && <div className="px-6 pt-2.5">{breadcrumb}</div>}

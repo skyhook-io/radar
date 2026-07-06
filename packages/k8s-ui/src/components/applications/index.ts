@@ -7,7 +7,7 @@ export { buildSingleAppEntry } from '../../utils/applications'
 // Facet moved to the shared ui/ primitives; re-exported here for compatibility.
 export { Facet } from '../ui/Facet'
 export { ApplicationDetail } from './ApplicationDetail'
-export type { ApplicationDetailProps, SelectedAppWorkload, AppIdentityInstance } from './ApplicationDetail'
+export type { ApplicationDetailProps, SelectedAppWorkload, AppIdentityInstance, ApplicationView } from './ApplicationDetail'
 export { CenteredEmpty } from '../ui/CenteredEmpty'
 export { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo } from './AppChips'
 export { ProvenanceTooltip, CategoryTooltip, VersionTooltip, AppIdentityTooltip } from './AppTooltips'

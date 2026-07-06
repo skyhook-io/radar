@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, ChevronRight, CircleCheck, Clock, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
 import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
+import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
 import { issueTiming } from './issue-timing';
@@ -254,10 +255,12 @@ export function IssueRow({
                 <span aria-hidden>·</span>
                 {/* Non-interactive signal (the header is the toggle — a nested
                     button would be invalid); the clickable link lives in the body. */}
-                <span className="min-w-0 truncate text-theme-text-tertiary" title={confidenceTitle(issue.incident_parent.confidence ?? '')}>
-                  ↳ {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}{' '}
-                  <span className="font-medium text-theme-text-secondary">{issue.incident_parent.ref.kind} / {issue.incident_parent.ref.name}</span>
-                </span>
+                <Tooltip content={confidenceTitle(issue.incident_parent.confidence ?? '')} delay={200} wrapperClassName="min-w-0">
+                  <span className="truncate text-theme-text-tertiary">
+                    ↳ {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}{' '}
+                    <span className="font-medium text-theme-text-secondary">{issue.incident_parent.ref.kind} / {issue.incident_parent.ref.name}</span>
+                  </span>
+                </Tooltip>
               </>
             ) : null}
             {renderMeta?.(slotCtx)}
@@ -271,17 +274,22 @@ export function IssueRow({
           </span>
           {/* Age chip: keep recency visible; the deployment-start signal rides as a secondary tag. */}
           {issue.first_seen ? (
-            <time
-              dateTime={issue.first_seen}
-              title={ageTitle(issue)}
-              className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
-            >
-              <Clock className="h-3 w-3" aria-hidden />
-              {formatCompactAge(issue.first_seen)}
+            <>
+              <Tooltip content={ageTitle(issue)} delay={200} wrapperClassName="shrink-0">
+                <time
+                  dateTime={issue.first_seen}
+                  className="flex items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
+                >
+                  <Clock className="h-3 w-3" aria-hidden />
+                  {formatCompactAge(issue.first_seen)}
+                </time>
+              </Tooltip>
               {timing ? (
-                <span className="badge-sm ml-1 text-[10px] text-theme-text-secondary" title={timing.tooltip}>{timing.chip}</span>
+                <Tooltip content={timing.tooltip} delay={200}>
+                  <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
+                </Tooltip>
               ) : null}
-            </time>
+            </>
           ) : null}
           {renderActions?.(slotCtx)}
           <ChevronRight className={`h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
@@ -308,9 +316,11 @@ export function IssueRow({
                     <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
                       {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}
                       {issue.incident_parent.confidence ? (
-                        <span className="ml-2 badge-sm text-[10px] font-normal text-theme-text-tertiary" title={confidenceTitle(issue.incident_parent.confidence)}>
-                          {issue.incident_parent.confidence} confidence
-                        </span>
+                        <Tooltip content={confidenceTitle(issue.incident_parent.confidence)} delay={200}>
+                          <span className="ml-2 badge-sm text-[10px] font-normal text-theme-text-tertiary">
+                            {issue.incident_parent.confidence} confidence
+                          </span>
+                        </Tooltip>
                       ) : null}
                     </h4>
                     <ul className="flex flex-col gap-px">
@@ -453,12 +463,11 @@ function DiagnosticContext({
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="shrink-0 text-xs font-medium text-theme-text-secondary">{diagnosticFactLabel(fact.type)}</span>
               {fact.confidence ? (
-                <span
-                  className="shrink-0 badge-sm text-[10px] text-theme-text-tertiary"
-                  title={confidenceTitle(fact.confidence)}
-                >
-                  {fact.confidence} confidence
-                </span>
+                <Tooltip content={confidenceTitle(fact.confidence)} delay={200}>
+                  <span className="shrink-0 badge-sm text-[10px] text-theme-text-tertiary">
+                    {fact.confidence} confidence
+                  </span>
+                </Tooltip>
               ) : null}
               {fact.message ? <span className="min-w-0 break-words text-xs leading-relaxed text-theme-text-tertiary">{fact.message}</span> : null}
             </div>
@@ -591,7 +600,9 @@ function ResourceLine({
         {r.name}
       </span>
       {count && count > 1 ? (
-        <span className="shrink-0 text-[10px] text-theme-text-tertiary tabular-nums" title={`${count} affected resources grouped under this issue`}>{count} affected</span>
+        <Tooltip content={`${count} affected resources grouped under this issue`} delay={200}>
+          <span className="shrink-0 text-[10px] text-theme-text-tertiary tabular-nums">{count} affected</span>
+        </Tooltip>
       ) : null}
       {linkable && <ResourceLinkIcon className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover/r:opacity-100" />}
     </>

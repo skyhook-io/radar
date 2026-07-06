@@ -300,6 +300,6 @@ export function getClusterProvider(resource: any): string {
 /** Parse CAPI compound condition messages ("* Foo: bar * Baz: qux") into a structured list */
 export function parseCAPIConditionMessage(message: string): string[] | null {
   if (!message || !message.includes('*')) return null
-  const items = message.split(/\s*\*\s*/).filter(Boolean).map(s => s.trim())
+  const items = message.split('*').map(s => s.trim()).filter(Boolean)
   return items.length > 1 ? items : null
 }

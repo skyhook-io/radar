@@ -17,14 +17,31 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
-// WorkloadPodInfo contains basic info about a pod for the UI
+// WorkloadPodContainerInfo contains compact per-container runtime status for the UI.
+type WorkloadPodContainerInfo struct {
+	Name         string `json:"name"`
+	Init         bool   `json:"init,omitempty"`
+	Ready        bool   `json:"ready"`
+	RestartCount int32  `json:"restartCount"`
+}
+
+// WorkloadPodInfo contains compact runtime status about a pod for workload views.
 type WorkloadPodInfo struct {
-	Name       string   `json:"name"`
-	Containers []string `json:"containers"`
-	Ready      bool     `json:"ready"`
+	Name                  string                     `json:"name"`
+	Containers            []string                   `json:"containers"`
+	Ready                 bool                       `json:"ready"`
+	Phase                 string                     `json:"phase,omitempty"`
+	HealthLevel           string                     `json:"healthLevel,omitempty"`
+	Reason                string                     `json:"reason,omitempty"`
+	Message               string                     `json:"message,omitempty"`
+	RestartCount          int32                      `json:"restartCount,omitempty"`
+	LastTerminationReason string                     `json:"lastTerminationReason,omitempty"`
+	CreatedAt             string                     `json:"createdAt,omitempty"`
+	ContainerStatuses     []WorkloadPodContainerInfo `json:"containerStatuses,omitempty"`
 }
 
 // workloadLogEntry is an internal structure for log lines from pods
@@ -257,7 +274,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 					knownPods[p.Name] = true
 					// Notify frontend about new pod
 					sendSSEEvent(w, flusher, "pod_added", map[string]any{
-						"pods": []WorkloadPodInfo{buildPodInfo(p)},
+						"pods": []WorkloadPodInfo{buildPodInfo(p, time.Now())},
 					})
 				}
 			}
@@ -357,25 +374,66 @@ func isPodReady(pod *corev1.Pod) bool {
 // buildPodInfos converts pods to WorkloadPodInfo slice
 func buildPodInfos(pods []*corev1.Pod) []WorkloadPodInfo {
 	infos := make([]WorkloadPodInfo, 0, len(pods))
+	now := time.Now()
 	for _, pod := range pods {
-		infos = append(infos, buildPodInfo(pod))
+		infos = append(infos, buildPodInfo(pod, now))
 	}
 	return infos
 }
 
 // buildPodInfo converts a single pod to WorkloadPodInfo
-func buildPodInfo(pod *corev1.Pod) WorkloadPodInfo {
+func buildPodInfo(pod *corev1.Pod, now time.Time) WorkloadPodInfo {
 	containers := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
+	containerStatuses := make([]WorkloadPodContainerInfo, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))
 	for _, c := range pod.Spec.InitContainers {
 		containers = append(containers, c.Name)
 	}
 	for _, c := range pod.Spec.Containers {
 		containers = append(containers, c.Name)
 	}
+	for _, cs := range pod.Status.InitContainerStatuses {
+		containerStatuses = append(containerStatuses, WorkloadPodContainerInfo{
+			Name:         cs.Name,
+			Init:         true,
+			Ready:        cs.Ready,
+			RestartCount: cs.RestartCount,
+		})
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		containerStatuses = append(containerStatuses, WorkloadPodContainerInfo{
+			Name:         cs.Name,
+			Ready:        cs.Ready,
+			RestartCount: cs.RestartCount,
+		})
+	}
+	verdict := health.Pod(pod, now)
+	displayLevel := health.PodDisplayLevel(pod, now)
+	if displayLevel != verdict.Level {
+		verdict.Level = displayLevel
+		if verdict.Reason == "" {
+			verdict.Reason = health.PodProblemReason(pod, now)
+		}
+		if verdict.Message == "" {
+			verdict.Message = health.PodProblemMessage(pod)
+		}
+	}
+	restartCount, lastTerminationReason := health.PodRestartContext(pod)
+	createdAt := ""
+	if !pod.CreationTimestamp.IsZero() {
+		createdAt = pod.CreationTimestamp.Time.Format(time.RFC3339)
+	}
 	return WorkloadPodInfo{
-		Name:       pod.Name,
-		Containers: containers,
-		Ready:      isPodReady(pod),
+		Name:                  pod.Name,
+		Containers:            containers,
+		Ready:                 isPodReady(pod),
+		Phase:                 string(pod.Status.Phase),
+		HealthLevel:           string(verdict.Level),
+		Reason:                verdict.Reason,
+		Message:               verdict.Message,
+		RestartCount:          restartCount,
+		LastTerminationReason: lastTerminationReason,
+		CreatedAt:             createdAt,
+		ContainerStatuses:     containerStatuses,
 	}
 }
 

@@ -12,23 +12,30 @@ import {
   type GitOpsOwnerRef,
   type GitOpsStatus,
   type HelmOwnerRef,
+  type AppRow,
+  type ResourceOwnershipContext,
+  type ServingResourceDetail,
+  type AuditFinding,
   gitOpsRouteForOwner,
   gitOpsOwnerFromRelationships,
   getGitOpsResourceStatus,
   resolvedEnvFromKey,
 } from '@skyhook-io/k8s-ui'
+import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import type { SelectedResource, ResourceRef, Relationships, ResolvedEnvFrom } from '../../types'
-import { kindToPlural, buildWorkloadPath, type NavigateToResource } from '../../utils/navigation'
+import { kindToPlural, relatedResourcePath, type NavigateToResource } from '../../utils/navigation'
 import {
   useChanges, useResourceWithRelationships, usePodLogs, useTopology, useUpdateResource,
   useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob,
   useRestartWorkload, useWorkloadRevisions, useRollbackWorkload,
+  useWorkloadPods,
   useFluxReconcile, useFluxSyncWithSource, useFluxSuspend, useFluxResume,
   useArgoSync, useArgoRefresh, useArgoSuspend, useArgoResume,
   useCordonNode, useUncordonNode, useDrainNode,
   useCascadeDeletePreview,
   useResourceEvents,
   useResource,
+  useApplications,
   fetchJSON,
 } from '../../api/client'
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
@@ -41,7 +48,8 @@ import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
 import { useCanUpdateSecrets, useCanNodeWrite, useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs, useOpenNodeTerminal } from '../dock'
-import { PortForwardButton } from '../portforward/PortForwardButton'
+import { PortForwardButton, PortForwardInlineButton } from '../portforward/PortForwardButton'
+import { CurlButton, CurlPanel, isHttpishPort, defaultScheme, defaultPathForPort } from '../curl/ServiceCurlButton'
 import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
 import { PodRenderer } from '../resources/renderers/PodRenderer'
@@ -123,7 +131,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   }, [navigate])
 
   const handleNavigate = useCallback((resource: SelectedResource) => {
-    navigate(buildWorkloadPath(resource))
+    navigate(relatedResourcePath(resource))
   }, [navigate])
 
   // Hooks must run unconditionally — the invalid-URL guard comes after them.
@@ -170,6 +178,7 @@ interface WorkloadViewProps {
   onCancelExpandIntent?: () => void
   initialTab?: 'detail' | 'yaml'
   group?: string
+  pushTabHistory?: boolean
 }
 
 function useActionsBarProps(kind: string, namespace: string, name: string) {
@@ -274,9 +283,11 @@ export function WorkloadView({
   namespace,
   name,
   expanded = true,
+  pushTabHistory = false,
   ...rest
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
+  const apiKind = kindToPlural(kindProp)
 
   // Tab state from URL query param — migrate legacy tab names
   const rawTab = searchParams.get('tab')
@@ -284,26 +295,38 @@ export function WorkloadView({
     : rawTab === 'events' ? 'timeline'
     : (rawTab as TabType) || 'overview'
 
-  const handleTabChange = useCallback((tab: TabType) => {
+  const handleTabChange = useCallback((tab: TabType, opts?: { replace?: boolean }) => {
     const params = new URLSearchParams(searchParams)
     if (tab === 'overview') {
       params.delete('tab')
     } else {
       params.set('tab', tab)
     }
-    setSearchParams(params, { replace: true })
-  }, [searchParams, setSearchParams])
+    setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory })
+  }, [pushTabHistory, searchParams, setSearchParams])
 
   // Fetch resource with relationships
-  const { data: resourceResponse, isLoading: resourceLoading, error: resourceError, refetch: refetchResource } = useResourceWithRelationships<any>(kindProp, namespace, name, rest.group)
+  const { data: resourceResponse, isLoading: resourceLoading, error: resourceError, refetch: refetchResource } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
+  const podWorkloadOwner = useMemo(
+    () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
+    [apiKind, namespace, relationships, resource],
+  )
+  const podOwnerAppsQuery = useApplications(
+    podWorkloadOwner?.namespace ? [podWorkloadOwner.namespace] : [],
+    { enabled: Boolean(podWorkloadOwner?.namespace) },
+  )
+  const ownershipContext = useMemo(
+    () => buildPodOwnershipContext(podWorkloadOwner, podOwnerAppsQuery.data?.applications),
+    [podWorkloadOwner, podOwnerAppsQuery.data?.applications],
+  )
   const certificateInfo = resourceResponse?.certificateInfo
   const hpaDiagnosis = resourceResponse?.hpaDiagnosis
   const relationshipGitopsOwner = useMemo(() => gitOpsOwnerFromRelationships(relationships), [relationships])
   const inheritedGitOpsLookupRef = useMemo(
-    () => findInheritedGitOpsLookupRef(relationships, relationshipGitopsOwner, { kind: kindProp, namespace, name, group: rest.group }),
-    [relationships, relationshipGitopsOwner, kindProp, namespace, name, rest.group],
+    () => findInheritedGitOpsLookupRef(relationships, relationshipGitopsOwner, { kind: apiKind, namespace, name, group: rest.group }),
+    [relationships, relationshipGitopsOwner, apiKind, namespace, name, rest.group],
   )
   const inheritedGitOpsResponse = useResourceWithRelationships<any>(
     inheritedGitOpsLookupRef ? kindToPlural(inheritedGitOpsLookupRef.kind) : '',
@@ -357,7 +380,7 @@ export function WorkloadView({
   )
 
   // For pods: extract envFrom ConfigMap/Secret names and resolve their keys
-  const isPod = kindProp.toLowerCase() === 'pods'
+  const isPod = apiKind === 'pods'
   const { envFromConfigMapNames, envFromSecretNames } = useMemo(() => {
     if (!isPod || !resource) return { envFromConfigMapNames: [] as string[], envFromSecretNames: [] as string[] }
     const cmNames = new Set<string>()
@@ -422,7 +445,7 @@ export function WorkloadView({
     isLoading: resourceFocusedEventsLoading,
     k8sError: resourceFocusedK8sError,
     updatesError: resourceFocusedUpdatesError,
-  } = useResourceEvents(kindProp, namespace, name)
+  } = useResourceEvents(apiKind, namespace, name)
 
   // Fetch all events for this resource's namespace (only when expanded)
   const { data: allEvents, isLoading: eventsLoading } = useChanges({
@@ -436,8 +459,60 @@ export function WorkloadView({
 
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()
+  const { canPortForward } = useNamespacedCapabilities(namespace)
+  const isLocalDeployment = useIsLocalDeployment()
+  const showServingPortForward = canPortForward || !isLocalDeployment
+  const showServingCurl = !isLocalDeployment
+  const [servingCurl, setServingCurl] = useState<{ namespace: string; serviceName: string; port: number; closing: boolean } | null>(null)
+  const closeServingCurl = useCallback(() => {
+    setServingCurl((p) => (p ? { ...p, closing: true } : null))
+    window.setTimeout(() => setServingCurl((p) => (p?.closing ? null : p)), 220)
+  }, [])
+  const renderServicePortAction = useCallback((props: ServicePortRenderProps) => {
+    const active = servingCurl?.namespace === props.namespace &&
+      servingCurl?.serviceName === props.serviceName &&
+      servingCurl?.port === props.port &&
+      !servingCurl.closing
+    return (
+      <>
+        {showServingCurl && isHttpishPort(props.port, props.name, props.appProtocol, props.protocol) && (
+          <CurlButton
+            active={active}
+            onClick={() => {
+              if (active) closeServingCurl()
+              else setServingCurl({ namespace: props.namespace, serviceName: props.serviceName, port: props.port, closing: false })
+            }}
+          />
+        )}
+        {showServingPortForward && (
+          <PortForwardInlineButton
+            namespace={props.namespace}
+            serviceName={props.serviceName}
+            port={props.port}
+            protocol={props.protocol}
+          />
+        )}
+      </>
+    )
+  }, [closeServingCurl, servingCurl, showServingCurl, showServingPortForward])
+  const renderServicePortPanel = useCallback((props: ServicePortRenderProps) => {
+    const active = servingCurl?.namespace === props.namespace &&
+      servingCurl?.serviceName === props.serviceName &&
+      servingCurl?.port === props.port
+    return active ? (
+      <CurlPanel
+        namespace={props.namespace}
+        serviceName={props.serviceName}
+        port={props.port}
+        initialScheme={defaultScheme(props.port, props.name, props.appProtocol)}
+        initialPath={defaultPathForPort(props.port, props.name, props.appProtocol)}
+        open={!servingCurl.closing}
+        onClose={closeServingCurl}
+      />
+    ) : null
+  }, [closeServingCurl, servingCurl])
   const updateResource = useUpdateResource()
-  const baseActionsBarProps = useActionsBarProps(kindProp, namespace, name)
+  const baseActionsBarProps = useActionsBarProps(apiKind, namespace, name)
   const desktopDownload = useDesktopDownload()
 
   const resourceGroup = useMemo(
@@ -447,14 +522,16 @@ export function WorkloadView({
   // Live Operational Issues for this resource. Fetched here (not inside the lead
   // render-prop) so the count also gates `hasOperationalIssues` — which tells the
   // renderers to suppress their own status-derived problems and avoid duplicates.
-  // Keyed on the STABLE prop kind+group (same inputs as the resource fetch above),
+  // Keyed on the stable API kind+group (same inputs as the resource fetch above),
   // NOT the manifest-derived ones: deriving kind/group from the loaded resource
   // would flip the query key when the manifest arrives, drop liveIssues, and flash
   // the renderer banners. The backend canonicalizes a plural kind via discovery,
-  // so passing the route's plural kindProp resolves correctly.
-  const { data: liveIssues } = useResourceIssues(kindProp, rest.group, namespace, name)
+  // so using the normalized API kind resolves direct links and app navigation alike.
+  const { data: liveIssues } = useResourceIssues(apiKind, rest.group, namespace, name)
+  const { data: auditFindings } = useResourceAudit(apiKind, namespace, name)
+  const hasOperationalIssues = Boolean(liveIssues?.length)
   const { onCompareTo, onCompareAcrossClusters, picker: comparePicker } = useCompareLauncher({
-    kind: kindProp,
+    kind: apiKind,
     namespace,
     name,
     // Prefer the URL-supplied group so Compare works even before the resource
@@ -495,6 +572,19 @@ export function WorkloadView({
     },
     [navigateRouter, searchParams],
   )
+  const handleOpenApplication = useCallback(
+    (appKey: string) => {
+      const params = new URLSearchParams()
+      const namespaces = new Set((searchParams.get('namespaces') ?? '').split(',').map((ns) => ns.trim()).filter(Boolean))
+      if (ownershipContext?.application?.key === appKey && ownershipContext.workload.namespace) {
+        namespaces.add(ownershipContext.workload.namespace)
+      }
+      if (namespaces.size > 0) params.set('namespaces', Array.from(namespaces).join(','))
+      params.set('app', appKey)
+      navigateRouter({ pathname: '/applications', search: params.toString() })
+    },
+    [navigateRouter, ownershipContext, searchParams],
+  )
 
   // Duplicate dialog
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false)
@@ -505,10 +595,46 @@ export function WorkloadView({
     setDuplicateDialogOpen(true)
   }, [])
 
+  const supportsWorkloadPods = ['deployments', 'statefulsets', 'daemonsets'].includes(apiKind)
+  const workloadPodsQuery = useWorkloadPods(
+    supportsWorkloadPods ? apiKind : '',
+    namespace,
+    name,
+  )
+  const servingRefs = useMemo(() => collectServingRefs(relationships), [relationships])
+  const servingQueries = useQueries({
+    queries: servingRefs.map((ref) => {
+      const pluralKind = kindToPlural(ref.kind)
+      const ns = ref.namespace || '_'
+      const params = new URLSearchParams()
+      if (ref.group) params.set('group', ref.group)
+      const queryString = params.toString()
+      return {
+        queryKey: ['resource', pluralKind, ref.namespace, ref.name, ref.group],
+        queryFn: () => fetchJSON<any>(`/resources/${pluralKind}/${ns}/${ref.name}${queryString ? `?${queryString}` : ''}`),
+        enabled: expanded && Boolean(ref.kind && ref.name),
+        staleTime: 30000,
+      }
+    }),
+  })
+  const servingResources = useMemo<ServingResourceDetail[]>(
+    () => servingRefs.map((ref, index) => {
+      const query = servingQueries[index]
+      const data = query?.data?.resource ?? query?.data
+      return {
+        ref,
+        resource: data,
+        loading: query?.isLoading ?? false,
+        error: (query?.error as Error | null) ?? null,
+      }
+    }),
+    [servingRefs, servingQueries],
+  )
+
   return (
     <>
     <BaseWorkloadView
-      kind={kindProp}
+      kind={apiKind}
       namespace={namespace}
       name={name}
       expanded={expanded}
@@ -516,8 +642,16 @@ export function WorkloadView({
       // Data
       resource={resource}
       relationships={relationships}
+      ownershipContext={ownershipContext}
+      onOpenApplication={handleOpenApplication}
       certificateInfo={certificateInfo}
       hpaDiagnosis={hpaDiagnosis}
+      workloadPods={supportsWorkloadPods ? workloadPodsQuery.data?.pods : undefined}
+      workloadPodsLoading={supportsWorkloadPods ? workloadPodsQuery.isLoading : false}
+      workloadPodsError={supportsWorkloadPods ? (workloadPodsQuery.error as Error | null) : null}
+      servingResources={servingResources}
+      renderServicePortAction={renderServicePortAction}
+      renderServicePortPanel={renderServicePortPanel}
       isLoading={resourceLoading}
       resourceError={resourceError}
       refetch={refetchResource}
@@ -555,8 +689,8 @@ export function WorkloadView({
       resolvedEnvFrom={resolvedEnvFrom}
       renderOverviewExtra={({ kind: k, namespace: ns, name: n }) => (
         <>
-          <AuditSection kind={k} namespace={ns} name={n} />
           <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
+          <AuditOverviewSection findings={auditFindings ?? []} onViewAll={() => navigateRouter('/checks')} />
         </>
       )}
       renderOverviewLead={() => (
@@ -575,7 +709,7 @@ export function WorkloadView({
           }
         />
       )}
-      hasOperationalIssues={!!liveIssues?.length}
+      hasOperationalIssues={hasOperationalIssues}
       onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
       resolvedGitOpsOwner={gitopsOwner}
       gitOpsOwnerVerified={gitOpsOwnerVerified}
@@ -599,6 +733,26 @@ export function WorkloadView({
     {comparePicker}
     </>
   )
+}
+
+function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
+  if (!relationships) return []
+  return dedupeRefs([
+    ...(relationships.services ?? []),
+    ...(relationships.ingresses ?? []),
+    ...(relationships.gateways ?? []),
+    ...(relationships.routes ?? []),
+  ])
+}
+
+function dedupeRefs(refs: ResourceRef[]): ResourceRef[] {
+  const seen = new Set<string>()
+  return refs.filter((ref) => {
+    const key = `${ref.kind}/${ref.namespace}/${ref.name}/${ref.group ?? ''}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function resolveGitOpsOwner(owner: GitOpsOwnerRef | null, argoApplications: any[] | undefined): GitOpsOwnerRef | null {
@@ -626,6 +780,60 @@ function findInheritedGitOpsLookupRef(
   ].filter(Boolean) as ResourceRef[]
 
   return candidates.find((ref) => !isCurrentResource(ref, current)) ?? null
+}
+
+const POD_OWNERSHIP_WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'rollouts'])
+
+function podWorkloadOwnerFromRelationships(kind: string, namespace: string, relationships: Relationships | undefined, resource: any): ResourceRef | null {
+  if (kindToPlural(kind).toLowerCase() !== 'pods') return null
+
+  if (relationships?.deployment) return relationships.deployment
+
+  const managedWorkload = relationships?.managedBy?.find((ref) => isPodOwnershipWorkloadRef(ref))
+  if (managedWorkload) return managedWorkload
+
+  if (relationships?.owner && isPodOwnershipWorkloadRef(relationships.owner)) return relationships.owner
+
+  return podControllerOwnerFromMetadata(namespace, resource)
+}
+
+function isPodOwnershipWorkloadRef(ref: ResourceRef): boolean {
+  return POD_OWNERSHIP_WORKLOAD_KINDS.has(kindToPlural(ref.kind).toLowerCase())
+}
+
+function podControllerOwnerFromMetadata(namespace: string, resource: any): ResourceRef | null {
+  const ownerRefs = resource?.metadata?.ownerReferences
+  if (!Array.isArray(ownerRefs)) return null
+  const owner = ownerRefs.find((ref) => ref?.controller === true) ?? null
+  if (!owner?.kind || !owner?.name) return null
+  if (!isPodOwnershipWorkloadRef({ kind: owner.kind, namespace, name: owner.name })) return null
+  return {
+    kind: owner.kind,
+    namespace,
+    name: owner.name,
+    group: apiVersionToGroup(owner.apiVersion),
+  }
+}
+
+function buildPodOwnershipContext(
+  workload: ResourceRef | null,
+  apps: AppRow[] | undefined,
+): ResourceOwnershipContext | undefined {
+  if (!workload) return undefined
+  const matches = (apps ?? []).filter((app) =>
+    (app.workloads ?? []).some((candidate) => sameWorkload(candidate, workload)),
+  )
+  const app = matches.length === 1 ? matches[0] : null
+  return {
+    workload,
+    application: app ? { key: app.key, name: app.name } : undefined,
+  }
+}
+
+function sameWorkload(candidate: { kind: string; namespace: string; name: string }, workload: ResourceRef): boolean {
+  return kindToPlural(candidate.kind).toLowerCase() === kindToPlural(workload.kind).toLowerCase()
+    && candidate.namespace === workload.namespace
+    && candidate.name === workload.name
 }
 
 function nativeHelmOwnerFromRelationships(relationships: Relationships | undefined, fallbackNamespace: string): HelmOwnerRef | null {
@@ -864,11 +1072,9 @@ function MultiPodLogsTab({ pods, namespace, selectedPod, onSelectPod, initialCon
   )
 }
 
-function AuditSection({ kind, namespace, name }: { kind: string; namespace: string; name: string }) {
-  const navigate = useNavigate()
-  const { data: findings } = useResourceAudit(kind, namespace, name)
-  if (!findings || findings.length === 0) return null
-  return <AuditAlerts findings={findings} onViewAll={() => navigate('/checks')} />
+function AuditOverviewSection({ findings, onViewAll }: { findings: AuditFinding[]; onViewAll: () => void }) {
+  if (findings.length === 0) return null
+  return <AuditAlerts findings={findings} onViewAll={onViewAll} />
 }
 
 // FluxSourceConsumersSection lists the reconcilers (Kustomization, HelmRelease)
@@ -921,15 +1127,16 @@ function FluxSourceConsumersInner({ sourceKind, namespace, name }: { sourceKind:
 
   if (consumers.length === 0) {
     return (
-      <div className="rounded-lg border border-theme-border bg-theme-elevated/40 p-3 text-xs text-theme-text-tertiary">
-        Consumed by — no Kustomization or HelmRelease references this source.
-      </div>
+      <section className="rounded-lg border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
+        <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Consumed by</h3>
+        <p className="text-xs text-theme-text-tertiary">No Kustomization or HelmRelease references this source.</p>
+      </section>
     )
   }
 
   return (
-    <div className="rounded-lg border border-theme-border bg-theme-elevated/40 p-3">
-      <h3 className="mb-2 text-xs font-medium text-theme-text-secondary">
+    <section className="rounded-lg border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
+      <h3 className="mb-3 text-sm font-semibold text-theme-text-primary">
         Consumed by ({consumers.length})
       </h3>
       <div className="flex flex-wrap gap-1.5">
@@ -948,7 +1155,7 @@ function FluxSourceConsumersInner({ sourceKind, namespace, name }: { sourceKind:
           </Tooltip>
         ))}
       </div>
-    </div>
+    </section>
   )
 }
 

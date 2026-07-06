@@ -94,7 +94,6 @@ export interface Deployment {
 // When adding a new kind here, also update:
 // - ALL_NODE_KINDS in App.tsx
 // - TopologyFilterSidebar.tsx RESOURCE_KINDS array
-// - index.css .topology-icon-* class
 // - K8sResourceNode.tsx NODE_DIMENSIONS
 // - resource-icons.ts KIND_ICON_MAP
 // - kindToPlural in navigation.ts (if irregular plural)
@@ -459,6 +458,7 @@ export interface Relationships {
   configRefs?: ResourceRef[]
   consumers?: ResourceRef[]
   scalers?: ResourceRef[]
+  storageRefs?: ResourceRef[]
   scaleTarget?: ResourceRef
   pdbs?: ResourceRef[]              // PodDisruptionBudgets protecting this workload
   networkPolicies?: ResourceRef[]   // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy variants selecting this workload
@@ -1248,10 +1248,25 @@ export interface ImageMetadata {
 // ============================================================================
 
 // Pod info returned from workload pods endpoint
+export interface WorkloadPodContainerInfo {
+  name: string
+  init?: boolean
+  ready: boolean
+  restartCount: number
+}
+
 export interface WorkloadPodInfo {
   name: string
   containers: string[]
   ready: boolean
+  phase?: string
+  healthLevel?: HealthStatus
+  reason?: string
+  message?: string
+  restartCount?: number
+  lastTerminationReason?: string
+  createdAt?: string
+  containerStatuses?: WorkloadPodContainerInfo[]
 }
 
 // SSE event types for workload log streaming

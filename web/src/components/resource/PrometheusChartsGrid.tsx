@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { BarChart3, ChevronDown, ChevronRight, Loader2, Wifi, WifiOff } from 'lucide-react'
+import { Loader2, Wifi, WifiOff } from 'lucide-react'
 import {
   AreaChart,
   SeriesLegend,
@@ -11,11 +11,9 @@ import {
   usePrometheusStatus,
   usePrometheusConnect,
   usePrometheusResourceMetrics,
-  usePrometheusRightsizing,
   useAutoPromConnect,
   type PrometheusMetricCategory,
   type PrometheusTimeRange,
-  type RightsizingTone,
 } from '../../api/client'
 import {
   MetricsSummary,
@@ -57,7 +55,6 @@ export function PrometheusChartsGrid({
   const showRestartLane = isSupported && kind !== 'Node'
 
   const [timeRange, setTimeRange] = useState<PrometheusTimeRange>('1h')
-  const [diskExpanded, setDiskExpanded] = useState(false)
 
   const categories = kind === 'Node' ? NODE_CATEGORIES : WORKLOAD_CATEGORIES
 
@@ -112,7 +109,6 @@ export function PrometheusChartsGrid({
   const findCategory = (key: PrometheusMetricCategory): CategoryDef | undefined =>
     categories.find(c => c.key === key)
 
-  // Disk I/O is collapsed by default — niche metric.
   const primaryCats: { def: CategoryDef; refLines?: ReferenceLine[] }[] = []
   const cpu = findCategory('cpu')
   if (cpu) primaryCats.push({ def: cpu, refLines: cpuRefLines })
@@ -125,19 +121,16 @@ export function PrometheusChartsGrid({
     if (tx) primaryCats.push({ def: tx })
   }
   const disk = findCategory('filesystem')
+  const chartPanels = disk ? [...primaryCats, { def: disk }] : primaryCats
 
   return (
     <div className="flex flex-col h-full overflow-auto">
-      <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-theme-border bg-theme-surface/50">
-        <div className="flex items-center gap-2 text-sm font-medium text-theme-text-secondary">
-          <BarChart3 className="w-4 h-4 text-theme-text-tertiary" />
-          Metrics
-          <WorkloadHealthBadge kind={kind} namespace={namespace} name={name} />
-        </div>
+      <div className="flex shrink-0 justify-end px-4 pt-3">
         <select
+          aria-label="Metrics time range"
           value={timeRange}
           onChange={e => setTimeRange(e.target.value as PrometheusTimeRange)}
-          className="px-2 py-1 text-xs rounded-md bg-theme-elevated border border-theme-border text-theme-text-secondary focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+          className="rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-xs text-theme-text-secondary shadow-theme-sm focus:outline-none focus:ring-1 focus:ring-accent/50"
         >
           {TIME_RANGES.map(tr => (
             <option key={tr.value} value={tr.value}>{tr.label}</option>
@@ -154,7 +147,7 @@ export function PrometheusChartsGrid({
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-4">
-        {primaryCats.map(({ def, refLines }) => (
+        {chartPanels.map(({ def, refLines }) => (
           <MetricsPanel
             key={def.key}
             category={def}
@@ -166,30 +159,6 @@ export function PrometheusChartsGrid({
           />
         ))}
       </div>
-
-      {disk && (
-        <div className="px-4 pb-4">
-          <button
-            type="button"
-            onClick={() => setDiskExpanded(v => !v)}
-            className="flex items-center gap-1.5 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary py-1"
-          >
-            {diskExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-            Disk I/O
-          </button>
-          {diskExpanded && (
-            <div className="mt-2">
-              <MetricsPanel
-                category={disk}
-                kind={kind}
-                namespace={namespace}
-                name={name}
-                timeRange={timeRange}
-              />
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }
@@ -267,49 +236,6 @@ function SaturationChip({ ratio, against }: { ratio: number; against: 'limit' | 
   const tone: Severity = ratio >= 0.9 ? 'error' : ratio >= 0.75 ? 'warning' : ratio < 0.05 ? 'info' : 'neutral'
   const label = `${(ratio * 100).toFixed(ratio < 0.1 ? 1 : 0)}% of ${against}`
   return <span className={`badge badge-sm ${SEVERITY_BADGE[tone]}`}>{label}</span>
-}
-
-// Severity ordering for rightsizing tones. Aligned with `Tone` constants in
-// `internal/prometheus/rightsizing.go` — adding a new tone there triggers a
-// TypeScript exhaustiveness error on the Record key set here.
-const TONE_RANK: Record<RightsizingTone, number> = {
-  ok: 0,
-  info: 1,
-  warning: 2,
-  alert: 3,
-  critical: 4,
-}
-
-function WorkloadHealthBadge({ kind, namespace, name }: { kind: string; namespace: string; name: string }) {
-  const supported = kind === 'Deployment' || kind === 'StatefulSet' || kind === 'DaemonSet'
-  const { data, error } = usePrometheusRightsizing(kind, namespace, name, supported)
-  if (!supported) return null
-  // Surface a neutral "Health unknown" pill when the rightsizing endpoint
-  // errors — otherwise an actually-throttled or OOM-risk workload would
-  // silently render as fine while we have no signal to display.
-  if (error && !data) {
-    const msg = error instanceof Error ? error.message : String(error)
-    return (
-      <Tooltip content={`Health check failed: ${msg}`}>
-      <span className={`badge badge-sm ${SEVERITY_BADGE.neutral}`}>Health unknown</span>
-      </Tooltip>
-    )
-  }
-  if (!data?.sampleAvailable || data.rows.length === 0) return null
-
-  const worst = data.rows.reduce<RightsizingTone>(
-    (acc, r) => (TONE_RANK[r.tone] > TONE_RANK[acc] ? r.tone : acc),
-    'ok',
-  )
-  // Skip the chip for the steady-state tones to avoid badge-blindness — we
-  // only want to draw the eye when there's something to address.
-  if (worst === 'ok' || worst === 'info') return null
-
-  const { label, severity }: { label: string; severity: Severity } =
-    worst === 'critical' ? { label: 'OOM risk', severity: 'error' } :
-    worst === 'alert' ? { label: 'CPU throttling', severity: 'alert' } :
-    /* warning */ { label: 'Needs review', severity: 'warning' }
-  return <span className={`badge badge-sm ${SEVERITY_BADGE[severity]}`}>{label}</span>
 }
 
 function PanelLoading() {

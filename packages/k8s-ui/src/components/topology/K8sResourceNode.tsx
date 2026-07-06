@@ -12,6 +12,7 @@ import { healthToSeverity, SEVERITY_DOT, SEVERITY_TEXT } from '../../utils/badge
 import { workloadHue } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
 import { midTruncate } from '../../utils/format'
+import { getTopologyIcon } from '../../utils/resource-icons'
 import { Tooltip } from '../ui/Tooltip'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 
@@ -393,13 +394,10 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const auditWarning = typeof nodeData.auditWarning === 'number' ? nodeData.auditWarning : 0
   const auditTotal = auditDanger + auditWarning
   const auditMessages = Array.isArray(nodeData.auditMessages) ? (nodeData.auditMessages as AuditBadgeMessage[]) : []
-  // Workload tint (application graph): a node owned by exactly one workload
-  // carries that workload's hue. Only on healthy/unknown cards — degraded/
-  // unhealthy already own the card background for health, which must win.
+  // Workload ownership (application graph): when present, it owns the node fill.
+  // Kind is shown by a real icon, not arbitrary color; health remains dot/border.
   const { ownerColorIndex } = ownershipOf(nodeData)
-  const hue = ownerColorIndex !== null && (status === 'healthy' || status === 'unknown')
-    ? workloadHue(ownerColorIndex)
-    : undefined
+  const hue = ownerColorIndex !== null ? workloadHue(ownerColorIndex) : undefined
   const subtitle = getSubtitle(kind, nodeData)
   const isInternet = kind === 'Internet'
   const isPodGroup = kind === 'PodGroup'
@@ -410,8 +408,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const issueTooltip = getIssueTooltip(statusIssue)
   const policyStatus = nodeData.policyStatus as string | undefined
 
-  // CSS class for icon (replaces Lucide SVG - saves ~5 DOM elements per node)
-  const iconClass = `topology-icon topology-icon-${kind.toLowerCase()}`
+  const Icon = getTopologyIcon(kind)
 
   if (isInternet) {
     return (
@@ -429,7 +426,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
             selected && 'ring-2 ring-skyhook-400'
           )}
         >
-          <span className="topology-icon topology-icon-internet" style={{ width: 20, height: 20 }} />
+          <Icon className="h-5 w-5 shrink-0 text-accent-text" aria-hidden />
           <span className="text-sm font-medium text-skyhook-300">Internet</span>
           <span className="w-2 h-2 rounded-full bg-green-500" />
         </div>
@@ -465,16 +462,9 @@ export const K8sResourceNode = memo(function K8sResourceNode({
         style={{
           width: NODE_DIMENSIONS[kind]?.width ?? DEFAULT_NODE_DIMENSIONS.width,
           ...getStatusStyle(status),
+          ...(hue ? { backgroundColor: hue.wash } : undefined),
         }}
       >
-        {/* Workload tint — layered over the surface, inset past the 4px status bar */}
-        {hue && (
-          <div
-            className="pointer-events-none absolute inset-y-0 right-0 rounded-r-lg"
-            style={{ left: 4, background: hue.wash }}
-          />
-        )}
-
         {/* Content */}
         <div className={clsx(
           'pl-3 pr-3',
@@ -482,7 +472,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
         )}>
           {/* Header row: icon + kind label + (right-aligned) policy badge + expand/collapse + status dot */}
           <div className="flex items-center gap-1.5 mb-0.5">
-            <span className={iconClass} />
+            <Icon className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" aria-hidden />
             <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary font-medium">
               {isPodGroup ? 'Pod Group' : displayKind(kind)}
             </span>
@@ -500,28 +490,30 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                 </Tooltip>
               )}
               {canExpand && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onExpand(id)
-                  }}
-                  className="p-0.5 hover:bg-theme-elevated rounded transition-colors"
-                  title="Expand to show individual pods"
-                >
-                  <ChevronDown className="w-3.5 h-3.5 text-theme-text-secondary" />
-                </button>
+                <Tooltip content="Expand to show individual pods" position="right">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onExpand(id)
+                    }}
+                    className="p-0.5 hover:bg-theme-elevated rounded transition-colors"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5 text-theme-text-secondary" />
+                  </button>
+                </Tooltip>
               )}
               {canCollapse && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onCollapse(id)
-                  }}
-                  className="p-0.5 hover:bg-theme-elevated rounded transition-colors"
-                  title="Collapse back to group"
-                >
-                  <ChevronUp className="w-3.5 h-3.5 text-theme-text-secondary" />
-                </button>
+                <Tooltip content="Collapse back to group" position="right">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onCollapse(id)
+                    }}
+                    className="p-0.5 hover:bg-theme-elevated rounded transition-colors"
+                  >
+                    <ChevronUp className="w-3.5 h-3.5 text-theme-text-secondary" />
+                  </button>
+                </Tooltip>
               )}
               {auditTotal > 0 && (
                 <Tooltip

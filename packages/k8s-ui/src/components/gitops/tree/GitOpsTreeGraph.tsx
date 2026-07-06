@@ -23,6 +23,7 @@ import type { GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, HealthStatus } 
 import { displayKind } from '../../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../../utils/badge-colors'
 import { formatCompactAge } from '../../../utils/format'
+import { getTopologyIcon } from '../../../utils/resource-icons'
 import { Tooltip } from '../../ui/Tooltip'
 import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, type GitOpsTreeFilters } from './tree-helpers'
 
@@ -549,6 +550,7 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
   const gitopsTool = gitopsToolForNode(node)
   const chips = buildChips(node)
   const dim = getNodeDimensions(node)
+  const KindIcon = getTopologyIcon(kind)
 
   return (
     <>
@@ -584,7 +586,7 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
       >
         <div className="px-3 py-2.5">
           <div className="mb-1 flex items-center gap-1.5">
-            <span className={`topology-icon topology-icon-${kind.toLowerCase()}`} />
+            <KindIcon className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" aria-hidden />
             <span className="truncate text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">
               {node.role === 'group' ? displayKind((node.data?.groupedKind as string) || kind) : displayKind(kind)}
             </span>

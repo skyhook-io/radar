@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { AppRow } from '@skyhook-io/k8s-ui'
+import type { AppHistory, AppRow } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
@@ -997,7 +997,7 @@ export function useTopology(namespaces: string[], viewMode: string = 'resources'
   })
 }
 
-export function useApplications(namespaces: string[]) {
+export function useApplications(namespaces: string[], options?: { enabled?: boolean }) {
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
   const queryString = params.toString()
@@ -1005,7 +1005,23 @@ export function useApplications(namespaces: string[]) {
   return useQuery<{ applications: AppRow[] }>({
     queryKey: ['applications', namespaces],
     queryFn: () => fetchJSON(`/applications${queryString ? `?${queryString}` : ''}`),
+    enabled: options?.enabled ?? true,
     staleTime: 30_000,
+    refetchInterval: APPLICATIONS_REFRESH_INTERVAL_MS,
+  })
+}
+
+export function useApplicationHistory(appKey: string | undefined, namespaces: string[], options?: { enabled?: boolean }) {
+  const params = new URLSearchParams()
+  if (appKey) params.set('app', appKey)
+  if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
+  const queryString = params.toString()
+
+  return useQuery<AppHistory>({
+    queryKey: ['application-history', appKey, namespaces],
+    queryFn: appKey ? () => fetchJSON(`/applications/history?${queryString}`) : skipToken,
+    enabled: Boolean(appKey) && (options?.enabled ?? true),
+    staleTime: 15_000,
     refetchInterval: APPLICATIONS_REFRESH_INTERVAL_MS,
   })
 }

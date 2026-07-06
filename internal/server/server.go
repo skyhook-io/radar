@@ -383,6 +383,7 @@ func (s *Server) setupRoutes() {
 			// cluster's own services grouped by pkg/subject app-overlay,
 			// anchored on container image:tag. See applications.go.
 			r.Get("/applications", s.handleListApplications)
+			r.Get("/applications/history", s.handleApplicationHistory)
 
 			// Free-text resource search (name + namespace + labels +
 			// annotations + container images). Used by the hub fan-out

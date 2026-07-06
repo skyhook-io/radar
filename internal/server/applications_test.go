@@ -7,6 +7,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/subject"
 	"github.com/skyhook-io/radar/pkg/topology"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // rawInput builds a workload with no label overlay and its own structural root
@@ -141,6 +142,161 @@ func TestGroupApplications_StructuralManagerRoot(t *testing.T) {
 	}
 }
 
+func TestGroupApplications_SourceRefRequiresExactSource(t *testing.T) {
+	helmApp := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
+	helmApp.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
+	helmApp.source = sourceRefForInput(helmApp.overlay, helmApp.rootKind, helmApp.rootKey)
+
+	labelApp := overlayInput("Deployment", "prod", "payments-worker", "1.0", "healthy", subject.TierPartOf, "prod/app/payments", subject.ConfidenceMedium)
+	labelApp.overlay.Winner.Ref = subject.Ref{Kind: "app", Namespace: "prod", Name: "payments"}
+	labelApp.source = sourceRefForInput(labelApp.overlay, labelApp.rootKind, labelApp.rootKey)
+
+	structuralApp := rawInput("Deployment", "prod", "admin", "1.0", "healthy")
+	structuralApp.rootKey, structuralApp.rootKind = "argocd/Application/admin", "Application"
+	structuralApp.source = sourceRefForInput(structuralApp.overlay, structuralApp.rootKind, structuralApp.rootKey)
+
+	rows := groupApplications([]appWorkloadInput{helmApp, labelApp, structuralApp})
+
+	helmRow := rowByName(rows, "checkout")
+	if helmRow == nil || helmRow.SourceRef == nil || helmRow.SourceRef.Type != "helm" || helmRow.SourceRef.Name != "checkout" {
+		t.Fatalf("native Helm exact source ref missing: %+v", helmRow)
+	}
+	labelRow := rowByName(rows, "payments")
+	if labelRow == nil || labelRow.SourceRef != nil {
+		t.Fatalf("label-inferred app should not expose source ref, got %+v", labelRow)
+	}
+	structuralRow := rowByName(rows, "admin")
+	if structuralRow == nil || structuralRow.SourceRef == nil || structuralRow.SourceRef.Type != "gitops" || structuralRow.SourceRef.Tool != "argocd" {
+		t.Fatalf("structural GitOps source ref missing: %+v", structuralRow)
+	}
+}
+
+func TestGroupApplications_SourceRefRequiresEveryWorkload(t *testing.T) {
+	api := overlayInput("Deployment", "prod", "checkout-api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
+	api.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
+	api.source = sourceRefForInput(api.overlay, api.rootKind, api.rootKey)
+
+	worker := overlayInput("Deployment", "prod", "checkout-worker", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
+
+	rows := groupApplications([]appWorkloadInput{api, worker})
+	checkout := rowByName(rows, "checkout")
+	if checkout == nil || len(checkout.Workloads) != 2 {
+		t.Fatalf("checkout app missing or malformed: %+v", rows)
+	}
+	if checkout.SourceRef != nil {
+		t.Fatalf("partial source evidence should not expose an app-level source ref: %+v", checkout.SourceRef)
+	}
+}
+
+func TestSetStrictSourceRefMarksConflictingSources(t *testing.T) {
+	row := appRow{}
+	setStrictSourceRef(&row, []appWorkloadInput{
+		{source: &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}},
+		{source: &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"}},
+	})
+	if row.SourceRef != nil || row.sourceStrict || !row.sourceConflict {
+		t.Fatalf("conflicting strict sources should mark conflict only: ref=%+v strict=%v conflict=%v", row.SourceRef, row.sourceStrict, row.sourceConflict)
+	}
+	mergeSourceRef(&row, &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"})
+	if row.SourceRef != nil {
+		t.Fatalf("managed source should not attach after strict source conflict: %+v", row.SourceRef)
+	}
+}
+
+func TestManagedSourceRefs_CrossNamespaceArgoApplication(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "argocd", "name": "billing"},
+		"spec": map[string]any{
+			"destination": map[string]any{"namespace": "team-a"},
+		},
+		"status": map[string]any{"resources": []any{
+			map[string]any{"kind": "Deployment", "name": "api"},
+			map[string]any{"kind": "Deployment", "namespace": "team-a", "name": "worker"},
+		}},
+	}}
+	sources := map[string][]appSourceRef{}
+	addArgoManagedSourceRefs(sources, []*unstructured.Unstructured{app})
+	ref := commonManagedSourceRef([]appWorkload{
+		{Kind: "Deployment", Namespace: "team-a", Name: "api"},
+		{Kind: "Deployment", Namespace: "team-a", Name: "worker"},
+	}, sources)
+	if ref == nil || ref.Tool != "argocd" || ref.Namespace != "argocd" || ref.Name != "billing" {
+		t.Fatalf("cross-namespace Argo source ref = %+v, want argocd/Application/billing", ref)
+	}
+}
+
+func TestMergeSourceRefPreservesStrictSourceRefOnManagedConflict(t *testing.T) {
+	row := appRow{
+		SourceRef:    &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"},
+		sourceStrict: true,
+	}
+	mergeSourceRef(&row, &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"})
+	if row.SourceRef == nil || row.SourceRef.Type != "helm" || row.SourceRef.Name != "checkout" {
+		t.Fatalf("strict source ref should survive managed conflict: %+v", row.SourceRef)
+	}
+	if row.sourceConflict {
+		t.Fatalf("strict source ref conflict should not mark row conflicted")
+	}
+}
+
+func TestMergeSourceRefClearsWeakConflict(t *testing.T) {
+	row := appRow{SourceRef: &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}}
+	mergeSourceRef(&row, &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"})
+	if row.SourceRef != nil || !row.sourceConflict {
+		t.Fatalf("weak source conflict should clear source ref and mark conflict: ref=%+v conflict=%v", row.SourceRef, row.sourceConflict)
+	}
+}
+
+func TestHistorySummaryPrioritizesCurrentIncidents(t *testing.T) {
+	summary := historySummary(
+		[]appHistoryAnchor{{Title: "Helm revision 3", Status: "deployed", Revision: "3", Timestamp: "2026-07-08T10:00:00Z"}},
+		[]appHistoryIncident{{Title: "FailedScheduling on Pod/api", Message: "0/9 nodes are available", LastSeen: "2026-07-08T11:00:00Z"}},
+	)
+	if summary == nil || summary.State != "incident" || summary.Title != "Current incident: FailedScheduling on Pod/api" || summary.Detail != "0/9 nodes are available" {
+		t.Fatalf("incident summary = %+v", summary)
+	}
+
+	summary = historySummary(
+		[]appHistoryAnchor{{Title: "Helm revision 3", Status: "deployed", Revision: "3", Message: "Upgrade complete", Timestamp: "2026-07-08T10:00:00Z"}},
+		nil,
+	)
+	if summary == nil || summary.State != "change" || summary.Detail != "deployed · 3 · Upgrade complete" {
+		t.Fatalf("change summary = %+v", summary)
+	}
+
+	summary = historySummary(nil, nil)
+	if summary == nil || summary.State != "none" {
+		t.Fatalf("empty summary = %+v", summary)
+	}
+}
+
+func TestHistoryIncidentsSortAndTimestampFallbacks(t *testing.T) {
+	events := []appEvent{
+		{Reason: "Older", Object: "Pod/old", Message: "old", Count: 1, LastSeen: "2026-07-08T10:00:00Z"},
+		{Reason: "Newer", Object: "Pod/new", Message: "new", Count: 3, FirstSeen: "2026-07-08T09:00:00Z", LastSeen: "2026-07-08T11:00:00Z"},
+	}
+	incidents := historyIncidents(events)
+	if len(incidents) != 2 || incidents[0].Title != "Newer on Pod/new" || incidents[0].Count != 3 || incidents[0].FirstSeen == "" {
+		t.Fatalf("incidents = %+v", incidents)
+	}
+}
+
+func TestGitOpsPluralKind(t *testing.T) {
+	cases := map[string]string{
+		"Application":    "applications",
+		"ApplicationSet": "applicationsets",
+		"AppProject":     "appprojects",
+		"Kustomization":  "kustomizations",
+		"HelmRelease":    "helmreleases",
+		"Deployment":     "",
+	}
+	for kind, want := range cases {
+		if got := gitOpsPluralKind(kind); got != want {
+			t.Fatalf("gitOpsPluralKind(%q) = %q, want %q", kind, got, want)
+		}
+	}
+}
+
 // Over-merge guardrail: two distinct apps that share a satellite Service must
 // NOT fuse. Satellites are attached, never used to partition.
 func TestGroupApplications_SharedSatelliteDoesNotMerge(t *testing.T) {
@@ -166,15 +322,17 @@ func TestGroupApplications_RelationshipCountsDeduplicateSharedRefs(t *testing.T)
 	}
 	a := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
 	a.rels = &appRelationships{
-		configRefs: map[string]struct{}{refKey(ref("ConfigMap", "prod", "shared-config")): {}},
-		scalerRefs: map[string]struct{}{refKey(ref("HorizontalPodAutoscaler", "prod", "checkout")): {}},
-		pdbRefs:    map[string]struct{}{refKey(ref("PodDisruptionBudget", "prod", "checkout")): {}},
+		configRefs:  map[string]struct{}{refKey(ref("ConfigMap", "prod", "shared-config")): {}},
+		scalerRefs:  map[string]struct{}{refKey(ref("HorizontalPodAutoscaler", "prod", "checkout")): {}},
+		storageRefs: map[string]struct{}{refKey(ref("PersistentVolumeClaim", "prod", "checkout-data")): {}},
+		pdbRefs:     map[string]struct{}{refKey(ref("PodDisruptionBudget", "prod", "checkout")): {}},
 	}
 	b := overlayInput("Deployment", "prod", "worker", "1.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
 	b.rels = &appRelationships{
-		configRefs: map[string]struct{}{refKey(ref("ConfigMap", "prod", "shared-config")): {}},
-		scalerRefs: map[string]struct{}{refKey(ref("HorizontalPodAutoscaler", "prod", "checkout")): {}},
-		pdbRefs:    map[string]struct{}{refKey(ref("PodDisruptionBudget", "prod", "checkout")): {}},
+		configRefs:  map[string]struct{}{refKey(ref("ConfigMap", "prod", "shared-config")): {}},
+		scalerRefs:  map[string]struct{}{refKey(ref("HorizontalPodAutoscaler", "prod", "checkout")): {}},
+		storageRefs: map[string]struct{}{refKey(ref("PersistentVolumeClaim", "prod", "checkout-data")): {}},
+		pdbRefs:     map[string]struct{}{refKey(ref("PodDisruptionBudget", "prod", "checkout")): {}},
 	}
 
 	rows := groupApplications([]appWorkloadInput{a, b})
@@ -182,7 +340,7 @@ func TestGroupApplications_RelationshipCountsDeduplicateSharedRefs(t *testing.T)
 	if r == nil || r.Relationships == nil {
 		t.Fatalf("checkout relationships missing: %+v", rows)
 	}
-	if r.Relationships.Configs != 1 || r.Relationships.Scalers != 1 || r.Relationships.PDBs != 1 {
+	if r.Relationships.Configs != 1 || r.Relationships.Scalers != 1 || r.Relationships.Storage != 1 || r.Relationships.PDBs != 1 {
 		t.Fatalf("relationship counts = %+v, want each shared ref counted once", r.Relationships)
 	}
 }

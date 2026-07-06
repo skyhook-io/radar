@@ -26,14 +26,14 @@ func (s *stubProvider) Services() ([]*corev1.Service, error) { return s.services
 func (s *stubProvider) Deployments() ([]*appsv1.Deployment, error) {
 	return nil, nil
 }
-func (s *stubProvider) DaemonSets() ([]*appsv1.DaemonSet, error)         { return nil, nil }
-func (s *stubProvider) StatefulSets() ([]*appsv1.StatefulSet, error)     { return nil, nil }
-func (s *stubProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error)       { return nil, nil }
-func (s *stubProvider) Jobs() ([]*batchv1.Job, error)                    { return nil, nil }
-func (s *stubProvider) CronJobs() ([]*batchv1.CronJob, error)            { return nil, nil }
-func (s *stubProvider) Ingresses() ([]*networkingv1.Ingress, error)      { return nil, nil }
-func (s *stubProvider) ConfigMaps() ([]*corev1.ConfigMap, error)         { return nil, nil }
-func (s *stubProvider) Secrets() ([]*corev1.Secret, error)               { return nil, nil }
+func (s *stubProvider) DaemonSets() ([]*appsv1.DaemonSet, error)     { return nil, nil }
+func (s *stubProvider) StatefulSets() ([]*appsv1.StatefulSet, error) { return nil, nil }
+func (s *stubProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error)   { return nil, nil }
+func (s *stubProvider) Jobs() ([]*batchv1.Job, error)                { return nil, nil }
+func (s *stubProvider) CronJobs() ([]*batchv1.CronJob, error)        { return nil, nil }
+func (s *stubProvider) Ingresses() ([]*networkingv1.Ingress, error)  { return nil, nil }
+func (s *stubProvider) ConfigMaps() ([]*corev1.ConfigMap, error)     { return nil, nil }
+func (s *stubProvider) Secrets() ([]*corev1.Secret, error)           { return nil, nil }
 func (s *stubProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
 	return nil, nil
 }
@@ -107,7 +107,6 @@ func TestGetRelationships_PodHygieneFields_EmptySAandUnscheduled(t *testing.T) {
 	}
 }
 
-
 // TestGetRelationships_IncomingEdgeProtects_DispatchesByKind verifies that
 // incoming "protects" edges split into rel.PDBs vs rel.NetworkPolicies based
 // on the source kind.
@@ -151,6 +150,42 @@ func TestGetRelationships_IncomingEdgeProtects_DispatchesByKind(t *testing.T) {
 		if !gotKinds[expected] {
 			t.Errorf("rel.NetworkPolicies missing %s; got kinds=%v", expected, gotKinds)
 		}
+	}
+}
+
+func TestGetRelationships_IncomingEdgeUsesSplitsScalersFromStorage(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
+			{ID: "horizontalpodautoscaler/demo/web-hpa", Kind: KindHPA, Name: "web-hpa"},
+			{ID: "persistentvolumeclaim/demo/web-data", Kind: KindPVC, Name: "web-data"},
+		},
+		Edges: []Edge{
+			{ID: "hpa-to-web", Source: "horizontalpodautoscaler/demo/web-hpa", Target: "deployment/demo/web", Type: EdgeUses},
+			{ID: "pvc-to-web", Source: "persistentvolumeclaim/demo/web-data", Target: "deployment/demo/web", Type: EdgeUses},
+		},
+	}
+
+	rel := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	if rel == nil {
+		t.Fatal("GetRelationships returned nil for deployment with incoming uses edges")
+	}
+	if len(rel.Scalers) != 1 || rel.Scalers[0].Kind != "HorizontalPodAutoscaler" || rel.Scalers[0].Name != "web-hpa" {
+		t.Errorf("rel.Scalers: want [HorizontalPodAutoscaler/web-hpa], got %+v", rel.Scalers)
+	}
+	if len(rel.StorageRefs) != 1 || rel.StorageRefs[0].Kind != "PersistentVolumeClaim" || rel.StorageRefs[0].Name != "web-data" {
+		t.Errorf("rel.StorageRefs: want [PersistentVolumeClaim/web-data], got %+v", rel.StorageRefs)
+	}
+
+	pvcRel := GetRelationships("PersistentVolumeClaim", "demo", "web-data", topo, nil, nil)
+	if pvcRel == nil {
+		t.Fatal("GetRelationships returned nil for PVC with outgoing uses edge")
+	}
+	if pvcRel.ScaleTarget != nil {
+		t.Errorf("PVC relationship should not expose a scale target, got %+v", pvcRel.ScaleTarget)
+	}
+	if len(pvcRel.Consumers) != 1 || pvcRel.Consumers[0].Kind != "Deployment" || pvcRel.Consumers[0].Name != "web" {
+		t.Errorf("PVC consumers: want [Deployment/web], got %+v", pvcRel.Consumers)
 	}
 }
 
