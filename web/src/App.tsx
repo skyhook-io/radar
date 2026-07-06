@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
-import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useAPIResources, CORE_RESOURCES } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -52,7 +52,6 @@ import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, us
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import { dashboardClusterLoadState, idleClusterLoadState, type ClusterLoadState } from './types/clusterLoadState'
-import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, HelpCircle, Loader2 } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
@@ -227,19 +226,10 @@ function AuthBarrier({ authMode }: { authMode: string }) {
 
   if (authMode === 'oidc') {
     return (
-      <div className="flex flex-1 min-h-[calc(100vh-51px)] items-center justify-center bg-theme-base">
-        <div className="pointer-events-none flex flex-col items-center text-center">
-          <img
-            src={radarLoadingIcon}
-            alt=""
-            aria-hidden
-            className="w-11 h-11"
-          />
-          <p className="mt-3 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
-            Redirecting to login…
-          </p>
-        </div>
-      </div>
+      <PaneLoader
+        label="Redirecting to login…"
+        className="flex-1 min-h-[calc(100vh-51px)] bg-theme-base"
+      />
     )
   }
 
@@ -1885,72 +1875,60 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           Icon is pane-anchored so its screen position matches the
           host hub splash across cross-document transitions. */}
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
-        <div className="flex flex-1 min-h-[calc(100vh-51px)] items-center justify-center bg-theme-base">
-          <div className="pointer-events-none flex flex-col items-center text-center">
-            <img
-              src={radarLoadingIcon}
-              alt=""
-              aria-hidden
-              className="w-11 h-11"
-            />
-            <p className="mt-3 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
-              Connecting to cluster
-            </p>
-            {connection.context && (
-              <p className="mt-1 text-sm text-theme-text-secondary">{connection.context}</p>
-            )}
-            {connection.progressMessage && (
-              <p className="mt-3 text-xs text-theme-text-tertiary animate-pulse">
-                {connection.progressMessage}
-              </p>
-            )}
-          </div>
-        </div>
+        <PaneLoader
+          label="Connecting to cluster"
+          className="flex-1 min-h-[calc(100vh-51px)] bg-theme-base"
+        >
+          {connection.context && (
+            <span className="mt-1 block text-sm font-normal tracking-normal text-theme-text-secondary">
+              {connection.context}
+            </span>
+          )}
+          {connection.progressMessage && (
+            <span className="mt-3 block text-xs font-normal tracking-normal text-theme-text-tertiary animate-pulse">
+              {connection.progressMessage}
+            </span>
+          )}
+        </PaneLoader>
       )}
 
       {/* Context switching overlay */}
       {isSwitching && (
-        <div className="flex flex-1 min-h-[calc(100vh-51px)] items-center justify-center bg-theme-base">
-          <div className="pointer-events-none flex flex-col items-center text-center">
-            <img
-              src={radarLoadingIcon}
-              alt=""
-              aria-hidden
-              className="w-11 h-11"
-            />
-            <div className="mt-3 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">Switching context</div>
-              {targetContext && (
-                <div className="text-xs mt-2 text-theme-text-tertiary">
-                  {targetContext.provider ? (
-                    <span className="flex items-center justify-center gap-1.5">
-                      <span className="text-blue-400 font-medium">{targetContext.provider}</span>
-                      {targetContext.account && (
-                        <>
-                          <span className="text-theme-text-tertiary/50">•</span>
-                          <span>{targetContext.account}</span>
-                        </>
-                      )}
-                      {targetContext.region && (
-                        <>
-                          <span className="text-theme-text-tertiary/50">•</span>
-                          <span>{targetContext.region}</span>
-                        </>
-                      )}
+        <PaneLoader
+          label="Switching context"
+          className="flex-1 min-h-[calc(100vh-51px)] bg-theme-base"
+        >
+          {targetContext && (
+            <span className="mt-2 block text-xs font-normal tracking-normal text-theme-text-tertiary">
+              {targetContext.provider ? (
+                <span className="flex items-center justify-center gap-1.5">
+                  <span className="text-blue-400 font-medium">{targetContext.provider}</span>
+                  {targetContext.account && (
+                    <>
                       <span className="text-theme-text-tertiary/50">•</span>
-                      <span className="text-theme-text-secondary font-medium">{targetContext.clusterName}</span>
-                    </span>
-                  ) : (
-                    <span>{targetContext.raw}</span>
+                      <span>{targetContext.account}</span>
+                    </>
                   )}
-                </div>
+                  {targetContext.region && (
+                    <>
+                      <span className="text-theme-text-tertiary/50">•</span>
+                      <span>{targetContext.region}</span>
+                    </>
+                  )}
+                  <span className="text-theme-text-tertiary/50">•</span>
+                  <span className="text-theme-text-secondary font-medium">{targetContext.clusterName}</span>
+                </span>
+              ) : (
+                <span>{targetContext.raw}</span>
               )}
-              {progressMessage && (
-                <div className="text-xs mt-3 text-theme-text-tertiary animate-pulse">
-                  {progressMessage}
-                </div>
-              )}
-          </div>
-        </div>
+            </span>
+          )}
+          {progressMessage && (
+            <span className="mt-3 block text-xs font-normal tracking-normal text-theme-text-tertiary animate-pulse">
+              {progressMessage}
+            </span>
+          )}
+        </PaneLoader>
       )}
 
       {/* Main content - only show when connected and authenticated */}
@@ -2210,19 +2188,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             own fetches) while the cross-document nav lands. Covers checks /
             issues / gitops with one block since only one view is active. */}
         {viewTakeoverHref && (
-          <div className="flex flex-1 min-h-[calc(100vh-51px)] items-center justify-center bg-theme-base">
-            <div className="pointer-events-none flex flex-col items-center text-center">
-              <img
-                src={radarLoadingIcon}
-                alt=""
-                aria-hidden
-                className="w-11 h-11"
-              />
-              <p className="mt-3 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
-                Opening…
-              </p>
-            </div>
-          </div>
+          <PaneLoader
+            label="Opening…"
+            className="flex-1 min-h-[calc(100vh-51px)] bg-theme-base"
+          />
         )}
 
         {/* Best practices detail view (inline only when the host hasn't taken
