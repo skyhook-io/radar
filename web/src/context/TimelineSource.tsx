@@ -25,9 +25,13 @@ export function TimelineSourceProvider({
   config?: TimelineSourceConfig
   children: ReactNode
 }) {
+  // Resolve from the config's two fields, not the object: a host passing a
+  // fresh config literal each render must not re-resolve the source.
+  const mode = config?.mode
+  const maxRangeDays = config?.maxRangeDays
   const source = useMemo(
-    () => resolveTimelineSource(config),
-    [config?.mode, config?.maxRangeDays],
+    () => resolveTimelineSource(mode === 'retained' ? { mode, maxRangeDays } : undefined),
+    [mode, maxRangeDays],
   )
   return (
     <TimelineSourceContext.Provider value={source}>

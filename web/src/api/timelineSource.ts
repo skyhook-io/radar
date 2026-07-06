@@ -435,6 +435,7 @@ function createRetainedEventsHook(
       [base.data, live.data],
     )
 
+    const kindsKey = query.kinds?.join(',')
     const data = useMemo(() => {
       if (base.data === undefined && live.data === undefined) return undefined
       return applyClientFilters(merged.events, query)
@@ -444,7 +445,7 @@ function createRetainedEventsHook(
       base.data,
       live.data,
       query.namespaces,
-      query.kinds?.join(','),
+      kindsKey,
       query.includeK8sEvents,
       query.includeDeleted,
       query.limit,
