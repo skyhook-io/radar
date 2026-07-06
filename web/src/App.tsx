@@ -227,25 +227,17 @@ function AuthBarrier({ authMode }: { authMode: string }) {
 
   if (authMode === 'oidc') {
     return (
-      <div className="flex-1 relative bg-theme-base">
-        <div className="absolute inset-0 pointer-events-none">
+      <div className="flex flex-1 min-h-[calc(100vh-51px)] items-center justify-center bg-theme-base">
+        <div className="pointer-events-none flex flex-col items-center text-center">
           <img
             src={radarLoadingIcon}
             alt=""
             aria-hidden
-            // Integer offset (50% − 22) — matches the Connecting/Opening splashes;
-            // avoids sub-pixel jitter from translate(-50%) on odd-width viewports.
-            className="absolute w-11 h-11"
-            style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
+            className="w-11 h-11"
           />
-          <div
-            className="absolute left-1/2 -translate-x-1/2 text-center"
-            style={{ top: 'calc(50% + 34px)' }}
-          >
-            <p className="whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
-              Redirecting to login…
-            </p>
-          </div>
+          <p className="mt-3 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
+            Redirecting to login…
+          </p>
         </div>
       </div>
     )
@@ -1893,62 +1885,40 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           Icon is pane-anchored so its screen position matches the
           host hub splash across cross-document transitions. */}
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
-        <div className="flex-1 relative bg-theme-base">
-          {/* Icon absolutely anchored to the pane center. The label block
-              sits at a fixed offset below — independent of label height
-              so multi-line messages (context + progress) don't shift the
-              icon's screen position. */}
-          <div className="absolute inset-0 pointer-events-none">
+        <div className="flex flex-1 min-h-[calc(100vh-51px)] items-center justify-center bg-theme-base">
+          <div className="pointer-events-none flex flex-col items-center text-center">
             <img
               src={radarLoadingIcon}
               alt=""
               aria-hidden
-              // Integer offset (50% − 22) — avoids sub-pixel jitter from
-              // `translate(-50%, -50%)` on odd-width viewports.
-              className="absolute w-11 h-11"
-              style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
+              className="w-11 h-11"
             />
-            <div
-              className="absolute left-1/2 -translate-x-1/2 text-center"
-              style={{ top: 'calc(50% + 34px)' }}
-            >
-              {/* 17px semibold matches the other splash surfaces so font
-                  weight doesn't visibly swap during hub → cluster
-                  transitions. Subtitles below stay smaller/dimmer. */}
-              <p className="whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
-                Connecting to cluster
+            <p className="mt-3 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
+              Connecting to cluster
+            </p>
+            {connection.context && (
+              <p className="mt-1 text-sm text-theme-text-secondary">{connection.context}</p>
+            )}
+            {connection.progressMessage && (
+              <p className="mt-3 text-xs text-theme-text-tertiary animate-pulse">
+                {connection.progressMessage}
               </p>
-              {connection.context && (
-                <p className="text-sm text-theme-text-secondary mt-1">{connection.context}</p>
-              )}
-              {connection.progressMessage && (
-                <p className="text-xs text-theme-text-tertiary animate-pulse mt-3">
-                  {connection.progressMessage}
-                </p>
-              )}
-            </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Context switching overlay — icon pane-anchored, label below. */}
+      {/* Context switching overlay */}
       {isSwitching && (
-        <div className="flex-1 relative bg-theme-base">
-          <div className="absolute inset-0 pointer-events-none">
+        <div className="flex flex-1 min-h-[calc(100vh-51px)] items-center justify-center bg-theme-base">
+          <div className="pointer-events-none flex flex-col items-center text-center">
             <img
               src={radarLoadingIcon}
               alt=""
               aria-hidden
-              // Integer offset (50% − 22) — avoids sub-pixel jitter from
-              // `translate(-50%, -50%)` on odd-width viewports.
-              className="absolute w-11 h-11"
-              style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
+              className="w-11 h-11"
             />
-            <div
-              className="absolute left-1/2 -translate-x-1/2 text-center"
-              style={{ top: 'calc(50% + 34px)' }}
-            >
-              <div className="whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">Switching context</div>
+            <div className="mt-3 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">Switching context</div>
               {targetContext && (
                 <div className="text-xs mt-2 text-theme-text-tertiary">
                   {targetContext.provider ? (
@@ -1979,7 +1949,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                   {progressMessage}
                 </div>
               )}
-            </div>
           </div>
         </div>
       )}
@@ -2241,25 +2210,17 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             own fetches) while the cross-document nav lands. Covers checks /
             issues / gitops with one block since only one view is active. */}
         {viewTakeoverHref && (
-          <div className="flex-1 relative bg-theme-base">
-            {/* Viewport-anchored, 17px — identical to the "Connecting" splash so
-                the mark doesn't move or resize across the takeover hand-off. */}
-            <div className="absolute inset-0 pointer-events-none">
+          <div className="flex flex-1 min-h-[calc(100vh-51px)] items-center justify-center bg-theme-base">
+            <div className="pointer-events-none flex flex-col items-center text-center">
               <img
                 src={radarLoadingIcon}
                 alt=""
                 aria-hidden
-                className="absolute w-11 h-11"
-                style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
+                className="w-11 h-11"
               />
-              <div
-                className="absolute left-1/2 -translate-x-1/2 text-center"
-                style={{ top: 'calc(50% + 34px)' }}
-              >
-                <p className="whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
-                  Opening…
-                </p>
-              </div>
+              <p className="mt-3 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
+                Opening…
+              </p>
             </div>
           </div>
         )}
