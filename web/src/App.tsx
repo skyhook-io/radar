@@ -910,6 +910,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const clusterLoadState = useMemo(
     () => {
       if (!needsClusterLoadState) return idleClusterLoadState
+      if (clusterLoadError) return idleClusterLoadState
       if (clusterLoadData) return dashboardClusterLoadState(clusterLoadData)
       if (clusterLoadObserverEnabled && clusterLoadPending) {
         return {
@@ -920,7 +921,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       }
       return idleClusterLoadState
     },
-    [clusterLoadData, clusterLoadObserverEnabled, clusterLoadPending, needsClusterLoadState],
+    [clusterLoadData, clusterLoadError, clusterLoadObserverEnabled, clusterLoadPending, needsClusterLoadState],
   )
   const clusterLoadStateKnown =
     !needsClusterLoadState || Boolean(clusterLoadData) || (clusterLoadObserverEnabled && (clusterLoadPending || clusterLoadError))
