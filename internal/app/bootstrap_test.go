@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -114,6 +117,32 @@ func TestConfigureNamespaceScopePreferenceResolverRescopeSurvivesReconnect(t *te
 	k8s.RestoreNamespaceScopePreference("ctx-a")
 	if got := k8s.GetNamespaceScopeTarget(); got != "bar" {
 		t.Fatalf("target after rescope+reconnect = %q, want bar", got)
+	}
+}
+
+func TestCheckClusterAccessPreservesProbeErrorShape(t *testing.T) {
+	previousProbe := clusterConnectionProbe
+	calls := 0
+	clusterConnectionProbe = func(context.Context) error {
+		calls++
+		return errors.New("cluster unreachable: context deadline exceeded")
+	}
+	t.Cleanup(func() {
+		clusterConnectionProbe = previousProbe
+	})
+
+	err := CheckClusterAccess(context.Background())
+	if err == nil {
+		t.Fatal("CheckClusterAccess() = nil, want error")
+	}
+	if calls != 2 {
+		t.Fatalf("clusterConnectionProbe calls = %d, want 2 attempts", calls)
+	}
+	if !strings.Contains(err.Error(), "failed to connect to cluster: cluster unreachable: context deadline exceeded") {
+		t.Fatalf("CheckClusterAccess() error = %q, want preserved cluster-unreachable wrapper", err.Error())
+	}
+	if got := k8s.ClassifyError(err); got != "timeout" {
+		t.Fatalf("ClassifyError(CheckClusterAccess error) = %q, want timeout", got)
 	}
 }
 

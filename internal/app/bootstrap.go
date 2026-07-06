@@ -27,6 +27,8 @@ import (
 	versionpkg "github.com/skyhook-io/radar/internal/version"
 )
 
+var clusterConnectionProbe = k8s.TestClusterConnection
+
 // AppConfig holds all parsed configuration for the Radar application.
 type AppConfig struct {
 	Kubeconfig               string
@@ -464,11 +466,6 @@ func Shutdown(srv *server.Server) {
 // timeouts ARE retried because the first call triggers a token refresh
 // (e.g., AWS SSO), and the cached token is available on the next attempt.
 func CheckClusterAccess(ctx context.Context) error {
-	clientset := k8s.GetClient()
-	if clientset == nil {
-		return fmt.Errorf("kubernetes client not initialized")
-	}
-
 	execAuth := k8s.UsesExecAuth()
 
 	// Exec credential plugins (EKS aws, GKE gcloud) may need 7-10s on first
@@ -510,33 +507,20 @@ func CheckClusterAccess(ctx context.Context) error {
 			}
 		}
 
-		t := time.Now()
 		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
-
-		// Run the API call in a goroutine so we can select on the parent
-		// context. This guarantees we return when the deadline hits even
-		// if the exec credential plugin blocks beyond the HTTP timeout.
-		resultCh := make(chan error, 1)
-		go func() {
-			_, err := clientset.Discovery().RESTClient().Get().AbsPath("/version").Do(attemptCtx).Raw()
-			resultCh <- err
-		}()
-
-		var err error
-		select {
-		case err = <-resultCh:
-		case <-ctx.Done():
-			cancel()
-			if lastErr != nil {
-				return fmt.Errorf("failed to connect to cluster: %w", lastErr)
-			}
-			return fmt.Errorf("failed to connect to cluster: %w", ctx.Err())
-		}
+		t := time.Now()
+		err := clusterConnectionProbe(attemptCtx)
 		cancel()
 
 		if err == nil {
 			k8s.LogTiming("   Cluster /version check (attempt %d): %v", attempt+1, time.Since(t))
 			return nil
+		}
+		if ctx.Err() != nil {
+			if lastErr != nil {
+				return fmt.Errorf("failed to connect to cluster: %w", lastErr)
+			}
+			return fmt.Errorf("failed to connect to cluster: %w", err)
 		}
 		log.Printf("Cluster connectivity check failed (attempt %d/2): %v (%v)", attempt+1, err, time.Since(t))
 		lastErr = err
