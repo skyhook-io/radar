@@ -123,6 +123,13 @@ func currentOperationGen() uint64 {
 	return operationGen
 }
 
+// CurrentOperationGen exposes currentOperationGen to other packages so a
+// multi-source read (e.g. the audit joining cache pods with the global metrics
+// store) can detect a context switch that landed mid-read and bail out.
+func CurrentOperationGen() uint64 {
+	return currentOperationGen()
+}
+
 // NewOperationContext returns a context derived from the current operation
 // context with the given timeout. Use this instead of context.Background()
 // for API calls that should be canceled on context switch.

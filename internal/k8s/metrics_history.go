@@ -44,6 +44,10 @@ func InitMetricsHistory() {
 
 // GetMetricsHistory returns the metrics history store.
 func GetMetricsHistory() *MetricsHistoryStore {
+	// Read under the same lock Init/Reset write the pointer with — audit scans
+	// (HTTP/MCP) now call this concurrently with a context switch's Reset.
+	metricsHistoryMu.Lock()
+	defer metricsHistoryMu.Unlock()
 	return metricsHistoryStore
 }
 

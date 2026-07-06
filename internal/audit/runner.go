@@ -15,8 +15,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // RunOptions provides optional data sources for checks that need them.
@@ -31,6 +31,11 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	if cache == nil {
 		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
 	}
+
+	// Capture the context generation before reading the cache. If a context
+	// switch lands while we're building the input, the metrics join below bails
+	// rather than pairing this cluster's pods with the next cluster's usage.
+	gen := k8s.CurrentOperationGen()
 
 	input := &bp.CheckInput{
 		Pods:                     listNamespaced(cache.Pods(), namespaces),
@@ -53,6 +58,17 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	if opts != nil {
 		input.ClusterVersion = opts.ClusterVersion
 		input.ServedAPIs = opts.ServedAPIs
+	}
+
+	// resourceUtilization needs live pod usage joined with each pod's requests.
+	// Usage comes from the metrics-history store (nil until metrics-server is
+	// polled); requests come from the pod specs already listed above. When no
+	// usage is available PodMetrics stays nil and the check honestly reports as
+	// a missing input rather than running on nothing.
+	if store := k8s.GetMetricsHistory(); store != nil && k8s.CurrentOperationGen() == gen {
+		if usage := store.GetAllPodMetricsLatest(); len(usage) > 0 {
+			input.PodMetrics = joinPodMetrics(usage, input.Pods)
+		}
 	}
 
 	// Crossplane Managed Resources / Composites / Claims live in the dynamic
@@ -312,6 +328,60 @@ func isCrossplaneComposite(u *unstructured.Unstructured) bool {
 		}
 	}
 	return false
+}
+
+// joinPodMetrics pairs live pod usage (metrics-history store, CPU in nanocores)
+// with each in-scope pod's summed container requests, normalized to the
+// millicores/bytes units resourceUtilization compares. Only pods that both
+// reported a usage sample and are in the audited scope are included — a pod with
+// no sample isn't evaluated. Returns nil when nothing is measurable so the check
+// stays in MissingInputs rather than reporting a false empty pass.
+func joinPodMetrics(usage []k8score.TopPodMetrics, pods []*corev1.Pod) []bp.PodMetricsInput {
+	type req struct{ cpuMilli, memBytes int64 }
+	reqByPod := make(map[string]req, len(pods))
+	for _, p := range pods {
+		var r req
+		add := func(c corev1.Container) {
+			if q, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+				r.cpuMilli += q.MilliValue()
+			}
+			if q, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+				r.memBytes += q.Value()
+			}
+		}
+		for _, c := range p.Spec.Containers {
+			add(c)
+		}
+		// Native sidecars (initContainers with RestartPolicy=Always) run for the
+		// whole pod lifetime, so their usage is in the pod-level metrics and
+		// their requests belong in the denominator.
+		for _, c := range p.Spec.InitContainers {
+			if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+				add(c)
+			}
+		}
+		reqByPod[p.Namespace+"/"+p.Name] = r
+	}
+
+	out := make([]bp.PodMetricsInput, 0, len(usage))
+	for _, m := range usage {
+		r, inScope := reqByPod[m.Namespace+"/"+m.Name]
+		if !inScope {
+			continue
+		}
+		out = append(out, bp.PodMetricsInput{
+			Namespace:     m.Namespace,
+			Name:          m.Name,
+			CPUUsage:      m.CPU / 1_000_000, // nanocores → millicores
+			MemoryUsage:   m.Memory,
+			CPURequest:    r.cpuMilli,
+			MemoryRequest: r.memBytes,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // lister is a generic interface that all typed K8s listers satisfy.
