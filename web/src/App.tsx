@@ -33,6 +33,7 @@ import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalT
 import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
+import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
@@ -1879,6 +1880,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
           {/* AI investigations (self-hides when no agent CLI is present) */}
           <GlobalDiagnoseButton />
+
+          {/* Radar Cloud funnel — OSS-only chrome, same gate as the star.
+              Cloud embeds render chromeless anyway; the explicit gate is
+              belt-and-braces for future chrome-bearing embedders. */}
+          {!navCustomization.embedded && <CloudFunnelButton />}
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
