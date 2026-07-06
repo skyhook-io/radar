@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, type AppGroupFoldEntry } from './applications'
+import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, type AppGroupFoldEntry, type AppRow } from './applications'
 
 describe('compareVersions', () => {
   it('orders semver', () => {
@@ -294,5 +294,89 @@ describe('foldAppGroups pathKey disambiguation', () => {
     const rows = foldAppGroups([fleetEntry('cl-a', 'dev', 'teamA/billing'), fleetEntry('cl-b', 'prod', 'teamB/billing')], new Set(), false, opts)
     expect(rows.filter((r) => r.kind === 'group').length).toBe(0)
     expect(rows.filter((r) => r.kind === 'instance').length).toBe(2)
+  })
+})
+
+describe('buildAppMembershipIndex', () => {
+  // Minimal AppRow builder — only the fields the index reads.
+  const row = (over: Partial<AppRow>): AppRow => ({
+    key: 'k', name: 'app', health: 'healthy', workloads: [], ...over,
+  })
+
+  it('indexes workloads by Kind/ns/name and satellites by the app namespace', () => {
+    const idx = buildAppMembershipIndex([
+      row({
+        key: 'team-a/app/billing', name: 'billing', namespace: 'team-a',
+        workloads: [{ kind: 'Deployment', namespace: 'team-a', name: 'billing-api', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+        relationships: { services: ['billing-svc'], ingresses: ['billing-ing'] },
+      }),
+    ])
+    expect(idx.byResource.get('Deployment/team-a/billing-api')?.appName).toBe('billing')
+    expect(idx.byResource.get('Service/team-a/billing-svc')?.appName).toBe('billing')
+    expect(idx.byResource.get('Ingress/team-a/billing-ing')?.appName).toBe('billing')
+  })
+
+  it('indexes routes under their concrete kind, not a generic "Route"', () => {
+    // The server ships "Kind/name" for polymorphic routes; the index must key on
+    // the concrete kind so it matches the route lane id (HTTPRoute/…/name).
+    const idx = buildAppMembershipIndex([
+      row({
+        key: 'team-a/app/web', name: 'web', namespace: 'team-a',
+        relationships: { routes: ['HTTPRoute/web-http', 'GRPCRoute/web-grpc'] },
+      }),
+    ])
+    expect(idx.byResource.get('HTTPRoute/team-a/web-http')?.appName).toBe('web')
+    expect(idx.byResource.get('GRPCRoute/team-a/web-grpc')?.appName).toBe('web')
+    expect(idx.byResource.has('Route/team-a/HTTPRoute/web-http')).toBe(false)
+  })
+
+  it('skips satellites for a multi-namespace app (can not place them unambiguously)', () => {
+    const idx = buildAppMembershipIndex([
+      row({
+        key: 'a', name: 'span', namespaces: ['team-a', 'team-b'],
+        workloads: [{ kind: 'Deployment', namespace: 'team-a', name: 'api', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+        relationships: { services: ['svc'] },
+      }),
+    ])
+    expect(idx.byResource.has('Deployment/team-a/api')).toBe(true)
+    expect([...idx.byResource.keys()].some((k) => k.startsWith('Service/'))).toBe(false)
+  })
+
+  it('indexes matchKeys by evidence but excludes name-stem (exact kinds only in v1)', () => {
+    // matchKeys are namespace-scoped (kind:namespace:value); name-stem stays unscoped.
+    const idx = buildAppMembershipIndex([
+      row({ key: 'a', name: 'billing', identity: { key: 'billing', env: 'prod', confidence: 'high', evidence: 'x' }, matchKeys: ['instance:team-a:billing-prod', 'helm:team-a:billing-v2', 'name-stem:billing'] }),
+    ])
+    expect(idx.byEvidence.get('instance:team-a:billing-prod')?.appName).toBe('billing')
+    expect(idx.byEvidence.get('helm:team-a:billing-v2')?.appName).toBe('billing')
+    expect(idx.byEvidence.has('name-stem:billing')).toBe(false)
+  })
+
+  it('carries env + evidence onto the membership', () => {
+    const idx = buildAppMembershipIndex([
+      row({ key: 'a', name: 'billing', identity: { key: 'billing', env: 'prod', confidence: 'high', evidence: 'name stem billing' }, matchKeys: ['name:team-a:billing'] }),
+    ])
+    const m = idx.byEvidence.get('name:team-a:billing')
+    expect(m?.env).toBe('prod')
+    expect(m?.evidence).toBe('name stem billing')
+  })
+
+  it('collision resolves first-wins (server-sorted row order)', () => {
+    const idx = buildAppMembershipIndex([
+      row({ key: 'first', name: 'first', matchKeys: ['name:team-a:shared'] }),
+      row({ key: 'second', name: 'second', matchKeys: ['name:team-a:shared'] }),
+    ])
+    expect(idx.byEvidence.get('name:team-a:shared')?.appName).toBe('first')
+  })
+
+  it('same label value in two namespaces indexes as distinct evidence keys', () => {
+    // The whole point of namespace scoping: "shared" in team-a and team-b must
+    // NOT collapse to one key — each namespace maps to its own app.
+    const idx = buildAppMembershipIndex([
+      row({ key: 'a', name: 'app-a', matchKeys: ['instance:team-a:shared'] }),
+      row({ key: 'b', name: 'app-b', matchKeys: ['instance:team-b:shared'] }),
+    ])
+    expect(idx.byEvidence.get('instance:team-a:shared')?.appName).toBe('app-a')
+    expect(idx.byEvidence.get('instance:team-b:shared')?.appName).toBe('app-b')
   })
 })

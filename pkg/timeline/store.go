@@ -30,14 +30,18 @@ type EventStore interface {
 	// store, so current-cluster callers must pass it.
 	GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error)
 
-	// MarkResourceSeen records that a resource has been seen (for dedup on restart)
-	MarkResourceSeen(kind, namespace, name string)
+	// MarkResourceSeen records that a resource has been seen (for dedup on
+	// restart). clusterContext scopes the key — the store outlives kubeconfig
+	// context switches, so a same-named resource in another cluster must not
+	// read as already-seen.
+	MarkResourceSeen(clusterContext, kind, namespace, name string)
 
-	// IsResourceSeen checks if a resource has been seen before
-	IsResourceSeen(kind, namespace, name string) bool
+	// IsResourceSeen checks if a resource has been seen before in the given
+	// cluster context.
+	IsResourceSeen(clusterContext, kind, namespace, name string) bool
 
 	// ClearResourceSeen removes a resource from the seen set (on delete)
-	ClearResourceSeen(kind, namespace, name string)
+	ClearResourceSeen(clusterContext, kind, namespace, name string)
 
 	// Stats returns storage statistics
 	Stats() StoreStats
@@ -200,4 +204,14 @@ func (cf *CompiledFilter) Matches(event *TimelineEvent) bool {
 // ResourceKey generates a unique key for a resource
 func ResourceKey(kind, namespace, name string) string {
 	return kind + "/" + namespace + "/" + name
+}
+
+// SeenResourceKey qualifies the seen-tracking key with the cluster context.
+// The NUL separator can't appear in a kubeconfig context name, so it can't
+// collide with the resource portion. Rows written before this qualification
+// (bare kind/namespace/name) simply never match, which is correct: their
+// cluster is unknowable, so the resource is re-extracted once per cluster
+// after upgrade rather than being wrongly suppressed.
+func SeenResourceKey(clusterContext, kind, namespace, name string) string {
+	return clusterContext + "\x00" + ResourceKey(kind, namespace, name)
 }

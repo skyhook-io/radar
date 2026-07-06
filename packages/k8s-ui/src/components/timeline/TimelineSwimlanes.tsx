@@ -6,11 +6,9 @@ import {
   RefreshCw,
   ZoomIn,
   ZoomOut,
+  ChevronLeft,
   ChevronRight,
   X,
-  List,
-  GanttChart,
-  ArrowUpDown,
   Clock,
   MemoryStick,
   Package,
@@ -21,28 +19,416 @@ import {
   Timer,
   RotateCcw,
   Shield,
-  Trash2,
+  Pin,
 } from 'lucide-react'
 import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { kindToPlural, apiVersionToGroup } from '../../utils/navigation'
 import { PaneLoader } from '../ui/PaneLoader'
-import { SearchBox } from '../ui/SearchBox'
+import { TimelineToolbar } from './TimelineToolbar'
+import { sortTimelineLanes, TIMELINE_SORT_DEFAULT, type TimelineSort } from './timeline-lane-sort'
+import {
+  matchesActivityFilter,
+  matchesTimelineSearch,
+  mergeKindOptions,
+  describeActiveFilters,
+  type ActivityFilterKey,
+} from './timeline-filters'
 import { pluralize } from '../../utils/pluralize'
 import { gitOpsRouteForKind } from '../../utils/gitops-route'
 import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../../types'
 import { DiffViewer } from './DiffViewer'
 import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
-import { buildResourceHierarchy, isProblematicEvent, type ResourceLane as BaseResourceLane } from '../../utils/resource-hierarchy'
+import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, isProblematicEvent, laneTrackEvents, isChildVisibleInWindow, collidingLaneKeys, laneCollisionKey, type ResourceLane as BaseResourceLane, type TimelineGrouping, type PinnedLaneRef } from '../../utils/resource-hierarchy'
+import { groupQualifiesLaneId } from '../../utils/navigation'
+import type { AppMembershipIndex } from '../../utils/applications'
+import { Layers } from 'lucide-react'
 import {
   formatAxisTime,
   formatFullTime,
   buildHealthSpans,
-  HealthSpan,
+  buildLaneMemberSpans,
+  sweepAggregateHealth,
+  formatAggregateHealthTooltip,
   timeToX as sharedTimeToX,
 } from './shared'
+import { Badge } from '../ui/Badge'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
+import { clampLensToSelection, type ScrubberRange } from './TimelineScrubber'
+
+// Predefined zoom levels (window widths in hours): 15m, 30m, 1h, 2h, 4h, 8h,
+// 12h, 1d, 2d, 3d, 7d. Hoisted so the controlled-window adapter can size the
+// view from a window width instead of the internal `zoom` state.
+const ZOOM_LEVELS = [0.25, 0.5, 1, 2, 4, 8, 12, 24, 48, 72, 168]
+
+// Same rungs, exported for the retained lens-width chip's preset ladder so the
+// band resizes through exactly the swimlane's zoom steps. Aliased (not `ZOOM_LEVELS`)
+// to avoid colliding with the distinct ladder exported from ./shared.
+export const SWIMLANE_ZOOM_LEVELS = ZOOM_LEVELS
+
+const HOUR_MS = 60 * 60 * 1000
+
+// A lane with at most this many direct children auto-expands on first render:
+// a small family's whole anatomy is cheap to show, so we reveal it by default.
+// Larger families (a Deployment with 20 pods, a big app group) stay collapsed to
+// keep the list scannable — the user opens them deliberately. 4 keeps a typical
+// Deployment→ReplicaSet(+a few pods) or CronJob→Job×2 open while collapsing noisy
+// fan-outs.
+export const AUTO_COLLAPSE_THRESHOLD = 4
+
+// Deterministic default expansion, computed from the lane tree alone (no
+// storage, no window state) so SSR and the first client render agree. A lane
+// with 1..THRESHOLD children starts expanded; 0 children or a large fan-out
+// starts collapsed. Recurses to every depth so a small Job under a large CronJob
+// still defaults open.
+//
+// STRUCTURAL count (not the in-window visible subset): the window is time-derived
+// (effectiveNow) and would desync SSR from hydration, and keying the default on
+// the lens would thrash a family open/closed as the user pans. The per-render
+// window filter (visibleChildren in renderLane) then hides out-of-window rows from
+// whatever this opened, so a structurally-small family reveals only its live
+// members without a large fan-out ever auto-opening on a transient in-window dip.
+export function computeAutoExpandedLanes(lanes: BaseResourceLane[]): Set<string> {
+  const out = new Set<string>()
+  const walk = (lane: BaseResourceLane): void => {
+    const n = lane.children?.length ?? 0
+    if (n > 0 && n <= AUTO_COLLAPSE_THRESHOLD) out.add(lane.id)
+    for (const c of lane.children ?? []) walk(c)
+  }
+  for (const l of lanes) walk(l)
+  return out
+}
+
+/** Every lane id in the tree (parents + all descendants), pre-order. */
+export function collectLaneIdsDeep(lanes: BaseResourceLane[]): string[] {
+  const out: string[] = []
+  const walk = (lane: BaseResourceLane): void => {
+    out.push(lane.id)
+    for (const c of lane.children ?? []) walk(c)
+  }
+  for (const l of lanes) walk(l)
+  return out
+}
+
+/**
+ * Freeze each lane's auto-expand default at FIRST sighting. A live poll rebuilds the
+ * whole lane tree every tick; recomputing the count-based default per tick would open
+ * or close rows on their own as a family's child count drifts across
+ * AUTO_COLLAPSE_THRESHOLD (a Deployment picking up a 5th pod would silently collapse).
+ * Instead the structural default is computed once per lane id: a lane already recorded
+ * in `prev` keeps its default; a newly-arrived lane adopts the current structural
+ * default. Existing rows are never reopened/closed by arriving events. Pure (returns a
+ * new map); the caller holds it in a ref across renders.
+ */
+export function reconcileAutoExpand(
+  prev: ReadonlyMap<string, boolean>,
+  lanes: BaseResourceLane[],
+): Map<string, boolean> {
+  const fresh = computeAutoExpandedLanes(lanes)
+  const next = new Map(prev)
+  for (const id of collectLaneIdsDeep(lanes)) {
+    if (!next.has(id)) next.set(id, fresh.has(id))
+  }
+  return next
+}
+
+/**
+ * Live-mode order hysteresis. In live mode the importance rank recomputes every poll
+ * (recency buckets + new events shift scores), reshuffling lanes under the user's gaze.
+ * This keeps lanes already on screen in their previous relative order and splices NEW
+ * lanes in by their fresh rank: a new lane lands right after the surviving lane that
+ * precedes it in the fresh ranking (or at the very top when none precedes it). Existing
+ * lanes never move relative to each other, so the viewport doesn't jump. Pure + exported
+ * for tests; the caller memoizes the previous order by lane id.
+ */
+export function mergeLaneOrderById(
+  prevOrder: readonly string[],
+  fresh: readonly string[],
+): string[] {
+  const prevSet = new Set(prevOrder)
+  const freshSet = new Set(fresh)
+  const survivors = prevOrder.filter((id) => freshSet.has(id))
+  const insertAfter = new Map<string, string[]>()
+  const front: string[] = []
+  let lastSurvivor: string | null = null
+  for (const id of fresh) {
+    if (prevSet.has(id)) {
+      lastSurvivor = id
+      continue
+    }
+    if (lastSurvivor == null) front.push(id)
+    else {
+      const list = insertAfter.get(lastSurvivor)
+      if (list) list.push(id)
+      else insertAfter.set(lastSurvivor, [id])
+    }
+  }
+  const out = [...front]
+  for (const id of survivors) {
+    out.push(id)
+    const ins = insertAfter.get(id)
+    if (ins) out.push(...ins)
+  }
+  return out
+}
+
+// Fixed 320px resource-label column + 32px (mr-8) right gutter frame the event
+// track; gap bands and the "Now" line map their x into `calc(320px + (100% -
+// 352px) * frac)`.
+const LANE_LABEL_PX = 320
+const LANE_TRACK_INSET_PX = LANE_LABEL_PX + 32
+
+// A gap band wider than this (px) has room for its "connector offline" caption.
+const GAP_LABEL_MIN_PX = 80
+
+/** A time window; shared shape with the scrubber's ScrubberRange. */
+export type TimeWindow = ScrubberRange
+
+/**
+ * Clamp a view window into bounds, preserving width. A window wider than the
+ * bounds collapses to the full bounds (fully zoomed out = bounds edge-to-edge).
+ * This is the same invariant as the scrubber's lens clamp, reused so the two
+ * can't drift.
+ */
+export const clampWindowToBounds = clampLensToSelection
+
+/**
+ * Step a view window to the next/previous zoom preset, keeping its center fixed,
+ * then clamp into bounds. Center-anchored (not end-anchored like the uncontrolled
+ * path) so zooming a lens sitting mid-selection stays put instead of sliding to
+ * the latest edge.
+ */
+export function zoomWindowWithinBounds(
+  win: TimeWindow,
+  dir: 'in' | 'out',
+  bounds?: TimeWindow,
+): TimeWindow {
+  const widthHours = (win.toMs - win.fromMs) / HOUR_MS
+  const idx = ZOOM_LEVELS.findIndex((l) => l >= widthHours)
+  const cur = idx === -1 ? ZOOM_LEVELS.length - 1 : idx
+  const nextIdx = dir === 'in'
+    ? Math.max(0, cur - 1)
+    : Math.min(ZOOM_LEVELS.length - 1, cur + 1)
+  const nextWidthMs = ZOOM_LEVELS[nextIdx] * HOUR_MS
+  const center = (win.fromMs + win.toMs) / 2
+  const next = { fromMs: center - nextWidthMs / 2, toMs: center + nextWidthMs / 2 }
+  return bounds ? clampWindowToBounds(next, bounds) : next
+}
+
+/**
+ * True when the entire view window sits inside a recording gap — the swimlane is
+ * empty because nothing was recorded, not because the period was quiet. Pure +
+ * exported for tests.
+ */
+export function windowInsideGap(
+  win: TimeWindow | undefined,
+  gaps: TimeWindow[] | undefined,
+): boolean {
+  if (!win || !gaps || gaps.length === 0) return false
+  return gaps.some((g) => g.fromMs <= win.fromMs && g.toMs >= win.toMs)
+}
+
+// ---------------------------------------------------------------------------
+// Event-marker shape coding (created ▲ / modified ● / deleted ▼ / warning ◆ /
+// historical ○). Colors live in text-* classes so the glyph fills via
+// currentColor and dark: variants keep contrast.
+// ---------------------------------------------------------------------------
+type MarkerShape = 'triangle-up' | 'triangle-down' | 'diamond' | 'circle' | 'ring'
+
+function eventShape(event: TimelineEvent): MarkerShape {
+  if (isHistoricalEvent(event)) return 'ring'
+  if (isProblematicEvent(event)) return 'diamond'
+  if (isChangeEvent(event)) {
+    switch (event.eventType) {
+      case 'add': return 'triangle-up'
+      case 'delete': return 'triangle-down'
+      case 'update': return 'circle'
+    }
+  }
+  return 'circle'
+}
+
+function eventColorClass(event: TimelineEvent): string {
+  if (isProblematicEvent(event)) return 'text-amber-500 dark:text-amber-400'
+  if (isChangeEvent(event)) {
+    switch (event.eventType) {
+      case 'add': return 'text-green-600 dark:text-green-400'
+      case 'delete': return 'text-red-600 dark:text-red-400'
+      case 'update': return 'text-blue-600 dark:text-blue-400'
+    }
+  }
+  return 'text-theme-text-tertiary'
+}
+
+/** A pure SVG-free glyph; `size` is the height in px (triangles are ~1.18× wide). */
+function MarkerGlyph({ shape, size, className }: { shape: MarkerShape; size: number; className?: string }) {
+  const half = size / 1.7
+  if (shape === 'triangle-up') {
+    return <span className={className} style={{ display: 'block', width: 0, height: 0, borderLeft: `${half}px solid transparent`, borderRight: `${half}px solid transparent`, borderBottom: `${size}px solid currentColor` }} />
+  }
+  if (shape === 'triangle-down') {
+    return <span className={className} style={{ display: 'block', width: 0, height: 0, borderLeft: `${half}px solid transparent`, borderRight: `${half}px solid transparent`, borderTop: `${size}px solid currentColor` }} />
+  }
+  if (shape === 'diamond') {
+    const d = size * 0.8
+    return <span className={clsx(className, 'rounded-[2px]')} style={{ display: 'block', width: d, height: d, background: 'currentColor', transform: 'rotate(45deg)' }} />
+  }
+  if (shape === 'ring') {
+    return <span className={clsx(className, 'rounded-full')} style={{ display: 'block', width: size, height: size, border: '2px solid currentColor' }} />
+  }
+  return <span className={clsx(className, 'rounded-full')} style={{ display: 'block', width: size, height: size, background: 'currentColor' }} />
+}
+
+// ---------------------------------------------------------------------------
+// Cluster near-overlapping markers into a single "×N" pill. Pure + exported so
+// the collapse logic is contract-testable independently of layout.
+// ---------------------------------------------------------------------------
+
+/** Gap (in x-percent of the track) below which two markers are treated as overlapping. */
+export const CLUSTER_MIN_GAP_PCT = 1.4
+
+export interface PositionedTimelineEvent {
+  event: TimelineEvent
+  /** Horizontal position as a percentage (0-100) of the track width. */
+  x: number
+}
+
+export interface TimelineEventCluster {
+  /** Average x-percent of the cluster's members. */
+  x: number
+  events: TimelineEvent[]
+  /** Highest-severity member — drives the pill glyph and the click target. */
+  dominant: TimelineEvent
+  count: number
+}
+
+/** Severity used to pick a cluster's dominant marker (higher wins; ties keep the earlier event). */
+export function eventSeverityRank(event: TimelineEvent): number {
+  if (isProblematicEvent(event)) return 3
+  if (isChangeEvent(event)) {
+    switch (event.eventType) {
+      case 'delete': return 2
+      case 'add': return 1
+      case 'update': return 0
+    }
+  }
+  return 0
+}
+
+/**
+ * Collapse positioned events whose x-positions are within `minGap` of the
+ * previous one into clusters. Input order is irrelevant (sorted internally);
+ * a single event passes through as a count-1 cluster.
+ */
+export function clusterEventsByPosition(
+  positioned: PositionedTimelineEvent[],
+  minGap: number,
+): TimelineEventCluster[] {
+  const sorted = [...positioned].sort((a, b) => a.x - b.x)
+  const clusters: TimelineEventCluster[] = []
+  let cur: { events: TimelineEvent[]; dominant: TimelineEvent; count: number; sum: number; lastX: number } | null = null
+  const flush = () => {
+    if (cur) clusters.push({ x: cur.sum / cur.count, events: cur.events, dominant: cur.dominant, count: cur.count })
+  }
+  for (const { event, x } of sorted) {
+    if (cur && x - cur.lastX < minGap) {
+      cur.events.push(event)
+      cur.count++
+      cur.sum += x
+      cur.lastX = x
+      if (eventSeverityRank(event) > eventSeverityRank(cur.dominant)) cur.dominant = event
+    } else {
+      flush()
+      cur = { events: [event], dominant: event, count: 1, sum: x, lastX: x }
+    }
+  }
+  flush()
+  return clusters
+}
+
+/** The drawer state a cluster opens into: a single-event cluster opens the
+ *  one-event panel; a multi-event cluster opens in cluster mode with members
+ *  ordered most-severe-first. `preferId` (URL restore) selects that member when
+ *  it's present; otherwise the dominant (top of the severity order) is selected —
+ *  the glyph the pill already promised. Shared by the click handler and the
+ *  restore resolver so their ordering can't drift. */
+export function clusterDrawerState(
+  cluster: TimelineEventCluster,
+  preferId?: string,
+): { events: TimelineEvent[]; selectedId: string } {
+  if (cluster.count === 1) {
+    const ev = cluster.dominant
+    return { events: [ev], selectedId: ev.id }
+  }
+  const ordered = [...cluster.events].sort((a, b) => eventSeverityRank(b) - eventSeverityRank(a))
+  const selectedId = preferId && ordered.some((e) => e.id === preferId) ? preferId : ordered[0].id
+  return { events: ordered, selectedId }
+}
+
+/** Resolve a persisted event id back to the drawer state it should open into,
+ *  reproducing exactly what the current render shows. Walks the rendered rows
+ *  (pinned rows first, then the visible lanes) in render order, honoring live
+ *  expansion via `laneTrackEvents`, and runs the SAME position clustering the
+ *  markers use on the containing row's track. Returns null when the id is on no
+ *  rendered row's track (pruned, filtered out, or scrolled beyond the window) —
+ *  the caller strips the stale param. Same window/filters → same clustering, so
+ *  restoration is deterministic. Pure + exported for tests. */
+export function resolveEventCluster(
+  rows: BaseResourceLane[],
+  expandedLanes: ReadonlySet<string>,
+  id: string,
+  timeToX: (timestampMs: number) => number,
+): { events: TimelineEvent[]; selectedId: string } | null {
+  const visit = (lane: BaseResourceLane): { events: TimelineEvent[]; selectedId: string } | null => {
+    const expanded = expandedLanes.has(lane.id)
+    const track = laneTrackEvents(lane, expanded)
+    if (track.some((e) => e.id === id)) {
+      const positioned = track
+        .map((event) => ({ event, x: timeToX(new Date(event.timestamp).getTime()) }))
+        .filter(({ x }) => x >= 0 && x <= 100)
+      const cluster = clusterEventsByPosition(positioned, CLUSTER_MIN_GAP_PCT)
+        .find((c) => c.events.some((e) => e.id === id))
+      if (cluster) return clusterDrawerState(cluster, id)
+    }
+    if (expanded && lane.children) {
+      for (const child of lane.children) {
+        const found = visit(child)
+        if (found) return found
+      }
+    }
+    return null
+  }
+  for (const lane of rows) {
+    const found = visit(lane)
+    if (found) return found
+  }
+  return null
+}
+
+/** URL ↔ drawer reconciliation guard. A `selectedEventId` (mount deep-link OR a
+ *  post-mount back/forward nav) must win over the "sync the drawer's id back to
+ *  the URL" effect until its restore attempt settles — otherwise a transient
+ *  closed-drawer null strips the param before the (possibly still-loading) rows
+ *  can resolve it. Pending stays true only while the drawer is CLOSED and the id
+ *  hasn't been resolved-or-ruled-out yet (`settledId`); an OPEN drawer is
+ *  authoritative, so the report effect is free to sync the URL to it. A
+ *  `dismissedId` (the id the user just closed) is NOT pending: the close is
+ *  authoritative, so the report effect must be free to strip the param even
+ *  before the URL has caught up — otherwise the still-present ?event=<id> echoes
+ *  back as a fresh restore and reopens the drawer. Pure + exported for tests. */
+export function restoreIsPending(
+  selectedEventId: string | null,
+  drawerSelectedId: string | null,
+  settledId: string | null,
+  dismissedId: string | null = null,
+): boolean {
+  if (selectedEventId == null) return false
+  if (drawerSelectedId != null) return false
+  if (selectedEventId === settledId) return false
+  if (selectedEventId === dismissedId) return false
+  return true
+}
 
 export interface TimelineSwimlanesProps {
   events: TimelineEvent[]
@@ -63,6 +449,87 @@ export interface TimelineSwimlanesProps {
   // to drive server-side delete filtering on the underlying fetch.
   showDeleted?: boolean
   onShowDeletedChange?: (showDeleted: boolean) => void
+  // Controlled pinned-only filter (falls back to internal state when absent) —
+  // lifted so the host can URL-persist it with the rest of the controls.
+  pinnedOnly?: boolean
+  onPinnedOnlyChange?: (pinnedOnly: boolean) => void
+  // Controlled-window adapter (the LENS). When `viewWindow` is set the component
+  // renders exactly that window instead of its internal zoom/pan-derived one, and
+  // pan / zoom / "→ Now" emit the would-be window via `onViewWindowChange` rather
+  // than mutating internal state. `bounds` clamps the window (pan can't exit it;
+  // zoom-out caps at its width). When a bound edge is reached, an "extend" hint
+  // fires `onExtendRequest`. All optional — absent props leave the uncontrolled
+  // path (OSS/local mode, WorkloadView) byte-identical.
+  viewWindow?: TimeWindow
+  onViewWindowChange?: (w: TimeWindow) => void
+  bounds?: TimeWindow
+  onExtendRequest?: (dir: 'past' | 'future') => void
+  // "→ Now" hook for the uncontrolled (local) mode, which has no scrubber: when
+  // set, the strip's "→ Now" button calls it instead of resetting the internal
+  // pan. Retained/controlled mode hides the button entirely — the scrubber's
+  // live/paused chip is the single path back to now — so it doesn't thread this.
+  onJumpToNow?: () => void
+  // Host-supplied clock for the "Now" line and health-span right edges. The
+  // retained host passes its live tick so both advance while watching (and
+  // freeze with the window in paused mode); without it they'd pin to mount
+  // time and new events would render PAST the stale Now line. Local mode
+  // omits it and keeps the mount-stable clock.
+  nowMs?: number
+  // Recording gaps (connector offline) as absolute time ranges. Rendered as
+  // vertical hatched bands behind the lanes; also drives the empty-state copy
+  // when the whole view window sits inside a gap. Retained-mode only — local
+  // mode omits it and behavior is unchanged.
+  gaps?: TimeWindow[]
+  // Controlled shared-filter state. When omitted each is managed internally; the
+  // host passes them so search / activity-type / kind survive the view switch
+  // and match the list view exactly. Absent props = current standalone behavior.
+  search?: string
+  onSearchChange?: (value: string) => void
+  activityFilter?: ActivityFilterKey[]
+  onActivityFilterChange?: (keys: ActivityFilterKey[]) => void
+  kindFilter?: string[]
+  onKindFilterChange?: (kinds: string[]) => void
+  // Refresh the underlying data. Rendered in the shared toolbar (both views).
+  onRefresh?: () => void
+  // Server app-membership index (from GET /api/applications). When present and
+  // grouping='app', lanes are grouped into app header lanes via the membership
+  // cascade. Absent → the legacy label grouping (owner fallback) is used, no crash.
+  appIndex?: AppMembershipIndex
+  // Controlled grouping mode. When omitted managed internally (default 'app').
+  // The host lifts it so it survives the view switch like the other view options.
+  grouping?: TimelineGrouping
+  onGroupingChange?: (grouping: TimelineGrouping) => void
+  // Controlled lane sort. Lifted alongside grouping so it survives the view
+  // switch; managed internally (default 'importance') when omitted.
+  sort?: TimelineSort
+  onSortChange?: (sort: TimelineSort) => void
+  // Pinned resource lanes — a stationary section rendered ABOVE all other lanes,
+  // in pin order, bypassing the visible-window filter and every grouping mode.
+  // Pure: this component owns no storage. The host holds the list (and persists
+  // it) and toggles via onTogglePin. Absent → no pin affordances render (the
+  // uncontrolled/WorkloadView path is unchanged). A pinned resource with no
+  // events in the loaded selection still renders as an empty track.
+  pinnedLanes?: PinnedLaneRef[]
+  onTogglePin?: (ref: PinnedLaneRef) => void
+  // App-group name click → host navigates to the Applications page (?app=<key>).
+  onAppClick?: (appKey: string) => void
+  // Observable drawer selection, for URL routing. When the host wires these,
+  // every drawer open/select/close (cluster row switches included) reports the
+  // SELECTED event id upward (close → null); and a non-null `selectedEventId` on
+  // a closed drawer is restored once lanes are built — resolved against the
+  // current render (same window/filters → same clustering → deterministic) via
+  // resolveEventCluster. An id absent after data settles reports null once (the
+  // host strips the stale param). Absent → the drawer stays fully internal and
+  // behavior is byte-identical.
+  selectedEventId?: string | null
+  onSelectedEventChange?: (id: string | null) => void
+  // True while the retained view is in LIVE mode (window latched to now, polling
+  // every tick). Enables order hysteresis: existing lanes keep their relative
+  // order across polls so arriving data doesn't reshuffle the list under the user.
+  // A user-initiated re-rank (sort / grouping / filter change, or leaving live)
+  // adopts the fresh importance rank. Absent/false → fresh rank every render
+  // (local mode / WorkloadView unchanged).
+  isLive?: boolean
 }
 
 interface ResourceLane extends BaseResourceLane {
@@ -135,7 +602,7 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
   breakdown.problematic = Math.min(problematicCount * 40, 200)
 
   // 4. Tertiary: Activity type
-  const operations = new Set(allEvents.map(e => e.eventType).filter(t => isOperation(t as any)))
+  const operations = new Set(allEvents.map(e => e.eventType).filter(t => isOperation(t)))
   breakdown.variety = operations.size * 10 // Up to 30 for all three types
 
   // Add/delete with caps
@@ -186,7 +653,9 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
   return breakdown
 }
 
-export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange }: TimelineSwimlanesProps) {
+export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange, pinnedOnly: pinnedOnlyProp, onPinnedOnlyChange, viewWindow, onViewWindowChange, bounds, onExtendRequest, onJumpToNow, nowMs, gaps, onAppClick, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onRefresh, appIndex, grouping: groupingProp, onGroupingChange, sort: sortProp, onSortChange, pinnedLanes, onTogglePin, selectedEventId, onSelectedEventChange, isLive }: TimelineSwimlanesProps) {
+  // Controlled when the host drives the visible window (retained-mode lens).
+  const controlled = viewWindow != null
   // Timeline lane labels for GitOps CRs (Application/Kustomization/HelmRelease)
   // deep-link to GitOps detail rather than the resource drawer — the lane is
   // already telling the user "this controller had changes/events"; the GitOps
@@ -202,28 +671,90 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   const containerRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
   const [panOffset, setPanOffset] = useState(0)
-  const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null)
+  // The detail drawer. A single marker opens a one-event drawer (today's exact
+  // panel); a cluster pill opens the SAME drawer carrying all N members so none
+  // is unreachable. `selectedId` is the member whose detail is shown.
+  const [drawer, setDrawer] = useState<{ events: TimelineEvent[]; selectedId: string } | null>(null)
+  // The id the user just closed, so the restore effect doesn't reopen it from a
+  // not-yet-stripped ?event= echo. Set on any user close (X / Escape / re-click),
+  // cleared when the selection settles to null or a new drawer opens.
+  const dismissedIdRef = useRef<string | null>(null)
+  // The member currently detailed — drives the marker/pill highlight so the pill
+  // whose cluster is open reads as selected.
+  const selectedEvent = useMemo(
+    () => (drawer ? drawer.events.find((e) => e.id === drawer.selectedId) ?? null : null),
+    [drawer],
+  )
   const [isDragging, setIsDragging] = useState(false)
-  const [dragStart, setDragStart] = useState({ x: 0, offset: 0 })
-  const [searchTerm, setSearchTerm] = useState('')
-  const [expandedLanes, setExpandedLanes] = useState<Set<string>>(new Set())
+  // `offset` drives the uncontrolled pan; `windowFrom/To` capture the window at
+  // grab time for the controlled path (shifting an absolute window, not panOffset).
+  const [dragStart, setDragStart] = useState({ x: 0, offset: 0, windowFrom: 0, windowTo: 0 })
+  const [searchInternal, setSearchInternal] = useState('')
+  const searchTerm = searchProp ?? searchInternal
+  const setSearchTerm = onSearchChange ?? setSearchInternal
+  const [activityFilterInternal, setActivityFilterInternal] = useState<ActivityFilterKey[]>([])
+  const activityFilter = activityFilterProp ?? activityFilterInternal
+  const setActivityFilter = onActivityFilterChange ?? setActivityFilterInternal
+  const [kindFilterInternal, setKindFilterInternal] = useState<string[]>([])
+  const kindFilter = kindFilterProp ?? kindFilterInternal
+  const setKindFilter = onKindFilterChange ?? setKindFilterInternal
+  // The user's explicit expand/collapse choices, per lane id. Overrides the
+  // count-based auto default below — once the user touches a lane we never fight
+  // them. Empty on first render, so the initial view is fully deterministic.
+  const [userLaneOverrides, setUserLaneOverrides] = useState<Map<string, boolean>>(new Map())
   const [hasAutoZoomed, setHasAutoZoomed] = useState(false)
-  const [groupByApp, setGroupByApp] = useState(true) // Group by app.kubernetes.io/name label
+  // Grouping mode: 'app' (membership cascade) | 'owner' (owner/topology only) |
+  // 'flat' (no parenting). Controlled by the host when provided, else internal.
+  const [groupingInternal, setGroupingInternal] = useState<TimelineGrouping>('app')
+  const grouping = groupingProp ?? groupingInternal
+  const setGrouping = onGroupingChange ?? setGroupingInternal
+
+  const [sortInternal, setSortInternal] = useState<TimelineSort>(TIMELINE_SORT_DEFAULT)
+  const sort = sortProp ?? sortInternal
+  const setSort = onSortChange ?? setSortInternal
   const [showDeletedInternal, setShowDeletedInternal] = useState(true)
+  // Pinned-only filter: session-local; auto-inert when the last pin is removed
+  // (the toggle disappears and effectivePinnedOnly falls back to false).
+  const [pinnedOnlyInternal, setPinnedOnlyInternal] = useState(false)
+  const pinnedOnly = pinnedOnlyProp ?? pinnedOnlyInternal
+  const setPinnedOnly = onPinnedOnlyChange ?? setPinnedOnlyInternal
   const showDeleted = showDeletedProp ?? showDeletedInternal
   const setShowDeleted = onShowDeletedChange ?? setShowDeletedInternal
 
-  // Stable lane ordering - use ref to avoid render loop (lanes depends on order, order depends on lanes)
-  const laneOrderRef = useRef<Map<string, number>>(new Map())
-  const [sortVersion, setSortVersion] = useState(0) // Increment to re-sort lanes
+  // Clear every content filter at once (search + activity + kind + show-deleted).
+  // Each setter already resolves to the controlled callback or the internal
+  // state setter, so this works in both host-driven and standalone modes.
+  const clearAllFilters = useCallback(() => {
+    setSearchTerm('')
+    setActivityFilter([])
+    setKindFilter([])
+    setShowDeleted(true)
+  }, [setSearchTerm, setActivityFilter, setKindFilter, setShowDeleted])
+
 
   // Stable "now" time - captured once on mount, only changes when user interacts
   // This prevents the time window from auto-shifting and causing re-renders
   const [stableNow] = useState(() => Date.now())
+  // Host clock wins when provided (retained live tick); local mode stays mount-stable.
+  const effectiveNow = nowMs ?? stableNow
 
-  // Auto-adjust zoom based on event distribution (only once on initial load)
+  // Track pixel width (container minus the label column + gutter) so gap bands
+  // can decide whether they're wide enough to caption.
+  const [trackPx, setTrackPx] = useState(0)
   useEffect(() => {
-    if (hasAutoZoomed || events.length === 0) return
+    const node = containerRef.current
+    if (!node) return
+    const measure = () => setTrackPx(Math.max(0, node.clientWidth - LANE_TRACK_INSET_PX))
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(node)
+    return () => ro.disconnect()
+  }, [])
+
+  // Auto-adjust zoom based on event distribution (only once on initial load).
+  // Skipped when controlled — the host owns the window, so internal zoom is inert.
+  useEffect(() => {
+    if (hasAutoZoomed || events.length === 0 || controlled) return
 
     const now = Date.now()
     const timestamps = events.map(e => new Date(e.timestamp).getTime())
@@ -246,7 +777,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
 
     setZoom(optimalZoom)
     setHasAutoZoomed(true)
-  }, [events, hasAutoZoomed])
+  }, [events, hasAutoZoomed, controlled])
 
   // Keyboard shortcuts
   useRegisterShortcut({
@@ -256,24 +787,60 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     category: 'Timeline',
     scope: 'timeline',
     handler: () => {
-      if (selectedEvent) setSelectedEvent(null)
+      if (drawer) closeDrawer()
     },
   })
 
-  // Filter events by search term
-  const filteredEvents = useMemo(() => {
-    const baseEvents = showDeleted ? events : events.filter(e => e.eventType !== 'delete')
-    if (!searchTerm) return baseEvents
+  // ↑/↓ step through a cluster drawer's members (inert for a single-event drawer).
+  const moveClusterSelection = useCallback((dir: 1 | -1) => {
+    setDrawer((prev) => {
+      if (!prev || prev.events.length < 2) return prev
+      const idx = prev.events.findIndex((e) => e.id === prev.selectedId)
+      const next = (idx + dir + prev.events.length) % prev.events.length
+      return { ...prev, selectedId: prev.events[next].id }
+    })
+  }, [])
+  const clusterOpen = !!drawer && drawer.events.length > 1
+  useRegisterShortcut({
+    id: 'swimlane-cluster-prev',
+    keys: 'ArrowUp',
+    description: 'Previous clustered event',
+    category: 'Timeline',
+    scope: 'timeline',
+    handler: (e) => {
+      if (!clusterOpen) return
+      e.preventDefault()
+      moveClusterSelection(-1)
+    },
+  })
+  useRegisterShortcut({
+    id: 'swimlane-cluster-next',
+    keys: 'ArrowDown',
+    description: 'Next clustered event',
+    category: 'Timeline',
+    scope: 'timeline',
+    handler: (e) => {
+      if (!clusterOpen) return
+      e.preventDefault()
+      moveClusterSelection(1)
+    },
+  })
 
-    const term = searchTerm.toLowerCase()
-    return baseEvents.filter(e =>
-      e.name.toLowerCase().includes(term) ||
-      e.kind.toLowerCase().includes(term) ||
-      e.namespace?.toLowerCase().includes(term) ||
-      e.reason?.toLowerCase().includes(term) ||
-      e.message?.toLowerCase().includes(term)
-    )
-  }, [events, searchTerm, showDeleted])
+  // Apply the shared filters (deleted, activity-type, kind, search) through the
+  // same predicates the list uses, so the two views can't drift.
+  const filteredEvents = useMemo(() => {
+    return events.filter((e) => {
+      if (!showDeleted && e.eventType === 'delete') return false
+      if (!matchesActivityFilter(e, activityFilter)) return false
+      if (kindFilter.length > 0 && !kindFilter.includes(e.kind)) return false
+      if (!matchesTimelineSearch(e, searchTerm)) return false
+      return true
+    })
+  }, [events, searchTerm, showDeleted, activityFilter, kindFilter])
+
+  // Kind dropdown options: seed set + every kind present in the (unfiltered)
+  // events. The swimlane fetches all kinds, so deriving from events is stable.
+  const kindOptions = useMemo(() => mergeKindOptions(events.map((e) => e.kind)), [events])
 
   // Build hierarchical lanes using owner references + topology edges
   // Uses the shared utility from utils/resource-hierarchy.ts
@@ -282,62 +849,245 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     const baseLanes = buildResourceHierarchy({
       events: filteredEvents,
       topology,
-      groupByApp,
+      grouping,
+      appIndex,
     })
 
-    // Add score breakdown to each lane (specific to swimlanes view)
-    const lanesWithScores: ResourceLane[] = baseLanes.map(lane => ({
-      ...lane,
-      scoreBreakdown: calculateInterestingnessWithBreakdown(lane),
-    }))
-
-    // Sort by interestingness score (highest first)
-    return lanesWithScores.sort((a, b) => {
-      const aScore = a.scoreBreakdown?.total ?? calculateInterestingness(a)
-      const bScore = b.scoreBreakdown?.total ?? calculateInterestingness(b)
-      return bScore - aScore
-    })
-  }, [filteredEvents, topology, sortVersion, groupByApp])
-
-  // Re-sort lanes by interestingness score
-  const handleRefreshSort = useCallback(() => {
-    // Reset lane order to force re-sort by interestingness
-    laneOrderRef.current = new Map()
-    setSortVersion(v => v + 1)
-  }, [])
-
-  // Toggle lane expansion
-  const toggleLane = useCallback((laneId: string) => {
-    setExpandedLanes(prev => {
-      const next = new Set(prev)
-      if (next.has(laneId)) {
-        next.delete(laneId)
-      } else {
-        next.add(laneId)
+    // Add score breakdown to each lane (specific to swimlanes view). An app-group
+    // header carries no own events, so its score is the MAX of its members —
+    // otherwise the empty-lane penalty would sink every app to the bottom. The
+    // top-level ordering is applied later by `orderedLanes` (sort-mode aware).
+    const lanesWithScores: ResourceLane[] = baseLanes.map(lane => {
+      if (lane.isAppGroup) {
+        const memberScores = (lane.children ?? []).map(calculateInterestingness)
+        return { ...lane, scoreBreakdown: { ...calculateInterestingnessWithBreakdown(lane), total: memberScores.length ? Math.max(...memberScores) : 0 } }
       }
+      return { ...lane, scoreBreakdown: calculateInterestingnessWithBreakdown(lane) }
+    })
+
+    return lanesWithScores
+  }, [filteredEvents, topology, grouping, appIndex])
+
+  // Same-kind cross-group collisions among the visible lanes (CAPI vs CNPG
+  // `Cluster`). Only lanes in this set show a disambiguating group chip — the API
+  // group is otherwise invisible. Pure + memoized on the built lane tree.
+  const collidingKeys = useMemo(() => collidingLaneKeys(lanes), [lanes])
+
+  // Auto-expand default frozen per lane id at first sighting (see
+  // reconcileAutoExpand) so a live poll's rebuilt tree can't reopen/close rows as
+  // child counts drift. Held in a ref across renders; new lanes adopt their
+  // structural default, existing lanes keep theirs.
+  const autoExpandRef = useRef<Map<string, boolean>>(new Map())
+
+  // Effective expansion = frozen auto default, then the user's per-lane overrides
+  // layered on top. `lanes` holds every id (nested), and pinned rows are extracted
+  // from it, so this one set covers both sections.
+  const expandedLanes = useMemo(() => {
+    const frozen = reconcileAutoExpand(autoExpandRef.current, lanes)
+    autoExpandRef.current = frozen
+    const eff = new Set<string>()
+    for (const [id, auto] of frozen) if (auto) eff.add(id)
+    for (const [id, expanded] of userLaneOverrides) {
+      if (expanded) eff.add(id)
+      else eff.delete(id)
+    }
+    return eff
+  }, [lanes, userLaneOverrides])
+
+  // Toggle lane expansion — pins the flipped state as a user override so it wins
+  // over the auto default from here on.
+  const toggleLane = useCallback((laneId: string) => {
+    const isExpanded = expandedLanes.has(laneId)
+    setUserLaneOverrides(prev => {
+      const next = new Map(prev)
+      next.set(laneId, !isExpanded)
       return next
     })
-  }, [])
+  }, [expandedLanes])
 
-  // Calculate visible time range
+  // Calculate visible time range. When controlled, the host's window replaces the
+  // internal zoom/pan/stableNow math entirely (adapter layer — the uncontrolled
+  // branch below is unchanged).
   const visibleTimeRange = useMemo(() => {
+    if (viewWindow) {
+      return {
+        start: viewWindow.fromMs,
+        end: viewWindow.toMs,
+        windowMs: viewWindow.toMs - viewWindow.fromMs,
+        now: effectiveNow,
+      }
+    }
     const windowMs = zoom * 60 * 60 * 1000
-    const end = stableNow - panOffset
+    const end = effectiveNow - panOffset
     const start = end - windowMs
-    return { start, end, windowMs, now: stableNow }
-  }, [zoom, panOffset, stableNow])
+    return { start, end, windowMs, now: effectiveNow }
+  }, [zoom, panOffset, effectiveNow, viewWindow])
+
+  // Apply the chosen ordering to the top-level lanes. 'recent' needs the visible
+  // window (newest-in-view first), so this lives after visibleTimeRange. The
+  // pinned section is ordered separately (strict pin order) and never flows here.
+  const orderedLanes = useMemo(
+    () => sortTimelineLanes(lanes, sort, {
+      windowStart: visibleTimeRange.start,
+      windowEnd: visibleTimeRange.end,
+      scoreOf: (lane) => lane.scoreBreakdown?.total ?? calculateInterestingness(lane),
+    }),
+    [lanes, sort, visibleTimeRange],
+  )
+
+  // Live-mode order hysteresis. The importance rank recomputes every poll (recency
+  // decay + new events), which reshuffles the whole list — the "screen jumps" the
+  // user sees. While live, keep the prior relative order and splice new lanes in by
+  // rank (mergeLaneOrderById). A user-initiated re-rank — sort / grouping / any
+  // content-filter change, or leaving live — drops the hysteresis and adopts the
+  // fresh rank. The live edge sliding (or a live pan) is NOT a re-rank; keeping order
+  // calm across it is the whole point. Inert when !isLive (local / WorkloadView).
+  const laneOrderRef = useRef<string[] | null>(null)
+  const rankResetKey = useMemo(
+    () => JSON.stringify([sort, grouping, searchTerm, showDeleted, activityFilter, kindFilter]),
+    [sort, grouping, searchTerm, showDeleted, activityFilter, kindFilter],
+  )
+  const rankResetKeyRef = useRef(rankResetKey)
+  const wasLiveRef = useRef(false)
+  const stableOrderedLanes = useMemo(() => {
+    const freshIds = orderedLanes.map((l) => l.id)
+    const resetKeyChanged = rankResetKeyRef.current !== rankResetKey
+    rankResetKeyRef.current = rankResetKey
+    const enteringLive = !!isLive && !wasLiveRef.current
+    wasLiveRef.current = !!isLive
+    if (!isLive || resetKeyChanged || enteringLive || laneOrderRef.current == null) {
+      laneOrderRef.current = freshIds
+      return orderedLanes
+    }
+    const mergedIds = mergeLaneOrderById(laneOrderRef.current, freshIds)
+    laneOrderRef.current = mergedIds
+    const byId = new Map(orderedLanes.map((l) => [l.id, l]))
+    return mergedIds.map((id) => byId.get(id)).filter((l): l is ResourceLane => l != null)
+  }, [orderedLanes, isLive, rankResetKey])
+
+  // Window width in hours — drives axis tick density and the window label for
+  // both modes (equals `zoom` exactly in the uncontrolled path).
+  const windowHours = visibleTimeRange.windowMs / HOUR_MS
+  const windowLabel = windowHours < 1
+    ? `${Math.round(windowHours * 60)}m`
+    : windowHours >= 24
+      ? `${Math.round(windowHours / 24)}d`
+      : Number.isInteger(windowHours) ? `${windowHours}h` : `${windowHours.toFixed(1)}h`
+
+  // "→ Now" is a local-mode affordance only: controlled/retained mode hides it
+  // (the scrubber's live/paused chip owns the path back to now). Uncontrolled it
+  // shows once the view has panned into the past, and calls the host's
+  // `onJumpToNow` when given, else resets the internal pan.
+  const showJumpToNow = !controlled && panOffset > 0
+  const handleJumpToNow = () => {
+    if (onJumpToNow) {
+      onJumpToNow()
+      return
+    }
+    setPanOffset(0)
+  }
+
+  // Extend affordances: when the controlled window is pinned against a bound edge
+  // there may be more retained data just beyond the loaded selection. The future
+  // side only offers extension when the selection actually ends before ~now (a
+  // historical query) — you can't load data that doesn't exist yet.
+  const EDGE_EPSILON_MS = 1000
+  const atPastEdge = controlled && !!bounds && !!onExtendRequest
+    && visibleTimeRange.start <= bounds.fromMs + EDGE_EPSILON_MS
+  const atFutureEdge = controlled && !!bounds && !!onExtendRequest
+    && visibleTimeRange.end >= bounds.toMs - EDGE_EPSILON_MS
+    && bounds.toMs < effectiveNow - 60 * 1000
+
+  // Events inside the current view window (post-filter). Drives the toolbar
+  // "events" count so it's view-scoped like "resources" — a lens sitting in a
+  // recording gap reads "0 resources · 0 events", not "0 resources · N events".
+  const eventsInWindow = useMemo(() => {
+    const { start, end } = visibleTimeRange
+    return filteredEvents.filter((e) => {
+      const t = new Date(e.timestamp).getTime()
+      return t >= start && t <= end
+    })
+  }, [filteredEvents, visibleTimeRange])
+
+  // Recording gaps clipped to the visible window, for the hatched lane bands.
+  const visibleGaps = useMemo(() => {
+    if (!gaps || gaps.length === 0) return []
+    const { start, end } = visibleTimeRange
+    const out: TimeWindow[] = []
+    for (const g of gaps) {
+      const fromMs = Math.max(g.fromMs, start)
+      const toMs = Math.min(g.toMs, end)
+      if (toMs > fromMs) out.push({ fromMs, toMs })
+    }
+    return out
+  }, [gaps, visibleTimeRange])
+
+  // Pin MOVES a row: pinned lanes (and pinned children inside groups) leave
+  // the regular list entirely — the pinned section is their only home.
+  const pinnedIdSetForFilter = useMemo(() => new Set((pinnedLanes ?? []).map((p) => p.id)), [pinnedLanes])
+  const pinnedAppKeys = useMemo(
+    () => new Set((pinnedLanes ?? []).flatMap((p) => (p.type === 'appGroup' ? [p.appKey] : []))),
+    [pinnedLanes],
+  )
+  const unpinnedLanes = useMemo(
+    () => removePinnedLanes(stableOrderedLanes, pinnedIdSetForFilter, pinnedAppKeys),
+    [stableOrderedLanes, pinnedIdSetForFilter, pinnedAppKeys],
+  )
 
   // Filter out lanes with no events in the visible time window
   const visibleLanes = useMemo(() => {
     const { start, end } = visibleTimeRange
-    return lanes.filter(lane => {
+    return unpinnedLanes.filter(lane => {
       const allLaneEvents = lane.allEventsSorted || []
       return allLaneEvents.some(e => {
         const t = new Date(e.timestamp).getTime()
         return t >= start && t <= end
       })
     })
-  }, [lanes, visibleTimeRange])
+  }, [unpinnedLanes, visibleTimeRange])
+
+  // Pinned rows: resolved from the FULL lane list (pre-window-filter, any
+  // grouping) so they stay put while the lens moves and even when they have no
+  // events in the window. The regular list above has them removed (move, not
+  // copy); counts add them back explicitly below.
+  const pinnedLaneRows = useMemo(
+    () => extractPinnedLanes(lanes, pinnedLanes ?? []),
+    [lanes, pinnedLanes],
+  )
+  const effectivePinnedOnly = pinnedOnly && pinnedLaneRows.length > 0
+  // Honest counts while filtered to pins: only pinned rows' in-window events.
+  const pinnedEventsInWindow = useMemo(() => {
+    if (pinnedLaneRows.length === 0) return 0
+    const { start, end } = visibleTimeRange
+    let n = 0
+    for (const lane of pinnedLaneRows) {
+      for (const e of lane.allEventsSorted || []) {
+        const t = new Date(e.timestamp).getTime()
+        if (t >= start && t <= end) n++
+      }
+    }
+    return n
+  }, [pinnedLaneRows, visibleTimeRange])
+
+  const pinnedIdSet = useMemo(() => new Set((pinnedLanes ?? []).map((p) => p.id)), [pinnedLanes])
+  // A pin button for a lane, or null when the host wired no pin handler. A pinned
+  // lane's button is filled and always visible (in the pinned section or its
+  // original spot); an unpinned one reveals on row hover.
+  const renderPinButton = useCallback((lane: ResourceLane): React.ReactNode => {
+    if (!onTogglePin) return null
+    const pinned = pinnedIdSet.has(lane.id)
+    const ref: PinnedLaneRef = lane.isAppGroup && lane.appKey
+      ? { type: 'appGroup', id: lane.id, appKey: lane.appKey, appName: lane.title ?? lane.name }
+      : { id: lane.id, kind: lane.kind, namespace: lane.namespace, name: lane.name }
+    return (
+      <PinButton
+        pinned={pinned}
+        alwaysVisible={pinned}
+        isAppGroup={lane.isAppGroup}
+        onToggle={() => onTogglePin(ref)}
+      />
+    )
+  }, [onTogglePin, pinnedIdSet])
 
   // Generate time axis ticks
   const axisTicks = useMemo(() => {
@@ -345,19 +1095,19 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     const ticks: { time: number; label: string }[] = []
 
     let intervalMs: number
-    if (zoom <= 0.25) {
+    if (windowHours <= 0.25) {
       intervalMs = 2 * 60 * 1000 // 2 min intervals for 15m window
-    } else if (zoom <= 0.5) {
+    } else if (windowHours <= 0.5) {
       intervalMs = 5 * 60 * 1000 // 5 min intervals for 30m window
-    } else if (zoom <= 1) {
+    } else if (windowHours <= 1) {
       intervalMs = 10 * 60 * 1000
-    } else if (zoom <= 3) {
+    } else if (windowHours <= 3) {
       intervalMs = 30 * 60 * 1000
-    } else if (zoom <= 6) {
+    } else if (windowHours <= 6) {
       intervalMs = 60 * 60 * 1000
-    } else if (zoom <= 24) {
+    } else if (windowHours <= 24) {
       intervalMs = 2 * 60 * 60 * 1000 // 2 hour intervals
-    } else if (zoom <= 72) {
+    } else if (windowHours <= 72) {
       intervalMs = 6 * 60 * 60 * 1000 // 6 hour intervals for up to 3 days
     } else {
       intervalMs = 24 * 60 * 60 * 1000 // 1 day intervals for larger windows
@@ -373,7 +1123,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     }
 
     return ticks
-  }, [visibleTimeRange, zoom])
+  }, [visibleTimeRange, windowHours])
 
   // Convert timestamp to X position (0-100%)
   const timeToX = useCallback(
@@ -384,24 +1134,126 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     [visibleTimeRange]
   )
 
-  // Predefined zoom levels (in hours): 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d, 2d, 3d, 7d
-  const ZOOM_LEVELS = [0.25, 0.5, 1, 2, 4, 8, 12, 24, 48, 72, 168]
+  // Vertical grid line positions (x-percent) shared by every lane backdrop.
+  const gridXs = useMemo(
+    () => axisTicks.map((t) => timeToX(t.time)).filter((x) => x > 0 && x < 100),
+    [axisTicks, timeToX]
+  )
 
-  // Zoom handlers - snap to predefined levels
-  const handleZoomIn = () => setZoom((z) => {
-    const idx = ZOOM_LEVELS.findIndex(level => level >= z)
-    return ZOOM_LEVELS[Math.max(0, idx - 1)]
-  })
-  const handleZoomOut = () => setZoom((z) => {
-    const idx = ZOOM_LEVELS.findIndex(level => level > z)
-    return ZOOM_LEVELS[Math.min(ZOOM_LEVELS.length - 1, idx === -1 ? ZOOM_LEVELS.length - 1 : idx)]
-  })
+  // Open the detail drawer for a marker or a cluster pill. A single-event cluster
+  // opens today's one-event drawer (re-click toggles it closed). A multi-event
+  // cluster opens the drawer in CLUSTER mode carrying every member, ordered
+  // most-severe-first and preselecting the top one — that's exactly the event the
+  // pill's glyph already promised, so the drawer opens on the resource the user
+  // was looking at, with the other N-1 one click away. Re-clicking the same pill
+  // toggles it closed.
+  const openCluster = useCallback((cluster: TimelineEventCluster) => {
+    // clusterDrawerState fixes the member ordering (dominant first) so the click
+    // path and the URL-restore path can't drift; re-clicking the same cluster
+    // toggles the drawer closed.
+    const next = clusterDrawerState(cluster)
+    const key = next.events.map((e) => e.id).join('|')
+    const isToggleClose = !!drawer && drawer.events.map((e) => e.id).join('|') === key
+    if (isToggleClose) {
+      // Re-click on the open pill is a user close: record the dismissed id so the
+      // restore effect doesn't resurrect it from the not-yet-stripped ?event=.
+      dismissedIdRef.current = drawer!.selectedId
+      setDrawer(null)
+      return
+    }
+    // Opening (a new selection) clears any prior dismissal — the user intends to
+    // see this drawer, so nothing must suppress it.
+    dismissedIdRef.current = null
+    setDrawer(next)
+  }, [drawer])
+
+  // User close (X button / Escape). Records the dismissed id so the restore
+  // effect treats the id still sitting in ?event= as dismissed, not as a fresh
+  // deep-link to re-open. Cleared once the selection actually settles to null.
+  const closeDrawer = useCallback(() => {
+    if (drawer) dismissedIdRef.current = drawer.selectedId
+    setDrawer(null)
+  }, [drawer])
+
+  // --- Observable drawer selection (URL routing) ---------------------------
+  // The rendered rows the resolver searches: pinned rows first, then the visible
+  // lanes, matching render order so restore lands on the same row the user sees.
+  // pinnedOnly hides the visible lanes entirely, so a restore must only search
+  // rows that actually render — otherwise it lands on a hidden lane the user
+  // can't see (the render below drops visibleLanes under effectivePinnedOnly).
+  const resolverRows = useMemo(
+    () => (effectivePinnedOnly ? pinnedLaneRows : [...pinnedLaneRows, ...visibleLanes]),
+    [effectivePinnedOnly, pinnedLaneRows, visibleLanes],
+  )
+  // The id we've already resolved/ruled-out, so a settled miss reports null once.
+  // Doubles as the guard's `settledId`: a fresh selectedEventId (never settled)
+  // keeps restoreIsPending true so a still-loading restore wins over the strip.
+  const restoredForRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!onSelectedEventChange) return
+    const want = selectedEventId ?? null
+    // Clearing the selection re-arms the machine: an id ruled out once must be
+    // resolvable again if the user re-selects it (ref is keyed by id, not reset).
+    // The dismissed id is cleared here too: once the selection has settled to
+    // null the close is complete, so a later back/forward to the same id is a
+    // genuine restore, not the close echo.
+    if (want == null) {
+      restoredForRef.current = null
+      dismissedIdRef.current = null
+      return
+    }
+    // Restore only into a CLOSED drawer; an open drawer is authoritative.
+    if (drawer) return
+    if (restoredForRef.current === want) return
+    // A user close wins: the id the user just dismissed must not be reopened by
+    // the ?event=<id> the strip hasn't cleared yet. Once the selection settles to
+    // null (above) the dismissal clears, so a real re-select/history-nav restores.
+    if (dismissedIdRef.current === want) return
+    const resolved = resolveEventCluster(resolverRows, expandedLanes, want, timeToX)
+    if (resolved) {
+      restoredForRef.current = want
+      setDrawer(resolved)
+      return
+    }
+    // Not on any row yet — keep waiting while data is still loading; only give up
+    // (strip the stale param, exactly once) after the fetch has settled.
+    if (isLoading) return
+    restoredForRef.current = want
+    onSelectedEventChange(null)
+  }, [selectedEventId, drawer, resolverRows, expandedLanes, timeToX, isLoading, onSelectedEventChange])
+
+  useEffect(() => {
+    if (!onSelectedEventChange) return
+    const want = selectedEventId ?? null
+    if (restoreIsPending(want, drawer?.selectedId ?? null, restoredForRef.current, dismissedIdRef.current)) return
+    const cur = drawer?.selectedId ?? null
+    if (cur === want) return
+    onSelectedEventChange(cur)
+  }, [drawer, selectedEventId, onSelectedEventChange])
+
+  // Zoom handlers - snap to predefined levels. Controlled: emit the would-be
+  // window (center-anchored, clamped to bounds); uncontrolled: mutate `zoom`.
+  const handleZoomIn = () => {
+    if (controlled) { onViewWindowChange?.(zoomWindowWithinBounds(viewWindow!, 'in', bounds)); return }
+    setZoom((z) => {
+      const idx = ZOOM_LEVELS.findIndex(level => level >= z)
+      return ZOOM_LEVELS[Math.max(0, idx - 1)]
+    })
+  }
+  const handleZoomOut = () => {
+    if (controlled) { onViewWindowChange?.(zoomWindowWithinBounds(viewWindow!, 'out', bounds)); return }
+    setZoom((z) => {
+      const idx = ZOOM_LEVELS.findIndex(level => level > z)
+      return ZOOM_LEVELS[Math.min(ZOOM_LEVELS.length - 1, idx === -1 ? ZOOM_LEVELS.length - 1 : idx)]
+    })
+  }
 
   // Pan with mouse drag
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return
     setIsDragging(true)
-    setDragStart({ x: e.clientX, offset: panOffset })
+    setDragStart({ x: e.clientX, offset: panOffset, windowFrom: visibleTimeRange.start, windowTo: visibleTimeRange.end })
   }
 
   const handleMouseMove = useCallback(
@@ -413,11 +1265,20 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
       const { windowMs } = visibleTimeRange
 
       const timePerPixel = windowMs / containerWidth
-      const newOffset = dragStart.offset - dx * timePerPixel
 
+      if (controlled) {
+        // Mirror the uncontrolled shift (Δend = +dx·timePerPixel) as an absolute
+        // window shift, clamped to bounds instead of the internal panOffset>=0 cap.
+        const shift = dx * timePerPixel
+        const next = { fromMs: dragStart.windowFrom + shift, toMs: dragStart.windowTo + shift }
+        onViewWindowChange?.(bounds ? clampWindowToBounds(next, bounds) : next)
+        return
+      }
+
+      const newOffset = dragStart.offset - dx * timePerPixel
       setPanOffset(Math.max(0, newOffset))
     },
-    [isDragging, dragStart, visibleTimeRange]
+    [isDragging, dragStart, visibleTimeRange, controlled, bounds, onViewWindowChange]
   )
 
   const handleMouseUp = useCallback(() => {
@@ -435,10 +1296,18 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     }
   }, [isDragging, handleMouseMove, handleMouseUp])
 
-  // Wheel zoom - snap to predefined levels
-  const handleWheel = useCallback((e: React.WheelEvent) => {
+  // Wheel: ctrl/cmd = zoom (snap to levels); horizontal scroll = pan the view
+  // window, same motion as dragging the canvas. Attached as a NATIVE
+  // non-passive listener (not React's onWheel, which is passive at the root)
+  // so preventDefault actually blocks the browser's horizontal back/forward
+  // overscroll gesture.
+  const handleWheel = useCallback((e: WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault()
+      if (controlled) {
+        onViewWindowChange?.(zoomWindowWithinBounds(viewWindow!, e.deltaY > 0 ? 'out' : 'in', bounds))
+        return
+      }
       setZoom((z) => {
         const currentIdx = ZOOM_LEVELS.findIndex(level => level >= z)
         const idx = currentIdx === -1 ? ZOOM_LEVELS.length - 1 : currentIdx
@@ -450,8 +1319,36 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           return ZOOM_LEVELS[Math.max(0, idx - 1)]
         }
       })
+      return
     }
-  }, [])
+
+    // Horizontal gesture: trackpad swipe (|deltaX| dominates) or shift+wheel.
+    const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey
+    if (!horizontal || !containerRef.current) return
+    e.preventDefault()
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+    const containerWidth = containerRef.current.clientWidth
+    const shift = delta * (visibleTimeRange.windowMs / containerWidth)
+    if (controlled) {
+      const next = { fromMs: viewWindow!.fromMs + shift, toMs: viewWindow!.toMs + shift }
+      onViewWindowChange?.(bounds ? clampWindowToBounds(next, bounds) : next)
+    } else {
+      setPanOffset((o) => Math.max(0, o - shift))
+    }
+  }, [controlled, viewWindow, bounds, onViewWindowChange, visibleTimeRange])
+
+  // Ref-stable indirection + isLoading in deps: the loading early-return means
+  // the container doesn't exist on first mount, so the listener must (re)attach
+  // once the real tree appears — without re-subscribing on every handler change.
+  const wheelHandlerRef = useRef(handleWheel)
+  wheelHandlerRef.current = handleWheel
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const h = (e: WheelEvent) => wheelHandlerRef.current(e)
+    el.addEventListener('wheel', h, { passive: false })
+    return () => el.removeEventListener('wheel', h)
+  }, [isLoading])
 
   if (isLoading) {
     return <PaneLoader label="Loading timeline…" className="h-full w-full" />
@@ -460,120 +1357,316 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   // Compute empty state info (but don't early return - we need the toolbar visible)
   const hasFilteredEvents = visibleLanes.length === 0 && events.length > 0 && filteredEvents.length === 0
 
+  // One lane row and — when expanded — its children, recursively. Shared by the
+  // pinned section and the sorted lanes so the pinned copy reuses the exact track.
+  //
+  // Event attribution (the locked rule) is centralized in `laneTrackEvents`:
+  //   - a COLLAPSED parent paints its whole-subtree aggregate (the roll-up)
+  //   - an EXPANDED parent paints ONLY its own resource's events; each child
+  //     row then renders its OWN slice below it (recursing, so a child that owns
+  //     collapsed children of its own paints ITS aggregate).
+  // So no event lands on two visible rows, and a resource that owns events in
+  // the window can't render an empty track. This holds at every depth — a
+  // CronJob member of an app group expands into its Job/Pod rows, each carrying
+  // its own events instead of the ancestor swallowing them all.
+  //
+  // `keyPrefix` keeps a pinned copy's React key distinct from its original;
+  // `depth` (0 = top level) drives the label style and child indentation.
+  const renderLane = (lane: ResourceLane, keyPrefix = '', depth = 0, isLast = false): React.ReactNode => {
+    const isExpanded = expandedLanes.has(lane.id)
+    const hasChildren = !!lane.children?.length
+    // When expanded, a parent renders only children that MOVE in the visible lens
+    // — a child whose whole subtree sits outside the window would otherwise paint
+    // an empty row. Same rule top-level lanes already follow (visibleLanes above).
+    // Exemptions: a pinned child (its row is its home) and a child the USER opened
+    // (don't yank a row they deliberately expanded). Auto-expanded children are NOT
+    // exempt, so a stale auto-open falls away cleanly as the lens moves off it. The
+    // chevron + count key off this visible set so "N resources" and "+N" match the
+    // rows actually on screen; the collapsed roll-up already paints in-window only.
+    const visibleChildren = hasChildren
+      ? lane.children!.filter((child) =>
+          isChildVisibleInWindow(child, visibleTimeRange.start, visibleTimeRange.end, {
+            pinned: pinnedIdSet.has(child.id),
+            userExpanded: userLaneOverrides.get(child.id) === true,
+          }),
+        )
+      : []
+    const hasVisibleChildren = visibleChildren.length > 0
+    const trackEvents = laneTrackEvents(lane, isExpanded)
+    const ownResource = { kind: lane.kind, namespace: lane.namespace, name: lane.name }
+    // Show the group chip only when this lane collides with another visible lane
+    // of a different API group (same kind+ns+name). The kind badge's title always
+    // carries the full group (non-intrusive), collision or not.
+    const showGroupChip = !lane.isAppGroup && !!lane.group && collidingKeys.has(laneCollisionKey(lane))
+    // Tooltip carries the group only for CRD groups — built-in resources stay
+    // visually untouched (the group appears nowhere for them, not even on hover).
+    const kindBadgeTitle = !lane.isAppGroup && groupQualifiesLaneId(lane.group) ? `${displayKind(lane.kind)} · ${lane.group}` : undefined
+    const track = (heightClass: string, small?: boolean) => (
+      <div className={clsx('flex-1 relative mr-8', heightClass)}>
+        <LaneBackdrop gridXs={gridXs} />
+        <HealthBarTrack
+          events={trackEvents}
+          ownResource={ownResource}
+          // A collapsed parent/app-group row shows an AGGREGATE: sweep its
+          // members' state families instead of blending latest-event-wins.
+          aggregateLane={hasVisibleChildren && !isExpanded ? lane : undefined}
+          startTime={visibleTimeRange.start}
+          windowMs={visibleTimeRange.windowMs}
+          now={visibleTimeRange.now}
+        />
+        <LaneEventMarkers
+          events={trackEvents}
+          timeToX={timeToX}
+          selectedEvent={selectedEvent}
+          onSelectCluster={openCluster}
+          small={small}
+        />
+      </div>
+    )
+    const childRows = isExpanded && hasVisibleChildren && (
+      <div
+        className="bg-theme-surface/30"
+        style={{ animation: 'swimlane-expand 250ms ease-out both' }}
+      >
+        {visibleChildren.map((child, idx) =>
+          renderLane(child, keyPrefix, depth + 1, idx === visibleChildren.length - 1),
+        )}
+      </div>
+    )
+
+    if (depth === 0) {
+      return (
+        <div key={keyPrefix + lane.id}>
+          {/* Parent lane */}
+          <div className="border-b-subtle">
+            <div className="flex">
+              {/* Lane label */}
+              <div className="w-80 shrink-0 border-r border-theme-border px-3 py-2 flex items-center gap-1 group/pin">
+                {/* Expand/collapse button */}
+                {hasVisibleChildren ? (
+                  <button
+                    onClick={() => toggleLane(lane.id)}
+                    className="p-0.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+                  >
+                    <ChevronRight className={clsx(
+                      'w-3 h-3 transition-transform',
+                      isExpanded && 'rotate-90'
+                    )} />
+                  </button>
+                ) : (
+                  <div className="w-4" />
+                )}
+                {lane.isAppGroup ? (
+                  <AppGroupLaneLabel lane={lane} memberCount={visibleChildren.length} onToggle={() => toggleLane(lane.id)} onAppClick={onAppClick} />
+                ) : (
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <Badge kind={lane.kind} size="sm" title={kindBadgeTitle}>{displayKind(lane.kind)}</Badge>
+                      {showGroupChip && <GroupChip group={lane.group!} />}
+                      {hasVisibleChildren && (
+                        <span className="text-xs font-semibold text-theme-text-tertiary">
+                          +{visibleChildren.length}
+                        </span>
+                      )}
+                      <LaneWarnChip events={lane.allEventsSorted || []} />
+                    </div>
+                    {/* Only the NAME text links to the resource; the surrounding
+                        label (badge, namespace, whitespace) is inert. */}
+                    <div className="text-sm font-semibold font-mono break-words mt-0.5">
+                      <span
+                        onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
+                        className="text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer"
+                      >
+                        {lane.name}
+                      </span>
+                    </div>
+                    <div className="text-xs text-theme-text-tertiary">{lane.namespace}</div>
+                  </div>
+                )}
+                {/* Pin toggle. Real lanes pin the resource; app-group headers pin
+                    the app (members re-resolve live). Navigation is scoped to the
+                    name text, so the pin sits inert alongside it. */}
+                {renderPinButton(lane)}
+              </div>
+              {track('h-14')}
+            </div>
+          </div>
+          {childRows}
+        </div>
+      )
+    }
+
+    // Depth >= 1: an indented tree row. A row with its own children carries an
+    // expand chevron; the connector's trunk stops half-way only on the last leaf.
+    return (
+      <div key={keyPrefix + lane.id} className={clsx('border-b-subtle', isLast && !(isExpanded && hasVisibleChildren) && 'border-b-0')}>
+        <div className="flex">
+          <ChildLaneLabel
+            kind={lane.kind}
+            group={lane.group}
+            showGroupChip={showGroupChip}
+            kindTitle={kindBadgeTitle}
+            name={lane.name}
+            isLast={isLast && !(isExpanded && hasVisibleChildren)}
+            depth={depth}
+            hasChildren={hasVisibleChildren}
+            expanded={isExpanded}
+            onToggle={hasVisibleChildren ? () => toggleLane(lane.id) : undefined}
+            onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
+            pinButton={renderPinButton(lane)}
+            title={
+              lane.nestedByContract ? `${lane.name} · linked by naming`
+              : lane.matchedByName ? `${lane.name} · matched by name`
+              : undefined
+            }
+          />
+          {track('h-12', true)}
+        </div>
+        {childRows}
+      </div>
+    )
+  }
+
+  // Empty-state block — shared by the no-rows-at-all case and the
+  // pinned-rows-but-nothing-else case (rendered below the pinned section).
+  const emptyState = (
+    <div className="flex flex-col items-center justify-center h-64 text-theme-text-tertiary">
+      <AlertCircle className="w-12 h-12 mb-4 opacity-50" />
+      {windowInsideGap(viewWindow, gaps) ? (
+        <>
+          {/* View window fully inside a recording gap: empty ≠ quiet. */}
+          <p className="text-lg">Nothing was recorded here — the connector was offline</p>
+          <p className="text-sm mt-1">Pan or zoom out — or drag the window on the strip above — to a recorded period</p>
+        </>
+      ) : hasFilteredEvents ? (
+        <>
+          <p className="text-lg">No matching events</p>
+          <p className="text-sm mt-1">
+            {describeActiveFilters({ search: searchTerm, activityFilter, kindFilter, showDeleted }) || 'Try adjusting your filters'}
+          </p>
+          {namespaces && namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in: {namespaces.length === 1 ? namespaces[0] : `${namespaces.length} namespaces`}</p>}
+          <button
+            type="button"
+            onClick={clearAllFilters}
+            className="mt-4 flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-lg text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors"
+          >
+            <X className="w-3.5 h-3.5" />
+            Clear filters
+          </button>
+        </>
+      ) : viewWindow && events.length > 0 ? (
+        <>
+          {/* Controlled window over loaded data: quiet ≠ waiting-for-live. */}
+          <p className="text-lg">No events in this window</p>
+          <p className="text-sm mt-1">Pan or zoom out — or drag the window on the strip above — to a busier period</p>
+        </>
+      ) : (
+        <>
+          <p className="text-lg">No events yet</p>
+          <p className="text-sm mt-1">Events will appear here as resources change</p>
+          {namespaces && namespaces.length > 0 && (
+            <p className="text-sm mt-2 text-theme-text-secondary">
+              Filtering by namespace: <span className="font-medium text-theme-text-primary">{namespaces.length === 1 ? namespaces[0] : `${namespaces.length} namespaces`}</span>
+            </p>
+          )}
+          {hasLimitedAccess && (
+            <p className="flex items-center gap-1 text-sm mt-2 text-amber-400/80">
+              <Shield className="w-3.5 h-3.5" />
+              Some resource types are not monitored due to RBAC restrictions
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  )
+
   return (
     <div className="flex flex-col h-full w-full">
       {/* Toolbar with search and zoom */}
-      <div className="border-b border-theme-border bg-theme-surface/30 overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2">
-          <div className="flex items-center gap-4">
-            {/* Search */}
-            <SearchBox value={searchTerm} onChange={setSearchTerm} scope="timeline" shortcutId="swimlane-search" className="w-80" />
-            {/* Zoom controls */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleZoomIn}
-                className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-                title="Zoom in (Ctrl+scroll)"
-              >
-                <ZoomIn className="w-4 h-4" />
-              </button>
-              <button
-                onClick={handleZoomOut}
-                className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-                title="Zoom out (Ctrl+scroll)"
-              >
-                <ZoomOut className="w-4 h-4" />
-              </button>
-              <span className="text-xs text-theme-text-tertiary">
-                {zoom < 1 ? `${Math.round(zoom * 60)}m` : zoom >= 24 ? `${Math.round(zoom / 24)}d` : `${zoom}h`} window
-              </span>
-              {panOffset > 0 && (
-                <button
-                  onClick={() => setPanOffset(0)}
-                  className="px-2 py-1 text-xs text-accent-text hover:underline hover:bg-theme-elevated rounded"
-                  title="Jump to current time"
-                >
-                  → Now
-                </button>
-              )}
-            </div>
-            {/* Sort by latest */}
+      {/* No overflow-hidden here: the toolbar's kinds/view-options popovers must overhang. */}
+      <div className="border-b border-theme-border bg-theme-surface/30 relative z-40">
+        <TimelineToolbar
+          search={searchTerm}
+          onSearchChange={setSearchTerm}
+          searchShortcutId="swimlane-search"
+          activityFilter={activityFilter}
+          onActivityFilterChange={setActivityFilter}
+          events={events}
+          showDeleted={showDeleted}
+          onShowDeletedChange={setShowDeleted}
+          kindFilter={kindFilter}
+          onKindFilterChange={setKindFilter}
+          kindOptions={kindOptions}
+          counts={effectivePinnedOnly
+            ? { resources: pinnedLaneRows.length, events: pinnedEventsInWindow }
+            : { resources: visibleLanes.length + pinnedLaneRows.length, events: eventsInWindow.length }}
+          pinnedCount={pinnedLaneRows.length}
+          pinnedOnly={effectivePinnedOnly}
+          onPinnedOnlyChange={setPinnedOnly}
+          countsFiltered={!!searchTerm || activityFilter.length > 0 || kindFilter.length > 0}
+          view={viewMode}
+          onViewChange={onViewModeChange}
+          onRefresh={onRefresh}
+          viewOptions={{
+            sort: { value: sort, onChange: setSort },
+            grouping: { value: grouping, onChange: setGrouping },
+          }}
+        />
+        {/* Swimlane strip controls (local mode only): zoom + "→ Now" sit next to
+            the timeline strip. Retained/controlled mode owns the window through
+            the scrubber (lens-width chip = zoom, live/paused chip = "→ Now"), so
+            this whole row is hidden there. */}
+        {!controlled && (
+          <div className="flex items-center gap-2 px-4 py-1.5">
             <button
-              onClick={handleRefreshSort}
-              className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-              title="Re-sort by importance"
+              onClick={handleZoomIn}
+              className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+              title="Zoom in (Ctrl+scroll)"
             >
-              <ArrowUpDown className="w-3.5 h-3.5" />
-              Sort
+              <ZoomIn className="w-4 h-4" />
             </button>
-          </div>
-          <div className="flex items-center gap-4">
+            <button
+              onClick={handleZoomOut}
+              className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+              title="Zoom out (Ctrl+scroll)"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
             <span className="text-xs text-theme-text-tertiary">
-              {pluralize(visibleLanes.length, 'resource')} · {pluralize(filteredEvents.length, 'event')}
-              {searchTerm && ` (filtered)`}
+              {windowLabel} window
             </span>
-            {/* Group by app toggle */}
-            <Tooltip content="Group related resources (Deployment, Service, Pod) by their app.kubernetes.io/name label" position="bottom">
-              <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary">
-                <input
-                  type="checkbox"
-                  checked={groupByApp}
-                  onChange={(e) => setGroupByApp(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-accent focus:ring-accent focus:ring-offset-0"
-                />
-                <span className="border-b border-dotted border-theme-text-tertiary">Group by app</span>
-              </label>
-            </Tooltip>
-            <Tooltip content="Show resources Radar observed being deleted, including Pods that no longer exist" position="bottom">
-              <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary">
-                <input
-                  type="checkbox"
-                  checked={showDeleted}
-                  onChange={(e) => setShowDeleted(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-accent focus:ring-accent focus:ring-offset-0"
-                />
-                <Trash2 className="w-3.5 h-3.5" />
-                <span className="border-b border-dotted border-theme-text-tertiary">Deleted</span>
-              </label>
-            </Tooltip>
-            {/* View toggle */}
-            {onViewModeChange && (
-              <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">
-                <button
-                  onClick={() => onViewModeChange('list')}
-                  className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors ${
-                    viewMode === 'list' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-                  }`}
-                >
-                  <List className="w-3.5 h-3.5" />
-                  List
-                </button>
-                <button
-                  onClick={() => onViewModeChange('swimlane')}
-                  className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors ${
-                    viewMode === 'swimlane' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-                  }`}
-                >
-                  <GanttChart className="w-3.5 h-3.5" />
-                  Timeline
-                </button>
-              </div>
+            {showJumpToNow && (
+              <button
+                onClick={handleJumpToNow}
+                className="px-2 py-1 text-xs text-accent-text hover:underline hover:bg-theme-elevated rounded"
+                title="Jump to current time"
+              >
+                → Now
+              </button>
             )}
           </div>
-        </div>
-        {/* Legend */}
-        <div className="flex flex-wrap items-center gap-3 px-4 pb-2 text-xs text-theme-text-secondary">
-          <LegendItem color="bg-green-500" label="created" description="Resource was created" />
-          <LegendItem color="bg-blue-500" label="modified" description="Resource was updated/changed" />
-          <LegendItem color="bg-red-500" label="deleted" description="Resource was removed" />
-          <LegendItem color="bg-amber-500" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
-          <LegendItem color="bg-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" dashed />
-          <span className="w-px h-3 bg-theme-border-light mx-1" />
-          <HealthBarLegendItem color="bg-green-500/60 dark:bg-green-600/60" label="healthy" description="Resource is fully operational" />
-          <HealthBarLegendItem color="bg-blue-500/60 dark:bg-blue-500/60" label="rolling" description="Expected degradation during deployment rollout" />
-          <HealthBarLegendItem color="bg-amber-500/60 dark:bg-[#b8861e]" label="degraded" description="Unexpected partial availability" />
-          <HealthBarLegendItem color="bg-red-500/60 dark:bg-red-500/60" label="unhealthy" description="Resource is failing or not ready" />
-          <HealthBarLegendItem color="bg-sky-500/60 dark:bg-sky-500/60" label="idle" description="Intentionally off/resting (completed, suspended, scaled to zero)" />
+        )}
+        {/* Legend — two labelled groups: point-in-time event markers vs. the
+            lane-health background bars. Captions keep the two vocabularies from
+            reading as one undifferentiated row. */}
+        {/* px-3 aligns the EVENTS caption with the RESOURCE column caption below. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2 text-xs text-theme-text-secondary">
+          <span className="text-[10px] uppercase leading-none tracking-[0.09em] text-theme-text-tertiary font-bold">Events</span>
+          <MarkerLegendItem shape="triangle-up" colorClass="text-green-600 dark:text-green-400" label="created" description="Resource was created" />
+          <MarkerLegendItem shape="circle" colorClass="text-blue-600 dark:text-blue-400" label="modified" description="Resource was updated/changed" />
+          <MarkerLegendItem shape="triangle-down" colorClass="text-red-600 dark:text-red-400" label="deleted" description="Resource was removed" />
+          <MarkerLegendItem shape="diamond" colorClass="text-amber-500 dark:text-amber-400" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
+          <MarkerLegendItem shape="ring" colorClass="text-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" />
+          <ClusterLegendItem description="Nearby events collapsed into one pill" />
+          <span className="w-px h-4 bg-theme-border mx-0.5" />
+          <span className="text-[10px] uppercase leading-none tracking-[0.09em] text-theme-text-tertiary font-bold">Health</span>
+          <HealthLegendItem color={HEALTH_STRIP_COLORS.healthy} label="healthy" description="Resource is fully operational" />
+          <HealthLegendItem color={HEALTH_STRIP_COLORS.rolling} label="rolling" description="Expected degradation during deployment rollout" />
+          <HealthLegendItem color={HEALTH_STRIP_COLORS.degraded} label="degraded" description="Unexpected partial availability" />
+          <HealthLegendItem color={HEALTH_STRIP_COLORS.unhealthy} label="unhealthy" description="Resource is failing or not ready" />
+          <HealthLegendItem color={HEALTH_STRIP_COLORS.idle} label="idle" description="Intentionally off/resting (completed, suspended, scaled to zero)" />
+          <HealthLegendItem color="bg-gray-400/50" label="unknown" description="No health signal observed yet (e.g. first event pending, node stopped reporting)" />
+          <HealthLegendItem label="mixed" swatchStyle={MIXED_HEALTH_STRIP_STYLE} description="members disagree — some OK, some degraded/rolling; expand or hover for who" />
         </div>
       </div>
 
@@ -583,14 +1676,13 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           ref={containerRef}
           className="min-w-full"
           onMouseDown={handleMouseDown}
-          onWheel={handleWheel}
           style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
         >
           {/* Time axis header */}
           <div className="sticky top-0 z-30 bg-theme-surface border-b border-theme-border">
             <div className="flex">
-              <div className="w-80 shrink-0 border-r border-theme-border px-3 py-2">
-                <span className="text-xs font-medium text-theme-text-secondary">Resource</span>
+              <div className="w-80 shrink-0 border-r border-theme-border px-3 py-2 flex items-center">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Resource</span>
               </div>
               <div className="flex-1 relative h-8 mr-8">
                 {axisTicks.map((tick) => {
@@ -621,40 +1713,41 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     </div>
                   )
                 })()}
+                {/* Extend affordances at the loaded-range edges. Stop propagation so
+                    clicking doesn't also start a pan drag on the container. */}
+                {atPastEdge && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); onExtendRequest?.('past') }}
+                    className="absolute left-0 top-1/2 z-30 flex -translate-y-1/2 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+                    title="Extend the loaded range further into the past"
+                  >
+                    <ChevronLeft className="h-3 w-3" />
+                    End of loaded range — extend
+                  </button>
+                )}
+                {atFutureEdge && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); onExtendRequest?.('future') }}
+                    className="absolute right-0 top-1/2 z-30 flex -translate-y-1/2 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+                    title="Extend the loaded range further toward now"
+                  >
+                    End of loaded range — extend
+                    <ChevronRight className="h-3 w-3" />
+                  </button>
+                )}
               </div>
             </div>
           </div>
 
-          {/* Swimlanes or empty state */}
-          {visibleLanes.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-theme-text-tertiary">
-              <AlertCircle className="w-12 h-12 mb-4 opacity-50" />
-              {hasFilteredEvents ? (
-                <>
-                  <p className="text-lg">No matching events</p>
-                  <p className="text-sm mt-1">
-                    {searchTerm ? `No results for "${searchTerm}"` : 'Try adjusting your filters'}
-                  </p>
-                  {namespaces && namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in: {namespaces.length === 1 ? namespaces[0] : `${namespaces.length} namespaces`}</p>}
-                </>
-              ) : (
-                <>
-                  <p className="text-lg">No events yet</p>
-                  <p className="text-sm mt-1">Events will appear here as resources change</p>
-                  {namespaces && namespaces.length > 0 && (
-                    <p className="text-sm mt-2 text-theme-text-secondary">
-                      Filtering by namespace: <span className="font-medium text-theme-text-primary">{namespaces.length === 1 ? namespaces[0] : `${namespaces.length} namespaces`}</span>
-                    </p>
-                  )}
-                  {hasLimitedAccess && (
-                    <p className="flex items-center gap-1 text-sm mt-2 text-amber-400/80">
-                      <Shield className="w-3.5 h-3.5" />
-                      Some resource types are not monitored due to RBAC restrictions
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
+          {/* Pinned section + swimlanes, or empty state. Pins always render above
+              everything; the empty-state message still shows below them when the
+              non-pinned window is quiet. */}
+          {pinnedLaneRows.length === 0 && visibleLanes.length === 0 ? (
+            emptyState
           ) : (
           <div className="relative">
             {/* "Now" line through swimlanes */}
@@ -668,268 +1761,341 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 />
               )
             })()}
-            {visibleLanes.map((lane) => {
-              const isExpanded = expandedLanes.has(lane.id)
-              const hasChildren = lane.children && lane.children.length > 0
-
+            {/* Recording-gap bands behind the lanes — same hatch language as the
+                strip, inert, captioned when wide enough. */}
+            {visibleGaps.map((g, i) => {
+              const fromFrac = Math.max(0, Math.min(1, timeToX(g.fromMs) / 100))
+              const toFrac = Math.max(0, Math.min(1, timeToX(g.toMs) / 100))
+              if (toFrac <= fromFrac) return null
+              const widthPx = trackPx * (toFrac - fromFrac)
               return (
-                <div key={lane.id}>
-                  {/* Parent lane */}
-                  <div className="border-b-subtle">
-                    <div className="flex">
-                      {/* Lane label */}
-                      <div className="w-80 shrink-0 border-r border-theme-border px-3 py-2 flex items-center gap-1">
-                        {/* Expand/collapse button */}
-                        {hasChildren ? (
-                          <button
-                            onClick={() => toggleLane(lane.id)}
-                            className="p-0.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-                          >
-                            <ChevronRight className={clsx(
-                              'w-3 h-3 transition-transform',
-                              isExpanded && 'rotate-90'
-                            )} />
-                          </button>
-                        ) : (
-                          <div className="w-4" />
-                        )}
-                        <div
-                          className="flex-1 min-w-0 cursor-pointer hover:bg-theme-surface/30 rounded px-1 -mx-1 group"
-                          onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
-                        >
-                          <div className="flex items-center gap-1">
-                            <span className={clsx(
-                              'text-xs px-1 py-0.5 rounded',
-                              lane.isWorkload ? 'bg-accent-muted text-accent-text' : 'bg-theme-elevated text-theme-text-secondary'
-                            )}>
-                              {displayKind(lane.kind)}
-                            </span>
-                            {hasChildren && (
-                              <span className="text-xs text-theme-text-tertiary">
-                                +{lane.children!.length}
-                              </span>
-                            )}
-                            {/* Issue count badge */}
-                            {(() => {
-                              const allEvents = lane.allEventsSorted || []
-                              const issueCount = allEvents.filter(e => isCriticalIssue(e)).length
-                              if (issueCount === 0) return null
-                              return (
-                                <Tooltip content={`${pluralize(issueCount, 'critical issue')} (OOMKilled, CrashLoopBackOff, etc.)`} position="top">
-                                  <span className="flex items-center gap-0.5 text-xs px-1 py-0.5 rounded bg-red-500/15 text-red-600 dark:text-red-300">
-                                    <AlertTriangle className="w-3 h-3" />
-                                    {issueCount}
-                                  </span>
-                                </Tooltip>
-                              )
-                            })()}
-                          </div>
-                          <div className="text-sm text-theme-text-primary break-words group-hover:text-accent-text group-hover:underline cursor-pointer">
-                            {lane.name}
-                          </div>
-                          <div className="text-xs text-theme-text-tertiary">{lane.namespace}</div>
-                        </div>
-                      </div>
-
-                      {/* Events track - ALWAYS shows all events (summary view) */}
-                      <div className="flex-1 relative h-12 mr-8">
-                        {/* Health bar background layer */}
-                        <HealthBarTrack
-                          events={lane.allEventsSorted || []}
-                          startTime={visibleTimeRange.start}
-                          windowMs={visibleTimeRange.windowMs}
-                          now={visibleTimeRange.now}
-                        />
-                        {/* Event markers layer (on top of health bars) */}
-                        <div className="absolute inset-0 z-10">
-                          {/* All events combined: own + children, pre-sorted in memo so important events render on top */}
-                          {(lane.allEventsSorted || []).map((event, eventIdx) => {
-                              const x = timeToX(new Date(event.timestamp).getTime())
-                              if (x < 0 || x > 100) return null
-                              return (
-                                <EventMarker
-                                  key={`summary-${event.id}-${eventIdx}`}
-                                  event={event}
-                                  x={x}
-                                  selected={selectedEvent?.id === event.id}
-                                  onClick={() => setSelectedEvent(selectedEvent?.id === event.id ? null : event)}
-                                />
-                              )
-                            })}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Child lanes (when expanded) - includes parent as first row */}
-                  {isExpanded && hasChildren && (
-                    <div
-                      className="border-l-2 border-accent/40 ml-3 bg-theme-surface/30"
-                      style={{ animation: 'swimlane-expand 250ms ease-out both' }}
-                    >
-                      {/* Parent's own events as first row (only if it has events) */}
-                      {lane.events.length > 0 && (
-                        <div className="border-b-subtle">
-                          <div className="flex">
-                            <div
-                              className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
-                              onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
-                            >
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs px-1 py-0.5 rounded bg-accent-muted text-accent-text">
-                                    {displayKind(lane.kind)}
-                                  </span>
-                                </div>
-                                <div className="text-sm text-theme-text-secondary break-words group-hover:text-accent-text group-hover:underline cursor-pointer">
-                                  {lane.name}
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex-1 relative h-10 mr-8">
-                              {/* Health bar background layer */}
-                              <HealthBarTrack
-                                events={lane.events}
-                                startTime={visibleTimeRange.start}
-                                windowMs={visibleTimeRange.windowMs}
-                                now={visibleTimeRange.now}
-                              />
-                              {/* Event markers layer */}
-                              <div className="absolute inset-0 z-10">
-                                {lane.events.map((event, eventIdx) => {
-                                  const x = timeToX(new Date(event.timestamp).getTime())
-                                  if (x < 0 || x > 100) return null
-                                  return (
-                                    <EventMarker
-                                      key={`expanded-${event.id}-${eventIdx}`}
-                                      event={event}
-                                      x={x}
-                                      selected={selectedEvent?.id === event.id}
-                                      onClick={() => setSelectedEvent(selectedEvent?.id === event.id ? null : event)}
-                                      small
-                                    />
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      {/* Children */}
-                      {lane.children!.map((child, idx) => (
-                        <div key={child.id} className={clsx(
-                          'border-b-subtle',
-                          idx === lane.children!.length - 1 && 'border-b-0'
-                        )}>
-                          <div className="flex">
-                            {/* Child lane label - indented */}
-                            <div
-                              className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
-                              onClick={() => handleLaneOpen(child.kind, child.namespace, child.name, child.group)}
-                            >
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs px-1 py-0.5 rounded bg-theme-elevated/50 text-theme-text-secondary">
-                                    {displayKind(child.kind)}
-                                  </span>
-                                </div>
-                                <div className="text-sm text-theme-text-secondary break-words group-hover:text-accent-text group-hover:underline cursor-pointer">
-                                  {child.name}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Child events track */}
-                            <div className="flex-1 relative h-10 mr-8">
-                              {/* Health bar background layer */}
-                              <HealthBarTrack
-                                events={child.events}
-                                startTime={visibleTimeRange.start}
-                                windowMs={visibleTimeRange.windowMs}
-                                now={visibleTimeRange.now}
-                              />
-                              {/* Event markers layer */}
-                              <div className="absolute inset-0 z-10">
-                                {child.events.map((event, eventIdx) => {
-                                  const x = timeToX(new Date(event.timestamp).getTime())
-                                  if (x < 0 || x > 100) return null
-                                  return (
-                                    <EventMarker
-                                      key={`${child.id}-${event.id}-${eventIdx}`}
-                                      event={event}
-                                      x={x}
-                                      selected={selectedEvent?.id === event.id}
-                                      onClick={() => setSelectedEvent(selectedEvent?.id === event.id ? null : event)}
-                                      small
-                                    />
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                <div
+                  key={`gap-${i}`}
+                  className="pointer-events-none absolute top-0 bottom-0 z-0 flex items-center justify-center overflow-hidden"
+                  style={{
+                    left: `calc(${LANE_LABEL_PX}px + (100% - ${LANE_TRACK_INSET_PX}px) * ${fromFrac})`,
+                    width: `calc((100% - ${LANE_TRACK_INSET_PX}px) * ${toFrac - fromFrac})`,
+                    background:
+                      'repeating-linear-gradient(45deg, transparent 0, transparent 5px, var(--border-default) 5px, var(--border-default) 6px)',
+                    opacity: 0.5,
+                  }}
+                  title="No data recorded — connector was offline"
+                  data-testid="swimlane-gap"
+                >
+                  {widthPx > GAP_LABEL_MIN_PX && (
+                    <span className="whitespace-nowrap rounded bg-theme-surface/70 px-1 text-[10px] uppercase tracking-wide text-theme-text-tertiary">
+                      connector offline
+                    </span>
                   )}
                 </div>
               )
             })}
+            {/* PINNED — stationary rows above everything, in pin order, never
+                re-ranked by interestingness. Same time axis as the lanes below. */}
+            {pinnedLaneRows.length > 0 && (
+              <div data-testid="timeline-pinned-section">
+                <div className="flex">
+                  <div className="w-80 shrink-0 border-r border-theme-border px-3 py-1.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Pinned</span>
+                  </div>
+                  <div className="flex-1" />
+                </div>
+                {pinnedLaneRows.map((lane) => renderLane(lane, 'pinned:'))}
+                {/* Subtle divider separating the pinned vantage from the ranked lanes. */}
+                <div className="border-b border-theme-border" />
+              </div>
+            )}
+            {effectivePinnedOnly
+              ? null
+              : visibleLanes.length === 0
+                // Pinned rows carrying in-window events ARE the content — the
+                // regular section below is just the end of the list, and a list
+                // doesn't caption its own end. The full empty states render only
+                // when the whole canvas would otherwise be blank.
+                ? (pinnedEventsInWindow > 0 ? null : emptyState)
+                : visibleLanes.map((lane) => renderLane(lane))}
           </div>
           )}
         </div>
       </div>
 
-      {/* Event detail panel */}
-      {selectedEvent && (
-        <EventDetailPanel event={selectedEvent} onClose={() => setSelectedEvent(null)} onResourceClick={onResourceClick} />
+      {/* Event detail drawer — single event, or a cluster's full member list. */}
+      {drawer && (
+        <EventDetailPanel
+          events={drawer.events}
+          selectedId={drawer.selectedId}
+          onSelectId={(id) => setDrawer((prev) => (prev ? { ...prev, selectedId: id } : prev))}
+          onClose={closeDrawer}
+          onResourceClick={onResourceClick}
+        />
       )}
     </div>
   )
 }
 
-// Legend item with hover tooltip
-interface LegendItemProps {
-  color: string
-  label: string
-  description: string
-  dashed?: boolean
+// Health-strip segment colors (solid, pinned to the lane's bottom edge).
+const HEALTH_STRIP_COLORS: Record<string, string> = {
+  healthy: 'bg-green-500',
+  rolling: 'bg-blue-500',
+  degraded: 'bg-amber-500 dark:bg-[#b8861e]',
+  unhealthy: 'bg-red-500',
+  neutral: 'bg-cyan-400',
+  idle: 'bg-cyan-400',
 }
 
-function LegendItem({ color, label, description, dashed }: LegendItemProps) {
+function getHealthStripColor(health: string): string {
+  return HEALTH_STRIP_COLORS[health] ?? 'bg-gray-400/50'
+}
+
+// Legend glyph item (event markers) with hover tooltip.
+function MarkerLegendItem({ shape, colorClass, label, description }: { shape: MarkerShape; colorClass: string; label: string; description: string }) {
   return (
     <Tooltip content={description} position="top">
-      <span className="flex items-center gap-1 cursor-help">
+      <span className="flex items-center gap-1.5 cursor-help">
+        <span className="inline-flex w-3 h-3 items-center justify-center">
+          <MarkerGlyph shape={shape} size={11} className={colorClass} />
+        </span>
+        {/* leading-none: the default line-box's descender space drags the label's
+            optical center below the glyph's — hug the text so centers agree. */}
+        <span className="leading-none">{label}</span>
+      </span>
+    </Tooltip>
+  )
+}
+
+// Legend sample for the "×N clustered" pill.
+function ClusterLegendItem({ description }: { description: string }) {
+  return (
+    <Tooltip content={description} position="top">
+      <span className="flex items-center gap-1.5 cursor-help">
+        <span className="inline-flex h-4 items-center gap-1 rounded-full border border-theme-border bg-theme-surface px-1.5">
+          <MarkerGlyph shape="circle" size={8} className="text-blue-600 dark:text-blue-400" />
+          <span className="text-[11px] font-semibold leading-none tabular-nums text-theme-text-primary">×5</span>
+        </span>
+        <span className="leading-none">clustered</span>
+      </span>
+    </Tooltip>
+  )
+}
+
+// Health strip legend item - shows a bar swatch.
+function HealthLegendItem({ color, label, description, swatchStyle }: { color?: string; label: string; description: string; swatchStyle?: React.CSSProperties }) {
+  return (
+    <Tooltip content={description} position="top">
+      <span className="flex items-center gap-1.5 cursor-help">
+        <span className={clsx('h-[7px] rounded-[2px]', color)} style={{ width: '18px', ...swatchStyle }} />
+        <span className="leading-none">{label}</span>
+      </span>
+    </Tooltip>
+  )
+}
+
+// Red warning-count chip (⚠ N) for critical issues in a lane.
+function LaneWarnChip({ events }: { events: TimelineEvent[] }) {
+  const issueCount = events.filter((e) => isCriticalIssue(e)).length
+  if (issueCount === 0) return null
+  return (
+    <Tooltip content={`${pluralize(issueCount, 'critical issue')} (OOMKilled, CrashLoopBackOff, etc.)`} position="top">
+      <span className="flex items-center gap-0.5 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-400">
+        <AlertTriangle className="w-3 h-3" />
+        {issueCount}
+      </span>
+    </Tooltip>
+  )
+}
+
+// Indented child lane label with an L-shaped tree connector. `depth` (>=1) steps
+// the indent + connector one rung right per level so a grandchild (a Pod under a
+// CronJob member) reads as nested, not sibling. When the child owns a subtree of
+// its own it carries an expand chevron so it can be drilled into. Only the name
+// text navigates to the resource; the chevron toggles; the rest of the row is inert.
+const CHILD_INDENT_BASE_PX = 44
+const CHILD_CONNECTOR_BASE_PX = 26
+const CHILD_INDENT_STEP_PX = 22
+// Disambiguating group chip — the ONLY place a lane's API group surfaces
+// visually, shown solely when the lane collides with another visible lane of a
+// different group (same kind+ns+name; CAPI vs CNPG `Cluster`). Quiet styling so
+// it reads as a subtle qualifier next to the kind badge, not a status pill.
+function GroupChip({ group }: { group: string }) {
+  return (
+    <span
+      className="shrink-0 rounded bg-theme-hover px-1 py-px text-[10px] font-medium text-theme-text-tertiary ring-1 ring-inset ring-theme-border"
+      title={`API group ${group}`}
+    >
+      {group}
+    </span>
+  )
+}
+
+function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, isLast, onClick, pinButton, title, depth = 1, hasChildren, expanded, onToggle }: { kind: string; group?: string; showGroupChip?: boolean; kindTitle?: string; name: string; isLast: boolean; onClick: () => void; pinButton?: React.ReactNode; title?: string; depth?: number; hasChildren?: boolean; expanded?: boolean; onToggle?: () => void }) {
+  const indentPx = CHILD_INDENT_BASE_PX + (depth - 1) * CHILD_INDENT_STEP_PX
+  const connectorPx = CHILD_CONNECTOR_BASE_PX + (depth - 1) * CHILD_INDENT_STEP_PX
+  return (
+    <div
+      // w-80 matches the top-level label column exactly — a narrower child width
+      // left the label column's right border ragged across depths.
+      className="relative w-80 shrink-0 border-r border-theme-border/50 pr-3 flex items-center gap-1 group/pin bg-theme-surface/40"
+      style={{ paddingLeft: indentPx }}
+    >
+      {/* Vertical trunk — stops at the row's vertical center on the last child. */}
+      <span className={clsx('absolute top-0 w-px bg-theme-border', isLast ? 'h-1/2' : 'h-full')} style={{ left: connectorPx }} />
+      {/* Horizontal branch into the row. */}
+      <span className="absolute top-1/2 h-px bg-theme-border" style={{ left: connectorPx, width: 11 }} />
+      {hasChildren && onToggle && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggle() }}
+          className="absolute top-1/2 -translate-y-1/2 z-10 p-0.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+          style={{ left: connectorPx + 12 }}
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+        >
+          <ChevronRight className={clsx('w-3 h-3 transition-transform', expanded && 'rotate-90')} />
+        </button>
+      )}
+      <div className="flex-1 min-w-0 flex flex-col justify-center gap-0.5">
+        {/* Quiet neutral pill, per the 1b mock: parents carry the colored kind
+            badge, children stay grey so the tree reads parent-loud/child-quiet. */}
+        <div className="flex items-center gap-1">
+          <span className="self-start rounded-md bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary" title={kindTitle}>{displayKind(kind)}</span>
+          {showGroupChip && group && <GroupChip group={group} />}
+        </div>
+        {/* Only the NAME text links to the resource; the rest of the row is inert. */}
+        <div className="text-[13px] font-mono break-words" title={title}>
+          <span
+            onClick={onClick}
+            className="text-theme-text-secondary hover:text-accent-text hover:underline cursor-pointer"
+          >
+            {name}
+          </span>
+        </div>
+      </div>
+      {pinButton}
+    </div>
+  )
+}
+
+// Pin toggle on a lane label. stopPropagation so it doesn't trigger the label's
+// navigate-on-click. Filled + always visible when pinned; hover-reveal otherwise.
+function PinButton({ pinned, onToggle, alwaysVisible, isAppGroup }: { pinned: boolean; onToggle: () => void; alwaysVisible?: boolean; isAppGroup?: boolean }) {
+  const title = isAppGroup
+    ? (pinned ? 'Unpin app' : 'Pin app — keep all its rows visible while you move the window')
+    : (pinned ? 'Unpin' : 'Pin — keep this row visible while you move the window')
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onToggle() }}
+      className={clsx(
+        'shrink-0 p-0.5 rounded hover:bg-theme-elevated transition-opacity',
+        pinned ? 'text-accent-text opacity-100' : 'text-theme-text-tertiary hover:text-theme-text-primary',
+        !pinned && !alwaysVisible && 'opacity-0 group-hover/pin:opacity-100',
+      )}
+      title={title}
+      aria-label={pinned ? 'Unpin' : 'Pin'}
+    >
+      <Pin className={clsx('w-3.5 h-3.5', pinned && 'fill-current')} />
+    </button>
+  )
+}
+
+// App-group header label — an app roll-up over its member root lanes. Shows the
+// app name, an optional env chip, and the member count. Evidence goes in the
+// title tooltip (native, to keep the flex label layout intact + SSR-safe).
+function AppGroupLaneLabel({ lane, memberCount, onToggle, onAppClick }: { lane: ResourceLane; memberCount: number; onToggle: () => void; onAppClick?: (appKey: string) => void }) {
+  // A pinned app absent from the current view (owner/flat grouping or vanished)
+  // is dimmed and reads its own honest tooltip.
+  const dimmed = lane.absentPinnedApp
+  const linkable = onAppClick && lane.appKey
+  const tooltip = lane.absentPinnedApp
+    ? 'app not present in the current view/grouping'
+    : (lane.evidence || undefined)
+  return (
+    <div
+      className="flex-1 min-w-0 cursor-pointer rounded px-1 -mx-1 hover:bg-theme-surface/30"
+      onClick={onToggle}
+      title={tooltip}
+    >
+      <div className="flex items-center gap-1.5">
         <span className={clsx(
-          'w-2 h-2 rounded-full',
-          dashed ? 'border border-dashed border-current bg-transparent' : color
-        )} />
-        <span>{label}</span>
-      </span>
-    </Tooltip>
+          'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset',
+          dimmed
+            ? 'bg-theme-hover text-theme-text-tertiary ring-theme-border'
+            : 'bg-accent-muted text-accent-text ring-transparent',
+        )}>
+          <Layers className="w-3 h-3" />
+          App
+        </span>
+        {lane.env && (
+          <span className="inline-flex items-center rounded-sm bg-theme-hover px-1.5 py-px text-[10px] font-medium text-theme-text-secondary ring-1 ring-inset ring-theme-border">
+            {lane.env}
+          </span>
+        )}
+        <span className="text-xs font-semibold text-theme-text-tertiary">
+          {pluralize(memberCount, 'resource')}
+        </span>
+        <LaneWarnChip events={lane.allEventsSorted || []} />
+      </div>
+      <div
+        className={clsx(
+          'text-sm font-semibold break-words mt-0.5',
+          dimmed ? 'text-theme-text-secondary' : 'text-theme-text-primary',
+          linkable && 'hover:text-accent-text hover:underline',
+        )}
+        // Name click navigates to the app's Applications page — mirroring how a
+        // resource name routes to its detail; the row body still toggles expand.
+        onClick={linkable ? (e) => { e.stopPropagation(); onAppClick!(lane.appKey!) } : undefined}
+        title={linkable ? 'Open in Applications' : undefined}
+      >
+        {lane.title ?? lane.name}
+      </div>
+      {lane.namespace && <div className="text-xs text-theme-text-tertiary">{lane.namespace}</div>}
+    </div>
   )
 }
 
-// Health bar legend item - shows a bar instead of a dot
-function HealthBarLegendItem({ color, label, description }: LegendItemProps) {
+// Lane backdrop: subtle vertical grid lines + a horizontal center guide.
+function LaneBackdrop({ gridXs }: { gridXs: number[] }) {
   return (
-    <Tooltip content={description} position="top">
-      <span className="flex items-center gap-1 cursor-help">
-        <span className={clsx('w-4 h-2 rounded-sm', color)} />
-        <span>{label}</span>
-      </span>
-    </Tooltip>
+    <div className="absolute inset-0 z-0 pointer-events-none">
+      {gridXs.map((x, i) => (
+        <div key={i} className="absolute top-0 bottom-0 w-px bg-theme-border/40" style={{ left: `${x}%` }} />
+      ))}
+      <div className="absolute left-0 right-0 top-1/2 h-px bg-theme-border/40" />
+    </div>
   )
 }
 
-// Health bar track component that renders health spans as background
+// Health bar track component that renders health as a thin bottom strip.
+// The 'mixed' segment's texture: grey diagonal stripes, deliberately NOT a solid
+// health color so it reads as "not a health state — members disagree". Denser
+// than the recording-gap hatch (which uses --border-default) so the two textures
+// stay distinct. Theme token so it tracks light/dark.
+const MIXED_HEALTH_STRIP_STYLE: React.CSSProperties = {
+  backgroundImage:
+    'repeating-linear-gradient(45deg, var(--text-tertiary) 0, var(--text-tertiary) 1px, transparent 1px, transparent 3px)',
+}
+
 interface HealthBarTrackProps {
+  ownResource?: { kind: string; namespace: string; name: string }
   events: TimelineEvent[]
+  /** When set, the row is a collapsed parent / app group: sweep its members'
+   *  honest spans into state-family segments instead of blending its subtree
+   *  events into one latest-event-wins timeline. */
+  aggregateLane?: ResourceLane
   startTime: number
   windowMs: number
   now: number
 }
 
-function HealthBarTrack({ events, startTime, windowMs, now }: HealthBarTrackProps) {
+function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggregateLane }: HealthBarTrackProps) {
+  if (aggregateLane) {
+    return (
+      <AggregateHealthTrack
+        lane={aggregateLane}
+        startTime={startTime}
+        windowMs={windowMs}
+        now={now}
+      />
+    )
+  }
   // Filter to change events for health state computation
   const changeEvents = events.filter(e => isChangeEvent(e))
 
@@ -938,7 +2104,8 @@ function HealthBarTrack({ events, startTime, windowMs, now }: HealthBarTrackProp
     changeEvents,
     startTime,
     now,
-    events // All events for createdAt extraction
+    events, // All events for createdAt extraction
+    ownResource
   )
 
   if (spans.length === 0) return null
@@ -955,21 +2122,164 @@ function HealthBarTrack({ events, startTime, windowMs, now }: HealthBarTrackProp
 
         // Clamp to visible range
         const clampedLeft = Math.max(0, left)
-        const clampedWidth = Math.min(100 - clampedLeft, width - (clampedLeft - left))
+        let clampedWidth = Math.min(100 - clampedLeft, width - (clampedLeft - left))
 
         if (clampedWidth <= 0) return null
+        // A real span narrower than ~a pixel still deserves ink: a cron pod's
+        // 3-second healthy run must read as a tick, not vanish entirely.
+        clampedWidth = Math.max(clampedWidth, 0.12)
 
+        const showCreatedBefore = createdBeforeWindow && i === 0 && createdAt != null
         return (
-          <HealthSpan
+          <div
             key={i}
-            health={span.health}
-            left={clampedLeft}
-            width={clampedWidth}
-            createdBefore={createdBeforeWindow && i === 0 ? new Date(createdAt!) : undefined}
+            className={clsx('absolute bottom-0 h-[7px]', getHealthStripColor(span.health))}
+            style={{ left: `${clampedLeft}%`, width: `${clampedWidth}%` }}
+            title={`${span.health} (${new Date(span.start).toLocaleTimeString()} - ${new Date(span.end).toLocaleTimeString()})`}
+          >
+            {showCreatedBefore && (
+              <span className="absolute bottom-[9px] left-0.5 text-[9px] text-theme-text-tertiary whitespace-nowrap pointer-events-none">
+                ← {formatCreatedBefore(new Date(createdAt!))}
+              </span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// The collapsed-parent / app-group health strip: an interval sweep over each
+// member's honest spans. A slice whose member states share one family paints
+// that family's dominant state; a slice where families disagree paints the
+// neutral 'mixed' texture. The tooltip names who's off.
+function AggregateHealthTrack({ lane, startTime, windowMs, now }: {
+  lane: ResourceLane
+  startTime: number
+  windowMs: number
+  now: number
+}) {
+  const endTime = startTime + windowMs
+  const segments = useMemo(() => {
+    const members = buildLaneMemberSpans(lane, startTime, now)
+    return sweepAggregateHealth(members, startTime, endTime)
+  }, [lane, startTime, endTime, now])
+
+  if (segments.length === 0) return null
+
+  return (
+    <div className="absolute inset-0 z-0">
+      {segments.map((seg, i) => {
+        const left = sharedTimeToX(seg.start, startTime, windowMs)
+        const right = sharedTimeToX(seg.end, startTime, windowMs)
+        if (right < 0 || left > 100) return null
+        const clampedLeft = Math.max(0, left)
+        let clampedWidth = Math.min(100 - clampedLeft, (right - left) - (clampedLeft - left))
+        if (clampedWidth <= 0) return null
+        clampedWidth = Math.max(clampedWidth, 0.12)
+        return (
+          <div
+            key={i}
+            className={clsx('absolute bottom-0 h-[7px]', !seg.mixed && getHealthStripColor(seg.health))}
+            style={{
+              left: `${clampedLeft}%`,
+              width: `${clampedWidth}%`,
+              ...(seg.mixed ? MIXED_HEALTH_STRIP_STYLE : null),
+            }}
+            title={formatAggregateHealthTooltip(seg)}
           />
         )
       })}
     </div>
+  )
+}
+
+// Relative "created before window" label (mirrors the shared HealthSpan helper).
+function formatCreatedBefore(date: Date): string {
+  const diffHours = (Date.now() - date.getTime()) / (1000 * 60 * 60)
+  const diffDays = diffHours / 24
+  if (diffDays < 1) return `${Math.round(diffHours)}h ago`
+  if (diffDays < 7) return `${Math.round(diffDays)}d ago`
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+// Renders a lane's event markers, collapsing near-overlapping ones into "×N" pills.
+function LaneEventMarkers({ events, timeToX, selectedEvent, onSelectCluster, small }: {
+  events: TimelineEvent[]
+  timeToX: (t: number) => number
+  selectedEvent: TimelineEvent | null
+  onSelectCluster: (cluster: TimelineEventCluster) => void
+  small?: boolean
+}) {
+  const clusters = useMemo(() => {
+    const positioned = events
+      .map((event) => ({ event, x: timeToX(new Date(event.timestamp).getTime()) }))
+      .filter(({ x }) => x >= 0 && x <= 100)
+    return clusterEventsByPosition(positioned, CLUSTER_MIN_GAP_PCT)
+  }, [events, timeToX])
+
+  return (
+    <div className="absolute inset-0 z-10">
+      {clusters.map((cluster, i) => {
+        const selected = !!selectedEvent && cluster.events.some((e) => e.id === selectedEvent.id)
+        if (cluster.count === 1) {
+          return (
+            <EventMarker
+              key={`m-${cluster.dominant.id}-${i}`}
+              event={cluster.dominant}
+              x={cluster.x}
+              selected={selected}
+              onClick={() => onSelectCluster(cluster)}
+              small={small}
+            />
+          )
+        }
+        return (
+          <ClusterPill
+            key={`c-${cluster.dominant.id}-${i}`}
+            cluster={cluster}
+            selected={selected}
+            onClick={() => onSelectCluster(cluster)}
+            small={small}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+// A collapsed "dominant-glyph ×N" pill. Clicking opens the drawer listing every
+// member so none of the N is unreachable.
+function ClusterPill({ cluster, selected, onClick, small }: {
+  cluster: TimelineEventCluster
+  selected?: boolean
+  onClick: () => void
+  small?: boolean
+}) {
+  return (
+    <Tooltip
+      content={`${cluster.count} events · click to browse`}
+      position="top"
+      delay={100}
+      wrapperClassName="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20"
+      wrapperStyle={{ left: `${cluster.x}%` }}
+    >
+      <button
+        aria-label={`Open ${cluster.count} clustered events`}
+        className={clsx(
+          'inline-flex items-center gap-1 rounded-full border border-theme-border bg-theme-surface shadow-theme-sm transition-transform',
+          small ? 'px-1 py-px' : 'px-1.5 py-0.5',
+          selected ? 'ring-2 ring-accent scale-105' : 'hover:scale-105'
+        )}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClick()
+        }}
+      >
+        <MarkerGlyph shape={eventShape(cluster.dominant)} size={small ? 9 : 11} className={eventColorClass(cluster.dominant)} />
+        <span className="text-[11px] font-semibold tabular-nums text-theme-text-primary">×{cluster.count}</span>
+      </button>
+    </Tooltip>
   )
 }
 
@@ -1179,6 +2489,9 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
         wrapperStyle={{ left: `${x}%` }}
       >
         <button
+          // Icon-only marker: the tooltip is mouse-only, so mirror it into an
+          // accessible name (event type · message · time) for screen readers.
+          aria-label={tooltipText}
           className={clsx(
             'rounded-full transition-all flex items-center justify-center',
             'w-5 h-5',
@@ -1197,6 +2510,10 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
     )
   }
 
+  // Shape-coded glyph (▲ created / ● modified / ▼ deleted / ◆ warning / ○ historical).
+  const shape = eventShape(event)
+  const size = small ? 11 : 13
+
   return (
     <Tooltip
       content={tooltipText}
@@ -1204,112 +2521,239 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
       delay={100}
       wrapperClassName={clsx(
         'absolute top-1/2 -translate-y-1/2 -translate-x-1/2',
-        dimmed ? 'z-5' : isHistorical ? 'z-5' : 'z-10'
+        isHistorical ? 'z-5' : 'z-10'
       )}
       wrapperStyle={{ left: `${x}%` }}
     >
       <button
+        // Icon-only glyph: the tooltip is mouse-only, so mirror it into an
+        // accessible name (event type · message · time) for screen readers.
+        aria-label={tooltipText}
         className={clsx(
-          'rounded-full transition-all',
-          small ? 'w-2.5 h-2.5' : 'w-3 h-3',
-          markerClasses,
-          selected ? 'ring-2 ring-white ring-offset-2 ring-offset-theme-base scale-150' : 'hover:scale-125'
+          'flex items-center justify-center transition-transform',
+          selected ? 'scale-150' : 'hover:scale-125'
         )}
+        style={{ width: `${size + 4}px`, height: `${size + 4}px` }}
         onClick={(e) => {
           e.stopPropagation()
           onClick()
         }}
-      />
+      >
+        <MarkerGlyph shape={shape} size={size} className={clsx(eventColorClass(event), selected && 'drop-shadow')} />
+      </button>
     </Tooltip>
   )
 }
 
 interface EventDetailPanelProps {
-  event: TimelineEvent
+  // The drawer's events. Length 1 = a single marker (today's exact panel);
+  // length > 1 = a cluster pill's members, listed so none is unreachable.
+  events: TimelineEvent[]
+  selectedId: string
+  onSelectId: (id: string) => void
   onClose: () => void
   onResourceClick?: NavigateToResource
 }
 
-function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelProps) {
-  const isChange = isChangeEvent(event)
+// The resource identity + time line shown at the top of a detail body. No close
+// button — the drawer owns that so a cluster's summary header carries the single
+// close affordance.
+function EventDetailHeaderInfo({ event, onResourceClick }: { event: TimelineEvent; onResourceClick?: NavigateToResource }) {
   const isHistorical = isHistoricalEvent(event)
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <span className="badge-sm bg-theme-elevated text-theme-text-secondary">
+          {displayKind(event.kind)}
+        </span>
+        <button
+          onClick={() => onResourceClick?.({ kind: kindToPlural(event.kind), namespace: event.namespace, name: event.name, group: apiVersionToGroup(event.apiVersion) })}
+          className="text-theme-text-primary font-medium hover:text-accent-text"
+        >
+          {event.name}
+        </button>
+        {event.namespace && (
+          <span className="text-xs text-theme-text-tertiary">in {event.namespace}</span>
+        )}
+        {isHistorical && (
+          <span className="badge-sm bg-theme-hover text-theme-text-secondary">
+            <Clock className="w-3 h-3" />
+            historical
+          </span>
+        )}
+      </div>
+      <div className="text-xs text-theme-text-tertiary mt-1">
+        {formatFullTime(new Date(event.timestamp))}
+        {isHistorical && event.reason && (
+          <span className="ml-2 text-theme-text-secondary">({event.reason})</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// The change-diff or K8s-event body for one event. Shared by the single-event
+// panel and the cluster drawer's detail pane so the two can't drift.
+function EventDetailBody({ event }: { event: TimelineEvent }) {
   const isProblematic = isProblematicEvent(event)
+  if (isChangeEvent(event)) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <span className={clsx('text-sm font-medium', isOperation(event.eventType) && getOperationColor(event.eventType))}>
+            {event.eventType}
+          </span>
+          {event.healthState && event.healthState !== 'unknown' && (
+            <span className={clsx('badge-sm', getHealthBadgeColor(event.healthState))}>
+              {event.healthState}
+            </span>
+          )}
+        </div>
+        {event.diff && <DiffViewer diff={event.diff} />}
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span className={clsx('text-sm font-medium', isProblematic ? 'text-amber-700 dark:text-amber-300' : 'text-green-700 dark:text-green-300')}>
+          {event.reason}
+        </span>
+        {event.eventType && (
+          <span className={clsx('badge-sm', getEventTypeColor(event.eventType))}>
+            {event.eventType}
+          </span>
+        )}
+        {event.count && event.count > 1 && (
+          <span className="text-xs text-theme-text-tertiary">x{event.count}</span>
+        )}
+      </div>
+      {event.message && <p className={clsx("text-sm", isProblematic ? "text-amber-700 dark:text-amber-200" : "text-theme-text-secondary")}>{event.message}</p>}
+    </div>
+  )
+}
+
+// One row in the cluster drawer's member list: glyph (severity tone via color) +
+// reason/type + owning resource + time. Reuses the marker glyph vocabulary so the
+// list reads the same as the track it summarizes.
+function ClusterEventRow({ event, active, onClick }: { event: TimelineEvent; active: boolean; onClick: () => void }) {
+  const isProblematic = isProblematicEvent(event)
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-current={active}
+        className={clsx(
+          'w-full flex items-center gap-2 px-3 py-1.5 text-left border-l-2 transition-colors',
+          active
+            ? 'border-accent bg-theme-elevated'
+            : 'border-transparent hover:bg-theme-hover',
+        )}
+      >
+        <span className="inline-flex w-3 h-3 shrink-0 items-center justify-center">
+          <MarkerGlyph shape={eventShape(event)} size={10} className={eventColorClass(event)} />
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className={clsx('block text-xs font-medium truncate', isProblematic ? 'text-amber-700 dark:text-amber-300' : 'text-theme-text-primary')}>
+            {event.reason || event.eventType}
+          </span>
+          <span className="block text-[11px] text-theme-text-tertiary truncate font-mono">{event.name}</span>
+        </span>
+        <span className="text-[11px] text-theme-text-tertiary tabular-nums shrink-0">
+          {formatAxisTime(new Date(event.timestamp))}
+        </span>
+      </button>
+    </li>
+  )
+}
+
+export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onResourceClick }: EventDetailPanelProps) {
+  const selected = events.find((e) => e.id === selectedId) ?? events[0]
+
+  // Single marker: today's exact one-event panel (no list chrome).
+  if (events.length <= 1) {
+    const isProblematic = isProblematicEvent(selected)
+    return (
+      <div className={clsx(
+        "fixed bottom-0 left-0 right-0 z-50 border-t p-4 min-h-40 max-h-72 overflow-auto shadow-theme-lg",
+        isProblematic ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950" : "border-theme-border bg-theme-surface"
+      )}>
+        <div className="flex items-start justify-between mb-3">
+          <EventDetailHeaderInfo event={selected} onResourceClick={onResourceClick} />
+          <button
+            onClick={onClose}
+            className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+            title="Close (Esc)"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <EventDetailBody event={selected} />
+      </div>
+    )
+  }
+
+  // Cluster mode: honest summary + the full member list + the selected detail.
+  const times = events.map((e) => new Date(e.timestamp).getTime())
+  const minT = Math.min(...times)
+  const maxT = Math.max(...times)
+  const fromLabel = formatAxisTime(new Date(minT))
+  const toLabel = formatAxisTime(new Date(maxT))
+  const timeRange = fromLabel === toLabel ? fromLabel : `${fromLabel}–${toLabel}`
+  // A collapsed parent lane can aggregate its whole subtree, so a pill may span
+  // several resources — name the resource only when it's the same one throughout.
+  const resourceKeys = new Set(events.map((e) => `${e.kind}/${e.namespace}/${e.name}`))
+  const uniformResource = resourceKeys.size === 1 ? selected : null
 
   return (
-    <div className={clsx(
-      "fixed bottom-0 left-0 right-0 z-50 border-t p-4 max-h-72 overflow-auto shadow-theme-lg",
-      isProblematic ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950" : "border-theme-border bg-theme-surface"
-    )}>
-      <div className="flex items-start justify-between mb-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="badge-sm bg-theme-elevated text-theme-text-secondary">
-              {displayKind(event.kind)}
+    // h-96 (not max-h): a content-driven height made the drawer jump between
+    // selections; a steady height keeps the list and detail panes stationary.
+    <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-theme-border bg-theme-surface h-96 shadow-theme-lg flex flex-col">
+      {/* Honest summary header: N · time range · resource */}
+      <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-theme-border shrink-0">
+        <div className="flex items-center gap-2 text-sm min-w-0">
+          <span className="badge-sm bg-theme-elevated text-theme-text-secondary shrink-0">{events.length} events</span>
+          <span className="text-theme-text-tertiary tabular-nums shrink-0">{timeRange}</span>
+          <span className="text-theme-text-tertiary shrink-0">·</span>
+          {uniformResource ? (
+            <span className="flex items-center gap-1.5 min-w-0">
+              <span className="badge-sm bg-theme-elevated text-theme-text-secondary shrink-0">{displayKind(uniformResource.kind)}</span>
+              <span className="font-medium text-theme-text-primary truncate">{uniformResource.name}</span>
             </span>
-            <button
-              onClick={() => onResourceClick?.({ kind: kindToPlural(event.kind), namespace: event.namespace, name: event.name, group: apiVersionToGroup(event.apiVersion) })}
-              className="text-theme-text-primary font-medium hover:text-accent-text"
-            >
-              {event.name}
-            </button>
-            {event.namespace && (
-              <span className="text-xs text-theme-text-tertiary">in {event.namespace}</span>
-            )}
-            {isHistorical && (
-              <span className="badge-sm bg-theme-hover text-theme-text-secondary">
-                <Clock className="w-3 h-3" />
-                historical
-              </span>
-            )}
-          </div>
-          <div className="text-xs text-theme-text-tertiary mt-1">
-            {formatFullTime(new Date(event.timestamp))}
-            {isHistorical && event.reason && (
-              <span className="ml-2 text-theme-text-secondary">({event.reason})</span>
-            )}
-          </div>
+          ) : (
+            <span className="text-theme-text-secondary shrink-0">{resourceKeys.size} resources</span>
+          )}
         </div>
         <button
           onClick={onClose}
-          className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+          className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
           title="Close (Esc)"
         >
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      {isChange ? (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className={clsx('text-sm font-medium', isOperation(event.eventType) && getOperationColor(event.eventType))}>
-              {event.eventType}
-            </span>
-            {event.healthState && event.healthState !== 'unknown' && (
-              <span className={clsx('badge-sm', getHealthBadgeColor(event.healthState))}>
-                {event.healthState}
-              </span>
-            )}
+      <div className="flex min-h-0 flex-1">
+        {/* Member list — every event the pill collapsed, most-severe first. */}
+        <ul className="w-72 shrink-0 border-r border-theme-border overflow-auto py-1" aria-label="Clustered events">
+          {events.map((ev) => (
+            <ClusterEventRow
+              key={ev.id}
+              event={ev}
+              active={ev.id === selectedId}
+              onClick={() => onSelectId(ev.id)}
+            />
+          ))}
+        </ul>
+        {/* Selected member's detail (↑/↓ to move). */}
+        <div className="flex-1 min-w-0 overflow-auto p-4">
+          <EventDetailHeaderInfo event={selected} onResourceClick={onResourceClick} />
+          <div className="mt-3">
+            <EventDetailBody event={selected} />
           </div>
-          {event.diff && <DiffViewer diff={event.diff} />}
         </div>
-      ) : (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className={clsx('text-sm font-medium', isProblematic ? 'text-amber-700 dark:text-amber-300' : 'text-green-700 dark:text-green-300')}>
-              {event.reason}
-            </span>
-            {event.eventType && (
-              <span className={clsx('badge-sm', getEventTypeColor(event.eventType))}>
-                {event.eventType}
-              </span>
-            )}
-            {event.count && event.count > 1 && (
-              <span className="text-xs text-theme-text-tertiary">x{event.count}</span>
-            )}
-          </div>
-          {event.message && <p className={clsx("text-sm", isProblematic ? "text-amber-700 dark:text-amber-200" : "text-theme-text-secondary")}>{event.message}</p>}
-        </div>
-      )}
+      </div>
     </div>
   )
 }

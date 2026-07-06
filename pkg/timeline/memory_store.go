@@ -14,6 +14,7 @@ type MemoryStore struct {
 	maxSize       int
 	head          int // next write position
 	count         int
+	index         map[string]int // event id -> ring slot, for dedup + upsert
 	mu            sync.RWMutex
 	seenResources map[string]bool
 	seenMu        sync.RWMutex
@@ -28,6 +29,7 @@ func NewMemoryStore(maxSize int) *MemoryStore {
 	return &MemoryStore{
 		records:       make([]TimelineEvent, maxSize),
 		maxSize:       maxSize,
+		index:         make(map[string]int),
 		seenResources: make(map[string]bool),
 		filterCache:   make(map[string]*CompiledFilter),
 	}
@@ -37,12 +39,7 @@ func NewMemoryStore(maxSize int) *MemoryStore {
 func (m *MemoryStore) Append(ctx context.Context, event TimelineEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	m.records[m.head] = event
-	m.head = (m.head + 1) % m.maxSize
-	if m.count < m.maxSize {
-		m.count++
-	}
+	m.appendLocked(event)
 	return nil
 }
 
@@ -52,13 +49,56 @@ func (m *MemoryStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 	defer m.mu.Unlock()
 
 	for _, event := range events {
-		m.records[m.head] = event
-		m.head = (m.head + 1) % m.maxSize
-		if m.count < m.maxSize {
-			m.count++
-		}
+		m.appendLocked(event)
 	}
 	return nil
+}
+
+// appendLocked writes one event, collapsing duplicate ids so a relist/replay
+// never produces two visible rows. An existing id from a mutable K8s Event
+// (same uid, bumped count) upserts in place; an identical informer/historical
+// id keeps the original row (same state, same first-observed timestamp).
+func (m *MemoryStore) appendLocked(event TimelineEvent) {
+	if event.ID != "" {
+		if idx, ok := m.index[event.ID]; ok && m.records[idx].ID == event.ID {
+			// K8s Events bump count/message on the same uid, but an out-of-order
+			// older revision must not clobber a newer one.
+			if event.Source == SourceK8sEvent && !event.Timestamp.Before(m.records[idx].Timestamp) {
+				// Vacate the old slot and re-append at head. Queries iterate by
+				// ring position (newest insert first), so updating in place would
+				// leave a count-bump buried at its stale recency; moving it to
+				// head reflects the fresh timestamp. Keeps one live row per id.
+				m.records[idx] = TimelineEvent{}
+				delete(m.index, event.ID)
+				m.writeAtHead(event)
+			}
+			return
+		}
+	}
+
+	m.writeAtHead(event)
+}
+
+// writeAtHead writes event at the head slot, advancing the ring. count tracks
+// the window span behind head (holes left by upsert vacating are counted here
+// and skipped on read), so the oldest live row is never scanned past.
+func (m *MemoryStore) writeAtHead(event TimelineEvent) {
+	// Drop the slot's current occupant from the index before overwriting it,
+	// so a wrapped-over id can't leave a dangling mapping.
+	if evicted := m.records[m.head]; evicted.ID != "" {
+		if idx, ok := m.index[evicted.ID]; ok && idx == m.head {
+			delete(m.index, evicted.ID)
+		}
+	}
+
+	m.records[m.head] = event
+	if event.ID != "" {
+		m.index[event.ID] = m.head
+	}
+	m.head = (m.head + 1) % m.maxSize
+	if m.count < m.maxSize {
+		m.count++
+	}
 }
 
 // Query retrieves events matching the given options
@@ -224,24 +264,24 @@ func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 }
 
 // MarkResourceSeen records that a resource has been seen
-func (m *MemoryStore) MarkResourceSeen(kind, namespace, name string) {
+func (m *MemoryStore) MarkResourceSeen(clusterContext, kind, namespace, name string) {
 	m.seenMu.Lock()
 	defer m.seenMu.Unlock()
-	m.seenResources[ResourceKey(kind, namespace, name)] = true
+	m.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)] = true
 }
 
 // IsResourceSeen checks if a resource has been seen before
-func (m *MemoryStore) IsResourceSeen(kind, namespace, name string) bool {
+func (m *MemoryStore) IsResourceSeen(clusterContext, kind, namespace, name string) bool {
 	m.seenMu.RLock()
 	defer m.seenMu.RUnlock()
-	return m.seenResources[ResourceKey(kind, namespace, name)]
+	return m.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)]
 }
 
 // ClearResourceSeen removes a resource from the seen set
-func (m *MemoryStore) ClearResourceSeen(kind, namespace, name string) {
+func (m *MemoryStore) ClearResourceSeen(clusterContext, kind, namespace, name string) {
 	m.seenMu.Lock()
 	defer m.seenMu.Unlock()
-	delete(m.seenResources, ResourceKey(kind, namespace, name))
+	delete(m.seenResources, SeenResourceKey(clusterContext, kind, namespace, name))
 }
 
 // Stats returns storage statistics
@@ -252,11 +292,15 @@ func (m *MemoryStore) Stats() StoreStats {
 	defer m.seenMu.RUnlock()
 
 	var oldest, newest time.Time
+	// count is the ring window span, which can include holes left by upsert
+	// vacating a slot — count live records instead of reporting the span.
+	var total int64
 	for i := 0; i < m.count; i++ {
 		idx := (m.head - 1 - i + m.maxSize) % m.maxSize
 		if m.records[idx].ID == "" {
 			continue
 		}
+		total++
 		ts := m.records[idx].Timestamp
 		if newest.IsZero() || ts.After(newest) {
 			newest = ts
@@ -267,7 +311,7 @@ func (m *MemoryStore) Stats() StoreStats {
 	}
 
 	return StoreStats{
-		TotalEvents:   int64(m.count),
+		TotalEvents:   total,
 		OldestEvent:   oldest,
 		NewestEvent:   newest,
 		SeenResources: len(m.seenResources),

@@ -367,7 +367,7 @@ export interface TimelineFilters {
   timeRange: TimeRange
 }
 
-export type TimeRange = '5m' | '30m' | '1h' | '6h' | '24h' | 'all'
+export type TimeRange = '5m' | '30m' | '1h' | '6h' | '24h' | '7d' | '30d' | 'all'
 
 // Cluster info
 export interface ClusterInfo {

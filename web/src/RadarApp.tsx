@@ -28,6 +28,8 @@ import { NavCustomizationProvider } from './context/NavCustomization';
 import { FilterLocationBridge } from './filter/FilterLocationBridge';
 import type { NavCustomization } from './context/NavCustomization';
 import type { ClusterLoadState } from './types/clusterLoadState';
+import { TimelineSourceProvider } from './context/TimelineSource';
+import type { TimelineSourceConfig } from './api/timelineSource';
 
 // Declare the shape of mutation meta here — inlined rather than in a
 // separate side-effect-only module so consumers that tree-shake aggressively
@@ -100,6 +102,16 @@ export interface RadarAppProps {
    * Radar runs with `navSlots.chrome: 'none'`.
    */
   onClusterLoadStateChange?: (state: ClusterLoadState) => void;
+  /**
+   * Selects the store backing the event timeline. Omit for the local event
+   * store the Radar binary keeps (default, standalone behavior). Set
+   * `{ mode: 'retained' }` when embedding behind a proxy that serves a
+   * longer-horizon history at `{apiBase}/timeline/events` +
+   * `{apiBase}/timeline/overview`; `maxRangeDays` caps how far back the
+   * 'all' range reaches. Generic extension point — the backend that answers
+   * the retained endpoints is the host's concern.
+   */
+  timelineSource?: TimelineSourceConfig;
 }
 
 // Default QueryClient with the same shape Radar's standalone binary uses.
@@ -143,6 +155,7 @@ export function RadarApp({
   documentTitleSuffix,
   initialPath,
   onClusterLoadStateChange,
+  timelineSource,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
   // before children construct URLs. getApiBase() / getAuthHeaders() /
@@ -163,11 +176,13 @@ export function RadarApp({
         <ToastProvider>
           <NavCustomizationProvider value={navSlots}>
             <FilterLocationBridge>
-              <App
-                manageDocumentTitle={manageDocumentTitle}
-                documentTitleSuffix={documentTitleSuffix}
-                onClusterLoadStateChange={onClusterLoadStateChange}
-              />
+              <TimelineSourceProvider config={timelineSource}>
+                <App
+                  manageDocumentTitle={manageDocumentTitle}
+                  documentTitleSuffix={documentTitleSuffix}
+                  onClusterLoadStateChange={onClusterLoadStateChange}
+                />
+              </TimelineSourceProvider>
             </FilterLocationBridge>
           </NavCustomizationProvider>
         </ToastProvider>

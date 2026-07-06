@@ -202,12 +202,30 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 	}
 	defer tx.Rollback()
 
+	// A K8s Event mutates count/message/lastTimestamp in place on the same uid;
+	// the id is the uid, so a bump re-arrives as a conflict. Upsert those mutable
+	// fields for k8s_event rows — mirroring MemoryStore.appendLocked — so the row
+	// reflects the latest revision instead of dropping the bump. The WHERE gates
+	// the update to k8s_event conflicts whose incoming revision is not older, so
+	// an out-of-order relay can't clobber a newer row. For informer/historical
+	// ids the WHERE is false, leaving the original row untouched — the same
+	// no-op an INSERT OR IGNORE gives for a relist dupe.
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR IGNORE INTO events (
+		INSERT INTO events (
 			id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 			reason, message, diff_json, health_state, owner_kind, owner_name,
 			labels_json, count, correlation_id, cluster_context
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			timestamp = excluded.timestamp,
+			event_type = excluded.event_type,
+			reason = excluded.reason,
+			message = excluded.message,
+			health_state = excluded.health_state,
+			count = excluded.count
+		WHERE events.source = 'k8s_event'
+			AND excluded.source = 'k8s_event'
+			AND excluded.timestamp >= events.timestamp
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -536,9 +554,12 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 	return events, rows.Err()
 }
 
-// MarkResourceSeen records that a resource has been seen
-func (s *SQLiteStore) MarkResourceSeen(kind, namespace, name string) {
-	key := ResourceKey(kind, namespace, name)
+// MarkResourceSeen records that a resource has been seen. The key is
+// cluster-qualified: this store outlives kubeconfig context switches, so a bare
+// kind/namespace/name would let a same-named resource in another cluster read
+// as already-seen and drop its add.
+func (s *SQLiteStore) MarkResourceSeen(clusterContext, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, kind, namespace, name)
 
 	s.seenMu.Lock()
 	s.seenResources[key] = true
@@ -548,16 +569,17 @@ func (s *SQLiteStore) MarkResourceSeen(kind, namespace, name string) {
 	_, _ = s.db.Exec("INSERT OR REPLACE INTO seen_resources (resource_key) VALUES (?)", key)
 }
 
-// IsResourceSeen checks if a resource has been seen before
-func (s *SQLiteStore) IsResourceSeen(kind, namespace, name string) bool {
+// IsResourceSeen checks if a resource has been seen before in the given cluster
+// context.
+func (s *SQLiteStore) IsResourceSeen(clusterContext, kind, namespace, name string) bool {
 	s.seenMu.RLock()
 	defer s.seenMu.RUnlock()
-	return s.seenResources[ResourceKey(kind, namespace, name)]
+	return s.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)]
 }
 
 // ClearResourceSeen removes a resource from the seen set
-func (s *SQLiteStore) ClearResourceSeen(kind, namespace, name string) {
-	key := ResourceKey(kind, namespace, name)
+func (s *SQLiteStore) ClearResourceSeen(clusterContext, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, kind, namespace, name)
 
 	s.seenMu.Lock()
 	delete(s.seenResources, key)

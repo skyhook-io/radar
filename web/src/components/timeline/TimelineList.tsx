@@ -1,12 +1,12 @@
 import { useState, useCallback } from 'react'
-import { TimelineList as TimelineListUI, type ActivityTypeFilter } from '@skyhook-io/k8s-ui'
+import { TimelineList as TimelineListUI, type ActivityTypeFilter, type ActivityFilterKey } from '@skyhook-io/k8s-ui'
 import type { TimeRange } from '@skyhook-io/k8s-ui'
-import { useChanges } from '../../api/client'
+import { useTimelineSource } from '../../context/TimelineSource'
 import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { NavigateToResource } from '../../utils/navigation'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 
-export type { ActivityTypeFilter }
+export type { ActivityTypeFilter, ActivityFilterKey }
 
 interface TimelineListProps {
   namespaces: string[]
@@ -17,26 +17,52 @@ interface TimelineListProps {
   initialTimeRange?: TimeRange
   showDeleted: boolean
   onShowDeletedChange: (showDeleted: boolean) => void
+  // Shared filter state lifted to TimelineView so it survives the view switch.
+  search: string
+  onSearchChange: (value: string) => void
+  activityFilter: ActivityFilterKey[]
+  onActivityFilterChange: (keys: ActivityFilterKey[]) => void
+  kindFilter: string[]
+  onKindFilterChange: (kinds: string[]) => void
+  // The shared scrubber selection [from,to]. When set (retained mode always;
+  // local mode once the scrubber owns the range), it drives the fetch window and
+  // hides the built-in range dropdown so the list can't drift from the
+  // swimlane/URL. Retained scopes server-side; local loads the ring and bounds it
+  // client-side (see useLocalEvents).
+  selectionWindow?: { fromMs: number; toMs: number }
+  // LIVE mode: quantize the base fetch so the sliding window doesn't churn the
+  // query key every tick.
+  sliding?: boolean
 }
 
-export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange }: TimelineListProps) {
+export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, sliding }: TimelineListProps) {
   const hasLimitedAccess = useHasLimitedAccess()
-  const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kind?: string }>({
+  const timelineSource = useTimelineSource()
+  const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kinds: string[] }>({
     timeRange: initialTimeRange ?? '1h',
+    kinds: [],
   })
 
-  const handleQueryChange = useCallback((params: { timeRange: TimeRange; kind?: string }) => {
+  const handleQueryChange = useCallback((params: { timeRange: TimeRange; kinds: string[] }) => {
     setQueryParams(params)
   }, [])
 
-  const { data: events = [], isLoading, isError, refetch } = useChanges({
+  const { data: events = [], isLoading, isError, refetch } = timelineSource.useEvents({
     namespaces,
-    kind: queryParams.kind,
+    kinds: queryParams.kinds,
     timeRange: queryParams.timeRange,
     includeK8sEvents: true,
     includeDeleted: showDeleted,
     limit: 500,
+    fromMs: selectionWindow?.fromMs,
+    toMs: selectionWindow?.toMs,
+    sliding,
   })
+
+  // Manual refresh button: re-run the query.
+  const handleRefresh = useCallback(() => {
+    refetch()
+  }, [refetch])
 
   if (isError) {
     return (
@@ -58,7 +84,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     <TimelineListUI
       events={events}
       isLoading={isLoading}
-      onRefresh={refetch}
+      onRefresh={handleRefresh}
       onQueryChange={handleQueryChange}
       hasLimitedAccess={hasLimitedAccess}
       namespaces={namespaces}
@@ -67,8 +93,15 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
       onResourceClick={onResourceClick}
       initialFilter={initialFilter}
       initialTimeRange={initialTimeRange}
+      hideRangeSelector={!!selectionWindow}
       showDeleted={showDeleted}
       onShowDeletedChange={onShowDeletedChange}
+      search={search}
+      onSearchChange={onSearchChange}
+      activityFilter={activityFilter}
+      onActivityFilterChange={onActivityFilterChange}
+      kindFilter={kindFilter}
+      onKindFilterChange={onKindFilterChange}
     />
   )
 }

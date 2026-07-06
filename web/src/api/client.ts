@@ -997,16 +997,20 @@ export function useTopology(namespaces: string[], viewMode: string = 'resources'
   })
 }
 
-export function useApplications(namespaces: string[]) {
+export function useApplications(namespaces: string[], options?: { enabled?: boolean }) {
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
   const queryString = params.toString()
 
+  const enabled = options?.enabled !== false
   return useQuery<{ applications: AppRow[] }>({
     queryKey: ['applications', namespaces],
     queryFn: () => fetchJSON(`/applications${queryString ? `?${queryString}` : ''}`),
     staleTime: 30_000,
-    refetchInterval: APPLICATIONS_REFRESH_INTERVAL_MS,
+    // Only poll while a consumer needs the index; gated off it must not keep the
+    // background refetch alive (the timeline's app grouping is the sole caller).
+    enabled,
+    refetchInterval: enabled ? APPLICATIONS_REFRESH_INTERVAL_MS : false,
   })
 }
 
@@ -1113,7 +1117,10 @@ export function useResources<T>(
 // Timeline changes (unified view of changes + K8s events)
 export interface UseChangesOptions {
   namespaces?: string[]
-  kind?: string
+  // Kind filter. The server narrows to a single kind (tighter result caps), so
+  // exactly one selected kind is pushed server-side; a multi-kind selection
+  // fetches unfiltered and is narrowed client-side by the caller.
+  kinds?: string[]
   timeRange?: TimeRange
   filter?: string // Filter preset name ('default', 'all', 'warnings-only', 'workloads')
   includeK8sEvents?: boolean
@@ -1137,17 +1144,25 @@ function getTimeRangeDate(range: TimeRange): Date | null {
       return new Date(now.getTime() - 6 * 60 * 60 * 1000)
     case '24h':
       return new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    case '7d':
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    case '30d':
+      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
     default:
       return null
   }
 }
 
 export function useChanges(options: UseChangesOptions = {}) {
-  const { namespaces = [], kind, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, includeDeleted = true, limit = 200, enabled = true } = options
+  const { namespaces = [], kinds, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, includeDeleted = true, limit = 200, enabled = true } = options
+
+  // Only a single-kind selection narrows the server query; a multi-kind
+  // selection is filtered client-side so the server cap isn't spent on one kind.
+  const serverKind = kinds && kinds.length === 1 ? kinds[0] : undefined
 
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
-  if (kind) params.set('kind', kind)
+  if (serverKind) params.set('kind', serverKind)
   if (filter) params.set('filter', filter)
   if (!includeK8sEvents) params.set('include_k8s_events', 'false')
   if (includeManaged) params.set('include_managed', 'true')
@@ -1162,7 +1177,7 @@ export function useChanges(options: UseChangesOptions = {}) {
   const queryString = params.toString()
 
   return useQuery<TimelineEvent[]>({
-    queryKey: ['changes', namespaces, kind, timeRange, filter, includeK8sEvents, includeManaged, includeDeleted, limit],
+    queryKey: ['changes', namespaces, serverKind, timeRange, filter, includeK8sEvents, includeManaged, includeDeleted, limit],
     queryFn: () => fetchJSON(`/changes${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // Consider data stale after 5 seconds to ensure fresh data on navigation
     refetchInterval: CHANGES_REFRESH_INTERVAL_MS, // SSE handles real-time updates; this is a fallback

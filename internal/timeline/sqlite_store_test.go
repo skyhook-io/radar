@@ -417,23 +417,23 @@ func TestSQLiteStore_ResourceSeen(t *testing.T) {
 	defer cleanup()
 
 	// Initially not seen
-	if store.IsResourceSeen("Pod", "default", "test-pod") {
+	if store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen initially")
 	}
 
 	// Mark as seen
-	store.MarkResourceSeen("Pod", "default", "test-pod")
+	store.MarkResourceSeen("ctx", "Pod", "default", "test-pod")
 
 	// Now should be seen
-	if !store.IsResourceSeen("Pod", "default", "test-pod") {
+	if !store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
 		t.Error("Resource should be seen after marking")
 	}
 
 	// Clear seen
-	store.ClearResourceSeen("Pod", "default", "test-pod")
+	store.ClearResourceSeen("ctx", "Pod", "default", "test-pod")
 
 	// Should not be seen again
-	if store.IsResourceSeen("Pod", "default", "test-pod") {
+	if store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen after clearing")
 	}
 }
@@ -629,8 +629,8 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	store1.MarkResourceSeen("Pod", "default", "p1")
-	store1.MarkResourceSeen("Deployment", "kube-system", "d1")
+	store1.MarkResourceSeen("ctx", "Pod", "default", "p1")
+	store1.MarkResourceSeen("ctx", "Deployment", "kube-system", "d1")
 	store1.Close()
 
 	store2, err := NewSQLiteStore(dbPath)
@@ -639,13 +639,13 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	}
 	defer store2.Close()
 
-	if !store2.IsResourceSeen("Pod", "default", "p1") {
+	if !store2.IsResourceSeen("ctx", "Pod", "default", "p1") {
 		t.Error("expected Pod default/p1 to be seen after restart")
 	}
-	if !store2.IsResourceSeen("Deployment", "kube-system", "d1") {
+	if !store2.IsResourceSeen("ctx", "Deployment", "kube-system", "d1") {
 		t.Error("expected Deployment kube-system/d1 to be seen after restart")
 	}
-	if store2.IsResourceSeen("Pod", "default", "never-marked") {
+	if store2.IsResourceSeen("ctx", "Pod", "default", "never-marked") {
 		t.Error("did not expect unmarked resource to be seen")
 	}
 }
@@ -1144,5 +1144,135 @@ func TestSQLiteStore_Migration_AddsClusterContext(t *testing.T) {
 	}
 	if len(scoped) != 0 {
 		t.Errorf("scoped query must exclude unknowable-provenance legacy rows, got %d", len(scoped))
+	}
+}
+
+// A relist re-emits the same informer id; INSERT ... ON CONFLICT must leave the
+// original row untouched (no k8s_event mutation path) instead of duplicating it.
+// Mirrors TestMemoryStore_DedupesIdenticalInformerID.
+func TestSQLiteStore_DedupesIdenticalInformerID(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	rv := "100"
+	add := NewInformerEvent("Deployment", "apps/v1", "team-a", "web", "uid-1", rv, EventTypeAdd, HealthHealthy, nil, nil, nil, nil)
+	relistUpdate := NewInformerEvent("Deployment", "apps/v1", "team-a", "web", "uid-1", rv, EventTypeUpdate, HealthHealthy, nil, nil, nil, nil)
+	if add.ID != relistUpdate.ID {
+		t.Fatalf("relist add/update must share an id: %q vs %q", add.ID, relistUpdate.ID)
+	}
+
+	if err := store.Append(ctx, add); err != nil {
+		t.Fatalf("Append add: %v", err)
+	}
+	if err := store.Append(ctx, relistUpdate); err != nil {
+		t.Fatalf("Append relistUpdate: %v", err)
+	}
+
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 deduped row, got %d: %+v", len(got), got)
+	}
+	// The original add is kept — the relist did NOT overwrite it into an update.
+	if got[0].EventType != EventTypeAdd {
+		t.Fatalf("informer relist must not mutate the row, got event_type %q want %q", got[0].EventType, EventTypeAdd)
+	}
+
+	del := NewInformerEvent("Deployment", "apps/v1", "team-a", "web", "uid-1", rv, EventTypeDelete, HealthUnknown, nil, nil, nil, nil)
+	if del.ID == add.ID {
+		t.Fatalf("delete must get a distinct id, got %q for both", del.ID)
+	}
+	if err := store.Append(ctx, del); err != nil {
+		t.Fatalf("Append del: %v", err)
+	}
+	got, err = store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected add + delete = 2 rows, got %d", len(got))
+	}
+}
+
+// A K8s Event's count bump reuses the uid-based id; the store must upsert the
+// mutable fields (count/message/timestamp) in place, not drop the bump or append
+// a duplicate. Mirrors TestMemoryStore_K8sEventCountBumpUpserts.
+func TestSQLiteStore_K8sEventCountBumpUpserts(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	base := time.Now()
+	mk := func(count int32, message string, ts time.Time) TimelineEvent {
+		return TimelineEvent{
+			ID: "k8s-uid-1", Timestamp: ts, Source: SourceK8sEvent,
+			Kind: "Pod", Namespace: "team-a", Name: "web-abc",
+			EventType: EventTypeWarning, Reason: "BackOff", Message: message, Count: count,
+		}
+	}
+	if err := store.Append(ctx, mk(1, "back-off 10s", base)); err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	if err := store.Append(ctx, mk(5, "back-off 40s", base.Add(30*time.Second))); err != nil {
+		t.Fatalf("Append bump: %v", err)
+	}
+
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 upserted row, got %d: %+v", len(got), got)
+	}
+	if got[0].Count != 5 {
+		t.Fatalf("expected refreshed count 5, got %d", got[0].Count)
+	}
+	if got[0].Message != "back-off 40s" {
+		t.Fatalf("expected refreshed message, got %q", got[0].Message)
+	}
+	if !got[0].Timestamp.Equal(base.Add(30 * time.Second)) {
+		t.Fatalf("expected refreshed timestamp %v, got %v", base.Add(30*time.Second), got[0].Timestamp)
+	}
+}
+
+// An out-of-order older revision of the same K8s Event uid must NOT clobber the
+// newer row already stored. Mirrors the recency guard in
+// TestMemoryStore_K8sEventBumpMovesToRecency.
+func TestSQLiteStore_K8sEventStaleBumpIgnored(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	base := time.Now()
+	mk := func(count int32, ts time.Time) TimelineEvent {
+		return TimelineEvent{
+			ID: "k8s-uid-1", Timestamp: ts, Source: SourceK8sEvent,
+			Kind: "Pod", Namespace: "team-a", Name: "web-abc",
+			EventType: EventTypeWarning, Reason: "BackOff", Count: count,
+		}
+	}
+	// Newest revision arrives first, then a stale older relay of the same uid.
+	if err := store.Append(ctx, mk(5, base.Add(30*time.Second))); err != nil {
+		t.Fatalf("Append newer: %v", err)
+	}
+	if err := store.Append(ctx, mk(1, base)); err != nil {
+		t.Fatalf("Append stale: %v", err)
+	}
+
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row, got %d: %+v", len(got), got)
+	}
+	if got[0].Count != 5 {
+		t.Fatalf("stale relay must not clobber newer row, got count %d want 5", got[0].Count)
+	}
+	if !got[0].Timestamp.Equal(base.Add(30 * time.Second)) {
+		t.Fatalf("stale relay must not roll back timestamp, got %v", got[0].Timestamp)
 	}
 }

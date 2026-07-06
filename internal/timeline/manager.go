@@ -40,6 +40,10 @@ type (
 	OwnerInfo   = pkgtimeline.OwnerInfo
 	DiffInfo    = pkgtimeline.DiffInfo
 	FieldChange = pkgtimeline.FieldChange
+
+	// Tombstone cache types
+	TombstoneCache = pkgtimeline.TombstoneCache
+	TombstoneEntry = pkgtimeline.TombstoneEntry
 )
 
 // Re-export constants from pkg/timeline.
@@ -88,19 +92,28 @@ func CompileFilter(preset *FilterPreset) (*CompiledFilter, error) {
 func ResourceKey(kind, namespace, name string) string {
 	return pkgtimeline.ResourceKey(kind, namespace, name)
 }
+func SeenResourceKey(clusterContext, kind, namespace, name string) string {
+	return pkgtimeline.SeenResourceKey(clusterContext, kind, namespace, name)
+}
 
 // Converter functions.
-func NewInformerEvent(kind, apiVersion, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
-	return pkgtimeline.NewInformerEvent(kind, apiVersion, namespace, name, uid, operation, healthState, diff, owner, labels, createdAt)
+func NewInformerEvent(kind, apiVersion, namespace, name, uid, resourceVersion string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
+	return pkgtimeline.NewInformerEvent(kind, apiVersion, namespace, name, uid, resourceVersion, operation, healthState, diff, owner, labels, createdAt)
 }
 func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEvent {
 	return pkgtimeline.NewK8sEventTimelineEvent(event, owner)
 }
-func NewHistoricalEvent(kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
-	return pkgtimeline.NewHistoricalEvent(kind, apiVersion, namespace, name, ts, reason, message, healthState, owner, labels)
+func NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
+	return pkgtimeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name, ts, reason, message, healthState, owner, labels)
 }
 func ExtractOwner(obj any) *OwnerInfo         { return pkgtimeline.ExtractOwner(obj) }
 func ExtractLabels(obj any) map[string]string { return pkgtimeline.ExtractLabels(obj) }
+func ExtractTombstoneEntry(obj any) (TombstoneEntry, bool) {
+	return pkgtimeline.ExtractTombstoneEntry(obj)
+}
+func NewTombstoneCache(ttl time.Duration, capacity int) *TombstoneCache {
+	return pkgtimeline.NewTombstoneCache(ttl, capacity)
+}
 func OperationToEventType(op string) EventType  { return pkgtimeline.OperationToEventType(op) }
 func EventTypeToOperation(et EventType) string  { return pkgtimeline.EventTypeToOperation(et) }
 func HealthStateToString(hs HealthState) string { return pkgtimeline.HealthStateToString(hs) }

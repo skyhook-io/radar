@@ -158,3 +158,69 @@ export function apiVersionToGroup(apiVersion?: string | null): string {
   const i = apiVersion.indexOf('/')
   return i === -1 ? '' : apiVersion.slice(0, i)
 }
+
+// -----------------------------------------------------------------------------
+// Timeline lane identity. A lane's id includes the API group so two CRDs that
+// share a kind name across vendors (CAPI `Cluster` in cluster.x-k8s.io vs CNPG
+// `Cluster` in postgresql.cnpg.io) can never merge into one row. The group is an
+// INTERNAL identity component only — it never surfaces in the UI except the rare
+// on-screen collision chip (see collidingLaneKeys in resource-hierarchy).
+// -----------------------------------------------------------------------------
+
+// Built-in Kubernetes API groups. Their kind names are globally reserved and
+// never collide across vendors, so their lanes keep the bare `Kind/ns/name` id.
+// This keeps existing pins, ?event= URLs, and the applications byResource join
+// byte-stable for all core/built-in resources (Pod, Deployment, Job, …) — only
+// CRD-group lanes get a group-qualified id, so ONLY CRD pins are affected.
+const BUILTIN_API_GROUPS: ReadonlySet<string> = new Set([
+  '', // core (v1)
+  'apps', 'batch', 'autoscaling', 'policy',
+  'networking.k8s.io', 'storage.k8s.io', 'scheduling.k8s.io',
+  'coordination.k8s.io', 'node.k8s.io', 'discovery.k8s.io',
+  'rbac.authorization.k8s.io', 'admissionregistration.k8s.io',
+  'authentication.k8s.io', 'authorization.k8s.io', 'certificates.k8s.io',
+  'apiextensions.k8s.io', 'apiregistration.k8s.io', 'events.k8s.io',
+  'flowcontrol.apiserver.k8s.io',
+])
+
+/** Whether a resource's API group must appear in its lane id to prevent a
+ *  cross-group merge. Built-in groups never collide, so they stay bare. */
+export function groupQualifiesLaneId(group: string | undefined): boolean {
+  return !!group && !BUILTIN_API_GROUPS.has(group)
+}
+
+/** Canonical timeline lane id. Group-qualified only for CRD groups
+ *  (`Cluster.postgresql.cnpg.io/prod/db`); bare for built-in/core groups
+ *  (`Pod/team-a/x`, `Deployment/ns/web`) so those ids stay exactly as before. */
+export function laneId(kind: string, group: string | undefined, namespace: string, name: string): string {
+  const g = groupQualifiesLaneId(group) ? `.${group}` : ''
+  return `${kind}${g}/${namespace}/${name}`
+}
+
+/** The group-less resource key (`Kind/ns/name`) — the join key for group-less
+ *  server payloads (applications byResource, AppRow workloads) and group-less
+ *  references (owner refs, K8s-event involvedObject, topology node ids). For a
+ *  built-in-group lane this equals its id; for a CRD lane it's the id minus the
+ *  `.group` segment. */
+export function laneResourceKey(kind: string, namespace: string, name: string): string {
+  return `${kind}/${namespace}/${name}`
+}
+
+/** Recover {kind, group, namespace, name} from a lane id. The kind segment may
+ *  carry a `.group` suffix (CRD lanes). Kind names never contain '.', and a
+ *  qualifying group always does, so the first '.' in the kind segment splits
+ *  them; ns and name never contain '/', so the first two '/' bound the rest. */
+export function parseLaneId(id: string): { kind: string; group: string; namespace: string; name: string } | null {
+  const s1 = id.indexOf('/')
+  if (s1 < 0) return null
+  const s2 = id.indexOf('/', s1 + 1)
+  if (s2 < 0) return null
+  const kindSeg = id.slice(0, s1)
+  const dot = kindSeg.indexOf('.')
+  return {
+    kind: dot < 0 ? kindSeg : kindSeg.slice(0, dot),
+    group: dot < 0 ? '' : kindSeg.slice(dot + 1),
+    namespace: id.slice(s1 + 1, s2),
+    name: id.slice(s2 + 1),
+  }
+}

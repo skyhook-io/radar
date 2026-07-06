@@ -1,24 +1,30 @@
-import { useState, useMemo, useEffect } from 'react'
-import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { PaneLoader } from '../ui/PaneLoader'
-import { SearchBox } from '../ui/SearchBox'
 import {
   AlertCircle,
   CheckCircle,
   Clock,
   RefreshCw,
   ChevronRight,
-  Filter,
   Plus,
   Trash2,
-  List,
-  GanttChart,
   Shield,
+  X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { DiffViewer, DiffBadge } from './DiffViewer'
+import { TimelineToolbar } from './TimelineToolbar'
+import {
+  matchesActivityFilter,
+  matchesTimelineSearch,
+  mergeKindOptions,
+  describeActiveFilters,
+  TIMELINE_RESOURCE_KINDS,
+  type ActivityTypeFilter,
+  type ActivityFilterKey,
+} from './timeline-filters'
 import type { TimelineEvent, TimeRange } from '../../types'
-import { isChangeEvent, isK8sEvent, isHistoricalEvent, isOperation } from '../../types'
+import { isChangeEvent, isHistoricalEvent, isOperation } from '../../types'
 import { getOperationColor, getHealthBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { ResourceRefBadge } from '../ui/drawer-components'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -39,13 +45,13 @@ function formatResourceAge(createdAt: string): string {
   return `${months}mo`
 }
 
-export type ActivityTypeFilter = 'all' | 'changes' | 'k8s_events' | 'warnings' | 'unhealthy'
+export type { ActivityTypeFilter, ActivityFilterKey }
 
 export interface TimelineListProps {
   events: TimelineEvent[]
   isLoading: boolean
   onRefresh?: () => void
-  onQueryChange?: (params: { timeRange: TimeRange; kind?: string }) => void
+  onQueryChange?: (params: { timeRange: TimeRange; kinds: string[] }) => void
   hasLimitedAccess?: boolean
   namespaces?: string[]
   onViewChange?: (view: 'list' | 'swimlane') => void
@@ -53,11 +59,26 @@ export interface TimelineListProps {
   onResourceClick?: NavigateToResource
   initialFilter?: ActivityTypeFilter
   initialTimeRange?: TimeRange
+  // Time-range dropdown options. Defaults to the standard set; a retained host
+  // can pass a deeper set (e.g. adds 7d/30d) without changing OSS behavior.
+  rangeOptions?: { value: TimeRange; label: string }[]
+  // Hide the built-in time-range dropdown when an external control (the
+  // retained-mode scrubber) owns the range instead.
+  hideRangeSelector?: boolean
   // Controlled "show deleted" toggle. When omitted the component manages it
   // internally; the host passes it to share one toggle across list + swimlane
   // and to drive server-side delete filtering.
   showDeleted?: boolean
   onShowDeletedChange?: (showDeleted: boolean) => void
+  // Controlled filter state. When omitted each is managed internally; the host
+  // passes them to share one set of filters across list + swimlane so they
+  // survive the view switch. Existing hosts that pass nothing are unaffected.
+  search?: string
+  onSearchChange?: (value: string) => void
+  activityFilter?: ActivityFilterKey[]
+  onActivityFilterChange?: (keys: ActivityFilterKey[]) => void
+  kindFilter?: string[]
+  onKindFilterChange?: (kinds: string[]) => void
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -69,41 +90,43 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-const RESOURCE_KINDS = [
-  'Deployment',
-  'Pod',
-  'Service',
-  'ConfigMap',
-  'Ingress',
-  'Gateway',
-  'HTTPRoute',
-  'GRPCRoute',
-  'TCPRoute',
-  'TLSRoute',
-  'ReplicaSet',
-  'DaemonSet',
-  'StatefulSet',
-]
-
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, showDeleted: showDeletedProp, onShowDeletedChange }: TimelineListProps) {
-  const [searchTerm, setSearchTerm] = useState('')
-  const [activityTypeFilter, setActivityTypeFilter] = useState<ActivityTypeFilter>(initialFilter ?? 'all')
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange }: TimelineListProps) {
+  const [searchInternal, setSearchInternal] = useState('')
+  const searchTerm = searchProp ?? searchInternal
+  const setSearchTerm = onSearchChange ?? setSearchInternal
+  const [activityFilterInternal, setActivityFilterInternal] = useState<ActivityFilterKey[]>(
+    initialFilter && initialFilter !== 'all' ? [initialFilter] : [],
+  )
+  const activityTypeFilter = activityFilterProp ?? activityFilterInternal
+  const setActivityTypeFilter = onActivityFilterChange ?? setActivityFilterInternal
   const [timeRange, setTimeRange] = useState<TimeRange>(initialTimeRange ?? '1h')
-  const [kindFilter, setKindFilter] = useState<string>('')
+  const [kindFilterInternal, setKindFilterInternal] = useState<string[]>([])
+  const kindFilter = kindFilterProp ?? kindFilterInternal
+  const setKindFilter = onKindFilterChange ?? setKindFilterInternal
   const [showDeletedInternal, setShowDeletedInternal] = useState(true)
   const showDeleted = showDeletedProp ?? showDeletedInternal
   const setShowDeleted = onShowDeletedChange ?? setShowDeletedInternal
   const [expandedItem, setExpandedItem] = useState<string | null>(null)
 
+  // Clear every content filter at once. Each setter already resolves to the
+  // controlled callback or the internal state setter, so this works in both
+  // host-driven and standalone modes.
+  const clearAllFilters = useCallback(() => {
+    setSearchTerm('')
+    setActivityTypeFilter([])
+    setKindFilter([])
+    setShowDeleted(true)
+  }, [setSearchTerm, setActivityTypeFilter, setKindFilter, setShowDeleted])
+
   useEffect(() => {
-    onQueryChange?.({ timeRange, kind: kindFilter || undefined })
+    onQueryChange?.({ timeRange, kinds: kindFilter })
   }, [timeRange, kindFilter, onQueryChange])
 
   // Kind filter options: seed with common kinds, then accumulate every kind seen
   // in the data so CRDs the cluster actually emits become filterable. The set only
   // grows — selecting a kind narrows the server query to it, so deriving options
   // from the current events alone would collapse the dropdown to that one kind.
-  const [seenKinds, setSeenKinds] = useState<Set<string>>(() => new Set(RESOURCE_KINDS))
+  const [seenKinds, setSeenKinds] = useState<Set<string>>(() => new Set(TIMELINE_RESOURCE_KINDS))
   useEffect(() => {
     if (!events?.length) return
     setSeenKinds((prev) => {
@@ -119,52 +142,19 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   }, [events])
   // Common kinds keep their curated order (most-used first); kinds discovered in
   // the data that aren't in the seed (CRDs) are appended alphabetically.
-  const kindOptions = useMemo(() => {
-    const seeded = new Set<string>(RESOURCE_KINDS)
-    const extra = [...seenKinds].filter((k) => !seeded.has(k)).sort()
-    return [...RESOURCE_KINDS, ...extra]
-  }, [seenKinds])
+  const kindOptions = useMemo(() => mergeKindOptions(seenKinds), [seenKinds])
 
-
-  const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(onRefresh ?? (() => {}))
-
-  // Filter activity
+  // Filter activity through the shared predicates so list + swimlane can't drift.
   const filteredActivity = useMemo(() => {
     if (!events) return []
-
     return events.filter((item) => {
-      // Filter by activity type
-      if (activityTypeFilter === 'changes' && !isChangeEvent(item)) return false
-      if (activityTypeFilter === 'k8s_events' && !isK8sEvent(item)) return false
-      if (activityTypeFilter === 'warnings') {
-        // Warnings filter: only K8s Warning events (matches home page count)
-        if (item.eventType !== 'Warning') return false
-      }
-      if (activityTypeFilter === 'unhealthy') {
-        // Unhealthy filter: only changes with unhealthy/degraded health state (no K8s events)
-        const isUnhealthyChange = isChangeEvent(item) && (item.healthState === 'unhealthy' || item.healthState === 'degraded')
-        if (!isUnhealthyChange) return false
-      }
+      if (!matchesActivityFilter(item, activityTypeFilter)) return false
+      if (kindFilter.length > 0 && !kindFilter.includes(item.kind)) return false
       if (!showDeleted && item.eventType === 'delete') return false
-
-      // Filter by search term
-      if (searchTerm) {
-        const term = searchTerm.toLowerCase()
-        const matchesName = item.name.toLowerCase().includes(term)
-        const matchesKind = item.kind.toLowerCase().includes(term)
-        const matchesNamespace = item.namespace?.toLowerCase().includes(term)
-        const matchesReason = item.reason?.toLowerCase().includes(term)
-        const matchesMessage = item.message?.toLowerCase().includes(term)
-        const matchesSummary = item.diff?.summary?.toLowerCase().includes(term)
-
-        if (!matchesName && !matchesKind && !matchesNamespace && !matchesReason && !matchesMessage && !matchesSummary) {
-          return false
-        }
-      }
-
+      if (!matchesTimelineSearch(item, searchTerm)) return false
       return true
     })
-  }, [events, activityTypeFilter, searchTerm, showDeleted])
+  }, [events, activityTypeFilter, kindFilter, searchTerm, showDeleted])
 
   // Aggregated event group type
   type AggregatedItem = {
@@ -278,153 +268,28 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     return groups
   }, [filteredActivity])
 
-  // Count stats
-  const stats = useMemo(() => {
-    if (!events) return { total: 0, changes: 0, warnings: 0, unhealthy: 0, deleted: 0 }
-    return {
-      total: events.length,
-      changes: events.filter((e) => isChangeEvent(e)).length,
-      warnings: events.filter((e) => e.eventType === 'Warning').length,
-      unhealthy: events.filter((e) => isChangeEvent(e) && (e.healthState === 'unhealthy' || e.healthState === 'degraded')).length,
-      deleted: events.filter((e) => e.eventType === 'delete').length,
-    }
-  }, [events])
-
   return (
     <div className="flex flex-col h-full w-full">
-      {/* Toolbar */}
-      <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 flex-wrap">
-        {/* Search */}
-        <SearchBox value={searchTerm} onChange={setSearchTerm} scope="timeline" shortcutId="timeline-list-search" className="flex-1 min-w-[200px] max-w-md" />
-
-        {/* Activity type filter */}
-        <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">
-          <FilterButton
-            active={activityTypeFilter === 'all'}
-            onClick={() => setActivityTypeFilter('all')}
-            icon={<Filter className="w-3 h-3" />}
-            label="All"
-            tooltip="Show all activity: resource changes and K8s events"
-          />
-          <FilterButton
-            active={activityTypeFilter === 'changes'}
-            onClick={() => setActivityTypeFilter('changes')}
-            icon={<RefreshCw className="w-3 h-3" />}
-            label="Changes"
-            count={stats.changes}
-            color="blue"
-            tooltip="Resource mutations: creates, updates, deletes detected by watching K8s API"
-          />
-          <FilterButton
-            active={activityTypeFilter === 'warnings'}
-            onClick={() => setActivityTypeFilter('warnings')}
-            icon={<AlertCircle className="w-3 h-3" />}
-            label="Warning Events"
-            count={stats.warnings}
-            color="amber"
-            tooltip="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)"
-          />
-          <FilterButton
-            active={activityTypeFilter === 'unhealthy'}
-            onClick={() => setActivityTypeFilter('unhealthy')}
-            icon={<AlertCircle className="w-3 h-3" />}
-            label="Unhealthy"
-            count={stats.unhealthy}
-            color="red"
-            tooltip="Resource changes with unhealthy or degraded health state"
-          />
-          <FilterButton
-            active={activityTypeFilter === 'k8s_events'}
-            onClick={() => setActivityTypeFilter('k8s_events')}
-            icon={<CheckCircle className="w-3 h-3" />}
-            label="K8s Events"
-            tooltip="All native Kubernetes events (Normal + Warning types)"
-          />
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setShowDeleted(!showDeleted)}
-          title="Show or hide resources that were deleted, including Pods that no longer exist"
-          className={clsx(
-            'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2 bg-theme-elevated',
-            showDeleted ? 'text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-          )}
-        >
-          <Trash2 className="w-3 h-3" />
-          Deleted
-          {stats.deleted > 0 && (
-            <span className="text-xs px-1.5 rounded bg-theme-hover/50">
-              {stats.deleted}
-            </span>
-          )}
-        </button>
-
-        {/* Kind filter */}
-        <select
-          value={kindFilter}
-          onChange={(e) => setKindFilter(e.target.value)}
-          className="appearance-none bg-theme-elevated text-theme-text-primary text-sm rounded-lg px-3 py-2 border border-theme-border-light focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <option value="">All Kinds</option>
-          {kindOptions.map((kind) => (
-            <option key={kind} value={kind}>
-              {kind}
-            </option>
-          ))}
-        </select>
-
-        {/* Time range */}
-        <select
-          value={timeRange}
-          onChange={(e) => setTimeRange(e.target.value as TimeRange)}
-          className="appearance-none bg-theme-elevated text-theme-text-primary text-sm rounded-lg px-3 py-2 border border-theme-border-light focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          {TIME_RANGES.map((range) => (
-            <option key={range.value} value={range.value}>
-              {range.label}
-            </option>
-          ))}
-        </select>
-
-        {/* View toggle */}
-        {onViewChange && (
-          <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">
-            <button
-              onClick={() => onViewChange('list')}
-              className={clsx(
-                'p-2 rounded-md transition-colors',
-                currentView === 'list' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-              )}
-              title="List view"
-            >
-              <List className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => onViewChange('swimlane')}
-              className={clsx(
-                'p-2 rounded-md transition-colors',
-                currentView === 'swimlane' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-              )}
-              title="Swimlane view"
-            >
-              <GanttChart className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {/* Refresh */}
-        {onRefresh && (
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshAnimating}
-            className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg disabled:opacity-50"
-            title="Refresh"
-          >
-            <RefreshCw className={clsx('w-4 h-4', isRefreshAnimating && 'animate-spin')} />
-          </button>
-        )}
-      </div>
+      <TimelineToolbar
+        search={searchTerm}
+        onSearchChange={setSearchTerm}
+        searchShortcutId="timeline-list-search"
+        activityFilter={activityTypeFilter}
+        onActivityFilterChange={setActivityTypeFilter}
+        events={events}
+        showDeleted={showDeleted}
+        onShowDeletedChange={setShowDeleted}
+        kindFilter={kindFilter}
+        onKindFilterChange={setKindFilter}
+        kindOptions={kindOptions}
+        rangeOptions={hideRangeSelector ? undefined : rangeOptions}
+        timeRange={hideRangeSelector ? undefined : timeRange}
+        onTimeRangeChange={hideRangeSelector ? undefined : setTimeRange}
+        counts={{ events: filteredActivity.length }}
+        view={currentView}
+        onViewChange={onViewChange}
+        onRefresh={onRefresh}
+      />
 
       {/* Timeline content */}
       <div className="flex-1 overflow-auto">
@@ -433,23 +298,38 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
         ) : filteredActivity.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
             <Clock className="w-12 h-12 mb-4 opacity-50" />
-            <p className="text-lg">No activity found</p>
-            <p className="text-sm mt-2">
-              {searchTerm || activityTypeFilter !== 'all' || kindFilter
-                ? 'Try adjusting your filters'
-                : 'Activity will appear here when cluster changes occur'}
-            </p>
-            {hasLimitedAccess && !searchTerm && activityTypeFilter === 'all' && !kindFilter && (
-              <p className="flex items-center gap-1 text-sm mt-2 text-amber-400/80">
-                <Shield className="w-3.5 h-3.5" />
-                Some resource types are not monitored due to RBAC restrictions
-              </p>
-            )}
-            {namespaces && namespaces.length > 0 && (
-              <p className="text-sm mt-2 text-theme-text-secondary">
-                Filtering by namespace: <span className="font-medium text-theme-text-primary">{namespaces.length === 1 ? namespaces[0] : `${namespaces.length} namespaces`}</span>
-              </p>
-            )}
+            {(() => {
+              const activeFilters = describeActiveFilters({ search: searchTerm, activityFilter: activityTypeFilter, kindFilter, showDeleted })
+              return (
+                <>
+                  <p className="text-lg">No activity found</p>
+                  <p className="text-sm mt-2">
+                    {activeFilters || 'Activity will appear here when cluster changes occur'}
+                  </p>
+                  {activeFilters && (
+                    <button
+                      type="button"
+                      onClick={clearAllFilters}
+                      className="mt-4 flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-lg text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      Clear filters
+                    </button>
+                  )}
+                  {hasLimitedAccess && !activeFilters && (
+                    <p className="flex items-center gap-1 text-sm mt-2 text-amber-400/80">
+                      <Shield className="w-3.5 h-3.5" />
+                      Some resource types are not monitored due to RBAC restrictions
+                    </p>
+                  )}
+                  {namespaces && namespaces.length > 0 && (
+                    <p className="text-sm mt-2 text-theme-text-secondary">
+                      Filtering by namespace: <span className="font-medium text-theme-text-primary">{namespaces.length === 1 ? namespaces[0] : `${namespaces.length} namespaces`}</span>
+                    </p>
+                  )}
+                </>
+              )
+            })()}
           </div>
         ) : (
           <div className="p-4 space-y-6">
@@ -495,49 +375,6 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
         )}
       </div>
     </div>
-  )
-}
-
-interface FilterButtonProps {
-  active: boolean
-  onClick: () => void
-  icon: React.ReactNode
-  label: string
-  count?: number
-  color?: 'blue' | 'amber' | 'green' | 'red'
-  tooltip?: string
-}
-
-function FilterButton({ active, onClick, icon, label, count, color, tooltip }: FilterButtonProps) {
-  const colorClasses = {
-    blue: SEVERITY_BADGE.info,
-    amber: SEVERITY_BADGE.warning,
-    green: SEVERITY_BADGE.success,
-    red: SEVERITY_BADGE.error,
-  }
-
-  return (
-    <button
-      onClick={onClick}
-      title={tooltip}
-      className={clsx(
-        'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2',
-        active ? (color ? colorClasses[color] : 'bg-theme-hover text-theme-text-primary') : 'text-theme-text-secondary hover:text-theme-text-primary'
-      )}
-    >
-      {icon}
-      {label}
-      {count !== undefined && count > 0 && (
-        <span
-          className={clsx(
-            'text-xs px-1.5 rounded',
-            color ? `bg-${color}-500/30` : 'bg-theme-hover/50'
-          )}
-        >
-          {count}
-        </span>
-      )}
-    </button>
   )
 }
 

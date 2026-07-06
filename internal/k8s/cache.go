@@ -119,6 +119,15 @@ var (
 	cacheMu       sync.Mutex
 )
 
+// tombstones retains recently-seen resource enrichment (owner/labels/createdAt)
+// for a short window after objects leave the informer cache, so delete-time and
+// late K8s events (the "Killing" class, processed after the involved object is
+// already gone from cache) carry owner/labels/createdAt as fact instead of
+// shipping anonymous. Fed on every informer add/update/delete; consulted after
+// the live cache during event enrichment. Bounded + TTL'd so it cannot grow
+// without limit; misses are silent (null enrichment, same as before the cache).
+var tombstones = timeline.NewTombstoneCache(15*time.Minute, 4000)
+
 // InitResourceCache initializes the resource cache with timeline-wired callbacks.
 func InitResourceCache(ctx context.Context) error {
 	var initErr error
@@ -235,6 +244,11 @@ func ResetResourceCache() {
 	cacheOnce = new(sync.Once)
 	initialSyncComplete = false
 	resetRecreateStash()
+	// Tombstone keys are kind/ns/name (no cluster context), so a leftover entry
+	// could mis-enrich a same-named resource on the next cluster. Drop them all
+	// in place (not a var reassignment) so concurrent informer readers of the
+	// stable pointer don't race with the reset.
+	tombstones.Clear()
 }
 
 // recordK8sEventToTimeline records a K8s Event to the timeline store
@@ -253,31 +267,11 @@ func recordK8sEventToTimeline(obj any) {
 		timeline.IncrementReceived("K8sEvent:" + event.InvolvedObject.Kind)
 	}
 
-	var owner *timeline.OwnerInfo
-	cache := GetResourceCache()
-	if cache != nil {
-		if event.InvolvedObject.Kind == "Pod" && cache.Pods() != nil {
-			if pod, err := cache.Pods().Pods(event.Namespace).Get(event.InvolvedObject.Name); err == nil && pod != nil {
-				for _, ref := range pod.OwnerReferences {
-					if ref.Controller != nil && *ref.Controller {
-						owner = &timeline.OwnerInfo{Kind: ref.Kind, Name: ref.Name}
-						break
-					}
-				}
-			}
-		} else if event.InvolvedObject.Kind == "ReplicaSet" && cache.ReplicaSets() != nil {
-			if rs, err := cache.ReplicaSets().ReplicaSets(event.Namespace).Get(event.InvolvedObject.Name); err == nil && rs != nil {
-				for _, ref := range rs.OwnerReferences {
-					if ref.Controller != nil && *ref.Controller {
-						owner = &timeline.OwnerInfo{Kind: ref.Kind, Name: ref.Name}
-						break
-					}
-				}
-			}
-		}
-	}
+	owner, labels, createdAt := enrichInvolvedObject(event)
 
 	timelineEvent := timeline.NewK8sEventTimelineEvent(event, owner)
+	timelineEvent.Labels = labels
+	timelineEvent.CreatedAt = createdAt
 	timelineEvent.ClusterContext = ActiveClusterContext()
 
 	ctx := context.Background()
@@ -286,6 +280,75 @@ func recordK8sEventToTimeline(obj any) {
 	} else if DebugEvents {
 		timeline.IncrementRecorded("K8sEvent:" + event.InvolvedObject.Kind)
 	}
+}
+
+// enrichInvolvedObject resolves the K8s Event's involved object to its
+// controller owner, grouping labels, and creation time. The live informer cache
+// is consulted first (freshest); the tombstone second, which is what carries the
+// answer for delete-time and late events (e.g. "Killing") whose involved object
+// has already left the cache. A total miss returns nils — the event ships with
+// whatever the event itself provides, exactly as before.
+func enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time) {
+	inv := event.InvolvedObject
+	if o, l, c, ok := liveInvolvedObject(inv.Kind, event.Namespace, inv.Name); ok {
+		return o, l, c
+	}
+	if entry, ok := tombstones.Get(inv.Kind, event.Namespace, inv.Name); ok {
+		return entry.Owner, entry.Labels, entry.CreatedAt
+	}
+	return nil, nil, nil
+}
+
+// liveInvolvedObject reads the involved object straight from the typed informer
+// cache when it is still present. ok=false means the object is not (or no longer)
+// cached, so the caller should fall back to the tombstone.
+func liveInvolvedObject(kind, namespace, name string) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, ok bool) {
+	cache := GetResourceCache()
+	if cache == nil {
+		return nil, nil, nil, false
+	}
+	switch kind {
+	case "Pod":
+		if cache.Pods() == nil {
+			return nil, nil, nil, false
+		}
+		pod, err := cache.Pods().Pods(namespace).Get(name)
+		if err != nil || pod == nil {
+			return nil, nil, nil, false
+		}
+		return controllerOwner(pod.OwnerReferences), timeline.ExtractLabels(pod), creationPtr(pod), true
+	case "ReplicaSet":
+		if cache.ReplicaSets() == nil {
+			return nil, nil, nil, false
+		}
+		rs, err := cache.ReplicaSets().ReplicaSets(namespace).Get(name)
+		if err != nil || rs == nil {
+			return nil, nil, nil, false
+		}
+		return controllerOwner(rs.OwnerReferences), timeline.ExtractLabels(rs), creationPtr(rs), true
+	}
+	return nil, nil, nil, false
+}
+
+// controllerOwner returns the controller owner reference as OwnerInfo, or nil
+// when the object has no controller (e.g. a bare pod).
+func controllerOwner(refs []metav1.OwnerReference) *timeline.OwnerInfo {
+	for _, ref := range refs {
+		if ref.Controller != nil && *ref.Controller {
+			return &timeline.OwnerInfo{Kind: ref.Kind, Name: ref.Name}
+		}
+	}
+	return nil
+}
+
+// creationPtr returns a pointer to the object's creation timestamp, or nil when
+// it is unset.
+func creationPtr(obj metav1.Object) *time.Time {
+	ct := obj.GetCreationTimestamp().Time
+	if ct.IsZero() {
+		return nil
+	}
+	return &ct
 }
 
 // emitSyncProgress is the SyncProgress callback wired into the resource
@@ -380,8 +443,10 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 		return
 	}
 
+	clusterContext := ActiveClusterContext()
+
 	if op == "add" {
-		if store.IsResourceSeen(kind, namespace, name) {
+		if store.IsResourceSeen(clusterContext, kind, namespace, name) {
 			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonAlreadySeen, op)
 			if DebugEvents {
 				log.Printf("[DEBUG] Already seen, skipping: %s/%s/%s", kind, namespace, name)
@@ -389,7 +454,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 			return
 		}
 	} else if op == "delete" {
-		store.ClearResourceSeen(kind, namespace, name)
+		store.ClearResourceSeen(clusterContext, kind, namespace, name)
 	}
 
 	obj := newObj
@@ -397,23 +462,32 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 		obj = oldObj
 	}
 
+	resourceVersion := ""
+	if obj != nil {
+		if meta, ok := obj.(metav1.Object); ok {
+			resourceVersion = meta.GetResourceVersion()
+		}
+	}
+
 	if op == "delete" {
 		stashDeletedForRecreate(kind, namespace, name, uid, obj)
 	}
 
-	owner := timeline.ExtractOwner(obj)
-	labels := timeline.ExtractLabels(obj)
+	// One extraction of owner/labels/createdAt, reused for both the event and
+	// the tombstone. ExtractTombstoneEntry unwraps DeletedFinalStateUnknown, so
+	// a delete whose payload is that wrapper still yields the final object.
+	entry, _ := timeline.ExtractTombstoneEntry(obj)
+	owner := entry.Owner
+	labels := entry.Labels
+	createdAt := entry.CreatedAt
 	healthState := classifyTimelineHealth(kind, obj, time.Now())
 	apiVersion := extractAPIVersion(obj)
 
-	var createdAt *time.Time
-	if obj != nil {
-		if meta, ok := obj.(metav1.Object); ok {
-			ct := meta.GetCreationTimestamp().Time
-			if !ct.IsZero() {
-				createdAt = &ct
-			}
-		}
+	// Feed the tombstone on every add/update/delete. While the object is live
+	// this mirrors its enrichment; once it is gone (delete, or a late K8s event
+	// after eviction) the retained copy is the only source of owner/labels.
+	if name != "" {
+		tombstones.Put(kind, namespace, name, entry)
 	}
 
 	var diff *timeline.DiffInfo
@@ -497,7 +571,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 	}
 
 	event := timeline.NewInformerEvent(
-		kind, apiVersion, namespace, name, uid,
+		kind, apiVersion, namespace, name, uid, resourceVersion,
 		timeline.OperationToEventType(op),
 		healthState,
 		diff,
@@ -505,14 +579,14 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 		labels,
 		createdAt,
 	)
-	event.ClusterContext = ActiveClusterContext()
+	event.ClusterContext = clusterContext
 	if recreated {
 		event.Reason = timeline.ReasonRecreated
 	}
 
 	var events []timeline.TimelineEvent
 	if op == "add" && newObj != nil {
-		historicalEvents := extractTimelineHistoricalEvents(kind, apiVersion, namespace, name, newObj, owner, labels)
+		historicalEvents := extractTimelineHistoricalEvents(clusterContext, kind, apiVersion, namespace, name, newObj, owner, labels)
 		for i := range historicalEvents {
 			historicalEvents[i].ClusterContext = event.ClusterContext
 		}
@@ -551,7 +625,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 					return
 				}
 			}
-			store.MarkResourceSeen(kind, namespace, name)
+			store.MarkResourceSeen(clusterContext, kind, namespace, name)
 			return
 		}
 	}
@@ -568,7 +642,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 	timeline.IncrementRecorded(kind)
 
 	if op == "add" {
-		store.MarkResourceSeen(kind, namespace, name)
+		store.MarkResourceSeen(clusterContext, kind, namespace, name)
 	}
 }
 
@@ -590,18 +664,18 @@ func extractAPIVersion(obj any) string {
 }
 
 // extractTimelineHistoricalEvents extracts historical events from resource metadata/status
-func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, obj any, owner *timeline.OwnerInfo, labels map[string]string) []timeline.TimelineEvent {
+func extractTimelineHistoricalEvents(clusterContext, kind, apiVersion, namespace, name string, obj any, owner *timeline.OwnerInfo, labels map[string]string) []timeline.TimelineEvent {
 	var events []timeline.TimelineEvent
 
 	switch kind {
 	case "Pod":
 		if pod, ok := obj.(*corev1.Pod); ok {
 			if !pod.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					pod.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			if pod.Status.StartTime != nil && !pod.Status.StartTime.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					pod.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner, labels))
 			}
 			for _, cond := range pod.Status.Conditions {
@@ -614,7 +688,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 				} else if cond.Status == corev1.ConditionFalse {
 					health = timeline.HealthDegraded
 				}
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner, labels))
 			}
 		}
@@ -622,7 +696,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 	case "Deployment":
 		if deploy, ok := obj.(*appsv1.Deployment); ok {
 			if !deploy.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					deploy.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			for _, cond := range deploy.Status.Conditions {
@@ -635,7 +709,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 				} else if cond.Status == corev1.ConditionFalse {
 					health = timeline.HealthDegraded
 				}
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner, labels))
 			}
 		}
@@ -647,7 +721,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 				if rs.Status.ReadyReplicas > 0 && rs.Status.ReadyReplicas == rs.Status.Replicas {
 					health = timeline.HealthHealthy
 				}
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					rs.CreationTimestamp.Time, "created", "", health, owner, labels))
 			}
 		}
@@ -655,7 +729,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 	case "StatefulSet":
 		if sts, ok := obj.(*appsv1.StatefulSet); ok {
 			if !sts.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					sts.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 		}
@@ -663,7 +737,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 	case "DaemonSet":
 		if ds, ok := obj.(*appsv1.DaemonSet); ok {
 			if !ds.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					ds.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 		}
@@ -671,7 +745,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 	case "Service":
 		if svc, ok := obj.(*corev1.Service); ok {
 			if !svc.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					svc.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
@@ -679,7 +753,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 	case "Ingress":
 		if ing, ok := obj.(*networkingv1.Ingress); ok {
 			if !ing.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					ing.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
@@ -687,7 +761,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 	case "CronJob":
 		if cj, ok := obj.(*batchv1.CronJob); ok {
 			if !cj.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					cj.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
@@ -695,7 +769,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 	case "HorizontalPodAutoscaler":
 		if hpa, ok := obj.(*autoscalingv2.HorizontalPodAutoscaler); ok {
 			if !hpa.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					hpa.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
@@ -703,25 +777,25 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 	case "Job":
 		if job, ok := obj.(*batchv1.Job); ok {
 			if !job.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					job.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					job.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner, labels))
 			}
 			if job.Status.CompletionTime != nil && !job.Status.CompletionTime.IsZero() {
 				// CompletionTime is set only on SUCCESS — a completed Job is
 				// neutral/idle (done by design), even if earlier attempts failed
 				// (Status.Failed > 0 counts retries, not a terminal failure).
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					job.Status.CompletionTime.Time, "completed", "", timeline.HealthNeutral, owner, labels))
 			} else {
 				// Terminal failure (backoffLimit exceeded) has no CompletionTime —
 				// surface the JobFailed condition as unhealthy at its transition time.
 				for _, cond := range job.Status.Conditions {
 					if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-						events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+						events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 							cond.LastTransitionTime.Time, "failed", cond.Message, timeline.HealthUnhealthy, owner, labels))
 						break
 					}
@@ -733,7 +807,7 @@ func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, o
 		if u, ok := obj.(*unstructured.Unstructured); ok {
 			ct := u.GetCreationTimestamp()
 			if !ct.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
 					ct.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 		}
