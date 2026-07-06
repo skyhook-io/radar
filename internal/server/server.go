@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -222,9 +223,12 @@ func (s *Server) setupRoutes() {
 
 	// CORS for development
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:*", "http://127.0.0.1:*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Content-Type"},
+		AllowedOrigins: []string{"http://localhost:*", "http://127.0.0.1:*"},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Accept", "Content-Type"},
+		// Without an expose entry, cross-origin JS reads this as "" and the
+		// timeline client silently falls back to full-ring refetches.
+		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch"},
 		AllowCredentials: true,
 	}))
 
@@ -2789,6 +2793,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	kind := r.URL.Query().Get("kind")
 	name := r.URL.Query().Get("name")
 	sinceStr := r.URL.Query().Get("since")
+	sinceSeqStr := r.URL.Query().Get("since_seq")
 	limitStr := r.URL.Query().Get("limit")
 	filterPreset := r.URL.Query().Get("filter")
 	includeK8sEvents := r.URL.Query().Get("include_k8s_events") != "false" // default true
@@ -2836,6 +2841,11 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		// clusters; the timeline view answers for the current one only.
 		ClusterContext: k8s.ActiveClusterContext(),
 	}
+	if sinceSeqStr != "" {
+		if n, err := strconv.ParseInt(sinceSeqStr, 10, 64); err == nil && n > 0 {
+			opts.SinceSeq = n
+		}
+	}
 	if kind != "" {
 		opts.Kinds = []string{kind}
 	}
@@ -2868,6 +2878,11 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	events = s.filterChangesByClusterScopedRBAC(r, events)
 
+	// The store epoch validates delta cursors: seq restarts from 1 when the
+	// store is re-created (process restart, context switch), so a client
+	// holding a cursor from another epoch must full-resync instead of
+	// trusting an empty delta as "nothing new".
+	w.Header().Set("X-Radar-Timeline-Epoch", strconv.FormatInt(timeline.ObservationStart().UnixNano(), 10))
 	s.writeJSON(w, events)
 }
 

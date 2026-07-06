@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1274,5 +1275,249 @@ func TestSQLiteStore_K8sEventStaleBumpIgnored(t *testing.T) {
 	}
 	if !got[0].Timestamp.Equal(base.Add(30 * time.Second)) {
 		t.Fatalf("stale relay must not roll back timestamp, got %v", got[0].Timestamp)
+	}
+}
+
+// Seq is the delta cursor: SinceSeq must return exactly what arrived after the
+// cursor, keyed on arrival order — a late event with an older timestamp still
+// lands ahead of the cursor. Mirrors TestMemoryStore_SeqCursor.
+func TestSQLiteStore_SeqCursor(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	base := time.Now()
+	mk := func(id string, ts time.Time) TimelineEvent {
+		return TimelineEvent{
+			ID: id, Timestamp: ts, Source: SourceInformer,
+			Kind: "Pod", Namespace: "default", Name: id, EventType: EventTypeUpdate,
+		}
+	}
+	if err := store.AppendBatch(ctx, []TimelineEvent{mk("a", base), mk("b", base.Add(time.Second))}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	all, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(all) != 2 || all[0].Seq == 0 || all[1].Seq == 0 || all[0].Seq == all[1].Seq {
+		t.Fatalf("expected 2 events with distinct non-zero seqs, got %+v", all)
+	}
+	cursor := max(all[0].Seq, all[1].Seq)
+
+	if err := store.Append(ctx, mk("late", base.Add(-time.Hour))); err != nil {
+		t.Fatalf("Append late: %v", err)
+	}
+	delta, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, SinceSeq: cursor})
+	if err != nil {
+		t.Fatalf("Query delta: %v", err)
+	}
+	if len(delta) != 1 || delta[0].ID != "late" {
+		t.Fatalf("expected exactly the late arrival past the cursor, got %+v", delta)
+	}
+	if delta[0].Seq <= cursor {
+		t.Fatalf("late arrival seq %d must exceed cursor %d", delta[0].Seq, cursor)
+	}
+}
+
+// A K8s Event count bump upserts in place but must take a fresh seq, or a
+// delta reader holding a cursor past the original arrival never sees the bump.
+// Mirrors TestMemoryStore_K8sEventBumpAdvancesSeq.
+func TestSQLiteStore_K8sEventBumpAdvancesSeq(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	base := time.Now()
+	mk := func(count int32, ts time.Time) TimelineEvent {
+		return TimelineEvent{
+			ID: "k8s-uid-1", Timestamp: ts, Source: SourceK8sEvent,
+			Kind: "Pod", Namespace: "default", Name: "web-abc",
+			EventType: EventTypeWarning, Reason: "BackOff", Count: count,
+		}
+	}
+	if err := store.Append(ctx, mk(1, base)); err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	first, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil || len(first) != 1 {
+		t.Fatalf("Query first: %v %+v", err, first)
+	}
+	cursor := first[0].Seq
+
+	if err := store.Append(ctx, mk(5, base.Add(30*time.Second))); err != nil {
+		t.Fatalf("Append bump: %v", err)
+	}
+	delta, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true, SinceSeq: cursor})
+	if err != nil {
+		t.Fatalf("Query delta: %v", err)
+	}
+	if len(delta) != 1 || delta[0].Count != 5 {
+		t.Fatalf("expected the bumped row past the cursor, got %+v", delta)
+	}
+}
+
+// A database created before the seq column existed must come back with arrival
+// numbers backfilled from rowid, so pre-upgrade rows are addressable by cursor.
+func TestSQLiteStore_SeqMigrationBackfillsFromRowid(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "timeline-migrate-*")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, "legacy.db")
+
+	// Recreate the pre-seq schema by hand and insert two rows in order.
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	legacySchema := `CREATE TABLE events (
+		id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, source TEXT NOT NULL,
+		kind TEXT NOT NULL, namespace TEXT, name TEXT NOT NULL, uid TEXT,
+		event_type TEXT NOT NULL, reason TEXT, message TEXT, diff_json TEXT,
+		health_state TEXT, owner_kind TEXT, owner_name TEXT, labels_json TEXT,
+		count INTEGER DEFAULT 0, correlation_id TEXT,
+		created_at TEXT DEFAULT (datetime('now')),
+		cluster_context TEXT NOT NULL DEFAULT '', api_version TEXT
+	)`
+	if _, err := db.Exec(legacySchema); err != nil {
+		t.Fatalf("legacy schema: %v", err)
+	}
+	insert := `INSERT INTO events (id, timestamp, source, kind, namespace, name, event_type, health_state) VALUES (?, ?, 'informer', 'Pod', 'default', ?, 'update', '')`
+	base := time.Now()
+	if _, err := db.Exec(insert, "old-1", base.Format(time.RFC3339Nano), "old-1"); err != nil {
+		t.Fatalf("legacy insert 1: %v", err)
+	}
+	if _, err := db.Exec(insert, "old-2", base.Add(time.Second).Format(time.RFC3339Nano), "old-2"); err != nil {
+		t.Fatalf("legacy insert 2: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	all, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(all) != 2 || all[0].Seq == 0 || all[1].Seq == 0 {
+		t.Fatalf("expected 2 migrated rows with backfilled seq, got %+v", all)
+	}
+
+	// New appends must continue above the backfilled numbers.
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "new-1", Timestamp: base.Add(2 * time.Second), Source: SourceInformer,
+		Kind: "Pod", Namespace: "default", Name: "new-1", EventType: EventTypeUpdate,
+	}); err != nil {
+		t.Fatalf("Append new: %v", err)
+	}
+	maxOld := max(all[0].Seq, all[1].Seq)
+	delta, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, SinceSeq: maxOld})
+	if err != nil {
+		t.Fatalf("Query delta: %v", err)
+	}
+	if len(delta) != 1 || delta[0].ID != "new-1" {
+		t.Fatalf("expected only the post-migration append past the cursor, got %+v", delta)
+	}
+}
+
+// event.CreatedAt (the resource's birth, distinct from observation time) must
+// survive a write/read roundtrip — the health-strip birth clamp depends on it.
+func TestSQLiteStore_ResourceCreatedAtRoundtrip(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	born := time.Now().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "with-birth", Timestamp: time.Now(), Source: SourceInformer,
+		Kind: "Pod", Namespace: "default", Name: "with-birth",
+		EventType: EventTypeAdd, CreatedAt: &born,
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Query: %v %+v", err, got)
+	}
+	if got[0].CreatedAt == nil || !got[0].CreatedAt.Equal(born) {
+		t.Fatalf("expected CreatedAt %v to roundtrip, got %+v", born, got[0].CreatedAt)
+	}
+}
+
+// A bump that lost its enrichment (tombstone expired) must not erase the
+// owner/labels/createdAt the row already knows; a bump that carries fresh
+// enrichment wins. Mirrors TestMemoryStore_K8sEventBumpPreservesEnrichment.
+func TestSQLiteStore_K8sEventBumpPreservesEnrichment(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	base := time.Now()
+	born := base.Add(-time.Hour).Truncate(time.Millisecond)
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "k8s-uid-1", Timestamp: base, Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "web-abc",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 1,
+		CreatedAt: &born,
+		Owner:     &OwnerInfo{Kind: "ReplicaSet", Name: "web"},
+		Labels:    map[string]string{"app": "web"},
+	}); err != nil {
+		t.Fatalf("Append enriched: %v", err)
+	}
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "k8s-uid-1", Timestamp: base.Add(30 * time.Second), Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "web-abc",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 5,
+	}); err != nil {
+		t.Fatalf("Append bare bump: %v", err)
+	}
+
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Query: %v %+v", err, got)
+	}
+	if got[0].Count != 5 {
+		t.Fatalf("expected bumped count 5, got %d", got[0].Count)
+	}
+	if got[0].CreatedAt == nil || !got[0].CreatedAt.Equal(born) {
+		t.Fatalf("bare bump erased CreatedAt: %+v", got[0].CreatedAt)
+	}
+	if got[0].Owner == nil || got[0].Owner.Name != "web" {
+		t.Fatalf("bare bump erased Owner: %+v", got[0].Owner)
+	}
+	if got[0].Labels["app"] != "web" {
+		t.Fatalf("bare bump erased Labels: %+v", got[0].Labels)
+	}
+
+	// The inverse: a bump that carries enrichment fills a row that lacked it.
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "k8s-uid-2", Timestamp: base, Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "late-enriched",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 1,
+	}); err != nil {
+		t.Fatalf("Append bare first: %v", err)
+	}
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "k8s-uid-2", Timestamp: base.Add(time.Minute), Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "late-enriched",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 2,
+		Owner: &OwnerInfo{Kind: "Job", Name: "batch"},
+	}); err != nil {
+		t.Fatalf("Append enriched bump: %v", err)
+	}
+	row, err := store.GetEvent(ctx, "k8s-uid-2")
+	if err != nil || row == nil {
+		t.Fatalf("GetEvent: %v %+v", err, row)
+	}
+	if row.Owner == nil || row.Owner.Name != "batch" {
+		t.Fatalf("enriched bump did not fill Owner: %+v", row.Owner)
 	}
 }

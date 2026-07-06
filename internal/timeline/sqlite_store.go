@@ -117,7 +117,9 @@ func (s *SQLiteStore) initSchema() error {
 		count INTEGER DEFAULT 0,
 		correlation_id TEXT,
 		created_at TEXT DEFAULT (datetime('now')),
-		cluster_context TEXT NOT NULL DEFAULT ''
+		cluster_context TEXT NOT NULL DEFAULT '',
+		resource_created_at TEXT,
+		seq INTEGER NOT NULL DEFAULT 0
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
@@ -147,6 +149,8 @@ func (s *SQLiteStore) initSchema() error {
 	defer rows.Close()
 	hasAPIVersion := false
 	hasClusterContext := false
+	hasResourceCreatedAt := false
+	hasSeq := false
 	for rows.Next() {
 		var cid int
 		var name, ctype string
@@ -160,6 +164,10 @@ func (s *SQLiteStore) initSchema() error {
 			hasAPIVersion = true
 		case "cluster_context":
 			hasClusterContext = true
+		case "resource_created_at":
+			hasResourceCreatedAt = true
+		case "seq":
+			hasSeq = true
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -178,7 +186,25 @@ func (s *SQLiteStore) initSchema() error {
 			return err
 		}
 	}
+	if !hasResourceCreatedAt {
+		if _, err := s.db.Exec("ALTER TABLE events ADD COLUMN resource_created_at TEXT"); err != nil {
+			return err
+		}
+	}
+	if !hasSeq {
+		if _, err := s.db.Exec("ALTER TABLE events ADD COLUMN seq INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+		// Backfill arrival numbers from rowid — insertion order, which is what
+		// seq means. New appends continue above MAX(seq).
+		if _, err := s.db.Exec("UPDATE events SET seq = rowid WHERE seq = 0"); err != nil {
+			return err
+		}
+	}
 	if _, err := s.db.Exec("CREATE INDEX IF NOT EXISTS idx_events_cluster_ts ON events(cluster_context, timestamp DESC)"); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec("CREATE INDEX IF NOT EXISTS idx_events_seq ON events(seq)"); err != nil {
 		return err
 	}
 
@@ -210,19 +236,33 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 	// an out-of-order relay can't clobber a newer row. For informer/historical
 	// ids the WHERE is false, leaving the original row untouched — the same
 	// no-op an INSERT OR IGNORE gives for a relist dupe.
+	//
+	// Enrichment (owner/labels/createdAt) upserts asymmetrically: a bump that
+	// carries it wins (fresher truth), a bump that lost it (tombstone expired,
+	// object gone from the live cache) keeps what the row already knows.
+	// seq is the arrival number: MAX(seq)+1 computed per insert (single-writer
+	// store, statements serialize inside the tx). The upsert takes excluded.seq
+	// — the freshly computed value — so a count bump re-arrives at the cursor
+	// frontier instead of staying buried at its original arrival position,
+	// mirroring MemoryStore's vacate-and-re-append-at-head.
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO events (
 			id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 			reason, message, diff_json, health_state, owner_kind, owner_name,
-			labels_json, count, correlation_id, cluster_context
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			labels_json, count, correlation_id, cluster_context, resource_created_at, seq
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM events))
 		ON CONFLICT(id) DO UPDATE SET
 			timestamp = excluded.timestamp,
 			event_type = excluded.event_type,
 			reason = excluded.reason,
 			message = excluded.message,
 			health_state = excluded.health_state,
-			count = excluded.count
+			count = excluded.count,
+			seq = excluded.seq,
+			resource_created_at = COALESCE(excluded.resource_created_at, events.resource_created_at),
+			owner_kind = CASE WHEN excluded.owner_kind != '' THEN excluded.owner_kind ELSE events.owner_kind END,
+			owner_name = CASE WHEN excluded.owner_name != '' THEN excluded.owner_name ELSE events.owner_name END,
+			labels_json = CASE WHEN excluded.labels_json != '' THEN excluded.labels_json ELSE events.labels_json END
 		WHERE events.source = 'k8s_event'
 			AND excluded.source = 'k8s_event'
 			AND excluded.timestamp >= events.timestamp
@@ -257,6 +297,10 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 			ownerKind = event.Owner.Kind
 			ownerName = event.Owner.Name
 		}
+		var resourceCreatedAt any
+		if event.CreatedAt != nil {
+			resourceCreatedAt = event.CreatedAt.Format(time.RFC3339Nano)
+		}
 
 		_, err = stmt.ExecContext(ctx,
 			event.ID,
@@ -278,6 +322,7 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 			event.Count,
 			event.CorrelationID,
 			event.ClusterContext,
+			resourceCreatedAt,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert event: %w", err)
@@ -293,7 +338,7 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	query := strings.Builder{}
 	query.WriteString("SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type, ")
 	query.WriteString("reason, message, diff_json, health_state, owner_kind, owner_name, ")
-	query.WriteString("labels_json, count, correlation_id, cluster_context FROM events WHERE 1=1")
+	query.WriteString("labels_json, count, correlation_id, cluster_context, resource_created_at, seq FROM events WHERE 1=1")
 
 	var args []any
 
@@ -378,6 +423,11 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	if opts.ClusterContext != "" {
 		query.WriteString(" AND cluster_context = ?")
 		args = append(args, opts.ClusterContext)
+	}
+
+	if opts.SinceSeq > 0 {
+		query.WriteString(" AND seq > ?")
+		args = append(args, opts.SinceSeq)
 	}
 
 	// Order by timestamp descending
@@ -498,7 +548,7 @@ func (s *SQLiteStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*Tim
 func (s *SQLiteStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, error) {
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 		reason, message, diff_json, health_state, owner_kind, owner_name,
-		labels_json, count, correlation_id, cluster_context FROM events WHERE id = ?`
+		labels_json, count, correlation_id, cluster_context, resource_created_at, seq FROM events WHERE id = ?`
 
 	row := s.db.QueryRowContext(ctx, query, id)
 	event, err := s.scanEventRow(row)
@@ -519,7 +569,7 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 		reason, message, diff_json, health_state, owner_kind, owner_name,
-		labels_json, count, correlation_id, cluster_context FROM events
+		labels_json, count, correlation_id, cluster_context, resource_created_at, seq FROM events
 		WHERE owner_kind = ? AND owner_name = ? AND namespace = ?`
 
 	args := []any{ownerKind, ownerName, ownerNamespace}
@@ -887,7 +937,7 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 	var timestamp string
 	var source, eventType, healthState string
 	var apiVersion, uid, reason, message, diffJSON, labelsJSON sql.NullString
-	var ownerKind, ownerName, correlationID, clusterContext sql.NullString
+	var ownerKind, ownerName, correlationID, clusterContext, resourceCreatedAt sql.NullString
 
 	err := rows.Scan(
 		&event.ID,
@@ -909,11 +959,18 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 		&event.Count,
 		&correlationID,
 		&clusterContext,
+		&resourceCreatedAt,
+		&event.Seq,
 	)
 	if err != nil {
 		return event, err
 	}
 	event.ClusterContext = clusterContext.String
+	if resourceCreatedAt.Valid && resourceCreatedAt.String != "" {
+		if t, err := time.Parse(time.RFC3339Nano, resourceCreatedAt.String); err == nil {
+			event.CreatedAt = &t
+		}
+	}
 
 	event.Timestamp, _ = time.Parse(time.RFC3339Nano, timestamp)
 	event.Source = EventSource(source)
@@ -963,7 +1020,7 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 	var timestamp string
 	var source, eventType, healthState string
 	var apiVersion, uid, reason, message, diffJSON, labelsJSON sql.NullString
-	var ownerKind, ownerName, correlationID, clusterContext sql.NullString
+	var ownerKind, ownerName, correlationID, clusterContext, resourceCreatedAt sql.NullString
 
 	err := row.Scan(
 		&event.ID,
@@ -985,11 +1042,18 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 		&event.Count,
 		&correlationID,
 		&clusterContext,
+		&resourceCreatedAt,
+		&event.Seq,
 	)
 	if err != nil {
 		return event, err
 	}
 	event.ClusterContext = clusterContext.String
+	if resourceCreatedAt.Valid && resourceCreatedAt.String != "" {
+		if t, err := time.Parse(time.RFC3339Nano, resourceCreatedAt.String); err == nil {
+			event.CreatedAt = &t
+		}
+	}
 
 	event.Timestamp, _ = time.Parse(time.RFC3339Nano, timestamp)
 	event.Source = EventSource(source)

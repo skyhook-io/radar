@@ -925,8 +925,22 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
   }>({ updatedKinds: new Set(), timer: null })
+  const timelineInvalidationRef = useRef<{ timer: number | null }>({ timer: null })
 
   const handleK8sEvent = useCallback((event: K8sEvent) => {
+    // The timeline consumes every frame — including the K8s Event kind the
+    // resource tiers skip below (warnings like BackOff are timeline content).
+    // Its own trailing throttle keeps the live view fresh within seconds
+    // while batching bursts into one refetch; the 60s poll on useChanges
+    // remains the no-SSE fallback.
+    const tl = timelineInvalidationRef.current
+    if (tl.timer === null) {
+      tl.timer = window.setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['changes'] })
+        timelineInvalidationRef.current = { timer: null }
+      }, 5000)
+    }
+
     // Skip K8s Event kind — informational, not resource mutations
     if (event.kind === 'Event') return
 

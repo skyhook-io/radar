@@ -118,8 +118,14 @@ function useLocalEvents(query: TimelineQuery): TimelineEventsResult {
   // and bound it to the selection client-side (applyClientFilters), exactly as
   // the swimlane derives its view from the loaded ring.
   const windowed = query.fromMs != null || query.toMs != null
+  // deltaSync on every full-ring pull (timeRange 'all' — the swimlane's direct
+  // query and the list's windowed one): SSE-driven refetches then transfer only
+  // what arrived since the last full load. Dropdown-ranged (`since`) queries
+  // stay plain — they're small and their range moves with the clock.
   const { data, isLoading, isError, refetch } = useChanges(
-    windowed ? { ...query, timeRange: 'all', limit: LOCAL_RING_LIMIT } : query,
+    windowed
+      ? { ...query, timeRange: 'all', limit: LOCAL_RING_LIMIT, deltaSync: true }
+      : { ...query, deltaSync: query.timeRange === 'all' },
   )
   const events = useMemo(
     () => (windowed && data ? applyClientFilters(data, query) : data),

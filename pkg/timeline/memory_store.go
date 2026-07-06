@@ -12,8 +12,9 @@ import (
 type MemoryStore struct {
 	records       []TimelineEvent
 	maxSize       int
-	head          int // next write position
+	head          int   // next write position
 	count         int
+	lastSeq       int64 // arrival counter; every head write (incl. upsert re-append) takes the next value
 	index         map[string]int // event id -> ring slot, for dedup + upsert
 	mu            sync.RWMutex
 	seenResources map[string]bool
@@ -64,6 +65,19 @@ func (m *MemoryStore) appendLocked(event TimelineEvent) {
 			// K8s Events bump count/message on the same uid, but an out-of-order
 			// older revision must not clobber a newer one.
 			if event.Source == SourceK8sEvent && !event.Timestamp.Before(m.records[idx].Timestamp) {
+				// A bump that lost its enrichment (tombstone expired, object gone
+				// from the live cache) must not erase what the row already knows;
+				// a bump that carries enrichment wins as the fresher truth.
+				old := m.records[idx]
+				if event.CreatedAt == nil {
+					event.CreatedAt = old.CreatedAt
+				}
+				if event.Owner == nil {
+					event.Owner = old.Owner
+				}
+				if event.Labels == nil {
+					event.Labels = old.Labels
+				}
 				// Vacate the old slot and re-append at head. Queries iterate by
 				// ring position (newest insert first), so updating in place would
 				// leave a count-bump buried at its stale recency; moving it to
@@ -91,6 +105,8 @@ func (m *MemoryStore) writeAtHead(event TimelineEvent) {
 		}
 	}
 
+	m.lastSeq++
+	event.Seq = m.lastSeq
 	m.records[m.head] = event
 	if event.ID != "" {
 		m.index[event.ID] = m.head
@@ -332,6 +348,10 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 
 	// Apply individual filters (these override preset if both specified)
 	if opts.ClusterContext != "" && event.ClusterContext != opts.ClusterContext {
+		return false
+	}
+
+	if opts.SinceSeq > 0 && event.Seq <= opts.SinceSeq {
 		return false
 	}
 

@@ -1128,6 +1128,84 @@ export interface UseChangesOptions {
   includeDeleted?: boolean
   limit?: number
   enabled?: boolean
+  // Cursor-aware refetches: after the first full load, refetches ask the
+  // server only for events that arrived after the highest seq already cached
+  // and merge them in, instead of re-pulling the whole ring. Intended for the
+  // timeline's full-ring (10k) query, where every SSE nudge would otherwise
+  // re-transfer megabytes for a handful of new events.
+  deltaSync?: boolean
+}
+
+// The store epoch guards delta cursors: a restarted store restarts seq
+// numbering, so an epoch change forces a full resync. A periodic full resync
+// also runs as anti-entropy for anything a dropped SSE connection or a
+// server-side eviction could leave behind in the cached copy.
+const FULL_RESYNC_MS = 5 * 60_000
+
+export interface ChangesDeltaMeta {
+  epoch: string
+  lastFullMs: number
+  // Highest seq observed in ANY response for this query — not just what
+  // survived the cap. A delta event older than everything cached gets capped
+  // out of the merge; deriving the cursor from cached rows alone would then
+  // re-request that same event on every refetch until the next full resync.
+  highWaterSeq: number
+}
+const changesDeltaMeta = new Map<string, ChangesDeltaMeta>()
+
+// The since_seq cursor for the next refetch, or 0 for a full fetch. Delta
+// requires an epoch-stamped prior full load, a cached page to merge into, and
+// the anti-entropy full resync not being due.
+export function deltaFetchCursor(
+  meta: ChangesDeltaMeta | undefined,
+  cached: TimelineEvent[] | undefined,
+  nowMs: number,
+): number {
+  if (!meta?.epoch || !cached) return 0
+  if (nowMs - meta.lastFullMs > FULL_RESYNC_MS) return 0
+  return Math.max(meta.highWaterSeq, maxEventSeq(cached))
+}
+
+async function fetchChangesPage(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ events: TimelineEvent[]; epoch: string }> {
+  const response = await apiFetch(`${getApiBase()}${path}`, signal ? { signal } : undefined)
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+    throw new ApiError(errorData.error || `HTTP ${response.status}`, response.status, errorData)
+  }
+  const events = (await response.json()) as TimelineEvent[]
+  return { events, epoch: response.headers.get('X-Radar-Timeline-Epoch') ?? '' }
+}
+
+// Highest store-assigned arrival number in the cached page — the delta cursor.
+export function maxEventSeq(events: TimelineEvent[]): number {
+  let max = 0
+  for (const event of events) {
+    if (event.seq && event.seq > max) max = event.seq
+  }
+  return max
+}
+
+// Merge a delta page into the cached page: a delta row replaces its cached id
+// (a K8s Event count bump re-arrives under the same id), new ids are added,
+// order stays newest-first (arrival number breaks timestamp ties), and the
+// result is capped to the query's limit by dropping the oldest.
+export function mergeDeltaEvents(
+  prev: TimelineEvent[],
+  delta: TimelineEvent[],
+  cap: number,
+): TimelineEvent[] {
+  if (delta.length === 0) return prev
+  const replaced = new Set(delta.map((event) => event.id))
+  const merged = [...delta, ...prev.filter((event) => !replaced.has(event.id))]
+  merged.sort((a, b) => {
+    const byTime = new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    if (byTime !== 0) return byTime
+    return (b.seq ?? 0) - (a.seq ?? 0)
+  })
+  return merged.length > cap ? merged.slice(0, cap) : merged
 }
 
 function getTimeRangeDate(range: TimeRange): Date | null {
@@ -1154,7 +1232,8 @@ function getTimeRangeDate(range: TimeRange): Date | null {
 }
 
 export function useChanges(options: UseChangesOptions = {}) {
-  const { namespaces = [], kinds, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, includeDeleted = true, limit = 200, enabled = true } = options
+  const { namespaces = [], kinds, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, includeDeleted = true, limit = 200, enabled = true, deltaSync = false } = options
+  const queryClient = useQueryClient()
 
   // Only a single-kind selection narrows the server query; a multi-kind
   // selection is filtered client-side so the server cap isn't spent on one kind.
@@ -1175,12 +1254,34 @@ export function useChanges(options: UseChangesOptions = {}) {
   }
 
   const queryString = params.toString()
+  const path = `/changes${queryString ? `?${queryString}` : ''}`
+  const queryKey = ['changes', namespaces, serverKind, timeRange, filter, includeK8sEvents, includeManaged, includeDeleted, limit]
 
   return useQuery<TimelineEvent[]>({
-    queryKey: ['changes', namespaces, serverKind, timeRange, filter, includeK8sEvents, includeManaged, includeDeleted, limit],
-    queryFn: () => fetchJSON(`/changes${queryString ? `?${queryString}` : ''}`),
+    queryKey,
+    queryFn: async ({ signal }) => {
+      if (!deltaSync) return fetchJSON(path, signal)
+
+      const metaKey = JSON.stringify(queryKey)
+      const cached = queryClient.getQueryData<TimelineEvent[]>(queryKey)
+      const meta = changesDeltaMeta.get(metaKey)
+      const cursor = deltaFetchCursor(meta, cached, Date.now())
+      if (cursor > 0) {
+        const delta = await fetchChangesPage(`${path}${queryString ? '&' : '?'}since_seq=${cursor}`, signal)
+        if (delta.epoch && delta.epoch === meta!.epoch) {
+          meta!.highWaterSeq = Math.max(meta!.highWaterSeq, maxEventSeq(delta.events))
+          // Returning the cached reference on an empty delta skips re-renders.
+          return delta.events.length ? mergeDeltaEvents(cached!, delta.events, limit) : cached!
+        }
+        // Epoch changed — the store restarted and seq numbering reset, so the
+        // cursor is meaningless. Fall through to a full resync.
+      }
+      const full = await fetchChangesPage(path, signal)
+      changesDeltaMeta.set(metaKey, { epoch: full.epoch, lastFullMs: Date.now(), highWaterSeq: maxEventSeq(full.events) })
+      return full.events
+    },
     staleTime: 5000, // Consider data stale after 5 seconds to ensure fresh data on navigation
-    refetchInterval: CHANGES_REFRESH_INTERVAL_MS, // SSE handles real-time updates; this is a fallback
+    refetchInterval: CHANGES_REFRESH_INTERVAL_MS, // SSE-driven invalidation handles real-time updates; this is the no-SSE fallback
     enabled,
   })
 }

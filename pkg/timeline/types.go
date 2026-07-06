@@ -84,6 +84,12 @@ type TimelineEvent struct {
 	ID        string      `json:"id"`
 	Timestamp time.Time   `json:"timestamp"`
 	Source    EventSource `json:"source"`
+	// Seq is the store-assigned arrival number: monotonic per store instance,
+	// re-assigned when a K8s Event upserts (a count bump is a new arrival).
+	// Delta reads cursor on it — arrival order, not event time — so a
+	// late-arriving event with an older timestamp can't slip behind a client's
+	// cursor. 0 means the store didn't assign one.
+	Seq int64 `json:"seq,omitempty"`
 	// ClusterContext is the kubeconfig context the event was observed on
 	// ("in-cluster" when no context name exists). Persistent stores outlive
 	// context switches, so reads MUST scope to the active context or events

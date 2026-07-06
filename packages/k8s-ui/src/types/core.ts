@@ -275,6 +275,10 @@ export interface TimelineEvent {
   id: string
   timestamp: string // ISO date string
   source: EventSource // Where event originated: 'informer', 'k8s_event', 'historical'
+  // Store-assigned arrival number (monotonic per store instance). The delta
+  // cursor keys on it — arrival order, not event time, so late-arriving
+  // events can't slip behind a client's cursor.
+  seq?: number
 
   // Resource identity
   kind: string

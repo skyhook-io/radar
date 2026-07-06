@@ -6,6 +6,7 @@ import {
   clampWindowToBounds,
   zoomWindowWithinBounds,
   clusterEventsByPosition,
+  clusterBreakdown,
   clusterDrawerState,
   resolveEventCluster,
   restoreIsPending,
@@ -135,6 +136,57 @@ describe('clusterEventsByPosition (collapse near-overlapping markers)', () => {
     expect(eventSeverityRank(mkEvent('x', 'Warning'))).toBeGreaterThan(eventSeverityRank(mkEvent('x', 'delete')))
     expect(eventSeverityRank(mkEvent('x', 'delete'))).toBeGreaterThan(eventSeverityRank(mkEvent('x', 'add')))
     expect(eventSeverityRank(mkEvent('x', 'add'))).toBeGreaterThan(eventSeverityRank(mkEvent('x', 'update')))
+  })
+})
+
+describe('clusterBreakdown (pill hover breakdown)', () => {
+  it('groups members into count×label lines, most-severe label first', () => {
+    const { lines, more } = clusterBreakdown([
+      mkEvent('u1', 'update'),
+      mkEvent('u2', 'update'),
+      mkEvent('a1', 'add'),
+      { ...mkEvent('w1', 'Warning'), reason: 'BackOff' },
+    ])
+    expect(more).toBe(0)
+    expect(lines).toEqual([
+      { label: 'BackOff', count: 1 },
+      { label: 'Created', count: 1 },
+      { label: 'Modified', count: 2 },
+    ])
+  })
+
+  it('merges same-reason warnings into one line with a count', () => {
+    const { lines } = clusterBreakdown([
+      { ...mkEvent('w1', 'Warning'), reason: 'BackOff' },
+      { ...mkEvent('w2', 'Warning'), reason: 'BackOff' },
+      { ...mkEvent('w3', 'Warning'), reason: 'Unhealthy' },
+    ])
+    expect(lines).toEqual([
+      { label: 'BackOff', count: 2 },
+      { label: 'Unhealthy', count: 1 },
+    ])
+  })
+
+  it('caps at maxLines and reports the remaining event total as more', () => {
+    const { lines, more } = clusterBreakdown(
+      [
+        { ...mkEvent('w1', 'Warning'), reason: 'BackOff' },
+        { ...mkEvent('w2', 'Warning'), reason: 'Unhealthy' },
+        { ...mkEvent('w3', 'Warning'), reason: 'Failed' },
+        mkEvent('d1', 'delete'),
+        mkEvent('a1', 'add'),
+        mkEvent('u1', 'update'),
+      ],
+      4,
+    )
+    expect(lines).toHaveLength(4)
+    expect(lines[3]).toEqual({ label: 'Deleted', count: 1 })
+    expect(more).toBe(2)
+  })
+
+  it('labels a reason-less warning as Warning', () => {
+    const { lines } = clusterBreakdown([mkEvent('w1', 'Warning')])
+    expect(lines).toEqual([{ label: 'Warning', count: 1 }])
   })
 })
 

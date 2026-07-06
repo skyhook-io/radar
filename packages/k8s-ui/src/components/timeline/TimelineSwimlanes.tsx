@@ -347,6 +347,54 @@ export function clusterEventsByPosition(
   return clusters
 }
 
+/** One line of a cluster pill's hover breakdown: a shared label with a count. */
+export interface ClusterBreakdownLine {
+  label: string
+  count: number
+}
+
+function breakdownLabel(event: TimelineEvent): string {
+  if (isProblematicEvent(event)) return event.reason || 'Warning'
+  if (isChangeEvent(event)) {
+    if (event.eventType === 'add') return 'Created'
+    if (event.eventType === 'delete') return 'Deleted'
+    if (event.eventType === 'update') return 'Modified'
+    return 'Changed'
+  }
+  return event.reason || 'Event'
+}
+
+/**
+ * Group a cluster's members into "count× label" lines for the pill tooltip,
+ * ordered by severity (warnings first), then count, then label. Labels reuse
+ * the single-marker vocabulary: the K8s reason for warnings, the operation
+ * for change events. Caps at `maxLines`; the remainder's event total is
+ * reported as `more`.
+ */
+export function clusterBreakdown(
+  events: TimelineEvent[],
+  maxLines = 5,
+): { lines: ClusterBreakdownLine[]; more: number } {
+  const groups = new Map<string, { count: number; rank: number }>()
+  for (const event of events) {
+    const label = breakdownLabel(event)
+    const rank = eventSeverityRank(event)
+    const group = groups.get(label)
+    if (group) {
+      group.count++
+      if (rank > group.rank) group.rank = rank
+    } else {
+      groups.set(label, { count: 1, rank })
+    }
+  }
+  const ordered = [...groups.entries()]
+    .map(([label, group]) => ({ label, count: group.count, rank: group.rank }))
+    .sort((a, b) => b.rank - a.rank || b.count - a.count || a.label.localeCompare(b.label))
+  const lines = ordered.slice(0, maxLines).map(({ label, count }) => ({ label, count }))
+  const more = ordered.slice(maxLines).reduce((sum, group) => sum + group.count, 0)
+  return { lines, more }
+}
+
 /** The drawer state a cluster opens into: a single-event cluster opens the
  *  one-event panel; a multi-event cluster opens in cluster mode with members
  *  ordered most-severe-first. `preferId` (URL restore) selects that member when
@@ -2135,7 +2183,7 @@ function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggrega
             key={i}
             className={clsx('absolute bottom-0 h-[7px]', getHealthStripColor(span.health))}
             style={{ left: `${clampedLeft}%`, width: `${clampedWidth}%` }}
-            title={`${span.health} (${new Date(span.start).toLocaleTimeString()} - ${new Date(span.end).toLocaleTimeString()})`}
+            title={`Health: ${span.health} · ${new Date(span.start).toLocaleTimeString()} - ${new Date(span.end).toLocaleTimeString()}`}
           >
             {showCreatedBefore && (
               <span className="absolute bottom-[9px] left-0.5 text-[9px] text-theme-text-tertiary whitespace-nowrap pointer-events-none">
@@ -2256,9 +2304,21 @@ function ClusterPill({ cluster, selected, onClick, small }: {
   onClick: () => void
   small?: boolean
 }) {
+  const { lines, more } = clusterBreakdown(cluster.events)
   return (
     <Tooltip
-      content={`${cluster.count} events · click to browse`}
+      content={
+        <div className="space-y-0.5">
+          <div className="font-medium">{cluster.count} events</div>
+          {lines.map((line) => (
+            <div key={line.label} className="tabular-nums">
+              {line.count}× {line.label}
+            </div>
+          ))}
+          {more > 0 && <div className="text-theme-text-tertiary">…and {more} more</div>}
+          <div className="text-theme-text-tertiary">click to browse</div>
+        </div>
+      }
       position="top"
       delay={100}
       wrapperClassName="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20"

@@ -633,3 +633,151 @@ func TestMemoryStore_FilterPreset(t *testing.T) {
 		t.Errorf("Expected 3 events with 'all' preset, got %d", len(result))
 	}
 }
+
+// Seq is the delta cursor: strictly increasing per arrival, and SinceSeq must
+// return exactly the events that arrived after the cursor — regardless of
+// their timestamps (a late event with an older timestamp still lands ahead).
+func TestMemoryStore_SeqCursor(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	base := time.Now()
+	mk := func(id string, ts time.Time) TimelineEvent {
+		return TimelineEvent{
+			ID: id, Timestamp: ts, Source: SourceInformer,
+			Kind: "Pod", Namespace: "default", Name: id, EventType: EventTypeUpdate,
+		}
+	}
+	if err := store.AppendBatch(ctx, []TimelineEvent{mk("a", base), mk("b", base.Add(time.Second))}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	all, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(all) != 2 || all[0].Seq <= all[1].Seq || all[1].Seq == 0 {
+		t.Fatalf("expected 2 events with increasing arrival seq (newest first), got %+v", all)
+	}
+	cursor := all[0].Seq // newest arrival
+
+	// A late event: OLDER timestamp than anything stored, but it arrives now.
+	if err := store.Append(ctx, mk("late", base.Add(-time.Hour))); err != nil {
+		t.Fatalf("Append late: %v", err)
+	}
+	delta, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, SinceSeq: cursor})
+	if err != nil {
+		t.Fatalf("Query delta: %v", err)
+	}
+	if len(delta) != 1 || delta[0].ID != "late" {
+		t.Fatalf("expected exactly the late arrival past the cursor, got %+v", delta)
+	}
+	if delta[0].Seq <= cursor {
+		t.Fatalf("late arrival seq %d must exceed cursor %d", delta[0].Seq, cursor)
+	}
+}
+
+// A K8s Event count bump re-appends at head, so its seq must advance past an
+// existing cursor — otherwise a delta reader never sees the bump.
+func TestMemoryStore_K8sEventBumpAdvancesSeq(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	base := time.Now()
+	mk := func(count int32, ts time.Time) TimelineEvent {
+		return TimelineEvent{
+			ID: "k8s-uid-1", Timestamp: ts, Source: SourceK8sEvent,
+			Kind: "Pod", Namespace: "default", Name: "web-abc",
+			EventType: EventTypeWarning, Reason: "BackOff", Count: count,
+		}
+	}
+	if err := store.Append(ctx, mk(1, base)); err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	first, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil || len(first) != 1 {
+		t.Fatalf("Query first: %v %+v", err, first)
+	}
+	cursor := first[0].Seq
+
+	if err := store.Append(ctx, mk(5, base.Add(30*time.Second))); err != nil {
+		t.Fatalf("Append bump: %v", err)
+	}
+	delta, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true, SinceSeq: cursor})
+	if err != nil {
+		t.Fatalf("Query delta: %v", err)
+	}
+	if len(delta) != 1 || delta[0].Count != 5 {
+		t.Fatalf("expected the bumped row past the cursor, got %+v", delta)
+	}
+}
+
+// A bump that lost its enrichment (tombstone expired) must not erase the
+// owner/labels/createdAt the row already knows; a bump that carries fresh
+// enrichment wins.
+func TestMemoryStore_K8sEventBumpPreservesEnrichment(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	base := time.Now()
+	born := base.Add(-time.Hour)
+	enriched := TimelineEvent{
+		ID: "k8s-uid-1", Timestamp: base, Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "web-abc",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 1,
+		CreatedAt: &born,
+		Owner:     &OwnerInfo{Kind: "ReplicaSet", Name: "web"},
+		Labels:    map[string]string{"app": "web"},
+	}
+	if err := store.Append(ctx, enriched); err != nil {
+		t.Fatalf("Append enriched: %v", err)
+	}
+	bare := TimelineEvent{
+		ID: "k8s-uid-1", Timestamp: base.Add(30 * time.Second), Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "web-abc",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 5,
+	}
+	if err := store.Append(ctx, bare); err != nil {
+		t.Fatalf("Append bare bump: %v", err)
+	}
+
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Query: %v %+v", err, got)
+	}
+	if got[0].Count != 5 {
+		t.Fatalf("expected bumped count 5, got %d", got[0].Count)
+	}
+	if got[0].CreatedAt == nil || !got[0].CreatedAt.Equal(born) {
+		t.Fatalf("bare bump erased CreatedAt: %+v", got[0].CreatedAt)
+	}
+	if got[0].Owner == nil || got[0].Owner.Name != "web" {
+		t.Fatalf("bare bump erased Owner: %+v", got[0].Owner)
+	}
+	if got[0].Labels["app"] != "web" {
+		t.Fatalf("bare bump erased Labels: %+v", got[0].Labels)
+	}
+
+	// The inverse: a bump that carries enrichment fills a row that lacked it.
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "k8s-uid-2", Timestamp: base, Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "late-enriched",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 1,
+	}); err != nil {
+		t.Fatalf("Append bare first: %v", err)
+	}
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "k8s-uid-2", Timestamp: base.Add(time.Minute), Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "late-enriched",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 2,
+		Owner: &OwnerInfo{Kind: "Job", Name: "batch"},
+	}); err != nil {
+		t.Fatalf("Append enriched bump: %v", err)
+	}
+	row, err := store.GetEvent(ctx, "k8s-uid-2")
+	if err != nil || row == nil {
+		t.Fatalf("GetEvent: %v %+v", err, row)
+	}
+	if row.Owner == nil || row.Owner.Name != "batch" {
+		t.Fatalf("enriched bump did not fill Owner: %+v", row.Owner)
+	}
+}

@@ -67,6 +67,11 @@ type QueryOptions struct {
 	// filter deliberately excludes.
 	ClusterContext string
 
+	// SinceSeq returns only events whose arrival number (Seq) is greater
+	// than this; 0 means no cursor. This is the delta-read cursor: arrival
+	// order, not event time, so late-arriving events can't be skipped.
+	SinceSeq int64
+
 	// Filter preset (overrides individual filters if set)
 	FilterPreset string
 
