@@ -71,7 +71,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const { data: helmData } = useDashboardHelm(namespaces)
 
   if (isLoading) {
-    return <PaneLoader label="Loading dashboard…" className="flex-1 min-h-[calc(100vh-51px)]" />
+    return <PaneLoader label="Loading dashboard…" className="flex-1 min-h-0" />
   }
 
   if (error || !data) {

@@ -228,7 +228,7 @@ function AuthBarrier({ authMode }: { authMode: string }) {
     return (
       <PaneLoader
         label="Redirecting to login…"
-        className="flex-1 min-h-[calc(100vh-51px)] bg-theme-base"
+        className="flex-1 min-h-0 bg-theme-base"
       />
     )
   }
@@ -1877,7 +1877,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
         <PaneLoader
           label="Connecting to cluster"
-          className="flex-1 min-h-[calc(100vh-51px)] bg-theme-base"
+          className="flex-1 min-h-0 bg-theme-base"
         >
           {connection.context && (
             <span className="mt-1 block text-sm font-normal tracking-normal text-theme-text-secondary">
@@ -1896,7 +1896,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {isSwitching && (
         <PaneLoader
           label="Switching context"
-          className="flex-1 min-h-[calc(100vh-51px)] bg-theme-base"
+          className="flex-1 min-h-0 bg-theme-base"
         >
           {targetContext && (
             <span className="mt-2 block text-xs font-normal tracking-normal text-theme-text-tertiary">
@@ -2190,7 +2190,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         {viewTakeoverHref && (
           <PaneLoader
             label="Opening…"
-            className="flex-1 min-h-[calc(100vh-51px)] bg-theme-base"
+            className="flex-1 min-h-0 bg-theme-base"
           />
         )}
 

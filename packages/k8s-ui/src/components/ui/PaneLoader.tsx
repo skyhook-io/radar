@@ -38,9 +38,13 @@ export function PaneLoader({
             primary) so the whole loading family — boot splash, connect splash,
             PaneLoader — reads as one continuous state, not a font change at the
             hand-off. */}
-        <span className="absolute left-1/2 top-full mt-3 -translate-x-1/2 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
-          {label}
-          {children}
+        <span className="absolute left-1/2 top-full mt-3 w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 text-center text-[17px] font-semibold tracking-tight text-theme-text-primary">
+          <span className="block whitespace-nowrap">{label}</span>
+          {children && (
+            <span className="block whitespace-normal">
+              {children}
+            </span>
+          )}
         </span>
       </span>
     </div>
