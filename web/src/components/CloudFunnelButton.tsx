@@ -219,7 +219,7 @@ function LetterVariant() {
           The way we keep the lights on is <b className="text-theme-text-primary font-semibold">Radar Cloud</b> —
           the same Radar, plus the parts that are genuinely hard to run yourself: every cluster under one URL,
           your team with SSO, alerts that find you at 3am, history that sticks around, and an AI agent that
-          analyzes issues and solves them for you.
+          analyzes issues and proposes the fix.
         </p>
         <p>
           If it's just you and one cluster — honestly, stay right here. This app is the product, not a demo.
@@ -265,7 +265,7 @@ function FeaturesVariant() {
     {
       icon: Sparkles,
       title: 'An AI agent on your fleet',
-      body: 'Analyzes issues, pinpoints the root cause, and solves them for you.',
+      body: 'Analyzes issues, pinpoints the root cause, and proposes the fix.',
       wide: true,
     },
   ]
@@ -341,7 +341,7 @@ function PostcardVariant() {
             'Your team — SSO, roles, RBAC intact',
             'Slack alerts when things break at 3am',
             'History that sticks around',
-            'An AI agent that analyzes and solves issues',
+            'An AI agent that analyzes issues and proposes fixes',
           ].map((line) => (
             <li key={line} className="flex items-start gap-2">
               <span className="mt-[7px] w-1 h-1 rounded-full bg-emerald-500 shrink-0" />
