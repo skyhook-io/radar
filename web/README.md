@@ -38,6 +38,12 @@ export function ClusterPage({ clusterId }: { clusterId: string }) {
 
 See `RadarAppProps` + `NavCustomization` in the type declarations for the full surface.
 
+## Embedding notes
+
+When `navSlots.embedded` is true, Radar sizes itself to the host container (`height: 100%`) instead of owning the browser viewport. Mount it inside a container with a definite height so the host chrome owns the page scrollbar.
+
+Chromeless hosts (`navSlots.chrome = 'none'`) can pass `onClusterLoadStateChange` and render `state.message` in their own topbar while Radar finishes loading deferred cluster resources.
+
 ## Tailwind
 
 Radar uses Tailwind v4 classes throughout. Your app's Tailwind config must scan Radar's source:
@@ -64,4 +70,4 @@ Call these before mounting `<RadarApp>`.
 
 ## Backwards compatibility
 
-The `RadarApp` props (`apiBase`, `basename`, `router`, `navSlots`, `queryClient`) and the runtime-config setters are the stable surface. Adding to them is fine; removing or renaming is a breaking change.
+The `RadarApp` props (`apiBase`, `basename`, `router`, `navSlots`, `queryClient`, `manageDocumentTitle`, `documentTitleSuffix`, `initialPath`, `onClusterLoadStateChange`) and the runtime-config setters are the stable surface. Adding to them is fine; removing or renaming is a breaking change.

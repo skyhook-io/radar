@@ -27,6 +27,7 @@ import { setApiBase, setBasename } from './api/config';
 import { NavCustomizationProvider } from './context/NavCustomization';
 import { FilterLocationBridge } from './filter/FilterLocationBridge';
 import type { NavCustomization } from './context/NavCustomization';
+import type { ClusterLoadState } from './types/clusterLoadState';
 
 // Declare the shape of mutation meta here — inlined rather than in a
 // separate side-effect-only module so consumers that tree-shake aggressively
@@ -93,6 +94,12 @@ export interface RadarAppProps {
    * chromeless under the host's own chrome (Radar Hub's per-cluster destinations).
    */
   initialPath?: string;
+  /**
+   * Reports cluster-data warmup after the main connection is usable. Embedders
+   * with their own chrome (Radar Hub) can render this in their topbar while
+   * Radar runs with `navSlots.chrome: 'none'`.
+   */
+  onClusterLoadStateChange?: (state: ClusterLoadState) => void;
 }
 
 // Default QueryClient with the same shape Radar's standalone binary uses.
@@ -135,6 +142,7 @@ export function RadarApp({
   manageDocumentTitle = false,
   documentTitleSuffix,
   initialPath,
+  onClusterLoadStateChange,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
   // before children construct URLs. getApiBase() / getAuthHeaders() /
@@ -155,7 +163,11 @@ export function RadarApp({
         <ToastProvider>
           <NavCustomizationProvider value={navSlots}>
             <FilterLocationBridge>
-              <App manageDocumentTitle={manageDocumentTitle} documentTitleSuffix={documentTitleSuffix} />
+              <App
+                manageDocumentTitle={manageDocumentTitle}
+                documentTitleSuffix={documentTitleSuffix}
+                onClusterLoadStateChange={onClusterLoadStateChange}
+              />
             </FilterLocationBridge>
           </NavCustomizationProvider>
         </ToastProvider>

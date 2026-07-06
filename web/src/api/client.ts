@@ -371,11 +371,12 @@ export interface DashboardCRDsResponse {
   topCRDs: DashboardCRDCount[]
 }
 
-export function useDashboard(namespaces: string[] = []) {
+export function useDashboard(namespaces: string[] = [], options?: { enabled?: boolean }) {
   const params = namespaces.length > 0 ? `?namespaces=${namespaces.join(',')}` : ''
   return useQuery<DashboardResponse>({
     queryKey: ['dashboard', namespaces],
     queryFn: () => fetchJSON(`/dashboard${params}`),
+    enabled: options?.enabled ?? true,
     staleTime: 15000, // 15 seconds
     refetchInterval: DASHBOARD_REFRESH_INTERVAL_MS,
   })

@@ -45,14 +45,15 @@ import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
+import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit, useDashboard } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
+import { dashboardClusterLoadState, idleClusterLoadState, type ClusterLoadState } from './types/clusterLoadState'
 import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
-import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, HelpCircle } from 'lucide-react'
+import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, HelpCircle, Loader2 } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -279,7 +280,13 @@ function peekOwnerKey(pathname: string, search: string): string {
   return `${pathname}\n${new URLSearchParams(search).get('app') ?? ''}`
 }
 
-function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manageDocumentTitle?: boolean; documentTitleSuffix?: string }) {
+interface AppProps {
+  manageDocumentTitle?: boolean
+  documentTitleSuffix?: string
+  onClusterLoadStateChange?: (state: ClusterLoadState) => void
+}
+
+function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const navigationType = useNavigationType()
@@ -894,6 +901,65 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
   // a drawer only ever sits over a real content surface.
   const contentReady = !isSwitching && !authMePending &&
     !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
+
+  const showHomeClusterLoadFallback = chromeless && !onClusterLoadStateChange && mainView === 'home'
+  const needsClusterLoadState = contentReady && (!chromeless || Boolean(onClusterLoadStateChange) || showHomeClusterLoadFallback)
+  const clusterLoadNamespaceKey = namespaces.join('\0')
+  const [clusterLoadObserverActive, setClusterLoadObserverActive] = useState(false)
+  useEffect(() => {
+    if (!needsClusterLoadState) {
+      setClusterLoadObserverActive(false)
+      return
+    }
+    setClusterLoadObserverActive(true)
+  }, [needsClusterLoadState, clusterLoadNamespaceKey])
+  useEffect(() => {
+    if (needsClusterLoadState && mainView === 'home') {
+      setClusterLoadObserverActive(true)
+    }
+  }, [mainView, needsClusterLoadState])
+
+  const clusterLoadObserverEnabled = needsClusterLoadState && clusterLoadObserverActive
+  const {
+    data: clusterLoadData,
+    isPending: clusterLoadPending,
+    isError: clusterLoadError,
+  } = useDashboard(namespaces, { enabled: clusterLoadObserverEnabled })
+  const clusterLoadState = useMemo(
+    () => {
+      if (!needsClusterLoadState) return idleClusterLoadState
+      if (clusterLoadData) return dashboardClusterLoadState(clusterLoadData)
+      if (clusterLoadObserverEnabled && clusterLoadPending) {
+        return {
+          loading: true,
+          message: 'Loading remaining resources…',
+          pendingKinds: [],
+        }
+      }
+      return idleClusterLoadState
+    },
+    [clusterLoadData, clusterLoadObserverEnabled, clusterLoadPending, needsClusterLoadState],
+  )
+  const clusterLoadStateKnown =
+    !needsClusterLoadState || Boolean(clusterLoadData) || (clusterLoadObserverEnabled && (clusterLoadPending || clusterLoadError))
+  useEffect(() => {
+    if (
+      needsClusterLoadState &&
+      mainView !== 'home' &&
+      ((clusterLoadData && !clusterLoadState.loading) || clusterLoadError)
+    ) {
+      setClusterLoadObserverActive(false)
+    }
+  }, [clusterLoadData, clusterLoadError, clusterLoadState.loading, mainView, needsClusterLoadState])
+  useEffect(() => {
+    return () => {
+      onClusterLoadStateChange?.(idleClusterLoadState)
+    }
+  }, [onClusterLoadStateChange])
+  useEffect(() => {
+    if (!clusterLoadStateKnown) return
+    onClusterLoadStateChange?.(clusterLoadState)
+  }, [clusterLoadState, clusterLoadStateKnown, onClusterLoadStateChange])
 
   // Query client for cache invalidation
   const queryClient = useQueryClient()
@@ -1516,7 +1582,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
         content column (min-w-0, shrinkable) would fall below the old desktop
         floor at small windows. Embedded mode has no rail → plain 800. */}
     <div
-      className="relative flex h-screen bg-theme-base"
+      className={`relative flex bg-theme-base ${navCustomization.embedded ? 'h-full min-h-0' : 'h-screen'}`}
       style={{ minWidth: 800 + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
     >
       {showNavRail && (
@@ -1590,6 +1656,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
                 content={
                   !clusterConnected
                     ? 'Cluster disconnected — click to reconnect'
+                    : clusterLoadState.loading
+                      ? `Connected — ${clusterLoadState.message}`
                     : crdDiscoveryStatus === 'discovering'
                       ? 'Connected — discovering Custom Resources...'
                       : 'Connected'
@@ -1615,9 +1683,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
                   </button>
                 )}
               </Tooltip>
-              {showNavRail && (!clusterConnected || crdDiscoveryStatus === 'discovering') && (
-                <span className="hidden xl:block whitespace-nowrap text-[11px] text-theme-text-tertiary">
-                  {!clusterConnected ? 'Disconnected' : 'Discovering Custom Resources…'}
+              {(clusterLoadState.loading || (showNavRail && (!clusterConnected || crdDiscoveryStatus === 'discovering'))) && (
+                <span className="hidden xl:flex items-center gap-1.5 whitespace-nowrap text-[11px] text-theme-text-tertiary">
+                  {clusterLoadState.loading && <Loader2 className="w-3 h-3 animate-spin" />}
+                  {!clusterConnected
+                    ? 'Disconnected'
+                    : clusterLoadState.loading
+                      ? clusterLoadState.message
+                      : 'Discovering Custom Resources…'}
                 </span>
               )}
             </div>
@@ -1922,6 +1995,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix }: { manage
           <HomeView
             namespaces={namespaces}
             topology={topology}
+            fallbackClusterLoadState={showHomeClusterLoadFallback ? clusterLoadState : undefined}
             onNavigateToView={setMainView}
             onNavigateToResourceKind={(kind, apiGroup, filters) => {
               // Navigate to resources view with kind in URL path
@@ -2424,14 +2498,18 @@ function FloatingButtons({ showHelp, showCommandPalette, showDiagnostics, onHelp
 }
 
 // Main App component wrapped with providers
-function App({ manageDocumentTitle = false, documentTitleSuffix }: { manageDocumentTitle?: boolean; documentTitleSuffix?: string }) {
+function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
   return (
     <ConnectionProvider>
       <CapabilitiesProvider>
         <ContextSwitchProvider>
           <DockProvider>
             <KeyboardShortcutProvider>
-              <AppInner manageDocumentTitle={manageDocumentTitle} documentTitleSuffix={documentTitleSuffix} />
+              <AppInner
+                manageDocumentTitle={manageDocumentTitle}
+                documentTitleSuffix={documentTitleSuffix}
+                onClusterLoadStateChange={onClusterLoadStateChange}
+              />
             </KeyboardShortcutProvider>
           </DockProvider>
         </ContextSwitchProvider>

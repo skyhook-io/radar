@@ -1,6 +1,7 @@
 import { useMemo, type ReactNode } from 'react'
 import { useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, type IssuesResponse } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
+import type { ClusterLoadState } from '../../types/clusterLoadState'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
 import { TopologyPreview } from './TopologyPreview'
 import { HelmSummary } from './HelmSummary'
@@ -33,6 +34,7 @@ interface HomeViewProps {
   onNavigateToView: (view: ExtendedMainView, params?: Record<string, string>) => void
   onNavigateToResourceKind: (kind: string, group?: string, filters?: Record<string, string[]>) => void
   onNavigateToResource: (resource: SelectedResource) => void
+  fallbackClusterLoadState?: ClusterLoadState
   /**
    * Optional override for the Certificate Health card's click. When an embedded
    * host (Radar Cloud) takes Certs over with its own fleet page, it passes this
@@ -42,7 +44,7 @@ interface HomeViewProps {
   onNavigateToCerts?: () => void
 }
 
-export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts }: HomeViewProps) {
+export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts }: HomeViewProps) {
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
   const { connection } = useConnection()
   const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError } = useIssues(namespaces)
@@ -96,19 +98,13 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
     )
   }
 
-  const stillLoading = data.deferredLoading || (data.partialData && data.partialData.length > 0)
-
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-[1600px] mx-auto px-6 py-6 space-y-6">
-        {stillLoading && (
-          <div className="flex items-center gap-2 text-xs text-theme-text-tertiary">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            <span>
-              {data.partialData && data.partialData.length > 0
-                ? `Still loading: ${data.partialData.join(', ')}`
-                : 'Loading remaining resources…'}
-            </span>
+        {fallbackClusterLoadState?.loading && (
+          <div className="flex items-center gap-2 text-sm text-theme-text-tertiary">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>{fallbackClusterLoadState.message}</span>
           </div>
         )}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
