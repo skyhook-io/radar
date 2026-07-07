@@ -53,7 +53,6 @@ import {
   formatAggregateHealthTooltip,
   timeToX as sharedTimeToX,
 } from './shared'
-import { Badge } from '../ui/Badge'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { clampLensToSelection, type ScrubberRange } from './TimelineScrubber'
 
@@ -258,7 +257,9 @@ function eventColorClass(event: TimelineEvent): string {
       case 'update': return 'text-blue-600 dark:text-blue-400'
     }
   }
-  return 'text-theme-text-tertiary'
+  // Informational K8s events (Scheduled, Pulled, Started…). Secondary, not
+  // tertiary: a tertiary-grey dot on the track is near-invisible.
+  return 'text-theme-text-secondary'
 }
 
 /** A pure SVG-free glyph; `size` is the height in px (triangles are ~1.18× wide). */
@@ -316,10 +317,18 @@ export function eventSeverityRank(event: TimelineEvent): number {
   return 0
 }
 
+/** A cluster may span at most this multiple of the min gap. Chaining alone
+ *  (each neighbor within minGap) lets a dense stream collapse into one pill
+ *  covering a long stretch of the track — a pill claiming events "at this
+ *  position" while its members sit far apart in time. The cap breaks the
+ *  chain, so a dense run renders as several pills at distinct positions. */
+export const CLUSTER_MAX_SPAN_FACTOR = 2
+
 /**
  * Collapse positioned events whose x-positions are within `minGap` of the
- * previous one into clusters. Input order is irrelevant (sorted internally);
- * a single event passes through as a count-1 cluster.
+ * previous one into clusters, capped so one cluster never spans more than
+ * CLUSTER_MAX_SPAN_FACTOR × minGap of the track. Input order is irrelevant
+ * (sorted internally); a single event passes through as a count-1 cluster.
  */
 export function clusterEventsByPosition(
   positioned: PositionedTimelineEvent[],
@@ -327,12 +336,13 @@ export function clusterEventsByPosition(
 ): TimelineEventCluster[] {
   const sorted = [...positioned].sort((a, b) => a.x - b.x)
   const clusters: TimelineEventCluster[] = []
-  let cur: { events: TimelineEvent[]; dominant: TimelineEvent; count: number; sum: number; lastX: number } | null = null
+  const maxSpan = minGap * CLUSTER_MAX_SPAN_FACTOR
+  let cur: { events: TimelineEvent[]; dominant: TimelineEvent; count: number; sum: number; startX: number; lastX: number } | null = null
   const flush = () => {
     if (cur) clusters.push({ x: cur.sum / cur.count, events: cur.events, dominant: cur.dominant, count: cur.count })
   }
   for (const { event, x } of sorted) {
-    if (cur && x - cur.lastX < minGap) {
+    if (cur && x - cur.lastX < minGap && x - cur.startX <= maxSpan) {
       cur.events.push(event)
       cur.count++
       cur.sum += x
@@ -340,7 +350,7 @@ export function clusterEventsByPosition(
       if (eventSeverityRank(event) > eventSeverityRank(cur.dominant)) cur.dominant = event
     } else {
       flush()
-      cur = { events: [event], dominant: event, count: 1, sum: x, lastX: x }
+      cur = { events: [event], dominant: event, count: 1, sum: x, startX: x, lastX: x }
     }
   }
   flush()
@@ -1494,10 +1504,11 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 {hasVisibleChildren ? (
                   <button
                     onClick={() => toggleLane(lane.id)}
-                    className="p-0.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+                    aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                    className="p-1 -m-0.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
                   >
                     <ChevronRight className={clsx(
-                      'w-3 h-3 transition-transform',
+                      'w-4 h-4 transition-transform',
                       isExpanded && 'rotate-90'
                     )} />
                   </button>
@@ -1509,7 +1520,10 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 ) : (
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <Badge kind={lane.kind} size="sm" title={kindBadgeTitle}>{displayKind(lane.kind)}</Badge>
+                      {/* Neutral pill (matches child rows): a column of many
+                          kind-colored badges reads as noise, not signal — the
+                          health strips and markers carry the color budget. */}
+                      <span className="self-start rounded-md bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary" title={kindBadgeTitle}>{displayKind(lane.kind)}</span>
                       {showGroupChip && <GroupChip group={lane.group!} />}
                       {hasVisibleChildren && (
                         <span className="text-xs font-semibold text-theme-text-tertiary">
@@ -1704,6 +1718,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           <MarkerLegendItem shape="circle" colorClass="text-blue-600 dark:text-blue-400" label="modified" description="Resource was updated/changed" />
           <MarkerLegendItem shape="triangle-down" colorClass="text-red-600 dark:text-red-400" label="deleted" description="Resource was removed" />
           <MarkerLegendItem shape="diamond" colorClass="text-amber-500 dark:text-amber-400" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
+          <MarkerLegendItem shape="circle" colorClass="text-theme-text-secondary" label="event" description="Informational Kubernetes event (Scheduled, Pulled, Started, etc.)" />
           <MarkerLegendItem shape="ring" colorClass="text-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" />
           <ClusterLegendItem description="Nearby events collapsed into one pill" />
           <span className="w-px h-4 bg-theme-border mx-0.5" />
@@ -1735,11 +1750,18 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
               <div className="flex-1 relative h-8 mr-8">
                 {axisTicks.map((tick) => {
                   const x = timeToX(tick.time)
-                  if (x < 0 || x > 100) return null
+                  // Left cull at 1.5% (not 0): a centered label hugging the
+                  // window start would bleed over the Resource column header.
+                  // The right edge needs no guard — the mr-8 gutter absorbs it.
+                  if (x < 1.5 || x > 100) return null
                   return (
                     <div
                       key={tick.time}
-                      className="absolute top-0 bottom-0 flex flex-col items-center"
+                      // -translate-x-1/2 centers the tick+label ON the time
+                      // position; positioned by the left edge, every label's
+                      // visual center sat half a label to the right of the
+                      // gridline (and "Now" right of the Now line).
+                      className="absolute top-0 bottom-0 flex -translate-x-1/2 flex-col items-center"
                       style={{ left: `${x}%` }}
                     >
                       <div className="h-2 w-px bg-theme-hover" />
@@ -1753,7 +1775,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                   if (nowX < 0 || nowX > 100) return null
                   return (
                     <div
-                      className="absolute top-0 bottom-0 flex flex-col items-center z-20"
+                      className="absolute top-0 bottom-0 z-20 flex -translate-x-1/2 flex-col items-center"
                       style={{ left: `${nowX}%` }}
                     >
                       <div className="h-2 w-0.5 bg-purple-500" />
@@ -1992,11 +2014,14 @@ function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, isLast, o
       {hasChildren && onToggle && (
         <button
           onClick={(e) => { e.stopPropagation(); onToggle() }}
-          className="absolute top-1/2 -translate-y-1/2 z-10 p-0.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-          style={{ left: connectorPx + 12 }}
+          // Centered ON the trunk/branch junction (not floated into the text
+          // column, where it overlapped wrapped names). bg keeps the trunk line
+          // from striking through the glyph.
+          className="absolute top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded bg-theme-surface p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
+          style={{ left: connectorPx }}
           aria-label={expanded ? 'Collapse' : 'Expand'}
         >
-          <ChevronRight className={clsx('w-3 h-3 transition-transform', expanded && 'rotate-90')} />
+          <ChevronRight className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-90')} />
         </button>
       )}
       <div className="flex-1 min-w-0 flex flex-col justify-center gap-0.5">

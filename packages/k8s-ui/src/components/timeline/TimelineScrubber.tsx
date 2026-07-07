@@ -79,6 +79,15 @@ export interface TimelineScrubberProps {
   // (or live-unlatched) fires `onLiveChipClick`; live-latched is inert.
   liveState?: TimelineLiveState
   onLiveChipClick?: () => void
+  // The MINIMAP: the host's full data span, rendered as a thin always-stable
+  // overview above the main track when it is wider than `domain`. The main
+  // track displays a framed sub-range (so a narrow selection stays visible and
+  // manipulable); the minimap is the global anchor that never zooms — it shows
+  // where the framed window and the selection sit within the whole span, and a
+  // click jumps the selection there.
+  fullDomain?: ScrubberRange
+  fullBuckets?: ScrubberBucket[]
+  onMinimapJump?: (centerMs: number) => void
 }
 
 // ============================================================================
@@ -103,10 +112,6 @@ const FALLBACK_WIDTH = 640
 const TRACK_HEIGHT = 44
 const AXIS_HEIGHT = 16
 
-// Extra strip height below the axis reserved for the pending timestamp pills
-// (rendered under the baseline, GCP-style). Reserved permanently so entering
-// pending mode never shifts the layout below the strip.
-const PILL_GUTTER = 8
 
 // ============================================================================
 // Pure geometry + selection math (exported for testing)
@@ -210,7 +215,18 @@ export function mergeGapRanges(ranges: ScrubberRange[], domain?: ScrubberRange):
 // last. Adaptive selection keeps the bar count bounded without over-widening
 // bars — a wide bucket smears a short burst of events across empty time, so the
 // strip would paint data where there is none (e.g. across a recording gap).
-const DISPLAY_BUCKET_RUNGS_MS = [1, 2, 3, 6, 12, 24].map((h) => h * HOUR_MS)
+// Sub-hour rungs serve hosts that bucket raw events client-side (the local
+// ring) when the displayed span is framed tightly around a narrow selection;
+// hosts limited to hourly rollups (the retained server overview) pass a
+// minBucketMs of one hour and never see them.
+const MINUTE_MS = 60_000
+const DISPLAY_BUCKET_RUNGS_MS = [
+  MINUTE_MS,
+  5 * MINUTE_MS,
+  10 * MINUTE_MS,
+  30 * MINUTE_MS,
+  ...[1, 2, 3, 6, 12, 24].map((h) => h * HOUR_MS),
+]
 
 // Upper bound on rendered bars — the smallest rung whose count fits under this
 // wins, so bars stay as fine as the strip width reasonably supports.
@@ -221,8 +237,9 @@ const MAX_DISPLAY_BARS = 256
  * `domainWidthMs / rung <= MAX_DISPLAY_BARS`, falling back to the coarsest rung.
  * Pure + exported so the rung boundaries can be unit-tested.
  */
-export function pickDisplayBucketSizeMs(domainWidthMs: number): number {
+export function pickDisplayBucketSizeMs(domainWidthMs: number, minBucketMs = HOUR_MS): number {
   for (const rung of DISPLAY_BUCKET_RUNGS_MS) {
+    if (rung < minBucketMs) continue
     if (domainWidthMs / rung <= MAX_DISPLAY_BARS) return rung
   }
   return DISPLAY_BUCKET_RUNGS_MS[DISPLAY_BUCKET_RUNGS_MS.length - 1]
@@ -598,13 +615,50 @@ export function dragExceedsThreshold(startClientX: number, clientX: number): boo
   return Math.abs(clientX - startClientX) >= DRAG_THRESHOLD_PX
 }
 
+// Screen-space glide for the selection band: a short ease-out from the last
+// rendered position to the new one. `immediate` (pointer staging/drags) snaps
+// so interaction never lags. Guarantees the band travels directly between its
+// old and new on-screen positions — unlike animating the time window, which
+// can sweep content across the viewport on large zoom changes.
+const SELECTION_GLIDE_MS = 240
+
+function useGlidingSelectionX(targetFromX: number, targetToX: number, immediate: boolean): [number, number] {
+  const [pos, setPos] = useState<[number, number]>([targetFromX, targetToX])
+  const posRef = useRef(pos)
+  posRef.current = pos
+  useEffect(() => {
+    if (immediate) {
+      setPos([targetFromX, targetToX])
+      return
+    }
+    const [f0, t0] = posRef.current
+    const dF = targetFromX - f0
+    const dT = targetToX - t0
+    if (Math.abs(dF) < 1 && Math.abs(dT) < 1) {
+      setPos([targetFromX, targetToX])
+      return
+    }
+    let raf = 0
+    const start = performance.now()
+    const step = (now: number) => {
+      const p = Math.min(1, (now - start) / SELECTION_GLIDE_MS)
+      const e = 1 - Math.pow(1 - p, 3)
+      setPos([f0 + dF * e, t0 + dT * e])
+      if (p < 1) raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [targetFromX, targetToX, immediate])
+  return pos
+}
+
 export function TimelineScrubber({
   buckets,
   coverage,
   gaps,
   loading,
   historyUnavailableBeforeMs,
-  domain,
+  domain: liveDomain,
   selection,
   onSelectionChange,
   maxSelectionMs,
@@ -616,6 +670,9 @@ export function TimelineScrubber({
   lensPresets,
   liveState,
   onLiveChipClick,
+  fullDomain,
+  fullBuckets,
+  onMinimapJump,
 }: TimelineScrubberProps) {
   const [containerRef, measuredWidth] = useMeasuredWidth()
   const width = measuredWidth > 0 ? measuredWidth : FALLBACK_WIDTH
@@ -635,10 +692,20 @@ export function TimelineScrubber({
   // listeners read the latest value without re-subscribing.
   const [pending, setPendingState] = useState<ScrubberRange | null>(null)
   const pendingRef = useRef<ScrubberRange | null>(null)
+  // The domain as it stood when the brush staged. A live tick advances the
+  // host's framed domain (~every 30s), which would slide the canvas — and the
+  // staged handles' pixels — under a composing brush. All mapping uses the
+  // snapshot until the pending resolves.
+  const pendingDomainRef = useRef<ScrubberRange | null>(null)
+  const liveDomainRef = useRef(liveDomain)
+  liveDomainRef.current = liveDomain
   const setPending = useCallback((next: ScrubberRange | null) => {
+    if (next != null && pendingRef.current == null) pendingDomainRef.current = liveDomainRef.current
+    if (next == null) pendingDomainRef.current = null
     pendingRef.current = next
     setPendingState(next)
   }, [])
+  const domain = pending != null && pendingDomainRef.current != null ? pendingDomainRef.current : liveDomain
 
   // The range shown on the strip: the staged one while brushing, else applied.
   const display = pending ?? selection
@@ -884,8 +951,17 @@ export function TimelineScrubber({
     )
   }
 
-  const selFromX = msToX(display.fromMs, domain, width)
-  const selToX = msToX(display.toMs, domain, width)
+  const selTargetFromX = msToX(display.fromMs, domain, width)
+  const selTargetToX = msToX(display.toMs, domain, width)
+  // The selection band GLIDES in screen space when a commit relocates it (the
+  // background re-frames with an instant cut): the user's eye follows the one
+  // object they care about from its old spot to its new spot. Pointer-driven
+  // updates (staging, drags) track the pointer with no lag.
+  const [selFromX, selToX] = useGlidingSelectionX(
+    selTargetFromX,
+    selTargetToX,
+    pending != null || dragInFlight,
+  )
   const appliedFromX = msToX(selection.fromMs, domain, width)
   const appliedToX = msToX(selection.toMs, domain, width)
   const preRetentionX = historyUnavailableBeforeMs != null
@@ -902,16 +978,28 @@ export function TimelineScrubber({
       {(presets?.length || onPresetSelect || liveState) && (
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="flex items-center gap-1">
-            {presets?.map((p) => (
-              <button
-                key={p.label}
-                type="button"
-                onClick={() => { resetPending(); onPresetSelect?.(p) }}
-                className="rounded border border-theme-border bg-theme-elevated px-2 py-0.5 text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-              >
-                {p.label}
-              </button>
-            ))}
+            {presets?.map((p) => {
+              // Width indicator: the chip matching the current selection width
+              // reads as pressed, so the strip always answers "what span am I
+              // looking at". 1% tolerance absorbs clamp rounding.
+              const active = Math.abs((selection.toMs - selection.fromMs) - p.ms) <= Math.max(1000, p.ms * 0.01)
+              return (
+                <button
+                  key={p.label}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => { resetPending(); onPresetSelect?.(p) }}
+                  className={clsx(
+                    'rounded border px-2 py-0.5 text-xs transition-colors',
+                    active
+                      ? 'border-accent/60 bg-theme-hover text-theme-text-primary'
+                      : 'border-theme-border bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
+                  )}
+                >
+                  {p.label}
+                </button>
+              )
+            })}
           </div>
           <div className="ml-auto flex items-center gap-2">
             <div className="flex items-center gap-1">
@@ -937,12 +1025,66 @@ export function TimelineScrubber({
         </div>
       )}
 
+      {/* MINIMAP: the full data span as a stable anchor. The main track below
+          zooms to frame the selection; this row never does — it answers "where
+          in the whole history am I", shows the framed window as a band and the
+          selection as a marker, and a click jumps the selection (width kept).
+          Always rendered (band covers the row when the frame IS the full span):
+          a conditional row would shift the layout below it — the jump class the
+          rest of the strip was just cured of. */}
+      {fullDomain && onMinimapJump && (() => {
+        const fullSpan = fullDomain.toMs - fullDomain.fromMs
+        const toX = (ms: number) => ((ms - fullDomain.fromMs) / fullSpan) * width
+        const windowLeft = toX(domain.fromMs)
+        const windowWidth = Math.max(2, toX(domain.toMs) - windowLeft)
+        const selLeft = toX(selection.fromMs)
+        const selWidth = Math.max(2, toX(selection.toMs) - selLeft)
+        const maxTotal = Math.max(1, ...(fullBuckets ?? []).map((b) => b.total))
+        return (
+          <div
+            className="relative mb-1 h-2.5 w-full cursor-pointer overflow-hidden rounded-sm bg-theme-hover/40"
+            data-testid="scrubber-minimap"
+            title="Full loaded range — click to move the selection there"
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect()
+              const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+              onMinimapJump(fullDomain.fromMs + frac * fullSpan)
+            }}
+          >
+            {fullBuckets?.filter((b) => b.total > 0).map((b, i) => {
+              const left = toX(b.startMs)
+              const w = Math.max(1, toX(b.endMs) - left)
+              return (
+                <div
+                  key={i}
+                  className={clsx('absolute bottom-0', b.warnings > 0 ? 'bg-amber-400/60' : 'bg-skyhook-500/40')}
+                  style={{ left, width: w, height: `${Math.max(20, (b.total / maxTotal) * 100)}%` }}
+                />
+              )
+            })}
+            <div
+              className="absolute inset-y-0 rounded-sm border border-accent/40 bg-accent/10"
+              style={{ left: windowLeft, width: windowWidth }}
+              data-testid="scrubber-minimap-window"
+            />
+            <div
+              className="absolute inset-y-0 rounded-sm bg-accent/70"
+              style={{ left: selLeft, width: selWidth }}
+              data-testid="scrubber-minimap-selection"
+            />
+          </div>
+        )
+      })()}
+
       {/* Hover handlers live on the WRAPPER (not the svg): the selection/lens
           overlay divs sit above the svg and would swallow hover inside the
           selection otherwise. They only set state — overlay drags unaffected. */}
       <div
         className="relative select-none"
-        style={{ height: TRACK_HEIGHT + AXIS_HEIGHT + (lens && onLensChange ? CHIP_ROW : PILL_GUTTER) }}
+        // Constant height regardless of whether the lens chip renders: a
+        // conditional row made the toolbar below jump 18px between the list
+        // and swimlane views (and when the list's lens appears on scroll).
+        style={{ height: TRACK_HEIGHT + AXIS_HEIGHT + CHIP_ROW }}
         onMouseMove={(e) => {
           if (dragRef.current) { setHover(null); return }
           const rect = svgRef.current?.getBoundingClientRect()
@@ -1017,8 +1159,14 @@ export function TimelineScrubber({
             )
           })}
           {buckets.map((b, i) => {
-            const x = msToX(b.startMs, domain, width)
-            const barW = Math.max(1, msToX(b.endMs, domain, width) - x - 0.5)
+            // Clip to the displayed domain: hosts filter buckets by OVERLAP, so
+            // an edge bucket can straddle the boundary — and the svg is
+            // overflow-visible, so unclipped bars would bleed past the track.
+            const startMs = Math.max(b.startMs, domain.fromMs)
+            const endMs = Math.min(b.endMs, domain.toMs)
+            if (endMs <= startMs) return null
+            const x = msToX(startMs, domain, width)
+            const barW = Math.max(1, msToX(endMs, domain, width) - x - 0.5)
             const h = barHeight(b.total, maxTotal, TRACK_HEIGHT)
             if (h <= 0) return null
             const warnFrac = b.total > 0 ? Math.min(1, b.warnings / b.total) : 0

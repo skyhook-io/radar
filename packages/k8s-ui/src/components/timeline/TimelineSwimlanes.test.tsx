@@ -18,6 +18,7 @@ import {
   collectLaneIdsDeep,
   AUTO_COLLAPSE_THRESHOLD,
   CLUSTER_MIN_GAP_PCT,
+  CLUSTER_MAX_SPAN_FACTOR,
   type PositionedTimelineEvent,
   type TimeWindow,
 } from './TimelineSwimlanes'
@@ -345,7 +346,7 @@ describe('app-group header lane (grouping=app + appIndex)', () => {
     expect(html).toContain('2 resources')
   })
 
-  it('hides an expanded member whose events are all outside the visible window', () => {
+  it('keeps a server-declared member visible even when its events are outside the window', () => {
     const now = 1_700_000_000_000
     const ev = (name: string, iso: string): TimelineEvent => ({
       id: name, timestamp: iso, source: 'informer',
@@ -367,11 +368,13 @@ describe('app-group header lane (grouping=app + appIndex)', () => {
         viewWindow={{ fromMs: now - 3600_000, toMs: now + 3600_000 }}
       />,
     )
-    // The in-window member renders; the out-of-window one is filtered out, and the
-    // header count reflects only the visible member.
+    // Both members are STRUCTURAL (the server's app identity declares them), so
+    // the out-of-window one stays — hiding the app's own workloads/Service made
+    // a matched app read as incomplete. The window noise filter still applies
+    // to evidence/name-matched lanes (covered in resource-hierarchy tests).
     expect(html).toContain('billing-api')
-    expect(html).not.toContain('billing-worker')
-    expect(html).toContain('1 resource')
+    expect(html).toContain('billing-worker')
+    expect(html).toContain('2 resources')
   })
 })
 
@@ -868,5 +871,30 @@ describe('group collision chip (same kind+ns+name, different API group)', () => 
     expect(html).not.toContain('API group')
     // The group still rides the kind badge's title tooltip (non-intrusive).
     expect(html).toContain('postgresql.cnpg.io')
+  })
+})
+
+describe('cluster span cap (a pill never spans far-apart events)', () => {
+  it('splits a dense chain that exceeds the max span into separate pills', () => {
+    // Each neighbor is within min-gap, but the chain crawls across 5× the gap.
+    // Unbounded chaining would collapse an hour of distinct positions into one
+    // pill; the cap breaks it at CLUSTER_MAX_SPAN_FACTOR × gap.
+    const step = CLUSTER_MIN_GAP_PCT * 0.9
+    const input = positioned(...Array.from({ length: 7 }, (_, i) => [mkEvent(`e${i}`), 10 + i * step] as [TimelineEvent, number]))
+    const out = clusterEventsByPosition(input, CLUSTER_MIN_GAP_PCT)
+    expect(out.length).toBeGreaterThan(1)
+    for (const c of out) {
+      const xs = c.events.map((e) => input.find((p) => p.event.id === e.id)!.x)
+      expect(Math.max(...xs) - Math.min(...xs)).toBeLessThanOrEqual(CLUSTER_MIN_GAP_PCT * CLUSTER_MAX_SPAN_FACTOR)
+    }
+  })
+
+  it('keeps a tight burst as one pill', () => {
+    const out = clusterEventsByPosition(
+      positioned([mkEvent('a'), 10], [mkEvent('b'), 10.3], [mkEvent('c'), 10.6]),
+      CLUSTER_MIN_GAP_PCT,
+    )
+    expect(out).toHaveLength(1)
+    expect(out[0].count).toBe(3)
   })
 })

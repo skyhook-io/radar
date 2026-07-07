@@ -91,8 +91,9 @@ describe('TimelineToolbar SSR', () => {
     // Group rows are not in the initial markup.
     expect(withOpts).toContain('title="View options"')
     expect(withOpts).toContain('>View<')
-    expect(withOpts).toContain('List view')
-    expect(withOpts).toContain('Swimlane view')
+    // The toggle is labeled — the words themselves are the affordance.
+    expect(withOpts).toContain('>List<')
+    expect(withOpts).toContain('>Timeline<')
 
     // List view (TimelineList) passes no viewOptions — the panel would be empty,
     // so no View button is rendered (a blank popover is worse than none).

@@ -13,9 +13,10 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { TimelineEvent } from '../../types'
 import { localOverviewFromEvents } from '../../api/timelineSource'
-import { groupBuckets, buildPresets, type ScrubberDomainInfo } from './RetainedTimelineScrubber'
+import { groupBuckets, buildPresets, frameDomainForSelection, type ScrubberDomainInfo } from './RetainedTimelineScrubber'
 
 const HOUR_MS = 60 * 60 * 1000
+const MINUTE_MS = 60_000
 
 interface LocalTimelineScrubberProps {
   // The loaded event ring. The local store ships the whole ring to the browser,
@@ -76,15 +77,40 @@ export function LocalTimelineScrubber({
   // No per-request cap locally: the full ring is already loaded, so a brush can
   // span the entire domain.
   const maxSelectionMs = domainWidth
-  const bucketSizeMs = pickDisplayBucketSizeMs(domainWidth)
-  const displayBuckets = useMemo(() => groupBuckets(hourBuckets, bucketSizeMs), [hourBuckets, bucketSizeMs])
+
+  // The strip DISPLAYS a framed sub-range of the domain — otherwise a narrow
+  // selection (and the lens inside it) collapses to a sub-pixel sliver.
+  // Derived, so a live selection sliding forward carries its frame along. One
+  // rule, no modes: the minimap row above the track is the stable full-span
+  // anchor, and clicking it jumps the selection (which re-frames here).
+  const displayDomain = useMemo(
+    () => frameDomainForSelection(selection, domain),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selection.fromMs, selection.toMs, domain.fromMs, domain.toMs],
+  )
+  const displayWidth = displayDomain.toMs - displayDomain.fromMs
+
+  // The whole ring is in the browser, so a tightly framed window can rebucket
+  // the raw events at sub-hour granularity instead of stretching hour bars.
+  const bucketSizeMs = pickDisplayBucketSizeMs(displayWidth, MINUTE_MS)
+
+  const displayBuckets = useMemo(() => {
+    const source = bucketSizeMs >= HOUR_MS
+      ? hourBuckets
+      : localOverviewFromEvents(events, bucketSizeMs).buckets
+    return groupBuckets(source, bucketSizeMs)
+      .filter((b) => b.endMs > displayDomain.fromMs && b.startMs < displayDomain.toMs)
+  }, [hourBuckets, bucketSizeMs, events, displayDomain.fromMs, displayDomain.toMs])
 
   // Enrich a frozen chip with the count of events after the frozen edge, so the
-  // "Go live" CTA can pull the user toward fresh data. Live states pass through.
+  // "Go live" CTA can pull the user toward fresh data. Counted over the FULL
+  // domain — the framed display may cut off newer events. Live states pass
+  // through.
+  const fullBuckets = useMemo(() => groupBuckets(hourBuckets, HOUR_MS), [hourBuckets])
   const chipState = useMemo<TimelineLiveState | undefined>(() => {
     if (!liveState || liveState.kind !== 'frozen') return liveState
-    return { ...liveState, newEventCount: countEventsAfter(displayBuckets, selection.toMs) }
-  }, [liveState, displayBuckets, selection.toMs])
+    return { ...liveState, newEventCount: countEventsAfter(fullBuckets, selection.toMs) }
+  }, [liveState, fullBuckets, selection.toMs])
 
   // Presets clamp to the domain: only offer windows the ring can actually fill,
   // so we never advertise 7d of history on a 20-minute-old cluster. Always keep
@@ -92,7 +118,10 @@ export function LocalTimelineScrubber({
   const presets = useMemo<ScrubberPreset[]>(() => {
     const all = buildPresets(30)
     const fit = all.filter((p) => p.ms <= domainWidth)
-    return fit.length > 0 ? fit : [all[0]]
+    const base = fit.length > 0 ? fit : [all[0]]
+    // One-click whole-ring selection. The framed strip caps a single brush at
+    // the frame width, so "everything we hold" needs a first-class control.
+    return [...base, { label: 'All', ms: domainWidth }]
   }, [domainWidth])
 
   // Lens-chip width ladder: the swimlane's zoom rungs, capped to the current
@@ -120,15 +149,18 @@ export function LocalTimelineScrubber({
     if (clamped.fromMs !== selection.fromMs || clamped.toMs !== selection.toMs) {
       ;(onSelectionClamp ?? onSelectionChange)(clamped)
     }
+    // Selection endpoints included: an externally-set selection (URL restore,
+    // back-nav) outside the domain must clamp even when the domain itself
+    // didn't change. Loop-safe — once clamped, the comparison is equal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [domain.fromMs, domain.toMs, maxSelectionMs])
+  }, [domain.fromMs, domain.toMs, maxSelectionMs, selection.fromMs, selection.toMs])
 
   return (
     <div className="px-4 py-2 border-b border-theme-border bg-theme-surface">
       <TimelineScrubber
         buckets={displayBuckets}
         loading={loading}
-        domain={domain}
+        domain={displayDomain}
         selection={selection}
         onSelectionChange={onSelectionChange}
         maxSelectionMs={maxSelectionMs}
@@ -138,6 +170,15 @@ export function LocalTimelineScrubber({
             ? onPresetSelect(p.ms)
             : onSelectionChange(presetToSelection(p.ms, now, domain, maxSelectionMs).selection)
         )}
+        fullDomain={domain}
+        fullBuckets={fullBuckets}
+        onMinimapJump={(centerMs) => {
+          const width = selection.toMs - selection.fromMs
+          onSelectionChange(clampSelection(
+            { fromMs: centerMs - width / 2, toMs: centerMs + width / 2 },
+            domain, maxSelectionMs, 'center',
+          ).selection)
+        }}
         lens={lens}
         onLensChange={onLensChange}
         lensPresets={lensPresets}

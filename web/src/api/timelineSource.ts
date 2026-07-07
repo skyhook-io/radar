@@ -169,10 +169,15 @@ interface LocalHourSlot {
 // domain floor comes from whoever holds the data, exactly as the retained
 // source reports its own retention floor.
 //
+// `bucketSizeMs` defaults to the retained rollup's hourly granularity; a
+// tightly framed strip passes a sub-hour size to rebucket the same events
+// finer. The bucket start rides the wire shape's `hourStartMs` field
+// regardless of size — it is the bucket start, hourly or not.
+//
 // No coverage/gap field is emitted. Coverage is a retention concept — the hub
 // records what it missed while not watching. Locally we cannot know what
 // happened during downtime, so claiming a gap would be dishonest; we omit it.
-export function localOverviewFromEvents(events: TimelineEvent[]): TimelineOverviewResult {
+export function localOverviewFromEvents(events: TimelineEvent[], bucketSizeMs = LOCAL_HOUR_MS): TimelineOverviewResult {
   const slots = new Map<number, LocalHourSlot>()
   let oldest = Number.POSITIVE_INFINITY
 
@@ -180,7 +185,7 @@ export function localOverviewFromEvents(events: TimelineEvent[]): TimelineOvervi
     const t = new Date(e.timestamp).getTime()
     if (!Number.isFinite(t)) continue
     if (t < oldest) oldest = t
-    const hour = Math.floor(t / LOCAL_HOUR_MS) * LOCAL_HOUR_MS
+    const hour = Math.floor(t / bucketSizeMs) * bucketSizeMs
     let slot = slots.get(hour)
     if (!slot) {
       slot = { total: 0, adds: 0, updates: 0, deletes: 0, warnings: 0, namespaces: new Set() }

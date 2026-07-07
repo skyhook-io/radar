@@ -66,7 +66,12 @@ export type { ActivityTypeFilter } from './TimelineList'
 
 // Retained-mode selection model: a relative live window, or a pinned absolute one.
 type TimelineMode =
-  | { kind: 'live'; widthMs: number }
+  // `all` marks a live window meant to cover the WHOLE data span: its width is
+  // re-derived from the scrubber domain each tick, so a growing local ring
+  // (toMs = now advances) never slides the left edge off the oldest data the
+  // way a fixed widthMs would. widthMs remains the fallback until the domain
+  // is known.
+  | { kind: 'live'; widthMs: number; all?: boolean }
   | { kind: 'frozen'; fromMs: number; toMs: number }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +150,11 @@ function parseTimeMode(sp: URLSearchParams, isRetained: boolean): TimelineMode {
       }
     }
     const w = sp.get('window')
+    if (w === 'all') {
+      // The width is a fallback until the scrubber domain lands; the flag makes
+      // the live selection track the whole span from then on.
+      return { kind: 'live', widthMs: DEFAULT_LIVE_WIDTH_MS, all: true }
+    }
     if (w != null) {
       const wm = Number(w)
       if (Number.isFinite(wm) && wm > 0) return { kind: 'live', widthMs: Math.round(wm) }
@@ -154,7 +164,7 @@ function parseTimeMode(sp: URLSearchParams, isRetained: boolean): TimelineMode {
 }
 
 function timeModeEqual(a: TimelineMode, b: TimelineMode): boolean {
-  if (a.kind === 'live' && b.kind === 'live') return a.widthMs === b.widthMs
+  if (a.kind === 'live' && b.kind === 'live') return a.widthMs === b.widthMs && (a.all ?? false) === (b.all ?? false)
   if (a.kind === 'frozen' && b.kind === 'frozen') return a.fromMs === b.fromMs && a.toMs === b.toMs
   return false
 }
@@ -185,6 +195,10 @@ function writeTimelineParams(
     set('from', String(s.mode.fromMs))
     set('to', String(s.mode.toMs))
     set('window', null)
+  } else if (opts.isRetained && s.mode.kind === 'live' && s.mode.all) {
+    set('window', 'all')
+    set('from', null)
+    set('to', null)
   } else if (opts.isRetained && s.mode.kind === 'live' && s.mode.widthMs !== DEFAULT_LIVE_WIDTH_MS) {
     set('window', String(s.mode.widthMs))
     set('from', null)
@@ -343,10 +357,19 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     return () => clearInterval(id)
   }, [mode.kind])
 
+  // Server-derived domain + per-request cap, lifted from the scrubber so extend
+  // requests clamp to the real retained window (and "all" live widths track it).
+  const [scrubberDomain, setScrubberDomain] = useState<ScrubberDomainInfo | null>(null)
+
   const selection = useMemo<ScrubberRange>(() => {
-    if (mode.kind === 'live') return deriveLiveSelection(mode.widthMs, nowTick)
+    if (mode.kind === 'live') {
+      // An "all" live window re-derives its width from the current domain so a
+      // growing ring never slides the left edge off the oldest held data.
+      const width = mode.all && scrubberDomain ? scrubberDomain.maxSelectionMs : mode.widthMs
+      return deriveLiveSelection(width, nowTick)
+    }
     return { fromMs: mode.fromMs, toMs: mode.toMs }
-  }, [mode, nowTick])
+  }, [mode, nowTick, scrubberDomain])
 
   // The LENS: the swimlane's visible window WITHIN the applied selection. Free
   // client-side exploration — kept in sync with both the scrubber band and the
@@ -358,10 +381,6 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const width = Math.min(DEFAULT_LENS_MS, selection.toMs - selection.fromMs)
     return { fromMs: selection.toMs - width, toMs: selection.toMs }
   })
-
-  // Server-derived domain + per-request cap, lifted from the scrubber so extend
-  // requests clamp to the real retained window.
-  const [scrubberDomain, setScrubberDomain] = useState<ScrubberDomainInfo | null>(null)
 
   // Recording gaps lifted from the scrubber so the swimlane renders matching
   // offline bands + empty-state copy.
@@ -418,7 +437,10 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   const handleSelectionClamp = useCallback((sel: ScrubberRange) => {
     setMode((prev) => (
       prev.kind === 'live'
-        ? { kind: 'live', widthMs: sel.toMs - sel.fromMs }
+        // `all` survives a clamp: the clamp narrowed the window to what the
+        // domain can hold right now, which is exactly what all-mode re-derives
+        // next tick anyway.
+        ? { kind: 'live', widthMs: sel.toMs - sel.fromMs, all: prev.all }
         : { kind: 'frozen', fromMs: sel.fromMs, toMs: sel.toMs }
     ))
     resetLensToRecent(sel)
@@ -428,12 +450,16 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // now and starts the tick.
   const handlePresetSelect = useCallback((widthMs: number) => {
     const capped = scrubberDomain ? Math.min(widthMs, scrubberDomain.maxSelectionMs) : widthMs
+    // Only local mode has a domain-tracking maximum ("All" = the whole ring);
+    // retained mode's cap is a fixed per-request limit, so its presets stay
+    // plain fixed widths.
+    const all = isLocal && scrubberDomain != null && widthMs >= scrubberDomain.maxSelectionMs
     const now = Date.now()
-    setMode({ kind: 'live', widthMs: capped })
+    setMode({ kind: 'live', widthMs: capped, all: all || undefined })
     setFrozenAsOfMs(null)
     setNowTick(now)
     resetLensToRecent(deriveLiveSelection(capped, now))
-  }, [scrubberDomain, resetLensToRecent])
+  }, [isLocal, scrubberDomain, resetLensToRecent])
 
   // "→ Now" → LIVE, width = current selection width. Pins to now and resets the
   // lens to the live edge.

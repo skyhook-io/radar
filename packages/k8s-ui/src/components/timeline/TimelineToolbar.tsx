@@ -263,34 +263,6 @@ export function TimelineToolbar({
             </span>
           )}
 
-          {/* View toggle */}
-          {onViewChange && (
-            <div className="flex shrink-0 items-center gap-1 bg-theme-elevated rounded-lg p-1">
-              <button
-                type="button"
-                onClick={() => onViewChange('list')}
-                className={clsx(
-                  'p-2 rounded-md transition-colors',
-                  view === 'list' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-                )}
-                title="List view"
-              >
-                <List className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => onViewChange('swimlane')}
-                className={clsx(
-                  'p-2 rounded-md transition-colors',
-                  view === 'swimlane' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-                )}
-                title="Swimlane view"
-              >
-                <GanttChart className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
           {/* View menu — Sort/Group only. Filters (Kinds, Deletions) live in the
               toolbar with the other filters. */}
           <ViewMenu
@@ -308,6 +280,38 @@ export function TimelineToolbar({
             >
               <RefreshCw className={clsx('w-4 h-4', isRefreshAnimating && 'animate-spin')} />
             </button>
+          )}
+
+          {/* View toggle — labeled, and LAST so it hugs the toolbar's right
+              edge. The rightmost slot is the only position that stays fixed
+              across the two views while the variable-width counts and menus
+              beside it change; an anchored control can be re-clicked without
+              re-aiming. */}
+          {onViewChange && (
+            <div className="flex shrink-0 items-center gap-1 bg-theme-elevated rounded-lg p-1">
+              <button
+                type="button"
+                onClick={() => onViewChange('list')}
+                className={clsx(
+                  'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors',
+                  view === 'list' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
+                )}
+              >
+                <List className="w-4 h-4" />
+                List
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewChange('swimlane')}
+                className={clsx(
+                  'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors',
+                  view === 'swimlane' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
+                )}
+              >
+                <GanttChart className="w-4 h-4" />
+                Timeline
+              </button>
+            </div>
           )}
         </div>
       </div>

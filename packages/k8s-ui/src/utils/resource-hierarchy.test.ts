@@ -928,3 +928,81 @@ describe('group-qualified lane identity', () => {
     expect(lanes[0].id).toBe('Cluster.postgresql.cnpg.io/prod/main')
   })
 })
+
+describe('app membership outranks topology attachment (grouping=app)', () => {
+  const crashloop: AppMembership = { appKey: 'radar-netdiag/Deployment/crashloop', appName: 'crashloop' }
+
+  const exposesTopo = {
+    nodes: [
+      { id: 'service/radar-netdiag/crashloop', kind: 'Service', name: 'crashloop', data: { namespace: 'radar-netdiag' } },
+      { id: 'deployment/radar-netdiag/crashloop', kind: 'Deployment', name: 'crashloop', data: { namespace: 'radar-netdiag' } },
+    ],
+    edges: [{ source: 'service/radar-netdiag/crashloop', target: 'deployment/radar-netdiag/crashloop', type: 'exposes' }],
+  } as unknown as Topology
+
+  it('keeps two same-app members SIBLINGS under the app header despite an exposes edge', () => {
+    const events = [
+      changeEvent('Service', 'radar-netdiag', 'crashloop'),
+      changeEvent('Deployment', 'radar-netdiag', 'crashloop'),
+    ]
+    const appIndex = index({
+      'Service/radar-netdiag/crashloop': crashloop,
+      'Deployment/radar-netdiag/crashloop': crashloop,
+    })
+    const lanes = buildResourceHierarchy({ events, topology: exposesTopo, grouping: 'app', appIndex })
+
+    expect(lanes).toHaveLength(1)
+    expect(lanes[0].isAppGroup).toBe(true)
+    expect(lanes[0].name).toBe('crashloop')
+    const memberKinds = (lanes[0].children ?? []).map((c) => c.kind).sort()
+    expect(memberKinds).toEqual(['Deployment', 'Service'])
+    // Neither member nests under the other.
+    for (const m of lanes[0].children ?? []) {
+      expect((m.children ?? []).map((c) => c.kind)).not.toContain('Deployment')
+    }
+  })
+
+  it('still parents the Deployment under the Service when they belong to DIFFERENT apps', () => {
+    const other: AppMembership = { appKey: 'radar-netdiag/Service/other', appName: 'other' }
+    const events = [
+      changeEvent('Service', 'radar-netdiag', 'crashloop'),
+      changeEvent('Deployment', 'radar-netdiag', 'crashloop'),
+    ]
+    const appIndex = index({
+      'Service/radar-netdiag/crashloop': other,
+      'Deployment/radar-netdiag/crashloop': crashloop,
+    })
+    const lanes = buildResourceHierarchy({ events, topology: exposesTopo, grouping: 'app', appIndex })
+
+    const service = lanes.flatMap((l) => [l, ...(l.children ?? [])]).find((l) => l.kind === 'Service')
+    expect((service?.children ?? []).some((c) => c.kind === 'Deployment')).toBe(true)
+  })
+
+  it('keeps exposes parenting when no app index is supplied (owner grouping)', () => {
+    const events = [
+      changeEvent('Service', 'radar-netdiag', 'crashloop'),
+      changeEvent('Deployment', 'radar-netdiag', 'crashloop'),
+    ]
+    const lanes = buildResourceHierarchy({ events, topology: exposesTopo, grouping: 'owner' })
+    const service = lanes.find((l) => l.kind === 'Service')
+    expect((service?.children ?? []).some((c) => c.kind === 'Deployment')).toBe(true)
+  })
+})
+
+describe('structural app members survive the window filter', () => {
+  it('keeps a server-declared member visible with no events in the window', () => {
+    const member: ResourceLane = {
+      id: 'Service/radar-netdiag/crashloop', kind: 'Service', namespace: 'radar-netdiag',
+      name: 'crashloop', events: [], isWorkload: false, structuralMember: true,
+    }
+    expect(isChildVisibleInWindow(member, 0, 1000, { pinned: false, userExpanded: false })).toBe(true)
+  })
+
+  it('still filters an event-less lane that is NOT a structural member', () => {
+    const stray: ResourceLane = {
+      id: 'Pod/radar-netdiag/old-pod', kind: 'Pod', namespace: 'radar-netdiag',
+      name: 'old-pod', events: [], isWorkload: false,
+    }
+    expect(isChildVisibleInWindow(stray, 0, 1000, { pinned: false, userExpanded: false })).toBe(false)
+  })
+})

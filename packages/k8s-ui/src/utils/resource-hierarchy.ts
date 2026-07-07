@@ -62,6 +62,12 @@ export interface ResourceLane {
    *  than owner/topology/label evidence — the lane's generated name matched a
    *  member workload's name. The UI annotates this weaker join. */
   matchedByName?: boolean
+  /** Tier-1 app member: the server's app identity DECLARES this resource (a
+   *  workload or a related Service/Ingress/Route). Structural members stay
+   *  visible even with no events in the window — hiding the app's own Service
+   *  makes a matched app read as incomplete. Evidence/name-matched lanes
+   *  (deleted pods, generated children) keep the window filter. */
+  structuralMember?: boolean
   /** Reparented under a PRESENT parent lane via a Kubernetes naming contract
    *  (CronJob→Job schedule stamp, controller→Pod generateName tail,
    *  Deployment→ReplicaSet pod-template-hash) because the child's in-window
@@ -130,6 +136,8 @@ interface RootGroupAssignment {
   /** Set when the join came from the name-prefix fallback (tier 2.5) — a weaker
    *  match the UI annotates. */
   matchedByName?: boolean
+  /** Set for tier-1 joins — the server's app identity declares this resource. */
+  structural?: boolean
 }
 
 // Workload kinds whose names a generated-name lane can prefix-match against.
@@ -291,7 +299,7 @@ function cascadeRootMembership(lane: ResourceLane, appIndex: AppMembershipIndex)
   // byResource is keyed group-less (AppRow workloads carry no group), so a
   // CRD lane's group-qualified id must join via its group-less resource key.
   const direct = appIndex.byResource.get(laneResourceKey(lane.kind, lane.namespace, lane.name))
-  if (direct) return { membership: direct }
+  if (direct) return { membership: direct, structural: true }
   for (const key of evidenceKeysForLane(lane)) {
     const m = appIndex.byEvidence.get(key)
     if (m) return { membership: m }
@@ -339,6 +347,7 @@ function applyAppGrouping(topLevelLanes: ResourceLane[], appIndex: AppMembership
     // Mark the lane so the UI can annotate the weaker name-prefix join. Only
     // surfaced once the lane actually lands in a ≥2-member group (below).
     if (g.matchedByName) lane.matchedByName = true
+    if (g.structural) lane.structuralMember = true
     assignment.set(lane.id, g)
     const arr = membersByApp.get(g.membership.appKey) ?? []
     arr.push(lane)
@@ -698,11 +707,33 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       const targetExists = laneIdByKey.has(targetKey)
       if (!sourceExists && !targetExists) continue
 
+      // App membership outranks topology attachment: two members of the SAME
+      // application (its Service and its Deployment) are siblings under the
+      // app's group header. Parenting one member under the other would swallow
+      // a root, drop the group below the 2-member header threshold, and front
+      // the whole stack with the attachment (a health-less Service) instead of
+      // the app. Only the byResource tier applies — both endpoints here are
+      // concrete resources the server either claims or doesn't.
+      const sameAppMembers = (aKey: string, bKey: string): boolean => {
+        if (grouping !== 'app' || !appIndex) return false
+        const toResourceKey = (key: string): string | null => {
+          const parsed = parseLaneId(key)
+          return parsed ? laneResourceKey(parsed.kind, parsed.namespace, parsed.name) : null
+        }
+        const aRes = toResourceKey(aKey)
+        const a = aRes ? appIndex.byResource.get(aRes) : undefined
+        if (!a) return false
+        const bRes = toResourceKey(bKey)
+        const b = bRes ? appIndex.byResource.get(bRes) : undefined
+        return b != null && a.appKey === b.appKey
+      }
+
       // Parent `child` under `parent`, materializing `parent`'s lane if absent.
       // `childHasEvents` mirrors the old guard (only parent an endpoint that
       // actually exists). Guards read canonical ids so laneParent lines up.
       const link = (childKey: string, parentKey: string, childHasEvents: boolean): void => {
         if (!childHasEvents) return
+        if (sameAppMembers(childKey, parentKey)) return
         const childId = resolveId(childKey)
         if (laneParent.has(childId)) return
         laneParent.set(childId, ensureRefLane(parentKey))
@@ -1059,6 +1090,11 @@ export function isChildVisibleInWindow(
   exempt: { pinned: boolean; userExpanded: boolean },
 ): boolean {
   if (exempt.pinned || exempt.userExpanded) return true
+  // A structural app member (server-declared workload/Service/Ingress) stays
+  // visible with an empty window — hiding the app's own Service makes a
+  // matched app read as incomplete. Generated/evidence-matched lanes keep the
+  // noise filter.
+  if (child.structuralMember) return true
   return laneHasEventInWindow(child, startMs, endMs)
 }
 

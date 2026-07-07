@@ -80,6 +80,39 @@ export function extractRecordingGaps(
   return mergeGapRanges(raw, domain)
 }
 
+// How much context frames a selection: the display window is the selection
+// width times this, so the selection band always occupies ~1/8 of the strip —
+// wide enough to grab handles and drag the lens. Without framing, a 1h preset
+// on a weeks-wide ring renders the selection sub-pixel: invisible and
+// un-manipulable.
+export const DOMAIN_FRAME_FACTOR = 8
+
+// The sub-range of the full data span the strip should display so `sel` stays
+// usable. Returns the full domain untouched when the selection is already a
+// large fraction of it. Centered on the selection, clamped inside the domain.
+export function frameDomainForSelection(
+  sel: ScrubberRange,
+  fullDomain: ScrubberRange,
+  factor = DOMAIN_FRAME_FACTOR,
+): ScrubberRange {
+  const fullWidth = fullDomain.toMs - fullDomain.fromMs
+  const selWidth = Math.max(1, sel.toMs - sel.fromMs)
+  const width = selWidth * factor
+  if (width >= fullWidth) return fullDomain
+  const center = (sel.fromMs + sel.toMs) / 2
+  let fromMs = center - width / 2
+  let toMs = center + width / 2
+  if (toMs > fullDomain.toMs) {
+    fromMs -= toMs - fullDomain.toMs
+    toMs = fullDomain.toMs
+  }
+  if (fromMs < fullDomain.fromMs) {
+    toMs = Math.min(fullDomain.toMs, toMs + (fullDomain.fromMs - fromMs))
+    fromMs = fullDomain.fromMs
+  }
+  return { fromMs, toMs }
+}
+
 export function buildPresets(maxRangeDays: number): ScrubberPreset[] {
   const presets: ScrubberPreset[] = [
     { label: '1h', ms: HOUR_MS },
@@ -190,17 +223,35 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
 
   const domainWidth = domain.toMs - domain.fromMs
   const maxSelectionMs = Math.min(MAX_SELECTION_MS, domainWidth)
-  const bucketSizeMs = pickDisplayBucketSizeMs(domainWidth)
 
-  const displayBuckets = useMemo(() => groupBuckets(hourBuckets, bucketSizeMs), [hourBuckets, bucketSizeMs])
+  // The strip DISPLAYS a framed sub-range of the domain — otherwise a narrow
+  // selection (and the lens inside it) collapses to a sub-pixel sliver.
+  // Derived, so a live selection sliding forward carries its frame along. One
+  // rule, no modes: the minimap row above the track is the stable full-span
+  // anchor, and clicking it jumps the selection (which re-frames here).
+  const displayDomain = useMemo(
+    () => frameDomainForSelection(selection, domain),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selection.fromMs, selection.toMs, domain.fromMs, domain.toMs],
+  )
+  const displayWidth = displayDomain.toMs - displayDomain.fromMs
+  const bucketSizeMs = pickDisplayBucketSizeMs(displayWidth)
+
+  const displayBuckets = useMemo(
+    () => groupBuckets(hourBuckets, bucketSizeMs)
+      .filter((b) => b.endMs > displayDomain.fromMs && b.startMs < displayDomain.toMs),
+    [hourBuckets, bucketSizeMs, displayDomain.fromMs, displayDomain.toMs],
+  )
 
   // Enrich a frozen chip with the count of events recorded after the frozen edge,
-  // so the "Go live" CTA can pull the user toward the fresh data. Live states pass
-  // through unchanged.
+  // so the "Go live" CTA can pull the user toward the fresh data. Counted over
+  // the FULL domain — the framed display may cut off newer events. Live states
+  // pass through unchanged.
+  const fullBuckets = useMemo(() => groupBuckets(hourBuckets, HOUR_MS), [hourBuckets])
   const chipState = useMemo<TimelineLiveState | undefined>(() => {
     if (!liveState || liveState.kind !== 'frozen') return liveState
-    return { ...liveState, newEventCount: countEventsAfter(displayBuckets, selection.toMs) }
-  }, [liveState, displayBuckets, selection.toMs])
+    return { ...liveState, newEventCount: countEventsAfter(fullBuckets, selection.toMs) }
+  }, [liveState, fullBuckets, selection.toMs])
   const gaps = useMemo(() => extractRecordingGaps(hourBuckets, domain), [hourBuckets, domain])
   const presets = useMemo(() => buildPresets(maxRangeDays), [maxRangeDays])
 
@@ -237,8 +288,11 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
     if (clamped.fromMs !== selection.fromMs || clamped.toMs !== selection.toMs) {
       ;(onSelectionClamp ?? onSelectionChange)(clamped)
     }
+    // Selection endpoints included: an externally-set selection (URL restore,
+    // back-nav) outside the domain must clamp even when the domain itself
+    // didn't change. Loop-safe — once clamped, the comparison is equal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [domain.fromMs, domain.toMs, maxSelectionMs])
+  }, [domain.fromMs, domain.toMs, maxSelectionMs, selection.fromMs, selection.toMs])
 
   if (overview.isError) {
     return (
@@ -262,7 +316,7 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
         buckets={displayBuckets}
         loading={overview.isLoading}
         gaps={gaps}
-        domain={domain}
+        domain={displayDomain}
         selection={selection}
         onSelectionChange={onSelectionChange}
         maxSelectionMs={maxSelectionMs}
@@ -272,6 +326,15 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
             ? onPresetSelect(p.ms)
             : onSelectionChange(presetToSelection(p.ms, now, domain, maxSelectionMs).selection)
         )}
+        fullDomain={domain}
+        fullBuckets={fullBuckets}
+        onMinimapJump={(centerMs) => {
+          const width = selection.toMs - selection.fromMs
+          onSelectionChange(clampSelection(
+            { fromMs: centerMs - width / 2, toMs: centerMs + width / 2 },
+            domain, maxSelectionMs, 'center',
+          ).selection)
+        }}
         lens={lens}
         onLensChange={onLensChange}
         lensPresets={lensPresets}
