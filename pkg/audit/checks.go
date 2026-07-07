@@ -127,13 +127,6 @@ func RunChecks(input *CheckInput) *ScanResults {
 	}
 	findings = append(findings, checkTraefikDanglingRefs(tr, input)...)
 
-	// --- Utilization checks (optional, only when metrics provided) ---
-	if input.PodMetrics != nil {
-		findings = append(findings, checkResourceUtilization(tr, input.PodMetrics)...)
-	} else {
-		missingInputs = append(missingInputs, "podmetrics")
-	}
-
 	// --- Deprecated API checks ---
 	findings = append(findings, checkDeprecatedAPIs(tr, input.ServedAPIs, input.ClusterVersion)...)
 
@@ -1418,63 +1411,6 @@ func hasControllerOwnerReference(refs []metav1.OwnerReference) bool {
 		}
 	}
 	return false
-}
-
-// ============================================================================
-// Resource utilization checks
-// ============================================================================
-
-func checkResourceUtilization(tr *evalTracker, metrics []PodMetricsInput) []Finding {
-	if len(metrics) == 0 {
-		return nil
-	}
-
-	var findings []Finding
-	for _, m := range metrics {
-		// Pods with no requests at all can't be measured against anything —
-		// they're out of scope, not passing.
-		if m.CPURequest > 0 || m.MemoryRequest > 0 {
-			tr.record("resourceUtilization", m.Namespace)
-		}
-		// CPU utilization
-		if m.CPURequest > 0 {
-			cpuPct := float64(m.CPUUsage) / float64(m.CPURequest) * 100
-			if cpuPct < 10 && m.CPUUsage > 0 {
-				findings = append(findings, Finding{
-					Kind: "Pod", Namespace: m.Namespace, Name: m.Name,
-					CheckID: "resourceUtilization", Category: CategoryEfficiency, Severity: SeverityWarning,
-					Message: fmt.Sprintf("CPU usage is %.0f%% of request (%dm used, %dm requested) — consider reducing request", cpuPct, m.CPUUsage, m.CPURequest),
-				})
-			} else if cpuPct > 90 {
-				findings = append(findings, Finding{
-					Kind: "Pod", Namespace: m.Namespace, Name: m.Name,
-					CheckID: "resourceUtilization", Category: CategoryEfficiency, Severity: SeverityWarning,
-					Message: fmt.Sprintf("CPU usage is %.0f%% of request (%dm used, %dm requested) — at risk of throttling", cpuPct, m.CPUUsage, m.CPURequest),
-				})
-			}
-		}
-
-		// Memory utilization
-		if m.MemoryRequest > 0 {
-			memPct := float64(m.MemoryUsage) / float64(m.MemoryRequest) * 100
-			memUsageMi := m.MemoryUsage / (1024 * 1024)
-			memReqMi := m.MemoryRequest / (1024 * 1024)
-			if memPct < 10 && m.MemoryUsage > 0 {
-				findings = append(findings, Finding{
-					Kind: "Pod", Namespace: m.Namespace, Name: m.Name,
-					CheckID: "resourceUtilization", Category: CategoryEfficiency, Severity: SeverityWarning,
-					Message: fmt.Sprintf("Memory usage is %.0f%% of request (%dMi used, %dMi requested) — consider reducing request", memPct, memUsageMi, memReqMi),
-				})
-			} else if memPct > 90 {
-				findings = append(findings, Finding{
-					Kind: "Pod", Namespace: m.Namespace, Name: m.Name,
-					CheckID: "resourceUtilization", Category: CategoryEfficiency, Severity: SeverityWarning,
-					Message: fmt.Sprintf("Memory usage is %.0f%% of request (%dMi used, %dMi requested) — at risk of OOM kill", memPct, memUsageMi, memReqMi),
-				})
-			}
-		}
-	}
-	return findings
 }
 
 // ============================================================================

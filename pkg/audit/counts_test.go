@@ -105,11 +105,11 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 		Deployments: []*appsv1.Deployment{
 			deploymentInNS("web", "prod", 3, secureContainer("app", true)),
 		},
-		// PodDisruptionBudgets, ConfigMaps, PodMetrics all nil = unavailable.
+		// PodDisruptionBudgets, ConfigMaps all nil = unavailable.
 	}
 	results := RunChecks(input)
 
-	for _, id := range []string{"missingPDB", "orphanConfigMapSecret", "secretInConfigMap", "resourceUtilization"} {
+	for _, id := range []string{"missingPDB", "orphanConfigMapSecret", "secretInConfigMap"} {
 		if _, ok := results.CheckCounts[id]; ok {
 			t.Errorf("%s must not appear in CheckCounts when its input is nil", id)
 		}
@@ -117,11 +117,11 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 	// Every nil prerequisite is declared, including the relationship-check
 	// and pod-spec-family inventories added by the per-check gating.
 	want := map[string]bool{
-		"poddisruptionbudgets": true, "configmaps": true, "podmetrics": true,
+		"poddisruptionbudgets": true, "configmaps": true,
 		"serviceaccounts": true, "limitranges": true, "secrets": true,
 		"pods": true, "services": true, "ingresses": true,
 		"horizontalpodautoscalers": true,
-		"statefulsets": true, "daemonsets": true,
+		"statefulsets":             true, "daemonsets": true,
 		"jobs": true, "cronjobs": true,
 	}
 	if len(results.MissingInputs) != len(want) {
@@ -136,7 +136,6 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 	// Same scan with the inputs present (but empty) — the checks run and count.
 	input.PodDisruptionBudgets = []*policyv1.PodDisruptionBudget{}
 	input.ConfigMaps = []*corev1.ConfigMap{{ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "prod"}}}
-	input.PodMetrics = []PodMetricsInput{}
 	input.ServiceAccounts = []*corev1.ServiceAccount{}
 	input.LimitRanges = []*corev1.LimitRange{}
 	input.Pods = []*corev1.Pod{}

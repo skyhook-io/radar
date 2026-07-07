@@ -40,9 +40,6 @@ type CheckInput struct {
 	// ServedAPIs lists API group/versions the cluster still serves (e.g. ["apps/v1", "batch/v1beta1"]).
 	// Used to detect deprecated APIs. Callers populate from discovery client.
 	ServedAPIs []string
-	// PodMetrics provides live CPU/memory usage for utilization checks.
-	// Optional — check is skipped when nil/empty. Callers populate from metrics-server or equivalent.
-	PodMetrics []PodMetricsInput
 	// ConfigObjectRefs lists ConfigMaps and Secrets referenced by non-core
 	// resources that the typed Kubernetes structs above do not cover.
 	ConfigObjectRefs []ConfigObjectRef
@@ -85,16 +82,6 @@ type ConfigObjectRef struct {
 	Name      string
 }
 
-// PodMetricsInput provides metrics data for resource utilization checks.
-type PodMetricsInput struct {
-	Namespace     string
-	Name          string
-	CPUUsage      int64 // millicores
-	MemoryUsage   int64 // bytes
-	CPURequest    int64 // millicores
-	MemoryRequest int64 // bytes
-}
-
 // ScanResults is the output of RunChecks.
 //
 // Checks is the catalog (checkID -> definition) — kept under the "checks" JSON
@@ -117,7 +104,7 @@ type ScanResults struct {
 	// without re-running the scan.
 	EvaluatedByNamespace map[string]map[string]int `json:"evaluatedByNamespace,omitempty"`
 	// MissingInputs lists prerequisite inputs that were nil (RBAC denied or
-	// unavailable), e.g. "poddisruptionbudgets", "configmaps", "podmetrics".
+	// unavailable), e.g. "poddisruptionbudgets", "configmaps".
 	// Checks depending on them did not run and are absent from CheckCounts.
 	MissingInputs []string `json:"missingInputs,omitempty"`
 	// GroupedChecks is the per-check remediation-queue rollup (one Check per

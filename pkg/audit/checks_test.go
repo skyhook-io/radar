@@ -1949,48 +1949,6 @@ func TestDeprecatedAPIVersion_NoServedAPIs(t *testing.T) {
 	}
 }
 
-func TestResourceUtilization(t *testing.T) {
-	input := &CheckInput{
-		PodMetrics: []PodMetricsInput{
-			{Namespace: "default", Name: "waste-pod", CPUUsage: 5, CPURequest: 1000, MemoryUsage: 10 * 1024 * 1024, MemoryRequest: 512 * 1024 * 1024},     // 0.5% CPU, 2% memory — waste
-			{Namespace: "default", Name: "hot-pod", CPUUsage: 950, CPURequest: 1000, MemoryUsage: 480 * 1024 * 1024, MemoryRequest: 512 * 1024 * 1024},    // 95% CPU, 94% memory — risk
-			{Namespace: "default", Name: "normal-pod", CPUUsage: 500, CPURequest: 1000, MemoryUsage: 256 * 1024 * 1024, MemoryRequest: 512 * 1024 * 1024}, // 50% — fine
-			{Namespace: "default", Name: "no-request-pod", CPUUsage: 100, CPURequest: 0, MemoryUsage: 128 * 1024 * 1024, MemoryRequest: 0},                // no requests — skip
-		},
-	}
-
-	results := RunChecks(input)
-	pods := map[string]int{} // pod name → finding count
-	for _, f := range results.Findings {
-		if f.CheckID == "resourceUtilization" {
-			pods[f.Name]++
-		}
-	}
-
-	if pods["waste-pod"] < 1 {
-		t.Error("expected utilization finding for waste-pod (under-utilized)")
-	}
-	if pods["hot-pod"] < 1 {
-		t.Error("expected utilization finding for hot-pod (over-utilized)")
-	}
-	if pods["normal-pod"] > 0 {
-		t.Error("normal-pod at 50% utilization should not be flagged")
-	}
-	if pods["no-request-pod"] > 0 {
-		t.Error("pod with no requests should not be flagged")
-	}
-}
-
-func TestResourceUtilization_Empty(t *testing.T) {
-	input := &CheckInput{}
-	results := RunChecks(input)
-	for _, f := range results.Findings {
-		if f.CheckID == "resourceUtilization" {
-			t.Error("resourceUtilization should not fire when no metrics provided")
-		}
-	}
-}
-
 func TestDockerSocketMount(t *testing.T) {
 	input := &CheckInput{
 		Deployments: []*appsv1.Deployment{{
