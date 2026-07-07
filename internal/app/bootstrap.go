@@ -348,13 +348,14 @@ func InitializeCluster() {
 		// Update status IMMEDIATELY so the UI shows the error page.
 		// Don't wait for subsystem drain — exec credential plugins serialize
 		// API calls, so draining 20+ RBAC checks can take 30+ seconds.
+		errorType := k8s.ClassifyError(err)
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   k8s.GetContextName(),
 			Error:     err.Error(),
-			ErrorType: k8s.ClassifyError(err),
+			ErrorType: errorType,
 		})
-		log.Printf("[ops] InitializeCluster FAILED: %v (errorType=%s, %v elapsed)", err, k8s.ClassifyError(err), time.Since(clusterStart))
+		log.Printf("[ops] InitializeCluster FAILED: %v (errorType=%s, %v elapsed)", err, errorType, time.Since(clusterStart))
 
 		// Drain subsystem goroutine in background to prevent goroutine leak.
 		// Cleanup is handled by the next context switch or retry.
@@ -461,10 +462,11 @@ func Shutdown(srv *server.Server) {
 // EKS) is still blocking.
 //
 // Retries once after a 2-second pause to handle transient timeouts.
-// Deterministic errors (auth, RBAC, network) skip the retry — retrying
-// expired credentials or unreachable hosts won't help. Exception: exec auth
-// timeouts ARE retried because the first call triggers a token refresh
-// (e.g., AWS SSO), and the cached token is available on the next attempt.
+// Deterministic errors (config, auth, RBAC, network, TLS) skip the retry —
+// retrying missing config, bad credentials, denied permissions, bad certs, or
+// unreachable hosts won't help. Timeout-shaped exec-auth failures are still
+// retryable because the first call may trigger a token refresh, with the cached
+// token ready by retry.
 func CheckClusterAccess(ctx context.Context) error {
 	execAuth := k8s.UsesExecAuth()
 
@@ -482,10 +484,7 @@ func CheckClusterAccess(ctx context.Context) error {
 			// Exception: exec auth timeouts are retryable — the first call
 			// triggers a token refresh, and the cached token is ready by retry.
 			errType := k8s.ClassifyError(lastErr)
-			if errType == "rbac" || errType == "network" {
-				break
-			}
-			if errType == "auth" && !execAuth {
+			if errType == "config" || errType == "auth" || errType == "rbac" || errType == "network" || errType == "tls" {
 				break
 			}
 			// Don't retry if the parent context is already done

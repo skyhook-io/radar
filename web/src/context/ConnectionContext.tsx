@@ -11,7 +11,7 @@ export interface ConnectionState {
   context: string
   clusterName?: string
   error?: string
-  errorType?: string // auth, network, timeout, unknown
+  errorType?: string // config, auth, rbac, network, timeout, tls, unknown
   progressMessage?: string
 }
 
@@ -40,6 +40,10 @@ class ConnectionRetryError extends Error {
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 const AUTO_RETRY_INITIAL_DELAY_MS = 10000
 const AUTO_RETRY_MAX_DELAY_MS = 60000
+
+export function shouldAutoRetryConnection(errorType?: string): boolean {
+  return errorType !== 'config' && errorType !== 'rbac'
+}
 
 async function fetchConnectionStatus(): Promise<ConnectionStatusResponse> {
   // apiFetch handles a 401 globally (re-auth redirect). These endpoints are
@@ -168,7 +172,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, [retryMutation.isPending])
 
   useEffect(() => {
-    if (connection.state !== 'disconnected') {
+    if (connection.state !== 'disconnected' || !shouldAutoRetryConnection(connection.errorType)) {
       autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
       return
     }
@@ -230,7 +234,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         window.clearTimeout(retryTimeout)
       }
     }
-  }, [connection.state, queryClient])
+  }, [connection.errorType, connection.state, queryClient])
 
   const retry = useCallback(() => {
     if (retryMutation.isPending || autoRetryInFlightRef.current) return

@@ -146,6 +146,87 @@ func TestCheckClusterAccessPreservesProbeErrorShape(t *testing.T) {
 	}
 }
 
+func TestCheckClusterAccessDoesNotRetryConcreteExecAuthFailure(t *testing.T) {
+	prevExec := k8s.SetTestContextUsesExec(true)
+	t.Cleanup(func() {
+		k8s.SetTestContextUsesExec(prevExec)
+	})
+	previousProbe := clusterConnectionProbe
+	calls := 0
+	clusterConnectionProbe = func(context.Context) error {
+		calls++
+		return errors.New("getting credentials: exec: executable aws failed with exit code 255")
+	}
+	t.Cleanup(func() {
+		clusterConnectionProbe = previousProbe
+	})
+
+	err := CheckClusterAccess(context.Background())
+	if err == nil {
+		t.Fatal("CheckClusterAccess() = nil, want error")
+	}
+	if calls != 1 {
+		t.Fatalf("clusterConnectionProbe calls = %d, want one attempt for deterministic auth failure", calls)
+	}
+	if got := k8s.ClassifyError(err); got != "auth" {
+		t.Fatalf("ClassifyError(CheckClusterAccess error) = %q, want auth", got)
+	}
+}
+
+func TestCheckClusterAccessDoesNotRetryDeterministicFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  string
+		want string
+	}{
+		{
+			name: "config",
+			err:  "no context configured",
+			want: "config",
+		},
+		{
+			name: "rbac",
+			err:  `deployments.apps is forbidden: User "alice" cannot list resource`,
+			want: "rbac",
+		},
+		{
+			name: "network",
+			err:  `cluster unreachable: Get "https://cluster.example/version": dial tcp 10.0.0.1:443: connect: connection refused`,
+			want: "network",
+		},
+		{
+			name: "tls",
+			err:  `cluster unreachable: Get "https://cluster.example/version": tls: failed to verify certificate: x509: certificate signed by unknown authority`,
+			want: "tls",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			previousProbe := clusterConnectionProbe
+			calls := 0
+			clusterConnectionProbe = func(context.Context) error {
+				calls++
+				return errors.New(tt.err)
+			}
+			t.Cleanup(func() {
+				clusterConnectionProbe = previousProbe
+			})
+
+			err := CheckClusterAccess(context.Background())
+			if err == nil {
+				t.Fatal("CheckClusterAccess() = nil, want error")
+			}
+			if calls != 1 {
+				t.Fatalf("clusterConnectionProbe calls = %d, want one attempt for deterministic %s failure", calls, tt.name)
+			}
+			if got := k8s.ClassifyError(err); got != tt.want {
+				t.Fatalf("ClassifyError(CheckClusterAccess error) = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfigureNamespaceScopePreferenceResolverAuthDoesNotUseLocalSettings(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	k8s.ResetTestState()

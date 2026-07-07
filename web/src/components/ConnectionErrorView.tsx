@@ -77,6 +77,56 @@ function getAuthHints(context: string): AuthHints {
   }
 }
 
+function getTimeoutHints(context: string): AuthHints | null {
+  const parsed = parseContextName(context)
+  const baseHints = [
+    'The Kubernetes API did not respond before the deadline.',
+    'Check VPN, firewall rules, and whether the cluster endpoint is reachable.',
+  ]
+
+  switch (parsed.provider) {
+    case 'GKE': {
+      const result: AuthHints = {
+        title: 'Connection Timed Out',
+        hints: [...baseHints, 'If the endpoint is reachable, Google Cloud credentials may need refresh.'],
+        authCommand: { label: 'If network access looks healthy, refresh Google Cloud credentials:', command: 'gcloud auth login' },
+      }
+      if (parsed.region && parsed.account) {
+        const isZone = /^[a-z]+-[a-z]+\d+-[a-z]$/.test(parsed.region)
+        const flag = isZone ? '--zone' : '--region'
+        result.fallbackCommand = {
+          label: 'If that does not work, refresh cluster credentials:',
+          command: `gcloud container clusters get-credentials ${parsed.clusterName} ${flag} ${parsed.region} --project ${parsed.account}`,
+        }
+      }
+      return result
+    }
+    case 'EKS': {
+      const result: AuthHints = {
+        title: 'Connection Timed Out',
+        hints: [...baseHints, 'If the endpoint is reachable, AWS credentials or SSO may need refresh.'],
+        authCommand: { label: 'If this context uses AWS SSO and network access looks healthy, refresh credentials:', command: 'aws sso login' },
+      }
+      if (parsed.region) {
+        result.fallbackCommand = {
+          label: 'If that does not work, refresh cluster credentials:',
+          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}`,
+        }
+      }
+      return result
+    }
+    case 'AKS':
+      return {
+        title: 'Connection Timed Out',
+        hints: [...baseHints, 'If the endpoint is reachable, Azure credentials may need refresh.'],
+        authCommand: { label: 'If network access looks healthy, refresh Azure credentials:', command: 'az login' },
+        fallbackCommand: { label: 'If that does not work, refresh cluster credentials:', command: 'az aks get-credentials --name <cluster> --resource-group <rg>' },
+      }
+    default:
+      return null
+  }
+}
+
 const errorHints: Record<string, { title: string; hints: string[] }> = {
   config: {
     title: 'No Kubeconfig Found',
@@ -102,6 +152,14 @@ const errorHints: Record<string, { title: string; hints: string[] }> = {
       'Check if VPN connection is required',
       'Verify firewall rules allow access',
       'Confirm the cluster is running',
+    ],
+  },
+  tls: {
+    title: 'Certificate Error',
+    hints: [
+      'Radar reached the Kubernetes API, but could not verify its TLS certificate',
+      'Check the kubeconfig cluster server hostname and certificate-authority settings',
+      'If this cluster intentionally uses a private CA, refresh the kubeconfig for this context',
     ],
   },
   timeout: {
@@ -142,25 +200,29 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
       </code>
       {onRunInTerminal && (
         <Tooltip content="Run in terminal" wrapperClassName="shrink-0">
-        <button
-          onClick={() => onRunInTerminal(command)}
-          className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-        >
-          <TerminalSquare className="w-3.5 h-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={() => onRunInTerminal(command)}
+            aria-label="Run command in terminal"
+            className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+          >
+            <TerminalSquare className="w-3.5 h-3.5" />
+          </button>
         </Tooltip>
       )}
       <Tooltip content="Copy to clipboard" wrapperClassName="shrink-0">
-      <button
-        onClick={handleCopy}
-        className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-      >
-        {copied ? (
-          <Check className="w-3.5 h-3.5 text-green-400" />
-        ) : (
-          <Copy className="w-3.5 h-3.5" />
-        )}
-      </button>
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label="Copy command to clipboard"
+          className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+        >
+          {copied ? (
+            <Check className="w-3.5 h-3.5 text-green-400" />
+          ) : (
+            <Copy className="w-3.5 h-3.5" />
+          )}
+        </button>
       </Tooltip>
     </div>
   )
@@ -169,8 +231,13 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
 export function ConnectionErrorView({ connection, onRetry, isRetrying }: ConnectionErrorViewProps) {
   // For auth errors, generate context-aware hints with a specific re-auth command
   const isAuth = connection.errorType === 'auth'
-  const authInfo = isAuth ? getAuthHints(connection.context || '') : null
-  const errorInfo = authInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
+  const isTimeout = connection.errorType === 'timeout'
+  const commandInfo = isAuth
+    ? getAuthHints(connection.context || '')
+    : isTimeout
+      ? getTimeoutHints(connection.context || '')
+      : null
+  const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
 
@@ -182,10 +249,10 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const retryCmd = `curl -s -X POST http://${window.location.host}/api/connection/retry > /dev/null`
 
   const handleAuthInTerminal = () => {
-    if (!authInfo?.authCommand) return
+    if (!commandInfo?.authCommand) return
     const cmd = authMe?.authEnabled === false
-      ? `${authInfo.authCommand.command} && ${retryCmd}`
-      : authInfo.authCommand.command
+      ? `${commandInfo.authCommand.command} && ${retryCmd}`
+      : commandInfo.authCommand.command
     openLocalTerminal({
       initialCommand: cmd,
       title: 'Auth',
@@ -234,23 +301,23 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
                 </li>
               ))}
             </ul>
-            {authInfo?.authCommand && (
+            {commandInfo?.authCommand && (
               <div className="mt-3">
-                <p className="text-xs text-theme-text-tertiary">{authInfo.authCommand.label}</p>
-                <CopyableCommand command={authInfo.authCommand.command} onRunInTerminal={handleRunInTerminal} />
+                <p className="text-xs text-theme-text-tertiary">{commandInfo.authCommand.label}</p>
+                <CopyableCommand command={commandInfo.authCommand.command} onRunInTerminal={handleRunInTerminal} />
                 <button
                   onClick={handleAuthInTerminal}
                   className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium btn-brand rounded-md"
                 >
                   <TerminalSquare className="w-3.5 h-3.5" />
-                  Authenticate in terminal
+                  {isAuth ? 'Authenticate in terminal' : 'Run in terminal'}
                 </button>
               </div>
             )}
-            {authInfo?.fallbackCommand && (
+            {commandInfo?.fallbackCommand && (
               <div className="mt-4 pt-3 border-t border-theme-border/50">
-                <p className="text-xs text-theme-text-tertiary">{authInfo.fallbackCommand.label}</p>
-                <CopyableCommand command={authInfo.fallbackCommand.command} onRunInTerminal={handleRunInTerminal} />
+                <p className="text-xs text-theme-text-tertiary">{commandInfo.fallbackCommand.label}</p>
+                <CopyableCommand command={commandInfo.fallbackCommand.command} onRunInTerminal={handleRunInTerminal} />
               </div>
             )}
           </div>

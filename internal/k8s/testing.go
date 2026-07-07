@@ -134,6 +134,16 @@ func SetTestContextName(name string) string {
 	return prev
 }
 
+// SetTestContextUsesExec overrides whether the current context uses exec auth
+// and returns the previous value so callers can restore it on cleanup.
+func SetTestContextUsesExec(enabled bool) bool {
+	clientMu.Lock()
+	prev := contextUsesExec
+	contextUsesExec = enabled
+	clientMu.Unlock()
+	return prev
+}
+
 // SetTestClient overrides the package-level client and returns the previous
 // value so tests in other packages can restore it.
 func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
