@@ -892,10 +892,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     contentReady,
     onClusterLoadStateChange,
   })
-  // Only label background/deferred warmup in the topbar — during the initial
-  // dashboard fetch the center splash already says "Loading dashboard…", so the
-  // dot alone carries the topbar. See useClusterLoadState's clusterLoadInitial.
-  const showClusterWarmupLabel = clusterLoadState.loading && !clusterLoadInitial
+  // Suppress the topbar warmup label during the initial dashboard fetch only on
+  // Home, where the center "Loading dashboard…" splash already covers it. Off
+  // Home there's no splash, so keep the label as the only text cue.
+  const showClusterWarmupLabel = clusterLoadState.loading && !(clusterLoadInitial && mainView === 'home')
 
   // Query client for cache invalidation
   const queryClient = useQueryClient()
