@@ -299,6 +299,16 @@
       "description": "Init containers to run before the main container.",
       "items": { "type": "object" }
     },
+    "extraVolumes": {
+      "type": "array",
+      "description": "Additional volumes to add to the pod.",
+      "items": { "type": "object" }
+    },
+    "extraVolumeMounts": {
+      "type": "array",
+      "description": "Additional volume mounts for the main container.",
+      "items": { "type": "object" }
+    },
     "probes": {
       "type": "object",
       "additionalProperties": false,
