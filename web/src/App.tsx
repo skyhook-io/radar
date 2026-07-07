@@ -45,13 +45,14 @@ import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit, useDashboard } from './api/client'
+import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
-import { dashboardClusterLoadState, idleClusterLoadState, type ClusterLoadState } from './types/clusterLoadState'
+import type { ClusterLoadState } from './types/clusterLoadState'
+import { useClusterLoadState } from './hooks/useClusterLoadState'
 import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, HelpCircle, Loader2 } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
@@ -884,65 +885,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const contentReady = !isSwitching && !authMePending &&
     !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
 
-  const showHomeClusterLoadFallback = chromeless && !onClusterLoadStateChange && mainView === 'home'
-  const needsClusterLoadState = contentReady && (!chromeless || Boolean(onClusterLoadStateChange) || showHomeClusterLoadFallback)
-  const clusterLoadNamespaceKey = namespaces.join('\0')
-  const [clusterLoadObserverActive, setClusterLoadObserverActive] = useState(false)
-  useEffect(() => {
-    if (!needsClusterLoadState) {
-      setClusterLoadObserverActive(false)
-      return
-    }
-    setClusterLoadObserverActive(true)
-  }, [needsClusterLoadState, clusterLoadNamespaceKey])
-  useEffect(() => {
-    if (needsClusterLoadState && mainView === 'home') {
-      setClusterLoadObserverActive(true)
-    }
-  }, [mainView, needsClusterLoadState])
-
-  const clusterLoadObserverEnabled = needsClusterLoadState && clusterLoadObserverActive
-  const {
-    data: clusterLoadData,
-    isPending: clusterLoadPending,
-    isError: clusterLoadError,
-  } = useDashboard(namespaces, { enabled: clusterLoadObserverEnabled })
-  const clusterLoadState = useMemo(
-    () => {
-      if (!needsClusterLoadState) return idleClusterLoadState
-      if (clusterLoadError) return idleClusterLoadState
-      if (clusterLoadData) return dashboardClusterLoadState(clusterLoadData)
-      if (clusterLoadObserverEnabled && clusterLoadPending) {
-        return {
-          loading: true,
-          message: 'Loading dashboard…',
-          pendingKinds: [],
-        }
-      }
-      return idleClusterLoadState
-    },
-    [clusterLoadData, clusterLoadError, clusterLoadObserverEnabled, clusterLoadPending, needsClusterLoadState],
-  )
-  const clusterLoadStateKnown =
-    !needsClusterLoadState || Boolean(clusterLoadData) || (clusterLoadObserverEnabled && (clusterLoadPending || clusterLoadError))
-  useEffect(() => {
-    if (
-      needsClusterLoadState &&
-      mainView !== 'home' &&
-      ((clusterLoadData && !clusterLoadState.loading) || clusterLoadError)
-    ) {
-      setClusterLoadObserverActive(false)
-    }
-  }, [clusterLoadData, clusterLoadError, clusterLoadState.loading, mainView, needsClusterLoadState])
-  useEffect(() => {
-    return () => {
-      onClusterLoadStateChange?.(idleClusterLoadState)
-    }
-  }, [onClusterLoadStateChange])
-  useEffect(() => {
-    if (!clusterLoadStateKnown) return
-    onClusterLoadStateChange?.(clusterLoadState)
-  }, [clusterLoadState, clusterLoadStateKnown, onClusterLoadStateChange])
+  const { clusterLoadState, showHomeClusterLoadFallback } = useClusterLoadState({
+    namespaces,
+    mainView,
+    chromeless,
+    contentReady,
+    onClusterLoadStateChange,
+  })
 
   // Query client for cache invalidation
   const queryClient = useQueryClient()
@@ -1651,7 +1600,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                 {clusterConnected ? (
                   <span
                     className={`block w-2.5 h-2.5 shrink-0 rounded-full ${
-                      crdDiscoveryStatus === 'discovering' ? 'bg-amber-400 animate-pulse' : 'bg-green-500'
+                      crdDiscoveryStatus === 'discovering' || clusterLoadState.loading
+                        ? 'bg-amber-400 animate-pulse'
+                        : 'bg-green-500'
                     }`}
                   />
                 ) : (
