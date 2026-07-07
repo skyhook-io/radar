@@ -14,6 +14,10 @@ interface UseClusterLoadStateArgs {
 interface UseClusterLoadStateResult {
   clusterLoadState: ClusterLoadState
   showHomeClusterLoadFallback: boolean
+  // The dashboard's first fetch is still in flight (no data yet). In this phase a
+  // center "Loading dashboard…" splash is shown, so the topbar label would be
+  // redundant — callers can suppress it and keep just the status dot.
+  clusterLoadInitial: boolean
 }
 
 // Tracks cluster-data warmup (deferred/partial dashboard load) once the main
@@ -63,5 +67,7 @@ export function useClusterLoadState({
   }, [clusterLoadState])
   useEffect(() => () => emitRef.current?.(idleClusterLoadState), [])
 
-  return { clusterLoadState, showHomeClusterLoadFallback }
+  const clusterLoadInitial = clusterLoadState.loading && !data
+
+  return { clusterLoadState, showHomeClusterLoadFallback, clusterLoadInitial }
 }

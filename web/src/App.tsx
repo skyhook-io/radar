@@ -885,13 +885,17 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const contentReady = !isSwitching && !authMePending &&
     !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
 
-  const { clusterLoadState, showHomeClusterLoadFallback } = useClusterLoadState({
+  const { clusterLoadState, showHomeClusterLoadFallback, clusterLoadInitial } = useClusterLoadState({
     namespaces,
     mainView,
     chromeless,
     contentReady,
     onClusterLoadStateChange,
   })
+  // Only label background/deferred warmup in the topbar — during the initial
+  // dashboard fetch the center splash already says "Loading dashboard…", so the
+  // dot alone carries the topbar. See useClusterLoadState's clusterLoadInitial.
+  const showClusterWarmupLabel = clusterLoadState.loading && !clusterLoadInitial
 
   // Query client for cache invalidation
   const queryClient = useQueryClient()
@@ -1617,12 +1621,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                   </button>
                 )}
               </Tooltip>
-              {(clusterLoadState.loading || (showNavRail && (!clusterConnected || crdDiscoveryStatus === 'discovering'))) && (
+              {(showClusterWarmupLabel || (showNavRail && (!clusterConnected || crdDiscoveryStatus === 'discovering'))) && (
                 <span className="hidden xl:flex items-center gap-1.5 whitespace-nowrap text-[11px] text-theme-text-tertiary">
-                  {clusterLoadState.loading && <Loader2 className="w-3 h-3 animate-spin" />}
+                  {showClusterWarmupLabel && <Loader2 className="w-3 h-3 animate-spin" />}
                   {!clusterConnected
                     ? 'Disconnected'
-                    : clusterLoadState.loading
+                    : showClusterWarmupLabel
                       ? clusterLoadState.message
                       : 'Discovering Custom Resources…'}
                 </span>
