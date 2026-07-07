@@ -240,6 +240,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
+  const showRawErrorOpen = !connection.errorType || connection.errorType === 'unknown'
 
   // Auto-retry after successful auth. The terminal shell runs on the server
   // host, so the auth command itself fixes the server's credentials in every
@@ -320,15 +321,19 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
                 <CopyableCommand command={commandInfo.fallbackCommand.command} onRunInTerminal={handleRunInTerminal} />
               </div>
             )}
+            {connection.error && (
+              <details open={showRawErrorOpen} className="mt-4 pt-3 border-t border-theme-border/50">
+                <summary className="cursor-pointer select-none text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary">
+                  Raw error
+                </summary>
+                <div className="mt-2 bg-theme-elevated border border-theme-border rounded-md p-3 overflow-auto max-h-32">
+                  <code className="text-xs text-theme-text-tertiary font-mono whitespace-pre-wrap break-words">
+                    {connection.error}
+                  </code>
+                </div>
+              </details>
+            )}
           </div>
-
-          {connection.error && (
-            <div className="w-full bg-theme-elevated border border-theme-border rounded-lg p-3 mb-6 overflow-auto max-h-32">
-              <code className="text-xs text-red-400 font-mono whitespace-pre-wrap break-words">
-                {connection.error}
-              </code>
-            </div>
-          )}
 
           <div className="flex items-center gap-5">
             <button
@@ -349,7 +354,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
               )}
             </button>
 
-            {connection.errorType !== 'config' && <ContextSwitcher />}
+            {connection.errorType !== 'config' && <ContextSwitcher triggerName="Switch context" />}
           </div>
 
           {isAuth && (
