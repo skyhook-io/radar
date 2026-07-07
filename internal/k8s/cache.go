@@ -160,6 +160,15 @@ func InitResourceCache(ctx context.Context) error {
 			scopes = map[string]k8score.ResourceScope{}
 		}
 
+		// Captured ONCE at wiring time and closed over by the callbacks below.
+		// Informer shutdown on context switch is asynchronous (up to 5s, then
+		// abandoned), so a late callback reading ActiveClusterContext() at
+		// delivery time would stamp the OLD cluster's event with the NEW
+		// cluster's name — permanently, under SQLite storage. Closing over the
+		// wiring-time value keeps late events truthfully attributed to the
+		// cluster they came from.
+		recordClusterContext := ActiveClusterContext()
+
 		cfg := k8score.CacheConfig{
 			Client:              k8sClient,
 			ResourceScopes:      scopes,
@@ -184,7 +193,7 @@ func InitResourceCache(ctx context.Context) error {
 				}
 
 				// Record to timeline store
-				recordToTimelineStore(change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
+				recordToTimelineStore(recordClusterContext, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
 			},
 
 			OnEventChange: func(obj any, op string) {
@@ -193,7 +202,7 @@ func InitResourceCache(ctx context.Context) error {
 				if op == "delete" {
 					return
 				}
-				recordK8sEventToTimeline(obj)
+				recordK8sEventToTimeline(recordClusterContext, obj)
 			},
 
 			OnDrop: func(kind, ns, name, reason, op string) {
@@ -251,8 +260,10 @@ func ResetResourceCache() {
 	tombstones.Clear()
 }
 
-// recordK8sEventToTimeline records a K8s Event to the timeline store
-func recordK8sEventToTimeline(obj any) {
+// recordK8sEventToTimeline records a K8s Event to the timeline store.
+// clusterContext is the wiring-time capture (see InitResourceCache), not the
+// live active context — a late callback must stamp the cluster it came from.
+func recordK8sEventToTimeline(clusterContext string, obj any) {
 	event, ok := obj.(*corev1.Event)
 	if !ok {
 		return
@@ -272,7 +283,7 @@ func recordK8sEventToTimeline(obj any) {
 	timelineEvent := timeline.NewK8sEventTimelineEvent(event, owner)
 	timelineEvent.Labels = labels
 	timelineEvent.CreatedAt = createdAt
-	timelineEvent.ClusterContext = ActiveClusterContext()
+	timelineEvent.ClusterContext = clusterContext
 
 	ctx := context.Background()
 	if err := timeline.RecordEventWithBroadcast(ctx, timelineEvent); err != nil {
@@ -290,10 +301,10 @@ func recordK8sEventToTimeline(obj any) {
 // whatever the event itself provides, exactly as before.
 func enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time) {
 	inv := event.InvolvedObject
-	if o, l, c, ok := liveInvolvedObject(inv.Kind, event.Namespace, inv.Name); ok {
+	if o, l, c, ok := liveInvolvedObject(string(inv.UID), inv.Kind, event.Namespace, inv.Name); ok {
 		return o, l, c
 	}
-	if entry, ok := tombstones.Get(inv.Kind, event.Namespace, inv.Name); ok {
+	if entry, ok := tombstones.Get(string(inv.UID), inv.APIVersion, inv.Kind, event.Namespace, inv.Name); ok {
 		return entry.Owner, entry.Labels, entry.CreatedAt
 	}
 	return nil, nil, nil
@@ -302,10 +313,17 @@ func enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, label
 // liveInvolvedObject reads the involved object straight from the typed informer
 // cache when it is still present. ok=false means the object is not (or no longer)
 // cached, so the caller should fall back to the tombstone.
-func liveInvolvedObject(kind, namespace, name string) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, ok bool) {
+func liveInvolvedObject(uid, kind, namespace, name string) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, ok bool) {
 	cache := GetResourceCache()
 	if cache == nil {
 		return nil, nil, nil, false
+	}
+	// The typed lister lookup is by kind/ns/name; when the event names a UID,
+	// verify it so a same-named different object (a CRD kind collision, or a
+	// recreated object) can't lend its enrichment. A mismatch falls through to
+	// the tombstone, which is keyed by UID.
+	uidMatches := func(obj metav1.Object) bool {
+		return uid == "" || string(obj.GetUID()) == uid
 	}
 	switch kind {
 	case "Pod":
@@ -313,7 +331,7 @@ func liveInvolvedObject(kind, namespace, name string) (owner *timeline.OwnerInfo
 			return nil, nil, nil, false
 		}
 		pod, err := cache.Pods().Pods(namespace).Get(name)
-		if err != nil || pod == nil {
+		if err != nil || pod == nil || !uidMatches(pod) {
 			return nil, nil, nil, false
 		}
 		return controllerOwner(pod.OwnerReferences), timeline.ExtractLabels(pod), creationPtr(pod), true
@@ -322,7 +340,7 @@ func liveInvolvedObject(kind, namespace, name string) (owner *timeline.OwnerInfo
 			return nil, nil, nil, false
 		}
 		rs, err := cache.ReplicaSets().ReplicaSets(namespace).Get(name)
-		if err != nil || rs == nil {
+		if err != nil || rs == nil || !uidMatches(rs) {
 			return nil, nil, nil, false
 		}
 		return controllerOwner(rs.OwnerReferences), timeline.ExtractLabels(rs), creationPtr(rs), true
@@ -437,13 +455,14 @@ func getGeneration(obj any) int64 {
 // we don't recompute the identical diff on the hottest per-update path. Callers
 // without a precomputed diff (tests, non-cache paths) pass nil + false and the
 // diff is computed here as before.
-func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
+// recordToTimelineStore records a resource change. clusterContext is the
+// wiring-time capture (see InitResourceCache), not the live active context —
+// a late callback must stamp the cluster it came from.
+func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
 	store := timeline.GetStore()
 	if store == nil {
 		return
 	}
-
-	clusterContext := ActiveClusterContext()
 
 	if op == "add" {
 		if store.IsResourceSeen(clusterContext, kind, namespace, name) {
@@ -487,7 +506,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 	// this mirrors its enrichment; once it is gone (delete, or a late K8s event
 	// after eviction) the retained copy is the only source of owner/labels.
 	if name != "" {
-		tombstones.Put(kind, namespace, name, entry)
+		tombstones.Put(uid, apiVersion, kind, namespace, name, entry)
 	}
 
 	var diff *timeline.DiffInfo

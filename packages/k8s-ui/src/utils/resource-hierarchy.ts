@@ -971,9 +971,12 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
 // so the user can tell them apart; every other lane shows nothing.
 // -----------------------------------------------------------------------------
 
-/** The group-less collision key for a lane — kind + namespace + name. */
+/** The group-less collision key for a lane — kind + namespace + name. The
+ *  pipe delimiter can't appear in any component (DNS-1123 names, alphanumeric
+ *  kinds) and keeps this file greppable — a NUL delimiter makes text tooling
+ *  classify the whole file as binary. */
 export function laneCollisionKey(lane: Pick<ResourceLane, 'kind' | 'namespace' | 'name'>): string {
-  return `${lane.kind} ${lane.namespace} ${lane.name}`
+  return `${lane.kind}|${lane.namespace}|${lane.name}`
 }
 
 /** Collision keys (see laneCollisionKey) that appear on 2+ lanes in the given

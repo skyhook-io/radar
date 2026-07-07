@@ -33,9 +33,12 @@ interface TimelineListProps {
   // LIVE mode: quantize the base fetch so the sliding window doesn't churn the
   // query key every tick.
   sliding?: boolean
+  // Time span of the rows visible in the list's scrollport — the host renders
+  // it as the scrubber lens so scrolling the list moves the lens.
+  onVisibleWindowChange?: (window: { fromMs: number; toMs: number } | null) => void
 }
 
-export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, sliding }: TimelineListProps) {
+export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, sliding, onVisibleWindowChange }: TimelineListProps) {
   const hasLimitedAccess = useHasLimitedAccess()
   const timelineSource = useTimelineSource()
   const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kinds: string[] }>({
@@ -102,6 +105,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
       onActivityFilterChange={onActivityFilterChange}
       kindFilter={kindFilter}
       onKindFilterChange={onKindFilterChange}
+      onVisibleWindowChange={onVisibleWindowChange}
     />
   )
 }

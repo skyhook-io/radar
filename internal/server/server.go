@@ -226,9 +226,9 @@ func (s *Server) setupRoutes() {
 		AllowedOrigins: []string{"http://localhost:*", "http://127.0.0.1:*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"Accept", "Content-Type"},
-		// Without an expose entry, cross-origin JS reads this as "" and the
+		// Without an expose entry, cross-origin JS reads these as "" and the
 		// timeline client silently falls back to full-ring refetches.
-		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch"},
+		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq"},
 		AllowCredentials: true,
 	}))
 
@@ -2876,6 +2876,16 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Cursor progress must be derived from the page BEFORE the RBAC filter
+	// below: rows the user can't read still advance the delta frontier, or a
+	// run of unreadable rows would pin a delta client's cursor in place while
+	// it re-fetches the same page forever.
+	var maxSeq int64
+	for _, e := range events {
+		if e.Seq > maxSeq {
+			maxSeq = e.Seq
+		}
+	}
 	events = s.filterChangesByClusterScopedRBAC(r, events)
 
 	// The store epoch validates delta cursors: seq restarts from 1 when the
@@ -2883,6 +2893,9 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	// holding a cursor from another epoch must full-resync instead of
 	// trusting an empty delta as "nothing new".
 	w.Header().Set("X-Radar-Timeline-Epoch", strconv.FormatInt(timeline.ObservationStart().UnixNano(), 10))
+	if maxSeq > 0 {
+		w.Header().Set("X-Radar-Timeline-Max-Seq", strconv.FormatInt(maxSeq, 10))
+	}
 	s.writeJSON(w, events)
 }
 

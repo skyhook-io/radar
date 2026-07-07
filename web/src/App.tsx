@@ -1001,8 +1001,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   useEffect(() => () => {
     if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
+    if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
     fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
     slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
+    timelineInvalidationRef.current = { timer: null }
   }, [])
 
   // SSE connection for real-time updates — no namespace filter for small/medium clusters (frontend filters).
@@ -1022,8 +1024,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       // Cancel any pending SSE-driven invalidation — old cluster's events are irrelevant
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
       if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
+      if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
       fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
       slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
+      timelineInvalidationRef.current = { timer: null }
 
       // Close any open drawers/overlays — old cluster's resources don't exist on the new one
       // (?full=1 is cleared by the URL reset below).

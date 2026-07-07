@@ -127,14 +127,18 @@ function useLocalEvents(query: TimelineQuery): TimelineEventsResult {
       ? { ...query, timeRange: 'all', limit: LOCAL_RING_LIMIT, deltaSync: true }
       : { ...query, deltaSync: query.timeRange === 'all' },
   )
+  // Multi-kind selections are the one CLIENT-side filter (a single kind rides
+  // the server query key), so the memo must watch them itself — `data`
+  // identity won't change when only the kind set does.
+  const kindsKey = query.kinds?.join(',')
   const events = useMemo(
     () => (windowed && data ? applyClientFilters(data, query) : data),
     // `data` identity captures every server-side filter change (namespaces,
-    // kinds, k8s-events, deleted — all in the useChanges query key); the
-    // client-only window + cap are added here. The live tick advances
+    // k8s-events, deleted — all in the useChanges query key); the client-only
+    // window + cap + kind set are added here. The live tick advances
     // query.toMs, re-filtering to the sliding edge with no refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [windowed, data, query.fromMs, query.toMs, query.limit],
+    [windowed, data, query.fromMs, query.toMs, query.limit, kindsKey],
   )
   return { data: events, isLoading, isError, refetch }
 }
@@ -475,10 +479,6 @@ async function fetchRetainedOverview(range: TimelineRange): Promise<TimelineOver
     throw new ApiError(errorData.error || `HTTP ${res.status}`, res.status, errorData)
   }
   const body: unknown = await res.json()
-  // Legacy hosts return a bare bucket array; the envelope adds availableFromMs.
-  if (Array.isArray(body)) {
-    return { buckets: body as TimelineOverviewBucket[] }
-  }
   const env = body as { buckets?: TimelineOverviewBucket[]; availableFromMs?: number }
   return { buckets: env.buckets ?? [], availableFromMs: env.availableFromMs }
 }

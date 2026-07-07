@@ -1169,14 +1169,18 @@ export function deltaFetchCursor(
 async function fetchChangesPage(
   path: string,
   signal?: AbortSignal,
-): Promise<{ events: TimelineEvent[]; epoch: string }> {
+): Promise<{ events: TimelineEvent[]; epoch: string; maxSeq: number }> {
   const response = await apiFetch(`${getApiBase()}${path}`, signal ? { signal } : undefined)
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
     throw new ApiError(errorData.error || `HTTP ${response.status}`, response.status, errorData)
   }
   const events = (await response.json()) as TimelineEvent[]
-  return { events, epoch: response.headers.get('X-Radar-Timeline-Epoch') ?? '' }
+  // maxSeq is the server's pre-RBAC-filter frontier for this page — rows the
+  // user can't see still advance the cursor, so a run of unreadable rows
+  // can't pin a delta client in place.
+  const maxSeq = Number(response.headers.get('X-Radar-Timeline-Max-Seq') ?? '0') || 0
+  return { events, epoch: response.headers.get('X-Radar-Timeline-Epoch') ?? '', maxSeq }
 }
 
 // Highest store-assigned arrival number in the cached page — the delta cursor.
@@ -1269,7 +1273,7 @@ export function useChanges(options: UseChangesOptions = {}) {
       if (cursor > 0) {
         const delta = await fetchChangesPage(`${path}${queryString ? '&' : '?'}since_seq=${cursor}`, signal)
         if (delta.epoch && delta.epoch === meta!.epoch) {
-          meta!.highWaterSeq = Math.max(meta!.highWaterSeq, maxEventSeq(delta.events))
+          meta!.highWaterSeq = Math.max(meta!.highWaterSeq, delta.maxSeq, maxEventSeq(delta.events))
           // Returning the cached reference on an empty delta skips re-renders.
           return delta.events.length ? mergeDeltaEvents(cached!, delta.events, limit) : cached!
         }
@@ -1277,7 +1281,7 @@ export function useChanges(options: UseChangesOptions = {}) {
         // cursor is meaningless. Fall through to a full resync.
       }
       const full = await fetchChangesPage(path, signal)
-      changesDeltaMeta.set(metaKey, { epoch: full.epoch, lastFullMs: Date.now(), highWaterSeq: maxEventSeq(full.events) })
+      changesDeltaMeta.set(metaKey, { epoch: full.epoch, lastFullMs: Date.now(), highWaterSeq: Math.max(full.maxSeq, maxEventSeq(full.events)) })
       return full.events
     },
     staleTime: 5000, // Consider data stale after 5 seconds to ensure fresh data on navigation

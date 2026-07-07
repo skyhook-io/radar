@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { PaneLoader } from '../ui/PaneLoader'
 import {
   AlertCircle,
@@ -79,6 +79,10 @@ export interface TimelineListProps {
   onActivityFilterChange?: (keys: ActivityFilterKey[]) => void
   kindFilter?: string[]
   onKindFilterChange?: (kinds: string[]) => void
+  // Reports the time span of the rows currently visible in the list's
+  // scrollport (null when nothing is visible). A host scrubber renders it as
+  // the lens, so scrolling the list moves the lens across the strip.
+  onVisibleWindowChange?: (window: { fromMs: number; toMs: number } | null) => void
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -90,7 +94,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange }: TimelineListProps) {
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
@@ -268,6 +272,43 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     return groups
   }, [filteredActivity])
 
+  // Visible-window reporting: rows carry their time span in data attributes;
+  // on scroll (rAF-throttled) and whenever the row set changes, the span of
+  // rows intersecting the scrollport is reported so a host scrubber can show
+  // it as the lens. DOM-measured, so it runs only in effects/handlers —
+  // SSR-safe by construction.
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const visibleWindowRaf = useRef<number | null>(null)
+  const reportVisibleWindow = useCallback(() => {
+    const container = scrollRef.current
+    if (!container || !onVisibleWindowChange) return
+    const containerRect = container.getBoundingClientRect()
+    let fromMs = Infinity
+    let toMs = -Infinity
+    for (const row of container.querySelectorAll<HTMLElement>('[data-ts-from]')) {
+      const rect = row.getBoundingClientRect()
+      if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) continue
+      const from = Number(row.dataset.tsFrom)
+      const to = Number(row.dataset.tsTo)
+      if (Number.isFinite(from) && from < fromMs) fromMs = from
+      if (Number.isFinite(to) && to > toMs) toMs = to
+    }
+    onVisibleWindowChange(fromMs <= toMs ? { fromMs, toMs } : null)
+  }, [onVisibleWindowChange])
+  const handleListScroll = useCallback(() => {
+    if (visibleWindowRaf.current != null) return
+    visibleWindowRaf.current = requestAnimationFrame(() => {
+      visibleWindowRaf.current = null
+      reportVisibleWindow()
+    })
+  }, [reportVisibleWindow])
+  useEffect(() => {
+    reportVisibleWindow()
+    return () => {
+      if (visibleWindowRaf.current != null) cancelAnimationFrame(visibleWindowRaf.current)
+    }
+  }, [reportVisibleWindow, groupedActivity])
+
   return (
     <div className="flex flex-col h-full w-full">
       <TimelineToolbar
@@ -292,7 +333,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       />
 
       {/* Timeline content */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto" ref={scrollRef} onScroll={onVisibleWindowChange ? handleListScroll : undefined}>
         {isLoading ? (
           <PaneLoader label="Loading timeline…" className="h-full" />
         ) : filteredActivity.length === 0 ? (
@@ -348,24 +389,34 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                 <div className="space-y-2 ml-6 border-l-2 border-theme-border pl-4">
                   {group.items.map((aggItem) => (
                     aggItem.type === 'aggregated' ? (
-                      <AggregatedActivityCard
+                      <div
                         key={`agg-${aggItem.first.id}-${aggItem.last.id}`}
-                        first={aggItem.first}
-                        last={aggItem.last}
-                        count={aggItem.count}
-                        reason={aggItem.reason}
-                        expanded={expandedItem === aggItem.first.id}
-                        onToggle={() => setExpandedItem(expandedItem === aggItem.first.id ? null : aggItem.first.id)}
-                        onResourceClick={onResourceClick}
-                      />
+                        data-ts-from={new Date(aggItem.first.timestamp).getTime()}
+                        data-ts-to={new Date(aggItem.last.timestamp).getTime()}
+                      >
+                        <AggregatedActivityCard
+                          first={aggItem.first}
+                          last={aggItem.last}
+                          count={aggItem.count}
+                          reason={aggItem.reason}
+                          expanded={expandedItem === aggItem.first.id}
+                          onToggle={() => setExpandedItem(expandedItem === aggItem.first.id ? null : aggItem.first.id)}
+                          onResourceClick={onResourceClick}
+                        />
+                      </div>
                     ) : (
-                      <ActivityCard
+                      <div
                         key={aggItem.item.id}
-                        item={aggItem.item}
-                        expanded={expandedItem === aggItem.item.id}
-                        onToggle={() => setExpandedItem(expandedItem === aggItem.item.id ? null : aggItem.item.id)}
-                        onResourceClick={onResourceClick}
-                      />
+                        data-ts-from={new Date(aggItem.item.timestamp).getTime()}
+                        data-ts-to={new Date(aggItem.item.timestamp).getTime()}
+                      >
+                        <ActivityCard
+                          item={aggItem.item}
+                          expanded={expandedItem === aggItem.item.id}
+                          onToggle={() => setExpandedItem(expandedItem === aggItem.item.id ? null : aggItem.item.id)}
+                          onResourceClick={onResourceClick}
+                        />
+                      </div>
                     )
                   ))}
                 </div>

@@ -33,9 +33,9 @@ func TestTombstoneCache_PutGetHit(t *testing.T) {
 	c := NewTombstoneCache(15*time.Minute, 10)
 	owner := &OwnerInfo{Kind: "ReplicaSet", Name: "web-rs"}
 	ct := time.Now().Add(-time.Hour)
-	c.Put("Pod", "shop", "web", TombstoneEntry{Owner: owner, Labels: map[string]string{"app": "web"}, CreatedAt: &ct})
+	c.Put("", "v1", "Pod", "shop", "web", TombstoneEntry{Owner: owner, Labels: map[string]string{"app": "web"}, CreatedAt: &ct})
 
-	got, ok := c.Get("Pod", "shop", "web")
+	got, ok := c.Get("", "v1", "Pod", "shop", "web")
 	if !ok {
 		t.Fatal("expected hit")
 	}
@@ -52,15 +52,15 @@ func TestTombstoneCache_PutGetHit(t *testing.T) {
 
 func TestTombstoneCache_MissSilent(t *testing.T) {
 	c := NewTombstoneCache(15*time.Minute, 10)
-	if _, ok := c.Get("Pod", "shop", "nope"); ok {
+	if _, ok := c.Get("", "v1", "Pod", "shop", "nope"); ok {
 		t.Fatal("expected miss for never-seen key")
 	}
 	// Different identity must not collide.
-	c.Put("Pod", "shop", "web", TombstoneEntry{})
-	if _, ok := c.Get("Pod", "other", "web"); ok {
+	c.Put("", "v1", "Pod", "shop", "web", TombstoneEntry{})
+	if _, ok := c.Get("", "v1", "Pod", "other", "web"); ok {
 		t.Fatal("namespace must be part of the key")
 	}
-	if _, ok := c.Get("Deployment", "shop", "web"); ok {
+	if _, ok := c.Get("", "v1", "Deployment", "shop", "web"); ok {
 		t.Fatal("kind must be part of the key")
 	}
 }
@@ -69,17 +69,17 @@ func TestTombstoneCache_TTLExpiry(t *testing.T) {
 	c := NewTombstoneCache(15*time.Minute, 10)
 	base := time.Now()
 	c.now = func() time.Time { return base }
-	c.Put("Pod", "shop", "web", TombstoneEntry{Owner: &OwnerInfo{Name: "x"}})
+	c.Put("", "v1", "Pod", "shop", "web", TombstoneEntry{Owner: &OwnerInfo{Name: "x"}})
 
 	// Just before expiry: still a hit.
 	c.now = func() time.Time { return base.Add(15*time.Minute - time.Second) }
-	if _, ok := c.Get("Pod", "shop", "web"); !ok {
+	if _, ok := c.Get("", "v1", "Pod", "shop", "web"); !ok {
 		t.Fatal("expected hit just before TTL")
 	}
 
 	// Past expiry: miss, and the stale entry is dropped on read.
 	c.now = func() time.Time { return base.Add(15*time.Minute + time.Second) }
-	if _, ok := c.Get("Pod", "shop", "web"); ok {
+	if _, ok := c.Get("", "v1", "Pod", "shop", "web"); ok {
 		t.Fatal("expected miss past TTL")
 	}
 	if c.Len() != 0 {
@@ -91,19 +91,19 @@ func TestTombstoneCache_LRUCap(t *testing.T) {
 	const cap = 4
 	c := NewTombstoneCache(15*time.Minute, cap)
 	for i := 0; i < 10; i++ {
-		c.Put("Pod", "shop", fmt.Sprintf("p-%d", i), TombstoneEntry{Owner: &OwnerInfo{Name: fmt.Sprintf("o-%d", i)}})
+		c.Put("", "v1", "Pod", "shop", fmt.Sprintf("p-%d", i), TombstoneEntry{Owner: &OwnerInfo{Name: fmt.Sprintf("o-%d", i)}})
 	}
 	if c.Len() != cap {
 		t.Fatalf("expected len capped at %d, got %d", cap, c.Len())
 	}
 	// Oldest (p-0..p-5) evicted; the last `cap` survive.
 	for i := 0; i < 6; i++ {
-		if _, ok := c.Get("Pod", "shop", fmt.Sprintf("p-%d", i)); ok {
+		if _, ok := c.Get("", "v1", "Pod", "shop", fmt.Sprintf("p-%d", i)); ok {
 			t.Fatalf("expected p-%d evicted", i)
 		}
 	}
 	for i := 6; i < 10; i++ {
-		if _, ok := c.Get("Pod", "shop", fmt.Sprintf("p-%d", i)); !ok {
+		if _, ok := c.Get("", "v1", "Pod", "shop", fmt.Sprintf("p-%d", i)); !ok {
 			t.Fatalf("expected p-%d retained", i)
 		}
 	}
@@ -111,17 +111,17 @@ func TestTombstoneCache_LRUCap(t *testing.T) {
 
 func TestTombstoneCache_GetRefreshesLRU(t *testing.T) {
 	c := NewTombstoneCache(15*time.Minute, 2)
-	c.Put("Pod", "shop", "a", TombstoneEntry{})
-	c.Put("Pod", "shop", "b", TombstoneEntry{})
+	c.Put("", "v1", "Pod", "shop", "a", TombstoneEntry{})
+	c.Put("", "v1", "Pod", "shop", "b", TombstoneEntry{})
 	// Touch "a" so it becomes most-recently-used; adding "c" should evict "b".
-	if _, ok := c.Get("Pod", "shop", "a"); !ok {
+	if _, ok := c.Get("", "v1", "Pod", "shop", "a"); !ok {
 		t.Fatal("a should be present")
 	}
-	c.Put("Pod", "shop", "c", TombstoneEntry{})
-	if _, ok := c.Get("Pod", "shop", "b"); ok {
+	c.Put("", "v1", "Pod", "shop", "c", TombstoneEntry{})
+	if _, ok := c.Get("", "v1", "Pod", "shop", "b"); ok {
 		t.Fatal("b should have been evicted as LRU")
 	}
-	if _, ok := c.Get("Pod", "shop", "a"); !ok {
+	if _, ok := c.Get("", "v1", "Pod", "shop", "a"); !ok {
 		t.Fatal("a should survive after being touched")
 	}
 }
@@ -184,8 +184,8 @@ func TestTombstoneCache_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 500; i++ {
 				name := fmt.Sprintf("p-%d-%d", g, i%50)
-				c.Put("Pod", "shop", name, TombstoneEntry{Owner: &OwnerInfo{Name: name}})
-				c.Get("Pod", "shop", name)
+				c.Put("", "v1", "Pod", "shop", name, TombstoneEntry{Owner: &OwnerInfo{Name: name}})
+				c.Get("", "v1", "Pod", "shop", name)
 			}
 		}(g)
 	}
@@ -201,5 +201,33 @@ func TestNewInformerEvent_StampsCreatedAt(t *testing.T) {
 		EventTypeAdd, HealthHealthy, nil, nil, nil, &created)
 	if ev.CreatedAt == nil || !ev.CreatedAt.Equal(created) {
 		t.Fatalf("informer event did not carry createdAt: %v", ev.CreatedAt)
+	}
+}
+
+// UID is the primary key: it disambiguates same-named objects across API
+// groups and across delete/recreate cycles, and a UID entry is not findable
+// by a UID-less (composite) lookup — the silent-miss contract.
+func TestTombstoneCache_UIDKeying(t *testing.T) {
+	c := NewTombstoneCache(time.Minute, 10)
+
+	c.Put("uid-core", "v1", "Service", "shop", "web", TombstoneEntry{Owner: &OwnerInfo{Name: "core-owner"}})
+	c.Put("uid-knative", "serving.knative.dev/v1", "Service", "shop", "web", TombstoneEntry{Owner: &OwnerInfo{Name: "knative-owner"}})
+
+	got, ok := c.Get("uid-core", "v1", "Service", "shop", "web")
+	if !ok || got.Owner.Name != "core-owner" {
+		t.Fatalf("uid-core lookup = %+v %v, want core-owner", got, ok)
+	}
+	got, ok = c.Get("uid-knative", "serving.knative.dev/v1", "Service", "shop", "web")
+	if !ok || got.Owner.Name != "knative-owner" {
+		t.Fatalf("uid-knative lookup = %+v %v, want knative-owner", got, ok)
+	}
+
+	// A recreated object (same name, new uid) must not inherit the old entry.
+	if _, ok := c.Get("uid-recreated", "v1", "Service", "shop", "web"); ok {
+		t.Fatal("new uid must not match the old object's tombstone")
+	}
+	// A uid-less lookup must not match uid-keyed entries.
+	if _, ok := c.Get("", "v1", "Service", "shop", "web"); ok {
+		t.Fatal("composite lookup must not match uid-keyed entries")
 	}
 }

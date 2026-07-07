@@ -56,17 +56,25 @@ func NewTombstoneCache(ttl time.Duration, capacity int) *TombstoneCache {
 	}
 }
 
-func tombstoneKey(kind, namespace, name string) string {
-	return kind + "\x00" + namespace + "\x00" + name
+// tombstoneKey prefers the object UID — globally unique, so it can't collide
+// across API groups (Knative Service vs core Service of the same name), across
+// delete/recreate cycles, or across clusters. Sources without a UID fall back
+// to an apiVersion-qualified composite; a UID-keyed entry is simply not
+// findable by a UID-less lookup, which is the cache's silent-miss contract.
+func tombstoneKey(uid, apiVersion, kind, namespace, name string) string {
+	if uid != "" {
+		return "uid|" + uid
+	}
+	return apiVersion + "|" + kind + "|" + namespace + "|" + name
 }
 
 // Put records (or refreshes) the enrichment for a resource, resetting its TTL
 // and marking it most-recently-used. Over-capacity writes evict the LRU entry.
-func (c *TombstoneCache) Put(kind, namespace, name string, entry TombstoneEntry) {
+func (c *TombstoneCache) Put(uid, apiVersion, kind, namespace, name string, entry TombstoneEntry) {
 	if c == nil {
 		return
 	}
-	key := tombstoneKey(kind, namespace, name)
+	key := tombstoneKey(uid, apiVersion, kind, namespace, name)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -92,11 +100,11 @@ func (c *TombstoneCache) Put(kind, namespace, name string, entry TombstoneEntry)
 
 // Get returns the enrichment for a resource. A miss, or an entry past its TTL,
 // returns ok=false; expired entries are dropped on read.
-func (c *TombstoneCache) Get(kind, namespace, name string) (TombstoneEntry, bool) {
+func (c *TombstoneCache) Get(uid, apiVersion, kind, namespace, name string) (TombstoneEntry, bool) {
 	if c == nil {
 		return TombstoneEntry{}, false
 	}
-	key := tombstoneKey(kind, namespace, name)
+	key := tombstoneKey(uid, apiVersion, kind, namespace, name)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

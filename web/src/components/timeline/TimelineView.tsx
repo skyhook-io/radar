@@ -311,10 +311,13 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   const timelineSource = useTimelineSource()
   const isRetained = timelineSource.capabilities.mode === 'retained'
   const isLocal = timelineSource.capabilities.mode === 'local'
-  // The local strip only rides the swimlane, where the full ring is loaded (the
-  // list view fetches its own small page — nothing to bucket). Retained shows its
-  // server-overview strip over both views.
-  const showLocalScrubber = isLocal && showSwimlanes
+  // The local strip rides both views, matching retained: the ring fetch below
+  // is enabled whenever the strip is shown, so list mode has data to bucket.
+  // Large clusters that require a namespace filter skip the strip — the same
+  // full-ring load the swimlane gate avoids — and the list then shows its own
+  // range dropdown instead (selectionWindow is only passed when a scrubber is
+  // on screen to own the range).
+  const showLocalScrubber = isLocal && !requiresNamespaceFilter
   const showScrubber = isRetained || showLocalScrubber
 
   // Both sources drive a scrubber now: retained fetches a server overview, local
@@ -363,6 +366,11 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // Recording gaps lifted from the scrubber so the swimlane renders matching
   // offline bands + empty-state copy.
   const [gaps, setGaps] = useState<ScrubberRange[]>([])
+
+  // List mode's lens source: the time span of the rows visible in the list's
+  // scrollport, reported by the list on scroll. Read-only on the strip (no
+  // onLensChange in list mode) — the list's scrollbar is the one authority.
+  const [listVisibleWindow, setListVisibleWindow] = useState<ScrubberRange | null>(null)
 
   // Latest selection for clamping the lens without re-creating the setter.
   const selectionRef = useRef(selection)
@@ -547,7 +555,9 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     includeManaged: true,
     includeDeleted: showDeleted,
     limit: 10000,
-    enabled: showSwimlanes,
+    // The local strip derives its histogram from this ring fetch, so it must
+    // run in list mode too whenever the strip is shown.
+    enabled: showSwimlanes || showLocalScrubber,
     fromMs: isRetained ? selection.fromMs : undefined,
     toMs: isRetained ? selection.toMs : undefined,
     sliding: isRetained && mode.kind === 'live',
@@ -603,6 +613,12 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // derives the strip client-side from the loaded ring and omits the gap band.
   const wrap = (node: ReactNode): ReactNode => {
     if (!showScrubber) return node
+    // In list mode the lens mirrors the rows visible in the list's scrollport
+    // (scrolling moves it) and is read-only on the strip; in swimlane mode it
+    // is the interactive zoom window.
+    const isListView = viewMode === 'list'
+    const lens = isListView ? listVisibleWindow ?? undefined : lensWindow
+    const onLensChange = isListView ? undefined : setLens
     return (
       <div className="flex-1 flex flex-col min-h-0">
         {isRetained ? (
@@ -612,8 +628,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
             onSelectionChange={handleSelectionChange}
             onSelectionClamp={handleSelectionClamp}
             onPresetSelect={handlePresetSelect}
-            lens={lensWindow}
-            onLensChange={setLens}
+            lens={lens}
+            onLensChange={onLensChange}
             onDomainChange={setScrubberDomain}
             onGapsChange={setGaps}
             liveState={liveState}
@@ -627,8 +643,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
             onSelectionChange={handleSelectionChange}
             onSelectionClamp={handleSelectionClamp}
             onPresetSelect={handlePresetSelect}
-            lens={lensWindow}
-            onLensChange={setLens}
+            lens={lens}
+            onLensChange={onLensChange}
             onDomainChange={setScrubberDomain}
             liveState={liveState}
             onLiveChipClick={handleLiveChipClick}
@@ -756,12 +772,12 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       onActivityFilterChange={setActivityFilter}
       kindFilter={kindFilter}
       onKindFilterChange={setKindFilter}
-      // Both retained and local drive the list off the shared selection now, so a
-      // deep-linked from/to/window restores the list (not just the swimlane) and
-      // the two views can't disagree. Local mode hides its private range dropdown
-      // and defers to the selection — the scrubber (swimlane) + URL own the range.
-      selectionWindow={isRetained || isLocal ? selection : undefined}
-      sliding={(isRetained || isLocal) && mode.kind === 'live'}
+      // The shared selection drives the list ONLY when a scrubber is on screen
+      // to own the range — passing it scrubber-less would hide the list's own
+      // range dropdown and leave the user with no time control at all.
+      selectionWindow={showScrubber ? selection : undefined}
+      sliding={showScrubber && mode.kind === 'live'}
+      onVisibleWindowChange={setListVisibleWindow}
     />
   )
 }

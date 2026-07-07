@@ -48,9 +48,13 @@ func k8sEventPod(name, reason string) *corev1.Event {
 			UID:       types.UID("evt-" + name),
 		},
 		InvolvedObject: corev1.ObjectReference{
-			Kind:      "Pod",
-			Namespace: "shop",
-			Name:      name,
+			Kind:       "Pod",
+			APIVersion: "v1",
+			Namespace:  "shop",
+			Name:       name,
+			// Real K8s Events carry the involved object's UID; the tombstone
+			// key is UID-first, so the fixture must too.
+			UID: types.UID("pod-" + name),
 		},
 		Reason:         reason,
 		Message:        "Stopping container web",
@@ -90,11 +94,11 @@ func TestK8sEvent_TombstoneEnrichesAfterDelete(t *testing.T) {
 	pod := tombstoneTestPod("web-abc", created)
 
 	// Informer delete: production passes the deleted object as newObj, oldObj=nil.
-	recordToTimelineStore("Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
 
 	// Late K8s event; live cache is empty (GetResourceCache()==nil), so
 	// enrichment must come from the tombstone.
-	recordK8sEventToTimeline(k8sEventPod("web-abc", "Killing"))
+	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "web-rs" {
@@ -113,7 +117,7 @@ func TestK8sEvent_TombstoneEnrichesAfterDelete(t *testing.T) {
 func TestK8sEvent_MissStaysSilentNull(t *testing.T) {
 	initMemoryTimeline(t)
 
-	recordK8sEventToTimeline(k8sEventPod("ghost", "Killing"))
+	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("ghost", "Killing"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner != nil {
@@ -136,9 +140,9 @@ func TestK8sEvent_TombstoneFedOnAdd(t *testing.T) {
 
 	created := time.Now() // fresh add (age <= 30s so it is recorded, not treated as sync)
 	pod := tombstoneTestPod("web-new", created)
-	recordToTimelineStore("Pod", "shop", "web-new", string(pod.UID), "add", nil, pod, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-new", string(pod.UID), "add", nil, pod, nil, false)
 
-	recordK8sEventToTimeline(k8sEventPod("web-new", "Started"))
+	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-new", "Started"))
 
 	got := k8sEventFromStore(t)
 	if got.Owner == nil || got.Owner.Name != "web-rs" {

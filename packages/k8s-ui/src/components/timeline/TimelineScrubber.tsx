@@ -745,9 +745,12 @@ export function TimelineScrubber({
       }
       const ms = pointerMs(e.clientX)
       if (drag.mode === 'handle-start') {
-        stage(clampSelection({ fromMs: ms, toMs: display.toMs }, domain, maxSelectionMs, 'start'))
+        // Anchor the OPPOSITE edge (matches the keyboard path): when the width
+        // clamp engages, the dragged edge stops at the cap instead of dragging
+        // the whole selection along with the cursor.
+        stage(clampSelection({ fromMs: ms, toMs: display.toMs }, domain, maxSelectionMs, 'end'))
       } else if (drag.mode === 'handle-end') {
-        stage(clampSelection({ fromMs: display.fromMs, toMs: ms }, domain, maxSelectionMs, 'end'))
+        stage(clampSelection({ fromMs: display.fromMs, toMs: ms }, domain, maxSelectionMs, 'start'))
       } else if (drag.mode === 'pan') {
         stage({
           selection: panSelection({ fromMs: drag.startFrom, toMs: drag.startTo }, ms - drag.grabMs, domain),
@@ -1175,7 +1178,7 @@ export function TimelineScrubber({
                 background: 'var(--selection-bg)',
                 opacity: dimmed ? 0.45 : 0.85,
                 border: '2px solid var(--accent)',
-                boxShadow: '0 0 0 1px var(--bg-theme-base)',
+                boxShadow: '0 0 0 1px var(--bg-base)',
               }}
               data-testid="scrubber-lens"
             >
