@@ -101,6 +101,11 @@ export interface TimelineToolbarProps {
   // Swimlane-only view options (Sort, Group by app). When supplied, the View menu
   // gains Sort and Group sections above the always-present Filters section.
   viewOptions?: TimelineViewOptions
+
+  // Legend toggle (swimlane-only). When supplied, a "Legend" button renders in the
+  // right-side controls; the host owns the shown/hidden state so the marker+health
+  // key stays on-demand rather than permanently occupying a toolbar row.
+  legend?: { shown: boolean; onToggle: () => void }
 }
 
 export function TimelineToolbar({
@@ -133,6 +138,7 @@ export function TimelineToolbar({
   onViewChange,
   onRefresh,
   viewOptions,
+  legend,
 }: TimelineToolbarProps) {
   const stats = statsProp ?? computeActivityStats(events)
   const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(onRefresh ?? (() => {}))
@@ -164,7 +170,10 @@ export function TimelineToolbar({
             embed): the fixed controls scroll horizontally WITHIN the row instead of
             clipping or forcing a page-level scrollbar. The Kinds popover is portaled
             so this scroll container can't clip it. */}
-        <div className="flex min-w-0 items-center gap-3 overflow-x-auto">
+        {/* -m-1 p-1: the overflow-x-auto clip box would otherwise shave the
+            search input's 2px focus ring on the left/top edge; the padding gives
+            the ring room and the negative margin cancels the layout shift. */}
+        <div className="-m-1 flex min-w-0 items-center gap-3 overflow-x-auto p-1">
           {/* Search — always open, static width, FIRST. The `/` shortcut still
               focuses it (SearchBox owns the shortcut) and the clear × stays; there
               is deliberately no collapse/expand so it can never shift its neighbors. */}
@@ -176,10 +185,10 @@ export function TimelineToolbar({
             className={searchClassName}
           />
 
-          {/* Activity filter — one joined segmented control. Short labels; full names
-              live in the tooltips. Multi-select: "All" clears; each other cell toggles
-              its key, and several can be active at once. Severity dots replace icons. */}
-          <div className="flex shrink-0 items-stretch divide-x divide-theme-border overflow-hidden rounded-lg border border-theme-border bg-theme-surface">
+          {/* Activity filter — discrete pill chips (7a), not a fused segment bar.
+              Multi-select: "All" clears; each other pill toggles its key, and
+              several can be active at once. Severity dots replace icons. */}
+          <div className="flex shrink-0 items-center gap-1.5">
             <SegmentCell
               active={activityFilter.length === 0}
               onClick={() => onActivityFilterChange([])}
@@ -192,6 +201,7 @@ export function TimelineToolbar({
               onClick={() => toggleActivityKey('changes')}
               label="Changes"
               count={stats.changes}
+              dotClass="bg-blue-500"
               tooltip="Resource mutations: creates, updates, deletes detected by watching K8s API"
             />
             <SegmentCell
@@ -199,7 +209,7 @@ export function TimelineToolbar({
               onClick={() => toggleActivityKey('warnings')}
               label="Warnings"
               count={stats.warnings}
-              dotTone="degraded"
+              dotClass="bg-amber-500"
               tooltip="Native Kubernetes Warning Events (e.g., ImagePullBackOff, FailedScheduling)"
             />
             <SegmentCell
@@ -207,7 +217,7 @@ export function TimelineToolbar({
               onClick={() => toggleActivityKey('unhealthy')}
               label="Unhealthy"
               count={stats.unhealthy}
-              dotTone="unhealthy"
+              dotClass="bg-rose-500"
               tooltip="Resource changes with unhealthy or degraded health state"
             />
             <SegmentCell
@@ -257,7 +267,10 @@ export function TimelineToolbar({
         <div className="flex min-w-0 items-center gap-3 self-end @[1390px]/toolbar:ml-auto @[1390px]/toolbar:self-auto">
           {counts && (
             <span className="min-w-0 truncate text-xs text-theme-text-tertiary">
-              {counts.resources !== undefined && `${pluralize(counts.resources, 'resource')} · `}
+              {/* "In view" (Turn 7): distinguishes these window counts from the
+                  strip's "in query range" total, so neither number is unlabeled. */}
+              {counts.resources !== undefined && `In view: ${pluralize(counts.resources, 'resource')} · `}
+              {counts.resources === undefined && 'In view: '}
               {pluralize(counts.events, 'event')}
               {countsFiltered && ' (filtered)'}
             </span>
@@ -279,6 +292,25 @@ export function TimelineToolbar({
               title="Refresh"
             >
               <RefreshCw className={clsx('w-4 h-4', isRefreshAnimating && 'animate-spin')} />
+            </button>
+          )}
+
+          {/* Legend toggle — the marker/health key is on-demand (6a), not a
+              permanent toolbar row. Host owns the shown state. */}
+          {legend && (
+            <button
+              type="button"
+              onClick={legend.onToggle}
+              aria-pressed={legend.shown}
+              className={clsx(
+                'shrink-0 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors',
+                legend.shown
+                  ? 'border-theme-border bg-theme-hover text-theme-text-primary'
+                  : 'border-theme-border-light text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
+              )}
+              title={legend.shown ? 'Hide legend' : 'Show legend'}
+            >
+              Legend
             </button>
           )}
 
@@ -325,10 +357,13 @@ interface SegmentCellProps {
   label: string
   count?: number
   dotTone?: StatusTone
+  // Raw dot color class — for tones the HealthLevel palette can't express (e.g.
+  // the info-blue "Changes" dot in the design). Takes precedence over dotTone.
+  dotClass?: string
   tooltip?: string
 }
 
-function SegmentCell({ active, onClick, label, count, dotTone, tooltip }: SegmentCellProps) {
+function SegmentCell({ active, onClick, label, count, dotTone, dotClass, tooltip }: SegmentCellProps) {
   return (
     <button
       type="button"
@@ -336,16 +371,16 @@ function SegmentCell({ active, onClick, label, count, dotTone, tooltip }: Segmen
       onClick={onClick}
       title={tooltip}
       className={clsx(
-        'flex items-center gap-1.5 px-3 py-1.5 text-sm transition-colors',
+        'flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm transition-colors',
         active
-          ? 'bg-accent-muted text-accent-text font-medium'
-          : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
+          ? 'border-theme-border-light bg-theme-hover font-semibold text-theme-text-primary'
+          : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
       )}
     >
-      {dotTone && <StatusDot tone={dotTone} />}
+      {dotClass ? <span className={clsx('inline-block h-1.5 w-1.5 rounded-full', dotClass)} aria-hidden /> : dotTone && <StatusDot tone={dotTone} />}
       <span>{label}</span>
       {count !== undefined && (
-        <span className="tabular-nums text-xs text-theme-text-tertiary">{count}</span>
+        <span className="tabular-nums text-xs text-theme-text-tertiary">{count.toLocaleString()}</span>
       )}
     </button>
   )
@@ -699,11 +734,13 @@ function KindsMenu({ kindFilter, onKindFilterChange, kindOptions }: KindsMenuPro
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         title="Filter by kind"
+        // Dashed pill (7a): reads as "add a filter", distinct from the solid
+        // always-on activity pills beside it.
         className={clsx(
-          'flex items-center gap-1.5 rounded-lg border border-theme-border-light px-3 py-1.5 text-sm transition-colors',
-          open
-            ? 'bg-theme-elevated text-theme-text-primary'
-            : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
+          'flex items-center gap-1.5 rounded-full border border-dashed px-3 py-1.5 text-sm transition-colors',
+          open || activeCount > 0
+            ? 'border-theme-border bg-theme-hover text-theme-text-primary'
+            : 'border-theme-border-light text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
         )}
       >
         <Boxes className="w-4 h-4" />

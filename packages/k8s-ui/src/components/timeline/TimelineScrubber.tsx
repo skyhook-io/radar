@@ -1317,7 +1317,7 @@ export function TimelineScrubber({
               aria-valuetext={`${formatScrubberPill(lens.fromMs)} to ${formatScrubberPill(lens.toMs)}`}
               onPointerDown={beginLensDrag}
               onKeyDown={onLensKeyDown}
-              className="absolute top-0 touch-none rounded-sm focus:outline-none focus:ring-2 focus:ring-accent flex items-center justify-center gap-0.5 cursor-grab active:cursor-grabbing"
+              className="absolute top-0 touch-none rounded-sm focus:outline-none focus:ring-2 focus:ring-accent flex items-center justify-center gap-[2.5px] cursor-grab active:cursor-grabbing"
               title="Drag to move the swimlane's view window"
               style={{
                 left,
@@ -1330,8 +1330,11 @@ export function TimelineScrubber({
               }}
               data-testid="scrubber-lens"
             >
-              <span aria-hidden className="rounded-full" style={{ width: 3, height: 12, background: 'var(--accent)' }} />
-              <span aria-hidden className="rounded-full" style={{ width: 3, height: 12, background: 'var(--accent)' }} />
+              {/* Three-bar grip (design update): thinner bars read as a grab
+                  affordance without the boxed double-arrow's visual weight. */}
+              <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
+              <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
+              <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
             </div>
           )
         })()}

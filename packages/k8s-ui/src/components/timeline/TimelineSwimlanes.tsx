@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
+import { Fragment, useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { clsx } from 'clsx'
 import {
   AlertCircle,
@@ -38,7 +38,8 @@ import { pluralize } from '../../utils/pluralize'
 import { gitOpsRouteForKind } from '../../utils/gitops-route'
 import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../../types'
 import { DiffViewer } from './DiffViewer'
-import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
+import { getOperationColor, getHealthBadgeColor, getEventTypeColor, getKindColorClass } from '../../utils/badge-colors'
+import { MiddleEllipsis } from '../ui/MiddleEllipsis'
 import { Tooltip } from '../ui/Tooltip'
 import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, isProblematicEvent, laneTrackEvents, isChildVisibleInWindow, collidingLaneKeys, laneCollisionKey, type ResourceLane as BaseResourceLane, type TimelineGrouping, type PinnedLaneRef } from '../../utils/resource-hierarchy'
 import { groupQualifiesLaneId } from '../../utils/navigation'
@@ -257,9 +258,24 @@ function eventColorClass(event: TimelineEvent): string {
       case 'update': return 'text-blue-600 dark:text-blue-400'
     }
   }
-  // Informational K8s events (Scheduled, Pulled, Started…). Secondary, not
-  // tertiary: a tertiary-grey dot on the track is near-invisible.
-  return 'text-theme-text-secondary'
+  // Informational K8s events (Scheduled, Pulled, Started…) — the most common
+  // marker. Violet so the busiest signal reads as a distinct calm colour instead
+  // of a near-invisible grey, without colliding with created/modified/deleted.
+  return 'text-violet-500 dark:text-violet-400'
+}
+
+// Markers are centered on their time — but a live event's time sits AT the Now
+// line, so a centered glyph/pill crosses it (and can clip the track edge). Near
+// the edge the anchor flips from center to right so the marker's right edge
+// kisses the Now line instead (Turn 8: "dots respect the Now line").
+// 97.5% ≈ 32px on a ~1300px track — enough clearance for the widest ×N pill
+// (a 99% threshold still let pill halves poke ~4px past the Now line).
+const NOW_EDGE_ANCHOR_PCT = 97.5
+function markerAnchor(x: number): { left: string; anchorClass: string } {
+  const clamped = Math.min(x, 100)
+  return clamped >= NOW_EDGE_ANCHOR_PCT
+    ? { left: '100%', anchorClass: '-translate-x-full' }
+    : { left: `${clamped}%`, anchorClass: '-translate-x-1/2' }
 }
 
 /** A pure SVG-free glyph; `size` is the height in px (triangles are ~1.18× wide). */
@@ -761,6 +777,9 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   // them. Empty on first render, so the initial view is fully deterministic.
   const [userLaneOverrides, setUserLaneOverrides] = useState<Map<string, boolean>>(new Map())
   const [hasAutoZoomed, setHasAutoZoomed] = useState(false)
+  // Legend is on-demand (6a): the marker/health key is hidden until the user asks
+  // for it via the toolbar's Legend button, rather than always occupying a row.
+  const [showLegend, setShowLegend] = useState(false)
   // Grouping mode: 'app' (membership cascade) | 'owner' (owner/topology only) |
   // 'flat' (no parenting). Controlled by the host when provided, else internal.
   const [groupingInternal, setGroupingInternal] = useState<TimelineGrouping>('app')
@@ -1408,6 +1427,20 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     return () => el.removeEventListener('wheel', h)
   }, [isLoading])
 
+  // Toolbar chip counts tell ONE story with the strip (Turn 8): they count
+  // within the QUERY range (bounds) so "All" matches "N events in query range"
+  // — not the whole loaded ring, whose 3,5xx total came from nowhere the user
+  // could see. Unbounded (uncontrolled local mode) keeps counting the ring.
+  // MUST sit above the isLoading early return — hooks after it violate the
+  // rules of hooks (React #310) the moment loading flips.
+  const queryScopedEvents = useMemo(() => {
+    if (!bounds) return events
+    return events.filter((e) => {
+      const t = new Date(e.timestamp).getTime()
+      return t >= bounds.fromMs && t <= bounds.toMs
+    })
+  }, [events, bounds])
+
   if (isLoading) {
     return <PaneLoader label="Loading timeline…" className="h-full w-full" />
   }
@@ -1459,6 +1492,11 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     // Tooltip carries the group only for CRD groups — built-in resources stay
     // visually untouched (the group appears nowhere for them, not even on hover).
     const kindBadgeTitle = !lane.isAppGroup && groupQualifiesLaneId(lane.group) ? `${displayKind(lane.kind)} · ${lane.group}` : undefined
+    // An expanded APP header keeps a dimmed "ghost" aggregate sweep (Turn 5): the
+    // rollup stays scannable while the children below carry the detail. Collapsed
+    // parents/apps paint the full-strength aggregate. Expanded non-app parents
+    // (a DaemonSet over its Pods) show their own events, not a rollup.
+    const showGhostAggregate = hasVisibleChildren && isExpanded && lane.isAppGroup
     const track = (heightClass: string, small?: boolean) => (
       <div className={clsx('flex-1 relative mr-8', heightClass)}>
         <LaneBackdrop gridXs={gridXs} />
@@ -1467,7 +1505,8 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           ownResource={ownResource}
           // A collapsed parent/app-group row shows an AGGREGATE: sweep its
           // members' state families instead of blending latest-event-wins.
-          aggregateLane={hasVisibleChildren && !isExpanded ? lane : undefined}
+          aggregateLane={hasVisibleChildren && (!isExpanded || showGhostAggregate) ? lane : undefined}
+          ghost={showGhostAggregate}
           startTime={visibleTimeRange.start}
           windowMs={visibleTimeRange.windowMs}
           now={visibleTimeRange.now}
@@ -1499,7 +1538,12 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           <div className="border-b-subtle">
             <div className="flex">
               {/* Lane label */}
-              <div className="w-80 shrink-0 border-r border-theme-border px-3 py-2 flex items-center gap-1 group/pin">
+              <div className="relative w-[360px] shrink-0 border-r border-theme-border px-3 py-2 flex items-center gap-1 group/pin">
+                {/* Descender: when expanded, carry the tree line from this row's
+                    chevron down to its first child's incoming trunk (rail 0). */}
+                {hasVisibleChildren && isExpanded && (
+                  <span className="absolute bottom-0 top-1/2 w-px bg-theme-border" style={{ left: TREE_ROOT_RAIL_PX }} />
+                )}
                 {/* Expand/collapse button */}
                 {hasVisibleChildren ? (
                   <button
@@ -1518,31 +1562,29 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 {lane.isAppGroup ? (
                   <AppGroupLaneLabel lane={lane} memberCount={visibleChildren.length} onToggle={() => toggleLane(lane.id)} onAppClick={onAppClick} />
                 ) : (
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      {/* Neutral pill (matches child rows): a column of many
-                          kind-colored badges reads as noise, not signal — the
-                          health strips and markers carry the color budget. */}
-                      <span className="self-start rounded-md bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary" title={kindBadgeTitle}>{displayKind(lane.kind)}</span>
-                      {showGroupChip && <GroupChip group={lane.group!} />}
-                      {hasVisibleChildren && (
-                        <span className="text-xs font-semibold text-theme-text-tertiary">
-                          +{visibleChildren.length}
-                        </span>
-                      )}
-                      <LaneWarnChip events={lane.allEventsSorted || []} />
-                    </div>
-                    {/* Only the NAME text links to the resource; the surrounding
-                        label (badge, namespace, whitespace) is inert. */}
-                    <div className="text-sm font-semibold font-mono break-words mt-0.5">
-                      <span
-                        onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
-                        className="text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer"
-                      >
-                        {lane.name}
+                  /* Single-line owner lane (6a): chip · name (bold, truncates) ·
+                     ns · +N · ⚠. Only the NAME navigates; the rest is inert. */
+                  <div className="flex-1 min-w-0 flex items-center gap-1.5">
+                    <KindChip kind={lane.kind} title={kindBadgeTitle} />
+                    {showGroupChip && <GroupChip group={lane.group!} />}
+                    <span
+                      onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
+                      className="min-w-0 text-sm font-semibold font-mono text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer"
+                      title={lane.name}
+                    >
+                      <MiddleEllipsis text={lane.name} className="block" />
+                    </span>
+                    {lane.namespace && (
+                      <span className="shrink-0 text-[11.5px] text-theme-text-tertiary whitespace-nowrap">
+                        {lane.namespace}
                       </span>
-                    </div>
-                    <div className="text-xs text-theme-text-tertiary">{lane.namespace}</div>
+                    )}
+                    {hasVisibleChildren && (
+                      <span className="shrink-0 text-[11.5px] font-semibold text-theme-text-tertiary">
+                        {`+${visibleChildren.length}`}
+                      </span>
+                    )}
+                    <LaneWarnChip events={lane.allEventsSorted || []} />
                   </div>
                 )}
                 {/* Pin toggle. Real lanes pin the resource; app-group headers pin
@@ -1550,7 +1592,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     name text, so the pin sits inert alongside it. */}
                 {renderPinButton(lane)}
               </div>
-              {track('h-14')}
+              {track('h-11')}
             </div>
           </div>
           {childRows}
@@ -1582,7 +1624,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
               : undefined
             }
           />
-          {track('h-12', true)}
+          {track('h-9', true)}
         </div>
         {childRows}
       </div>
@@ -1653,7 +1695,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           searchShortcutId="swimlane-search"
           activityFilter={activityFilter}
           onActivityFilterChange={setActivityFilter}
-          events={events}
+          events={queryScopedEvents}
           showDeleted={showDeleted}
           onShowDeletedChange={setShowDeleted}
           kindFilter={kindFilter}
@@ -1673,6 +1715,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             sort: { value: sort, onChange: setSort },
             grouping: { value: grouping, onChange: setGrouping },
           }}
+          legend={{ shown: showLegend, onToggle: () => setShowLegend((v) => !v) }}
         />
         {/* Swimlane strip controls (local mode only): zoom + "→ Now" sit next to
             the timeline strip. Retained/controlled mode owns the window through
@@ -1708,29 +1751,36 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             )}
           </div>
         )}
-        {/* Legend — two labelled groups: point-in-time event markers vs. the
-            lane-health background bars. Captions keep the two vocabularies from
-            reading as one undifferentiated row. */}
-        {/* px-3 aligns the EVENTS caption with the RESOURCE column caption below. */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2 text-xs text-theme-text-secondary">
-          <span className="text-[10px] uppercase leading-none tracking-[0.09em] text-theme-text-tertiary font-bold">Events</span>
-          <MarkerLegendItem shape="triangle-up" colorClass="text-green-600 dark:text-green-400" label="created" description="Resource was created" />
-          <MarkerLegendItem shape="circle" colorClass="text-blue-600 dark:text-blue-400" label="modified" description="Resource was updated/changed" />
-          <MarkerLegendItem shape="triangle-down" colorClass="text-red-600 dark:text-red-400" label="deleted" description="Resource was removed" />
-          <MarkerLegendItem shape="diamond" colorClass="text-amber-500 dark:text-amber-400" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
-          <MarkerLegendItem shape="circle" colorClass="text-theme-text-secondary" label="event" description="Informational Kubernetes event (Scheduled, Pulled, Started, etc.)" />
-          <MarkerLegendItem shape="ring" colorClass="text-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" />
-          <ClusterLegendItem description="Nearby events collapsed into one pill" />
-          <span className="w-px h-4 bg-theme-border mx-0.5" />
-          <span className="text-[10px] uppercase leading-none tracking-[0.09em] text-theme-text-tertiary font-bold">Health</span>
-          <HealthLegendItem color={HEALTH_STRIP_COLORS.healthy} label="healthy" description="Resource is fully operational" />
-          <HealthLegendItem color={HEALTH_STRIP_COLORS.rolling} label="rolling" description="Expected degradation during deployment rollout" />
-          <HealthLegendItem color={HEALTH_STRIP_COLORS.degraded} label="degraded" description="Unexpected partial availability" />
-          <HealthLegendItem color={HEALTH_STRIP_COLORS.unhealthy} label="unhealthy" description="Resource is failing or not ready" />
-          <HealthLegendItem color={HEALTH_STRIP_COLORS.idle} label="idle" description="Intentionally off/resting (completed, suspended, scaled to zero)" />
-          <HealthLegendItem color="bg-gray-400/50" label="unknown" description="No health signal observed yet (e.g. first event pending, node stopped reporting)" />
-          <HealthLegendItem label="mixed" swatchStyle={MIXED_HEALTH_STRIP_STYLE} description="members disagree — some OK, some degraded/rolling; expand or hover for who" />
-        </div>
+        {/* Legend (1a): an on-demand popover, not a permanent strip. Two labelled
+            sections — point-in-time event markers and lane-health bars — each a
+            2-column grid. Toggled by the toolbar's Legend button. */}
+        {showLegend && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setShowLegend(false)} aria-hidden />
+            <div className="absolute right-4 top-full z-50 mt-1 w-[280px] rounded-xl border border-theme-border bg-theme-surface p-4 shadow-theme-lg">
+              <div className="text-[10px] font-bold uppercase leading-none tracking-[0.07em] text-theme-text-tertiary">Events</div>
+              <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-theme-text-secondary">
+                <MarkerLegendItem shape="triangle-up" colorClass="text-green-600 dark:text-green-400" label="created" description="Resource was created" />
+                <MarkerLegendItem shape="circle" colorClass="text-blue-600 dark:text-blue-400" label="modified" description="Resource was updated/changed" />
+                <MarkerLegendItem shape="triangle-down" colorClass="text-red-600 dark:text-red-400" label="deleted" description="Resource was removed" />
+                <MarkerLegendItem shape="diamond" colorClass="text-amber-500 dark:text-amber-400" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
+                <MarkerLegendItem shape="circle" colorClass="text-violet-500 dark:text-violet-400" label="event" description="Informational Kubernetes event (Scheduled, Pulled, Started, etc.)" />
+                <MarkerLegendItem shape="ring" colorClass="text-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" />
+                <ClusterLegendItem description="Nearby events collapsed into one pill" />
+              </div>
+              <div className="mt-3.5 text-[10px] font-bold uppercase leading-none tracking-[0.07em] text-theme-text-tertiary">Health</div>
+              <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-theme-text-secondary">
+                <HealthLegendItem color={HEALTH_STRIP_COLORS.healthy} label="healthy" description="Resource is fully operational" />
+                <HealthLegendItem color={HEALTH_STRIP_COLORS.rolling} label="rolling" description="Expected degradation during deployment rollout" />
+                <HealthLegendItem color={HEALTH_STRIP_COLORS.degraded} label="degraded" description="Unexpected partial availability" />
+                <HealthLegendItem color={HEALTH_STRIP_COLORS.unhealthy} label="unhealthy" description="Resource is failing or not ready" />
+                <HealthLegendItem color={HEALTH_STRIP_COLORS.idle} label="idle" description="Intentionally off/resting (completed, suspended, scaled to zero)" />
+                <HealthLegendItem color="bg-gray-400/50" label="unknown" description="No health signal observed yet (e.g. first event pending, node stopped reporting)" />
+                <HealthLegendItem label="mixed" swatchStyle={MIXED_HEALTH_STRIP_STYLE} description="members disagree — some OK, some degraded/rolling; expand or hover for who" />
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Timeline container */}
@@ -1744,7 +1794,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           {/* Time axis header */}
           <div className="sticky top-0 z-30 bg-theme-surface border-b border-theme-border">
             <div className="flex">
-              <div className="w-80 shrink-0 border-r border-theme-border px-3 py-2 flex items-center">
+              <div className="w-[360px] shrink-0 border-r border-theme-border px-3 py-2 flex items-center">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Resource</span>
               </div>
               <div className="flex-1 relative h-8 mr-8">
@@ -1865,7 +1915,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             {pinnedLaneRows.length > 0 && (
               <div data-testid="timeline-pinned-section">
                 <div className="flex">
-                  <div className="w-80 shrink-0 border-r border-theme-border px-3 py-1.5">
+                  <div className="w-[360px] shrink-0 border-r border-theme-border px-3 py-1.5">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Pinned</span>
                   </div>
                   <div className="flex-1" />
@@ -1897,6 +1947,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           onSelectId={(id) => setDrawer((prev) => (prev ? { ...prev, selectedId: id } : prev))}
           onClose={closeDrawer}
           onResourceClick={onResourceClick}
+          allEvents={filteredEvents}
         />
       )}
     </div>
@@ -1960,13 +2011,14 @@ function HealthLegendItem({ color, label, description, swatchStyle }: { color?: 
   )
 }
 
-// Red warning-count chip (⚠ N) for critical issues in a lane.
+// Amber warning-count chip (⚠ N). Turn 7: red is reserved for "actually broken"
+// (that shows on the health bar); the ⚠ summary is a warning tone, so it's amber.
 function LaneWarnChip({ events }: { events: TimelineEvent[] }) {
   const issueCount = events.filter((e) => isCriticalIssue(e)).length
   if (issueCount === 0) return null
   return (
     <Tooltip content={`${pluralize(issueCount, 'critical issue')} (OOMKilled, CrashLoopBackOff, etc.)`} position="top">
-      <span className="flex items-center gap-0.5 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-400">
+      <span className="flex items-center gap-0.5 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400">
         <AlertTriangle className="w-3 h-3" />
         {issueCount}
       </span>
@@ -1979,9 +2031,33 @@ function LaneWarnChip({ events }: { events: TimelineEvent[] }) {
 // CronJob member) reads as nested, not sibling. When the child owns a subtree of
 // its own it carries an expand chevron so it can be drilled into. Only the name
 // text navigates to the resource; the chevron toggles; the rest of the row is inert.
-const CHILD_INDENT_BASE_PX = 44
-const CHILD_CONNECTOR_BASE_PX = 26
+// Tree geometry. The depth-0 (top-level) expand chevron sits ~this many px from
+// the label's left edge (px-3 + the -m-0.5 p-1 button ≈ 22px). Every child rail
+// is derived from it so verticals align under the chevron directly above them.
+const TREE_ROOT_RAIL_PX = 22
 const CHILD_INDENT_STEP_PX = 22
+// The kind chip: mono, uppercased via CSS (DOM text stays the display kind, so
+// text queries keep matching), colored from the shared per-kind palette
+// (getKindColorClass) so every kind — Application, Gateway, GatewayClass, Pod,
+// CRDs — gets its own distinct, app-consistent color instead of a flat grey.
+function KindChip({ kind, title }: { kind: string; title?: string }) {
+  // Some cluster components emit events whose involvedObject has NO kind (e.g.
+  // GKE's resource-tracker "BigQueryUpload" events) — label those lanes as plain
+  // events instead of rendering an empty pill.
+  const label = displayKind(kind) || 'Event'
+  return (
+    <span
+      className={clsx(
+        'shrink-0 rounded border font-mono text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5',
+        getKindColorClass(kind),
+      )}
+      title={title ?? (kind ? undefined : 'Kubernetes event — its source object reports no kind')}
+    >
+      {label}
+    </span>
+  )
+}
+
 // Disambiguating group chip — the ONLY place a lane's API group surfaces
 // visually, shown solely when the lane collides with another visible lane of a
 // different group (same kind+ns+name; CAPI vs CNPG `Cluster`). Quiet styling so
@@ -1998,49 +2074,51 @@ function GroupChip({ group }: { group: string }) {
 }
 
 function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, isLast, onClick, pinButton, title, depth = 1, hasChildren, expanded, onToggle }: { kind: string; group?: string; showGroupChip?: boolean; kindTitle?: string; name: string; isLast: boolean; onClick: () => void; pinButton?: React.ReactNode; title?: string; depth?: number; hasChildren?: boolean; expanded?: boolean; onToggle?: () => void }) {
-  const indentPx = CHILD_INDENT_BASE_PX + (depth - 1) * CHILD_INDENT_STEP_PX
-  const connectorPx = CHILD_CONNECTOR_BASE_PX + (depth - 1) * CHILD_INDENT_STEP_PX
+  // Tree rails: the INCOMING trunk sits under the parent's chevron (rail d-1), the
+  // row's own chevron sits on its CHILDREN's rail (rail d). Deriving both from one
+  // ROOT keeps every level's vertical aligned under the chevron above it.
+  const parentRailPx = TREE_ROOT_RAIL_PX + (depth - 1) * CHILD_INDENT_STEP_PX
+  const selfRailPx = TREE_ROOT_RAIL_PX + depth * CHILD_INDENT_STEP_PX
+  const contentPadPx = selfRailPx + 14
   return (
     <div
-      // w-80 matches the top-level label column exactly — a narrower child width
-      // left the label column's right border ragged across depths.
-      className="relative w-80 shrink-0 border-r border-theme-border/50 pr-3 flex items-center gap-1 group/pin bg-theme-surface/40"
-      style={{ paddingLeft: indentPx }}
+      // w-[360px] matches the top-level label column exactly — a narrower child
+      // width left the label column's right border ragged across depths.
+      className="relative w-[360px] shrink-0 border-r border-theme-border/50 pr-3 flex items-center gap-1.5 group/pin bg-theme-surface/40"
+      style={{ paddingLeft: contentPadPx }}
     >
-      {/* Vertical trunk — stops at the row's vertical center on the last child. */}
-      <span className={clsx('absolute top-0 w-px bg-theme-border', isLast ? 'h-1/2' : 'h-full')} style={{ left: connectorPx }} />
-      {/* Horizontal branch into the row. */}
-      <span className="absolute top-1/2 h-px bg-theme-border" style={{ left: connectorPx, width: 11 }} />
+      {/* Incoming trunk (under the parent's chevron) — elbow (half height) on the
+          last child, full height otherwise so the next sibling connects. */}
+      <span className={clsx('absolute top-0 w-px bg-theme-border', isLast ? 'h-1/2' : 'h-full')} style={{ left: parentRailPx }} />
+      {/* Horizontal branch from the parent rail into this row. */}
+      <span className="absolute top-1/2 h-px bg-theme-border" style={{ left: parentRailPx, width: selfRailPx - parentRailPx }} />
+      {/* Descender: when expanded, carry the line down from this row's chevron to
+          its first child's incoming trunk (which sits on selfRail). */}
+      {hasChildren && expanded && (
+        <span className="absolute bottom-0 top-1/2 w-px bg-theme-border" style={{ left: selfRailPx }} />
+      )}
       {hasChildren && onToggle && (
         <button
           onClick={(e) => { e.stopPropagation(); onToggle() }}
-          // Centered ON the trunk/branch junction (not floated into the text
-          // column, where it overlapped wrapped names). bg keeps the trunk line
-          // from striking through the glyph.
+          // Centered ON this row's rail. bg keeps the line from striking the glyph.
           className="absolute top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded bg-theme-surface p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
-          style={{ left: connectorPx }}
+          style={{ left: selfRailPx }}
           aria-label={expanded ? 'Collapse' : 'Expand'}
         >
           <ChevronRight className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-90')} />
         </button>
       )}
-      <div className="flex-1 min-w-0 flex flex-col justify-center gap-0.5">
-        {/* Quiet neutral pill, per the 1b mock: parents carry the colored kind
-            badge, children stay grey so the tree reads parent-loud/child-quiet. */}
-        <div className="flex items-center gap-1">
-          <span className="self-start rounded-md bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary" title={kindTitle}>{displayKind(kind)}</span>
-          {showGroupChip && group && <GroupChip group={group} />}
-        </div>
-        {/* Only the NAME text links to the resource; the rest of the row is inert. */}
-        <div className="text-[13px] font-mono break-words" title={title}>
-          <span
-            onClick={onClick}
-            className="text-theme-text-secondary hover:text-accent-text hover:underline cursor-pointer"
-          >
-            {name}
-          </span>
-        </div>
-      </div>
+      {/* Single-line child row: kind chip · name (middle-ellipsis). Colored chips
+          come from getKindColorClass. Only the NAME links to the resource. */}
+      <KindChip kind={kind} title={kindTitle} />
+      {showGroupChip && group && <GroupChip group={group} />}
+      <span
+        onClick={onClick}
+        className="min-w-0 flex-1 text-[13px] font-mono text-theme-text-secondary hover:text-accent-text hover:underline cursor-pointer"
+        title={title ?? name}
+      >
+        <MiddleEllipsis text={name} className="block" />
+      </span>
       {pinButton}
     </div>
   )
@@ -2082,44 +2160,46 @@ function AppGroupLaneLabel({ lane, memberCount, onToggle, onAppClick }: { lane: 
     : (lane.evidence || undefined)
   return (
     <div
-      className="flex-1 min-w-0 cursor-pointer rounded px-1 -mx-1 hover:bg-theme-surface/30"
+      // Single-line app header (6a): App chip · name (bold, truncates) · env? ·
+      // ns · +N · ⚠. The row toggles expand; only the name links to Applications.
+      className="flex-1 min-w-0 flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-theme-surface/30"
       onClick={onToggle}
       title={tooltip}
     >
-      <div className="flex items-center gap-1.5">
-        <span className={clsx(
-          'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset',
-          dimmed
-            ? 'bg-theme-hover text-theme-text-tertiary ring-theme-border'
-            : 'bg-accent-muted text-accent-text ring-transparent',
-        )}>
-          <Layers className="w-3 h-3" />
-          App
-        </span>
-        {lane.env && (
-          <span className="inline-flex items-center rounded-sm bg-theme-hover px-1.5 py-px text-[10px] font-medium text-theme-text-secondary ring-1 ring-inset ring-theme-border">
-            {lane.env}
-          </span>
-        )}
-        <span className="text-xs font-semibold text-theme-text-tertiary">
-          {pluralize(memberCount, 'resource')}
-        </span>
-        <LaneWarnChip events={lane.allEventsSorted || []} />
-      </div>
-      <div
+      <span className={clsx(
+        'shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset',
+        dimmed
+          ? 'bg-theme-hover text-theme-text-tertiary ring-theme-border'
+          : 'bg-accent-muted text-accent-text ring-transparent',
+      )}>
+        <Layers className="w-3 h-3" />
+        App
+      </span>
+      <span
         className={clsx(
-          'text-sm font-semibold break-words mt-0.5',
+          'min-w-0 text-sm font-semibold',
           dimmed ? 'text-theme-text-secondary' : 'text-theme-text-primary',
-          linkable && 'hover:text-accent-text hover:underline',
+          linkable && 'hover:text-accent-text hover:underline cursor-pointer',
         )}
         // Name click navigates to the app's Applications page — mirroring how a
         // resource name routes to its detail; the row body still toggles expand.
         onClick={linkable ? (e) => { e.stopPropagation(); onAppClick!(lane.appKey!) } : undefined}
-        title={linkable ? 'Open in Applications' : undefined}
+        title={linkable ? 'Open in Applications' : (lane.title ?? lane.name)}
       >
-        {lane.title ?? lane.name}
-      </div>
-      {lane.namespace && <div className="text-xs text-theme-text-tertiary">{lane.namespace}</div>}
+        <MiddleEllipsis text={lane.title ?? lane.name} className="block" />
+      </span>
+      {lane.env && (
+        <span className="shrink-0 inline-flex items-center rounded-sm bg-theme-hover px-1.5 py-px text-[10px] font-medium text-theme-text-secondary ring-1 ring-inset ring-theme-border">
+          {lane.env}
+        </span>
+      )}
+      {lane.namespace && (
+        <span className="shrink-0 text-[11.5px] text-theme-text-tertiary whitespace-nowrap">{lane.namespace}</span>
+      )}
+      <span className="shrink-0 text-[11.5px] font-semibold text-theme-text-tertiary">
+        {`+${memberCount}`}
+      </span>
+      <LaneWarnChip events={lane.allEventsSorted || []} />
     </div>
   )
 }
@@ -2136,14 +2216,13 @@ function LaneBackdrop({ gridXs }: { gridXs: number[] }) {
   )
 }
 
-// Health bar track component that renders health as a thin bottom strip.
-// The 'mixed' segment's texture: grey diagonal stripes, deliberately NOT a solid
-// health color so it reads as "not a health state — members disagree". Denser
-// than the recording-gap hatch (which uses --border-default) so the two textures
-// stay distinct. Theme token so it tracks light/dark.
+// The 'mixed' segment (members disagree): a green/amber HEALTH weave, not a grey
+// hatch (Turn 7: grey stripes read as "no data", not "busy"). Solid green means
+// everyone's fine, solid amber all degraded, and this weave = they disagree — so
+// the texture stays a health signal, distinct from the recording-gap hatch.
 const MIXED_HEALTH_STRIP_STYLE: React.CSSProperties = {
   backgroundImage:
-    'repeating-linear-gradient(45deg, var(--text-tertiary) 0, var(--text-tertiary) 1px, transparent 1px, transparent 3px)',
+    'repeating-linear-gradient(115deg, var(--color-success) 0 5px, var(--color-warning) 5px 10px)',
 }
 
 interface HealthBarTrackProps {
@@ -2153,16 +2232,20 @@ interface HealthBarTrackProps {
    *  honest spans into state-family segments instead of blending its subtree
    *  events into one latest-event-wins timeline. */
   aggregateLane?: ResourceLane
+  /** Dim + thin the aggregate to a "ghost" — an expanded app header keeps the
+   *  rollup scannable without competing with the children below it. */
+  ghost?: boolean
   startTime: number
   windowMs: number
   now: number
 }
 
-function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggregateLane }: HealthBarTrackProps) {
+function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggregateLane, ghost }: HealthBarTrackProps) {
   if (aggregateLane) {
     return (
       <AggregateHealthTrack
         lane={aggregateLane}
+        ghost={ghost}
         startTime={startTime}
         windowMs={windowMs}
         now={now}
@@ -2181,7 +2264,12 @@ function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggrega
     ownResource
   )
 
-  if (spans.length === 0) return null
+  // Turn 7: every row gets a health line even with no derived spans (event dots
+  // floating on nothing read as footnotes with no page). Paint a faint neutral
+  // baseline so the row still has its line.
+  if (spans.length === 0) {
+    return <div className="absolute bottom-0 left-0 right-0 z-0 h-[7px] rounded-[2px] bg-gray-400/25" />
+  }
 
   return (
     <div className="absolute inset-0 z-0">
@@ -2226,11 +2314,12 @@ function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggrega
 // member's honest spans. A slice whose member states share one family paints
 // that family's dominant state; a slice where families disagree paints the
 // neutral 'mixed' texture. The tooltip names who's off.
-function AggregateHealthTrack({ lane, startTime, windowMs, now }: {
+function AggregateHealthTrack({ lane, startTime, windowMs, now, ghost }: {
   lane: ResourceLane
   startTime: number
   windowMs: number
   now: number
+  ghost?: boolean
 }) {
   const endTime = startTime + windowMs
   const segments = useMemo(() => {
@@ -2238,10 +2327,15 @@ function AggregateHealthTrack({ lane, startTime, windowMs, now }: {
     return sweepAggregateHealth(members, startTime, endTime)
   }, [lane, startTime, endTime, now])
 
-  if (segments.length === 0) return null
+  // Turn 7: group headers get their line too — a sweep with no segments still
+  // paints the faint neutral baseline (same as leaf rows) so event pills never
+  // float on nothing.
+  if (segments.length === 0) {
+    return <div className={clsx('absolute bottom-0 left-0 right-0 z-0 rounded-[2px] bg-gray-400/25', ghost ? 'h-[4px]' : 'h-[7px]')} />
+  }
 
   return (
-    <div className="absolute inset-0 z-0">
+    <div className={clsx('absolute inset-0 z-0', ghost && 'opacity-40')}>
       {segments.map((seg, i) => {
         const left = sharedTimeToX(seg.start, startTime, windowMs)
         const right = sharedTimeToX(seg.end, startTime, windowMs)
@@ -2253,7 +2347,7 @@ function AggregateHealthTrack({ lane, startTime, windowMs, now }: {
         return (
           <div
             key={i}
-            className={clsx('absolute bottom-0 h-[7px]', !seg.mixed && getHealthStripColor(seg.health))}
+            className={clsx(ghost ? 'absolute bottom-0 h-[4px]' : 'absolute bottom-0 h-[7px]', !seg.mixed && getHealthStripColor(seg.health))}
             style={{
               left: `${clampedLeft}%`,
               width: `${clampedWidth}%`,
@@ -2346,8 +2440,8 @@ function ClusterPill({ cluster, selected, onClick, small }: {
       }
       position="top"
       delay={100}
-      wrapperClassName="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20"
-      wrapperStyle={{ left: `${cluster.x}%` }}
+      wrapperClassName={clsx('absolute top-1/2 -translate-y-1/2 z-20', markerAnchor(cluster.x).anchorClass)}
+      wrapperStyle={{ left: markerAnchor(cluster.x).left }}
     >
       <button
         aria-label={`Open ${cluster.count} clustered events`}
@@ -2570,8 +2664,8 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
         content={tooltipText}
         position="top"
         delay={100}
-        wrapperClassName="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20"
-        wrapperStyle={{ left: `${x}%` }}
+        wrapperClassName={clsx('absolute top-1/2 -translate-y-1/2 z-20', markerAnchor(x).anchorClass)}
+        wrapperStyle={{ left: markerAnchor(x).left }}
       >
         <button
           // Icon-only marker: the tooltip is mouse-only, so mirror it into an
@@ -2605,10 +2699,11 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
       position="top"
       delay={100}
       wrapperClassName={clsx(
-        'absolute top-1/2 -translate-y-1/2 -translate-x-1/2',
+        'absolute top-1/2 -translate-y-1/2',
+        markerAnchor(x).anchorClass,
         isHistorical ? 'z-5' : 'z-10'
       )}
-      wrapperStyle={{ left: `${x}%` }}
+      wrapperStyle={{ left: markerAnchor(x).left }}
     >
       <button
         // Icon-only glyph: the tooltip is mouse-only, so mirror it into an
@@ -2638,87 +2733,16 @@ interface EventDetailPanelProps {
   onSelectId: (id: string) => void
   onClose: () => void
   onResourceClick?: NavigateToResource
+  // Every event in view — powers the ±15-min correlation feed ("what else
+  // happened around this deploy?"). Absent → the correlation section is omitted.
+  allEvents?: TimelineEvent[]
 }
 
-// The resource identity + time line shown at the top of a detail body. No close
-// button — the drawer owns that so a cluster's summary header carries the single
-// close affordance.
-function EventDetailHeaderInfo({ event, onResourceClick }: { event: TimelineEvent; onResourceClick?: NavigateToResource }) {
-  const isHistorical = isHistoricalEvent(event)
-  return (
-    <div>
-      <div className="flex items-center gap-2">
-        <span className="badge-sm bg-theme-elevated text-theme-text-secondary">
-          {displayKind(event.kind)}
-        </span>
-        <button
-          onClick={() => onResourceClick?.({ kind: kindToPlural(event.kind), namespace: event.namespace, name: event.name, group: apiVersionToGroup(event.apiVersion) })}
-          className="text-theme-text-primary font-medium hover:text-accent-text"
-        >
-          {event.name}
-        </button>
-        {event.namespace && (
-          <span className="text-xs text-theme-text-tertiary">in {event.namespace}</span>
-        )}
-        {isHistorical && (
-          <span className="badge-sm bg-theme-hover text-theme-text-secondary">
-            <Clock className="w-3 h-3" />
-            historical
-          </span>
-        )}
-      </div>
-      <div className="text-xs text-theme-text-tertiary mt-1">
-        {formatFullTime(new Date(event.timestamp))}
-        {isHistorical && event.reason && (
-          <span className="ml-2 text-theme-text-secondary">({event.reason})</span>
-        )}
-      </div>
-    </div>
-  )
-}
+// The ±15-min window a single event's rail pulls correlated neighbours from
+// (deploy ↔ incident debugging — "what else happened around this moment?").
+const CORRELATION_WINDOW_MS = 15 * 60_000
 
-// The change-diff or K8s-event body for one event. Shared by the single-event
-// panel and the cluster drawer's detail pane so the two can't drift.
-function EventDetailBody({ event }: { event: TimelineEvent }) {
-  const isProblematic = isProblematicEvent(event)
-  if (isChangeEvent(event)) {
-    return (
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <span className={clsx('text-sm font-medium', isOperation(event.eventType) && getOperationColor(event.eventType))}>
-            {event.eventType}
-          </span>
-          {event.healthState && event.healthState !== 'unknown' && (
-            <span className={clsx('badge-sm', getHealthBadgeColor(event.healthState))}>
-              {event.healthState}
-            </span>
-          )}
-        </div>
-        {event.diff && <DiffViewer diff={event.diff} />}
-      </div>
-    )
-  }
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <span className={clsx('text-sm font-medium', isProblematic ? 'text-amber-700 dark:text-amber-300' : 'text-green-700 dark:text-green-300')}>
-          {event.reason}
-        </span>
-        {event.eventType && (
-          <span className={clsx('badge-sm', getEventTypeColor(event.eventType))}>
-            {event.eventType}
-          </span>
-        )}
-        {event.count && event.count > 1 && (
-          <span className="text-xs text-theme-text-tertiary">x{event.count}</span>
-        )}
-      </div>
-      {event.message && <p className={clsx("text-sm", isProblematic ? "text-amber-700 dark:text-amber-200" : "text-theme-text-secondary")}>{event.message}</p>}
-    </div>
-  )
-}
-
-// One row in the cluster drawer's member list: glyph (severity tone via color) +
+// One row in the drawer's rail: glyph (severity tone via color) +
 // reason/type + owning resource + time. Reuses the marker glyph vocabulary so the
 // list reads the same as the track it summarizes.
 function ClusterEventRow({ event, active, onClick }: { event: TimelineEvent; active: boolean; onClick: () => void }) {
@@ -2753,90 +2777,201 @@ function ClusterEventRow({ event, active, onClick }: { event: TimelineEvent; act
   )
 }
 
-export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onResourceClick }: EventDetailPanelProps) {
-  const selected = events.find((e) => e.id === selectedId) ?? events[0]
+export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onResourceClick, allEvents }: EventDetailPanelProps) {
+  // ONE drawer anatomy (Turn 9): rail left, detail right — for one event or
+  // fifty. The shape never changes with count, so muscle memory holds. A single
+  // clicked dot renders as a rail of one plus its ±15-min correlated neighbors,
+  // so "what else happened around this?" is a click away, not a separate feed.
+  const railEvents = useMemo(() => {
+    if (events.length !== 1 || !allEvents) return events
+    const origin = events[0]
+    const t0 = new Date(origin.timestamp).getTime()
+    const neighbors = allEvents
+      .filter((e) => e.id !== origin.id && Math.abs(new Date(e.timestamp).getTime() - t0) <= CORRELATION_WINDOW_MS)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      .slice(0, 30)
+    return [origin, ...neighbors]
+  }, [events, allEvents])
 
-  // Single marker: today's exact one-event panel (no list chrome).
-  if (events.length <= 1) {
-    const isProblematic = isProblematicEvent(selected)
-    return (
-      <div className={clsx(
-        "fixed bottom-0 left-0 right-0 z-50 border-t p-4 min-h-40 max-h-72 overflow-auto shadow-theme-lg",
-        isProblematic ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950" : "border-theme-border bg-theme-surface"
-      )}>
-        <div className="flex items-start justify-between mb-3">
-          <EventDetailHeaderInfo event={selected} onResourceClick={onResourceClick} />
-          <button
-            onClick={onClose}
-            className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-            title="Close (Esc)"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <EventDetailBody event={selected} />
-      </div>
-    )
+  // Height is bounded: opens at ~40% viewport, drag the top edge to resize.
+  // No backdrop — the timeline above stays interactive, so the next dot is
+  // clickable without closing. SSR gets the fallback height.
+  const [heightPx, setHeightPx] = useState(() =>
+    typeof window === 'undefined' ? 384 : Math.max(280, Math.round(window.innerHeight * 0.4)),
+  )
+  const resizeRef = useRef<{ startY: number; startH: number } | null>(null)
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const r = resizeRef.current
+      if (!r) return
+      const max = Math.round(window.innerHeight * 0.8)
+      setHeightPx(Math.min(max, Math.max(240, r.startH + (r.startY - e.clientY))))
+    }
+    const onUp = () => { resizeRef.current = null }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [])
+
+  const selected = railEvents.find((e) => e.id === selectedId) ?? events[0]
+  const selIdx = railEvents.findIndex((e) => e.id === selected.id)
+  const step = (dir: 1 | -1) => {
+    const next = railEvents[selIdx + dir]
+    if (next) onSelectId(next.id)
   }
-
-  // Cluster mode: honest summary + the full member list + the selected detail.
-  const times = events.map((e) => new Date(e.timestamp).getTime())
-  const minT = Math.min(...times)
-  const maxT = Math.max(...times)
-  const fromLabel = formatAxisTime(new Date(minT))
-  const toLabel = formatAxisTime(new Date(maxT))
-  const timeRange = fromLabel === toLabel ? fromLabel : `${fromLabel}–${toLabel}`
-  // A collapsed parent lane can aggregate its whole subtree, so a pill may span
-  // several resources — name the resource only when it's the same one throughout.
-  const resourceKeys = new Set(events.map((e) => `${e.kind}/${e.namespace}/${e.name}`))
-  const uniformResource = resourceKeys.size === 1 ? selected : null
+  const isProblematic = isProblematicEvent(selected)
+  const isHistorical = isHistoricalEvent(selected)
+  // Index where correlated neighbors start (single-origin rails only) — a
+  // divider separates "the dot you clicked" from "what happened around it".
+  const neighborsFrom = events.length === 1 && railEvents.length > 1 ? 1 : -1
+  const openResource = () =>
+    onResourceClick?.({ kind: kindToPlural(selected.kind), namespace: selected.namespace, name: selected.name, group: apiVersionToGroup(selected.apiVersion) })
 
   return (
-    // h-96 (not max-h): a content-driven height made the drawer jump between
-    // selections; a steady height keeps the list and detail panes stationary.
-    <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-theme-border bg-theme-surface h-96 shadow-theme-lg flex flex-col">
-      {/* Honest summary header: N · time range · resource */}
-      <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-theme-border shrink-0">
-        <div className="flex items-center gap-2 text-sm min-w-0">
-          <span className="badge-sm bg-theme-elevated text-theme-text-secondary shrink-0">{events.length} events</span>
-          <span className="text-theme-text-tertiary tabular-nums shrink-0">{timeRange}</span>
-          <span className="text-theme-text-tertiary shrink-0">·</span>
-          {uniformResource ? (
-            <span className="flex items-center gap-1.5 min-w-0">
-              <span className="badge-sm bg-theme-elevated text-theme-text-secondary shrink-0">{displayKind(uniformResource.kind)}</span>
-              <span className="font-medium text-theme-text-primary truncate">{uniformResource.name}</span>
-            </span>
-          ) : (
-            <span className="text-theme-text-secondary shrink-0">{resourceKeys.size} resources</span>
+    <div
+      className="fixed bottom-0 left-0 right-0 z-50 flex flex-col border-t border-theme-border bg-theme-surface shadow-theme-lg"
+      style={{ height: heightPx }}
+    >
+      {/* Resize handle — drag the top edge. */}
+      <div
+        onPointerDown={(e) => { e.preventDefault(); resizeRef.current = { startY: e.clientY, startH: heightPx } }}
+        className="group absolute -top-1.5 left-0 right-0 flex h-3 cursor-ns-resize items-center justify-center"
+        title="Drag to resize"
+      >
+        <span className="h-1 w-10 rounded-full bg-theme-border opacity-0 transition-opacity group-hover:opacity-100" />
+      </div>
+
+      {/* Header echoes the lit dot — glyph + reason + resource + time — and
+          ‹ › steps through the rail without touching the timeline. */}
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-theme-border px-4 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-sm">
+          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+            <MarkerGlyph shape={eventShape(selected)} size={12} className={eventColorClass(selected)} />
+          </span>
+          <span className={clsx('shrink-0 font-medium', isProblematic ? 'text-amber-700 dark:text-amber-300' : 'text-theme-text-primary')}>
+            {selected.reason || selected.eventType}
+          </span>
+          <span className="badge-sm shrink-0 bg-theme-elevated text-theme-text-secondary">{displayKind(selected.kind) || 'Event'}</span>
+          <button onClick={openResource} className="min-w-0 truncate font-medium text-theme-text-primary hover:text-accent-text">
+            {selected.name}
+          </button>
+          {selected.namespace && <span className="shrink-0 text-xs text-theme-text-tertiary">in {selected.namespace}</span>}
+          <span className="shrink-0 text-xs tabular-nums text-theme-text-tertiary">{formatFullTime(new Date(selected.timestamp))}</span>
+          {events.length > 1 && (
+            <span className="badge-sm shrink-0 bg-theme-elevated text-theme-text-secondary">{events.length} events</span>
           )}
         </div>
-        <button
-          onClick={onClose}
-          className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-          title="Close (Esc)"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            onClick={() => step(-1)}
+            disabled={selIdx <= 0}
+            className="rounded p-1 text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary disabled:opacity-30"
+            aria-label="Previous event"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="text-xs tabular-nums text-theme-text-tertiary">{`${selIdx + 1} of ${railEvents.length}`}</span>
+          <button
+            onClick={() => step(1)}
+            disabled={selIdx >= railEvents.length - 1}
+            className="rounded p-1 text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary disabled:opacity-30"
+            aria-label="Next event"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          <button
+            onClick={onClose}
+            className="ml-1 rounded p-1.5 text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
+            title="Close (Esc)"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {/* Member list — every event the pill collapsed, most-severe first. */}
-        <ul className="w-72 shrink-0 border-r border-theme-border overflow-auto py-1" aria-label="Clustered events">
-          {events.map((ev) => (
-            <ClusterEventRow
-              key={ev.id}
-              event={ev}
-              active={ev.id === selectedId}
-              onClick={() => onSelectId(ev.id)}
-            />
+        {/* The rail — always renders, even as a rail of one. */}
+        <ul className="w-72 shrink-0 overflow-auto border-r border-theme-border py-1" aria-label="Drawer events">
+          {railEvents.map((ev, i) => (
+            <Fragment key={ev.id}>
+              {i === neighborsFrom && (
+                <li aria-hidden className="mt-1 border-t border-theme-border px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary">
+                  Within ±15 min
+                </li>
+              )}
+              <ClusterEventRow event={ev} active={ev.id === selected.id} onClick={() => onSelectId(ev.id)} />
+            </Fragment>
           ))}
         </ul>
-        {/* Selected member's detail (↑/↓ to move). */}
-        <div className="flex-1 min-w-0 overflow-auto p-4">
-          <EventDetailHeaderInfo event={selected} onResourceClick={onResourceClick} />
-          <div className="mt-3">
-            <EventDetailBody event={selected} />
-          </div>
+
+        {/* Detail pane: fields as properties, then message, diff, actions. */}
+        <div className="min-w-0 flex-1 overflow-auto p-4">
+          <dl className="grid grid-cols-[96px_1fr] items-baseline gap-x-3 gap-y-2 text-sm">
+            <dt className="text-xs text-theme-text-tertiary">Reason</dt>
+            <dd className="flex flex-wrap items-center gap-2">
+              <span className={clsx(
+                'font-medium',
+                isChangeEvent(selected) && isOperation(selected.eventType)
+                  ? getOperationColor(selected.eventType)
+                  : isProblematic ? 'text-amber-700 dark:text-amber-300' : 'text-theme-text-primary',
+              )}>
+                {selected.reason || selected.eventType}
+              </span>
+              {!isChangeEvent(selected) && selected.eventType && (
+                <span className={clsx('badge-sm', getEventTypeColor(selected.eventType))}>{selected.eventType}</span>
+              )}
+              {selected.count && selected.count > 1 && (
+                <span className="text-xs text-theme-text-tertiary">×{selected.count}</span>
+              )}
+            </dd>
+            <dt className="text-xs text-theme-text-tertiary">Resource</dt>
+            <dd className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="badge-sm bg-theme-elevated text-theme-text-secondary">{displayKind(selected.kind) || 'Event'}</span>
+              <button onClick={openResource} className="min-w-0 truncate font-medium text-theme-text-primary hover:text-accent-text">
+                {selected.name}
+              </button>
+              {selected.namespace && <span className="text-xs text-theme-text-tertiary">in {selected.namespace}</span>}
+            </dd>
+            <dt className="text-xs text-theme-text-tertiary">Time</dt>
+            <dd className="flex items-center gap-2 tabular-nums">
+              {formatFullTime(new Date(selected.timestamp))}
+              {isHistorical && (
+                <span className="badge-sm bg-theme-hover text-theme-text-secondary">
+                  <Clock className="h-3 w-3" />
+                  from metadata
+                </span>
+              )}
+            </dd>
+            {selected.healthState && selected.healthState !== 'unknown' && (
+              <>
+                <dt className="text-xs text-theme-text-tertiary">Health</dt>
+                <dd><span className={clsx('badge-sm', getHealthBadgeColor(selected.healthState))}>{selected.healthState}</span></dd>
+              </>
+            )}
+          </dl>
+          {selected.message && (
+            <p className={clsx('mt-3 text-sm', isProblematic ? 'text-amber-700 dark:text-amber-200' : 'text-theme-text-secondary')}>
+              {selected.message}
+            </p>
+          )}
+          {selected.diff && (
+            <div className="mt-3">
+              <DiffViewer diff={selected.diff} />
+            </div>
+          )}
+          {onResourceClick && (
+            <div className="mt-4 flex items-center gap-2 border-t border-theme-border pt-3">
+              <button
+                onClick={openResource}
+                className="rounded-md border border-theme-border bg-theme-elevated px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+              >
+                View resource
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

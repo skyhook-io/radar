@@ -215,7 +215,7 @@ describe('EventDetailPanel cluster mode (a ×N pill exposes every member)', () =
     )
     // Honest summary: the "N events" badge + a member list with all four rows.
     expect(html).toContain('events</span>')
-    expect(html).toContain('aria-label="Clustered events"')
+    expect(html).toContain('aria-label="Drawer events"')
     expect((html.match(/<li>/g) ?? []).length).toBe(4)
     expect(html).toContain('BackOff')
     expect(html).toContain('>add<')
@@ -243,16 +243,30 @@ describe('EventDetailPanel cluster mode (a ×N pill exposes every member)', () =
     expect((html.match(/<li>/g) ?? []).length).toBe(4)
   })
 
-  it('N=1 renders exactly today\'s single-event panel — no list chrome (regression pin)', () => {
+  it('N=1 renders the SAME rail+detail anatomy — a rail of one, selected (Turn 9)', () => {
     const single = mk('warn-web', 'Warning', T0, { reason: 'BackOff', message: 'Back-off restarting failed container' })
     const html = renderToString(
       <EventDetailPanel events={[single]} selectedId={single.id} onSelectId={() => {}} onClose={() => {}} />,
     )
-    // Today's panel: the amber problematic wrapper + name + message, NO cluster list.
+    // One anatomy: the rail always renders — a single event is a rail of one.
     expect(html).toContain('Back-off restarting failed container')
-    expect(html).toContain('bg-amber-50')
-    expect(html).not.toContain('aria-label="Clustered events"')
-    expect(html).not.toContain(' events</span>') // no "N events" summary badge
+    expect(html).toContain('aria-label="Drawer events"')
+    expect((html.match(/<li/g) ?? []).length).toBe(1)
+    expect(html).toContain('1 of 1') // header stepper reflects the rail of one
+    expect(html).not.toContain(' events</span>') // no misleading "1 events" badge
+  })
+
+  it('N=1 with allEvents grows the rail with ±15-min correlated neighbors', () => {
+    const single = mk('warn-web', 'Warning', T0, { reason: 'BackOff', message: 'Back-off restarting failed container' })
+    const neighbor = mk('upd-api', 'update', T0 + 2 * 60_000, { name: 'api' })
+    const far = mk('upd-db', 'update', T0 + 60 * 60_000, { name: 'db' }) // outside ±15m
+    const html = renderToString(
+      <EventDetailPanel events={[single]} selectedId={single.id} onSelectId={() => {}} onClose={() => {}} allEvents={[single, neighbor, far]} />,
+    )
+    expect(html).toContain('Within ±15 min')
+    expect(html).toContain('>api<') // the neighbor joined the rail
+    expect(html).not.toContain('>db<') // out-of-window event did not
+    expect(html).toContain('1 of 2')
   })
 })
 
@@ -343,7 +357,7 @@ describe('app-group header lane (grouping=app + appIndex)', () => {
     )
     expect(html).toContain('billing')
     expect(html).toContain('>prod<')
-    expect(html).toContain('2 resources')
+    expect(html).toContain('+2')
   })
 
   it('keeps a server-declared member visible even when its events are outside the window', () => {
@@ -374,7 +388,7 @@ describe('app-group header lane (grouping=app + appIndex)', () => {
     // to evidence/name-matched lanes (covered in resource-hierarchy tests).
     expect(html).toContain('billing-api')
     expect(html).toContain('billing-worker')
-    expect(html).toContain('2 resources')
+    expect(html).toContain('+2')
   })
 })
 

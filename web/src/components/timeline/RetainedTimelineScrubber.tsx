@@ -2,11 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import {
-  TimelineScrubber,
-  SWIMLANE_ZOOM_LEVELS,
+  TimelineStrip,
   clampSelection,
   countEventsAfter,
-  formatLensDuration,
   mergeGapRanges,
   pickDisplayBucketSizeMs,
   presetToSelection,
@@ -224,15 +222,13 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
   const domainWidth = domain.toMs - domain.fromMs
   const maxSelectionMs = Math.min(MAX_SELECTION_MS, domainWidth)
 
-  // The strip DISPLAYS a framed sub-range of the domain — otherwise a narrow
-  // selection (and the lens inside it) collapses to a sub-pixel sliver.
-  // Derived, so a live selection sliding forward carries its frame along. One
-  // rule, no modes: the minimap row above the track is the stable full-span
-  // anchor, and clicking it jumps the selection (which re-frames here).
-  const displayDomain = useMemo(
-    () => frameDomainForSelection(selection, domain),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selection.fromMs, selection.toMs, domain.fromMs, domain.toMs],
+  // 6a model: the histogram spans the QUERY RANGE (selection) directly —
+  // no ×8 framing, no minimap. The query is the view, so a narrow window is never
+  // a sub-pixel sliver; the draggable lens band lives inside this span. Navigating
+  // to other times is the query-range picker's job, not a spatial minimap's.
+  const displayDomain = useMemo<ScrubberRange>(
+    () => ({ fromMs: selection.fromMs, toMs: selection.toMs }),
+    [selection.fromMs, selection.toMs],
   )
   const displayWidth = displayDomain.toMs - displayDomain.fromMs
   const bucketSizeMs = pickDisplayBucketSizeMs(displayWidth)
@@ -254,17 +250,6 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
   }, [liveState, fullBuckets, selection.toMs])
   const gaps = useMemo(() => extractRecordingGaps(hourBuckets, domain), [hourBuckets, domain])
   const presets = useMemo(() => buildPresets(maxRangeDays), [maxRangeDays])
-
-  // Lens-chip width ladder: the swimlane's zoom rungs (shared ZOOM_LEVELS so the
-  // band and the swimlane resize identically), capped to the current selection —
-  // the lens can never show more than what's queried.
-  const lensPresets = useMemo<ScrubberPreset[]>(() => {
-    const selWidth = selection.toMs - selection.fromMs
-    return SWIMLANE_ZOOM_LEVELS
-      .map((h) => h * HOUR_MS)
-      .filter((ms) => ms <= selWidth)
-      .map((ms) => ({ label: formatLensDuration(ms), ms }))
-  }, [selection.fromMs, selection.toMs])
 
   // Lift the resolved domain + cap so the host can clamp extend requests to the
   // real retained window rather than an estimate.
@@ -312,11 +297,12 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
 
   return (
     <div className="px-4 py-2 border-b border-theme-border bg-theme-surface">
-      <TimelineScrubber
+      <TimelineStrip
         buckets={displayBuckets}
         loading={overview.isLoading}
         gaps={gaps}
-        domain={displayDomain}
+        domain={domain}
+        historyUnavailableBeforeMs={availableFromMs ?? undefined}
         selection={selection}
         onSelectionChange={onSelectionChange}
         maxSelectionMs={maxSelectionMs}
@@ -326,18 +312,8 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
             ? onPresetSelect(p.ms)
             : onSelectionChange(presetToSelection(p.ms, now, domain, maxSelectionMs).selection)
         )}
-        fullDomain={domain}
-        fullBuckets={fullBuckets}
-        onMinimapJump={(centerMs) => {
-          const width = selection.toMs - selection.fromMs
-          onSelectionChange(clampSelection(
-            { fromMs: centerMs - width / 2, toMs: centerMs + width / 2 },
-            domain, maxSelectionMs, 'center',
-          ).selection)
-        }}
         lens={lens}
         onLensChange={onLensChange}
-        lensPresets={lensPresets}
         liveState={chipState}
         onLiveChipClick={onLiveChipClick}
       />

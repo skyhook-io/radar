@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  TimelineScrubber,
-  SWIMLANE_ZOOM_LEVELS,
+  TimelineStrip,
   clampSelection,
   countEventsAfter,
-  formatLensDuration,
   pickDisplayBucketSizeMs,
   presetToSelection,
   type ScrubberPreset,
@@ -13,10 +11,15 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { TimelineEvent } from '../../types'
 import { localOverviewFromEvents } from '../../api/timelineSource'
-import { groupBuckets, buildPresets, frameDomainForSelection, type ScrubberDomainInfo } from './RetainedTimelineScrubber'
+import { groupBuckets, buildPresets, type ScrubberDomainInfo } from './RetainedTimelineScrubber'
 
 const HOUR_MS = 60 * 60 * 1000
 const MINUTE_MS = 60_000
+// Cap on how many bars the strip draws for the full query, so window-driven fine
+// bucketing can't explode into thousands of divs on a wide query + tiny window.
+// Generous (thin bars are cheap) so even a 24h query keeps ~3min bars — fine
+// enough that a narrow window spans many, and an empty window shows none.
+const MAX_STRIP_BARS = 512
 
 interface LocalTimelineScrubberProps {
   // The loaded event ring. The local store ships the whole ring to the browser,
@@ -59,6 +62,21 @@ export function LocalTimelineScrubber({
   const hourBuckets = overview.buckets
   const availableFromMs = overview.availableFromMs
 
+  // When recording began: the oldest LIVE-fed event (informer / k8s event).
+  // Historical events are synthesized from resource metadata and can be years
+  // old, so they don't mark where the ring's real coverage starts. The strip
+  // dims the query region before this — "Radar wasn't watching yet" is the
+  // honest answer to "why can't I scroll further back".
+  const recordingStartMs = useMemo(() => {
+    let min: number | null = null
+    for (const e of events) {
+      if (e.source === 'historical') continue
+      const t = new Date(e.timestamp).getTime()
+      if (Number.isFinite(t) && (min == null || t < min)) min = t
+    }
+    return min ?? undefined
+  }, [events])
+
   // Stable "now" between renders so the domain doesn't jitter. A LIVE selection's
   // right edge tracks the host's tick, so take the max — the domain never trails
   // the selection (which would fight the clamp effect every tick).
@@ -78,21 +96,25 @@ export function LocalTimelineScrubber({
   // span the entire domain.
   const maxSelectionMs = domainWidth
 
-  // The strip DISPLAYS a framed sub-range of the domain — otherwise a narrow
-  // selection (and the lens inside it) collapses to a sub-pixel sliver.
-  // Derived, so a live selection sliding forward carries its frame along. One
-  // rule, no modes: the minimap row above the track is the stable full-span
-  // anchor, and clicking it jumps the selection (which re-frames here).
-  const displayDomain = useMemo(
-    () => frameDomainForSelection(selection, domain),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selection.fromMs, selection.toMs, domain.fromMs, domain.toMs],
+  // 6a model: the histogram spans the QUERY RANGE (selection) directly —
+  // no framing, no minimap. The query is the view, so a narrow window is never a
+  // sub-pixel sliver; the draggable lens band lives inside this span.
+  const displayDomain = useMemo<ScrubberRange>(
+    () => ({ fromMs: selection.fromMs, toMs: selection.toMs }),
+    [selection.fromMs, selection.toMs],
   )
   const displayWidth = displayDomain.toMs - displayDomain.fromMs
 
-  // The whole ring is in the browser, so a tightly framed window can rebucket
-  // the raw events at sub-hour granularity instead of stretching hour bars.
-  const bucketSizeMs = pickDisplayBucketSizeMs(displayWidth, MINUTE_MS)
+  // Bar granularity is driven by the WINDOW, not the whole query: a narrow window
+  // on a 24h query must still span many fine bars, or it sits over one coarse bar
+  // and an EMPTY window reads as populated (and midpoint colouring mislabels it).
+  // The whole ring is in the browser, so we can rebucket raw events sub-hour.
+  // Floor keeps the query itself from exceeding ~MAX_STRIP_BARS.
+  const lensWidthMs = lens ? Math.max(lens.toMs - lens.fromMs, MINUTE_MS) : displayWidth
+  const bucketSizeMs = Math.max(
+    pickDisplayBucketSizeMs(lensWidthMs, MINUTE_MS),
+    Math.ceil(displayWidth / MAX_STRIP_BARS / MINUTE_MS) * MINUTE_MS,
+  )
 
   const displayBuckets = useMemo(() => {
     const source = bucketSizeMs >= HOUR_MS
@@ -124,16 +146,6 @@ export function LocalTimelineScrubber({
     return [...base, { label: 'All', ms: domainWidth }]
   }, [domainWidth])
 
-  // Lens-chip width ladder: the swimlane's zoom rungs, capped to the current
-  // selection — the lens can never show more than what's selected.
-  const lensPresets = useMemo<ScrubberPreset[]>(() => {
-    const selWidth = selection.toMs - selection.fromMs
-    return SWIMLANE_ZOOM_LEVELS
-      .map((h) => h * HOUR_MS)
-      .filter((ms) => ms <= selWidth)
-      .map((ms) => ({ label: formatLensDuration(ms), ms }))
-  }, [selection.fromMs, selection.toMs])
-
   // Lift the resolved domain + cap so the host can clamp extend requests.
   useEffect(() => {
     onDomainChange?.({ domain, maxSelectionMs })
@@ -157,10 +169,17 @@ export function LocalTimelineScrubber({
 
   return (
     <div className="px-4 py-2 border-b border-theme-border bg-theme-surface">
-      <TimelineScrubber
+      <TimelineStrip
         buckets={displayBuckets}
         loading={loading}
-        domain={displayDomain}
+        domain={domain}
+        historyUnavailableBeforeMs={recordingStartMs}
+        // Exact count with the SAME predicate the toolbar chips use — edge
+        // buckets spill a few events, so a bucket sum tells a second story.
+        totalInQueryRange={events.reduce((n, e) => {
+          const t = new Date(e.timestamp).getTime()
+          return t >= selection.fromMs && t <= selection.toMs ? n + 1 : n
+        }, 0)}
         selection={selection}
         onSelectionChange={onSelectionChange}
         maxSelectionMs={maxSelectionMs}
@@ -170,18 +189,8 @@ export function LocalTimelineScrubber({
             ? onPresetSelect(p.ms)
             : onSelectionChange(presetToSelection(p.ms, now, domain, maxSelectionMs).selection)
         )}
-        fullDomain={domain}
-        fullBuckets={fullBuckets}
-        onMinimapJump={(centerMs) => {
-          const width = selection.toMs - selection.fromMs
-          onSelectionChange(clampSelection(
-            { fromMs: centerMs - width / 2, toMs: centerMs + width / 2 },
-            domain, maxSelectionMs, 'center',
-          ).selection)
-        }}
         lens={lens}
         onLensChange={onLensChange}
-        lensPresets={lensPresets}
         liveState={chipState}
         onLiveChipClick={onLiveChipClick}
       />

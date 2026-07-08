@@ -36,9 +36,11 @@ interface TimelineListProps {
   // Time span of the rows visible in the list's scrollport — the host renders
   // it as the scrubber lens so scrolling the list moves the lens.
   onVisibleWindowChange?: (window: { fromMs: number; toMs: number } | null) => void
+  // Carries the swimlane's view window into the list on view switch (scroll target).
+  scrollToMs?: number
 }
 
-export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, sliding, onVisibleWindowChange }: TimelineListProps) {
+export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, sliding, onVisibleWindowChange, scrollToMs }: TimelineListProps) {
   const hasLimitedAccess = useHasLimitedAccess()
   const timelineSource = useTimelineSource()
   const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kinds: string[] }>({
@@ -56,7 +58,9 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     timeRange: queryParams.timeRange,
     includeK8sEvents: true,
     includeDeleted: showDeleted,
-    limit: 500,
+    // Generous so a busy query window isn't silently truncated — the list is
+    // already bounded to the selection range, so this only caps pathological bursts.
+    limit: 2000,
     fromMs: selectionWindow?.fromMs,
     toMs: selectionWindow?.toMs,
     sliding,
@@ -106,6 +110,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
       kindFilter={kindFilter}
       onKindFilterChange={onKindFilterChange}
       onVisibleWindowChange={onVisibleWindowChange}
+      scrollToMs={scrollToMs}
     />
   )
 }

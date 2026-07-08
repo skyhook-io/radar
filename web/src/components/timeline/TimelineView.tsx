@@ -85,7 +85,9 @@ type TimelineMode =
 // a restored live link is still live at restore time; the 30s live tick moves
 // no absolute state and therefore never touches the URL.
 // ---------------------------------------------------------------------------
-const DEFAULT_LIVE_WIDTH_MS = 24 * 60 * 60 * 1000
+// Default query: the last hour. Wide-enough for "what just happened" without
+// burying the lanes in a day of history; presets/URL widen it deliberately.
+const DEFAULT_LIVE_WIDTH_MS = 60 * 60 * 1000
 const DEFAULT_VIEW: TimelineViewMode = 'swimlane'
 const DEFAULT_GROUPING: TimelineGrouping = 'app'
 const DEFAULT_SORT: TimelineSort = 'importance'
@@ -387,9 +389,15 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   const [gaps, setGaps] = useState<ScrubberRange[]>([])
 
   // List mode's lens source: the time span of the rows visible in the list's
-  // scrollport, reported by the list on scroll. Read-only on the strip (no
-  // onLensChange in list mode) — the list's scrollbar is the one authority.
+  // scrollport, reported by the list on scroll. Dragging the strip band works
+  // the other way: it sets a scroll target the list jumps to.
   const [listVisibleWindow, setListVisibleWindow] = useState<ScrubberRange | null>(null)
+  const [listScrollToMs, setListScrollToMs] = useState<number | undefined>(undefined)
+  // A stale drag target must not override the swimlane-lens carry-over on the
+  // NEXT visit to list view.
+  useEffect(() => {
+    if (viewMode !== 'list') setListScrollToMs(undefined)
+  }, [viewMode])
 
   // Latest selection for clamping the lens without re-creating the setter.
   const selectionRef = useRef(selection)
@@ -640,11 +648,14 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   const wrap = (node: ReactNode): ReactNode => {
     if (!showScrubber) return node
     // In list mode the lens mirrors the rows visible in the list's scrollport
-    // (scrolling moves it) and is read-only on the strip; in swimlane mode it
-    // is the interactive zoom window.
+    // (scrolling moves it) — and dragging the band works the OTHER way too: it
+    // scrolls the list to that time (two-way, like the swimlane). In swimlane
+    // mode it is the interactive zoom window.
     const isListView = viewMode === 'list'
     const lens = isListView ? listVisibleWindow ?? undefined : lensWindow
-    const onLensChange = isListView ? undefined : setLens
+    const onLensChange = isListView
+      ? (l: ScrubberRange) => setListScrollToMs(l.toMs)
+      : setLens
     return (
       <div className="flex-1 flex flex-col min-h-0">
         {isRetained ? (
@@ -804,6 +815,10 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       selectionWindow={showScrubber ? selection : undefined}
       sliding={showScrubber && mode.kind === 'live'}
       onVisibleWindowChange={setListVisibleWindow}
+      // On switching to list, scroll to the swimlane's window so the view stays
+      // put; afterwards, dragging the strip band retargets the scroll. Only
+      // meaningful with a scrubber (which owns the lens).
+      scrollToMs={listScrollToMs ?? (showScrubber ? lensWindow.toMs : undefined)}
     />
   )
 }

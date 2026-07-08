@@ -83,6 +83,9 @@ export interface TimelineListProps {
   // scrollport (null when nothing is visible). A host scrubber renders it as
   // the lens, so scrolling the list moves the lens across the strip.
   onVisibleWindowChange?: (window: { fromMs: number; toMs: number } | null) => void
+  // On mount/switch, scroll the list so the row nearest this time sits at the
+  // top — carries the swimlane's view window over when switching to list view.
+  scrollToMs?: number
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -94,7 +97,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs }: TimelineListProps) {
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
@@ -308,6 +311,28 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       if (visibleWindowRaf.current != null) cancelAnimationFrame(visibleWindowRaf.current)
     }
   }, [reportVisibleWindow, groupedActivity])
+
+  // Carry the swimlane's view window into the list: once rows exist, scroll so
+  // the row nearest `scrollToMs` sits at the top. Applied once per `scrollToMs`
+  // (a fresh view switch), so it never fights the user's own scrolling after.
+  const scrolledToRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (scrollToMs == null || scrolledToRef.current === scrollToMs) return
+    const container = scrollRef.current
+    if (!container) return
+    const rows = container.querySelectorAll<HTMLElement>('[data-ts-from]')
+    if (rows.length === 0) return
+    let best: HTMLElement | null = null
+    let bestDelta = Infinity
+    for (const row of rows) {
+      const delta = Math.abs(Number(row.dataset.tsFrom) - scrollToMs)
+      if (delta < bestDelta) { bestDelta = delta; best = row }
+    }
+    if (best) {
+      container.scrollTop += best.getBoundingClientRect().top - container.getBoundingClientRect().top
+      scrolledToRef.current = scrollToMs
+    }
+  }, [scrollToMs, groupedActivity])
 
   return (
     <div className="flex flex-col h-full w-full">

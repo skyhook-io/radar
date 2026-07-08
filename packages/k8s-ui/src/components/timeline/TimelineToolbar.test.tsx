@@ -47,9 +47,7 @@ describe('TimelineToolbar SSR', () => {
     expect(html).toContain('Changes')
     expect(html).toContain('Warnings')
     expect(html).toContain('Unhealthy')
-    // K8s Events is the visible label now (dots-only control, no per-cell icons).
     expect(html).toContain('K8s Events')
-    // changes=3, warnings=1, unhealthy=1
     expect(html).toContain('>3<') // changes count
   })
 
@@ -64,12 +62,12 @@ describe('TimelineToolbar SSR', () => {
     expect(html).toContain('>99<')
     expect(html).toContain('>42<')
     expect(html).toContain('>7<')
-    expect(html).toContain('>5<')
   })
 
-  it('renders severity dots on the Warnings and Unhealthy cells', () => {
+  it('renders colored dots on the Changes / Warnings / Unhealthy cells', () => {
     const html = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
-    // StatusDot tones: degraded=amber (warnings), unhealthy=rose.
+    // Changes = info-blue, Warnings = amber, Unhealthy = rose.
+    expect(html).toContain('bg-blue-500')
     expect(html).toContain('bg-amber-500')
     expect(html).toContain('bg-rose-500')
   })
@@ -234,14 +232,13 @@ describe('TimelineToolbar SSR', () => {
     )
     expect(html).toContain('Changes')
     expect(html).toContain('Warnings')
-    // Active cells get the filled indigo/neutral treatment.
-    expect(html).toContain('bg-accent-muted')
+    // Two pills pressed at once (semantic state, not styling class).
+    expect(html.match(/aria-pressed="true"/g)?.length).toBeGreaterThanOrEqual(2)
 
-    // With a non-empty selection, All is NOT active — but other cells are, so the
-    // active fill class is still present somewhere. Assert All is active only when
-    // the selection is empty by comparing counts of the active class.
+    // With an empty selection only "All" is pressed (the deleted toggle also
+    // carries aria-pressed, so assert on presence, not an exact count).
     const allEmpty = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} activityFilter={[]} />)
-    expect(allEmpty).toContain('bg-accent-muted')
+    expect(allEmpty).toContain('aria-pressed="true"')
   })
 
   // The live/paused chip moved out of the toolbar into the scrubber header — the
