@@ -170,7 +170,7 @@ export function LocalTimelineScrubber({
   }, [domain.fromMs, domain.toMs, maxSelectionMs, selection.fromMs, selection.toMs])
 
   return (
-    <div className="px-4 py-2 border-b border-theme-border bg-theme-surface">
+    <div className="@container px-4 py-2 border-b border-theme-border bg-theme-surface">
       <TimelineStrip
         buckets={displayBuckets}
         loading={loading}

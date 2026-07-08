@@ -3,7 +3,7 @@ import { renderToString } from 'react-dom/server'
 import type { TimelineEvent } from '../../types'
 import type { ActivityFilterKey, ActivitySelection } from './timeline-filters'
 import { activityKeysToSelection, countActiveViewOptions, selectionToActivityKeys } from './timeline-filters'
-import { TimelineToolbar, OptionMenu, DeletedEventsToggle, PinnedOnlyToggle } from './TimelineToolbar'
+import { TimelineToolbar, ViewMenu, DeletedEventsToggle, PinnedOnlyToggle } from './TimelineToolbar'
 
 function ev(partial: Partial<TimelineEvent>): TimelineEvent {
   return {
@@ -95,7 +95,7 @@ describe('TimelineToolbar SSR', () => {
     expect(html).not.toContain('bg-rose-500')
   })
 
-  it('renders separate Sort and Group dropdowns (swimlane only), not a combined View menu', () => {
+  it('renders ONE View trigger (Sort + Group live in its popover), swimlane only', () => {
     const withOpts = renderToString(
       <TimelineToolbar
         {...baseProps}
@@ -108,44 +108,33 @@ describe('TimelineToolbar SSR', () => {
         }}
       />,
     )
-    // Two labeled triggers, each showing its current value inline.
-    expect(withOpts).toContain('>Sort<')
-    expect(withOpts).toContain('>Importance<')
-    expect(withOpts).toContain('>Group<')
-    expect(withOpts).toContain('>Applications<')
-    expect(withOpts).not.toContain('>View<')
+    // The trigger renders; the popover is closed on the server, so the Sort /
+    // Group rows are not in the initial markup.
+    expect(withOpts).toContain('>View<')
+    expect(withOpts).not.toContain('role="radiogroup" aria-label="Lane sort"')
     // The view toggle is labeled — the words themselves are the affordance.
     expect(withOpts).toContain('>List<')
     expect(withOpts).toContain('>Timeline<')
 
-    // List view (TimelineList) passes no viewOptions — neither dropdown renders.
+    // List view (TimelineList) passes no viewOptions — no View trigger.
     const noOpts = renderToString(
       <TimelineToolbar {...baseProps} events={EVENTS} view="list" onViewChange={() => {}} />,
     )
-    expect(noOpts).not.toContain('>Sort<')
-    expect(noOpts).not.toContain('>Group<')
+    expect(noOpts).not.toContain('>View<')
   })
 
-  it('shows non-default Sort/Group values on the triggers (no hidden state)', () => {
-    const some = renderToString(
+  it('dims a zero-count chip in place instead of hiding it (position memory)', () => {
+    // EVENTS has 3 changes and 1 warning K8s event; craft stats with zeros.
+    const html = renderToString(
       <TimelineToolbar
         {...baseProps}
-        events={EVENTS}
-        view="swimlane"
-        onViewChange={() => {}}
-        viewOptions={{
-          sort: { value: 'recent', onChange: () => {} },
-          grouping: { value: 'owner', onChange: () => {} },
-        }}
+        stats={{ total: 5, changes: 0, k8sEvents: 5, warnings: 0, unhealthy: 0, deleted: 0 }}
       />,
     )
-    expect(some).toContain('>Recent activity<')
-    expect(some).toContain('>Owners<')
-  })
-
-  it('labels the activity pill group with a "Show" prefix', () => {
-    const html = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
-    expect(html).toContain('>Show<')
+    // Changes 0 and Problems 0 dim + disable; K8s Events stays interactive.
+    expect(html).toContain('opacity-45')
+    expect(html.match(/opacity-45/g)?.length).toBe(2)
+    expect(html.match(/disabled=""/g)?.length).toBe(2)
   })
 
   it('renders the Kinds chip with its own badge = selected kinds, hidden when none', () => {
@@ -179,10 +168,8 @@ describe('TimelineToolbar SSR', () => {
     expect(html).toContain('placeholder="Search... (press /)"')
     expect(html).toContain('value=""')
     expect(html).not.toContain('aria-label="Search"')
-    // Container-driven width (flex between floor and cap) — focus/typing can
-    // never resize it.
-    expect(html).toContain('min-w-[11rem]')
-    expect(html).toContain('max-w-sm')
+    // Compact static width — focus/typing can never resize it.
+    expect(html).toContain('w-44')
   })
 
   it('reflects the controlled search value', () => {
@@ -257,21 +244,20 @@ describe('TimelineToolbar SSR', () => {
   })
 })
 
-describe('OptionMenu SSR', () => {
-  const SORT_OPTS = [
-    { value: 'importance', label: 'Importance', tooltip: 'x' },
-    { value: 'recent', label: 'Recent activity', tooltip: 'y' },
-  ]
-
-  it('renders a labeled trigger showing the current value, popover closed', () => {
+describe('ViewMenu SSR', () => {
+  it('renders the View trigger with the popover closed', () => {
     const html = renderToString(
-      <OptionMenu label="Sort" options={SORT_OPTS} value="recent" onChange={() => {}} />,
+      <ViewMenu
+        viewOptions={{
+          sort: { value: 'recent', onChange: () => {} },
+          grouping: { value: 'app', onChange: () => {} },
+        }}
+      />,
     )
-    expect(html).toContain('>Sort<')
-    expect(html).toContain('>Recent activity<')
+    expect(html).toContain('>View<')
     expect(html).toContain('aria-haspopup="menu"')
     expect(html).toContain('aria-expanded="false"')
-    // Closed on the server: the radio rows are not in the initial markup.
+    // Closed on the server: the Sort/Group radio rows are not in the markup.
     expect(html).not.toContain('role="radio"')
   })
 

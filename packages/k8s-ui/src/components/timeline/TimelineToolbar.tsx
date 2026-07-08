@@ -11,6 +11,7 @@ import {
   Check,
   ChevronDown,
   RefreshCw,
+  SlidersHorizontal,
   List,
   GanttChart,
 } from 'lucide-react'
@@ -112,10 +113,10 @@ export function TimelineToolbar({
   onSearchChange,
   searchScope = 'timeline',
   searchShortcutId,
-  // Width is container-driven only (flex between a floor and a cap): the search
-  // absorbs the row's free space instead of leaving a dead gap, but neither
-  // focus nor typing can ever move the controls to its right.
-  searchClassName = 'min-w-[11rem] max-w-sm flex-1',
+  // Compact static width (12a single-row layout): the row is shared with the
+  // meta controls, so the search takes a fixed slot; focus and typing can
+  // never move the controls to its right.
+  searchClassName = 'w-44 shrink-0',
   activityFilter,
   onActivityFilterChange,
   events,
@@ -159,31 +160,22 @@ export function TimelineToolbar({
     : stats.warnings + stats.unhealthy
 
   return (
-    // Container query, not a viewport media query: this same toolbar renders
-    // inside the ~800px resource-drawer embed within a wide viewport, so it must
-    // react to its OWN width. `@container/toolbar` establishes the query context;
-    // the layout below flips single-row → stacked purely on available width — no
-    // JS, no resize listener, and nothing that interaction (focus/typing) can move.
+    // ONE control row (Turn 12): search + filter chips left, table controls
+    // right. The former two-row stack was 90% air on its second row. The left
+    // group scrolls within itself when the container is narrower than its
+    // intrinsic width (e.g. the ~800px resource-drawer embed).
+    // @container = inline-size CONTAINMENT (not just a query context): without
+    // it the row's intrinsic min-content width propagates up and widens the
+    // whole timeline pane past the viewport instead of the left group shrinking.
     <div className="@container/toolbar border-b border-theme-border bg-theme-surface/50">
-      {/* Threshold = the single-row natural width (measured ~1822px: filters ~906
-          at the search's min width + meta ~876 + gap + padding) plus slack.
-          Below it, the row can't hold both groups without truncating, so we
-          stack into two tight rows rather than cramp one. */}
-      <div className="flex flex-col gap-2.5 px-4 py-2.5 @[1860px]/toolbar:flex-row @[1860px]/toolbar:items-center">
-        {/* FILTERS group: search first, then activity segments + Kinds + deleted
-            toggle + pinned-only. min-w-0 lets the group shrink without pushing the
-            meta group off-screen; controls keep their intrinsic size. overflow-x-auto
-            is the safety net below the group's intrinsic width (e.g. an ~800px drawer
-            embed): the fixed controls scroll horizontally WITHIN the row instead of
-            clipping or forcing a page-level scrollbar. The Kinds popover is portaled
-            so this scroll container can't clip it. */}
+      <div className="flex items-center gap-3 px-4 py-2">
         {/* -m-1 p-1: the overflow-x-auto clip box would otherwise shave the
             search input's 2px focus ring on the left/top edge; the padding gives
-            the ring room and the negative margin cancels the layout shift. */}
+            the ring room and the negative margin cancels the layout shift. The
+            Kinds popover is portaled so this scroll container can't clip it. */}
         <div className="-m-1 flex min-w-0 items-center gap-2 overflow-x-auto p-1">
-          {/* Search — always open, static width, FIRST. The `/` shortcut still
-              focuses it (SearchBox owns the shortcut) and the clear × stays; there
-              is deliberately no collapse/expand so it can never shift its neighbors. */}
+          {/* Search — always open, compact static width, FIRST. The `/` shortcut
+              still focuses it (SearchBox owns the shortcut) and the clear × stays. */}
           <SearchBox
             value={search}
             onChange={onSearchChange}
@@ -192,55 +184,51 @@ export function TimelineToolbar({
             className={searchClassName}
           />
 
-          {/* Activity filter — two orthogonal axes instead of four sibling
-              pills (which put "Warnings" next to its own superset "K8s Events"
-              and read as unrelated peers): a single-select SOURCE segment
+          {/* Activity filter — two orthogonal axes: a single-select SOURCE pick
               (which stream) plus a PROBLEMS toggle (only the severity slice of
-              the picked source). The "Show" prefix names the group's job. */}
-          <div className="flex shrink-0 items-center gap-1.5">
-            <span className="pr-0.5 text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary" aria-hidden>
-              Show
-            </span>
-            <div role="radiogroup" aria-label="Activity source" className="flex shrink-0 items-center gap-0.5 rounded-lg bg-theme-elevated p-0.5">
-              <SourceSegment
-                active={activitySel.source === 'all'}
-                onClick={() => setSource('all')}
-                label="All"
-                count={stats.total}
-                tooltip="Everything: resource changes and native K8s Events"
-              />
-              <SourceSegment
-                active={activitySel.source === 'changes'}
-                onClick={() => setSource('changes')}
-                label="Changes"
-                count={stats.changes}
-                tooltip="Resource mutations Radar watched: creates, updates, deletes"
-              />
-              <SourceSegment
-                active={activitySel.source === 'k8s_events'}
-                onClick={() => setSource('k8s_events')}
-                label="K8s Events"
-                count={stats.k8sEvents}
-                tooltip="Native Kubernetes Event objects (Normal + Warning)"
-              />
-            </div>
-            <ProblemsToggle
-              active={activitySel.problemsOnly}
-              count={problemsCount}
-              source={activitySel.source}
-              onClick={toggleProblems}
+              the picked source). Zero-count chips dim in place rather than
+              disappearing — position memory without visual weight. */}
+          <div role="radiogroup" aria-label="Activity source" className="flex shrink-0 items-center gap-1.5">
+            <SourceChip
+              active={activitySel.source === 'all'}
+              onClick={() => setSource('all')}
+              label="All"
+              count={stats.total}
+              tooltip="Everything: resource changes and native K8s Events"
+            />
+            <SourceChip
+              active={activitySel.source === 'changes'}
+              onClick={() => setSource('changes')}
+              label="Changes"
+              count={stats.changes}
+              tooltip="Resource mutations Radar watched: creates, updates, deletes"
+            />
+            <SourceChip
+              active={activitySel.source === 'k8s_events'}
+              onClick={() => setSource('k8s_events')}
+              label="K8s Events"
+              count={stats.k8sEvents}
+              tooltip="Native Kubernetes Event objects (Normal + Warning)"
             />
           </div>
+          <ProblemsToggle
+            active={activitySel.problemsOnly}
+            count={problemsCount}
+            source={activitySel.source}
+            onClick={toggleProblems}
+          />
 
-          {/* Kinds filter — its own chip in the View button's visual family, sitting
-              between the activity control and View. Changes which events are visible,
-              so it's a filter, not a view preference. */}
+          {/* Kinds filter — dashed "add a filter" chip beside the type chips. */}
           <KindsMenu
             kindFilter={kindFilter}
             onKindFilterChange={onKindFilterChange}
             kindOptions={kindOptions}
           />
 
+          {/* Deleted is SCOPE, not a type (Turn 12): it filters which resources
+              exist, not which events show — so it sits past a divider, out of
+              the type-chip group. */}
+          <span className="mx-0.5 h-5 w-px shrink-0 bg-theme-border" aria-hidden />
           <DeletedEventsToggle showDeleted={showDeleted} onChange={onShowDeletedChange} />
 
           {/* Pinned-only — appears only once something is pinned; hidden chrome
@@ -265,10 +253,9 @@ export function TimelineToolbar({
           )}
         </div>
 
-        {/* META group: counts, view toggle, View menu, refresh. When stacked it
-            sits on its own row, right-aligned (self-end); single-row it floats to
-            the right (ml-auto). Its position is width-driven, never interaction. */}
-        <div className="flex min-w-0 items-center gap-2 self-end @[1390px]/toolbar:ml-auto @[1390px]/toolbar:self-auto">
+        {/* META group — right-aligned: In view · View (sort + group) · Legend ·
+            view toggle. Its position is width-driven, never interaction. */}
+        <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
           {counts && (
             <span className="min-w-0 truncate text-xs text-theme-text-tertiary">
               {/* "In view" (Turn 7): distinguishes these window counts from the
@@ -280,14 +267,10 @@ export function TimelineToolbar({
             </span>
           )}
 
-          {/* Sort and Group — separate labeled dropdowns showing their current
-              value, so the state is readable without opening anything. */}
-          {viewOptions?.sort && (
-            <OptionMenu label="Sort" options={SORT_OPTIONS} value={viewOptions.sort.value} onChange={viewOptions.sort.onChange} />
-          )}
-          {viewOptions?.grouping && (
-            <OptionMenu label="Group" options={GROUPING_OPTIONS} value={viewOptions.grouping.value} onChange={viewOptions.grouping.onChange} />
-          )}
+          {/* View menu — Sort + Group as labeled sections behind one trigger
+              (12a): the single control row has no room for two dropdowns that
+              each restate their value. */}
+          {viewOptions && <ViewMenu viewOptions={viewOptions} />}
 
           {onRefresh && (
             <Tooltip content="Refresh" position="bottom" wrapperClassName="shrink-0">
@@ -358,28 +341,31 @@ export function TimelineToolbar({
   )
 }
 
-// One cell of the single-select SOURCE segment. The joined-segment idiom (same
-// as the List/Timeline toggle) signals "exactly one of these", unlike the
-// discrete pills it replaced which read as independent toggles.
-function SourceSegment({ active, onClick, label, count, tooltip }: {
+// One pill of the single-select SOURCE pick. A zero-count pill dims in place
+// and goes inert (Turn 12): position memory without visual weight — chips that
+// vanish make the row reflow and the user hunt.
+function SourceChip({ active, onClick, label, count, tooltip }: {
   active: boolean
   onClick: () => void
   label: string
   count?: number
   tooltip?: string
 }) {
+  const dead = !active && count === 0
   return (
-    <Tooltip content={tooltip} disabled={!tooltip} position="bottom" wrapperClassName="shrink-0">
+    <Tooltip content={tooltip} disabled={!tooltip || dead} position="bottom" wrapperClassName="shrink-0">
       <button
         type="button"
         role="radio"
         aria-checked={active}
-        onClick={onClick}
+        onClick={dead ? undefined : onClick}
+        disabled={dead}
         className={clsx(
-          'flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-sm transition-colors',
+          'flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1.5 text-sm transition-colors',
           active
-            ? 'bg-theme-hover font-semibold text-theme-text-primary shadow-theme-sm'
-            : 'text-theme-text-secondary hover:text-theme-text-primary',
+            ? 'border-theme-border-light bg-theme-hover font-semibold text-theme-text-primary'
+            : 'border-theme-border text-theme-text-secondary',
+          dead ? 'cursor-default opacity-45' : !active && 'hover:bg-theme-hover hover:text-theme-text-primary',
         )}
       >
         <span>{label}</span>
@@ -400,21 +386,24 @@ function ProblemsToggle({ active, count, source, onClick }: {
   source: ActivitySource
   onClick: () => void
 }) {
+  const dead = !active && count === 0
   const tooltip =
     source === 'changes' ? 'Only changes that left the resource unhealthy or degraded.'
     : source === 'k8s_events' ? 'Only Warning-type events (e.g. ImagePullBackOff, FailedScheduling).'
     : 'Only problem activity: Warning events and changes that left a resource unhealthy or degraded. Combines with the source pick.'
   return (
-    <Tooltip content={tooltip} position="bottom" wrapperClassName="shrink-0">
+    <Tooltip content={tooltip} position="bottom" disabled={dead} wrapperClassName="shrink-0">
       <button
         type="button"
         aria-pressed={active}
-        onClick={onClick}
+        onClick={dead ? undefined : onClick}
+        disabled={dead}
         className={clsx(
           'flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1.5 text-sm transition-colors',
           active
             ? 'border-amber-400/60 bg-amber-100 font-semibold text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/50 dark:text-amber-300'
-            : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
+            : 'border-theme-border text-theme-text-secondary',
+          dead ? 'cursor-default opacity-45' : !active && 'hover:bg-theme-hover hover:text-theme-text-primary',
         )}
       >
         <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
@@ -478,25 +467,14 @@ function SegmentedRadioGroup<T extends string>({
 }
 
 /**
- * A labeled single-choice dropdown ("Sort: Importance ▾") — one per view option,
- * replacing the combined "View" menu whose label said nothing about the state
- * inside. The button always shows the current value.
+ * The "View" button + popover holding the Sort and Group sections (12a: one
+ * trigger — the single control row has no room for two dropdowns that each
+ * restate their value; the sections inside are clearly labeled).
  */
-export function OptionMenu<T extends string>({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string
-  options: { value: T; label: string; tooltip: string }[]
-  value: T
-  onChange: (value: T) => void
-}) {
+export function ViewMenu({ viewOptions }: { viewOptions: TimelineViewOptions }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   usePopoverDismiss(open, setOpen, rootRef)
-  const current = options.find((o) => o.value === value)
 
   return (
     <div ref={rootRef} className="relative shrink-0">
@@ -506,31 +484,37 @@ export function OptionMenu<T extends string>({
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         className={clsx(
-          'flex items-center gap-1.5 rounded-lg border border-theme-border-light px-2.5 py-1.5 text-sm transition-colors',
+          'flex items-center gap-1.5 rounded-lg border border-theme-border-light px-2.5 py-1.5 text-sm font-medium transition-colors',
           open
             ? 'bg-theme-elevated text-theme-text-primary'
             : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
         )}
       >
-        <span className="text-xs text-theme-text-tertiary">{label}</span>
-        <span className="font-medium">{current?.label ?? value}</span>
+        <SlidersHorizontal className="h-4 w-4" />
+        <span>View</span>
         <ChevronDown className="w-3.5 h-3.5 text-theme-text-tertiary" />
       </button>
 
       {open && (
         <div
           role="menu"
-          aria-label={`${label} options`}
-          className="absolute right-0 top-full z-50 mt-1 min-w-[13rem] rounded-lg border border-theme-border bg-theme-elevated p-1 shadow-theme-lg"
+          aria-label="View options"
+          className="absolute right-0 top-full z-50 mt-1 min-w-[14rem] rounded-lg border border-theme-border bg-theme-elevated p-2 shadow-theme-lg"
         >
+          <span className="block px-2 pb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-theme-text-tertiary">Sort</span>
           <SegmentedRadioGroup
-            label={label}
-            options={options}
-            value={value}
-            onChange={(v) => {
-              onChange(v)
-              setOpen(false)
-            }}
+            label="Lane sort"
+            options={SORT_OPTIONS}
+            value={viewOptions.sort.value}
+            onChange={(v) => { viewOptions.sort.onChange(v); setOpen(false) }}
+          />
+          <span aria-hidden className="my-2 block h-px bg-theme-border" />
+          <span className="block px-2 pb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-theme-text-tertiary">Group</span>
+          <SegmentedRadioGroup
+            label="Lane grouping"
+            options={GROUPING_OPTIONS}
+            value={viewOptions.grouping.value}
+            onChange={(v) => { viewOptions.grouping.onChange(v); setOpen(false) }}
           />
         </div>
       )}
@@ -598,15 +582,17 @@ export function DeletedEventsToggle({
         aria-pressed={!showDeleted}
         aria-label={showDeleted ? 'Hide delete events' : 'Show delete events'}
         onClick={() => onChange(!showDeleted)}
+        // Dashed pill like Kinds: Deleted is SCOPE (which resources exist),
+        // not an event type — the dashed family marks the scope controls.
         className={clsx(
-          'flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-sm transition-colors',
+          'flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1.5 text-sm transition-colors',
           showDeleted
-            ? 'border-theme-border bg-theme-surface text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
+            ? 'border-dashed border-theme-border-light text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
             : 'border-accent bg-accent-muted text-accent-text',
         )}
       >
         <Trash2 className="h-4 w-4" />
-        <span className="text-xs font-medium">{showDeleted ? 'Deleted' : 'Deleted hidden'}</span>
+        <span>{showDeleted ? 'Deleted' : 'Deleted hidden'}</span>
       </button>
     </Tooltip>
   )

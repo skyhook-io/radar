@@ -490,14 +490,36 @@ export function TimelineStrip({
     return { left, visualW }
   })()
 
+  // Window = range is a STATE, not a border (Turn 12): when the band coincides
+  // with the histogram frame its drag affordance vanishes and its label merely
+  // duplicates the edge stamps — so at full range the fill doesn't paint at
+  // all. Edge handles + the "viewing full range" caption carry the affordance;
+  // the band (fill + grip + accent bars) appears only once a handle narrows it.
+  const FULL_RANGE_EPS_PX = 2
+  const fullRange = lens != null && width > 0 &&
+    msToX(lens.fromMs, selection, width) <= FULL_RANGE_EPS_PX &&
+    msToX(lens.toMs, selection, width) >= width - FULL_RANGE_EPS_PX
+
   const totalEvents = totalInQueryRange ?? buckets.reduce((sum, b) => sum + b.total, 0)
+  // Bucket-approximate count inside the window (midpoint rule; edge buckets
+  // straddle, same caveat as every strip count).
+  const inWindowEvents = lens == null ? totalEvents : buckets.reduce((sum, b) => {
+    const mid = (b.startMs + b.endMs) / 2
+    return mid >= lens.fromMs && mid <= lens.toMs ? sum + b.total : sum
+  }, 0)
+  const gapsSuffix = gaps && gaps.length > 0 ? ` · ${gaps.length} gap${gaps.length > 1 ? 's' : ''}` : ''
+  const centerCaption = lens && !fullRange
+    ? `${bandTime(lens.fromMs)} — ${bandTime(lens.toMs)} · ${inWindowEvents.toLocaleString()} of ${totalEvents.toLocaleString()} events${gapsSuffix}`
+    : lens && lensResizable && onLensChange
+      ? `${totalEvents.toLocaleString()} events · viewing full range — drag a handle to narrow${gapsSuffix}`
+      : `${totalEvents.toLocaleString()} events in query range${gapsSuffix}`
 
   return (
-    <div ref={containerRef} className={clsx('relative', className)}>
-      {/* Row 1 — query range + window size + go-live */}
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary">Query range</span>
-        <div ref={pickerRef} className="relative">
+    // ONE row (Turn 12): the range picker + window stepper cap the histogram on
+    // the left, Live docks right, and the edge stamps + state caption sit under
+    // the track — the former label row above the strip was mostly air.
+    <div ref={containerRef} className={clsx('relative flex items-center gap-3', className)}>
+      <div ref={pickerRef} className="relative shrink-0">
           <Tooltip content={absoluteRange} position="bottom" disabled={pickerOpen}>
             <button
               type="button"
@@ -577,35 +599,23 @@ export function TimelineStrip({
           )}
         </div>
 
-        <span className="mx-1 h-5 w-px bg-theme-border" />
-        {windowMs != null && lensResizable && (
-          <>
-            <Tooltip content="The slice shown in the lanes below — always within the query range" position="bottom">
-              <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary">Window</span>
-            </Tooltip>
-            <div className="inline-flex items-center overflow-hidden rounded-md border border-theme-border bg-theme-elevated">
-              <button type="button" aria-label="Narrow visible window" onClick={() => stepWindow(-1)} className="flex h-6 w-6 items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
-                <Minus className="h-3 w-3" />
-              </button>
-              <span className="border-x border-theme-border-light px-2 text-[11.5px] font-semibold tabular-nums text-theme-text-primary">{formatLensDuration(windowMs)}</span>
-              <button type="button" aria-label="Widen visible window" onClick={() => stepWindow(1)} className="flex h-6 w-6 items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
-                <Plus className="h-3 w-3" />
-              </button>
-            </div>
-          </>
-        )}
-
-        {liveState && (
-          <div className="ml-auto">
-            <StripLiveChip state={liveState} onClick={onLiveChipClick} />
+      {windowMs != null && lensResizable && (
+        <Tooltip content="Window — the slice shown in the lanes below, always within the query range" position="bottom" wrapperClassName="shrink-0">
+          <div className="inline-flex items-center overflow-hidden rounded-md border border-theme-border bg-theme-elevated">
+            <button type="button" aria-label="Narrow visible window" onClick={() => stepWindow(-1)} className="flex h-6 w-6 items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
+              <Minus className="h-3 w-3" />
+            </button>
+            <span className="border-x border-theme-border-light px-2 text-[11.5px] font-semibold tabular-nums text-theme-text-primary">{formatLensDuration(windowMs)}</span>
+            <button type="button" aria-label="Widen visible window" onClick={() => stepWindow(1)} className="flex h-6 w-6 items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
+              <Plus className="h-3 w-3" />
+            </button>
           </div>
-        )}
-      </div>
+        </Tooltip>
+      )}
 
-      {/* Row 2 — results histogram with the draggable view-window band. The
-          window's exact times live in the footer center (accent-tinted to read
-          as the band's), not in a floating pill over the track — the inverted
-          pill read as foreign chrome and cost a whole row of whitespace. */}
+      {/* Histogram block — the flexible center: track above, edge stamps +
+          state caption below. */}
+      <div className="min-w-0 flex-1">
       <div className="relative">
         {hoverLabel != null && hoverX != null && (
           <div
@@ -652,12 +662,14 @@ export function TimelineStrip({
             if (endX <= 0 || startX >= width) return null
             const warnFrac = b.total > 0 ? Math.min(1, b.warnings / b.total) : 0
             const warnH = b.warnings > 0 ? Math.max(2, h * warnFrac) : 0
-            // Bars inside the WINDOW (what's shown in the lanes) read bright; bars
-            // in the query but outside the window are muted context — INCLUDING the
-            // warning overlay, or an out-of-window warning bar shows a bright red
-            // cap under the band and reads as "events here" when the window is empty.
+            // Accent fill marks the window only while it's a SUB-range: bars in
+            // the window read bright, bars outside are muted context — including
+            // the warning overlay, or an out-of-window warning bar reads as
+            // "events here" when the window is empty. At full range (the quiet
+            // default state) every bar stays neutral — highlighting everything
+            // highlights nothing.
             const mid = (b.startMs + b.endMs) / 2
-            const inWindow = !lens || (mid >= lens.fromMs && mid <= lens.toMs)
+            const inWindow = lens != null && !fullRange && mid >= lens.fromMs && mid <= lens.toMs
             return (
               <div key={i} className="absolute bottom-1" style={{ left: startX, width: w }}>
                 {/* Out-of-window bars are muted but still legible — the dimmed
@@ -712,63 +724,86 @@ export function TimelineStrip({
           )
         })}
 
-        {/* view-window band (the lens) */}
-        {lensGeom && lens && (
-          <>
-            <div
-              role="slider"
-              tabIndex={0}
-              aria-label="Visible window — drag to pan the lanes"
-              aria-valuemin={selection.fromMs}
-              aria-valuemax={selection.toMs}
-              aria-valuenow={lens.fromMs}
-              onPointerDown={beginLensDrag('move')}
-              className="absolute top-0 z-10 flex cursor-grab touch-none items-center justify-center gap-[2.5px] rounded-sm active:cursor-grabbing focus:outline-none focus:ring-2 focus:ring-accent"
-              style={{
-                left: lensGeom.left,
-                width: lensGeom.visualW,
-                height: TRACK_HEIGHT,
-                background: 'var(--selection-bg)',
-                border: '2px solid var(--accent)',
-                boxShadow: '0 0 0 1px var(--bg-base)',
-              }}
-              data-testid="strip-lens"
-            >
-              {lensResizable && (
-                <span onPointerDown={beginLensDrag('resize-start')} className="absolute left-[-4px] top-1/2 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded" style={{ background: 'var(--accent)' }} aria-hidden />
-              )}
-              {/* three-bar grip */}
-              <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
-              <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
-              <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
-              {lensResizable && (
-                <span onPointerDown={beginLensDrag('resize-end')} className="absolute right-[-4px] top-1/2 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded" style={{ background: 'var(--accent)' }} aria-hidden />
-              )}
-            </div>
-          </>
-        )}
+        {/* view-window band (the lens). At FULL RANGE the fill doesn't paint —
+            only the edge handles show, ready to narrow inward (Turn 12: a band
+            coinciding with the frame is a border, not an affordance). */}
+        {lensGeom && lens && (fullRange ? (
+          lensResizable && onLensChange && (
+            <>
+              <span
+                onPointerDown={beginLensDrag('resize-start')}
+                className="absolute left-0 top-1/2 z-10 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded-r"
+                style={{ background: 'var(--accent)' }}
+                aria-label="Drag to narrow the window from the start"
+                data-testid="strip-edge-handle"
+              />
+              <span
+                onPointerDown={beginLensDrag('resize-end')}
+                className="absolute right-0 top-1/2 z-10 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded-l"
+                style={{ background: 'var(--accent)' }}
+                aria-label="Drag to narrow the window from the end"
+                data-testid="strip-edge-handle"
+              />
+            </>
+          )
+        ) : (
+          <div
+            role="slider"
+            tabIndex={0}
+            aria-label="Visible window — drag to pan the lanes"
+            aria-valuemin={selection.fromMs}
+            aria-valuemax={selection.toMs}
+            aria-valuenow={lens.fromMs}
+            onPointerDown={beginLensDrag('move')}
+            className="absolute top-0 z-10 flex cursor-grab touch-none items-center justify-center gap-[2.5px] rounded-sm active:cursor-grabbing focus:outline-none focus:ring-2 focus:ring-accent"
+            style={{
+              left: lensGeom.left,
+              width: lensGeom.visualW,
+              height: TRACK_HEIGHT,
+              background: 'var(--selection-bg)',
+              border: '2px solid var(--accent)',
+              boxShadow: '0 0 0 1px var(--bg-base)',
+            }}
+            data-testid="strip-lens"
+          >
+            {lensResizable && (
+              <span onPointerDown={beginLensDrag('resize-start')} className="absolute left-[-4px] top-1/2 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded" style={{ background: 'var(--accent)' }} aria-hidden />
+            )}
+            {/* three-bar grip */}
+            <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
+            <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
+            <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
+            {lensResizable && (
+              <span onPointerDown={beginLensDrag('resize-end')} className="absolute right-[-4px] top-1/2 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded" style={{ background: 'var(--accent)' }} aria-hidden />
+            )}
+          </div>
+        ))}
         </div>
       </div>
 
-      {/* Strip footer: the query range's start/end times at the corners (so the
-          strip's own ruler is labeled, distinct from the lanes' axis), the count
-          riding the left corner, and the WINDOW's exact times in the center —
-          accent-tinted to read as the blue band's label. */}
-      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] tabular-nums text-theme-text-tertiary">
-        <span className="whitespace-nowrap">
-          {footerStamp(selection.fromMs)}
-          <span className="ml-2 text-theme-text-tertiary/80">
-            · {totalEvents.toLocaleString()} events in query range
-            {gaps && gaps.length > 0 && ` · ${gaps.length} gap${gaps.length > 1 ? 's' : ''}`}
-          </span>
+      {/* Edge stamps + state caption under the track: query start left, query
+          end (+ "· now" while live) right, and between them either the window's
+          range ("3:41 — 4:11 · 58 of 125 events") or the full-range state line. */}
+      <div className="mt-1 flex items-center justify-between gap-2 text-[10.5px] tabular-nums text-theme-text-tertiary">
+        <span className="whitespace-nowrap">{footerStamp(selection.fromMs)}</span>
+        <span
+          className={clsx('min-w-0 truncate whitespace-nowrap', lens && !fullRange && 'font-medium text-accent-text')}
+          data-testid="strip-window-range"
+        >
+          {centerCaption}
         </span>
-        {lens && (
-          <span className="whitespace-nowrap font-medium text-accent-text" data-testid="strip-window-range">
-            {`${bandTime(lens.fromMs)} — ${bandTime(lens.toMs)}`}
-          </span>
-        )}
-        <span className="whitespace-nowrap">{footerStamp(selection.toMs)}</span>
+        <span className="whitespace-nowrap">
+          {footerStamp(selection.toMs)}
+          {isLiveSelection && <span className="text-theme-text-tertiary/80"> · now</span>}
+        </span>
       </div>
+      </div>
+
+      {liveState && (
+        <div className="shrink-0">
+          <StripLiveChip state={liveState} onClick={onLiveChipClick} />
+        </div>
+      )}
     </div>
   )
 }

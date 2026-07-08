@@ -151,8 +151,8 @@ describe('TimelineStrip render', () => {
         onLensChange={() => {}}
       />,
     )
-    // Window label reflects the 4h window, and the query pill still spans 24h.
-    expect(html).toContain('Window')
+    // The stepper reflects the 4h window (its label rides the tooltip now).
+    expect(html).toContain('aria-label="Narrow visible window"')
     expect(html).toContain('4h')
     expect(html).toContain('strip-histogram')
     expect(html).toContain('strip-lens')
@@ -163,5 +163,52 @@ describe('TimelineStrip render', () => {
       <TimelineStrip buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}} />,
     )
     expect(html).not.toContain('Widen visible window')
+  })
+})
+
+describe('band-as-state (Turn 12): full range paints handles, not a border', () => {
+  const buckets: ScrubberBucket[] = [
+    { startMs: 0, endMs: 12 * HOUR, total: 5, warnings: 0 },
+    { startMs: 12 * HOUR, endMs: 24 * HOUR, total: 8, warnings: 0 },
+  ]
+
+  it('renders edge handles + the full-range caption when window == range', () => {
+    const html = renderToString(
+      <TimelineStrip
+        buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}}
+        lens={query} onLensChange={() => {}}
+      />,
+    )
+    expect(html).not.toContain('strip-lens')
+    expect((html.match(/strip-edge-handle/g) ?? []).length).toBe(2)
+    expect(html).toContain('viewing full range')
+    // Quiet default: no accent-highlighted bars at full range.
+    expect(html).not.toContain('bg-accent/60')
+  })
+
+  it('renders the band + window caption with in-window count when narrowed', () => {
+    const html = renderToString(
+      <TimelineStrip
+        buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}}
+        lens={{ fromMs: 4 * HOUR, toMs: 8 * HOUR }} onLensChange={() => {}}
+      />,
+    )
+    expect(html).toContain('strip-lens')
+    expect(html).not.toContain('strip-edge-handle')
+    // Midpoint rule: the 0–12h bucket's midpoint (6h) is inside the 4–8h
+    // window (5 events); the 12–24h bucket's (18h) is not → 5 of 13.
+    expect(html).toContain('5 of 13 events')
+    // The in-window bucket highlights accent; the other stays neutral.
+    expect(html).toContain('bg-accent/60')
+  })
+
+  it('suffixes the end stamp with "· now" while live', () => {
+    const html = renderToString(
+      <TimelineStrip
+        buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}}
+        liveState={{ kind: 'live', latched: true }}
+      />,
+    )
+    expect(html).toContain('· now')
   })
 })
