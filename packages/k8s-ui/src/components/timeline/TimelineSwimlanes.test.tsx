@@ -191,6 +191,18 @@ describe('clusterBreakdown (pill hover breakdown)', () => {
   })
 })
 
+describe('bulk expand/collapse controls', () => {
+  it('renders Expand all / Collapse all in the resource header', () => {
+    const ev = (name: string): TimelineEvent => ({
+      id: name, timestamp: new Date().toISOString(), source: 'informer',
+      kind: 'Deployment', namespace: 'team-a', name, eventType: 'update',
+    })
+    const html = renderToString(<TimelineSwimlanes events={[ev('web')]} />)
+    expect(html).toContain('aria-label="Expand all resources"')
+    expect(html).toContain('aria-label="Collapse all resources"')
+  })
+})
+
 describe('EventDetailPanel cluster mode (a ×N pill exposes every member)', () => {
   // A mixed cluster: one warning dominates the pill glyph; three benign updates
   // hide behind it. The founder's bug was that only one of these ever showed.

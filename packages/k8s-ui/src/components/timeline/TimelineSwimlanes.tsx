@@ -20,6 +20,8 @@ import {
   RotateCcw,
   Shield,
   Pin,
+  UnfoldVertical,
+  FoldVertical,
 } from 'lucide-react'
 import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -173,10 +175,11 @@ export function mergeLaneOrderById(
   return out
 }
 
-// Fixed 320px resource-label column + 32px (mr-8) right gutter frame the event
-// track; gap bands and the "Now" line map their x into `calc(320px + (100% -
-// 352px) * frac)`.
-const LANE_LABEL_PX = 320
+// Fixed resource-label column + 32px (mr-8) right gutter frame the event track;
+// gap bands and the "Now" line map their x into `calc(label + (100% - inset) *
+// frac)`. MUST match the label cells' w-[360px] — a stale value here draws the
+// Now line and gap bands against a track shifted left of the real one.
+const LANE_LABEL_PX = 360
 const LANE_TRACK_INSET_PX = LANE_LABEL_PX + 32
 
 // A gap band wider than this (px) has room for its "connector offline" caption.
@@ -981,6 +984,24 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
       return next
     })
   }, [expandedLanes])
+
+  // Bulk expand/collapse (RESOURCE header controls): pin an override for every
+  // lane that has children, so the whole tree opens/closes regardless of the
+  // frozen auto defaults. REPLACES prior per-row overrides — "expand all" means
+  // all, not "all except the two rows I once closed".
+  const setAllExpanded = useCallback((expanded: boolean) => {
+    const next = new Map<string, boolean>()
+    const walk = (ls: ResourceLane[]) => {
+      for (const l of ls) {
+        if (l.children?.length) {
+          next.set(l.id, expanded)
+          walk(l.children as ResourceLane[])
+        }
+      }
+    }
+    walk(lanes)
+    setUserLaneOverrides(next)
+  }, [lanes])
 
   // Calculate visible time range. When controlled, the host's window replaces the
   // internal zoom/pan/stableNow math entirely (adapter layer — the uncontrolled
@@ -1796,41 +1817,76 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             <div className="flex">
               <div className="w-[360px] shrink-0 border-r border-theme-border px-3 py-2 flex items-center">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Resource</span>
+                {/* Bulk tree controls — expand/collapse every group at once. */}
+                <span className="ml-auto flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setAllExpanded(true)}
+                    className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
+                    title="Expand all"
+                    aria-label="Expand all resources"
+                  >
+                    <UnfoldVertical className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAllExpanded(false)}
+                    className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
+                    title="Collapse all"
+                    aria-label="Collapse all resources"
+                  >
+                    <FoldVertical className="h-3.5 w-3.5" />
+                  </button>
+                </span>
               </div>
               <div className="flex-1 relative h-8 mr-8">
-                {axisTicks.map((tick) => {
-                  const x = timeToX(tick.time)
-                  // Left cull at 1.5% (not 0): a centered label hugging the
-                  // window start would bleed over the Resource column header.
-                  // The right edge needs no guard — the mr-8 gutter absorbs it.
-                  if (x < 1.5 || x > 100) return null
-                  return (
-                    <div
-                      key={tick.time}
-                      // -translate-x-1/2 centers the tick+label ON the time
-                      // position; positioned by the left edge, every label's
-                      // visual center sat half a label to the right of the
-                      // gridline (and "Now" right of the Now line).
-                      className="absolute top-0 bottom-0 flex -translate-x-1/2 flex-col items-center"
-                      style={{ left: `${x}%` }}
-                    >
-                      <div className="h-2 w-px bg-theme-hover" />
-                      <span className="text-xs text-theme-text-tertiary mt-0.5">{tick.label}</span>
-                    </div>
-                  )
-                })}
-                {/* "Now" marker in header */}
                 {(() => {
-                  const nowX = timeToX(visibleTimeRange.now)
-                  if (nowX < 0 || nowX > 100) return null
+                  // Clamp in live mode: a data load can push `now` past the
+                  // still-latched window for one tick; pinning to the right edge
+                  // keeps the marker steady instead of blinking on every refresh.
+                  const rawNowX = timeToX(visibleTimeRange.now)
+                  const nowX = isLive ? Math.min(rawNowX, 100) : rawNowX
+                  const nowVisible = nowX >= 0 && nowX <= 100
                   return (
-                    <div
-                      className="absolute top-0 bottom-0 z-20 flex -translate-x-1/2 flex-col items-center"
-                      style={{ left: `${nowX}%` }}
-                    >
-                      <div className="h-2 w-0.5 bg-purple-500" />
-                      <span className="text-xs text-purple-500 font-medium mt-0.5">Now</span>
-                    </div>
+                    <>
+                      {axisTicks.map((tick) => {
+                        const x = timeToX(tick.time)
+                        // Left cull at 1.5% (not 0): a centered label hugging the
+                        // window start would bleed over the Resource column
+                        // header. Also cull the tick whose label would collide
+                        // with the "Now" label at the live edge.
+                        if (x < 1.5 || x > 100) return null
+                        if (nowVisible && Math.abs(x - nowX) < 4) return null
+                        return (
+                          <div
+                            key={tick.time}
+                            // -translate-x-1/2 centers the tick+label ON the time
+                            // position; positioned by the left edge, every label's
+                            // visual center sat half a label to the right of the
+                            // gridline (and "Now" right of the Now line).
+                            className="absolute top-0 bottom-0 flex -translate-x-1/2 flex-col items-center"
+                            style={{ left: `${x}%` }}
+                          >
+                            <div className="h-2 w-px bg-theme-hover" />
+                            <span className="mt-0.5 whitespace-nowrap text-xs text-theme-text-tertiary">{tick.label}</span>
+                          </div>
+                        )
+                      })}
+                      {/* "Now" marker in header — the label right-aligns to the
+                          line at the edge so it never spills into the gutter. */}
+                      {nowVisible && (
+                        <div
+                          className={clsx(
+                            'absolute top-0 bottom-0 z-20 flex flex-col',
+                            nowX > 97 ? '-translate-x-full items-end' : '-translate-x-1/2 items-center',
+                          )}
+                          style={{ left: `${nowX}%` }}
+                        >
+                          <div className={clsx('h-2 w-0.5 bg-purple-500', nowX > 97 && 'translate-x-0.5')} />
+                          <span className="mt-0.5 whitespace-nowrap text-xs font-medium text-purple-500">Now</span>
+                        </div>
+                      )}
+                    </>
                   )
                 })()}
                 {/* Extend affordances at the loaded-range edges. Stop propagation so
@@ -1870,14 +1926,18 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             emptyState
           ) : (
           <div className="relative">
-            {/* "Now" line through swimlanes */}
+            {/* "Now" line through swimlanes. In live mode a data load can push
+                `now` past the still-latched window for one tick — clamp to the
+                right edge instead of vanishing, or the line blinks/jumps on
+                every refresh ("the Now line breaks as new data loads"). */}
             {(() => {
-              const nowX = timeToX(visibleTimeRange.now)
+              const rawNowX = timeToX(visibleTimeRange.now)
+              const nowX = isLive ? Math.min(rawNowX, 100) : rawNowX
               if (nowX < 0 || nowX > 100) return null
               return (
                 <div
                   className="absolute top-0 bottom-0 w-0.5 bg-purple-500/50 z-10 pointer-events-none"
-                  style={{ left: `calc(320px + (100% - 320px - 32px) * ${nowX / 100})` }}
+                  style={{ left: `calc(${LANE_LABEL_PX}px + (100% - ${LANE_TRACK_INSET_PX}px) * ${nowX / 100})` }}
                 />
               )
             })()}
