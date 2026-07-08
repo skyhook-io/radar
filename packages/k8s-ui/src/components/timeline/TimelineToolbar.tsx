@@ -117,10 +117,10 @@ export function TimelineToolbar({
   onSearchChange,
   searchScope = 'timeline',
   searchShortcutId,
-  // Static width, never grows/shrinks: the search is the first control in the
-  // filters row and must not move any control when it gains focus or text. A
-  // flexible width let typing shift (or wrap) everything to its right.
-  searchClassName = 'w-56 shrink-0',
+  // Width is container-driven only (flex between a floor and a cap): the search
+  // absorbs the row's free space instead of leaving a dead gap, but neither
+  // focus nor typing can ever move the controls to its right.
+  searchClassName = 'min-w-[11rem] max-w-sm flex-1',
   activityFilter,
   onActivityFilterChange,
   events,
@@ -164,10 +164,11 @@ export function TimelineToolbar({
     // the layout below flips single-row → stacked purely on available width — no
     // JS, no resize listener, and nothing that interaction (focus/typing) can move.
     <div className="@container/toolbar border-b border-theme-border bg-theme-surface/50">
-      {/* Threshold = the single-row natural width (measured ~1362px: filters ~944
-          + meta ~374 + gap + padding) plus ~28px slack. Below it, the row can't
-          hold both groups without truncating, so we stack rather than cramp. */}
-      <div className="flex flex-col gap-3 px-4 py-3 @[1390px]/toolbar:flex-row @[1390px]/toolbar:items-center">
+      {/* Threshold = the single-row natural width (measured ~1822px: filters ~906
+          at the search's min width + meta ~876 + gap + padding) plus slack.
+          Below it, the row can't hold both groups without truncating, so we
+          stack into two tight rows rather than cramp one. */}
+      <div className="flex flex-col gap-2.5 px-4 py-2.5 @[1860px]/toolbar:flex-row @[1860px]/toolbar:items-center">
         {/* FILTERS group: search first, then activity segments + Kinds + deleted
             toggle + pinned-only. min-w-0 lets the group shrink without pushing the
             meta group off-screen; controls keep their intrinsic size. overflow-x-auto
@@ -178,7 +179,7 @@ export function TimelineToolbar({
         {/* -m-1 p-1: the overflow-x-auto clip box would otherwise shave the
             search input's 2px focus ring on the left/top edge; the padding gives
             the ring room and the negative margin cancels the layout shift. */}
-        <div className="-m-1 flex min-w-0 items-center gap-3 overflow-x-auto p-1">
+        <div className="-m-1 flex min-w-0 items-center gap-2 overflow-x-auto p-1">
           {/* Search — always open, static width, FIRST. The `/` shortcut still
               focuses it (SearchBox owns the shortcut) and the clear × stays; there
               is deliberately no collapse/expand so it can never shift its neighbors. */}
@@ -195,7 +196,7 @@ export function TimelineToolbar({
               several can be active at once. Severity dots replace icons. The
               "Show" prefix names the group's job — without it the pills read as
               ambiguous buttons rather than visibility filters. */}
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1">
             <span className="pr-0.5 text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary" aria-hidden>
               Show
             </span>
@@ -274,7 +275,7 @@ export function TimelineToolbar({
         {/* META group: counts, view toggle, View menu, refresh. When stacked it
             sits on its own row, right-aligned (self-end); single-row it floats to
             the right (ml-auto). Its position is width-driven, never interaction. */}
-        <div className="flex min-w-0 items-center gap-3 self-end @[1390px]/toolbar:ml-auto @[1390px]/toolbar:self-auto">
+        <div className="flex min-w-0 items-center gap-2 self-end @[1390px]/toolbar:ml-auto @[1390px]/toolbar:self-auto">
           {counts && (
             <span className="min-w-0 truncate text-xs text-theme-text-tertiary">
               {/* "In view" (Turn 7): distinguishes these window counts from the
@@ -300,6 +301,7 @@ export function TimelineToolbar({
           {freshness ? (
             <FreshnessControl
               mode="auto"
+              compact
               dataUpdatedAt={freshness.dataUpdatedAt}
               isFetching={freshness.isFetching}
               onRefresh={onRefresh}
@@ -327,7 +329,7 @@ export function TimelineToolbar({
               onClick={legend.onToggle}
               aria-pressed={legend.shown}
               className={clsx(
-                'shrink-0 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors',
+                'shrink-0 rounded-lg border px-2.5 py-1.5 text-sm font-medium transition-colors',
                 legend.shown
                   ? 'border-theme-border bg-theme-hover text-theme-text-primary'
                   : 'border-theme-border-light text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
@@ -394,7 +396,7 @@ function SegmentCell({ active, onClick, label, count, dotTone, dotClass, tooltip
         aria-pressed={active}
         onClick={onClick}
         className={clsx(
-          'flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm transition-colors',
+          'flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1.5 text-sm transition-colors',
           active
             ? 'border-theme-border-light bg-theme-hover font-semibold text-theme-text-primary'
             : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
@@ -489,7 +491,7 @@ export function OptionMenu<T extends string>({
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         className={clsx(
-          'flex items-center gap-1.5 rounded-lg border border-theme-border-light px-3 py-1.5 text-sm transition-colors',
+          'flex items-center gap-1.5 rounded-lg border border-theme-border-light px-2.5 py-1.5 text-sm transition-colors',
           open
             ? 'bg-theme-elevated text-theme-text-primary'
             : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
@@ -710,7 +712,7 @@ function KindsMenu({ kindFilter, onKindFilterChange, kindOptions }: KindsMenuPro
         // Dashed pill (7a): reads as "add a filter", distinct from the solid
         // always-on activity pills beside it.
         className={clsx(
-          'flex items-center gap-1.5 rounded-full border border-dashed px-3 py-1.5 text-sm transition-colors',
+          'flex items-center gap-1.5 rounded-full border border-dashed px-2.5 py-1.5 text-sm transition-colors',
           open || activeCount > 0
             ? 'border-theme-border bg-theme-hover text-theme-text-primary'
             : 'border-theme-border-light text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',

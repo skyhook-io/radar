@@ -45,13 +45,14 @@ describe('parseTimeInput — relative / now / absolute', () => {
   })
 })
 
-describe('resizeWindowWithinQuery — window is a sub-range of the query', () => {
-  const window: ScrubberRange = { fromMs: 10 * HOUR, toMs: 14 * HOUR } // 4h, centered at 12h
+describe('resizeWindowWithinQuery — end-anchored sub-range of the query', () => {
+  const window: ScrubberRange = { fromMs: 10 * HOUR, toMs: 14 * HOUR } // 4h ending at 14h
 
-  it('resizes around the center', () => {
-    const next = resizeWindowWithinQuery(window, 2 * HOUR, query)
-    expect(next.toMs - next.fromMs).toBe(2 * HOUR)
-    expect((next.fromMs + next.toMs) / 2).toBe(12 * HOUR)
+  it('resizes keeping the END fixed (widening reaches back, narrowing keeps recent)', () => {
+    const narrower = resizeWindowWithinQuery(window, 2 * HOUR, query)
+    expect(narrower).toEqual({ fromMs: 12 * HOUR, toMs: 14 * HOUR })
+    const wider = resizeWindowWithinQuery(window, 8 * HOUR, query)
+    expect(wider).toEqual({ fromMs: 6 * HOUR, toMs: 14 * HOUR })
   })
 
   it('never grows wider than the query span', () => {
@@ -60,12 +61,10 @@ describe('resizeWindowWithinQuery — window is a sub-range of the query', () =>
     expect(next.toMs).toBe(query.toMs)
   })
 
-  it('keeps the window inside the query when resizing near an edge', () => {
-    const nearEnd: ScrubberRange = { fromMs: 22 * HOUR, toMs: 23 * HOUR }
-    const next = resizeWindowWithinQuery(nearEnd, 4 * HOUR, query)
-    expect(next.toMs).toBeLessThanOrEqual(query.toMs)
-    expect(next.fromMs).toBeGreaterThanOrEqual(query.fromMs)
-    expect(next.toMs - next.fromMs).toBe(4 * HOUR)
+  it('yields the end only when the start hits the query floor', () => {
+    const nearStart: ScrubberRange = { fromMs: HOUR, toMs: 2 * HOUR }
+    const next = resizeWindowWithinQuery(nearStart, 4 * HOUR, query)
+    expect(next).toEqual({ fromMs: 0, toMs: 4 * HOUR })
   })
 })
 

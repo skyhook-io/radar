@@ -162,8 +162,10 @@ describe('TimelineToolbar SSR', () => {
     expect(html).toContain('placeholder="Search... (press /)"')
     expect(html).toContain('value=""')
     expect(html).not.toContain('aria-label="Search"')
-    // Static width class — never grows/shrinks on focus/typing.
-    expect(html).toContain('w-56')
+    // Container-driven width (flex between floor and cap) — focus/typing can
+    // never resize it.
+    expect(html).toContain('min-w-[11rem]')
+    expect(html).toContain('max-w-sm')
   })
 
   it('reflects the controlled search value', () => {

@@ -14,7 +14,7 @@
  *
  * Three controls:
  *   1. Query-range picker — sets the QUERY (the fetched span).
- *   2. Window − / ＋ — grows/shrinks the WINDOW around its center, capped at the
+ *   2. Window − / ＋ — grows/shrinks the WINDOW keeping its end fixed, capped at the
  *      query span.
  *   3. The band — drag to pan the window, drag its edges to resize, or draw a new
  *      one anywhere on the histogram. All clamped inside the query.
@@ -258,22 +258,25 @@ export function nextWindowRungMs(currentMs: number, dir: 1 | -1, capMs: number):
 }
 
 /**
- * Resize the view WINDOW to `targetMs` around its center, kept inside — and never
- * wider than — the QUERY range. The window is always a sub-range of the query.
+ * Resize the view WINDOW to `targetMs` keeping its END fixed, inside — and never
+ * wider than — the QUERY range. End-anchored like the wheel zoom: widening
+ * reaches farther back in time, narrowing focuses on the most recent slice
+ * (a 2–5pm window widened stays ended at 5pm and grows past 2pm). Only when
+ * the start hits the query floor does the end give way.
  */
 export function resizeWindowWithinQuery(
   window: ScrubberRange,
   targetMs: number,
   query: ScrubberRange,
 ): ScrubberRange {
-  const querySpan = query.toMs - query.fromMs
-  const half = Math.min(targetMs, querySpan) / 2
-  const center = (window.fromMs + window.toMs) / 2
-  let fromMs = center - half
-  let toMs = center + half
-  if (fromMs < query.fromMs) { toMs += query.fromMs - fromMs; fromMs = query.fromMs }
-  if (toMs > query.toMs) { fromMs -= toMs - query.toMs; toMs = query.toMs }
-  return { fromMs: Math.max(query.fromMs, fromMs), toMs: Math.min(query.toMs, toMs) }
+  const width = Math.min(targetMs, query.toMs - query.fromMs)
+  let toMs = window.toMs
+  let fromMs = toMs - width
+  if (fromMs < query.fromMs) {
+    fromMs = query.fromMs
+    toMs = Math.min(query.toMs, fromMs + width)
+  }
+  return { fromMs, toMs }
 }
 
 type LensDrag =
