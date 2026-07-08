@@ -32,8 +32,8 @@ describe('TimelineList controlled vs fallback', () => {
 
   it('renders the shared toolbar chips (unified with the swimlane)', () => {
     const html = renderToString(<TimelineList events={EVENTS} isLoading={false} />)
-    expect(html).toContain('Warnings')
-    expect(html).toContain('Unhealthy')
+    expect(html).toContain('K8s Events')
+    expect(html).toContain('Problems')
   })
 })
 
@@ -53,8 +53,8 @@ describe('TimelineSwimlanes controlled vs fallback', () => {
 
   it('renders the same shared toolbar chips as the list', () => {
     const html = renderToString(<TimelineSwimlanes events={EVENTS} />)
-    expect(html).toContain('Warnings')
-    expect(html).toContain('Unhealthy')
+    expect(html).toContain('K8s Events')
+    expect(html).toContain('Problems')
   })
 
   it('renders separate Sort and Group triggers showing their current values', () => {

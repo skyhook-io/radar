@@ -16,14 +16,13 @@ import {
 } from 'lucide-react'
 import { SearchBox } from '../ui/SearchBox'
 import { FreshnessControl } from '../ui/FreshnessControl'
-import { StatusDot, type StatusTone } from '../ui/status-tone'
 import { type ShortcutScope } from '../../hooks/useKeyboardShortcuts'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { pluralize } from '../../utils/pluralize'
 import type { TimelineEvent, TimeRange } from '../../types'
 import type { TimelineGrouping } from '../../utils/resource-hierarchy'
-import type { ActivityFilterKey, ActivityStats } from './timeline-filters'
-import { computeActivityStats } from './timeline-filters'
+import type { ActivityFilterKey, ActivitySource, ActivityStats } from './timeline-filters'
+import { activityKeysToSelection, computeActivityStats, selectionToActivityKeys } from './timeline-filters'
 import type { TimelineSort } from './timeline-lane-sort'
 
 // Swimlane view options, surfaced together in the "View" menu so the toolbar
@@ -149,13 +148,20 @@ export function TimelineToolbar({
   const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(onRefresh ?? (() => {}))
   const showRange = !!rangeOptions && timeRange !== undefined && !!onTimeRangeChange
 
-  const toggleActivityKey = (key: ActivityFilterKey) => {
-    onActivityFilterChange(
-      activityFilter.includes(key)
-        ? activityFilter.filter((k) => k !== key)
-        : [...activityFilter, key],
-    )
-  }
+  // Two-axis read of the carried keys: SOURCE (what stream) × PROBLEMS (only
+  // the severity slice of it). Both writers emit canonical key sets, so the
+  // URL/state stay in the shared ActivityFilterKey vocabulary.
+  const activitySel = activityKeysToSelection(activityFilter)
+  const setSource = (source: ActivitySource) =>
+    onActivityFilterChange(selectionToActivityKeys({ ...activitySel, source }))
+  const toggleProblems = () =>
+    onActivityFilterChange(selectionToActivityKeys({ ...activitySel, problemsOnly: !activitySel.problemsOnly }))
+  // The problems count follows the picked source — it previews exactly what
+  // the toggle would show, not a fixed global number.
+  const problemsCount =
+    activitySel.source === 'changes' ? stats.unhealthy
+    : activitySel.source === 'k8s_events' ? stats.warnings
+    : stats.warnings + stats.unhealthy
 
   return (
     // Container query, not a viewport media query: this same toolbar renders
@@ -191,51 +197,43 @@ export function TimelineToolbar({
             className={searchClassName}
           />
 
-          {/* Activity filter — discrete pill chips (7a), not a fused segment bar.
-              Multi-select: "All" clears; each other pill toggles its key, and
-              several can be active at once. Severity dots replace icons. The
-              "Show" prefix names the group's job — without it the pills read as
-              ambiguous buttons rather than visibility filters. */}
-          <div className="flex shrink-0 items-center gap-1">
+          {/* Activity filter — two orthogonal axes instead of four sibling
+              pills (which put "Warnings" next to its own superset "K8s Events"
+              and read as unrelated peers): a single-select SOURCE segment
+              (which stream) plus a PROBLEMS toggle (only the severity slice of
+              the picked source). The "Show" prefix names the group's job. */}
+          <div className="flex shrink-0 items-center gap-1.5">
             <span className="pr-0.5 text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary" aria-hidden>
               Show
             </span>
-            <SegmentCell
-              active={activityFilter.length === 0}
-              onClick={() => onActivityFilterChange([])}
-              label="All"
-              count={stats.total}
-              tooltip="Show all activity: resource changes and K8s events"
-            />
-            <SegmentCell
-              active={activityFilter.includes('changes')}
-              onClick={() => toggleActivityKey('changes')}
-              label="Changes"
-              count={stats.changes}
-              dotClass="bg-blue-500"
-              tooltip="Resource mutations: creates, updates, deletes detected by watching K8s API"
-            />
-            <SegmentCell
-              active={activityFilter.includes('warnings')}
-              onClick={() => toggleActivityKey('warnings')}
-              label="Warnings"
-              count={stats.warnings}
-              dotClass="bg-amber-500"
-              tooltip="Native Kubernetes Warning Events (e.g., ImagePullBackOff, FailedScheduling)"
-            />
-            <SegmentCell
-              active={activityFilter.includes('unhealthy')}
-              onClick={() => toggleActivityKey('unhealthy')}
-              label="Unhealthy"
-              count={stats.unhealthy}
-              dotClass="bg-rose-500"
-              tooltip="Resource changes with unhealthy or degraded health state"
-            />
-            <SegmentCell
-              active={activityFilter.includes('k8s_events')}
-              onClick={() => toggleActivityKey('k8s_events')}
-              label="K8s Events"
-              tooltip="All native Kubernetes Events (Normal + Warning types)"
+            <div role="radiogroup" aria-label="Activity source" className="flex shrink-0 items-center gap-0.5 rounded-lg bg-theme-elevated p-0.5">
+              <SourceSegment
+                active={activitySel.source === 'all'}
+                onClick={() => setSource('all')}
+                label="All"
+                count={stats.total}
+                tooltip="Everything: resource changes and native K8s Events"
+              />
+              <SourceSegment
+                active={activitySel.source === 'changes'}
+                onClick={() => setSource('changes')}
+                label="Changes"
+                count={stats.changes}
+                tooltip="Resource mutations Radar watched: creates, updates, deletes"
+              />
+              <SourceSegment
+                active={activitySel.source === 'k8s_events'}
+                onClick={() => setSource('k8s_events')}
+                label="K8s Events"
+                count={stats.k8sEvents}
+                tooltip="Native Kubernetes Event objects (Normal + Warning)"
+              />
+            </div>
+            <ProblemsToggle
+              active={activitySel.problemsOnly}
+              count={problemsCount}
+              source={activitySel.source}
+              onClick={toggleProblems}
             />
           </div>
 
@@ -376,21 +374,54 @@ export function TimelineToolbar({
   )
 }
 
-interface SegmentCellProps {
+// One cell of the single-select SOURCE segment. The joined-segment idiom (same
+// as the List/Timeline toggle) signals "exactly one of these", unlike the
+// discrete pills it replaced which read as independent toggles.
+function SourceSegment({ active, onClick, label, count, tooltip }: {
   active: boolean
   onClick: () => void
   label: string
   count?: number
-  dotTone?: StatusTone
-  // Raw dot color class — for tones the HealthLevel palette can't express (e.g.
-  // the info-blue "Changes" dot in the design). Takes precedence over dotTone.
-  dotClass?: string
   tooltip?: string
-}
-
-function SegmentCell({ active, onClick, label, count, dotTone, dotClass, tooltip }: SegmentCellProps) {
+}) {
   return (
     <Tooltip content={tooltip} disabled={!tooltip} position="bottom" wrapperClassName="shrink-0">
+      <button
+        type="button"
+        role="radio"
+        aria-checked={active}
+        onClick={onClick}
+        className={clsx(
+          'flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-sm transition-colors',
+          active
+            ? 'bg-theme-hover font-semibold text-theme-text-primary shadow-theme-sm'
+            : 'text-theme-text-secondary hover:text-theme-text-primary',
+        )}
+      >
+        <span>{label}</span>
+        {count !== undefined && (
+          <span className="tabular-nums text-xs text-theme-text-tertiary">{count.toLocaleString()}</span>
+        )}
+      </button>
+    </Tooltip>
+  )
+}
+
+// The severity slice of the picked source: Warning events, unhealthy/degraded
+// changes, or both under "All". Engaged state is amber — the timeline's
+// problem hue — and the count previews what the toggle would show.
+function ProblemsToggle({ active, count, source, onClick }: {
+  active: boolean
+  count: number
+  source: ActivitySource
+  onClick: () => void
+}) {
+  const tooltip =
+    source === 'changes' ? 'Only changes that left the resource unhealthy or degraded.'
+    : source === 'k8s_events' ? 'Only Warning-type events (e.g. ImagePullBackOff, FailedScheduling).'
+    : 'Only problem activity: Warning events and changes that left a resource unhealthy or degraded. Combines with the source pick.'
+  return (
+    <Tooltip content={tooltip} position="bottom" wrapperClassName="shrink-0">
       <button
         type="button"
         aria-pressed={active}
@@ -398,15 +429,15 @@ function SegmentCell({ active, onClick, label, count, dotTone, dotClass, tooltip
         className={clsx(
           'flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1.5 text-sm transition-colors',
           active
-            ? 'border-theme-border-light bg-theme-hover font-semibold text-theme-text-primary'
+            ? 'border-amber-400/60 bg-amber-100 font-semibold text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/50 dark:text-amber-300'
             : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
         )}
       >
-        {dotClass ? <span className={clsx('inline-block h-1.5 w-1.5 rounded-full', dotClass)} aria-hidden /> : dotTone && <StatusDot tone={dotTone} />}
-        <span>{label}</span>
-        {count !== undefined && (
-          <span className="tabular-nums text-xs text-theme-text-tertiary">{count.toLocaleString()}</span>
-        )}
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+        <span>Problems</span>
+        <span className={clsx('tabular-nums text-xs', active ? 'text-amber-700/80 dark:text-amber-400/80' : 'text-theme-text-tertiary')}>
+          {count.toLocaleString()}
+        </span>
       </button>
     </Tooltip>
   )

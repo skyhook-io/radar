@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import type { TimelineEvent } from '../../types'
-import type { ActivityFilterKey } from './timeline-filters'
-import { countActiveViewOptions } from './timeline-filters'
+import type { ActivityFilterKey, ActivitySelection } from './timeline-filters'
+import { activityKeysToSelection, countActiveViewOptions, selectionToActivityKeys } from './timeline-filters'
 import { TimelineToolbar, OptionMenu, DeletedEventsToggle, PinnedOnlyToggle } from './TimelineToolbar'
 
 function ev(partial: Partial<TimelineEvent>): TimelineEvent {
@@ -39,35 +39,60 @@ const baseProps = {
 }
 
 describe('TimelineToolbar SSR', () => {
-  it('renders the activity segmented control with derived counts', () => {
+  it('renders the two-axis activity control: source radiogroup + Problems toggle', () => {
     const html = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
-    expect(html).toContain('All')
-    expect(html).toContain('Changes')
-    expect(html).toContain('Warnings')
-    expect(html).toContain('Unhealthy')
-    expect(html).toContain('K8s Events')
+    expect(html).toContain('aria-label="Activity source"')
+    expect(html).toContain('>All<')
+    expect(html).toContain('>Changes<')
+    expect(html).toContain('>K8s Events<')
+    expect(html).toContain('>Problems<')
+    // The old severity pills are gone — they were subsets posing as peers.
+    expect(html).not.toContain('>Warnings<')
+    expect(html).not.toContain('>Unhealthy<')
     expect(html).toContain('>3<') // changes count
   })
 
-  it('shows the TOTAL event count on the All cell', () => {
+  it('shows per-source counts and a source-scoped Problems count', () => {
     const html = renderToString(
       <TimelineToolbar
         {...baseProps}
-        stats={{ total: 99, changes: 42, warnings: 7, unhealthy: 5, deleted: 3 }}
+        stats={{ total: 99, changes: 42, k8sEvents: 57, warnings: 7, unhealthy: 5, deleted: 3 }}
       />,
     )
-    // Only the All cell surfaces the grand total.
     expect(html).toContain('>99<')
     expect(html).toContain('>42<')
-    expect(html).toContain('>7<')
+    expect(html).toContain('>57<')
+    // Source = All → Problems previews warnings + unhealthy.
+    expect(html).toContain('>12<')
   })
 
-  it('renders colored dots on the Changes / Warnings / Unhealthy cells', () => {
+  it('scopes the Problems count to the picked source', () => {
+    const stats = { total: 99, changes: 42, k8sEvents: 57, warnings: 7, unhealthy: 5, deleted: 3 }
+    const changesOnly = renderToString(
+      <TimelineToolbar {...baseProps} stats={stats} activityFilter={['changes']} />,
+    )
+    expect(changesOnly).toContain('>5<') // unhealthy slice
+    const eventsOnly = renderToString(
+      <TimelineToolbar {...baseProps} stats={stats} activityFilter={['k8s_events']} />,
+    )
+    expect(eventsOnly).toContain('>7<') // warnings slice
+  })
+
+  it('reads legacy key sets back into the two axes (deep-link compat)', () => {
+    // ['warnings'] = problems within K8s Events: that segment is checked and
+    // the Problems toggle is pressed.
+    const html = renderToString(
+      <TimelineToolbar {...baseProps} events={EVENTS} activityFilter={['warnings']} />,
+    )
+    expect(html).toContain('aria-checked="true"')
+    expect(html).toContain('aria-pressed="true"')
+  })
+
+  it('renders the amber dot on the Problems toggle only (no per-pill colors)', () => {
     const html = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
-    // Changes = info-blue, Warnings = amber, Unhealthy = rose.
-    expect(html).toContain('bg-blue-500')
     expect(html).toContain('bg-amber-500')
-    expect(html).toContain('bg-rose-500')
+    expect(html).not.toContain('bg-blue-500')
+    expect(html).not.toContain('bg-rose-500')
   })
 
   it('renders separate Sort and Group dropdowns (swimlane only), not a combined View menu', () => {
@@ -221,19 +246,14 @@ describe('TimelineToolbar SSR', () => {
     expect(noRefresh).not.toContain('aria-label="Refresh"')
   })
 
-  it('marks multiple activity cells active simultaneously (multi-select)', () => {
+  it('normalizes an unmappable legacy multi-select to the widest reading (All, problems off)', () => {
     const html = renderToString(
       <TimelineToolbar {...baseProps} events={EVENTS} activityFilter={['changes', 'warnings']} />,
     )
-    expect(html).toContain('Changes')
-    expect(html).toContain('Warnings')
-    // Two pills pressed at once (semantic state, not styling class).
-    expect(html.match(/aria-pressed="true"/g)?.length).toBeGreaterThanOrEqual(2)
-
-    // With an empty selection only "All" is pressed (the deleted toggle also
-    // carries aria-pressed, so assert on presence, not an exact count).
-    const allEmpty = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} activityFilter={[]} />)
-    expect(allEmpty).toContain('aria-pressed="true"')
+    // Showing more than a stale link intended beats silently hiding activity —
+    // and the Problems toggle stays unpressed.
+    expect(html).toContain('aria-checked="true"')
+    expect(html).not.toContain('aria-pressed="true"')
   })
 
   // The live/paused chip moved out of the toolbar into the scrubber header — the
@@ -273,6 +293,29 @@ describe('OptionMenu SSR', () => {
     expect(hiding).toContain('aria-pressed="true"')
     expect(hiding).toContain('Show delete events')
     expect(hiding).toContain('Deleted hidden')
+  })
+})
+
+describe('activity two-axis mapping (source × problems ↔ ActivityFilterKey[])', () => {
+  const CANONICAL: [ActivitySelection, ActivityFilterKey[]][] = [
+    [{ source: 'all', problemsOnly: false }, []],
+    [{ source: 'changes', problemsOnly: false }, ['changes']],
+    [{ source: 'k8s_events', problemsOnly: false }, ['k8s_events']],
+    [{ source: 'changes', problemsOnly: true }, ['unhealthy']],
+    [{ source: 'k8s_events', problemsOnly: true }, ['warnings']],
+    [{ source: 'all', problemsOnly: true }, ['warnings', 'unhealthy']],
+  ]
+
+  it('round-trips all six reachable states through the shared key vocabulary', () => {
+    for (const [sel, keys] of CANONICAL) {
+      expect(selectionToActivityKeys(sel)).toEqual(keys)
+      expect(activityKeysToSelection(keys)).toEqual(sel)
+    }
+  })
+
+  it('falls back to All/off for legacy multi-select key sets', () => {
+    expect(activityKeysToSelection(['changes', 'warnings'])).toEqual({ source: 'all', problemsOnly: false })
+    expect(activityKeysToSelection(['changes', 'k8s_events'])).toEqual({ source: 'all', problemsOnly: false })
   })
 })
 

@@ -142,8 +142,8 @@ describe('computeActivityStats', () => {
     expect(stats.deleted).toBe(1)
   })
   it('handles empty/undefined', () => {
-    expect(computeActivityStats([])).toEqual({ total: 0, changes: 0, warnings: 0, unhealthy: 0, deleted: 0 })
-    expect(computeActivityStats(undefined)).toEqual({ total: 0, changes: 0, warnings: 0, unhealthy: 0, deleted: 0 })
+    expect(computeActivityStats([])).toEqual({ total: 0, changes: 0, k8sEvents: 0, warnings: 0, unhealthy: 0, deleted: 0 })
+    expect(computeActivityStats(undefined)).toEqual({ total: 0, changes: 0, k8sEvents: 0, warnings: 0, unhealthy: 0, deleted: 0 })
   })
 })
 

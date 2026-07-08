@@ -38,6 +38,54 @@ export function matchesActivityFilter(event: TimelineEvent, selected: readonly A
   return selected.some((key) => matchesActivityKey(event, key))
 }
 
+// ---------------------------------------------------------------------------
+// Two-axis view over the activity keys. The toolbar presents the filter as a
+// SOURCE pick (Changes = watched resource mutations vs K8s Events = native
+// Event objects) crossed with a PROBLEMS toggle (the severity slice of the
+// picked source). Four sibling pills hid this structure — "Warnings" sat next
+// to its own superset "K8s Events" and read as an unrelated peer.
+//
+// The six reachable states are exactly expressible in the existing key
+// vocabulary, so the URL param, the shared predicate, and both views carry
+// ActivityFilterKey[] unchanged:
+//   All        → []                          All+problems    → warnings+unhealthy
+//   Changes    → [changes]                   Changes+problems → [unhealthy]
+//   K8s Events → [k8s_events]                Events+problems  → [warnings]
+// ---------------------------------------------------------------------------
+
+export type ActivitySource = 'all' | 'changes' | 'k8s_events'
+
+export interface ActivitySelection {
+  source: ActivitySource
+  problemsOnly: boolean
+}
+
+export function selectionToActivityKeys(sel: ActivitySelection): ActivityFilterKey[] {
+  if (sel.problemsOnly) {
+    if (sel.source === 'changes') return ['unhealthy']
+    if (sel.source === 'k8s_events') return ['warnings']
+    return ['warnings', 'unhealthy']
+  }
+  if (sel.source === 'changes') return ['changes']
+  if (sel.source === 'k8s_events') return ['k8s_events']
+  return []
+}
+
+// Inverse of selectionToActivityKeys for the six canonical states. Legacy
+// multi-select key sets (pre-two-axis URLs) fall back to the widest reading —
+// showing more than a stale link intended beats silently hiding activity.
+export function activityKeysToSelection(keys: readonly ActivityFilterKey[]): ActivitySelection {
+  const set = new Set(keys)
+  const eq = (...want: ActivityFilterKey[]) => set.size === want.length && want.every((k) => set.has(k))
+  if (keys.length === 0) return { source: 'all', problemsOnly: false }
+  if (eq('changes')) return { source: 'changes', problemsOnly: false }
+  if (eq('k8s_events')) return { source: 'k8s_events', problemsOnly: false }
+  if (eq('unhealthy')) return { source: 'changes', problemsOnly: true }
+  if (eq('warnings')) return { source: 'k8s_events', problemsOnly: true }
+  if (eq('warnings', 'unhealthy')) return { source: 'all', problemsOnly: true }
+  return { source: 'all', problemsOnly: false }
+}
+
 // Free-text search predicate. Uses the list view's richer field set (adds the
 // diff summary the swimlane previously ignored) so both views match identically.
 export function matchesTimelineSearch(event: TimelineEvent, term: string): boolean {
@@ -76,6 +124,7 @@ export function describeActiveFilters(opts: {
 export interface ActivityStats {
   total: number
   changes: number
+  k8sEvents: number
   warnings: number
   unhealthy: number
   deleted: number
@@ -85,19 +134,21 @@ export interface ActivityStats {
 // show totals regardless of the active filter — identical in both views.
 export function computeActivityStats(events: TimelineEvent[] | undefined): ActivityStats {
   if (!events || events.length === 0) {
-    return { total: 0, changes: 0, warnings: 0, unhealthy: 0, deleted: 0 }
+    return { total: 0, changes: 0, k8sEvents: 0, warnings: 0, unhealthy: 0, deleted: 0 }
   }
   let changes = 0
+  let k8sEvents = 0
   let warnings = 0
   let unhealthy = 0
   let deleted = 0
   for (const e of events) {
     if (isChangeEvent(e)) changes++
+    if (isK8sEvent(e)) k8sEvents++
     if (e.eventType === 'Warning') warnings++
     if (isChangeEvent(e) && (e.healthState === 'unhealthy' || e.healthState === 'degraded')) unhealthy++
     if (e.eventType === 'delete') deleted++
   }
-  return { total: events.length, changes, warnings, unhealthy, deleted }
+  return { total: events.length, changes, k8sEvents, warnings, unhealthy, deleted }
 }
 
 // Count of non-default choices in the View menu — drives the badge on the "View"
