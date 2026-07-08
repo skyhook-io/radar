@@ -148,14 +148,6 @@ describe('TimelineToolbar SSR', () => {
     expect(html).toContain('>Show<')
   })
 
-  it('renders the FreshnessControl instead of the refresh icon when freshness is supplied', () => {
-    const html = renderToString(
-      <TimelineToolbar {...baseProps} events={EVENTS} onRefresh={() => {}} freshness={{ dataUpdatedAt: Date.now(), isFetching: false }} />,
-    )
-    expect(html).toContain('Auto-updating')
-    expect(html).not.toContain('aria-label="Refresh"')
-  })
-
   it('renders the Kinds chip with its own badge = selected kinds, hidden when none', () => {
     const none = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
     // Chip always renders its label; badge hidden with no selection.
@@ -237,7 +229,7 @@ describe('TimelineToolbar SSR', () => {
     expect(list).not.toContain('resources · ')
   })
 
-  it('renders refresh only when onRefresh is given (no freshness)', () => {
+  it('renders refresh only when onRefresh is given', () => {
     const withRefresh = renderToString(
       <TimelineToolbar {...baseProps} events={EVENTS} onRefresh={() => {}} />,
     )

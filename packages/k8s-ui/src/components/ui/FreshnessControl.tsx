@@ -31,10 +31,6 @@ interface FreshnessControlProps {
   // 'auto' streams only: paused (e.g. topology pause toggle). "Auto-updating"
   // while paused would be a lie, so it degrades to "Paused".
   paused?: boolean
-  // Tight-toolbar variant: the "· updated Ns ago" suffix moves into the tooltip
-  // instead of riding the label. Degraded states keep the suffix — staleness
-  // must stay visible exactly when it matters.
-  compact?: boolean
   className?: string
 }
 
@@ -49,7 +45,6 @@ export function FreshnessControl({
   onRefresh,
   connectionState = 'connected',
   paused = false,
-  compact = false,
   className,
 }: FreshnessControlProps) {
   const [, force] = useState(0)
@@ -113,8 +108,7 @@ export function FreshnessControl({
   // label, and alongside a degraded label in either mode — "Reconnecting… ·
   // updated 8m ago" is exactly when staleness matters most. (In connected
   // 'snapshot' mode the age IS the label, so no suffix.)
-  const ageSuffix = age && (mode === 'auto' || degraded) && (!compact || degraded) ? age : null
-  if (compact && age && !ageSuffix && tooltip) tooltip = `${tooltip} — updated ${age}`
+  const ageSuffix = age && (mode === 'auto' || degraded) ? age : null
 
   const labelNode = label ? (
     <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">

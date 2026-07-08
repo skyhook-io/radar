@@ -52,7 +52,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     setQueryParams(params)
   }, [])
 
-  const { data: events = [], isLoading, isError, refetch, dataUpdatedAt, isFetching } = timelineSource.useEvents({
+  const { data: events = [], isLoading, isError, refetch } = timelineSource.useEvents({
     namespaces,
     kinds: queryParams.kinds,
     timeRange: queryParams.timeRange,
@@ -65,11 +65,6 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     toMs: selectionWindow?.toMs,
     sliding,
   })
-
-  // Manual refresh button: re-run the query.
-  const handleRefresh = useCallback(() => {
-    refetch()
-  }, [refetch])
 
   if (isError) {
     return (
@@ -91,8 +86,6 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     <TimelineListUI
       events={events}
       isLoading={isLoading}
-      onRefresh={handleRefresh}
-      freshness={{ dataUpdatedAt, isFetching }}
       onQueryChange={handleQueryChange}
       hasLimitedAccess={hasLimitedAccess}
       namespaces={namespaces}

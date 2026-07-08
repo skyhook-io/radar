@@ -561,10 +561,6 @@ export interface TimelineSwimlanesProps {
   onActivityFilterChange?: (keys: ActivityFilterKey[]) => void
   kindFilter?: string[]
   onKindFilterChange?: (kinds: string[]) => void
-  // Refresh the underlying data. Rendered in the shared toolbar (both views).
-  onRefresh?: () => void
-  // Query freshness for the toolbar's live indicator (see TimelineToolbarProps).
-  freshness?: { dataUpdatedAt?: number; isFetching?: boolean }
   // Server app-membership index (from GET /api/applications). When present and
   // grouping='app', lanes are grouped into app header lanes via the membership
   // cascade. Absent → the legacy label grouping (owner fallback) is used, no crash.
@@ -727,7 +723,7 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
   return breakdown
 }
 
-export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange, pinnedOnly: pinnedOnlyProp, onPinnedOnlyChange, viewWindow, onViewWindowChange, bounds, onExtendRequest, onJumpToNow, nowMs, gaps, onAppClick, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onRefresh, freshness, appIndex, grouping: groupingProp, onGroupingChange, sort: sortProp, onSortChange, pinnedLanes, onTogglePin, selectedEventId, onSelectedEventChange, isLive }: TimelineSwimlanesProps) {
+export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange, pinnedOnly: pinnedOnlyProp, onPinnedOnlyChange, viewWindow, onViewWindowChange, bounds, onExtendRequest, onJumpToNow, nowMs, gaps, onAppClick, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, appIndex, grouping: groupingProp, onGroupingChange, sort: sortProp, onSortChange, pinnedLanes, onTogglePin, selectedEventId, onSelectedEventChange, isLive }: TimelineSwimlanesProps) {
   // Controlled when the host drives the visible window (retained-mode lens).
   const controlled = viewWindow != null
   // Timeline lane labels for GitOps CRs (Application/Kustomization/HelmRelease)
@@ -1764,8 +1760,6 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           countsFiltered={!!searchTerm || activityFilter.length > 0 || kindFilter.length > 0}
           view={viewMode}
           onViewChange={onViewModeChange}
-          onRefresh={onRefresh}
-          freshness={freshness}
           viewOptions={{
             sort: { value: sort, onChange: setSort },
             grouping: { value: grouping, onChange: setGrouping },

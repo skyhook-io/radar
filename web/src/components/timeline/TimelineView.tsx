@@ -519,11 +519,6 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     setFrozenAsOfMs(Date.now())
   }, [scrubberDomain])
 
-  // Manual refresh: re-run the query and, while frozen, re-stamp "as of".
-  const markRefreshed = useCallback(() => {
-    setFrozenAsOfMs((prev) => (prev == null ? prev : Date.now()))
-  }, [])
-
   // Live/paused chip state (any scrubber source). `latched` reflects whether the
   // lens still rides the live edge — an unlatched live chip offers a jump-to-now.
   // (The frozen "new events" count is filled in by the scrubber, which owns the
@@ -603,7 +598,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
 
   // Fetch all activity - zoom controls what's visible in the UI
   // Only fetch heavy 10k dataset for swimlanes; list view fetches its own 500
-  const { data: activity, isLoading, isError, refetch, dataUpdatedAt, isFetching } = timelineSource.useEvents({
+  const { data: activity, isLoading, isError, refetch } = timelineSource.useEvents({
     namespaces,
     timeRange: 'all',
     includeK8sEvents: true,
@@ -655,13 +650,6 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
 
   // Use stable reference for events to prevent unnecessary re-renders
   const events = activity ?? EMPTY_EVENTS
-
-  // Swimlane manual refresh + paused-chip click: re-run the query and re-stamp
-  // "as of" (no-op stamp while live).
-  const handleSwimlaneRefresh = useCallback(() => {
-    refetch()
-    markRefreshed()
-  }, [refetch, markRefreshed])
 
   // The scrubber sits above whichever view is active, sharing one selection
   // across list + swimlane. Retained draws its server-overview strip; local
@@ -794,8 +782,6 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
         onActivityFilterChange={setActivityFilter}
         kindFilter={kindFilter}
         onKindFilterChange={setKindFilter}
-        onRefresh={showScrubber ? handleSwimlaneRefresh : refetch}
-        freshness={{ dataUpdatedAt, isFetching }}
         appIndex={appIndex}
         grouping={grouping}
         onGroupingChange={setGrouping}

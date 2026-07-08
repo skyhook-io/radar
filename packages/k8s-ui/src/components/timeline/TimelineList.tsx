@@ -52,8 +52,6 @@ export interface TimelineListProps {
   events: TimelineEvent[]
   isLoading: boolean
   onRefresh?: () => void
-  // Query freshness for the toolbar's live indicator (see TimelineToolbarProps).
-  freshness?: { dataUpdatedAt?: number; isFetching?: boolean }
   onQueryChange?: (params: { timeRange: TimeRange; kinds: string[] }) => void
   hasLimitedAccess?: boolean
   namespaces?: string[]
@@ -100,7 +98,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, freshness, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs }: TimelineListProps) {
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
@@ -361,7 +359,6 @@ export function TimelineList({ events, isLoading, onRefresh, freshness, onQueryC
         view={currentView}
         onViewChange={onViewChange}
         onRefresh={onRefresh}
-        freshness={freshness}
       />
 
       {/* Timeline content */}

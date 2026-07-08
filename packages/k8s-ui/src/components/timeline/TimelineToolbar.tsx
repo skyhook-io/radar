@@ -15,7 +15,6 @@ import {
   GanttChart,
 } from 'lucide-react'
 import { SearchBox } from '../ui/SearchBox'
-import { FreshnessControl } from '../ui/FreshnessControl'
 import { type ShortcutScope } from '../../hooks/useKeyboardShortcuts'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { pluralize } from '../../utils/pluralize'
@@ -94,12 +93,9 @@ export interface TimelineToolbarProps {
   view?: 'list' | 'swimlane'
   onViewChange?: (view: 'list' | 'swimlane') => void
 
-  // Refresh
+  // Manual refresh button. Radar's own timeline omits it (the view is live);
+  // hosts whose data is a one-shot load can wire it.
   onRefresh?: () => void
-  // Live-view freshness (React Query dataUpdatedAt / isFetching). When supplied,
-  // the refresh icon becomes the canonical FreshnessControl ("Auto-updating",
-  // like topology) with onRefresh as its check-now hatch.
-  freshness?: { dataUpdatedAt?: number; isFetching?: boolean }
 
   // Swimlane-only view options. Each renders as its OWN dropdown control
   // ("Sort: …", "Group: …") — one "View" bucket hid both behind an opaque label.
@@ -140,7 +136,6 @@ export function TimelineToolbar({
   view,
   onViewChange,
   onRefresh,
-  freshness,
   viewOptions,
   legend,
 }: TimelineToolbarProps) {
@@ -294,18 +289,7 @@ export function TimelineToolbar({
             <OptionMenu label="Group" options={GROUPING_OPTIONS} value={viewOptions.grouping.value} onChange={viewOptions.grouping.onChange} />
           )}
 
-          {/* Freshness — the canonical live indicator (like topology) when the
-              host supplies query freshness; a bare refresh button otherwise. */}
-          {freshness ? (
-            <FreshnessControl
-              mode="auto"
-              compact
-              dataUpdatedAt={freshness.dataUpdatedAt}
-              isFetching={freshness.isFetching}
-              onRefresh={onRefresh}
-              className="shrink-0"
-            />
-          ) : onRefresh && (
+          {onRefresh && (
             <Tooltip content="Refresh" position="bottom" wrapperClassName="shrink-0">
               <button
                 type="button"
