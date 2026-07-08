@@ -475,7 +475,10 @@ export function TimelineStrip({
             <ChevronDown className="h-3 w-3 text-theme-text-tertiary" />
           </button>
           {pickerOpen && (
-            <div className="absolute left-0 top-full z-50 mt-2 w-[460px] max-w-[92vw] overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-lg" role="dialog" aria-label="Query range picker">
+            // NO overflow-hidden: the DateTimeField calendars pop past the
+            // dialog's bottom edge and were getting clipped to a header sliver.
+            // The footer rounds its own bottom corners instead.
+            <div className="absolute left-0 top-full z-50 mt-2 w-[460px] max-w-[92vw] rounded-xl border border-theme-border bg-theme-surface shadow-theme-lg" role="dialog" aria-label="Query range picker">
               {presets && presets.length > 0 && (
                 <div className="flex flex-col gap-2 border-b border-theme-border/60 px-4 py-3">
                   <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary">
@@ -527,7 +530,7 @@ export function TimelineStrip({
                   <span className="text-[10px] text-amber-600 dark:text-amber-400">"To" must be after "From".</span>
                 )}
               </div>
-              <div className="flex items-center justify-between gap-2 bg-theme-elevated px-4 py-1.5 text-[10.5px] text-theme-text-tertiary">
+              <div className="flex items-center justify-between gap-2 rounded-b-xl bg-theme-elevated px-4 py-1.5 text-[10.5px] text-theme-text-tertiary">
                 <span>Browser time · {Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
                 <span>Retained since {formatScrubberPill(domain.fromMs)}</span>
               </div>
