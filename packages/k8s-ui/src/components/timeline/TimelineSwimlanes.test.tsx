@@ -3,6 +3,7 @@ import { renderToString } from 'react-dom/server'
 import {
   TimelineSwimlanes,
   EventDetailPanel,
+  chipKindLabel,
   clampWindowToBounds,
   zoomWindowWithinBounds,
   clusterEventsByPosition,
@@ -188,6 +189,25 @@ describe('clusterBreakdown (pill hover breakdown)', () => {
   it('labels a reason-less warning as Warning', () => {
     const { lines } = clusterBreakdown([mkEvent('w1', 'Warning')])
     expect(lines).toEqual([{ label: 'Warning', count: 1 }])
+  })
+})
+
+describe('chipKindLabel — chip abbreviations with full kind on hover', () => {
+  it('maps common long kinds to k8s-idiomatic short forms', () => {
+    expect(chipKindLabel('Application')).toEqual({ label: 'App', abbreviated: true })
+    expect(chipKindLabel('CustomResourceDefinition')).toEqual({ label: 'CRD', abbreviated: true })
+    expect(chipKindLabel('PodDisruptionBudget')).toEqual({ label: 'PDB', abbreviated: true })
+  })
+  it('compresses unknown long CamelCase kinds to their initials', () => {
+    expect(chipKindLabel('VerticalPodAutoscalerCheckpoint')).toEqual({ label: 'VPAC', abbreviated: true })
+  })
+  it('leaves short kinds alone and keeps displayKind short forms', () => {
+    expect(chipKindLabel('Pod')).toEqual({ label: 'Pod', abbreviated: false })
+    expect(chipKindLabel('Deployment')).toEqual({ label: 'Deployment', abbreviated: false })
+    expect(chipKindLabel('HorizontalPodAutoscaler')).toEqual({ label: 'HPA', abbreviated: true })
+  })
+  it('labels kind-less events as Event', () => {
+    expect(chipKindLabel('')).toEqual({ label: 'Event', abbreviated: false })
   })
 })
 

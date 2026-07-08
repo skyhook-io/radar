@@ -2117,19 +2117,49 @@ function LaneWarnChip({ events }: { events: TimelineEvent[] }) {
 // is derived from it so verticals align under the chevron directly above them.
 const TREE_ROOT_RAIL_PX = 22
 const CHILD_INDENT_STEP_PX = 22
-// The kind chip: mono, uppercased via CSS (DOM text stays the display kind, so
-// text queries keep matching). ALL NEUTRAL (Turn 11 color budget): identity is
-// monochrome — kind is the text, not the hue — so color stays reserved for
-// status and selection. No per-kind color map.
-function KindChip({ kind, title }: { kind: string; title?: string }) {
+// Chip-specific short forms layered over displayKind — the chip is a narrow
+// uppercase pill, so long kinds get k8s-idiomatic abbreviations and the full
+// kind rides the tooltip. Only names that stay obvious belong here; everything
+// else falls through to the CamelCase-initials rule below.
+const CHIP_KIND_SHORT: Record<string, string> = {
+  Application: 'App',
+  ApplicationSet: 'AppSet',
+  CustomResourceDefinition: 'CRD',
+  PodDisruptionBudget: 'PDB',
+  ServiceAccount: 'SvcAcct',
+  NetworkPolicy: 'NetPol',
+  CertificateRequest: 'CertReq',
+  VerticalPodAutoscaler: 'VPA',
+}
+
+/** Chip label + whether it abbreviates the raw kind (→ tooltip carries it). */
+export function chipKindLabel(kind: string): { label: string; abbreviated: boolean } {
   // Some cluster components emit events whose involvedObject has NO kind (e.g.
-  // GKE's resource-tracker "BigQueryUpload" events) — label those lanes as plain
-  // events instead of rendering an empty pill.
-  const label = displayKind(kind) || 'Event'
+  // GKE's resource-tracker "BigQueryUpload" events) — label those as plain events.
+  if (!kind) return { label: 'Event', abbreviated: false }
+  const short = CHIP_KIND_SHORT[kind]
+  if (short) return { label: short, abbreviated: true }
+  const display = displayKind(kind)
+  // Still long after displayKind: compress ≥3-word CamelCase kinds to their
+  // initials — the idiom k8s itself uses (CRD, HPA, PVC), so e.g.
+  // VerticalPodAutoscalerCheckpoint → VPAC.
+  if (display.length > 14) {
+    const words = kind.match(/[A-Z][a-z0-9]*/g) ?? []
+    if (words.length >= 3) return { label: words.map((w) => w[0]).join(''), abbreviated: true }
+  }
+  return { label: display, abbreviated: display !== kind }
+}
+
+// The kind chip: mono, uppercased via CSS (DOM text stays the label, so text
+// queries keep matching). ALL NEUTRAL (Turn 11 color budget): identity is
+// monochrome — kind is the text, not the hue. Abbreviated labels always carry
+// the full kind in the tooltip.
+function KindChip({ kind, title }: { kind: string; title?: string }) {
+  const { label, abbreviated } = chipKindLabel(kind)
   return (
     <span
       className="shrink-0 rounded border border-theme-border-light bg-theme-elevated px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-theme-text-secondary"
-      title={title ?? (kind ? undefined : 'Kubernetes event — its source object reports no kind')}
+      title={title ?? (abbreviated ? kind : kind ? undefined : 'Kubernetes event — its source object reports no kind')}
     >
       {label}
     </span>
