@@ -95,7 +95,7 @@
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
     "elkjs": "^0.11.1",
-    "lucide-react": "^1.22.0",
+    "lucide-react": "^1.23.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^6.0.2",
