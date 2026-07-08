@@ -226,6 +226,24 @@ func TestApplyOCIUpgrade_SetsFields(t *testing.T) {
 	}
 }
 
+func TestResolveOCIUpgradeURLWithLister_UsesRegisteredPrefix(t *testing.T) {
+	withOCISources(t, []string{"oci://reg/c"})
+	lister := &fakeTagLister{tags: map[string][]string{"reg/c/app": {"1.4.0", "1.5.0"}}}
+	c := &Client{}
+
+	url, ok := c.resolveOCIUpgradeURLWithLister("app", "1.5.0", lister)
+	if !ok {
+		t.Fatal("expected OCI URL resolution")
+	}
+	if url != "oci://reg/c/app" {
+		t.Fatalf("url = %q, want oci://reg/c/app", url)
+	}
+
+	if _, ok := c.resolveOCIUpgradeURLWithLister("app", "2.0.0", lister); ok {
+		t.Fatal("unexpected resolution for a version not published by the registered source")
+	}
+}
+
 func TestSortVersionsDesc(t *testing.T) {
 	in := []string{"1.2.0", "1.10.0", "1.2.3", "0.9.0", "2.0.0"}
 	got := sortVersionsDesc(in)

@@ -3,12 +3,39 @@ import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { X, Plus, Trash2, Link2, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useHelmOCISources, useAddOCISource, useRemoveOCISource, useClusterInfo } from '../../api/client'
+import type { UpgradeInfo } from '../../types'
 
 interface TrackChartSourceDialogProps {
   open: boolean
   onClose: () => void
   /** Chart name of the release this was opened from, for the example prompt. */
   chartName?: string
+  sourceIssue?: UpgradeInfo['sourceIssue']
+  sourceError?: string
+}
+
+function getSourceIssueCopy(sourceIssue: UpgradeInfo['sourceIssue'], sourceError?: string) {
+  switch (sourceIssue) {
+    case 'repo_index_error':
+      return {
+        title: 'A Helm repo index failed',
+        body: 'Fix, refresh, or remove the broken Helm repo index. If this release came from OCI, add its registry prefix and Radar will check OCI before reporting that repo error.',
+      }
+    case 'ambiguous_repository':
+      return {
+        title: 'Multiple Helm repos match',
+        body: 'Radar will not guess between classic repos. Adding an OCI prefix will not enable direct upgrades while those repos remain ambiguous.',
+      }
+    case 'untracked':
+      return {
+        title: 'Source not tracked',
+        body: 'Helm does not record the install source. Add the OCI prefix that contains this chart.',
+      }
+    default:
+      return sourceError
+        ? { title: 'Source unresolved', body: sourceError }
+        : undefined
+  }
 }
 
 // TrackChartSourceDialog lets the user register an OCI chart-source prefix — the
@@ -16,7 +43,7 @@ interface TrackChartSourceDialogProps {
 // installed from, so for charts published to an OCI registry (and not managed by
 // GitOps) Radar can only track upgrades once the user declares where they live.
 // Registering a registry/org prefix lets Radar probe "<prefix>/<chartName>".
-export function TrackChartSourceDialog({ open, onClose, chartName }: TrackChartSourceDialogProps) {
+export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, sourceError }: TrackChartSourceDialogProps) {
   const [value, setValue] = useState('')
   const { data: sources } = useHelmOCISources()
   const { data: clusterInfo } = useClusterInfo()
@@ -30,6 +57,11 @@ export function TrackChartSourceDialog({ open, onClose, chartName }: TrackChartS
 
   const trimmed = value.trim()
   const invalid = trimmed !== '' && !trimmed.startsWith('oci://')
+  const normalizedInput = trimmed.replace(/\/+$/, '')
+  const normalizedChartName = chartName?.trim().replace(/^\/+|\/+$/g, '') ?? ''
+  const probedRef = normalizedInput && normalizedChartName ? `${normalizedInput}/${normalizedChartName}` : ''
+  const looksLikeFullChartRef = Boolean(normalizedInput && normalizedChartName && normalizedInput.endsWith(`/${normalizedChartName}`))
+  const sourceIssueCopy = getSourceIssueCopy(sourceIssue, sourceError)
 
   const handleAdd = () => {
     if (!trimmed || invalid) return
@@ -58,6 +90,16 @@ export function TrackChartSourceDialog({ open, onClose, chartName }: TrackChartS
       </div>
 
       <div className="p-4 space-y-4">
+        {sourceIssueCopy && (
+          <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-theme-text-secondary" />
+            <div>
+              <p className="font-medium text-theme-text-primary">{sourceIssueCopy.title}</p>
+              <p className="text-theme-text-secondary">{sourceIssueCopy.body}</p>
+            </div>
+          </div>
+        )}
+
         <div>
           <label className="block text-sm font-medium text-theme-text-secondary mb-2">
             OCI registry prefix
@@ -87,8 +129,10 @@ export function TrackChartSourceDialog({ open, onClose, chartName }: TrackChartS
           <p className="mt-1 text-xs text-theme-text-tertiary">
             {invalid
               ? 'Must be an oci:// reference.'
+              : looksLikeFullChartRef
+                ? `This looks like a full chart ref. Radar would probe "${probedRef}"; remove the final "/${normalizedChartName}" if "${normalizedChartName}" is the chart name.`
               : chartName
-                ? `Radar will look for "${chartName}" under this prefix (and any others below).`
+                ? `Radar will probe "${probedRef || `<prefix>/${normalizedChartName}`}".`
                 : 'Radar probes <prefix>/<chartName> for each untracked release.'}
           </p>
         </div>

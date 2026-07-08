@@ -836,9 +836,11 @@ export interface UpgradeInfo {
   // oci:// chart reference an OCI-sourced upgrade lives at (display only).
   chartRef?: string
   error?: string
+  // Machine-readable source-resolution failure, used to make the Helm drawer
+  // explain whether tracking an OCI source can help.
+  sourceIssue?: 'untracked' | 'repo_index_error' | 'ambiguous_repository'
   // True only when the error is a genuinely untracked source (registering a
-  // chart source could fix it) — NOT for repo-side errors like a stale index or
-  // classic ambiguity. Gates the "track source" affordance.
+  // chart source could fix it). Kept for compatibility; prefer sourceIssue.
   untracked?: boolean
 }
 
