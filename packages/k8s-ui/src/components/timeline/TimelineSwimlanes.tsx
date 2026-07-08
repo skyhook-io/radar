@@ -20,8 +20,8 @@ import {
   RotateCcw,
   Shield,
   Pin,
-  UnfoldVertical,
-  FoldVertical,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from 'lucide-react'
 import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -985,7 +985,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     })
   }, [expandedLanes])
 
-  // Bulk expand/collapse (RESOURCE header controls): pin an override for every
+  // Bulk expand/collapse (RESOURCE header toggle): pin an override for every
   // lane that has children, so the whole tree opens/closes regardless of the
   // frozen auto defaults. REPLACES prior per-row overrides — "expand all" means
   // all, not "all except the two rows I once closed".
@@ -1002,6 +1002,36 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     walk(lanes)
     setUserLaneOverrides(next)
   }, [lanes])
+
+  // One morphing toggle (10a): when at least half the groups are open the
+  // button offers collapse, otherwise expand — one control, state-aware.
+  const expandableIds = useMemo(() => {
+    const ids: string[] = []
+    const walk = (ls: ResourceLane[]) => {
+      for (const l of ls) {
+        if (l.children?.length) {
+          ids.push(l.id)
+          walk(l.children as ResourceLane[])
+        }
+      }
+    }
+    walk(lanes)
+    return ids
+  }, [lanes])
+  const mostlyExpanded =
+    expandableIds.length > 0 &&
+    expandableIds.filter((id) => expandedLanes.has(id)).length >= expandableIds.length / 2
+  useRegisterShortcut({
+    id: 'swimlane-toggle-expand-all',
+    keys: 'e',
+    description: 'Expand/collapse all resources',
+    category: 'Timeline',
+    scope: 'timeline',
+    handler: (ev) => {
+      ev.preventDefault()
+      setAllExpanded(!mostlyExpanded)
+    },
+  })
 
   // Calculate visible time range. When controlled, the host's window replaces the
   // internal zoom/pan/stableNow math entirely (adapter layer — the uncontrolled
@@ -1817,25 +1847,20 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             <div className="flex">
               <div className="w-[360px] shrink-0 border-r border-theme-border px-3 py-2 flex items-center">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Resource</span>
-                {/* Bulk tree controls — expand/collapse every group at once. */}
-                <span className="ml-auto flex items-center gap-0.5">
+                {/* Single morphing toggle (10a): ≥half the groups open → offers
+                    collapse-all; otherwise expand-all. Tooltip names the action
+                    and its shortcut. */}
+                <span className="ml-auto">
                   <button
                     type="button"
-                    onClick={() => setAllExpanded(true)}
+                    onClick={() => setAllExpanded(!mostlyExpanded)}
                     className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
-                    title="Expand all"
-                    aria-label="Expand all resources"
+                    title={mostlyExpanded ? 'Collapse all (E)' : 'Expand all (E)'}
+                    aria-label={mostlyExpanded ? 'Collapse all resources' : 'Expand all resources'}
                   >
-                    <UnfoldVertical className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAllExpanded(false)}
-                    className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
-                    title="Collapse all"
-                    aria-label="Collapse all resources"
-                  >
-                    <FoldVertical className="h-3.5 w-3.5" />
+                    {mostlyExpanded
+                      ? <ChevronsDownUp className="h-3.5 w-3.5" />
+                      : <ChevronsUpDown className="h-3.5 w-3.5" />}
                   </button>
                 </span>
               </div>

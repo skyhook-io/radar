@@ -191,15 +191,17 @@ describe('clusterBreakdown (pill hover breakdown)', () => {
   })
 })
 
-describe('bulk expand/collapse controls', () => {
-  it('renders Expand all / Collapse all in the resource header', () => {
+describe('bulk expand/collapse toggle (10a: single morphing control)', () => {
+  it('renders ONE state-aware toggle in the resource header, tooltip naming action + shortcut', () => {
     const ev = (name: string): TimelineEvent => ({
       id: name, timestamp: new Date().toISOString(), source: 'informer',
       kind: 'Deployment', namespace: 'team-a', name, eventType: 'update',
     })
+    // Flat lanes (no groups) → nothing expanded → the toggle offers Expand.
     const html = renderToString(<TimelineSwimlanes events={[ev('web')]} />)
     expect(html).toContain('aria-label="Expand all resources"')
-    expect(html).toContain('aria-label="Collapse all resources"')
+    expect(html).not.toContain('aria-label="Collapse all resources"')
+    expect(html).toContain('title="Expand all (E)"')
   })
 })
 
