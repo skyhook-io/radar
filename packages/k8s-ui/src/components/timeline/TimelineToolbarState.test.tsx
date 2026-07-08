@@ -57,10 +57,12 @@ describe('TimelineSwimlanes controlled vs fallback', () => {
     expect(html).toContain('Unhealthy')
   })
 
-  it('renders the view-options trigger (Sort + Group live in its popover)', () => {
-    // The swimlane wires viewOptions; the popover is closed on the server, so the
-    // trigger is present but the Sort / Group rows are not yet in the DOM.
+  it('renders separate Sort and Group triggers showing their current values', () => {
+    // The swimlane wires viewOptions; each renders as its own labeled dropdown
+    // whose trigger carries the current value (popovers closed on the server).
     const html = renderToString(<TimelineSwimlanes events={EVENTS} />)
-    expect(html).toContain('title="View options"')
+    expect(html).toContain('>Sort<')
+    expect(html).toContain('>Group<')
+    expect(html).not.toContain('>View<')
   })
 })

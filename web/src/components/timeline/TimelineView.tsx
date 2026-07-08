@@ -393,15 +393,28 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // the other way: it sets a scroll target the list jumps to.
   const [listVisibleWindow, setListVisibleWindow] = useState<ScrubberRange | null>(null)
   const [listScrollToMs, setListScrollToMs] = useState<number | undefined>(undefined)
-  // A stale drag target must not override the swimlane-lens carry-over on the
-  // NEXT visit to list view.
-  useEffect(() => {
-    if (viewMode !== 'list') setListScrollToMs(undefined)
-  }, [viewMode])
 
   // Latest selection for clamping the lens without re-creating the setter.
   const selectionRef = useRef(selection)
   selectionRef.current = selection
+
+  // Carry the swimlane window into the list ONCE, at the moment of the switch.
+  // Deriving the scroll target from the live lensWindow instead would re-scroll
+  // the list on every live tick as the latched lens edge advances. Leaving list
+  // view drops both the target and the last reported scrollport window — stale
+  // values would otherwise flash as the band/lens on the next visit.
+  const lensWindowRef = useRef(lensWindow)
+  lensWindowRef.current = lensWindow
+  const showScrubberRef = useRef(showScrubber)
+  showScrubberRef.current = showScrubber
+  useEffect(() => {
+    if (viewMode === 'list') {
+      setListScrollToMs(showScrubberRef.current ? lensWindowRef.current.toMs : undefined)
+    } else {
+      setListScrollToMs(undefined)
+      setListVisibleWindow(null)
+    }
+  }, [viewMode])
 
   // Single writer for the lens: every update (band drag or swimlane pan/zoom) is
   // clamped inside the current selection so the lens can never leave the query.
@@ -532,6 +545,14 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   //     persisted field, so it writes nothing.
   const searchParamsRef = useRef(searchParams)
   searchParamsRef.current = searchParams
+  // setSearchParams gets a new identity whenever the URL changes (react-router
+  // closes over searchParams). If it sat in the write effect's deps, a
+  // back/forward navigation would fire the write in the SAME commit as the
+  // URL->state read — with pre-sync state — pushing the old URL back. State and
+  // URL then swap values every commit until React aborts (#185). Reading the
+  // setter through a ref keeps the write keyed on persisted state alone.
+  const setSearchParamsRef = useRef(setSearchParams)
+  setSearchParamsRef.current = setSearchParams
   const didMountUrlSyncRef = useRef(false)
 
   useEffect(() => {
@@ -577,12 +598,12 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     // legacy `filter` seed) must not leave a back entry.
     const replace = !didMountUrlSyncRef.current || onlyHighFreqDiffer(currentStr, targetStr)
     didMountUrlSyncRef.current = true
-    setSearchParams(target, { replace })
-  }, [viewMode, mode, showDeleted, pinnedOnly, search, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, requiresNamespaceFilter, setSearchParams])
+    setSearchParamsRef.current(target, { replace })
+  }, [viewMode, mode, showDeleted, pinnedOnly, search, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, requiresNamespaceFilter])
 
   // Fetch all activity - zoom controls what's visible in the UI
   // Only fetch heavy 10k dataset for swimlanes; list view fetches its own 500
-  const { data: activity, isLoading, isError, refetch } = timelineSource.useEvents({
+  const { data: activity, isLoading, isError, refetch, dataUpdatedAt, isFetching } = timelineSource.useEvents({
     namespaces,
     timeRange: 'all',
     includeK8sEvents: true,
@@ -667,6 +688,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
             onPresetSelect={handlePresetSelect}
             lens={lens}
             onLensChange={onLensChange}
+            lensResizable={!isListView}
             onDomainChange={setScrubberDomain}
             onGapsChange={setGaps}
             liveState={liveState}
@@ -682,6 +704,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
             onPresetSelect={handlePresetSelect}
             lens={lens}
             onLensChange={onLensChange}
+            lensResizable={!isListView}
             onDomainChange={setScrubberDomain}
             liveState={liveState}
             onLiveChipClick={handleLiveChipClick}
@@ -772,6 +795,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
         kindFilter={kindFilter}
         onKindFilterChange={setKindFilter}
         onRefresh={showScrubber ? handleSwimlaneRefresh : refetch}
+        freshness={{ dataUpdatedAt, isFetching }}
         appIndex={appIndex}
         grouping={grouping}
         onGroupingChange={setGrouping}
@@ -815,10 +839,9 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       selectionWindow={showScrubber ? selection : undefined}
       sliding={showScrubber && mode.kind === 'live'}
       onVisibleWindowChange={setListVisibleWindow}
-      // On switching to list, scroll to the swimlane's window so the view stays
-      // put; afterwards, dragging the strip band retargets the scroll. Only
-      // meaningful with a scrubber (which owns the lens).
-      scrollToMs={listScrollToMs ?? (showScrubber ? lensWindow.toMs : undefined)}
+      // Seeded with the swimlane's window at the switch (see the viewMode
+      // effect); afterwards, dragging the strip band retargets the scroll.
+      scrollToMs={listScrollToMs}
     />
   )
 }

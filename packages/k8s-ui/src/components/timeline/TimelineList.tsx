@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { PaneLoader } from '../ui/PaneLoader'
+import { Tooltip } from '../ui/Tooltip'
 import {
   AlertCircle,
   CheckCircle,
@@ -51,6 +52,8 @@ export interface TimelineListProps {
   events: TimelineEvent[]
   isLoading: boolean
   onRefresh?: () => void
+  // Query freshness for the toolbar's live indicator (see TimelineToolbarProps).
+  freshness?: { dataUpdatedAt?: number; isFetching?: boolean }
   onQueryChange?: (params: { timeRange: TimeRange; kinds: string[] }) => void
   hasLimitedAccess?: boolean
   namespaces?: string[]
@@ -97,7 +100,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, freshness, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs }: TimelineListProps) {
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
@@ -331,8 +334,11 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     if (best) {
       container.scrollTop += best.getBoundingClientRect().top - container.getBoundingClientRect().top
       scrolledToRef.current = scrollToMs
+      // A jump that lands where the list already sits emits no scroll event, so
+      // the host's lens would keep showing the pre-jump window without this.
+      reportVisibleWindow()
     }
-  }, [scrollToMs, groupedActivity])
+  }, [scrollToMs, groupedActivity, reportVisibleWindow])
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -355,6 +361,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
         view={currentView}
         onViewChange={onViewChange}
         onRefresh={onRefresh}
+        freshness={freshness}
       />
 
       {/* Timeline content */}
@@ -554,9 +561,11 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
                 </span>
               )}
               {item.createdAt && (
-                <span className="text-xs text-theme-text-quaternary" title={`Created: ${new Date(item.createdAt).toLocaleString()}`}>
-                  • {formatResourceAge(item.createdAt)} old
-                </span>
+                <Tooltip content={`Created: ${new Date(item.createdAt).toLocaleString()}`}>
+                  <span className="text-xs text-theme-text-quaternary">
+                    • {formatResourceAge(item.createdAt)} old
+                  </span>
+                </Tooltip>
               )}
             </div>
 
@@ -656,11 +665,15 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
           {/* Aggregation visualization: first dot - line - last dot */}
           <div className="flex flex-col items-center shrink-0 mt-0.5">
             {/* First occurrence dot */}
-            <div className={clsx('w-2.5 h-2.5 rounded-full', dotColor)} title={`First: ${firstTime}`} />
+            <Tooltip content={`First: ${firstTime}`}>
+              <div className={clsx('w-2.5 h-2.5 rounded-full', dotColor)} />
+            </Tooltip>
             {/* Connecting line */}
             <div className={clsx('w-0.5 h-4 my-0.5', isWarning ? 'bg-amber-500/40' : 'bg-red-500/40')} />
             {/* Last occurrence dot */}
-            <div className={clsx('w-2.5 h-2.5 rounded-full', dotColor)} title={`Last: ${lastTime}`} />
+            <Tooltip content={`Last: ${lastTime}`}>
+              <div className={clsx('w-2.5 h-2.5 rounded-full', dotColor)} />
+            </Tooltip>
           </div>
 
           {/* Content */}

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { ReactNode, RefObject } from 'react'
+import type { RefObject } from 'react'
 import { clsx } from 'clsx'
 import { MultiSelectPicker } from '../ui/MultiSelectPicker'
 import { Tooltip } from '../ui/Tooltip'
@@ -11,11 +11,11 @@ import {
   Check,
   ChevronDown,
   RefreshCw,
-  SlidersHorizontal,
   List,
   GanttChart,
 } from 'lucide-react'
 import { SearchBox } from '../ui/SearchBox'
+import { FreshnessControl } from '../ui/FreshnessControl'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
 import { type ShortcutScope } from '../../hooks/useKeyboardShortcuts'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
@@ -23,7 +23,7 @@ import { pluralize } from '../../utils/pluralize'
 import type { TimelineEvent, TimeRange } from '../../types'
 import type { TimelineGrouping } from '../../utils/resource-hierarchy'
 import type { ActivityFilterKey, ActivityStats } from './timeline-filters'
-import { computeActivityStats, countActiveViewOptions } from './timeline-filters'
+import { computeActivityStats } from './timeline-filters'
 import type { TimelineSort } from './timeline-lane-sort'
 
 // Swimlane view options, surfaced together in the "View" menu so the toolbar
@@ -97,9 +97,13 @@ export interface TimelineToolbarProps {
 
   // Refresh
   onRefresh?: () => void
+  // Live-view freshness (React Query dataUpdatedAt / isFetching). When supplied,
+  // the refresh icon becomes the canonical FreshnessControl ("Auto-updating",
+  // like topology) with onRefresh as its check-now hatch.
+  freshness?: { dataUpdatedAt?: number; isFetching?: boolean }
 
-  // Swimlane-only view options (Sort, Group by app). When supplied, the View menu
-  // gains Sort and Group sections above the always-present Filters section.
+  // Swimlane-only view options. Each renders as its OWN dropdown control
+  // ("Sort: …", "Group: …") — one "View" bucket hid both behind an opaque label.
   viewOptions?: TimelineViewOptions
 
   // Legend toggle (swimlane-only). When supplied, a "Legend" button renders in the
@@ -137,6 +141,7 @@ export function TimelineToolbar({
   view,
   onViewChange,
   onRefresh,
+  freshness,
   viewOptions,
   legend,
 }: TimelineToolbarProps) {
@@ -187,8 +192,13 @@ export function TimelineToolbar({
 
           {/* Activity filter — discrete pill chips (7a), not a fused segment bar.
               Multi-select: "All" clears; each other pill toggles its key, and
-              several can be active at once. Severity dots replace icons. */}
+              several can be active at once. Severity dots replace icons. The
+              "Show" prefix names the group's job — without it the pills read as
+              ambiguous buttons rather than visibility filters. */}
           <div className="flex shrink-0 items-center gap-1.5">
+            <span className="pr-0.5 text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary" aria-hidden>
+              Show
+            </span>
             <SegmentCell
               active={activityFilter.length === 0}
               onClick={() => onActivityFilterChange([])}
@@ -276,23 +286,37 @@ export function TimelineToolbar({
             </span>
           )}
 
-          {/* View menu — Sort/Group only. Filters (Kinds, Deletions) live in the
-              toolbar with the other filters. */}
-          <ViewMenu
-            viewOptions={viewOptions}
-          />
+          {/* Sort and Group — separate labeled dropdowns showing their current
+              value, so the state is readable without opening anything. */}
+          {viewOptions?.sort && (
+            <OptionMenu label="Sort" options={SORT_OPTIONS} value={viewOptions.sort.value} onChange={viewOptions.sort.onChange} />
+          )}
+          {viewOptions?.grouping && (
+            <OptionMenu label="Group" options={GROUPING_OPTIONS} value={viewOptions.grouping.value} onChange={viewOptions.grouping.onChange} />
+          )}
 
-          {/* Refresh */}
-          {onRefresh && (
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={isRefreshAnimating}
-              className="shrink-0 p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg disabled:opacity-50"
-              title="Refresh"
-            >
-              <RefreshCw className={clsx('w-4 h-4', isRefreshAnimating && 'animate-spin')} />
-            </button>
+          {/* Freshness — the canonical live indicator (like topology) when the
+              host supplies query freshness; a bare refresh button otherwise. */}
+          {freshness ? (
+            <FreshnessControl
+              mode="auto"
+              dataUpdatedAt={freshness.dataUpdatedAt}
+              isFetching={freshness.isFetching}
+              onRefresh={onRefresh}
+              className="shrink-0"
+            />
+          ) : onRefresh && (
+            <Tooltip content="Refresh" position="bottom" wrapperClassName="shrink-0">
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={isRefreshAnimating}
+                aria-label="Refresh"
+                className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg disabled:opacity-50"
+              >
+                <RefreshCw className={clsx('w-4 h-4', isRefreshAnimating && 'animate-spin')} />
+              </button>
+            </Tooltip>
           )}
 
           {/* Legend toggle — the marker/health key is on-demand (6a), not a
@@ -308,7 +332,6 @@ export function TimelineToolbar({
                   ? 'border-theme-border bg-theme-hover text-theme-text-primary'
                   : 'border-theme-border-light text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
               )}
-              title={legend.shown ? 'Hide legend' : 'Show legend'}
             >
               Legend
             </button>
@@ -365,35 +388,28 @@ interface SegmentCellProps {
 
 function SegmentCell({ active, onClick, label, count, dotTone, dotClass, tooltip }: SegmentCellProps) {
   return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      title={tooltip}
-      className={clsx(
-        'flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm transition-colors',
-        active
-          ? 'border-theme-border-light bg-theme-hover font-semibold text-theme-text-primary'
-          : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
-      )}
-    >
-      {dotClass ? <span className={clsx('inline-block h-1.5 w-1.5 rounded-full', dotClass)} aria-hidden /> : dotTone && <StatusDot tone={dotTone} />}
-      <span>{label}</span>
-      {count !== undefined && (
-        <span className="tabular-nums text-xs text-theme-text-tertiary">{count.toLocaleString()}</span>
-      )}
-    </button>
+    <Tooltip content={tooltip} disabled={!tooltip} position="bottom" wrapperClassName="shrink-0">
+      <button
+        type="button"
+        aria-pressed={active}
+        onClick={onClick}
+        className={clsx(
+          'flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm transition-colors',
+          active
+            ? 'border-theme-border-light bg-theme-hover font-semibold text-theme-text-primary'
+            : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
+        )}
+      >
+        {dotClass ? <span className={clsx('inline-block h-1.5 w-1.5 rounded-full', dotClass)} aria-hidden /> : dotTone && <StatusDot tone={dotTone} />}
+        <span>{label}</span>
+        {count !== undefined && (
+          <span className="tabular-nums text-xs text-theme-text-tertiary">{count.toLocaleString()}</span>
+        )}
+      </button>
+    </Tooltip>
   )
 }
 
-
-function SectionLabel({ children }: { children: ReactNode }) {
-  return (
-    <span className="px-1 text-[10px] font-bold uppercase tracking-[0.09em] text-theme-text-tertiary">
-      {children}
-    </span>
-  )
-}
 
 interface KindsMenuProps {
   kindFilter: string[]
@@ -422,67 +438,85 @@ function SegmentedRadioGroup<T extends string>({
       {options.map((opt) => {
         const active = value === opt.value
         return (
-          <button
-            key={opt.value}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onChange(opt.value)}
-            title={opt.tooltip}
-            className={clsx(
-              'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors',
-              'hover:bg-theme-hover focus:bg-theme-hover focus:outline-none',
-              active ? 'text-theme-text-primary font-medium' : 'text-theme-text-secondary',
-            )}
-          >
-            <Check className={clsx('h-3.5 w-3.5 shrink-0 text-skyhook-500', active ? 'opacity-100' : 'opacity-0')} />
-            <span className="truncate">{opt.label}</span>
-          </button>
+          <Tooltip key={opt.value} content={opt.tooltip} position="left" wrapperClassName="w-full">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChange(opt.value)}
+              className={clsx(
+                'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors',
+                'hover:bg-theme-hover focus:bg-theme-hover focus:outline-none',
+                active ? 'text-theme-text-primary font-medium' : 'text-theme-text-secondary',
+              )}
+            >
+              <Check className={clsx('h-3.5 w-3.5 shrink-0 text-skyhook-500', active ? 'opacity-100' : 'opacity-0')} />
+              <span className="truncate">{opt.label}</span>
+            </button>
+          </Tooltip>
         )
       })}
     </div>
   )
 }
 
-interface ViewMenuContentProps {
-  viewOptions?: TimelineViewOptions
-}
-
 /**
- * The View menu's content: the Sort and Group sections (swimlane only; list view
- * passes neither, so the menu isn't rendered at all). Pure so it's SSR-testable.
- * Kinds and Show-deleted are their own toolbar chips, not part of this panel.
+ * A labeled single-choice dropdown ("Sort: Importance ▾") — one per view option,
+ * replacing the combined "View" menu whose label said nothing about the state
+ * inside. The button always shows the current value.
  */
-export function ViewOptionsPanel({ viewOptions }: ViewMenuContentProps) {
-  const hasSort = !!viewOptions?.sort
-  const hasGroup = !!viewOptions?.grouping
+export function OptionMenu<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string
+  options: { value: T; label: string; tooltip: string }[]
+  value: T
+  onChange: (value: T) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  usePopoverDismiss(open, setOpen, rootRef)
+  const current = options.find((o) => o.value === value)
 
   return (
-    <div className="flex flex-col gap-3 p-1">
-      {hasSort && (
-        <div className="flex flex-col gap-1">
-          <SectionLabel>Sort</SectionLabel>
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className={clsx(
+          'flex items-center gap-1.5 rounded-lg border border-theme-border-light px-3 py-1.5 text-sm transition-colors',
+          open
+            ? 'bg-theme-elevated text-theme-text-primary'
+            : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
+        )}
+      >
+        <span className="text-xs text-theme-text-tertiary">{label}</span>
+        <span className="font-medium">{current?.label ?? value}</span>
+        <ChevronDown className="w-3.5 h-3.5 text-theme-text-tertiary" />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          aria-label={`${label} options`}
+          className="absolute right-0 top-full z-50 mt-1 min-w-[13rem] rounded-lg border border-theme-border bg-theme-elevated p-1 shadow-theme-lg"
+        >
           <SegmentedRadioGroup
-            label="Lane sort"
-            options={SORT_OPTIONS}
-            value={viewOptions!.sort.value}
-            onChange={viewOptions!.sort.onChange}
+            label={label}
+            options={options}
+            value={value}
+            onChange={(v) => {
+              onChange(v)
+              setOpen(false)
+            }}
           />
         </div>
       )}
-
-      {hasGroup && (
-        <div className={clsx('flex flex-col gap-1', hasSort && 'border-t border-theme-border pt-2')}>
-          <SectionLabel>Group</SectionLabel>
-          <SegmentedRadioGroup
-            label="Lane grouping"
-            options={GROUPING_OPTIONS}
-            value={viewOptions!.grouping.value}
-            onChange={viewOptions!.grouping.onChange}
-          />
-        </div>
-      )}
-
     </div>
   )
 }
@@ -555,7 +589,7 @@ export function DeletedEventsToggle({
         )}
       >
         <Trash2 className="h-4 w-4" />
-        {!showDeleted && <span className="text-xs font-medium">hidden</span>}
+        <span className="text-xs font-medium">{showDeleted ? 'Deleted' : 'Deleted hidden'}</span>
       </button>
     </Tooltip>
   )
@@ -583,66 +617,6 @@ function usePopoverDismiss(
       window.removeEventListener('keydown', onKey)
     }
   }, [open, setOpen, rootRef])
-}
-
-/**
- * The "View" button + popover holding the Sort and Group sections. Reuses the
- * outside-click + Escape pattern; the button carries a badge counting non-default
- * view choices. Renders nothing when the host wires neither Sort nor Group (list
- * view), so the button never opens an empty popover. Kinds and Show-deleted are
- * separate toolbar chips.
- */
-function ViewMenu(props: ViewMenuContentProps) {
-  const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement | null>(null)
-  // List view passes no sort/grouping, so the panel would be empty — don't render
-  // a View button that opens a blank popover.
-  const hasContent = !!props.viewOptions?.sort || !!props.viewOptions?.grouping
-  const activeCount = countActiveViewOptions({
-    grouping: props.viewOptions?.grouping.value,
-    sort: props.viewOptions?.sort.value,
-  })
-
-  usePopoverDismiss(open, setOpen, rootRef)
-
-  if (!hasContent) return null
-
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        title="View options"
-        className={clsx(
-          'flex items-center gap-1.5 rounded-lg border border-theme-border-light px-3 py-1.5 text-sm transition-colors',
-          open
-            ? 'bg-theme-elevated text-theme-text-primary'
-            : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
-        )}
-      >
-        <SlidersHorizontal className="w-4 h-4" />
-        <span>View</span>
-        {activeCount > 0 && (
-          <span className="inline-flex min-w-[1.25rem] justify-center rounded-full bg-accent px-1.5 text-xs font-medium text-white tabular-nums">
-            {activeCount}
-          </span>
-        )}
-        <ChevronDown className="w-3.5 h-3.5 text-theme-text-tertiary" />
-      </button>
-
-      {open && (
-        <div
-          role="menu"
-          aria-label="View options"
-          className="absolute right-0 top-full z-50 mt-1 min-w-[15rem] rounded-lg border border-theme-border bg-theme-elevated p-1 shadow-theme-lg"
-        >
-          <ViewOptionsPanel {...props} />
-        </div>
-      )}
-    </div>
-  )
 }
 
 /**
@@ -733,7 +707,6 @@ function KindsMenu({ kindFilter, onKindFilterChange, kindOptions }: KindsMenuPro
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        title="Filter by kind"
         // Dashed pill (7a): reads as "add a filter", distinct from the solid
         // always-on activity pills beside it.
         className={clsx(

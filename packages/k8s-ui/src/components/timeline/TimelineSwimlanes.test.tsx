@@ -65,20 +65,20 @@ describe('clampWindowToBounds (view window ⊂ bounds)', () => {
   })
 })
 
-describe('zoomWindowWithinBounds (preset stepping, center-anchored)', () => {
-  it('zooms in to the next-smaller preset, keeping the center fixed', () => {
-    // 2h window → zoom in → 1h window, centered on the same midpoint.
+describe('zoomWindowWithinBounds (preset stepping, end-anchored)', () => {
+  it('zooms in to the next-smaller preset, keeping the END fixed (focus on recent)', () => {
+    // 2h window → zoom in → 1h window ending at the same moment.
     const win: TimeWindow = { fromMs: NOW - 3 * HOUR, toMs: NOW - HOUR }
-    const center = (win.fromMs + win.toMs) / 2
     const next = zoomWindowWithinBounds(win, 'in', BOUNDS)
     expect(next.toMs - next.fromMs).toBe(HOUR)
-    expect((next.fromMs + next.toMs) / 2).toBe(center)
+    expect(next.toMs).toBe(win.toMs)
   })
 
-  it('zooms out to the next-larger preset', () => {
+  it('zooms out to the next-larger preset, reaching farther back (END fixed)', () => {
     const win: TimeWindow = { fromMs: NOW - 90 * 60 * 1000, toMs: NOW - 30 * 60 * 1000 } // 1h wide
     const next = zoomWindowWithinBounds(win, 'out', BOUNDS)
     expect(next.toMs - next.fromMs).toBe(2 * HOUR)
+    expect(next.toMs).toBe(win.toMs)
   })
 
   it('caps zoom-out at the bounds width', () => {
@@ -221,7 +221,8 @@ describe('bulk expand/collapse toggle (10a: single morphing control)', () => {
     const html = renderToString(<TimelineSwimlanes events={[ev('web')]} />)
     expect(html).toContain('aria-label="Expand all resources"')
     expect(html).not.toContain('aria-label="Collapse all resources"')
-    expect(html).toContain('title="Expand all (E)"')
+    // The "(E)" shortcut hint rides the custom Tooltip (not SSR'd) — the
+    // aria-labels above are the state-aware affordance.
   })
 })
 
@@ -307,8 +308,8 @@ describe('EventDetailPanel cluster mode (a ×N pill exposes every member)', () =
 describe('toolbar lens controls (controlled vs uncontrolled)', () => {
   it('shows zoom buttons and the window label in uncontrolled mode', () => {
     const html = renderToString(<TimelineSwimlanes events={[]} />)
-    expect(html).toContain('Zoom in (Ctrl+scroll)')
-    expect(html).toContain('Zoom out (Ctrl+scroll)')
+    expect(html).toContain('aria-label="Zoom in"')
+    expect(html).toContain('aria-label="Zoom out"')
     expect(html).toContain(' window')
   })
 
@@ -321,8 +322,8 @@ describe('toolbar lens controls (controlled vs uncontrolled)', () => {
         onViewWindowChange={() => {}}
       />,
     )
-    expect(html).not.toContain('Zoom in (Ctrl+scroll)')
-    expect(html).not.toContain('Zoom out (Ctrl+scroll)')
+    expect(html).not.toContain('aria-label="Zoom in"')
+    expect(html).not.toContain('aria-label="Zoom out"')
     expect(html).not.toContain(' window')
   })
 
@@ -490,8 +491,8 @@ describe('pinned resource lanes', () => {
     expect(html).toContain('Pinned')
     expect(html).toContain('billing')
     // The pinned group's toggle shows the app-specific filled Unpin affordance.
-    expect(html).toContain('aria-label="Unpin"')
-    expect(html).toContain('Unpin app')
+    expect(html).toContain('aria-label="Unpin app"')
+    expect(html).toContain('fill-current')
   })
 
   it('synthesizes a quiet pinned header when the pinned app is absent (owner grouping)', () => {

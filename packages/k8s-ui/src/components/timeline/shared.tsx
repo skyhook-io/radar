@@ -7,6 +7,7 @@
 
 import { clsx } from 'clsx'
 import { ZoomIn, ZoomOut } from 'lucide-react'
+import { Tooltip } from '../ui/Tooltip'
 import type { TimelineEvent } from '../../types/core'
 import { isChangeEvent, isDeploymentLikeWorkloadKind, isHistoricalEvent } from '../../types/core'
 import { isProblematicEvent, type ResourceLane } from '../../utils/resource-hierarchy'
@@ -160,23 +161,27 @@ interface ZoomControlsProps {
 export function ZoomControls({ zoom, onZoomIn, onZoomOut, canZoomIn, canZoomOut }: ZoomControlsProps) {
   return (
     <div className="flex items-center gap-1 text-theme-text-tertiary">
-      <button
-        onClick={onZoomOut}
-        disabled={!canZoomOut}
-        className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
-        title="Zoom out (show more time)"
-      >
-        <ZoomOut className="w-4 h-4" />
-      </button>
+      <Tooltip content="Zoom out (show more time)">
+        <button
+          onClick={onZoomOut}
+          disabled={!canZoomOut}
+          aria-label="Zoom out"
+          className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
+        >
+          <ZoomOut className="w-4 h-4" />
+        </button>
+      </Tooltip>
       <span className="text-xs min-w-[3ch] text-center">{formatZoomLevel(zoom)}</span>
-      <button
-        onClick={onZoomIn}
-        disabled={!canZoomIn}
-        className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
-        title="Zoom in (show less time)"
-      >
-        <ZoomIn className="w-4 h-4" />
-      </button>
+      <Tooltip content="Zoom in (show less time)">
+        <button
+          onClick={onZoomIn}
+          disabled={!canZoomIn}
+          aria-label="Zoom in"
+          className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
+        >
+          <ZoomIn className="w-4 h-4" />
+        </button>
+      </Tooltip>
     </div>
   )
 }

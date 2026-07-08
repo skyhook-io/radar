@@ -43,6 +43,7 @@ import { DiffViewer } from './DiffViewer'
 import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
 import { MiddleEllipsis } from '../ui/MiddleEllipsis'
 import { Tooltip } from '../ui/Tooltip'
+import { ResourceRefBadge } from '../ui/drawer-components'
 import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, isProblematicEvent, laneTrackEvents, isChildVisibleInWindow, collidingLaneKeys, laneCollisionKey, type ResourceLane as BaseResourceLane, type TimelineGrouping, type PinnedLaneRef } from '../../utils/resource-hierarchy'
 import { groupQualifiesLaneId } from '../../utils/navigation'
 import type { AppMembershipIndex } from '../../utils/applications'
@@ -197,10 +198,11 @@ export type TimeWindow = ScrubberRange
 export const clampWindowToBounds = clampLensToSelection
 
 /**
- * Step a view window to the next/previous zoom preset, keeping its center fixed,
- * then clamp into bounds. Center-anchored (not end-anchored like the uncontrolled
- * path) so zooming a lens sitting mid-selection stays put instead of sliding to
- * the latest edge.
+ * Step a view window to the next/previous zoom preset, keeping its END fixed,
+ * then clamp into bounds. End-anchored: zooming out reaches farther back in
+ * time, zooming in focuses on the most recent slice — the natural reading of
+ * a timeline whose right edge is "now". (Center anchoring made both directions
+ * eat into the recent edge, which read as the view drifting.)
  */
 export function zoomWindowWithinBounds(
   win: TimeWindow,
@@ -214,8 +216,7 @@ export function zoomWindowWithinBounds(
     ? Math.max(0, cur - 1)
     : Math.min(ZOOM_LEVELS.length - 1, cur + 1)
   const nextWidthMs = ZOOM_LEVELS[nextIdx] * HOUR_MS
-  const center = (win.fromMs + win.toMs) / 2
-  const next = { fromMs: center - nextWidthMs / 2, toMs: center + nextWidthMs / 2 }
+  const next = { fromMs: win.toMs - nextWidthMs, toMs: win.toMs }
   return bounds ? clampWindowToBounds(next, bounds) : next
 }
 
@@ -562,6 +563,8 @@ export interface TimelineSwimlanesProps {
   onKindFilterChange?: (kinds: string[]) => void
   // Refresh the underlying data. Rendered in the shared toolbar (both views).
   onRefresh?: () => void
+  // Query freshness for the toolbar's live indicator (see TimelineToolbarProps).
+  freshness?: { dataUpdatedAt?: number; isFetching?: boolean }
   // Server app-membership index (from GET /api/applications). When present and
   // grouping='app', lanes are grouped into app header lanes via the membership
   // cascade. Absent → the legacy label grouping (owner fallback) is used, no crash.
@@ -724,7 +727,7 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
   return breakdown
 }
 
-export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange, pinnedOnly: pinnedOnlyProp, onPinnedOnlyChange, viewWindow, onViewWindowChange, bounds, onExtendRequest, onJumpToNow, nowMs, gaps, onAppClick, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onRefresh, appIndex, grouping: groupingProp, onGroupingChange, sort: sortProp, onSortChange, pinnedLanes, onTogglePin, selectedEventId, onSelectedEventChange, isLive }: TimelineSwimlanesProps) {
+export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange, pinnedOnly: pinnedOnlyProp, onPinnedOnlyChange, viewWindow, onViewWindowChange, bounds, onExtendRequest, onJumpToNow, nowMs, gaps, onAppClick, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onRefresh, freshness, appIndex, grouping: groupingProp, onGroupingChange, sort: sortProp, onSortChange, pinnedLanes, onTogglePin, selectedEventId, onSelectedEventChange, isLive }: TimelineSwimlanesProps) {
   // Controlled when the host drives the visible window (retained-mode lens).
   const controlled = viewWindow != null
   // Timeline lane labels for GitOps CRs (Application/Kustomization/HelmRelease)
@@ -1612,13 +1615,14 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                   <div className="flex-1 min-w-0 flex items-center gap-1.5">
                     <KindChip kind={lane.kind} title={kindBadgeTitle} />
                     {showGroupChip && <GroupChip group={lane.group!} />}
-                    <span
-                      onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
-                      className="min-w-0 text-sm font-semibold font-mono text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer"
-                      title={lane.name}
-                    >
-                      <MiddleEllipsis text={lane.name} className="block" />
-                    </span>
+                    <Tooltip content={lane.name} wrapperClassName="min-w-0">
+                      <span
+                        onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
+                        className="min-w-0 w-full text-sm font-semibold font-mono text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer"
+                      >
+                        <MiddleEllipsis text={lane.name} className="block" />
+                      </span>
+                    </Tooltip>
                     {lane.namespace && (
                       <span className="shrink-0 text-[11.5px] text-theme-text-tertiary whitespace-nowrap">
                         {lane.namespace}
@@ -1761,6 +1765,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           view={viewMode}
           onViewChange={onViewModeChange}
           onRefresh={onRefresh}
+          freshness={freshness}
           viewOptions={{
             sort: { value: sort, onChange: setSort },
             grouping: { value: grouping, onChange: setGrouping },
@@ -1773,31 +1778,36 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             this whole row is hidden there. */}
         {!controlled && (
           <div className="flex items-center gap-2 px-4 py-1.5">
-            <button
-              onClick={handleZoomIn}
-              className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-              title="Zoom in (Ctrl+scroll)"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
-            <button
-              onClick={handleZoomOut}
-              className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-              title="Zoom out (Ctrl+scroll)"
-            >
-              <ZoomOut className="w-4 h-4" />
-            </button>
+            <Tooltip content="Zoom in (Ctrl+scroll)">
+              <button
+                onClick={handleZoomIn}
+                aria-label="Zoom in"
+                className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+            </Tooltip>
+            <Tooltip content="Zoom out (Ctrl+scroll)">
+              <button
+                onClick={handleZoomOut}
+                aria-label="Zoom out"
+                className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+            </Tooltip>
             <span className="text-xs text-theme-text-tertiary">
               {windowLabel} window
             </span>
             {showJumpToNow && (
-              <button
-                onClick={handleJumpToNow}
-                className="px-2 py-1 text-xs text-accent-text hover:underline hover:bg-theme-elevated rounded"
-                title="Jump to current time"
-              >
-                → Now
-              </button>
+              <Tooltip content="Jump to current time">
+                <button
+                  onClick={handleJumpToNow}
+                  className="px-2 py-1 text-xs text-accent-text hover:underline hover:bg-theme-elevated rounded"
+                >
+                  → Now
+                </button>
+              </Tooltip>
             )}
           </div>
         )}
@@ -1849,17 +1859,18 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     collapse-all; otherwise expand-all. Tooltip names the action
                     and its shortcut. */}
                 <span className="ml-auto">
-                  <button
-                    type="button"
-                    onClick={() => setAllExpanded(!mostlyExpanded)}
-                    className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
-                    title={mostlyExpanded ? 'Collapse all (E)' : 'Expand all (E)'}
-                    aria-label={mostlyExpanded ? 'Collapse all resources' : 'Expand all resources'}
-                  >
-                    {mostlyExpanded
-                      ? <ChevronsDownUp className="h-3.5 w-3.5" />
-                      : <ChevronsUpDown className="h-3.5 w-3.5" />}
-                  </button>
+                  <Tooltip content={mostlyExpanded ? 'Collapse all (E)' : 'Expand all (E)'}>
+                    <button
+                      type="button"
+                      onClick={() => setAllExpanded(!mostlyExpanded)}
+                      className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
+                      aria-label={mostlyExpanded ? 'Collapse all resources' : 'Expand all resources'}
+                    >
+                      {mostlyExpanded
+                        ? <ChevronsDownUp className="h-3.5 w-3.5" />
+                        : <ChevronsUpDown className="h-3.5 w-3.5" />}
+                    </button>
+                  </Tooltip>
                 </span>
               </div>
               <div className="flex-1 relative h-8 mr-8">
@@ -1920,7 +1931,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => { e.stopPropagation(); onExtendRequest?.('past') }}
                     className="absolute left-0 top-1/2 z-30 flex -translate-y-1/2 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-                    title="Extend the loaded range further into the past"
+                    aria-label="Extend the loaded range further into the past"
                   >
                     <ChevronLeft className="h-3 w-3" />
                     End of loaded range — extend
@@ -1932,7 +1943,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => { e.stopPropagation(); onExtendRequest?.('future') }}
                     className="absolute right-0 top-1/2 z-30 flex -translate-y-1/2 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-                    title="Extend the loaded range further toward now"
+                    aria-label="Extend the loaded range further toward now"
                   >
                     End of loaded range — extend
                     <ChevronRight className="h-3 w-3" />
@@ -1982,7 +1993,6 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                       'repeating-linear-gradient(45deg, transparent 0, transparent 5px, var(--border-default) 5px, var(--border-default) 6px)',
                     opacity: 0.5,
                   }}
-                  title="No data recorded — connector was offline"
                   data-testid="swimlane-gap"
                 >
                   {widthPx > GAP_LABEL_MIN_PX && (
@@ -2172,13 +2182,16 @@ export function chipKindLabel(kind: string): { label: string; abbreviated: boole
 // the full kind in the tooltip.
 function KindChip({ kind, title }: { kind: string; title?: string }) {
   const { label, abbreviated } = chipKindLabel(kind)
+  const tip = title ?? (abbreviated ? kind : kind ? undefined : 'Kubernetes event — its source object reports no kind')
   return (
-    <span
-      className="shrink-0 rounded border border-theme-border-light bg-theme-elevated px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-theme-text-secondary"
-      title={title ?? (abbreviated ? kind : kind ? undefined : 'Kubernetes event — its source object reports no kind')}
-    >
-      {label}
-    </span>
+    <Tooltip content={tip} disabled={!tip} wrapperClassName="shrink-0">
+      <span
+        className="rounded border border-theme-border-light bg-theme-elevated px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-theme-text-secondary"
+        aria-label={tip}
+      >
+        {label}
+      </span>
+    </Tooltip>
   )
 }
 
@@ -2188,12 +2201,14 @@ function KindChip({ kind, title }: { kind: string; title?: string }) {
 // it reads as a subtle qualifier next to the kind badge, not a status pill.
 function GroupChip({ group }: { group: string }) {
   return (
-    <span
-      className="shrink-0 rounded bg-theme-hover px-1 py-px text-[10px] font-medium text-theme-text-tertiary ring-1 ring-inset ring-theme-border"
-      title={`API group ${group}`}
-    >
-      {group}
-    </span>
+    <Tooltip content={`API group ${group}`} wrapperClassName="shrink-0">
+      <span
+        className="rounded bg-theme-hover px-1 py-px text-[10px] font-medium text-theme-text-tertiary ring-1 ring-inset ring-theme-border"
+        aria-label={`API group ${group}`}
+      >
+        {group}
+      </span>
+    </Tooltip>
   )
 }
 
@@ -2236,13 +2251,14 @@ function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, isLast, o
           are neutral (Turn 11). Only the NAME links to the resource. */}
       <KindChip kind={kind} title={kindTitle} />
       {showGroupChip && group && <GroupChip group={group} />}
-      <span
-        onClick={onClick}
-        className="min-w-0 flex-1 text-[13px] font-mono text-theme-text-secondary hover:text-accent-text hover:underline cursor-pointer"
-        title={title ?? name}
-      >
-        <MiddleEllipsis text={name} className="block" />
-      </span>
+      <Tooltip content={title ?? name} wrapperClassName="min-w-0 flex-1">
+        <span
+          onClick={onClick}
+          className="min-w-0 w-full text-[13px] font-mono text-theme-text-secondary hover:text-accent-text hover:underline cursor-pointer"
+        >
+          <MiddleEllipsis text={name} className="block" />
+        </span>
+      </Tooltip>
       {pinButton}
     </div>
   )
@@ -2255,25 +2271,27 @@ function PinButton({ pinned, onToggle, alwaysVisible, isAppGroup }: { pinned: bo
     ? (pinned ? 'Unpin app' : 'Pin app — keep all its rows visible while you move the window')
     : (pinned ? 'Unpin' : 'Pin — keep this row visible while you move the window')
   return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); onToggle() }}
-      className={clsx(
-        'shrink-0 p-0.5 rounded hover:bg-theme-elevated transition-opacity',
-        pinned ? 'text-accent-text opacity-100' : 'text-theme-text-tertiary hover:text-theme-text-primary',
-        !pinned && !alwaysVisible && 'opacity-0 group-hover/pin:opacity-100',
-      )}
-      title={title}
-      aria-label={pinned ? 'Unpin' : 'Pin'}
-    >
-      <Pin className={clsx('w-3.5 h-3.5', pinned && 'fill-current')} />
-    </button>
+    <Tooltip content={title} wrapperClassName="shrink-0">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onToggle() }}
+        className={clsx(
+          'p-0.5 rounded hover:bg-theme-elevated transition-opacity',
+          pinned ? 'text-accent-text opacity-100' : 'text-theme-text-tertiary hover:text-theme-text-primary',
+          !pinned && !alwaysVisible && 'opacity-0 group-hover/pin:opacity-100',
+        )}
+        aria-label={isAppGroup ? (pinned ? 'Unpin app' : 'Pin app') : (pinned ? 'Unpin' : 'Pin')}
+      >
+        <Pin className={clsx('w-3.5 h-3.5', pinned && 'fill-current')} />
+      </button>
+    </Tooltip>
   )
 }
 
 // App-group header label — an app roll-up over its member root lanes. Shows the
-// app name, an optional env chip, and the member count. Evidence goes in the
-// title tooltip (native, to keep the flex label layout intact + SSR-safe).
+// app name, an optional env chip, and the member count. Evidence rides the App
+// chip's tooltip (attaching it to the whole flex row would need a layout-breaking
+// wrapper).
 function AppGroupLaneLabel({ lane, memberCount, onToggle, onAppClick }: { lane: ResourceLane; memberCount: number; onToggle: () => void; onAppClick?: (appKey: string) => void }) {
   // A pinned app absent from the current view (owner/flat grouping or vanished)
   // is dimmed and reads its own honest tooltip.
@@ -2288,30 +2306,37 @@ function AppGroupLaneLabel({ lane, memberCount, onToggle, onAppClick }: { lane: 
       // ns · +N · ⚠. The row toggles expand; only the name links to Applications.
       className="flex-1 min-w-0 flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-theme-surface/30"
       onClick={onToggle}
-      title={tooltip}
     >
-      <span className={clsx(
-        'shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset',
-        dimmed
-          ? 'bg-theme-hover text-theme-text-tertiary ring-theme-border'
-          : 'bg-accent-muted text-accent-text ring-transparent',
-      )}>
-        <Layers className="w-3 h-3" />
-        App
-      </span>
-      <span
-        className={clsx(
-          'min-w-0 text-sm font-semibold',
-          dimmed ? 'text-theme-text-secondary' : 'text-theme-text-primary',
-          linkable && 'hover:text-accent-text hover:underline cursor-pointer',
-        )}
-        // Name click navigates to the app's Applications page — mirroring how a
-        // resource name routes to its detail; the row body still toggles expand.
-        onClick={linkable ? (e) => { e.stopPropagation(); onAppClick!(lane.appKey!) } : undefined}
-        title={linkable ? 'Open in Applications' : (lane.title ?? lane.name)}
-      >
-        <MiddleEllipsis text={lane.title ?? lane.name} className="block" />
-      </span>
+      <Tooltip content={tooltip} disabled={!tooltip} wrapperClassName="shrink-0">
+        <span
+          className={clsx(
+            'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset',
+            dimmed
+              ? 'bg-theme-hover text-theme-text-tertiary ring-theme-border'
+              : 'bg-accent-muted text-accent-text ring-transparent',
+          )}
+          aria-label={tooltip}
+        >
+          <Layers className="w-3 h-3" />
+          App
+        </span>
+      </Tooltip>
+      <Tooltip content={linkable ? 'Open in Applications' : (lane.title ?? lane.name)} wrapperClassName="min-w-0">
+        <span
+          className={clsx(
+            'min-w-0 w-full text-sm font-semibold',
+            dimmed ? 'text-theme-text-secondary' : 'text-theme-text-primary',
+            linkable && 'hover:text-accent-text hover:underline cursor-pointer',
+          )}
+          // Name click navigates to the app's Applications page — mirroring how a
+          // resource name routes to its detail; the row body still toggles expand.
+          onClick={linkable ? (e) => { e.stopPropagation(); onAppClick!(lane.appKey!) } : undefined}
+          role={linkable ? 'button' : undefined}
+          aria-label={linkable ? 'Open in Applications' : undefined}
+        >
+          <MiddleEllipsis text={lane.title ?? lane.name} className="block" />
+        </span>
+      </Tooltip>
       {lane.env && (
         <span className="shrink-0 inline-flex items-center rounded-sm bg-theme-hover px-1.5 py-px text-[10px] font-medium text-theme-text-secondary ring-1 ring-inset ring-theme-border">
           {lane.env}
@@ -2415,19 +2440,22 @@ function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggrega
         clampedWidth = Math.max(clampedWidth, 0.12)
 
         const showCreatedBefore = createdBeforeWindow && i === 0 && createdAt != null
+        // Positioning lives on the Tooltip wrapper so the span itself can fill it.
         return (
-          <div
+          <Tooltip
             key={i}
-            className={clsx('absolute bottom-0 h-[7px]', getHealthStripColor(span.health))}
-            style={{ left: `${clampedLeft}%`, width: `${clampedWidth}%` }}
-            title={`Health: ${span.health} · ${new Date(span.start).toLocaleTimeString()} - ${new Date(span.end).toLocaleTimeString()}`}
+            content={`Health: ${span.health} · ${new Date(span.start).toLocaleTimeString()} - ${new Date(span.end).toLocaleTimeString()}`}
+            wrapperClassName="absolute bottom-0 h-[7px]"
+            wrapperStyle={{ left: `${clampedLeft}%`, width: `${clampedWidth}%` }}
           >
-            {showCreatedBefore && (
-              <span className="absolute bottom-[9px] left-0.5 text-[9px] text-theme-text-tertiary whitespace-nowrap pointer-events-none">
-                ← {formatCreatedBefore(new Date(createdAt!))}
-              </span>
-            )}
-          </div>
+            <div className={clsx('relative h-full w-full', getHealthStripColor(span.health))}>
+              {showCreatedBefore && (
+                <span className="absolute bottom-[9px] left-0.5 text-[9px] text-theme-text-tertiary whitespace-nowrap pointer-events-none">
+                  ← {formatCreatedBefore(new Date(createdAt!))}
+                </span>
+              )}
+            </div>
+          </Tooltip>
         )
       })}
     </div>
@@ -2469,16 +2497,17 @@ function AggregateHealthTrack({ lane, startTime, windowMs, now, ghost }: {
         if (clampedWidth <= 0) return null
         clampedWidth = Math.max(clampedWidth, 0.12)
         return (
-          <div
+          <Tooltip
             key={i}
-            className={clsx(ghost ? 'absolute bottom-0 h-[4px]' : 'absolute bottom-0 h-[7px]', !seg.mixed && getHealthStripColor(seg.health))}
-            style={{
-              left: `${clampedLeft}%`,
-              width: `${clampedWidth}%`,
-              ...(seg.mixed ? MIXED_HEALTH_STRIP_STYLE : null),
-            }}
-            title={formatAggregateHealthTooltip(seg)}
-          />
+            content={formatAggregateHealthTooltip(seg)}
+            wrapperClassName={ghost ? 'absolute bottom-0 h-[4px]' : 'absolute bottom-0 h-[7px]'}
+            wrapperStyle={{ left: `${clampedLeft}%`, width: `${clampedWidth}%` }}
+          >
+            <div
+              className={clsx('h-full w-full', !seg.mixed && getHealthStripColor(seg.health))}
+              style={seg.mixed ? MIXED_HEALTH_STRIP_STYLE : undefined}
+            />
+          </Tooltip>
         )
       })}
     </div>
@@ -2921,12 +2950,12 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
     return [origin, ...neighbors]
   }, [events, allEvents])
 
-  // Height is bounded: opens at ~40% viewport, drag the top edge to resize.
-  // No backdrop — the timeline above stays interactive, so the next dot is
-  // clickable without closing. SSR gets the fallback height.
-  const [heightPx, setHeightPx] = useState(() =>
-    typeof window === 'undefined' ? 384 : Math.max(280, Math.round(window.innerHeight * 0.4)),
-  )
+  // Opens just tall enough for one event (header + rail + property grid) —
+  // the timeline above is the main surface, so the drawer defaults out of its
+  // way; drag the top edge when a long message or diff needs room. No backdrop
+  // — the timeline stays interactive, so the next dot is clickable without
+  // closing.
+  const [heightPx, setHeightPx] = useState(272)
   const resizeRef = useRef<{ startY: number; startH: number } | null>(null)
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
@@ -2967,7 +2996,7 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
       <div
         onPointerDown={(e) => { e.preventDefault(); resizeRef.current = { startY: e.clientY, startH: heightPx } }}
         className="group absolute -top-1.5 left-0 right-0 flex h-3 cursor-ns-resize items-center justify-center"
-        title="Drag to resize"
+        aria-label="Drag to resize"
       >
         <span className="h-1 w-10 rounded-full bg-theme-border opacity-0 transition-opacity group-hover:opacity-100" />
       </div>
@@ -2983,9 +3012,7 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
             {selected.reason || selected.eventType}
           </span>
           <span className="badge-sm shrink-0 bg-theme-elevated text-theme-text-secondary">{displayKind(selected.kind) || 'Event'}</span>
-          <button onClick={openResource} className="min-w-0 truncate font-medium text-theme-text-primary hover:text-accent-text">
-            {selected.name}
-          </button>
+          <span className="min-w-0 truncate font-medium text-theme-text-primary">{selected.name}</span>
           {selected.namespace && <span className="shrink-0 text-xs text-theme-text-tertiary">in {selected.namespace}</span>}
           <span className="shrink-0 text-xs tabular-nums text-theme-text-tertiary">{formatFullTime(new Date(selected.timestamp))}</span>
           {events.length > 1 && (
@@ -3010,13 +3037,15 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
           >
             <ChevronRight className="h-4 w-4" />
           </button>
-          <button
-            onClick={onClose}
-            className="ml-1 rounded p-1.5 text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
-            title="Close (Esc)"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Tooltip content="Close (Esc)">
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="ml-1 rounded p-1.5 text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -3057,10 +3086,12 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
             </dd>
             <dt className="text-xs text-theme-text-tertiary">Resource</dt>
             <dd className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <span className="badge-sm bg-theme-elevated text-theme-text-secondary">{displayKind(selected.kind) || 'Event'}</span>
-              <button onClick={openResource} className="min-w-0 truncate font-medium text-theme-text-primary hover:text-accent-text">
-                {selected.name}
-              </button>
+              {/* The ONE click target for the resource — the same badge used by
+                  every Radar drawer, so it reads as "this navigates". */}
+              <ResourceRefBadge
+                resourceRef={{ kind: selected.kind || 'Event', namespace: selected.namespace ?? '', name: selected.name }}
+                onClick={onResourceClick ? openResource : undefined}
+              />
               {selected.namespace && <span className="text-xs text-theme-text-tertiary">in {selected.namespace}</span>}
             </dd>
             <dt className="text-xs text-theme-text-tertiary">Time</dt>
@@ -3088,16 +3119,6 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
           {selected.diff && (
             <div className="mt-3">
               <DiffViewer diff={selected.diff} />
-            </div>
-          )}
-          {onResourceClick && (
-            <div className="mt-4 flex items-center gap-2 border-t border-theme-border pt-3">
-              <button
-                onClick={openResource}
-                className="rounded-md border border-theme-border bg-theme-elevated px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
-              >
-                View resource
-              </button>
             </div>
           )}
         </div>

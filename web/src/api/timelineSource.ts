@@ -83,6 +83,9 @@ export interface TimelineEventsResult {
   isLoading: boolean
   isError: boolean
   refetch: () => void
+  // Freshness for the toolbar's live indicator.
+  dataUpdatedAt?: number
+  isFetching?: boolean
   // Present only for sources that report coverage (retained).
   coverage?: TimelineCoverageRecord[]
 }
@@ -122,7 +125,7 @@ function useLocalEvents(query: TimelineQuery): TimelineEventsResult {
   // query and the list's windowed one): SSE-driven refetches then transfer only
   // what arrived since the last full load. Dropdown-ranged (`since`) queries
   // stay plain — they're small and their range moves with the clock.
-  const { data, isLoading, isError, refetch } = useChanges(
+  const { data, isLoading, isError, refetch, dataUpdatedAt, isFetching } = useChanges(
     windowed
       ? { ...query, timeRange: 'all', limit: LOCAL_RING_LIMIT, deltaSync: true }
       : { ...query, deltaSync: query.timeRange === 'all' },
@@ -140,7 +143,7 @@ function useLocalEvents(query: TimelineQuery): TimelineEventsResult {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [windowed, data, query.fromMs, query.toMs, query.limit, kindsKey],
   )
-  return { data: events, isLoading, isError, refetch }
+  return { data: events, isLoading, isError, refetch, dataUpdatedAt, isFetching }
 }
 
 export const localSource: TimelineSource = {
@@ -472,6 +475,8 @@ function createRetainedEventsHook(
         base.refetch()
         live.refetch()
       },
+      dataUpdatedAt: Math.max(base.dataUpdatedAt, live.dataUpdatedAt) || undefined,
+      isFetching: base.isFetching || live.isFetching,
       coverage: merged.coverage,
     }
   }

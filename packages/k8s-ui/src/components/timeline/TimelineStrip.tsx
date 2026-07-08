@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { clsx } from 'clsx'
 import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Minus, Plus } from 'lucide-react'
+import { Tooltip } from '../ui/Tooltip'
 import {
   barHeight,
   clampLensToSelection,
@@ -68,6 +69,9 @@ export interface TimelineStripProps {
   /** The swimlane's visible window, drawn as the draggable band inside the strip. */
   lens?: ScrubberRange
   onLensChange?: (lens: ScrubberRange) => void
+  /** When false the band can only pan, not resize — for hosts (list view) where
+   *  the lens mirrors a scrollport whose height fixes the window size. */
+  lensResizable?: boolean
   liveState?: TimelineLiveState
   onLiveChipClick?: () => void
   className?: string
@@ -294,6 +298,7 @@ export function TimelineStrip({
   onPresetSelect,
   lens,
   onLensChange,
+  lensResizable = true,
   liveState,
   onLiveChipClick,
   className,
@@ -397,11 +402,12 @@ export function TimelineStrip({
   const beginLensDrag = useCallback(
     (mode: 'move' | 'resize-start' | 'resize-end') => (e: React.PointerEvent) => {
       if (!lens || !onLensChange) return
+      if (!lensResizable && mode !== 'move') return
       e.preventDefault()
       e.stopPropagation()
       dragRef.current = { mode, startX: e.clientX, fromMs: lens.fromMs, toMs: lens.toMs }
     },
-    [lens, onLensChange],
+    [lens, onLensChange, lensResizable],
   )
 
   const applyCustom = useCallback(() => {
@@ -428,12 +434,12 @@ export function TimelineStrip({
   // Draw a fresh window by dragging on the histogram background. The band + its
   // resize edges stopPropagation, so this only fires on empty histogram space.
   const beginDraw = useCallback((e: React.PointerEvent) => {
-    if (!onLensChange || width <= 0) return
+    if (!onLensChange || !lensResizable || width <= 0) return
     const rect = trackRef.current?.getBoundingClientRect()
     if (!rect) return
     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / width))
     dragRef.current = { mode: 'draw', anchorMs: selection.fromMs + frac * selSpan }
-  }, [onLensChange, selection.fromMs, selSpan, width])
+  }, [onLensChange, lensResizable, selection.fromMs, selSpan, width])
 
   // Window − / ＋ resizes the WINDOW (the blue band), not the query — snapping to
   // round rung sizes so the jumps are consistent. Capped at the query span.
@@ -445,6 +451,30 @@ export function TimelineStrip({
   }
 
   const maxTotal = Math.max(1, ...buckets.map((b) => b.total))
+
+  // ONE shared hover readout for the whole histogram: a floating chip above the
+  // cursor describing the hovered bucket (or pre-data / gap region). Replaces
+  // the per-bar native titles — one tooltip that tracks the pointer instead of
+  // hundreds of independent ones.
+  const [hoverX, setHoverX] = useState<number | null>(null)
+  const handleTrackHover = useCallback((e: React.PointerEvent) => {
+    const rect = trackRef.current?.getBoundingClientRect()
+    if (!rect || width <= 0) return
+    setHoverX(Math.min(width, Math.max(0, e.clientX - rect.left)))
+  }, [width])
+  const hoverLabel = (() => {
+    if (hoverX == null || msPerPx <= 0) return null
+    const t = selection.fromMs + hoverX * msPerPx
+    if (historyUnavailableBeforeMs != null && historyUnavailableBeforeMs > selection.fromMs && t < historyUnavailableBeforeMs) {
+      return `No data recorded before ${footerStamp(historyUnavailableBeforeMs)} — Radar wasn't watching yet`
+    }
+    if (gaps?.some((g) => t >= g.fromMs && t <= g.toMs)) {
+      return 'No data recorded — connector was offline'
+    }
+    const b = buckets.find((bk) => t >= bk.startMs && t < bk.endMs)
+    if (!b || b.total === 0) return `${bandTime(t)} · no events`
+    return `${bandTime(b.startMs)} – ${bandTime(b.endMs)} · ${b.total.toLocaleString()} events${b.warnings ? ` · ${b.warnings} warnings` : ''}`
+  })()
 
   // Lens band geometry (kept ≥ LENS_MIN_BAND_PX so a tiny lens stays grabbable).
   const lensGeom = (() => {
@@ -465,20 +495,21 @@ export function TimelineStrip({
       <div className="mb-2 flex items-center gap-2">
         <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary">Query range</span>
         <div ref={pickerRef} className="relative">
-          <button
-            type="button"
-            onClick={() => setPickerOpen((v) => !v)}
-            aria-expanded={pickerOpen}
-            aria-haspopup="dialog"
-            className={clsx(
-              'flex items-center gap-2 whitespace-nowrap rounded-md border bg-theme-elevated px-3 py-1.5 text-[13px] font-semibold text-theme-text-primary',
-              pickerOpen ? 'border-accent' : 'border-theme-border hover:border-accent',
-            )}
-            title={absoluteRange}
-          >
-            {queryPillLabel}
-            <ChevronDown className="h-3 w-3 text-theme-text-tertiary" />
-          </button>
+          <Tooltip content={absoluteRange} position="bottom" disabled={pickerOpen}>
+            <button
+              type="button"
+              onClick={() => setPickerOpen((v) => !v)}
+              aria-expanded={pickerOpen}
+              aria-haspopup="dialog"
+              className={clsx(
+                'flex items-center gap-2 whitespace-nowrap rounded-md border bg-theme-elevated px-3 py-1.5 text-[13px] font-semibold text-theme-text-primary',
+                pickerOpen ? 'border-accent' : 'border-theme-border hover:border-accent',
+              )}
+            >
+              {queryPillLabel}
+              <ChevronDown className="h-3 w-3 text-theme-text-tertiary" />
+            </button>
+          </Tooltip>
           {pickerOpen && (
             // NO overflow-hidden: the DateTimeField calendars pop past the
             // dialog's bottom edge and were getting clipped to a header sliver.
@@ -544,9 +575,11 @@ export function TimelineStrip({
         </div>
 
         <span className="mx-1 h-5 w-px bg-theme-border" />
-        {windowMs != null && (
+        {windowMs != null && lensResizable && (
           <>
-            <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary" title="The slice shown in the lanes below — always within the query range">Window</span>
+            <Tooltip content="The slice shown in the lanes below — always within the query range" position="bottom">
+              <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary">Window</span>
+            </Tooltip>
             <div className="inline-flex items-center overflow-hidden rounded-md border border-theme-border bg-theme-elevated">
               <button type="button" aria-label="Narrow visible window" onClick={() => stepWindow(-1)} className="flex h-6 w-6 items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
                 <Minus className="h-3 w-3" />
@@ -567,23 +600,25 @@ export function TimelineStrip({
       </div>
 
       {/* Row 2 — results histogram with the draggable view-window band. The
-          wrapper reserves space above the track for the floating window-edge time
-          label; the track itself stays overflow-hidden to clip the bars. */}
-      <div className="relative pt-6">
-        {/* Persistent range label (Turn 7): the window's exact times, always
-            visible (not just on hover), centered over the band and clamped so it
-            never clips at the sides. */}
-        {lensGeom && lens && (
-          <span
-            className="pointer-events-none absolute top-0 z-30 -translate-x-1/2 whitespace-nowrap rounded-full bg-theme-text-primary px-2.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-theme-base shadow-theme-md"
-            style={{ left: Math.min(Math.max(lensGeom.left + lensGeom.visualW / 2, 60), width - 60) }}
+          window's exact times live in the footer center (accent-tinted to read
+          as the band's), not in a floating pill over the track — the inverted
+          pill read as foreign chrome and cost a whole row of whitespace. */}
+      <div className="relative">
+        {hoverLabel != null && hoverX != null && (
+          <div
+            className="pointer-events-none absolute -top-7 z-40 -translate-x-1/2 whitespace-nowrap rounded border border-theme-border bg-theme-base px-2 py-0.5 text-[11px] tabular-nums text-theme-text-primary shadow-theme-md"
+            style={{ left: Math.min(Math.max(hoverX, 80), Math.max(80, width - 80)) }}
+            data-testid="strip-hover-readout"
+            role="status"
           >
-            {bandTime(lens.fromMs)} — {bandTime(lens.toMs)}
-          </span>
+            {hoverLabel}
+          </div>
         )}
         <div
           ref={trackRef}
           onPointerDown={beginDraw}
+          onPointerMove={handleTrackHover}
+          onPointerLeave={() => setHoverX(null)}
           className={clsx(
             'relative overflow-hidden rounded-md border border-theme-border bg-theme-elevated',
             lens && onLensChange && 'cursor-crosshair',
@@ -624,7 +659,7 @@ export function TimelineStrip({
               <div key={i} className="absolute bottom-1" style={{ left: startX, width: w }}>
                 {/* Out-of-window bars are muted but still legible — the dimmed
                     part of a photo crop, not invisible. */}
-                <div className={clsx('w-full rounded-[1px]', inWindow ? 'bg-accent/60' : 'bg-theme-text-tertiary/45')} style={{ height: h }} title={`${b.total} events${b.warnings ? ` · ${b.warnings} warnings` : ''}`} />
+                <div className={clsx('w-full rounded-[1px]', inWindow ? 'bg-accent/60' : 'bg-theme-text-tertiary/45')} style={{ height: h }} />
                 {/* Warning cap is AMBER (Turn 7: red is reserved for "actually
                     broken"; these buckets count warning events, not failures). */}
                 {warnH > 0 && <div className={clsx('absolute bottom-0 w-full rounded-[1px]', inWindow ? 'bg-[var(--color-warning)]/80' : 'bg-[var(--color-warning)]/40')} style={{ height: warnH }} />}
@@ -642,7 +677,6 @@ export function TimelineStrip({
             <div
               className="pointer-events-auto absolute bottom-0 top-0 left-0 z-[5]"
               style={{ width: edgeX }}
-              title={`No data recorded before ${footerStamp(historyUnavailableBeforeMs)} — Radar wasn't watching yet`}
               data-testid="strip-predata"
             >
               <div className="absolute inset-0 bg-theme-base/60" />
@@ -671,7 +705,6 @@ export function TimelineStrip({
                 background: 'repeating-linear-gradient(45deg, transparent 0, transparent 4px, var(--border-default) 4px, var(--border-default) 5px)',
                 opacity: 0.5,
               }}
-              title="No data recorded — connector was offline"
             />
           )
         })}
@@ -697,31 +730,40 @@ export function TimelineStrip({
                 boxShadow: '0 0 0 1px var(--bg-base)',
               }}
               data-testid="strip-lens"
-              title="Drag to move the swimlane's view window"
             >
-              {/* left resize edge */}
-              <span onPointerDown={beginLensDrag('resize-start')} className="absolute left-[-4px] top-1/2 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded" style={{ background: 'var(--accent)' }} aria-hidden />
+              {lensResizable && (
+                <span onPointerDown={beginLensDrag('resize-start')} className="absolute left-[-4px] top-1/2 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded" style={{ background: 'var(--accent)' }} aria-hidden />
+              )}
               {/* three-bar grip */}
               <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
               <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
               <span aria-hidden style={{ width: 1.5, height: 11, borderRadius: 1, background: 'var(--accent)' }} />
-              {/* right resize edge */}
-              <span onPointerDown={beginLensDrag('resize-end')} className="absolute right-[-4px] top-1/2 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded" style={{ background: 'var(--accent)' }} aria-hidden />
+              {lensResizable && (
+                <span onPointerDown={beginLensDrag('resize-end')} className="absolute right-[-4px] top-1/2 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded" style={{ background: 'var(--accent)' }} aria-hidden />
+              )}
             </div>
           </>
         )}
         </div>
       </div>
 
-      {/* Strip footer (Turn 7): the query range's start/end times at the corners
-          (so the strip's own ruler is labeled, distinct from the lanes' axis) with
-          the labeled count between them. */}
+      {/* Strip footer: the query range's start/end times at the corners (so the
+          strip's own ruler is labeled, distinct from the lanes' axis), the count
+          riding the left corner, and the WINDOW's exact times in the center —
+          accent-tinted to read as the blue band's label. */}
       <div className="mt-1 flex items-center justify-between gap-2 text-[11px] tabular-nums text-theme-text-tertiary">
-        <span className="whitespace-nowrap">{footerStamp(selection.fromMs)}</span>
         <span className="whitespace-nowrap">
-          {totalEvents.toLocaleString()} events in query range
-          {gaps && gaps.length > 0 && ` · ${gaps.length} gap${gaps.length > 1 ? 's' : ''}`}
+          {footerStamp(selection.fromMs)}
+          <span className="ml-2 text-theme-text-tertiary/80">
+            · {totalEvents.toLocaleString()} events in query range
+            {gaps && gaps.length > 0 && ` · ${gaps.length} gap${gaps.length > 1 ? 's' : ''}`}
+          </span>
         </span>
+        {lens && (
+          <span className="whitespace-nowrap font-medium text-accent-text" data-testid="strip-window-range">
+            {`${bandTime(lens.fromMs)} — ${bandTime(lens.toMs)}`}
+          </span>
+        )}
         <span className="whitespace-nowrap">{footerStamp(selection.toMs)}</span>
       </div>
     </div>
@@ -741,7 +783,7 @@ function StripLiveChip({ state, onClick }: { state: TimelineLiveState; onClick?:
       )
     }
     return (
-      <button type="button" onClick={onClick} className="inline-flex items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-2.5 py-1 text-xs font-semibold text-theme-text-secondary hover:bg-theme-hover" title="Jump to the live edge">
+      <button type="button" onClick={onClick} className="inline-flex items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-2.5 py-1 text-xs font-semibold text-theme-text-secondary hover:bg-theme-hover">
         <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
         Live · jump to now
       </button>
@@ -756,7 +798,6 @@ function StripLiveChip({ state, onClick }: { state: TimelineLiveState; onClick?:
         'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold text-white',
         stale ? 'bg-amber-500 hover:bg-amber-600' : 'bg-green-600 hover:bg-green-700',
       )}
-      title="Return to live"
     >
       <span className="h-1.5 w-1.5 rounded-full bg-white" />
       Go live{state.newEventCount ? ` · ${state.newEventCount.toLocaleString()} new` : ''}

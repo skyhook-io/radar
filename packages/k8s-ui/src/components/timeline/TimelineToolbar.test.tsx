@@ -3,7 +3,7 @@ import { renderToString } from 'react-dom/server'
 import type { TimelineEvent } from '../../types'
 import type { ActivityFilterKey } from './timeline-filters'
 import { countActiveViewOptions } from './timeline-filters'
-import { TimelineToolbar, ViewOptionsPanel, DeletedEventsToggle, PinnedOnlyToggle } from './TimelineToolbar'
+import { TimelineToolbar, OptionMenu, DeletedEventsToggle, PinnedOnlyToggle } from './TimelineToolbar'
 
 function ev(partial: Partial<TimelineEvent>): TimelineEvent {
   return {
@@ -38,8 +38,6 @@ const baseProps = {
   kindOptions: ['Deployment', 'Pod'],
 }
 
-const panelProps = {}
-
 describe('TimelineToolbar SSR', () => {
   it('renders the activity segmented control with derived counts', () => {
     const html = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
@@ -72,7 +70,7 @@ describe('TimelineToolbar SSR', () => {
     expect(html).toContain('bg-rose-500')
   })
 
-  it('renders the View button only when Sort/Group options exist (swimlane), not in list view', () => {
+  it('renders separate Sort and Group dropdowns (swimlane only), not a combined View menu', () => {
     const withOpts = renderToString(
       <TimelineToolbar
         {...baseProps}
@@ -85,42 +83,25 @@ describe('TimelineToolbar SSR', () => {
         }}
       />,
     )
-    // The trigger renders; its popover is closed on the server, so the Sort /
-    // Group rows are not in the initial markup.
-    expect(withOpts).toContain('title="View options"')
-    expect(withOpts).toContain('>View<')
-    // The toggle is labeled — the words themselves are the affordance.
+    // Two labeled triggers, each showing its current value inline.
+    expect(withOpts).toContain('>Sort<')
+    expect(withOpts).toContain('>Importance<')
+    expect(withOpts).toContain('>Group<')
+    expect(withOpts).toContain('>Applications<')
+    expect(withOpts).not.toContain('>View<')
+    // The view toggle is labeled — the words themselves are the affordance.
     expect(withOpts).toContain('>List<')
     expect(withOpts).toContain('>Timeline<')
 
-    // List view (TimelineList) passes no viewOptions — the panel would be empty,
-    // so no View button is rendered (a blank popover is worse than none).
+    // List view (TimelineList) passes no viewOptions — neither dropdown renders.
     const noOpts = renderToString(
       <TimelineToolbar {...baseProps} events={EVENTS} view="list" onViewChange={() => {}} />,
     )
-    expect(noOpts).not.toContain('title="View options"')
-    expect(noOpts).not.toContain('>View<')
+    expect(noOpts).not.toContain('>Sort<')
+    expect(noOpts).not.toContain('>Group<')
   })
 
-  it('shows the View badge counting non-default view choices, hidden at zero', () => {
-    // The badge only exists when the View menu renders, which needs viewOptions;
-    // with default grouping ('app') + sort ('importance') the count is zero.
-    const none = renderToString(
-      <TimelineToolbar
-        {...baseProps}
-        events={EVENTS}
-        view="swimlane"
-        onViewChange={() => {}}
-        viewOptions={{
-          sort: { value: 'importance', onChange: () => {} },
-          grouping: { value: 'app', onChange: () => {} },
-        }}
-      />,
-    )
-    expect(none).toContain('title="View options"')
-    expect(none).not.toContain('bg-accent px-1.5')
-
-    // Both grouping and sort moved off their defaults → badge counts 2.
+  it('shows non-default Sort/Group values on the triggers (no hidden state)', () => {
     const some = renderToString(
       <TimelineToolbar
         {...baseProps}
@@ -133,15 +114,27 @@ describe('TimelineToolbar SSR', () => {
         }}
       />,
     )
-    expect(some).toContain('bg-accent px-1.5')
-    expect(some).toContain('>2<')
+    expect(some).toContain('>Recent activity<')
+    expect(some).toContain('>Owners<')
+  })
+
+  it('labels the activity pill group with a "Show" prefix', () => {
+    const html = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
+    expect(html).toContain('>Show<')
+  })
+
+  it('renders the FreshnessControl instead of the refresh icon when freshness is supplied', () => {
+    const html = renderToString(
+      <TimelineToolbar {...baseProps} events={EVENTS} onRefresh={() => {}} freshness={{ dataUpdatedAt: Date.now(), isFetching: false }} />,
+    )
+    expect(html).toContain('Auto-updating')
+    expect(html).not.toContain('aria-label="Refresh"')
   })
 
   it('renders the Kinds chip with its own badge = selected kinds, hidden when none', () => {
     const none = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
     // Chip always renders its label; badge hidden with no selection.
     expect(none).toContain('>Kinds<')
-    expect(none).toContain('title="Filter by kind"')
     expect(none).not.toContain('bg-accent px-1.5')
 
     const two = renderToString(
@@ -217,13 +210,13 @@ describe('TimelineToolbar SSR', () => {
     expect(list).not.toContain('resources · ')
   })
 
-  it('renders refresh only when onRefresh is given', () => {
+  it('renders refresh only when onRefresh is given (no freshness)', () => {
     const withRefresh = renderToString(
       <TimelineToolbar {...baseProps} events={EVENTS} onRefresh={() => {}} />,
     )
-    expect(withRefresh).toContain('Refresh')
+    expect(withRefresh).toContain('aria-label="Refresh"')
     const noRefresh = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
-    expect(noRefresh).not.toContain('title="Refresh"')
+    expect(noRefresh).not.toContain('aria-label="Refresh"')
   })
 
   it('marks multiple activity cells active simultaneously (multi-select)', () => {
@@ -250,71 +243,34 @@ describe('TimelineToolbar SSR', () => {
   })
 })
 
-describe('ViewOptionsPanel SSR', () => {
-  it('renders Sort + Group sections when swimlane viewOptions are supplied', () => {
+describe('OptionMenu SSR', () => {
+  const SORT_OPTS = [
+    { value: 'importance', label: 'Importance', tooltip: 'x' },
+    { value: 'recent', label: 'Recent activity', tooltip: 'y' },
+  ]
+
+  it('renders a labeled trigger showing the current value, popover closed', () => {
     const html = renderToString(
-      <ViewOptionsPanel
-        {...panelProps}
-        viewOptions={{
-          sort: { value: 'importance', onChange: () => {} },
-          grouping: { value: 'app', onChange: () => {} },
-        }}
-      />,
+      <OptionMenu label="Sort" options={SORT_OPTS} value="recent" onChange={() => {}} />,
     )
-    expect(html).toContain('Sort')
-    expect(html).toContain('role="radio"')
-    // 3-way sort segmented control (Importance / Recent activity / Name).
-    expect(html).toContain('Importance')
-    expect(html).toContain('Recent activity')
-    expect(html).toContain('Name (A')
-    // 3-way grouping segmented control (Applications / Owners / Flat).
-    expect(html).toContain('role="radiogroup"')
-    expect(html).toContain('Applications')
-    expect(html).toContain('Owners')
-    expect(html).toContain('Flat')
-    // Show-deleted is still a switch; sort/grouping are radios, not checkboxes.
-    expect(html).not.toContain('type="checkbox"')
+    expect(html).toContain('>Sort<')
+    expect(html).toContain('>Recent activity<')
+    expect(html).toContain('aria-haspopup="menu"')
+    expect(html).toContain('aria-expanded="false"')
+    // Closed on the server: the radio rows are not in the initial markup.
+    expect(html).not.toContain('role="radio"')
   })
 
-  it('marks the active sort radio via aria-checked', () => {
-    const html = renderToString(
-      <ViewOptionsPanel
-        {...panelProps}
-        viewOptions={{
-          sort: { value: 'recent', onChange: () => {} },
-          grouping: { value: 'app', onChange: () => {} },
-        }}
-      />,
-    )
-    // The active row shows the product's check-row treatment: checked state via
-    // aria-checked and a visible check glyph (opacity-100).
-    expect(html).toContain('aria-checked="true"')
-    expect(html).toContain('opacity-100')
-  })
-
-  it('holds no filters — Show deleted moved to its own toolbar toggle', () => {
-    const html = renderToString(<ViewOptionsPanel {...panelProps} />)
-    expect(html).not.toContain('Show deleted')
-    expect(html).not.toContain('role="switch"')
-    // Kinds moved to its own chip — the checklist is no longer in the View menu.
-    expect(html).not.toContain('role="menuitemcheckbox"')
-  })
-
-  it('renders empty without viewOptions (list view has no sort/group)', () => {
-    const html = renderToString(<ViewOptionsPanel {...panelProps} />)
-    expect(html).not.toContain('Importance')
-    expect(html).not.toContain('role="radiogroup"')
-  })
-
-  it('DeletedEventsToggle: quiet when shown, marked + labeled when hiding', () => {
+  it('DeletedEventsToggle: labeled "Deleted", marked "Deleted hidden" when hiding', () => {
     const shown = renderToString(<DeletedEventsToggle showDeleted={true} onChange={() => {}} />)
     expect(shown).toContain('aria-pressed="false"')
     expect(shown).toContain('Hide delete events')
-    expect(shown).not.toContain('hidden</span>')
+    expect(shown).toContain('>Deleted<')
+    expect(shown).not.toContain('Deleted hidden')
     const hiding = renderToString(<DeletedEventsToggle showDeleted={false} onChange={() => {}} />)
     expect(hiding).toContain('aria-pressed="true"')
     expect(hiding).toContain('Show delete events')
-    expect(hiding).toContain('hidden')
+    expect(hiding).toContain('Deleted hidden')
   })
 })
 

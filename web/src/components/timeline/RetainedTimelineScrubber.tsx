@@ -23,6 +23,7 @@ import { getApiBase } from '../../api/config'
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
 const EMPTY_BUCKETS: TimelineOverviewBucket[] = []
+const MAX_STRIP_BARS = 512
 
 // Per-request guard on the retained events endpoint: never brush wider than 7d.
 const MAX_SELECTION_MS = 7 * DAY_MS
@@ -164,6 +165,7 @@ interface RetainedTimelineScrubberProps {
   // The lens band (swimlane's visible window). Two-way synced by the host.
   lens?: ScrubberRange
   onLensChange?: (lens: ScrubberRange) => void
+  lensResizable?: boolean
   // Lifts the server-derived domain + cap so the host can clamp extend requests.
   onDomainChange?: (info: ScrubberDomainInfo) => void
   // Lifts merged recording gaps so the host can thread them into the swimlane.
@@ -175,7 +177,7 @@ interface RetainedTimelineScrubberProps {
   onLiveChipClick?: () => void
 }
 
-export function RetainedTimelineScrubber({ source, selection, onSelectionChange, onSelectionClamp, onPresetSelect, lens, onLensChange, onDomainChange, onGapsChange, liveState, onLiveChipClick }: RetainedTimelineScrubberProps) {
+export function RetainedTimelineScrubber({ source, selection, onSelectionChange, onSelectionClamp, onPresetSelect, lens, onLensChange, lensResizable, onDomainChange, onGapsChange, liveState, onLiveChipClick }: RetainedTimelineScrubberProps) {
   const maxRangeDays = source.capabilities.maxRangeDays ?? 7
   const fetchOverview = source.fetchOverview
 
@@ -231,7 +233,15 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
     [selection.fromMs, selection.toMs],
   )
   const displayWidth = displayDomain.toMs - displayDomain.fromMs
-  const bucketSizeMs = pickDisplayBucketSizeMs(displayWidth)
+  // Bucket size follows the WINDOW (lens), like the local strip: zooming the
+  // window into a slice of a wide query re-buckets the histogram to match the
+  // zoom level. Floored at the server rollup's hour granularity, and at a size
+  // that keeps the whole query under ~MAX_STRIP_BARS bars.
+  const lensWidthMs = lens ? Math.max(lens.toMs - lens.fromMs, HOUR_MS) : displayWidth
+  const bucketSizeMs = Math.max(
+    pickDisplayBucketSizeMs(lensWidthMs),
+    Math.ceil(displayWidth / MAX_STRIP_BARS / HOUR_MS) * HOUR_MS,
+  )
 
   const displayBuckets = useMemo(
     () => groupBuckets(hourBuckets, bucketSizeMs)
@@ -302,7 +312,14 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
         loading={overview.isLoading}
         gaps={gaps}
         domain={domain}
-        historyUnavailableBeforeMs={availableFromMs ?? undefined}
+        // The honest coverage floor is the CLAMPED one: data older than the
+        // retention window is as unreachable as data from before recording
+        // began, so raw availableFromMs (which can predate retention by years
+        // via synthesized historical events) would fail to dim the dead zone.
+        // No totalInQueryRange here — the hour-granular rollup can't produce an
+        // exact count for an arbitrary sub-hour-aligned range, so the strip's
+        // bucket-sum footer (± edge-bucket spillover) is the best available.
+        historyUnavailableBeforeMs={availableFromMs != null ? domain.fromMs : undefined}
         selection={selection}
         onSelectionChange={onSelectionChange}
         maxSelectionMs={maxSelectionMs}
@@ -314,6 +331,7 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
         )}
         lens={lens}
         onLensChange={onLensChange}
+        lensResizable={lensResizable}
         liveState={chipState}
         onLiveChipClick={onLiveChipClick}
       />

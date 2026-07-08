@@ -35,6 +35,7 @@ interface LocalTimelineScrubberProps {
   onPresetSelect?: (widthMs: number) => void
   lens?: ScrubberRange
   onLensChange?: (lens: ScrubberRange) => void
+  lensResizable?: boolean
   onDomainChange?: (info: ScrubberDomainInfo) => void
   liveState?: TimelineLiveState
   onLiveChipClick?: () => void
@@ -54,6 +55,7 @@ export function LocalTimelineScrubber({
   onPresetSelect,
   lens,
   onLensChange,
+  lensResizable,
   onDomainChange,
   liveState,
   onLiveChipClick,
@@ -191,6 +193,7 @@ export function LocalTimelineScrubber({
         )}
         lens={lens}
         onLensChange={onLensChange}
+        lensResizable={lensResizable}
         liveState={chipState}
         onLiveChipClick={onLiveChipClick}
       />
