@@ -99,6 +99,42 @@ describe('TimelineStrip bar positioning', () => {
   })
 })
 
+describe('query pill label — relative when live, absolute when frozen', () => {
+  const buckets: ScrubberBucket[] = [{ startMs: 0, endMs: HOUR, total: 3, warnings: 0 }]
+  const presets = [{ label: '24h', ms: 24 * HOUR }, { label: 'All', ms: 24 * HOUR * 7 }]
+
+  it('shows "Last 24h" for a live preset-width query (absolute range on hover)', () => {
+    const html = renderToString(
+      <TimelineStrip
+        buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}}
+        presets={presets} liveState={{ kind: 'live', latched: true }}
+      />,
+    )
+    expect(html).toContain('Last 24h')
+  })
+
+  it('shows "Last <width>" for a live non-preset width', () => {
+    const html = renderToString(
+      <TimelineStrip
+        buckets={buckets} domain={query} selection={{ fromMs: query.toMs - 5 * HOUR, toMs: query.toMs }}
+        onSelectionChange={() => {}} presets={presets} liveState={{ kind: 'live', latched: true }}
+      />,
+    )
+    expect(html).toContain('Last 5h')
+  })
+
+  it('keeps absolute stamps when frozen', () => {
+    const html = renderToString(
+      <TimelineStrip
+        buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}}
+        presets={presets} liveState={{ kind: 'frozen', asOfMs: query.toMs }}
+      />,
+    )
+    expect(html).not.toContain('Last 24h')
+    expect(html).toContain('—')
+  })
+})
+
 describe('TimelineStrip render', () => {
   const buckets: ScrubberBucket[] = [
     { startMs: 0, endMs: 12 * HOUR, total: 5, warnings: 1 },

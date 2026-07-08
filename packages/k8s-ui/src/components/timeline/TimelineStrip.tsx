@@ -406,6 +406,20 @@ export function TimelineStrip({
   }, [customFromMs, customToMs, domain, maxSelectionMs, onSelectionChange])
   const customValid = customToMs > customFromMs
 
+  // A LIVE query reads as its relative width ("Last 7d") — absolute stamps
+  // re-render on every tick and read as churn while new data streams in. The
+  // exact range rides the tooltip; frozen/custom ranges keep explicit stamps.
+  const isLiveSelection =
+    liveState?.kind === 'live' ||
+    (liveState == null && Math.abs(domain.toMs - selection.toMs) < 2 * 60_000)
+  const matchedPreset = presets?.find((p) => Math.abs(selSpan - p.ms) <= Math.max(1000, p.ms * 0.01))
+  const absoluteRange = `${formatScrubberPill(selection.fromMs)} — ${formatScrubberPill(selection.toMs)}`
+  const queryPillLabel = isLiveSelection
+    ? matchedPreset
+      ? matchedPreset.label === 'All' ? 'All history' : `Last ${matchedPreset.label}`
+      : `Last ${formatLensDuration(selSpan)}`
+    : absoluteRange
+
   // Draw a fresh window by dragging on the histogram background. The band + its
   // resize edges stopPropagation, so this only fires on empty histogram space.
   const beginDraw = useCallback((e: React.PointerEvent) => {
@@ -455,8 +469,9 @@ export function TimelineStrip({
               'flex items-center gap-2 whitespace-nowrap rounded-md border bg-theme-elevated px-3 py-1.5 text-[13px] font-semibold text-theme-text-primary',
               pickerOpen ? 'border-accent' : 'border-theme-border hover:border-accent',
             )}
+            title={absoluteRange}
           >
-            {formatScrubberPill(selection.fromMs)} — {formatScrubberPill(selection.toMs)}
+            {queryPillLabel}
             <ChevronDown className="h-3 w-3 text-theme-text-tertiary" />
           </button>
           {pickerOpen && (
