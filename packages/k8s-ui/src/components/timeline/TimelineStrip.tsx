@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { clsx } from 'clsx'
-import { ChevronDown, Minus, Plus } from 'lucide-react'
+import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Minus, Plus } from 'lucide-react'
 import {
   barHeight,
   clampLensToSelection,
@@ -94,20 +94,128 @@ export function parseTimeInput(raw: string, nowMs: number): number | null {
   return Number.isFinite(abs) ? abs : null
 }
 
-// The resolved absolute time a field currently points at, for the live preview.
-function previewTime(raw: string, nowMs: number): string {
-  const ms = parseTimeInput(raw, nowMs)
-  if (ms == null) return raw.trim() ? 'unrecognized' : ''
+// Field stamp for the custom-range pickers, e.g. "Jul 8, 12:01 AM".
+function fieldStamp(ms: number): string {
   return new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
-// Express a duration as a compact relative string (24h / 3d / 45m) for seeding
-// the From field when the range ends at "now".
-function formatRelWidth(ms: number): string {
-  const min = Math.max(1, Math.round(ms / 60_000))
-  if (min % (60 * 24) === 0) return `${min / (60 * 24)}d`
-  if (min % 60 === 0) return `${min / 60}h`
-  return `${min}m`
+const DOW_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
+
+// A compact, theme-styled datetime picker: a stamp button opening a month-grid
+// popover with a time field and a "Now" shortcut. Replaces both the OS-native
+// datetime-local widget (jarring against the theme) and the freetext relative
+// inputs (too implicit) that preceded it.
+function DateTimeField({ label, valueMs, onChange, nowMs }: {
+  label: string
+  valueMs: number
+  onChange: (ms: number) => void
+  nowMs: number
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const value = new Date(valueMs)
+  const [viewY, setViewY] = useState(() => value.getFullYear())
+  const [viewM, setViewM] = useState(() => value.getMonth())
+  useEffect(() => {
+    if (!open) return
+    const d = new Date(valueMs)
+    setViewY(d.getFullYear())
+    setViewM(d.getMonth())
+    const onDown = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('pointerdown', onDown)
+    return () => window.removeEventListener('pointerdown', onDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+  const prevMonth = () => { if (viewM === 0) { setViewY(viewY - 1); setViewM(11) } else setViewM(viewM - 1) }
+  const nextMonth = () => { if (viewM === 11) { setViewY(viewY + 1); setViewM(0) } else setViewM(viewM + 1) }
+  const daysInMonth = new Date(viewY, viewM + 1, 0).getDate()
+  const firstDow = new Date(viewY, viewM, 1).getDay()
+  const pickDay = (day: number) =>
+    onChange(new Date(viewY, viewM, day, value.getHours(), value.getMinutes()).getTime())
+  const timeStr = `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`
+  const setTime = (t: string) => {
+    const m = t.match(/^(\d{2}):(\d{2})$/)
+    if (m) onChange(new Date(value.getFullYear(), value.getMonth(), value.getDate(), +m[1], +m[2]).getTime())
+  }
+  const today = new Date(nowMs)
+  return (
+    <div ref={rootRef} className="relative flex min-w-0 flex-col gap-1">
+      <span className="text-[10.5px] text-theme-text-tertiary">{label}</span>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className={clsx(
+          'flex w-full items-center justify-between gap-2 rounded-md border bg-theme-elevated px-2 py-1.5 text-xs tabular-nums text-theme-text-primary',
+          open ? 'border-accent' : 'border-theme-border hover:border-accent',
+        )}
+      >
+        {fieldStamp(valueMs)}
+        <Calendar className="h-3 w-3 shrink-0 text-theme-text-tertiary" />
+      </button>
+      {open && (
+        <div
+          className="absolute left-0 top-full z-[60] mt-1 w-[232px] rounded-lg border border-theme-border bg-theme-surface p-2.5 shadow-theme-lg"
+          role="dialog"
+          aria-label={`Pick ${label.toLowerCase()} date and time`}
+        >
+          <div className="mb-1.5 flex items-center justify-between">
+            <button type="button" onClick={prevMonth} aria-label="Previous month" className="rounded p-1 text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary">
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+            <span className="text-xs font-semibold text-theme-text-primary">
+              {new Date(viewY, viewM).toLocaleDateString([], { month: 'long', year: 'numeric' })}
+            </span>
+            <button type="button" onClick={nextMonth} aria-label="Next month" className="rounded p-1 text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary">
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="grid grid-cols-7 text-center text-[10px] text-theme-text-tertiary">
+            {DOW_LABELS.map((d, i) => <span key={i} className="py-0.5">{d}</span>)}
+          </div>
+          <div className="grid grid-cols-7">
+            {Array.from({ length: firstDow }).map((_, i) => <span key={`pad-${i}`} />)}
+            {Array.from({ length: daysInMonth }).map((_, i) => {
+              const day = i + 1
+              const isSelected = value.getFullYear() === viewY && value.getMonth() === viewM && value.getDate() === day
+              const isToday = today.getFullYear() === viewY && today.getMonth() === viewM && today.getDate() === day
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => pickDay(day)}
+                  className={clsx(
+                    'h-7 rounded text-xs tabular-nums transition-colors',
+                    isSelected
+                      ? 'bg-accent font-semibold text-white'
+                      : isToday
+                        ? 'font-semibold text-accent-text hover:bg-theme-hover'
+                        : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
+                  )}
+                >
+                  {day}
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2 border-t border-theme-border pt-2">
+            <input
+              type="time"
+              value={timeStr}
+              onChange={(e) => setTime(e.target.value)}
+              className="rounded border border-theme-border bg-theme-elevated px-1.5 py-1 text-xs tabular-nums text-theme-text-primary focus:border-accent focus:outline-none"
+            />
+            <button type="button" onClick={() => { onChange(nowMs); setOpen(false) }} className="text-xs font-medium text-accent-text hover:underline">
+              Now
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // Window-edge label parts, kept short + separate so the pill can stack the time
@@ -193,8 +301,8 @@ export function TimelineStrip({
   const trackRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(800)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [customFrom, setCustomFrom] = useState('')
-  const [customTo, setCustomTo] = useState('')
+  const [customFromMs, setCustomFromMs] = useState(0)
+  const [customToMs, setCustomToMs] = useState(0)
 
   useLayoutEffect(() => {
     const el = trackRef.current
@@ -206,20 +314,12 @@ export function TimelineStrip({
     return () => ro.disconnect()
   }, [])
 
-  // Seed the custom fields from the current query when the picker opens. A range
-  // ending at "now" reads naturally as a relative width (From "24h", To "now");
-  // otherwise fall back to absolute locale strings the parser round-trips.
+  // Seed the custom pickers from the current query when the dialog opens.
   useEffect(() => {
     if (!pickerOpen) return
-    const endsNow = Math.abs(selection.toMs - domain.toMs) < 2 * 60_000
-    if (endsNow) {
-      setCustomFrom(formatRelWidth(selection.toMs - selection.fromMs))
-      setCustomTo('now')
-    } else {
-      setCustomFrom(new Date(selection.fromMs).toLocaleString())
-      setCustomTo(new Date(selection.toMs).toLocaleString())
-    }
-  }, [pickerOpen, selection.fromMs, selection.toMs, domain.toMs])
+    setCustomFromMs(selection.fromMs)
+    setCustomToMs(selection.toMs)
+  }, [pickerOpen, selection.fromMs, selection.toMs])
 
   // Close the picker on outside-click / Escape.
   useEffect(() => {
@@ -300,17 +400,11 @@ export function TimelineStrip({
   )
 
   const applyCustom = useCallback(() => {
-    const from = parseTimeInput(customFrom, domain.toMs)
-    const to = parseTimeInput(customTo, domain.toMs)
-    if (from == null || to == null || to <= from) return
-    onSelectionChange(clampSelection({ fromMs: from, toMs: to }, domain, maxSelectionMs, 'end').selection)
+    if (customToMs <= customFromMs) return
+    onSelectionChange(clampSelection({ fromMs: customFromMs, toMs: customToMs }, domain, maxSelectionMs, 'end').selection)
     setPickerOpen(false)
-  }, [customFrom, customTo, domain, maxSelectionMs, onSelectionChange])
-  const customValid = (() => {
-    const from = parseTimeInput(customFrom, domain.toMs)
-    const to = parseTimeInput(customTo, domain.toMs)
-    return from != null && to != null && to > from
-  })()
+  }, [customFromMs, customToMs, domain, maxSelectionMs, onSelectionChange])
+  const customValid = customToMs > customFromMs
 
   // Draw a fresh window by dragging on the histogram background. The band + its
   // resize edges stopPropagation, so this only fires on empty histogram space.
@@ -398,42 +492,25 @@ export function TimelineStrip({
               <div className="flex flex-col gap-2 px-4 py-3">
                 <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary">Custom</span>
                 <div className="grid grid-cols-[1fr_1fr_auto] items-start gap-2">
-                  <label className="flex min-w-0 flex-col gap-1">
-                    <span className="text-[10.5px] text-theme-text-tertiary">From</span>
-                    <input
-                      type="text"
-                      inputMode="text"
-                      value={customFrom}
-                      onChange={(e) => setCustomFrom(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && applyCustom()}
-                      placeholder="24h ago…"
-                      className="w-full min-w-0 rounded-md border border-theme-border bg-theme-elevated px-2 py-1.5 text-xs tabular-nums text-theme-text-primary focus:border-accent focus:outline-none"
-                    />
-                    <span className="truncate text-[10px] text-theme-text-tertiary" title={previewTime(customFrom, domain.toMs)}>{previewTime(customFrom, domain.toMs)}</span>
-                  </label>
-                  <label className="flex min-w-0 flex-col gap-1">
-                    <span className="text-[10.5px] text-theme-text-tertiary">To</span>
-                    <input
-                      type="text"
-                      inputMode="text"
-                      value={customTo}
-                      onChange={(e) => setCustomTo(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && applyCustom()}
-                      placeholder="now"
-                      className="w-full min-w-0 rounded-md border border-theme-border bg-theme-elevated px-2 py-1.5 text-xs tabular-nums text-theme-text-primary focus:border-accent focus:outline-none"
-                    />
-                    <span className="truncate text-[10px] text-theme-text-tertiary" title={previewTime(customTo, domain.toMs)}>{previewTime(customTo, domain.toMs)}</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={applyCustom}
-                    disabled={!customValid}
-                    className="btn-brand rounded-md px-3.5 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Apply
-                  </button>
+                  <DateTimeField label="From" valueMs={customFromMs} onChange={setCustomFromMs} nowMs={domain.toMs} />
+                  <DateTimeField label="To" valueMs={customToMs} onChange={setCustomToMs} nowMs={domain.toMs} />
+                  {/* Label-height spacer keeps Apply on the INPUT row, not floated
+                      to the top of the taller field columns. */}
+                  <div className="flex flex-col gap-1">
+                    <span aria-hidden className="text-[10.5px]">&nbsp;</span>
+                    <button
+                      type="button"
+                      onClick={applyCustom}
+                      disabled={!customValid}
+                      className="btn-brand rounded-md px-3.5 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Apply
+                    </button>
+                  </div>
                 </div>
-                <span className="text-[10px] text-theme-text-tertiary">Accepts <span className="font-medium text-theme-text-secondary">24h</span>, <span className="font-medium text-theme-text-secondary">3d</span>, <span className="font-medium text-theme-text-secondary">now</span>, or a date — resolves as you type.</span>
+                {!customValid && (
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400">"To" must be after "From".</span>
+                )}
               </div>
               <div className="flex items-center justify-between gap-2 bg-theme-elevated px-4 py-1.5 text-[10.5px] text-theme-text-tertiary">
                 <span>Browser time · {Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
