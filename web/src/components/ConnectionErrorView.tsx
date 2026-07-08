@@ -1,5 +1,5 @@
-import { XCircle, RefreshCw, Loader2, Copy, Check, TerminalSquare } from 'lucide-react'
-import { useState } from 'react'
+import { ServerOff, RefreshCw, Loader2, Copy, Check, TerminalSquare, ChevronRight } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
 import { parseContextName } from '../utils/context-name'
@@ -183,6 +183,7 @@ const errorHints: Record<string, { title: string; hints: string[] }> = {
 
 function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunInTerminal?: (command: string) => void }) {
   const [copied, setCopied] = useState(false)
+  const commandParts = command.split(/(\s+)/)
 
   const handleCopy = () => {
     navigator.clipboard.writeText(command).then(() => {
@@ -195,8 +196,10 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
 
   return (
     <div className="mt-2 flex items-center gap-2 bg-theme-elevated border border-theme-border rounded-md px-3 py-2 group">
-      <code className="text-xs font-mono text-theme-text-primary flex-1 select-all break-all">
-        {command}
+      <code className="text-xs font-mono text-theme-text-primary flex-1 min-w-0 select-all whitespace-pre-wrap break-normal">
+        {commandParts.map((part, index) => (
+          /\s+/.test(part) ? part : <span key={index} className="inline-block whitespace-nowrap">{part}</span>
+        ))}
       </code>
       {onRunInTerminal && (
         <Tooltip content="Run in terminal" wrapperClassName="shrink-0">
@@ -240,7 +243,12 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
-  const showRawErrorOpen = !connection.errorType || connection.errorType === 'unknown'
+  const rawErrorDefaultOpen = !connection.errorType || connection.errorType === 'unknown'
+  const [showRawError, setShowRawError] = useState(rawErrorDefaultOpen)
+
+  useEffect(() => {
+    setShowRawError(rawErrorDefaultOpen)
+  }, [connection.error, rawErrorDefaultOpen])
 
   // Auto-retry after successful auth. The terminal shell runs on the server
   // host, so the auth command itself fixes the server's credentials in every
@@ -265,32 +273,34 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   }
 
   return (
-    <div className="flex-1 flex items-start justify-center pt-16 px-8">
-      <div className="max-w-lg w-full">
+    <div className="flex-1 flex items-start justify-center pt-12 px-8">
+      <div className="max-w-xl w-full">
         <div className="flex flex-col items-center text-center">
-          <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mb-6">
-            <XCircle className="w-10 h-10 text-red-400" />
+          <div className="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center mb-5">
+            <ServerOff className="w-8 h-8 text-red-400" />
           </div>
 
           <h2 className="text-xl font-semibold text-theme-text-primary mb-2">
             {connection.errorType === 'config' ? 'No Cluster Configuration' : 'Cannot Connect to Cluster'}
           </h2>
 
-          <p className="text-sm text-theme-text-secondary mb-1 inline-flex items-center gap-1.5">
-            Context: {connection.context ? (
-              <ClusterName name={connection.context} />
-            ) : (
-              <span className="inline-code">(none)</span>
-            )}
-          </p>
-
-          {connection.clusterName && (
-            <p className="text-sm text-theme-text-secondary mb-4">
-              Cluster: <span className="inline-code">{connection.clusterName}</span>
+          <div className="mb-6 space-y-1">
+            <p className="text-sm text-theme-text-secondary inline-flex items-center gap-1.5">
+              Context: {connection.context ? (
+                <ClusterName name={connection.context} />
+              ) : (
+                <span className="inline-code">(none)</span>
+              )}
             </p>
-          )}
 
-          <div className="w-full bg-theme-surface border border-theme-border rounded-lg p-4 mb-6 text-left">
+            {connection.clusterName && (
+              <p className="text-sm text-theme-text-secondary">
+                Cluster: <span className="inline-code">{connection.clusterName}</span>
+              </p>
+            )}
+          </div>
+
+          <div className="w-full bg-theme-surface border border-theme-border rounded-lg p-4 mb-5 text-left">
             <h3 className="text-sm font-medium text-theme-text-primary mb-2">
               {errorInfo.title}
             </h3>
@@ -306,13 +316,15 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
               <div className="mt-3">
                 <p className="text-xs text-theme-text-tertiary">{commandInfo.authCommand.label}</p>
                 <CopyableCommand command={commandInfo.authCommand.command} onRunInTerminal={handleRunInTerminal} />
-                <button
-                  onClick={handleAuthInTerminal}
-                  className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium btn-brand rounded-md"
-                >
-                  <TerminalSquare className="w-3.5 h-3.5" />
-                  {isAuth ? 'Authenticate in terminal' : 'Run in terminal'}
-                </button>
+                {isAuth && (
+                  <button
+                    onClick={handleAuthInTerminal}
+                    className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium btn-brand rounded-md"
+                  >
+                    <TerminalSquare className="w-3.5 h-3.5" />
+                    Authenticate in terminal
+                  </button>
+                )}
               </div>
             )}
             {commandInfo?.fallbackCommand && (
@@ -322,16 +334,27 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
               </div>
             )}
             {connection.error && (
-              <details open={showRawErrorOpen} className="mt-4 pt-3 border-t border-theme-border/50">
-                <summary className="cursor-pointer select-none text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary">
+              <div className="mt-4 pt-3 border-t border-theme-border/50">
+                <button
+                  type="button"
+                  aria-expanded={showRawError}
+                  aria-controls="connection-raw-error"
+                  onClick={() => setShowRawError((open) => !open)}
+                  className="flex items-center gap-1 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+                >
+                  <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-200 ${showRawError ? 'rotate-90' : ''}`} />
                   Raw error
-                </summary>
-                <div className="mt-2 bg-theme-elevated border border-theme-border rounded-md p-3 overflow-auto max-h-32">
-                  <code className="text-xs text-theme-text-tertiary font-mono whitespace-pre-wrap break-words">
-                    {connection.error}
-                  </code>
+                </button>
+                <div className={`issue-details-motion ${showRawError ? 'issue-details-motion-open' : ''}`}>
+                  <div className="overflow-hidden">
+                    <div id="connection-raw-error" className="mt-2 bg-theme-elevated border border-theme-border rounded-md p-3 overflow-auto max-h-32">
+                      <code className="text-xs text-theme-text-tertiary font-mono whitespace-pre-wrap break-words">
+                        {connection.error}
+                      </code>
+                    </div>
+                  </div>
                 </div>
-              </details>
+              </div>
             )}
           </div>
 
