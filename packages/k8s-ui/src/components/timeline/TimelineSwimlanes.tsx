@@ -40,7 +40,7 @@ import { pluralize } from '../../utils/pluralize'
 import { gitOpsRouteForKind } from '../../utils/gitops-route'
 import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../../types'
 import { DiffViewer } from './DiffViewer'
-import { getOperationColor, getHealthBadgeColor, getEventTypeColor, getKindColorClass } from '../../utils/badge-colors'
+import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
 import { MiddleEllipsis } from '../ui/MiddleEllipsis'
 import { Tooltip } from '../ui/Tooltip'
 import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, isProblematicEvent, laneTrackEvents, isChildVisibleInWindow, collidingLaneKeys, laneCollisionKey, type ResourceLane as BaseResourceLane, type TimelineGrouping, type PinnedLaneRef } from '../../utils/resource-hierarchy'
@@ -254,17 +254,11 @@ function eventShape(event: TimelineEvent): MarkerShape {
 
 function eventColorClass(event: TimelineEvent): string {
   if (isProblematicEvent(event)) return 'text-amber-500 dark:text-amber-400'
-  if (isChangeEvent(event)) {
-    switch (event.eventType) {
-      case 'add': return 'text-green-600 dark:text-green-400'
-      case 'delete': return 'text-red-600 dark:text-red-400'
-      case 'update': return 'text-blue-600 dark:text-blue-400'
-    }
-  }
-  // Informational K8s events (Scheduled, Pulled, Started…) — the most common
-  // marker. Violet so the busiest signal reads as a distinct calm colour instead
-  // of a near-invisible grey, without colliding with created/modified/deleted.
-  return 'text-violet-500 dark:text-violet-400'
+  if (isHistoricalEvent(event)) return 'text-theme-text-tertiary'
+  // ONE activity hue (Turn 11 color budget): every change/create/delete/
+  // informational dot is info-blue — the SHAPE carries the event class
+  // (▲ created / ● modified / ▼ deleted), hue is reserved for status.
+  return 'text-blue-600 dark:text-blue-400'
 }
 
 // Markers are centered on their time — but a live event's time sits AT the Now
@@ -1811,23 +1805,22 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             <div className="absolute right-4 top-full z-50 mt-1 w-[280px] rounded-xl border border-theme-border bg-theme-surface p-4 shadow-theme-lg">
               <div className="text-[10px] font-bold uppercase leading-none tracking-[0.07em] text-theme-text-tertiary">Events</div>
               <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-theme-text-secondary">
-                <MarkerLegendItem shape="triangle-up" colorClass="text-green-600 dark:text-green-400" label="created" description="Resource was created" />
-                <MarkerLegendItem shape="circle" colorClass="text-blue-600 dark:text-blue-400" label="modified" description="Resource was updated/changed" />
-                <MarkerLegendItem shape="triangle-down" colorClass="text-red-600 dark:text-red-400" label="deleted" description="Resource was removed" />
+                {/* One activity hue (Turn 11): shape carries the event class. */}
+                <MarkerLegendItem shape="triangle-up" colorClass="text-blue-600 dark:text-blue-400" label="created" description="Resource was created" />
+                <MarkerLegendItem shape="circle" colorClass="text-blue-600 dark:text-blue-400" label="modified" description="Resource change or informational Kubernetes event" />
+                <MarkerLegendItem shape="triangle-down" colorClass="text-blue-600 dark:text-blue-400" label="deleted" description="Resource was removed" />
                 <MarkerLegendItem shape="diamond" colorClass="text-amber-500 dark:text-amber-400" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
-                <MarkerLegendItem shape="circle" colorClass="text-violet-500 dark:text-violet-400" label="event" description="Informational Kubernetes event (Scheduled, Pulled, Started, etc.)" />
                 <MarkerLegendItem shape="ring" colorClass="text-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" />
                 <ClusterLegendItem description="Nearby events collapsed into one pill" />
               </div>
               <div className="mt-3.5 text-[10px] font-bold uppercase leading-none tracking-[0.07em] text-theme-text-tertiary">Health</div>
               <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-theme-text-secondary">
+                {/* Exactly three status colors (Turn 11); everything else is gray. */}
                 <HealthLegendItem color={HEALTH_STRIP_COLORS.healthy} label="healthy" description="Resource is fully operational" />
-                <HealthLegendItem color={HEALTH_STRIP_COLORS.rolling} label="rolling" description="Expected degradation during deployment rollout" />
                 <HealthLegendItem color={HEALTH_STRIP_COLORS.degraded} label="degraded" description="Unexpected partial availability" />
                 <HealthLegendItem color={HEALTH_STRIP_COLORS.unhealthy} label="unhealthy" description="Resource is failing or not ready" />
-                <HealthLegendItem color={HEALTH_STRIP_COLORS.idle} label="idle" description="Intentionally off/resting (completed, suspended, scaled to zero)" />
-                <HealthLegendItem color="bg-gray-400/50" label="unknown" description="No health signal observed yet (e.g. first event pending, node stopped reporting)" />
-                <HealthLegendItem label="mixed" swatchStyle={MIXED_HEALTH_STRIP_STYLE} description="members disagree — some OK, some degraded/rolling; expand or hover for who" />
+                <HealthLegendItem color="bg-gray-400/50" label="no signal" description="Not a health state: rolling out, idle/suspended, or nothing observed yet" />
+                <HealthLegendItem label="mixed" swatchStyle={MIXED_HEALTH_STRIP_STYLE} description="members disagree — some OK, some degraded; expand or hover for who" />
               </div>
             </div>
           </>
@@ -2040,13 +2033,16 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
 }
 
 // Health-strip segment colors (solid, pinned to the lane's bottom edge).
+// Status is EXACTLY three colors (Turn 11): healthy green, degraded amber,
+// unhealthy red. Anything else — rolling, idle, neutral, unknown — is gray
+// ("not a health signal"). No fourth status color, ever.
 const HEALTH_STRIP_COLORS: Record<string, string> = {
   healthy: 'bg-green-500',
-  rolling: 'bg-blue-500',
+  rolling: 'bg-gray-400/50',
   degraded: 'bg-amber-500 dark:bg-[#b8861e]',
   unhealthy: 'bg-red-500',
-  neutral: 'bg-cyan-400',
-  idle: 'bg-cyan-400',
+  neutral: 'bg-gray-400/50',
+  idle: 'bg-gray-400/50',
 }
 
 function getHealthStripColor(health: string): string {
@@ -2122,9 +2118,9 @@ function LaneWarnChip({ events }: { events: TimelineEvent[] }) {
 const TREE_ROOT_RAIL_PX = 22
 const CHILD_INDENT_STEP_PX = 22
 // The kind chip: mono, uppercased via CSS (DOM text stays the display kind, so
-// text queries keep matching), colored from the shared per-kind palette
-// (getKindColorClass) so every kind — Application, Gateway, GatewayClass, Pod,
-// CRDs — gets its own distinct, app-consistent color instead of a flat grey.
+// text queries keep matching). ALL NEUTRAL (Turn 11 color budget): identity is
+// monochrome — kind is the text, not the hue — so color stays reserved for
+// status and selection. No per-kind color map.
 function KindChip({ kind, title }: { kind: string; title?: string }) {
   // Some cluster components emit events whose involvedObject has NO kind (e.g.
   // GKE's resource-tracker "BigQueryUpload" events) — label those lanes as plain
@@ -2132,10 +2128,7 @@ function KindChip({ kind, title }: { kind: string; title?: string }) {
   const label = displayKind(kind) || 'Event'
   return (
     <span
-      className={clsx(
-        'shrink-0 rounded border font-mono text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5',
-        getKindColorClass(kind),
-      )}
+      className="shrink-0 rounded border border-theme-border-light bg-theme-elevated px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-theme-text-secondary"
       title={title ?? (kind ? undefined : 'Kubernetes event — its source object reports no kind')}
     >
       {label}
@@ -2194,7 +2187,7 @@ function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, isLast, o
         </button>
       )}
       {/* Single-line child row: kind chip · name (middle-ellipsis). Colored chips
-          come from getKindColorClass. Only the NAME links to the resource. */}
+          are neutral (Turn 11). Only the NAME links to the resource. */}
       <KindChip kind={kind} title={kindTitle} />
       {showGroupChip && group && <GroupChip group={group} />}
       <span
@@ -2540,7 +2533,11 @@ function ClusterPill({ cluster, selected, onClick, small }: {
           onClick()
         }}
       >
-        <MarkerGlyph shape={eventShape(cluster.dominant)} size={small ? 9 : 11} className={eventColorClass(cluster.dominant)} />
+        {/* Red once per problem (Turn 11): a critical-dominant cluster shows the
+            error glyph — one ⊘ ×N, not N shouting icons or a generic diamond. */}
+        {isCriticalIssue(cluster.dominant)
+          ? <Ban className={clsx('text-red-600 dark:text-red-400', small ? 'h-2.5 w-2.5' : 'h-3 w-3')} />
+          : <MarkerGlyph shape={eventShape(cluster.dominant)} size={small ? 9 : 11} className={eventColorClass(cluster.dominant)} />}
         <span className="text-[11px] font-semibold tabular-nums text-theme-text-primary">×{cluster.count}</span>
       </button>
     </Tooltip>
