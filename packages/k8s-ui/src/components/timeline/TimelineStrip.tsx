@@ -124,8 +124,9 @@ function DateTimeField({ label, valueMs, onChange, nowMs }: {
     const onDown = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
     }
-    window.addEventListener('pointerdown', onDown)
-    return () => window.removeEventListener('pointerdown', onDown)
+    // Capture phase: a stopPropagation elsewhere must not keep the calendar open.
+    window.addEventListener('pointerdown', onDown, true)
+    return () => window.removeEventListener('pointerdown', onDown, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
   const prevMonth = () => { if (viewM === 0) { setViewY(viewY - 1); setViewM(11) } else setViewM(viewM - 1) }
@@ -321,17 +322,21 @@ export function TimelineStrip({
     setCustomToMs(selection.toMs)
   }, [pickerOpen, selection.fromMs, selection.toMs])
 
-  // Close the picker on outside-click / Escape.
+  // Close the picker on outside-click / Escape. "Outside" means outside the
+  // trigger + dialog (pickerRef) — NOT the whole strip: scoping to containerRef
+  // kept the dialog open when clicking the histogram, stepper, or live chip.
+  // Capture phase, so a stopPropagation anywhere below can't swallow the close.
+  const pickerRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!pickerOpen) return
     const onDown = (e: PointerEvent) => {
-      if (!containerRef.current?.contains(e.target as Node)) setPickerOpen(false)
+      if (!pickerRef.current?.contains(e.target as Node)) setPickerOpen(false)
     }
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setPickerOpen(false)
-    window.addEventListener('pointerdown', onDown)
+    window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('keydown', onKey)
     return () => {
-      window.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('pointerdown', onDown, true)
       window.removeEventListener('keydown', onKey)
     }
   }, [pickerOpen])
@@ -459,7 +464,7 @@ export function TimelineStrip({
       {/* Row 1 — query range + window size + go-live */}
       <div className="mb-2 flex items-center gap-2">
         <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary">Query range</span>
-        <div className="relative">
+        <div ref={pickerRef} className="relative">
           <button
             type="button"
             onClick={() => setPickerOpen((v) => !v)}
