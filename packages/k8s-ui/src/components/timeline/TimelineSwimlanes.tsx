@@ -1705,9 +1705,14 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
         </>
       ) : viewWindow && events.length > 0 ? (
         <>
-          {/* Controlled window over loaded data: quiet ≠ waiting-for-live. */}
-          <p className="text-lg">No events in this window</p>
-          <p className="text-sm mt-1">Pan or zoom out — or drag the window on the strip above — to a busier period</p>
+          {/* Controlled window over loaded data: quiet ≠ waiting-for-live. Name
+              the exact count sitting outside the window — the strip's bars show
+              where, so point there instead of guessing at "a busier period". */}
+          <p className="text-lg">Nothing changed in this window</p>
+          <p className="text-sm mt-1">Only resources with activity are shown</p>
+          <p className="text-sm mt-1">
+            {pluralize(events.length, 'event')} elsewhere in the query range — move the window on the strip above to see them
+          </p>
         </>
       ) : (
         <>
@@ -2011,7 +2016,18 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 // doesn't caption its own end. The full empty states render only
                 // when the whole canvas would otherwise be blank.
                 ? (pinnedEventsInWindow > 0 ? null : emptyState)
-                : visibleLanes.map((lane) => renderLane(lane))}
+                : (
+                  <>
+                    {visibleLanes.map((lane) => renderLane(lane))}
+                    {/* End-of-list caption: absence here means "nothing happened
+                        to it in this range", not "it doesn't exist". Same voice
+                        as the empty states. */}
+                    <div className="flex items-center justify-center gap-2 py-6 text-sm text-theme-text-tertiary">
+                      <Clock className="h-4 w-4 opacity-50" />
+                      <span>The timeline shows only resources with activity in this query range</span>
+                    </div>
+                  </>
+                )}
           </div>
           )}
         </div>
