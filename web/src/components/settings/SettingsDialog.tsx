@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug, Plus, Terminal } from 'lucide-react'
+import {
+  Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
+  Plus, Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
+  type LucideIcon,
+} from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
@@ -8,7 +12,6 @@ import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useCloudRole, useVersionCheck } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Tooltip } from '../ui/Tooltip'
-import type { DeploymentMode } from '../../types'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 
@@ -45,54 +48,117 @@ interface SettingsDialogProps {
   onShowMyPermissions?: () => void
 }
 
+// The settings surface splits into three honest apply buckets:
+//   • Startup config (kubeconfig, server, timeline, MCP) — persisted by the
+//     owner-gated footer to the config file; effect on next launch.
+//   • Live integrations (Prometheus, Argo CD) — their own Apply/Connect endpoints
+//     re-point the running server; effect immediately, NOT part of footer dirty.
+//   • AI diagnose — client-side prefs, self-saving, editable by everyone.
+type SectionId =
+  | 'perms' | 'connection' | 'prometheus' | 'argocd' | 'ai' | 'advanced'
+
+// Only STARTUP fields count toward footer dirty. Integration fields (prometheusUrl,
+// argoCdUrl, argoCdInsecureTls) apply live and are excluded here. Every field is
+// normalized so unset≡default doesn't read as a change.
+function normalizeStartup(c: Config) {
+  return {
+    kubeconfig: c.kubeconfig ?? '',
+    kubeconfigDirs: c.kubeconfigDirs && c.kubeconfigDirs.length > 0 ? c.kubeconfigDirs.join('\x00') : '',
+    namespace: c.namespace ?? '',
+    port: c.port ?? null,
+    noBrowser: c.noBrowser ?? false,
+    browser: c.browser ?? '',
+    timelineStorage: c.timelineStorage ?? 'memory',
+    timelineDbPath: c.timelineDbPath ?? '',
+    historyLimit: c.historyLimit ?? null,
+    mcp: c.mcp ?? true,
+  }
+}
+
 export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
   const { data: versionInfo } = useVersionCheck()
   // Radar configuration (kubeconfig, port, integrations…) is host-level and
   // affects every user of this instance, so it's gated to owners. Personal
-  // sections (My permissions) stay visible to everyone. Non-Cloud callers
-  // (OSS, OIDC, kubectl plugin) have no role and pass — single-user laptops
-  // are never locked out of their own config. Backend enforces this too.
+  // sections (My permissions, AI diagnose) stay usable by everyone. Non-Cloud
+  // callers (OSS, OIDC, kubectl plugin) have no role and pass — single-user
+  // laptops are never locked out of their own config. Backend enforces this too.
   const { canAtLeast } = useCloudRole()
   const capabilities = useCapabilitiesContext()
   const canEditConfig = canAtLeast('owner')
+
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
   const [editedConfig, setEditedConfig] = useState<Config>({})
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
-  const [configDirty, setConfigDirty] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [section, setSection] = useState<SectionId>('perms')
+  const [confirmingClose, setConfirmingClose] = useState(false)
 
-  // AI Diagnosis prefs are client-side (localStorage) but, like the rest of this
-  // dialog, are STAGED and committed on Save — not on every change. The draft
-  // mirrors the committed values (from DiagnoseContext) and is snapshotted on open.
+  // AI Diagnosis prefs are client-side (localStorage) and now SELF-SAVING: the
+  // section has its own Save that commits the draft to DiagnoseContext, so it's
+  // independent of the owner-gated footer. The draft is snapshotted on open.
   const diag = useDiagnose()
+  const aiAvailable = diag.available && diag.agents.length > 0
   const [aiDraft, setAiDraft] = useState<AIDraft>({
     agent: diag.selectedAgent,
     isolated: diag.isolated,
     model: diag.model,
     effort: diag.effort,
   })
+  const [aiSaved, setAiSaved] = useState(false)
   const aiDirty =
     aiDraft.agent !== diag.selectedAgent ||
     aiDraft.isolated !== diag.isolated ||
     aiDraft.model !== diag.model ||
     aiDraft.effort !== diag.effort
 
-  // Load config on open
+  // Per-bucket normalized dirty. Only startup fields participate; integration
+  // fields apply live and never light up the footer.
+  const edN = normalizeStartup(editedConfig)
+  const svN = normalizeStartup(configData?.file ?? {})
+  const clusterDirty =
+    edN.kubeconfig !== svN.kubeconfig ||
+    edN.kubeconfigDirs !== svN.kubeconfigDirs ||
+    edN.namespace !== svN.namespace
+  const serverDirty =
+    edN.port !== svN.port || edN.noBrowser !== svN.noBrowser || edN.browser !== svN.browser
+  const mcpDirty = edN.mcp !== svN.mcp
+  const timelineDirty =
+    edN.timelineStorage !== svN.timelineStorage ||
+    edN.timelineDbPath !== svN.timelineDbPath ||
+    edN.historyLimit !== svN.historyLimit
+  // Merged-pane dirty for the flat nav (Connection = cluster+server, Advanced = mcp+timeline).
+  const connectionDirty = clusterDirty || serverDirty
+  const advancedDirty = mcpDirty || timelineDirty
+  const startupDirty =
+    configData != null && (clusterDirty || serverDirty || mcpDirty || timelineDirty)
+
+  // Load config on open + snapshot AI prefs + pick a default section that's
+  // actually accessible to the current identity.
   useEffect(() => {
     if (!open) return
     setSaveMessage(null)
-    setConfigDirty(false)
     setLoadError(null)
-    // Snapshot the committed AI prefs into the draft so edits stage cleanly.
+    setConfirmingClose(false)
+    setAiSaved(false)
     setAiDraft({
       agent: diag.selectedAgent,
       isolated: diag.isolated,
       model: diag.model,
       effort: diag.effort,
     })
+    // First accessible section: My permissions for everyone when wired, else the
+    // first host-config section for owners, else AI for non-owners.
+    const firstId: SectionId = onShowMyPermissions
+      ? 'perms'
+      : canEditConfig
+        ? 'connection'
+        : diag.available && diag.agents.length > 0
+          ? 'ai'
+          : 'connection'
+    setSection(firstId)
 
     fetch(apiUrl('/config'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => {
@@ -111,18 +177,98 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
+  const updateConfigField = useCallback(<K extends keyof Config>(field: K, value: Config[K]) => {
+    setEditedConfig((prev) => ({ ...prev, [field]: value }))
+    setSaveMessage(null)
+  }, [])
+
+  const saveConfig = useCallback(async (): Promise<boolean> => {
+    if (!configData) return false
+    setSaving(true)
+    setSaveMessage(null)
+    try {
+      // /config is FULL-REPLACEMENT. Integration fields must carry the
+      // LAST-COMMITTED values (from configData.file), never an un-applied draft:
+      // sending a typed-but-not-applied argoCdUrl trips the server-side origin
+      // guard that clears the stored Argo token, and a stale value would revert a
+      // live-applied integration. configData.file is kept in sync on Apply/Connect.
+      const body: Config = {
+        ...editedConfig,
+        prometheusUrl: configData.file.prometheusUrl,
+        argoCdUrl: configData.file.argoCdUrl,
+        argoCdInsecureTls: configData.file.argoCdInsecureTls,
+      }
+      const res = await fetch(apiUrl('/config'), {
+        method: 'PUT',
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        setSaveMessage(`Error: ${data?.error || res.statusText}`)
+        return false
+      }
+      // Advance the committed snapshot so startupDirty settles to false.
+      setConfigData((prev) => (prev ? { ...prev, file: body } : prev))
+      setSaveMessage('Saved. Restart Radar to apply.')
+      return true
+    } catch (err) {
+      setSaveMessage(`Error: ${err}`)
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }, [editedConfig, configData])
+
+  // AI prefs are client-side (localStorage) — commit the staged draft now.
+  // setSelectedAgent clears model/effort (they're agent-specific), so set the
+  // agent first, then restore the draft's model/effort.
+  const saveAi = useCallback(() => {
+    diag.setSelectedAgent(aiDraft.agent)
+    diag.setIsolated(aiDraft.isolated)
+    diag.setModel(aiDraft.model)
+    diag.setEffort(aiDraft.effort)
+    setAiSaved(true)
+  }, [diag, aiDraft])
+
+  const resetConfig = useCallback(() => {
+    // Clears STARTUP fields only — integration inputs (which apply live) are
+    // preserved so Reset doesn't blank a URL the user is looking at.
+    setEditedConfig((prev) => ({
+      prometheusUrl: prev.prometheusUrl,
+      argoCdUrl: prev.argoCdUrl,
+      argoCdInsecureTls: prev.argoCdInsecureTls,
+    }))
+    setSaveMessage('All startup fields cleared. Press Save to apply.')
+  }, [])
+
+  const handleSaveAndClose = useCallback(async () => {
+    const ok = await saveConfig()
+    if (ok) onClose()
+  }, [saveConfig, onClose])
+
+  // Close guard: a pending startup edit prompts an inline confirm rather than
+  // silently discarding. An unsaved AI draft is re-derivable, so it's fine to
+  // drop it on close. Held in a ref so the ESC listener reads current dirtiness.
+  const requestCloseRef = useRef<() => void>(() => {})
+  requestCloseRef.current = () => {
+    if (canEditConfig && startupDirty) setConfirmingClose(true)
+    else onClose()
+  }
+
   // ESC key
   useEffect(() => {
     if (!open) return
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation()
-        onClose()
+        requestCloseRef.current()
       }
     }
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [open, onClose])
+  }, [open])
 
   // Focus trap
   useEffect(() => {
@@ -131,66 +277,25 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
     }
   }, [open])
 
-  const updateConfigField = useCallback(<K extends keyof Config>(field: K, value: Config[K]) => {
-    setEditedConfig((prev) => ({ ...prev, [field]: value }))
-    setConfigDirty(true)
-    setSaveMessage(null)
-  }, [])
-
-  const saveConfig = useCallback(async () => {
-    setSaving(true)
-    setSaveMessage(null)
-    // AI prefs are client-side (localStorage) — commit the staged draft now.
-    // setSelectedAgent clears model/effort (they're agent-specific), so set the
-    // agent first, then restore the draft's model/effort.
-    if (aiDirty) {
-      diag.setSelectedAgent(aiDraft.agent)
-      diag.setIsolated(aiDraft.isolated)
-      diag.setModel(aiDraft.model)
-      diag.setEffort(aiDraft.effort)
-    }
-    try {
-      if (configDirty) {
-        const res = await fetch(apiUrl('/config'), {
-          method: 'PUT',
-          credentials: getCredentialsMode(),
-          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-          body: JSON.stringify(editedConfig),
-        })
-        if (!res.ok) {
-          const data = await res.json().catch(() => null)
-          setSaveMessage(`Error: ${data?.error || res.statusText}`)
-          return
-        }
-        setConfigDirty(false)
-        setSaveMessage('Saved. Configuration changes take effect on next launch.')
-      } else {
-        setSaveMessage('Saved.')
-      }
-    } catch (err) {
-      setSaveMessage(`Error: ${err}`)
-    } finally {
-      setSaving(false)
-    }
-  }, [editedConfig, configDirty, aiDirty, aiDraft, diag])
-
-  const resetConfig = useCallback(() => {
-    setEditedConfig({})
-    setConfigDirty(true)
-    // Revert staged AI edits back to the committed prefs.
-    setAiDraft({
-      agent: diag.selectedAgent,
-      isolated: diag.isolated,
-      model: diag.model,
-      effort: diag.effort,
-    })
-    setSaveMessage('All fields cleared. Press Save to apply.')
-  }, [diag])
-
   if (!shouldRender) return null
 
   const isDesktop = configData?.isDesktop ?? false
   const deploymentMode = capabilities.deployment?.mode ?? 'local'
+  const showBrowserLaunchControls = !isDesktop && deploymentMode === 'local'
+
+  // Flat, un-grouped nav — the per-section captions carry the restart-vs-live
+  // semantics, so group labels would only add visual weight to a 6-item list.
+  const navItems: NavItemDef[] = [
+    { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, visible: !!onShowMyPermissions, dirty: false },
+    { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, visible: true, dirty: connectionDirty },
+    { id: 'prometheus', label: 'Prometheus', icon: Activity, ownerOnly: true, visible: true, dirty: false },
+    { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, visible: true, dirty: false },
+    { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, visible: aiAvailable, dirty: aiDirty },
+    { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, visible: true, dirty: advancedDirty },
+  ]
+  const flatVisible = navItems.filter((i) => i.visible)
+
+  const showFooter = canEditConfig && (confirmingClose || startupDirty || !!saveMessage)
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -201,7 +306,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
           TRANSITION_BACKDROP,
           isOpen ? 'opacity-100' : 'opacity-0'
         )}
-        onClick={onClose}
+        onClick={() => requestCloseRef.current()}
       />
 
       {/* Dialog */}
@@ -211,12 +316,12 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
         className={clsx(
           'relative bg-theme-surface border border-theme-border shadow-theme-lg w-full outline-none flex flex-col',
           'max-sm:inset-0 max-sm:absolute max-sm:rounded-none max-sm:max-h-full max-sm:border-0',
-          'sm:rounded-xl sm:max-w-2xl sm:mx-4 sm:max-h-[85vh]',
+          'sm:rounded-xl sm:max-w-4xl sm:mx-4 sm:max-h-[85vh]',
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
       >
-        {/* Header */}
+        {/* Header — spans both panes */}
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
           <div className="flex items-center gap-2">
             <Settings className="w-5 h-5 text-theme-text-secondary" />
@@ -229,120 +334,279 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={() => requestCloseRef.current()}
             className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="overflow-y-auto p-4 flex-1">
-          {loadError && (
-            <div className="mb-3 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-md">
-              {loadError}
+        {/* Body: sidebar + content */}
+        <div className="flex flex-col sm:flex-row flex-1 min-h-0">
+          {/* Sidebar (sm+) */}
+          <nav
+            role="tablist"
+            aria-orientation="vertical"
+            className="hidden sm:flex sm:flex-col gap-0.5 w-[200px] shrink-0 overflow-y-auto border-r border-theme-border p-3"
+          >
+            {flatVisible.map((i) => (
+              <NavItem
+                key={i.id}
+                item={i}
+                active={section === i.id}
+                disabled={i.ownerOnly && !canEditConfig}
+                onSelect={() => setSection(i.id)}
+              />
+            ))}
+          </nav>
+
+          {/* Tab strip (below sm) */}
+          <div role="tablist" className="sm:hidden flex gap-1 overflow-x-auto border-b border-theme-border p-2 shrink-0">
+            {flatVisible.map((i) => (
+              <NavItem
+                key={i.id}
+                item={i}
+                horizontal
+                active={section === i.id}
+                disabled={i.ownerOnly && !canEditConfig}
+                onSelect={() => setSection(i.id)}
+              />
+            ))}
+          </div>
+
+          {/* Content pane */}
+          <div className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-5">
+            {loadError && (
+              <div className="mb-3 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-md">
+                {loadError}
+              </div>
+            )}
+
+            {/* My permissions — usable by everyone */}
+            <div className={clsx(section !== 'perms' && 'hidden')} role="tabpanel">
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-theme-text-primary">My permissions</h3>
+              </div>
+              <p className="text-sm text-theme-text-secondary">
+                See what your current identity can do in this cluster — the roles bound to you
+                and your effective, flattened permissions.
+              </p>
+              <button
+                onClick={onShowMyPermissions}
+                className="mt-4 flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+              >
+                <Shield className="w-3.5 h-3.5" />
+                Open my permissions
+              </button>
             </div>
-          )}
-          {onShowMyPermissions && (
-            <div className="mb-5">
-              <SectionLabel>Personal</SectionLabel>
-              <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="text-sm font-medium text-theme-text-primary">My permissions</h3>
-                    <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                      View what your current identity can do in this cluster.
-                    </p>
-                  </div>
+
+            {/* Connection — Cluster + Server merged */}
+            <SectionPane
+              id="connection"
+              active={section}
+              title="Connection"
+              caption="Takes effect on next launch."
+              locked={!canEditConfig}
+            >
+              <div className="space-y-4">
+                <SubHeading>Cluster</SubHeading>
+                <ClusterSection
+                  config={editedConfig}
+                  effectiveConfig={configData?.effective}
+                  onChange={updateConfigField}
+                />
+              </div>
+              <div className="space-y-4 border-t border-theme-border-subtle pt-4">
+                <SubHeading>Server</SubHeading>
+                <ServerSection
+                  config={editedConfig}
+                  effectiveConfig={configData?.effective}
+                  isDesktop={isDesktop}
+                  showBrowserLaunchControls={showBrowserLaunchControls}
+                  onChange={updateConfigField}
+                />
+              </div>
+            </SectionPane>
+
+            {/* Prometheus — live */}
+            <SectionPane
+              id="prometheus"
+              active={section}
+              title="Prometheus"
+              caption="Applies immediately — no restart."
+              live
+              locked={!canEditConfig}
+            >
+              <PrometheusConfigField
+                value={editedConfig.prometheusUrl ?? ''}
+                configuredHeaderKeys={configData?.prometheusHeaderKeys ?? []}
+                onChange={(v) => updateConfigField('prometheusUrl', v || undefined)}
+                onApplied={(url) =>
+                  setConfigData((prev) =>
+                    prev ? { ...prev, file: { ...prev.file, prometheusUrl: url || undefined } } : prev
+                  )
+                }
+              />
+            </SectionPane>
+
+            {/* Argo CD — live */}
+            <SectionPane
+              id="argocd"
+              active={section}
+              title="Argo CD"
+              caption="Applies immediately — no restart."
+              live
+              locked={!canEditConfig}
+            >
+              <ArgoCDConfigField
+                url={editedConfig.argoCdUrl ?? ''}
+                insecureTls={editedConfig.argoCdInsecureTls ?? false}
+                tokenSet={configData?.argoCdTokenSet ?? false}
+                onChangeUrl={(v) => updateConfigField('argoCdUrl', v || undefined)}
+                onChangeInsecureTls={(v) => updateConfigField('argoCdInsecureTls', v || undefined)}
+                onApplied={({ url, insecureTls, tokenSet }) =>
+                  setConfigData((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          file: { ...prev.file, argoCdUrl: url || undefined, argoCdInsecureTls: insecureTls || undefined },
+                          argoCdTokenSet: tokenSet,
+                        }
+                      : prev
+                  )
+                }
+              />
+            </SectionPane>
+
+            {/* AI diagnose — self-saving, usable by everyone. AISettingsSection
+                carries its own heading + "applies to new investigations" note. */}
+            <div className={clsx(section !== 'ai' && 'hidden')} role="tabpanel">
+              <AISettingsSection
+                available={diag.available}
+                agents={diag.agents}
+                draft={aiDraft}
+                onChange={(patch) => {
+                  setAiDraft((d) => ({ ...d, ...patch }))
+                  setAiSaved(false)
+                }}
+              />
+              {aiAvailable && (
+                <div className="flex items-center justify-end gap-3">
+                  {aiSaved && !aiDirty && (
+                    <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+                      <Check className="w-3 h-3" />
+                      Saved
+                    </span>
+                  )}
                   <button
-                    onClick={onShowMyPermissions}
-                    className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover rounded-md transition-colors"
+                    onClick={saveAi}
+                    disabled={!aiDirty}
+                    className="px-4 py-1.5 text-sm font-medium btn-brand rounded-md disabled:opacity-50 disabled:pointer-events-none"
                   >
-                    <Shield className="w-3.5 h-3.5" />
-                    Open
+                    Save
                   </button>
                 </div>
-              </div>
-            </div>
-          )}
-
-          <AISettingsSection
-            available={diag.available}
-            agents={diag.agents}
-            draft={aiDraft}
-            onChange={(patch) => {
-              setAiDraft((d) => ({ ...d, ...patch }))
-              setSaveMessage(null)
-            }}
-          />
-
-          <SectionLabel>Radar configuration</SectionLabel>
-          {canEditConfig ? (
-            <StartupConfigTab
-              config={editedConfig}
-              effectiveConfig={configData?.effective}
-              isDesktop={isDesktop}
-              deploymentMode={deploymentMode}
-              prometheusHeaderKeys={configData?.prometheusHeaderKeys ?? []}
-              argoCdTokenSet={configData?.argoCdTokenSet ?? false}
-              onChange={updateConfigField}
-            />
-          ) : (
-            <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-4 flex items-start gap-3">
-              <Lock className="w-4 h-4 mt-0.5 shrink-0 text-theme-text-tertiary" />
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-theme-text-primary">Owner access required</p>
-                <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                  These settings (kubeconfig, server port, timeline, integrations) affect
-                  every user of this Radar instance, so they're limited to owners. Ask an
-                  owner if you need a change here.
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Footer — only the owner-gated config section is editable, so hide
-            the save controls entirely for non-owners (personal sections save
-            themselves). */}
-        {canEditConfig && (
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-theme-border shrink-0">
-            <div className="flex items-center gap-2">
-              <Tooltip content="Clear all fields — reverts to defaults when saved">
-              <button
-                onClick={resetConfig}
-                disabled={saving}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Reset
-              </button>
-              </Tooltip>
-              {saveMessage && (
-                <span className={clsx(
-                  'text-xs',
-                  saveMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400'
-                )}>
-                  {saveMessage}
-                </span>
               )}
             </div>
-            <div className="flex items-center gap-3">
-              <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
-                <RotateCw className="w-3 h-3" />
-                {aiDirty && !configDirty
-                  ? 'Applies to new investigations'
-                  : 'Applies on next launch'}
-              </span>
-              <button
-                onClick={saveConfig}
-                disabled={saving || (!configDirty && !aiDirty)}
-                className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
-              >
-                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Save
-              </button>
-            </div>
+
+            {/* Advanced — MCP + Timeline merged */}
+            <SectionPane
+              id="advanced"
+              active={section}
+              title="Advanced"
+              caption="Takes effect on next launch."
+              locked={!canEditConfig}
+            >
+              <div className="space-y-4">
+                <SubHeading>MCP</SubHeading>
+                <MCPSection
+                  mcpEnabled={editedConfig.mcp ?? true}
+                  onToggle={(v) => updateConfigField('mcp', v)}
+                  isDesktop={isDesktop}
+                  portPinned={editedConfig.port != null && editedConfig.port > 0}
+                  onPinPort={(port) => updateConfigField('port', port)}
+                />
+              </div>
+              <div className="space-y-4 border-t border-theme-border-subtle pt-4">
+                <SubHeading>Timeline</SubHeading>
+                <TimelineSection
+                  config={editedConfig}
+                  effectiveConfig={configData?.effective}
+                  onChange={updateConfigField}
+                />
+              </div>
+            </SectionPane>
+          </div>
+        </div>
+
+        {/* Footer — owner-gated. Startup config only: AI self-saves, integrations
+            apply live. Shown whenever a startup edit is pending (any section),
+            while confirming a close, or briefly after a save. */}
+        {showFooter && (
+          <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-theme-border shrink-0">
+            {confirmingClose ? (
+              <>
+                <span className="text-xs text-theme-text-secondary">Unsaved changes.</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setConfirmingClose(false)}
+                    disabled={saving}
+                    className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
+                  >
+                    Keep editing
+                  </button>
+                  <button
+                    onClick={onClose}
+                    disabled={saving}
+                    className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    onClick={handleSaveAndClose}
+                    disabled={saving}
+                    className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                  >
+                    {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    Save
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <Tooltip content="Clear all startup fields — reverts to defaults when saved">
+                    <button
+                      onClick={resetConfig}
+                      disabled={saving}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Reset
+                    </button>
+                  </Tooltip>
+                  {saveMessage && (
+                    <span className={clsx('text-xs', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400')}>
+                      {saveMessage}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
+                    <RotateCw className="w-3 h-3" />
+                    Restart Radar to apply
+                  </span>
+                  <button
+                    onClick={saveConfig}
+                    disabled={saving || !startupDirty}
+                    className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                  >
+                    {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    Save
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -351,172 +615,255 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
   )
 }
 
-// -- Section label ------------------------------------------------------------
+// -- Sidebar primitives -------------------------------------------------------
 
-function SectionLabel({ children }: { children: ReactNode }) {
+interface NavItemDef {
+  id: SectionId
+  label: string
+  icon: LucideIcon
+  ownerOnly: boolean
+  visible: boolean
+  dirty: boolean
+}
+
+// Light subheading separating the two field groups inside a merged pane
+// (Cluster/Server, MCP/Timeline).
+function SubHeading({ children }: { children: ReactNode }) {
   return (
-    <h3 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-2">
+    <h4 className="text-xs font-semibold uppercase tracking-wider text-theme-text-tertiary">
       {children}
-    </h3>
+    </h4>
   )
 }
 
-// A titled card grouping related config fields. Cards (vs thin dividers) give the
-// sections clear visual separation in the scroll.
-function ConfigSection({ title, children }: { title: string; children: ReactNode }) {
+function NavItem({
+  item,
+  active,
+  disabled,
+  horizontal,
+  onSelect,
+}: {
+  item: NavItemDef
+  active: boolean
+  disabled: boolean
+  horizontal?: boolean
+  onSelect: () => void
+}) {
+  const Icon = item.icon
   return (
-    <section className="rounded-lg border border-theme-border bg-theme-elevated/30 p-4">
-      <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-3">
-        {title}
-      </h4>
-      <div className="space-y-4">{children}</div>
-    </section>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onSelect}
+      disabled={disabled}
+      title={disabled ? 'Owner access required' : undefined}
+      className={clsx(
+        'group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm transition-colors',
+        horizontal ? 'shrink-0' : 'w-full text-left',
+        active
+          ? 'bg-theme-active text-theme-text-primary font-medium'
+          : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
+        disabled && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:text-theme-text-secondary'
+      )}
+    >
+      <Icon className="w-4 h-4 shrink-0" />
+      <span className={clsx('truncate', !horizontal && 'flex-1')}>{item.label}</span>
+      {disabled ? (
+        <Lock className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
+      ) : item.dirty ? (
+        <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" title="Unsaved changes" />
+      ) : null}
+    </button>
   )
 }
 
-// -- Startup Configuration Tab ------------------------------------------------
+// -- Section shell ------------------------------------------------------------
 
-function StartupConfigTab({
+// A section stays MOUNTED (visibility toggled) so local draft state in the live
+// integration cards survives switching sidebar items. The caption states the
+// section's honest apply semantics.
+function SectionPane({
+  id,
+  active,
+  title,
+  caption,
+  live,
+  locked,
+  children,
+}: {
+  id: SectionId
+  active: SectionId
+  title: string
+  caption?: string
+  live?: boolean
+  locked?: boolean
+  children: ReactNode
+}) {
+  return (
+    <div className={clsx(active !== id && 'hidden')} role="tabpanel">
+      <div className="mb-4">
+        <h3 className="text-base font-semibold text-theme-text-primary">{title}</h3>
+        {!locked && caption && <SectionCaption live={live}>{caption}</SectionCaption>}
+      </div>
+      {locked ? <LockWall /> : <div className="space-y-4">{children}</div>}
+    </div>
+  )
+}
+
+function SectionCaption({ children, live }: { children: ReactNode; live?: boolean }) {
+  return (
+    <p
+      className={clsx(
+        'mt-1 flex items-center gap-1.5 text-xs',
+        live ? 'text-theme-text-secondary' : 'text-theme-text-tertiary'
+      )}
+    >
+      {live ? <Zap className="w-3 h-3 shrink-0" /> : <RotateCw className="w-3 h-3 shrink-0" />}
+      {children}
+    </p>
+  )
+}
+
+function LockWall() {
+  return (
+    <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-4 flex items-start gap-3">
+      <Lock className="w-4 h-4 mt-0.5 shrink-0 text-theme-text-tertiary" />
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-theme-text-primary">Owner access required</p>
+        <p className="mt-0.5 text-xs text-theme-text-tertiary">
+          These settings (kubeconfig, server port, timeline, integrations) affect
+          every user of this Radar instance, so they're limited to owners. Ask an
+          owner if you need a change here.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// -- Startup section bodies ---------------------------------------------------
+
+function ClusterSection({
+  config,
+  effectiveConfig,
+  onChange,
+}: {
+  config: Config
+  effectiveConfig?: Config
+  onChange: <K extends keyof Config>(field: K, value: Config[K]) => void
+}) {
+  return (
+    <>
+      <ConfigField
+        label="Kubeconfig"
+        help="Path to kubeconfig file"
+        value={config.kubeconfig ?? ''}
+        effectiveValue={effectiveConfig?.kubeconfig}
+        placeholder="~/.kube/config"
+        onChange={(v) => onChange('kubeconfig', v || undefined)}
+      />
+      <ConfigArrayField
+        label="Kubeconfig Directories"
+        help="Comma-separated directories containing kubeconfig files"
+        value={config.kubeconfigDirs}
+        effectiveValue={effectiveConfig?.kubeconfigDirs}
+        placeholder="/path/to/dir1, /path/to/dir2"
+        onChange={(v) => onChange('kubeconfigDirs', v)}
+      />
+      <ConfigField
+        label="Default Namespace"
+        help="Startup default only — change the active namespace live anytime from the header switcher"
+        value={config.namespace ?? ''}
+        effectiveValue={effectiveConfig?.namespace}
+        placeholder="All namespaces"
+        onChange={(v) => onChange('namespace', v || undefined)}
+      />
+    </>
+  )
+}
+
+function ServerSection({
   config,
   effectiveConfig,
   isDesktop,
-  deploymentMode,
-  prometheusHeaderKeys,
-  argoCdTokenSet,
+  showBrowserLaunchControls,
   onChange,
 }: {
   config: Config
   effectiveConfig?: Config
   isDesktop: boolean
-  deploymentMode: DeploymentMode
-  prometheusHeaderKeys: string[]
-  argoCdTokenSet: boolean
+  showBrowserLaunchControls: boolean
   onChange: <K extends keyof Config>(field: K, value: Config[K]) => void
 }) {
-  const showBrowserLaunchControls = !isDesktop && deploymentMode === 'local'
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-theme-text-tertiary">
-        Most changes require a restart to take effect.
-        {isDesktop
-          ? ' Quit and relaunch Radar to apply.'
-          : ' Stop and restart the radar command to apply.'}
-      </p>
+    <>
+      <ConfigNumberField
+        label="Port"
+        help={isDesktop
+          ? 'Fixed server port (leave empty for random). Set this to keep a stable MCP endpoint.'
+          : 'Server port'}
+        value={config.port}
+        effectiveValue={effectiveConfig?.port}
+        placeholder={isDesktop ? 'Random' : '9280'}
+        onChange={(v) => onChange('port', v)}
+      />
 
-      <ConfigSection title="Cluster">
-        <ConfigField
-          label="Kubeconfig"
-          help="Path to kubeconfig file"
-          value={config.kubeconfig ?? ''}
-          effectiveValue={effectiveConfig?.kubeconfig}
-          placeholder="~/.kube/config"
-          onChange={(v) => onChange('kubeconfig', v || undefined)}
-        />
-
-        <ConfigArrayField
-          label="Kubeconfig Directories"
-          help="Comma-separated directories containing kubeconfig files"
-          value={config.kubeconfigDirs}
-          effectiveValue={effectiveConfig?.kubeconfigDirs}
-          placeholder="/path/to/dir1, /path/to/dir2"
-          onChange={(v) => onChange('kubeconfigDirs', v)}
-        />
-
-        <ConfigField
-          label="Default Namespace"
-          help="Startup default only — change the active namespace live anytime from the header switcher"
-          value={config.namespace ?? ''}
-          effectiveValue={effectiveConfig?.namespace}
-          placeholder="All namespaces"
-          onChange={(v) => onChange('namespace', v || undefined)}
-        />
-      </ConfigSection>
-
-      <ConfigSection title="Server">
-        <ConfigNumberField
-          label="Port"
-          help={isDesktop
-            ? 'Fixed server port (leave empty for random). Set this to keep a stable MCP endpoint.'
-            : 'Server port'}
-          value={config.port}
-          effectiveValue={effectiveConfig?.port}
-          placeholder={isDesktop ? 'Random' : '9280'}
-          onChange={(v) => onChange('port', v)}
-        />
-
-        {showBrowserLaunchControls && (
-          <>
-            <ConfigToggle
-              label="Open browser on start"
-              value={!(config.noBrowser ?? false)}
-              onChange={(v) => onChange('noBrowser', !v ? true : undefined)}
-            />
-
-            <ConfigField
-              label="Browser"
-              help="Browser for automatic launch; macOS app names are supported"
-              value={config.browser ?? ''}
-              effectiveValue={effectiveConfig?.browser}
-              placeholder="System default"
-              onChange={(v) => onChange('browser', v || undefined)}
-            />
-          </>
-        )}
-      </ConfigSection>
-
-      <ConfigSection title="AI Tools">
-        <MCPSection
-          mcpEnabled={config.mcp ?? true}
-          onToggle={(v) => onChange('mcp', v)}
-          isDesktop={isDesktop}
-          portPinned={config.port != null && config.port > 0}
-          onPinPort={(port) => onChange('port', port)}
-        />
-      </ConfigSection>
-
-      <ConfigSection title="Timeline">
-        <div>
-          <label className="block text-sm font-medium text-theme-text-primary mb-1">
-            Storage Backend
-          </label>
-          <select
-            value={config.timelineStorage ?? 'memory'}
-            onChange={(e) => onChange('timelineStorage', e.target.value === 'memory' ? undefined : e.target.value as 'sqlite')}
-            className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-skyhook-500"
-          >
-            <option value="memory">Memory (default)</option>
-            <option value="sqlite">SQLite (persistent)</option>
-          </select>
-          <EffectiveHint current={config.timelineStorage} effective={effectiveConfig?.timelineStorage} />
-        </div>
-
-        <ConfigNumberField
-          label="History Limit"
-          help="Maximum events to retain"
-          value={config.historyLimit}
-          effectiveValue={effectiveConfig?.historyLimit}
-          placeholder="10000"
-          onChange={(v) => onChange('historyLimit', v)}
-        />
-      </ConfigSection>
-
-      <ConfigSection title="Integrations">
-        <PrometheusConfigField
-          value={config.prometheusUrl ?? ''}
-          configuredHeaderKeys={prometheusHeaderKeys}
-          onChange={(v) => onChange('prometheusUrl', v || undefined)}
-        />
-        <div className="border-t border-theme-border/60 pt-4">
-          <ArgoCDConfigField
-            url={config.argoCdUrl ?? ''}
-            insecureTls={config.argoCdInsecureTls ?? false}
-            tokenSet={argoCdTokenSet}
-            onChangeUrl={(v) => onChange('argoCdUrl', v || undefined)}
-            onChangeInsecureTls={(v) => onChange('argoCdInsecureTls', v || undefined)}
+      {showBrowserLaunchControls && (
+        <>
+          <ConfigToggle
+            label="Open browser on start"
+            value={!(config.noBrowser ?? false)}
+            onChange={(v) => onChange('noBrowser', !v ? true : undefined)}
           />
-        </div>
-      </ConfigSection>
-    </div>
+          <ConfigField
+            label="Browser"
+            help="Browser for automatic launch; macOS app names are supported"
+            value={config.browser ?? ''}
+            effectiveValue={effectiveConfig?.browser}
+            placeholder="System default"
+            onChange={(v) => onChange('browser', v || undefined)}
+          />
+        </>
+      )}
+    </>
+  )
+}
+
+function TimelineSection({
+  config,
+  effectiveConfig,
+  onChange,
+}: {
+  config: Config
+  effectiveConfig?: Config
+  onChange: <K extends keyof Config>(field: K, value: Config[K]) => void
+}) {
+  return (
+    <>
+      <div>
+        <label className="block text-sm font-medium text-theme-text-primary mb-1">
+          Storage Backend
+        </label>
+        <select
+          value={config.timelineStorage ?? 'memory'}
+          onChange={(e) => onChange('timelineStorage', e.target.value === 'memory' ? undefined : e.target.value as 'sqlite')}
+          className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-skyhook-500"
+        >
+          <option value="memory">Memory (default)</option>
+          <option value="sqlite">SQLite (persistent)</option>
+        </select>
+        <EffectiveHint current={config.timelineStorage} effective={effectiveConfig?.timelineStorage} />
+      </div>
+
+      <ConfigNumberField
+        label="History Limit"
+        help="Maximum events to retain"
+        value={config.historyLimit}
+        effectiveValue={effectiveConfig?.historyLimit}
+        placeholder="10000"
+        onChange={(v) => onChange('historyLimit', v)}
+      />
+    </>
   )
 }
 
@@ -605,13 +952,12 @@ function MCPSection({
 
 // -- Prometheus (live-appliable) ----------------------------------------------
 
-// Unlike the rest of this dialog, the Prometheus URL can be re-pointed without
-// a restart — the metrics path reads it from a mutable global. "Apply now" hits
-// PUT /integrations/prometheus, which persists the URL AND re-points the running
-// client, then probes it so we can confirm reachability inline. The global Save
-// still persists this field too (taking effect next launch, like everything
-// else); Apply is the shortcut to "now". No EffectiveHint here — the per-field
-// restart-diff hint would contradict the whole point of applying live.
+// The Prometheus URL can be re-pointed without a restart — the metrics path reads
+// it from a mutable global. "Apply now" hits PUT /integrations/prometheus, which
+// persists the URL AND re-points the running client, then probes it so we can
+// confirm reachability inline. onApplied notifies the parent so the footer's
+// last-committed snapshot stays in sync (see saveConfig). No EffectiveHint here —
+// a restart-diff hint would contradict the whole point of applying live.
 type ApplyState =
   | { status: 'idle' }
   | { status: 'applying' }
@@ -625,10 +971,12 @@ function PrometheusConfigField({
   value,
   onChange,
   configuredHeaderKeys,
+  onApplied,
 }: {
   value: string
   onChange: (value: string) => void
   configuredHeaderKeys: string[]
+  onApplied?: (url: string) => void
 }) {
   const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
   // null = not editing headers (preserve what's stored). A non-null array means
@@ -682,6 +1030,7 @@ function PrometheusConfigField({
         setApply({ status: 'failed', error: data?.error || res.statusText })
         return
       }
+      onApplied?.(value.trim())
       if (editedHeaders !== undefined) {
         setAppliedKeys(Object.keys(editedHeaders).sort())
       }
@@ -828,10 +1177,10 @@ function PrometheusConfigField({
 // GitOps Application pages. Like Prometheus, it applies to the running server
 // without a restart: both actions PUT /integrations/argocd, which persists the
 // settings AND re-points the running client, then verifies reachability (the
-// server returns 400 distinguishing unreachable from an invalid token). The
-// URL + insecure-TLS flag are bound to the shared config so the global Save
-// persists them too; the token is write-only — never returned, and omitted
-// from the PUT unless the user types a new value or clicks Clear.
+// server returns 400 distinguishing unreachable from an invalid token). onApplied
+// notifies the parent so the footer's last-committed snapshot stays in sync. The
+// token is write-only — never returned, and omitted from the PUT unless the user
+// types a new value or clicks Clear.
 type ArgoState =
   | { status: 'idle' }
   | { status: 'connecting' }
@@ -844,12 +1193,14 @@ function ArgoCDConfigField({
   tokenSet,
   onChangeUrl,
   onChangeInsecureTls,
+  onApplied,
 }: {
   url: string
   insecureTls: boolean
   tokenSet: boolean
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
+  onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
 }) {
   const [state, setState] = useState<ArgoState>({ status: 'idle' })
   // Token editor three-way state: `touched` = user typed a value (replaces the
@@ -890,6 +1241,11 @@ function ArgoCDConfigField({
       setTokenTouched(false)
       setTokenCleared(false)
       if (resultingTokenSet !== undefined) setTokenSetLocal(resultingTokenSet)
+      onApplied?.({
+        url: (body.argoCdUrl as string) ?? '',
+        insecureTls: (body.argoCdInsecureTls as boolean) ?? false,
+        tokenSet: resultingTokenSet ?? effectiveTokenSet,
+      })
       setState({ status: 'connected' })
     } catch (err) {
       setState({ status: 'error', error: String(err) })
