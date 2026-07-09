@@ -89,6 +89,8 @@ const STRUCTURED_MODE_DESCRIPTIONS: Record<StructuredMode, string> = {
   raw: 'Original log line, unparsed',
 }
 
+const EMPTY_STATE_CLASS = 'flex-1 flex flex-col items-center justify-center gap-2 px-4 text-center'
+
 const TIMESTAMP_FORMAT_SHORT_LABELS: Record<TimestampFormat, string> = {
   'time-local': 'Local time',
   'time-utc': 'UTC time',
@@ -800,12 +802,12 @@ export function LogCore({
           </div>
         </div>
       ) : errorMessage ? (
-        <div className={`flex-1 flex flex-col items-center justify-center gap-2 ${palette.textError}`}>
+        <div className={`${EMPTY_STATE_CLASS} ${palette.textError}`}>
           <Terminal className="w-8 h-8" />
           <span>{errorMessage}</span>
         </div>
       ) : groupedEntries.length === 0 ? (
-        <div className={`flex-1 flex flex-col items-center justify-center gap-2 ${palette.textTertiary}`}>
+        <div className={`${EMPTY_STATE_CLASS} ${palette.textTertiary}`}>
           <Terminal className="w-8 h-8" />
           <span>{emptyMessage}</span>
         </div>

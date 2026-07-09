@@ -5,6 +5,9 @@ import type { Topology, NodeKind, EdgeType } from '../types/core'
 function node(id: string, kind: string, ns: string, name: string): Topology['nodes'][number] {
   return { id, kind: kind as NodeKind, name, status: 'healthy' as Topology['nodes'][number]['status'], data: { namespace: ns } }
 }
+function crdNode(id: string, kind: string, ns: string, name: string, apiVersion: string): Topology['nodes'][number] {
+  return { id, kind: kind as NodeKind, name, status: 'healthy' as Topology['nodes'][number]['status'], data: { namespace: ns, apiVersion } }
+}
 function edge(source: string, target: string, type: EdgeType): Topology['edges'][number] {
   return { id: `${source}->${target}`, source, target, type }
 }
@@ -118,6 +121,53 @@ describe('neighborhoodFor', () => {
     const out = neighborhoodFor(topo, [{ kind: 'Deployment', namespace: 'app', name: 'missing' }])
     expect(out.nodes).toHaveLength(0)
     expect(out.warnings?.some((w) => w.includes('No topology nodes matched'))).toBe(true)
+  })
+
+  it('uses seed group to disambiguate same-kind nodes', () => {
+    const topo: Topology = {
+      nodes: [
+        crdNode('argo', 'Workflow', 'app', 'run', 'argoproj.io/v1alpha1'),
+        crdNode('other', 'Workflow', 'app', 'run', 'example.com/v1'),
+      ],
+      edges: [],
+    }
+    const out = neighborhoodFor(topo, [{ kind: 'Workflow', group: 'argoproj.io', namespace: 'app', name: 'run' }])
+    expect(out.nodes.map((n) => n.id)).toEqual(['argo'])
+  })
+
+  it('expands from an Argo WorkflowTemplate to its runs and run pods', () => {
+    const topo: Topology = {
+      nodes: [
+        crdNode('wt', 'WorkflowTemplate', 'app', 'migration', 'argoproj.io/v1alpha1'),
+        crdNode('wf', 'Workflow', 'app', 'migration-abc', 'argoproj.io/v1alpha1'),
+        node('pod', 'Pod', 'app', 'migration-abc-main'),
+      ],
+      edges: [
+        edge('wt', 'wf', 'configures'),
+        edge('wf', 'pod', 'manages'),
+      ],
+    }
+    const out = neighborhoodFor(topo, [{ kind: 'WorkflowTemplate', group: 'argoproj.io', namespace: 'app', name: 'migration' }])
+    expect(new Set(out.nodes.map((n) => n.id))).toEqual(new Set(['wt', 'wf', 'pod']))
+  })
+
+  it('caps batch run fan-out to the newest retained runs', () => {
+    const runs = Array.from({ length: 18 }, (_, i) => ({
+      ...crdNode(`wf${i}`, 'Workflow', 'app', `migration-${i}`, 'argoproj.io/v1alpha1'),
+      data: { namespace: 'app', apiVersion: 'argoproj.io/v1alpha1', startedAt: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z` },
+    }))
+    const topo: Topology = {
+      nodes: [crdNode('wt', 'WorkflowTemplate', 'app', 'migration', 'argoproj.io/v1alpha1'), ...runs],
+      edges: runs.map((run) => edge('wt', run.id, 'configures')),
+    }
+    const out = neighborhoodFor(topo, [{ kind: 'WorkflowTemplate', group: 'argoproj.io', namespace: 'app', name: 'migration' }])
+    const ids = new Set(out.nodes.map((n) => n.id))
+    expect(ids.has('wt')).toBe(true)
+    expect(ids.has('wf0')).toBe(false)
+    expect(ids.has('wf9')).toBe(false)
+    expect(ids.has('wf10')).toBe(true)
+    expect(ids.has('wf17')).toBe(true)
+    expect(out.warnings?.some((w) => w.includes('showing latest 8 of 18 retained Workflow runs'))).toBe(true)
   })
 })
 

@@ -7,6 +7,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/subject"
 	"github.com/skyhook-io/radar/pkg/topology"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -37,6 +38,38 @@ func rowByName(rows []appRow, name string) *appRow {
 	return nil
 }
 
+func workflowRun(ns, name, template, phase, startedAt string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": ns,
+		},
+		"spec": map[string]any{
+			"workflowTemplateRef": map[string]any{"name": template},
+		},
+		"status": map[string]any{
+			"phase":     phase,
+			"startedAt": startedAt,
+		},
+	}}
+}
+
+func clusterWorkflowRun(ns, name, template, phase, startedAt string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": ns,
+		},
+		"spec": map[string]any{
+			"workflowTemplateRef": map[string]any{"name": template, "clusterScope": true},
+		},
+		"status": map[string]any{
+			"phase":     phase,
+			"startedAt": startedAt,
+		},
+	}}
+}
+
 func TestEventsForWorkload_MatchesKindAndName(t *testing.T) {
 	byObject := map[string][]*corev1.Event{
 		"Service/api": {
@@ -52,6 +85,149 @@ func TestEventsForWorkload_MatchesKindAndName(t *testing.T) {
 	}
 	if got[0].Object != "Deployment/api" || got[0].Reason != "ProgressDeadlineExceeded" {
 		t.Fatalf("eventsForWorkload picked wrong event: %+v", got[0])
+	}
+}
+
+func TestApplyRunToBatchUsesNewestRunAndLatestSchedule(t *testing.T) {
+	batch := &appBatchSummary{}
+
+	applyRunToBatch(batch, WorkloadRun{
+		Name:        "success-new",
+		Phase:       "Succeeded",
+		StartedAt:   "2026-01-03T00:00:00Z",
+		FinishedAt:  "2026-01-03T00:01:00Z",
+		ScheduledAt: "2026-01-03T00:00:00Z",
+	})
+	applyRunToBatch(batch, WorkloadRun{
+		Name:        "failed-old",
+		Phase:       "Failed",
+		StartedAt:   "2026-01-02T00:00:00Z",
+		FinishedAt:  "2026-01-02T00:01:00Z",
+		ScheduledAt: "2026-01-02T00:00:00Z",
+	})
+
+	if batch.LatestRunName != "success-new" || batch.LatestRunPhase != "Succeeded" {
+		t.Fatalf("latest run = %s/%s, want success-new/Succeeded", batch.LatestRunName, batch.LatestRunPhase)
+	}
+	if batch.LastScheduledAt != "2026-01-03T00:00:00Z" {
+		t.Fatalf("last scheduled = %q, want newest schedule", batch.LastScheduledAt)
+	}
+}
+
+func TestWorkflowTemplateBatchSummariesGroupGeneratedWorkflows(t *testing.T) {
+	workflows := []*unstructured.Unstructured{
+		workflowRun("dev", "migration-a", "migration-template", "Failed", "2026-01-02T00:00:00Z"),
+		workflowRun("dev", "migration-b", "migration-template", "Succeeded", "2026-01-03T00:00:00Z"),
+	}
+
+	summaries := workflowTemplateBatchSummaries(workflows)
+	batch := summaries["WorkflowTemplate/dev/migration-template"]
+	if batch == nil {
+		t.Fatalf("missing WorkflowTemplate batch summary: %#v", summaries)
+	}
+	if batch.RetainedRuns != 2 || batch.FailedRuns != 1 || batch.SucceededRuns != 1 {
+		t.Fatalf("unexpected counts: %#v", batch)
+	}
+	if batch.LatestRunName != "migration-b" || batch.LatestRunPhase != "Succeeded" {
+		t.Fatalf("latest run = %s/%s, want newest run", batch.LatestRunName, batch.LatestRunPhase)
+	}
+}
+
+func TestWorkflowTemplateBatchSummariesGroupClusterWorkflowTemplates(t *testing.T) {
+	workflows := []*unstructured.Unstructured{
+		clusterWorkflowRun("dev", "global-a", "cluster-migration", "Succeeded", "2026-01-03T00:00:00Z"),
+		clusterWorkflowRun("prod", "global-b", "cluster-migration", "Running", "2026-01-04T00:00:00Z"),
+	}
+
+	summaries := workflowTemplateBatchSummaries(workflows)
+	batch := summaries["ClusterWorkflowTemplate//cluster-migration"]
+	if batch == nil {
+		t.Fatalf("missing ClusterWorkflowTemplate batch summary: %#v", summaries)
+	}
+	if batch.RetainedRuns != 2 || batch.ActiveRuns != 1 || batch.SucceededRuns != 1 {
+		t.Fatalf("unexpected counts: %#v", batch)
+	}
+	if batch.LatestRunName != "global-b" || batch.LatestRunPhase != "Running" {
+		t.Fatalf("latest run = %s/%s, want global-b/Running", batch.LatestRunName, batch.LatestRunPhase)
+	}
+}
+
+func TestArgoWorkflowTemplateRefFallsBackToWorkflowTemplateLabel(t *testing.T) {
+	wf := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name":      "migration-x",
+			"namespace": "dev",
+			"labels": map[string]any{
+				"workflows.argoproj.io/workflow-template": "migration-template",
+			},
+		},
+	}}
+
+	ref, ok := argoWorkflowTemplateRef(wf)
+	if !ok {
+		t.Fatal("expected template ref from workflow-template label")
+	}
+	if ref.key() != "WorkflowTemplate/dev/migration-template" {
+		t.Fatalf("template ref = %q", ref.key())
+	}
+}
+
+func TestCronWorkflowOwnerNamePrefersControllerOwnerReference(t *testing.T) {
+	controller := true
+	wf := &unstructured.Unstructured{}
+	wf.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "label-owner"})
+	wf.SetOwnerReferences([]metav1.OwnerReference{{
+		Kind:       "CronWorkflow",
+		Name:       "owner-ref",
+		Controller: &controller,
+	}})
+
+	if got := cronWorkflowOwnerName(wf); got != "owner-ref" {
+		t.Fatalf("cronWorkflowOwnerName = %q, want owner-ref", got)
+	}
+}
+
+func TestScaledJobHealthFollowsKedaConditions(t *testing.T) {
+	tests := []struct {
+		name       string
+		conditions []any
+		want       packages.Health
+	}{
+		{
+			name: "not ready is unhealthy",
+			conditions: []any{
+				map[string]any{"type": "Ready", "status": "False"},
+				map[string]any{"type": "Active", "status": "False"},
+			},
+			want: packages.HealthUnhealthy,
+		},
+		{
+			name: "active is healthy",
+			conditions: []any{
+				map[string]any{"type": "Ready", "status": "True"},
+				map[string]any{"type": "Active", "status": "True"},
+			},
+			want: packages.HealthHealthy,
+		},
+		{
+			name: "ready but idle is neutral",
+			conditions: []any{
+				map[string]any{"type": "Ready", "status": "True"},
+				map[string]any{"type": "Active", "status": "False"},
+			},
+			want: packages.HealthNeutral,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sj := &unstructured.Unstructured{Object: map[string]any{
+				"status": map[string]any{"conditions": tt.conditions},
+			}}
+			if got := scaledJobHealth(sj); got != tt.want {
+				t.Fatalf("scaledJobHealth = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

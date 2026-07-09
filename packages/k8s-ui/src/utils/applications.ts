@@ -10,6 +10,7 @@ export type AppHealth = 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unkn
 
 export interface AppWorkload {
   kind: string
+  group?: string
   namespace: string
   name: string
   workload_class?: AppWorkloadClass
@@ -21,6 +22,23 @@ export interface AppWorkload {
   desired: number
   restarts: number
   reason?: string
+  batch?: AppBatchSummary
+}
+
+export interface AppBatchSummary {
+  schedule?: string
+  suspended?: boolean
+  activeRuns?: number
+  retainedRuns?: number
+  failedRuns?: number
+  succeededRuns?: number
+  latestRunName?: string
+  latestRunPhase?: string
+  latestStartedAt?: string
+  latestFinishedAt?: string
+  lastScheduledAt?: string
+  lastSuccessfulAt?: string
+  message?: string
 }
 
 export interface AppRelationships {
@@ -835,7 +853,7 @@ export const CLASS_ORDER: AppWorkloadClass[] = ['service', 'worker', 'job', 'unk
 export const CLASS_META: Record<AppWorkloadClass, { label: string; pill: string; tooltip: string }> = {
   service: { label: 'Service', pill: CHIP_TONE.blue, tooltip: 'Long-running, request-serving (a Deployment/StatefulSet behind a Service/Ingress/route). Inferred from the workload shape + routing.' },
   worker: { label: 'Worker', pill: CHIP_TONE.violet, tooltip: 'Long-running background processor (no serving edge). Inferred from the workload shape.' },
-  job: { label: 'Job', pill: CHIP_TONE.amber, tooltip: 'Finite or scheduled work (Job/CronJob).' },
+  job: { label: 'Job', pill: CHIP_TONE.amber, tooltip: 'Finite or scheduled work (Job/CronJob/Workflow/CronWorkflow/WorkflowTemplate/ClusterWorkflowTemplate/ScaledJob).' },
   mixed: { label: 'Mixed', pill: CHIP_TONE.neutral, tooltip: 'Contains workloads of more than one class (e.g. a service plus its scheduled jobs).' },
   unknown: { label: 'Unknown', pill: CHIP_TONE.muted, tooltip: "Couldn't infer a runtime class from the workload." },
 }
@@ -860,6 +878,206 @@ export function classSetOf(app: AppRow): AppWorkloadClass[] {
     .filter((c) => c === 'service' || c === 'worker' || c === 'job')
   if (known.length > 0) return known
   return [workloadClassOf(app.workload_class)]
+}
+
+export interface BatchSignal {
+  tone: 'rose' | 'amber' | 'sky' | 'emerald' | 'muted'
+  label: string
+  detail: string
+  workload: AppWorkload
+}
+
+export interface AppBatchActivity {
+  workload: AppWorkload
+  tone: BatchSignal['tone']
+  rank: number
+  label: string
+  detail: string
+  latestRunName?: string
+  latestRunPhase?: string
+  latestStartedAt?: string
+  latestFinishedAt?: string
+  schedule?: string
+  activeRuns: number
+  retainedRuns: number
+  failedRuns: number
+  lastScheduledAt?: string
+  lastSuccessfulAt?: string
+}
+
+export function batchActivityForApp(app: AppRow): AppBatchActivity[] {
+  return (app.workloads || [])
+    .map(batchActivityForWorkload)
+    .filter((activity): activity is AppBatchActivity => Boolean(activity))
+    .sort((a, b) => b.rank - a.rank || a.workload.name.localeCompare(b.workload.name))
+}
+
+export function batchSignalForApp(app: AppRow): BatchSignal | null {
+  let best: BatchSignal | null = null
+  for (const workload of app.workloads || []) {
+    const signal = batchSignalForWorkload(workload)
+    if (!signal) continue
+    if (!best || batchSignalRank(signal) > batchSignalRank(best)) best = signal
+  }
+  return best
+}
+
+export function batchSignalForWorkload(workload: AppWorkload): BatchSignal | null {
+  const batch = workload.batch
+  if (!batch) return null
+  const latestPhase = batch.latestRunPhase || ''
+  const name = `${workload.kind}/${workload.name}`
+  if (latestPhase === 'Failed' || latestPhase === 'Error') {
+    return {
+      tone: 'rose',
+      label: 'batch failed',
+      detail: batch.message || `${name} latest run ${batch.latestRunName || ''} ended ${latestPhase}.`,
+      workload,
+    }
+  }
+  if ((batch.failedRuns ?? 0) > 1) {
+    return {
+      tone: 'amber',
+      label: `${batch.failedRuns} failed runs`,
+      detail: `${name} has ${batch.failedRuns} retained failed runs.`,
+      workload,
+    }
+  }
+  if (batch.suspended) {
+    return {
+      tone: 'sky',
+      label: 'schedule suspended',
+      detail: `${name} will not create new runs until resumed.`,
+      workload,
+    }
+  }
+  if ((batch.activeRuns ?? 0) > 0) {
+    return {
+      tone: 'sky',
+      label: `${batch.activeRuns} running`,
+      detail: `${name} currently has ${batch.activeRuns} active run${batch.activeRuns === 1 ? '' : 's'}.`,
+      workload,
+    }
+  }
+  return null
+}
+
+function batchActivityForWorkload(workload: AppWorkload): AppBatchActivity | null {
+  const batch = workload.batch
+  if (!batch) return null
+  const latestPhase = batch.latestRunPhase || ''
+  const name = `${workload.kind}/${workload.name}`
+  const activeRuns = batch.activeRuns ?? 0
+  const retainedRuns = batch.retainedRuns ?? 0
+  const failedRuns = batch.failedRuns ?? 0
+  if (latestPhase === 'Failed' || latestPhase === 'Error') {
+    return {
+      workload,
+      tone: 'rose',
+      rank: 50,
+      label: 'Latest run failed',
+      detail: batch.message || `${name} latest run ${batch.latestRunName || ''} ended ${latestPhase}.`,
+      latestRunName: batch.latestRunName,
+      latestRunPhase: latestPhase,
+      latestStartedAt: batch.latestStartedAt,
+      latestFinishedAt: batch.latestFinishedAt,
+      schedule: batch.schedule,
+      activeRuns,
+      retainedRuns,
+      failedRuns,
+      lastScheduledAt: batch.lastScheduledAt,
+      lastSuccessfulAt: batch.lastSuccessfulAt,
+    }
+  }
+  if (failedRuns > 0) {
+    return {
+      workload,
+      tone: 'amber',
+      rank: 40,
+      label: `${failedRuns} retained failed ${failedRuns === 1 ? 'run' : 'runs'}`,
+      detail: `${name} has retained failed executions in Kubernetes.`,
+      latestRunName: batch.latestRunName,
+      latestRunPhase: latestPhase,
+      latestStartedAt: batch.latestStartedAt,
+      latestFinishedAt: batch.latestFinishedAt,
+      schedule: batch.schedule,
+      activeRuns,
+      retainedRuns,
+      failedRuns,
+      lastScheduledAt: batch.lastScheduledAt,
+      lastSuccessfulAt: batch.lastSuccessfulAt,
+    }
+  }
+  if (activeRuns > 0) {
+    return {
+      workload,
+      tone: 'sky',
+      rank: 35,
+      label: `${activeRuns} active ${activeRuns === 1 ? 'run' : 'runs'}`,
+      detail: `${name} is executing now.`,
+      latestRunName: batch.latestRunName,
+      latestRunPhase: latestPhase,
+      latestStartedAt: batch.latestStartedAt,
+      latestFinishedAt: batch.latestFinishedAt,
+      schedule: batch.schedule,
+      activeRuns,
+      retainedRuns,
+      failedRuns,
+      lastScheduledAt: batch.lastScheduledAt,
+      lastSuccessfulAt: batch.lastSuccessfulAt,
+    }
+  }
+  if (batch.suspended) {
+    return {
+      workload,
+      tone: 'sky',
+      rank: 30,
+      label: 'Schedule suspended',
+      detail: `${name} will not create new runs until resumed.`,
+      latestRunName: batch.latestRunName,
+      latestRunPhase: latestPhase,
+      latestStartedAt: batch.latestStartedAt,
+      latestFinishedAt: batch.latestFinishedAt,
+      schedule: batch.schedule,
+      activeRuns,
+      retainedRuns,
+      failedRuns,
+      lastScheduledAt: batch.lastScheduledAt,
+      lastSuccessfulAt: batch.lastSuccessfulAt,
+    }
+  }
+  return {
+    workload,
+    tone: 'muted',
+    rank: latestPhase === 'Succeeded' ? 20 : 10,
+    label: latestPhase === 'Succeeded' ? 'Latest run succeeded' : 'No active runs',
+    detail: `${name} has ${retainedRuns} retained ${retainedRuns === 1 ? 'run' : 'runs'}.`,
+    latestRunName: batch.latestRunName,
+    latestRunPhase: latestPhase,
+    latestStartedAt: batch.latestStartedAt,
+    latestFinishedAt: batch.latestFinishedAt,
+    schedule: batch.schedule,
+    activeRuns,
+    retainedRuns,
+    failedRuns,
+    lastScheduledAt: batch.lastScheduledAt,
+    lastSuccessfulAt: batch.lastSuccessfulAt,
+  }
+}
+
+function batchSignalRank(signal: BatchSignal): number {
+  switch (signal.tone) {
+    case 'rose':
+      return 5
+    case 'amber':
+      return 4
+    case 'sky':
+      return 3
+    case 'emerald':
+      return 2
+    default:
+      return 1
+  }
 }
 
 export function workloadClassOf(value?: AppWorkloadClass): AppWorkloadClass {

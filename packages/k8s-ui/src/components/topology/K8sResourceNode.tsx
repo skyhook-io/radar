@@ -163,6 +163,10 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   HorizontalPodAutoscaler: { width: 280, height: 84 },
   Job: { width: 180, height: 84 },
   CronJob: { width: 200, height: 84 },
+  Workflow: { width: 220, height: 84 },
+  CronWorkflow: { width: 240, height: 84 },
+  WorkflowTemplate: { width: 240, height: 84 },
+  ClusterWorkflowTemplate: { width: 260, height: 84 },
   PersistentVolumeClaim: { width: 200, height: 84 },
   Namespace: { width: 180, height: 84 },
   Node: { width: 280, height: 84 },
@@ -250,7 +254,7 @@ function getSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string 
 
 // Kinds that own pods and therefore carry a podSummary in summary mode.
 const SUMMARY_POD_KINDS = new Set<NodeKind>([
-  'Deployment', 'StatefulSet', 'DaemonSet', 'Rollout', 'Job', 'Service',
+  'Deployment', 'StatefulSet', 'DaemonSet', 'Rollout', 'Job', 'CronJob', 'Workflow', 'CronWorkflow', 'Service',
 ])
 
 function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
@@ -327,6 +331,14 @@ function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string
       return `${nodeData.keys ?? 0} keys`
     case 'Secret':
       return `${nodeData.keys ?? 0} keys`
+    case 'WorkflowTemplate':
+    case 'ClusterWorkflowTemplate': {
+      const entrypoint = nodeData.entrypoint as string
+      const templateCount = nodeData.templateCount as number
+      if (entrypoint && templateCount) return `${entrypoint} • ${templateCount} templates`
+      if (entrypoint) return entrypoint
+      return templateCount ? `${templateCount} templates` : ''
+    }
     case 'PersistentVolumeClaim': {
       const storage = (nodeData.storage as string) || ''
       const phase = (nodeData.phase as string) || ''

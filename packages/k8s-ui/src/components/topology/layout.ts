@@ -827,8 +827,16 @@ function computeWorkloadCards(
       subtitle = (d.type as string) || 'ClusterIP'
     } else if (primary.kind === 'CronJob') {
       subtitle = (d.schedule as string) || ''
+    } else if (primary.kind === 'CronWorkflow') {
+      subtitle = (d.schedule as string) || ''
     } else if (primary.kind === 'Job') {
       subtitle = (d.phase as string) || ''
+    } else if (primary.kind === 'Workflow') {
+      subtitle = (d.progress as string) || (d.phase as string) || ''
+    } else if (primary.kind === 'WorkflowTemplate' || primary.kind === 'ClusterWorkflowTemplate') {
+      const entrypoint = d.entrypoint as string
+      const templateCount = d.templateCount as number
+      subtitle = entrypoint || (templateCount ? `${templateCount} templates` : '')
     } else if (primary.kind === 'Application') {
       const sync = d.syncStatus as string
       const health = d.healthStatus as string
@@ -855,10 +863,10 @@ function computeWorkloadCards(
 // Shared kind priority map — used by both pickGroupName and computeWorkloadCards
 const KIND_PRIORITY: Record<string, number> = {
   'Deployment': 1, 'Rollout': 1, 'StatefulSet': 2, 'DaemonSet': 3,
-  'CronJob': 4, 'Job': 5, 'Service': 6, 'Gateway': 7,
+  'CronJob': 4, 'CronWorkflow': 4, 'Job': 5, 'Workflow': 5, 'Service': 6, 'Gateway': 7,
   'HTTPRoute': 6, 'GRPCRoute': 6, 'TCPRoute': 6, 'TLSRoute': 6, 'Ingress': 7,
   'ReplicaSet': 8, 'Pod': 9, 'PodGroup': 9,
-  'ConfigMap': 10, 'Secret': 10, 'PersistentVolumeClaim': 10, 'HorizontalPodAutoscaler': 10,
+  'ConfigMap': 10, 'Secret': 10, 'WorkflowTemplate': 10, 'ClusterWorkflowTemplate': 10, 'PersistentVolumeClaim': 10, 'HorizontalPodAutoscaler': 10,
   'KnativeService': 1, 'KnativeConfiguration': 3, 'KnativeRevision': 4, 'KnativeRoute': 2,
   'Broker': 2, 'Channel': 2, 'Trigger': 3, 'PingSource': 3, 'ApiServerSource': 3,
   'ContainerSource': 3, 'SinkBinding': 3,

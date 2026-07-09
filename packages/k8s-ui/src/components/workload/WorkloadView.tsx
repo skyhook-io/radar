@@ -245,6 +245,14 @@ interface WorkloadViewProps {
     initialContainer: string | null
     onConsumeInitialContainer: () => void
   }) => ReactNode
+  /** Render a full replacement for the expanded Overview tab. */
+  renderExpandedOverview?: (props: {
+    kind: string
+    apiKind: string
+    namespace: string
+    name: string
+    resource: any
+  }) => ReactNode
   /** Render the metrics tab content */
   renderMetricsTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render a read-only YAML view for a related object from the workload's
@@ -257,6 +265,8 @@ interface WorkloadViewProps {
   isMetricsAvailable?: (kind: string, resource: any) => boolean
   /** Render extra content at the bottom of the overview tab (e.g. audit findings) */
   renderOverviewExtra?: (props: { kind: string; namespace: string; name: string }) => ReactNode
+  /** Render lightweight overview intro content before the default renderer. */
+  renderOverviewIntro?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render content at the TOP of the overview tab, above the renderer (e.g. live
    *  Operational Issues). Optional + additive — consumers that don't pass it are
    *  unaffected. Only rendered when `hasOperationalIssues` is true: the lead
@@ -343,6 +353,7 @@ export function WorkloadView({
   onTabChange,
   // Render props
   renderLogsTab,
+  renderExpandedOverview,
   renderRelatedYaml,
   renderMetricsTab,
   isMetricsAvailable,
@@ -350,6 +361,7 @@ export function WorkloadView({
   onDuplicate,
   onDownload,
   renderOverviewExtra,
+  renderOverviewIntro,
   renderOverviewLead,
   hasOperationalIssues,
   // Actions bar
@@ -627,7 +639,7 @@ export function WorkloadView({
   })
 
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
-  const logsTabVisible = Boolean(allPods.length > 0 && renderLogsTab)
+  const logsTabVisible = Boolean(renderLogsTab) && (allPods.length > 0 || LOGS_TAB_WITHOUT_PODS_KINDS.has(kindToPlural(kind).toLowerCase()))
   const metricsTabVisible = Boolean(showMetricsTab && renderMetricsTab)
   const podEvidenceLoading = resourceLoading || workloadPodsLoading || eventsLoading
   const logsFallbackReady = !renderLogsTab || (!logsTabVisible && !podEvidenceLoading)
@@ -658,6 +670,8 @@ export function WorkloadView({
   useEffect(() => {
     if (shouldCommitFallback && activeTab !== 'overview') onTabChange?.('overview', { replace: true })
   }, [activeTab, onTabChange, shouldCommitFallback])
+  const expandedOverview = expanded ? renderExpandedOverview?.({ kind, apiKind, namespace, name, resource }) : null
+  const overviewIntro = renderOverviewIntro?.({ kind, namespace, name })
 
   // ── Collapsed (drawer) mode ──────────────────────────────────────────────
   if (!expanded) {
@@ -927,7 +941,16 @@ export function WorkloadView({
       overlay={saveSuccess ? <SaveSuccessAnimation /> : null}
       compactHeader={compactHeader}
     >
-        {effectiveTab === 'overview' && (
+        {effectiveTab === 'overview' && expandedOverview ? (
+          <div className="h-full min-h-0">
+            {hasOperationalIssues && renderOverviewLead && (
+              <div className="px-4 pt-4">
+                {renderOverviewLead({ kind, namespace, name })}
+              </div>
+            )}
+            {expandedOverview}
+          </div>
+        ) : effectiveTab === 'overview' && (
             <InfoTab
               resource={resource}
               selectedResource={selectedResource}
@@ -960,6 +983,7 @@ export function WorkloadView({
               eventsError={overviewEventsError}
               updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
+              introContent={overviewIntro}
               leadContent={hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined}
             />
         )}
@@ -1394,6 +1418,7 @@ function InfoTab({
   eventsError,
   updatesError,
   extraContent,
+  introContent,
   leadContent,
 }: {
   resource: any
@@ -1427,6 +1452,7 @@ function InfoTab({
   eventsError?: Error | null
   updatesError?: Error | null
   extraContent?: ReactNode
+  introContent?: ReactNode
   leadContent?: ReactNode
 }) {
   if (!resource) {
@@ -1439,6 +1465,11 @@ function InfoTab({
         {leadContent && (
           <div className="px-4 pt-4">
             {leadContent}
+          </div>
+        )}
+        {introContent && (
+          <div className="px-4 pt-4">
+            {introContent}
           </div>
         )}
         <ResourceRendererDispatch
@@ -1507,6 +1538,7 @@ function InfoTab({
       eventsError={eventsError}
       updatesError={updatesError}
       extraContent={extraContent}
+      introContent={introContent}
       leadContent={leadContent}
     />
   )
@@ -1516,6 +1548,7 @@ const POD_VISIBLE_LIMIT = 5
 const EVENT_VISIBLE_LIMIT = 5
 const RELATIONSHIP_GROUP_LIMIT = 5
 const RELATIONSHIP_REF_LIMIT = 5
+const LOGS_TAB_WITHOUT_PODS_KINDS = new Set(['jobs', 'cronjobs', 'workflows', 'cronworkflows'])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
 type RuntimeOverviewShape = 'replicated' | 'job' | 'cronjob'
 
@@ -1552,6 +1585,7 @@ function WorkloadOverviewTab({
   eventsError,
   updatesError,
   extraContent,
+  introContent,
   leadContent,
 }: {
   resource: any
@@ -1575,6 +1609,7 @@ function WorkloadOverviewTab({
   eventsError?: Error | null
   updatesError?: Error | null
   extraContent?: ReactNode
+  introContent?: ReactNode
   leadContent?: ReactNode
 }) {
   const apiKind = kindToPlural(selectedResource.kind)
@@ -1604,6 +1639,7 @@ function WorkloadOverviewTab({
       <div className="h-full overflow-auto bg-theme-base">
         <div className="space-y-4 p-4">
           {leadContent}
+          {introContent}
 
           <WorkloadStatusStrip
             state={state}
@@ -1677,6 +1713,7 @@ function WorkloadOverviewTab({
     <div className="h-full overflow-auto bg-theme-base">
       <div className="space-y-4 p-4">
         {leadContent}
+        {introContent}
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
           {summaryMetrics.map((metric) => (

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
@@ -36,7 +38,7 @@ type manageCronJobInput struct {
 }
 
 type getWorkloadLogsInput struct {
-	Kind      string `json:"kind,omitempty" jsonschema:"workload kind: deployment, statefulset, or daemonset. Defaults to deployment when omitted."`
+	Kind      string `json:"kind,omitempty" jsonschema:"workload kind: deployment, statefulset, daemonset, job, or workflow. Defaults to deployment when omitted."`
 	Namespace string `json:"namespace" jsonschema:"workload namespace"`
 	Name      string `json:"name" jsonschema:"workload name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container name, defaults to all containers"`
@@ -175,7 +177,7 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input getWorkloadLogsInput) (*mcp.CallToolResult, any, error) {
 	kind := normalizeWorkloadLogsKind(input.Kind)
 	if kind == "" {
-		return nil, nil, fmt.Errorf("invalid kind %q: must be deployment, statefulset, or daemonset", input.Kind)
+		return nil, nil, fmt.Errorf("invalid kind %q: must be deployment, statefulset, daemonset, job, or workflow", input.Kind)
 	}
 
 	if !checkNamespaceAccess(ctx, input.Namespace) {
@@ -201,11 +203,14 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	// Get pods matching the workload
 	pods := cache.GetPodsForWorkload(input.Namespace, selector)
 	if len(pods) == 0 {
-		return toJSONResult(map[string]any{
+		empty := describeMCPWorkloadLogEmpty(ctx, kind, input.Namespace, input.Name)
+		response := map[string]any{
 			"workload": fmt.Sprintf("%s/%s/%s", kind, input.Namespace, input.Name),
 			"pods":     0,
-			"logs":     "no pods found for this workload",
-		})
+			"logs":     empty.Message,
+		}
+		addMCPWorkloadLogEmptyMetadata(response, empty)
+		return toJSONResult(response)
 	}
 
 	tailLines := int64(100)
@@ -275,6 +280,135 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		resp["warnings"] = w
 	}
 	return toJSONResult(resp)
+}
+
+type mcpWorkloadLogEmptyMetadata struct {
+	Reason  string
+	Message string
+	Command string
+}
+
+func describeMCPWorkloadLogEmpty(ctx context.Context, kind, namespace, name string) mcpWorkloadLogEmptyMetadata {
+	switch kind {
+	case "jobs":
+		return describeMCPJobLogEmpty(namespace, name)
+	case "workflows":
+		return describeMCPWorkflowLogEmpty(ctx, namespace, name)
+	default:
+		return mcpWorkloadLogEmptyMetadata{
+			Reason:  "no-pods",
+			Message: "no pods found for this workload",
+		}
+	}
+}
+
+func describeMCPJobLogEmpty(namespace, name string) mcpWorkloadLogEmptyMetadata {
+	metadata := mcpWorkloadLogEmptyMetadata{
+		Reason:  "no-pods",
+		Message: "No pods found for this Job yet. Check scheduling, admission, or controller events.",
+		Command: "kubectl logs job/" + name + " -n " + namespace,
+	}
+	cache := k8s.GetResourceCache()
+	if cache == nil || cache.Jobs() == nil {
+		return metadata
+	}
+	job, err := cache.Jobs().Jobs(namespace).Get(name)
+	if err != nil {
+		return metadata
+	}
+	applyMCPTerminalJobEmptyState(&metadata, job, namespace, name)
+	return metadata
+}
+
+func applyMCPTerminalJobEmptyState(metadata *mcpWorkloadLogEmptyMetadata, job *batchv1.Job, namespace, name string) {
+	if _, complete := mcpJobCondition(job, batchv1.JobComplete); !complete {
+		if _, failed := mcpJobCondition(job, batchv1.JobFailed); !failed {
+			return
+		}
+	}
+	metadata.Reason = "pods-gone"
+	metadata.Message = "This Job has finished, but its pods are no longer present in Kubernetes. If logs were retained externally, use your logging system or try kubectl logs job/" + name + " -n " + namespace + "."
+}
+
+func mcpJobCondition(job *batchv1.Job, conditionType batchv1.JobConditionType) (batchv1.JobCondition, bool) {
+	for _, condition := range job.Status.Conditions {
+		if condition.Type == conditionType && condition.Status == corev1.ConditionTrue {
+			return condition, true
+		}
+	}
+	return batchv1.JobCondition{}, false
+}
+
+func describeMCPWorkflowLogEmpty(ctx context.Context, namespace, name string) mcpWorkloadLogEmptyMetadata {
+	metadata := mcpWorkloadLogEmptyMetadata{
+		Reason:  "no-pods",
+		Message: "No Workflow pods found yet. Check scheduling, admission, or controller events.",
+		Command: "argo logs " + name + " -n " + namespace,
+	}
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return metadata
+	}
+	workflow, err := cache.GetDynamicWithGroup(ctx, "Workflow", namespace, name, "argoproj.io")
+	if err != nil {
+		return metadata
+	}
+	applyMCPTerminalWorkflowEmptyState(&metadata, workflow.Object, namespace, name)
+	return metadata
+}
+
+func applyMCPTerminalWorkflowEmptyState(metadata *mcpWorkloadLogEmptyMetadata, workflow map[string]any, namespace, name string) {
+	phase, _, _ := unstructured.NestedString(workflow, "status", "phase")
+	if !mcpWorkflowTerminal(phase) {
+		return
+	}
+	metadata.Reason = "pods-gone"
+	if mcpWorkflowArchiveLogsConfigured(workflow) {
+		metadata.Message = "This Workflow has finished and its pods are no longer present. Archived logs appear to be enabled; use the configured Argo or logging UI, or try argo logs " + name + " -n " + namespace + "."
+	} else {
+		metadata.Message = "This Workflow has finished and its pods are no longer present. Argo may have garbage-collected them; Kubernetes pod logs are no longer available here."
+	}
+}
+
+func mcpWorkflowTerminal(phase string) bool {
+	switch phase {
+	case "Succeeded", "Failed", "Error":
+		return true
+	default:
+		return false
+	}
+}
+
+func mcpWorkflowArchiveLogsConfigured(obj map[string]any) bool {
+	if archiveLogs, ok, _ := unstructured.NestedBool(obj, "spec", "archiveLogs"); ok && archiveLogs {
+		return true
+	}
+	templates, ok, _ := unstructured.NestedSlice(obj, "spec", "templates")
+	if !ok {
+		return false
+	}
+	for _, template := range templates {
+		templateMap, ok := template.(map[string]any)
+		if !ok {
+			continue
+		}
+		if archiveLogs, ok, _ := unstructured.NestedBool(templateMap, "archiveLocation", "archiveLogs"); ok && archiveLogs {
+			return true
+		}
+	}
+	return false
+}
+
+func addMCPWorkloadLogEmptyMetadata(response map[string]any, metadata mcpWorkloadLogEmptyMetadata) {
+	if metadata.Reason != "" {
+		response["emptyReason"] = metadata.Reason
+	}
+	if metadata.Message != "" {
+		response["emptyMessage"] = metadata.Message
+	}
+	if metadata.Command != "" {
+		response["command"] = metadata.Command
+	}
 }
 
 // schedulingBlockerWarnings detects when a restart won't accomplish what the
@@ -568,5 +702,12 @@ func normalizeWorkloadLogsKind(kind string) string {
 	if strings.TrimSpace(kind) == "" {
 		return "deployments"
 	}
-	return normalizeWorkloadKind(kind)
+	switch strings.ToLower(kind) {
+	case "job", "jobs":
+		return "jobs"
+	case "workflow", "workflows":
+		return "workflows"
+	default:
+		return normalizeWorkloadKind(kind)
+	}
 }

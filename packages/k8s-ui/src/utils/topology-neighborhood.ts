@@ -30,12 +30,14 @@ import type { Topology, TopologyNode, TopologyEdge, EdgeType, NodeKind } from '.
 
 export interface NeighborhoodSeed {
   kind: string
+  group?: string
   namespace: string
   name: string
 }
 
 const IDENTITY_EDGES = new Set<EdgeType>(['manages'])
 const ROUTING_EDGES = new Set<EdgeType>(['exposes', 'routes-to'])
+const BATCH_RUN_FANOUT_LIMIT = 8
 // context: 'configures' | 'uses' | 'protects' — everything else is leaf-attached.
 
 // GitOps managers: included as context ("managed by"), never expanded through.
@@ -51,6 +53,57 @@ function nodeNamespace(node: TopologyNode): string {
   return typeof ns === 'string' ? ns : ''
 }
 
+function nodeGroup(node: TopologyNode): string {
+  const apiVersion = node.data?.apiVersion
+  return typeof apiVersion === 'string' && apiVersion.includes('/') ? apiVersion.split('/')[0] : ''
+}
+
+function isWorkflowTemplateKind(kind: NodeKind | string): boolean {
+  return kind === 'WorkflowTemplate' || kind === 'ClusterWorkflowTemplate'
+}
+
+function isTemplateConfiguredRun(kind: NodeKind | string): boolean {
+  return kind === 'Workflow' || kind === 'CronWorkflow'
+}
+
+function isTemplateToRunEdge(edge: TopologyEdge, nodeById: Map<string, TopologyNode>): boolean {
+  return edge.type === 'configures'
+    && isWorkflowTemplateKind(nodeById.get(edge.source)?.kind ?? '')
+    && isTemplateConfiguredRun(nodeById.get(edge.target)?.kind ?? '')
+}
+
+function isBatchRunFanoutEdge(edge: TopologyEdge, nodeById: Map<string, TopologyNode>): boolean {
+  const source = nodeById.get(edge.source)
+  const target = nodeById.get(edge.target)
+  if (!source || !target) return false
+  if (edge.type === 'manages') {
+    return (source.kind === 'CronJob' || source.kind === 'ScaledJob') && target.kind === 'Job'
+      || source.kind === 'CronWorkflow' && target.kind === 'Workflow'
+  }
+  return edge.type === 'configures' && isWorkflowTemplateKind(source.kind) && target.kind === 'Workflow'
+}
+
+function nodeRunTime(node: TopologyNode): number {
+  const data = node.data ?? {}
+  for (const key of ['startedAt', 'finishedAt', 'startTime', 'completionTime', 'creationTimestamp']) {
+    const value = data[key]
+    if (typeof value !== 'string' || value === '') continue
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return Number.NEGATIVE_INFINITY
+}
+
+function compareRunsNewestFirst(a: TopologyNode, b: TopologyNode): number {
+  const byTime = nodeRunTime(b) - nodeRunTime(a)
+  if (byTime !== 0) return byTime
+  return b.name.localeCompare(a.name)
+}
+
+function batchFanoutLimit(edge: TopologyEdge, nodeById: Map<string, TopologyNode>): number | null {
+  return isBatchRunFanoutEdge(edge, nodeById) ? BATCH_RUN_FANOUT_LIMIT : null
+}
+
 /** The identity string for a workload/seed — `kind/namespace/name`. This format
  *  is a cross-module contract: rail rows, the `?workload=` URL param, hover
  *  focus, and the ownership stamp all compare these strings. Always construct
@@ -61,7 +114,10 @@ export function workloadKey(ref: NeighborhoodSeed): string {
 }
 
 function matchSeedNode(node: TopologyNode, seeds: NeighborhoodSeed[]): boolean {
-  return seeds.some((s) => s.kind === node.kind && s.name === node.name && s.namespace === nodeNamespace(node))
+  return seeds.some((s) => {
+    if (s.kind !== node.kind || s.name !== node.name || s.namespace !== nodeNamespace(node)) return false
+    return !s.group || s.group === nodeGroup(node)
+  })
 }
 
 /** Filter a topology to the neighborhood of `seeds`. Returns the subgraph; an
@@ -92,18 +148,40 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
     }
   }
 
+  const limitedFanouts = new Map<string, { allowed: Set<string>; total: number; kind: string }>()
+  for (const [sourceId, edges] of adjacency) {
+    const runEdges = edges.filter((edge) => edge.source === sourceId && batchFanoutLimit(edge, nodeById) !== null)
+    if (runEdges.length <= BATCH_RUN_FANOUT_LIMIT) continue
+    const targets = runEdges
+      .map((edge) => nodeById.get(edge.target))
+      .filter((node): node is TopologyNode => !!node)
+      .sort(compareRunsNewestFirst)
+    limitedFanouts.set(sourceId, {
+      allowed: new Set(targets.slice(0, BATCH_RUN_FANOUT_LIMIT).map((node) => node.id)),
+      total: targets.length,
+      kind: targets[0]?.kind === 'Job' ? 'Job' : 'Workflow',
+    })
+  }
+
   const keep = new Set(seedIds)
   // Nodes included for context but never expanded THROUGH.
   const leaf = new Set<string>()
   const queue: string[] = Array.from(seedIds)
+  const cappedSources = new Set<string>()
 
   while (queue.length) {
     const id = queue.shift()!
     if (leaf.has(id)) continue // a leaf is a dead end — don't traverse out of it
+    const currentNode = nodeById.get(id)
     for (const e of adjacency.get(id) ?? []) {
       const nextId = e.source === id ? e.target : e.source
       const nextNode = nodeById.get(nextId)
       if (!nextNode) continue
+      const fanout = e.source === id ? limitedFanouts.get(id) : undefined
+      if (fanout && !fanout.allowed.has(nextId)) {
+        cappedSources.add(id)
+        continue
+      }
 
       let asLeaf: boolean
       if (IDENTITY_EDGES.has(e.type)) {
@@ -115,6 +193,8 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
         asLeaf = nextId === e.source
       } else if (ROUTING_EDGES.has(e.type)) {
         asLeaf = true // a Service/Ingress in front of the workload — leaf
+      } else if (currentNode && isTemplateToRunEdge(e, nodeById) && e.source === currentNode.id) {
+        asLeaf = false
       } else {
         asLeaf = true // configures / uses / protects — leaf
       }
@@ -130,6 +210,14 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
     ...topology,
     nodes: topology.nodes.filter((n) => keep.has(n.id)),
     edges: topology.edges.filter((e) => keep.has(e.source) && keep.has(e.target)),
+    warnings: [
+      ...(topology.warnings ?? []),
+      ...Array.from(cappedSources).map((sourceId) => {
+        const source = nodeById.get(sourceId)
+        const fanout = limitedFanouts.get(sourceId)
+        return `Topology view: showing latest ${BATCH_RUN_FANOUT_LIMIT} of ${fanout?.total ?? BATCH_RUN_FANOUT_LIMIT} retained ${fanout?.kind ?? 'batch'} runs for ${source?.kind ?? 'workload'}/${source?.name ?? sourceId}. Use the run list for the full retained history.`
+      }),
+    ],
   }
 }
 
@@ -197,10 +285,12 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
   }
 
   // manages-DOWN children (source manages target) + undirected neighbors.
+  const nodeById = new Map<string, TopologyNode>()
+  for (const n of sub.nodes) nodeById.set(n.id, n)
   const downChildren = new Map<string, string[]>()
   const neighbors = new Map<string, Set<string>>()
   for (const e of sub.edges) {
-    if (e.type === 'manages') {
+    if (e.type === 'manages' || isTemplateToRunEdge(e, nodeById)) {
       if (!downChildren.has(e.source)) downChildren.set(e.source, [])
       downChildren.get(e.source)!.push(e.target)
     }
@@ -210,8 +300,9 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
     }
   }
 
-  // Core = each seed plus everything reachable DOWN the manages chain from it
-  // (its ReplicaSets, Pods). Exclusive by construction — a pod has one controller.
+  // Core = each seed plus everything reachable DOWN its runtime chain. For most
+  // workloads that is `manages`; Argo templates also treat template→run as core
+  // so their Workflows and Pods inherit the template workload color.
   const coreOwner = new Map<string, string>()
   for (const [seedId, key] of seedKeyById) {
     const queue = [seedId]

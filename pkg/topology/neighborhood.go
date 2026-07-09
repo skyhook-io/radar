@@ -375,7 +375,7 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 	switch rootKind {
 	// Workloads / pods: management chain + network exposure + protection.
 	case KindPod, KindPodGroup, KindDeployment, KindStatefulSet, KindDaemonSet,
-		KindReplicaSet, KindRollout, KindJob, KindCronJob,
+		KindReplicaSet, KindRollout, KindJob, KindCronJob, KindWorkflow, KindCronWorkflow,
 		KindKnativeService, KindKnativeRevision, KindKnativeConfiguration:
 		return map[EdgeType]bool{
 			EdgeManages:  true,

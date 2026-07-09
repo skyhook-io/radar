@@ -72,7 +72,7 @@ describe('ApplicationDetail shell', () => {
     expect(html).toContain('Overview')
     expect(html).toContain('Topology')
     expect(html).toContain('History')
-    expect(html).toContain('BackOff on checkout-api')
+    expect(html).not.toContain('BackOff on checkout-api')
     expect(html).toContain('Source &amp; provenance')
     expect(html).toContain('Entrypoints')
     expect(html).toContain('Dependencies')
@@ -183,7 +183,7 @@ describe('ApplicationDetail shell', () => {
     }
     const html = renderDetail({ history })
 
-    expect(html).toContain('BackOff on checkout-api')
+    expect(html).not.toContain('BackOff on checkout-api')
     expect(html).not.toContain('Current incident: BackOff on Deployment/checkout-api')
     expect(html).not.toContain('Latest change')
   })
@@ -220,8 +220,9 @@ describe('ApplicationDetail shell', () => {
     }
     const html = renderDetail({ app: idleApp })
 
-    expect(html).toContain('No application issues detected')
+    expect(html).toContain('checkout-cleanup')
     expect(html).not.toContain('needs attention')
+    expect(html).not.toContain('No application issues detected')
   })
 
   it('does not link ambiguous event objects to a workload', () => {
@@ -252,5 +253,79 @@ describe('ApplicationDetail shell', () => {
 
     expect(html).toContain('Deployment/checkout-api')
     expect(html).not.toContain('Open workload')
+  })
+
+  it('shows batch activity and injected operational issues on the application overview', () => {
+    const batchApp: AppRow = {
+      key: 'app:prod:batch',
+      name: 'batch',
+      namespace: 'prod',
+      health: 'unhealthy',
+      workload_class: 'job',
+      workloads: [
+        {
+          kind: 'CronJob',
+          namespace: 'prod',
+          name: 'nightly',
+          workload_class: 'job',
+          health: 'healthy',
+          ready: 0,
+          desired: 0,
+          restarts: 0,
+          batch: {
+            schedule: '0 3 * * *',
+            retainedRuns: 3,
+            succeededRuns: 3,
+            failedRuns: 0,
+            activeRuns: 0,
+            latestRunName: 'nightly-29720340',
+            latestRunPhase: 'Succeeded',
+            latestStartedAt: '2026-07-05T10:25:00Z',
+            lastSuccessfulAt: '2026-07-05T10:29:00Z',
+          },
+        },
+        {
+          kind: 'Job',
+          namespace: 'prod',
+          name: 'ad-hoc-import',
+          workload_class: 'job',
+          health: 'unhealthy',
+          ready: 0,
+          desired: 1,
+          restarts: 0,
+          batch: {
+            retainedRuns: 1,
+            succeededRuns: 0,
+            failedRuns: 1,
+            activeRuns: 0,
+            latestRunName: 'ad-hoc-import',
+            latestRunPhase: 'Failed',
+            latestStartedAt: '2026-07-05T09:25:00Z',
+            message: 'Job has reached the specified backoff limit',
+          },
+        },
+      ],
+    }
+    const html = renderDetail({
+      app: batchApp,
+      renderOverviewIssues: () => <div>Operational Issues (1)</div>,
+    })
+
+    expect(html).toContain('Application views')
+    expect(html).toContain('Operational Issues (1)')
+    expect(html).toContain('Batch activity')
+    const workloadsPanel = html.indexOf('>Workloads</h2>')
+    const batchPanel = html.indexOf('>Batch activity</h2>')
+    expect(workloadsPanel).toBeGreaterThanOrEqual(0)
+    expect(batchPanel).toBeGreaterThanOrEqual(0)
+    expect(workloadsPanel).toBeLessThan(batchPanel)
+    expect(html).toContain('Latest run')
+    expect(html).toContain('Retained runs')
+    expect(html).toContain('1 CronJob / 1 Job')
+    expect(html).toContain('3 succeeded / 1 failed')
+    expect(html).toContain('nightly-29720340')
+    expect(html).toContain('ad-hoc-import')
+    expect(html).not.toContain('ad-hoc-import is down')
+    expect(html).not.toContain('Runtime for')
   })
 })

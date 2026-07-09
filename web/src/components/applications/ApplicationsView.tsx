@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ApplicationsList,
@@ -6,6 +6,8 @@ import {
   CenteredEmpty,
   PageHeader,
   FreshnessControl,
+  IssueRow,
+  ISSUE_SEVERITY_RANK,
   useToast,
   orderEnvs,
   matchWorkloadAcrossInstances,
@@ -13,15 +15,20 @@ import {
   healthOf,
   compareVersions,
   gitOpsRouteForKind,
+  memberRef,
+  subjectRef,
   type AppRow,
+  type AppWorkload,
   type AppIdentityInstance,
   type ApplicationView,
   type AppSourceRef,
+  type Issue,
+  type IssueResourceRef,
   type SelectedAppWorkload,
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
-import { Boxes } from 'lucide-react'
-import { useApplicationHistory, useApplications, useTopology } from '../../api/client'
+import { AlertTriangle, Boxes } from 'lucide-react'
+import { useApplicationHistory, useApplications, useIssues, useTopology } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import { buildWorkloadPath, kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
@@ -139,6 +146,11 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     return Array.from(namespaces).sort()
   }, [app.sourceRef?.namespace, appNamespaces])
   const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', { enabled: appNamespaces.length > 0 })
+  const issuesQuery = useIssues(appNamespaces)
+  const appIssues = useMemo(
+    () => appIssuesForWorkloads(issuesQuery.data?.issues ?? [], app.workloads ?? []),
+    [issuesQuery.data?.issues, app.workloads],
+  )
 
   // The selected workload (?workload=<key>) is the scope switch and wins over
   // ?view= when both are present. With neither param, use the product default:
@@ -322,10 +334,17 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         onSelectWorkload={selectWorkload}
         selectedView={selectedView}
         onSelectView={selectView}
+        renderOverviewIssues={() => (
+          <AppOverviewIssues
+            issues={appIssues}
+            onOpenResource={onOpenResource}
+          />
+        )}
         renderWorkload={(workload: SelectedAppWorkload) => (
           <div className="h-full overflow-hidden">
             <WorkloadView
               kind={kindToPlural(workload.kind)}
+              group={workload.group}
               namespace={workload.namespace}
               name={workload.name}
               onBack={() => selectWorkload(null)}
@@ -339,4 +358,98 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
       />
     </div>
   )
+}
+
+function AppOverviewIssues({ issues, onOpenResource }: { issues: Issue[]; onOpenResource: (resource: SelectedResource) => void }) {
+  const [openId, setOpenId] = useState<string | null>(null)
+  const sorted = useMemo(() => [...issues].sort(compareAppOverviewIssues), [issues])
+  if (sorted.length === 0) return null
+
+  const navigate = (ref: IssueResourceRef) => {
+    onOpenResource({
+      kind: kindToPlural(ref.kind),
+      namespace: ref.namespace ?? '',
+      name: ref.name,
+      group: ref.group ?? '',
+    })
+  }
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-theme-text-primary">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-theme-text-secondary" aria-hidden />
+          <span>Operational Issues</span>
+          <span className="badge-sm text-[10px] text-theme-text-secondary">{sorted.length}</span>
+        </div>
+        <span className="text-xs text-theme-text-tertiary">Scoped to this application</span>
+      </div>
+      <ol className="flex flex-col gap-1.5">
+        {sorted.slice(0, 4).map((issue) => {
+          const rowKey = `${issue.cluster_id ?? ''}:${issue.id}`
+          return (
+            <IssueRow
+              key={rowKey}
+              issue={issue}
+              open={openId === rowKey}
+              onToggle={() => setOpenId((cur) => (cur === rowKey ? null : rowKey))}
+              onResourceClick={navigate}
+            />
+          )
+        })}
+      </ol>
+      {sorted.length > 4 ? (
+        <div className="text-xs text-theme-text-tertiary">
+          Showing 4 of {sorted.length} issues. Open Issues for the full queue.
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function compareAppOverviewIssues(a: Issue, b: Issue): number {
+  const severity = ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity]
+  if (severity !== 0) return severity
+  const fa = a.first_seen ?? ''
+  const fb = b.first_seen ?? ''
+  if (fa !== fb) return fb.localeCompare(fa)
+  const ns = (a.namespace ?? '').localeCompare(b.namespace ?? '')
+  if (ns !== 0) return ns
+  const name = a.name.localeCompare(b.name)
+  if (name !== 0) return name
+  return a.id.localeCompare(b.id)
+}
+
+function appIssuesForWorkloads(issues: Issue[], workloads: AppWorkload[]): Issue[] {
+  if (issues.length === 0 || workloads.length === 0) return []
+  const workloadKeys = new Set(workloads.map(workloadIssueKey))
+  const out: Issue[] = []
+  const seen = new Set<string>()
+  for (const issue of issues) {
+    if (!issueRefs(issue).some((ref) => workloadKeys.has(issueRefKey(ref)))) continue
+    if (seen.has(issue.id)) continue
+    seen.add(issue.id)
+    out.push(issue)
+  }
+  return out
+}
+
+function workloadIssueKey(workload: AppWorkload): string {
+  return `${workload.kind.toLowerCase()}|${workload.namespace}|${workload.name}`
+}
+
+function issueRefKey(ref: IssueResourceRef): string {
+  return `${ref.kind.toLowerCase()}|${ref.namespace ?? ''}|${ref.name}`
+}
+
+function issueRefs(issue: Issue): IssueResourceRef[] {
+  const refs: IssueResourceRef[] = [subjectRef(issue)]
+  if (issue.owner) refs.push(issue.owner)
+  if (issue.incident_parent?.ref) refs.push(issue.incident_parent.ref)
+  for (const member of issue.members ?? []) refs.push(memberRef(issue, member))
+  for (const fact of issue.diagnostic_context?.facts ?? []) {
+    refs.push(...(fact.refs ?? []))
+    for (const related of fact.related_issues ?? []) refs.push(related.ref)
+  }
+  return refs
 }

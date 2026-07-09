@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, Boxes, CheckCircle2, ChevronDown, Clock3, ExternalLink, Layers, Search } from 'lucide-react'
+import { ArrowLeft, Boxes, ChevronDown, Clock3, ExternalLink, Layers, Search } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { ResourceRef, Topology, TopologyNode } from '../../types'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
@@ -17,6 +17,7 @@ import {
   type AppHistory,
   type AppSourceRef,
   type AppWorkload,
+  type AppBatchActivity,
   type AppHealth,
   CHIP,
   CHIP_TONE,
@@ -28,6 +29,8 @@ import {
   identityEnvInferred,
   workloadClassOf,
   classCompositionOf,
+  batchSignalForApp,
+  batchActivityForApp,
   worstHealth,
   appGroupLagMessage,
   compareVersions,
@@ -37,7 +40,7 @@ import {
 import { PaneLoader } from '../ui/PaneLoader'
 import { midTruncate } from '../../utils/format'
 import { VersionTooltip, AppIdentityTooltip } from './AppTooltips'
-import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo } from './AppChips'
+import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo, BatchSignalChip } from './AppChips'
 import { ReadyBar } from './ReadyBar'
 
 // ApplicationDetail owns the application chrome and scope switcher. The selected
@@ -92,6 +95,8 @@ export type ApplicationDetailProps = {
   onBack: () => void
   /** Render the host's WorkloadView for the chosen workload. */
   renderWorkload: (workload: SelectedAppWorkload) => ReactNode
+  /** Render host-scoped operational issues for the app overview. */
+  renderOverviewIssues?: () => ReactNode
   /** Resources-view topology spanning the app's namespaces. When present, it
    *  powers the application Topology view and workload hover focus. */
   topology?: Topology
@@ -160,7 +165,7 @@ function compareDefinedVersions(a: string | undefined, b: string | undefined): n
   return compareVersions(a, b) ?? 0
 }
 
-export function ApplicationDetail({ app, onBack, renderWorkload, topology, topologyLoading, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
+export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewIssues, topology, topologyLoading, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
   // Stable order regardless of API ordering: rail rows and the per-workload
   // color assignment both follow this array, so an order flap between
   // refetches must not reshuffle rows or reassign a workload's hue.
@@ -179,6 +184,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
   const ready = workloads.reduce((n, w) => n + (w.ready ?? 0), 0)
   const desired = workloads.reduce((n, w) => n + (w.desired ?? 0), 0)
   const restartSignal = restartWarning(workloads)
+  const batchSignal = batchSignalForApp(app)
   // Resolve namespace the same way the list does (the workloads' shared
   // namespace) so env/namespace match across list and detail. Multi-namespace
   // apps get the count, never an arbitrary pick.
@@ -221,7 +227,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
   const [focusedOwnerId, setFocusedOwnerId] = useState<WorkloadFocus>(null)
 
   const appSeeds = useMemo(
-    () => workloads.map((w) => ({ kind: w.kind, namespace: w.namespace, name: w.name })),
+    () => workloads.map((w) => ({ kind: w.kind, namespace: w.namespace, name: w.name, group: w.group })),
     [workloads],
   )
   // Neighborhood subgraph + per-workload color/ownership tagging in one pass.
@@ -323,6 +329,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
         <ProvenanceBadge tier={app.tier} appKey={app.key} confidence={app.confidence} />
         <CategoryChip category={app.category} addonReason={app.addonReason} />
         <ClassBadge workloadClass={workloadClass} composition={classCompositionOf(app)} />
+        <BatchSignalChip signal={batchSignal} />
         {singleWorkloadScope && selectedWorkload.name !== app.name && (
           <ContextFact label="Workload">
             <span className="font-mono">{selectedWorkload.kind}/{selectedWorkload.name}</span>
@@ -397,6 +404,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
             history={history}
             historyLoading={historyLoading}
             onOpenSource={onOpenSource}
+            renderOverviewIssues={renderOverviewIssues}
           />
         )}
       </div>
@@ -429,6 +437,7 @@ function ApplicationWorkspace({
   history,
   historyLoading,
   onOpenSource,
+  renderOverviewIssues,
 }: {
   app: AppRow
   activeView: CanonicalApplicationView
@@ -454,6 +463,7 @@ function ApplicationWorkspace({
   history?: AppHistory
   historyLoading?: boolean
   onOpenSource?: (source: AppSourceRef) => void
+  renderOverviewIssues?: () => ReactNode
 }) {
   const historyCount = (history?.anchors?.length ?? 0) + (history?.incidents?.length ?? (app.events?.length ?? 0))
   return (
@@ -478,6 +488,7 @@ function ApplicationWorkspace({
           history={history}
           onSelectHistory={() => onViewChange('history')}
           onOpenSource={onOpenSource}
+          renderOverviewIssues={renderOverviewIssues}
         />
       )}
       {activeView === 'topology' && (
@@ -543,16 +554,6 @@ function ApplicationViewTabs({
   )
 }
 
-type AppIssueSeverity = 'error' | 'warning' | 'info'
-
-type AppIssue = {
-  key: string
-  severity: AppIssueSeverity
-  title: string
-  detail?: string
-  workload?: AppWorkload
-}
-
 function ApplicationOverview({
   app,
   workloads,
@@ -567,6 +568,7 @@ function ApplicationOverview({
   history,
   onSelectHistory,
   onOpenSource,
+  renderOverviewIssues,
 }: {
   app: AppRow
   workloads: AppWorkload[]
@@ -581,24 +583,27 @@ function ApplicationOverview({
   history?: AppHistory
   onSelectHistory: () => void
   onOpenSource?: (source: AppSourceRef) => void
+  renderOverviewIssues?: () => ReactNode
 }) {
   const rel = app.relationships
   const hasEntrypoints = Boolean(rel && ((rel.services?.length ?? 0) > 0 || (rel.ingresses?.length ?? 0) > 0 || (rel.routes?.length ?? 0) > 0))
   const hasDependencies = Boolean(rel && ((rel.configs ?? 0) > 0 || (rel.scalers ?? 0) > 0 || (rel.storage ?? 0) > 0 || (rel.pdbs ?? 0) > 0))
-  const composition = classCompositionOf(app)
+  const classComposition = classCompositionOf(app)
     .map(({ cls, count }) => `${count} ${cls}`)
     .join(' / ')
-  const issues = useMemo(() => buildAppIssues(workloads, app.events ?? []), [workloads, app.events])
+  const workloadComposition = workloadKindComposition(workloads)
+  const batchActivity = useMemo(() => batchActivityForApp(app), [app])
+  const renderedOverviewIssues = renderOverviewIssues?.()
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
       <div className="grid w-full max-w-[2400px] gap-4 p-4 sm:p-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
         <div className="min-w-0 space-y-4">
-          <ApplicationNow issues={issues} ready={ready} desired={desired} onSelectWorkload={onSelectWorkload} />
+          {renderedOverviewIssues}
           <ApplicationLatestHistory history={history} sourceRef={app.sourceRef} onSelectHistory={onSelectHistory} onOpenSource={onOpenSource} />
           <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
             <ApplicationFact label="State" value={verdictLabel} />
-            <ApplicationFact label="Workloads" value={String(workloads.length)} detail={composition || 'No workloads'} />
+            <ApplicationFact label="Workloads" value={String(workloads.length)} detail={workloadComposition || 'No workloads'} />
             <ApplicationFact label="Ready" value={`${ready}/${desired}`} detail={desired === 0 ? 'No desired replicas' : undefined} />
             <ApplicationFact label="Version" value={app.appVersion || (versions.length === 1 ? versions[0] : versions.length > 1 ? `${versions.length} versions` : 'Unknown')} />
           </div>
@@ -613,14 +618,27 @@ function ApplicationOverview({
           <ApplicationPanel title="Workloads">
             <WorkloadsMatrix workloads={workloads} onSelectWorkload={onSelectWorkload} />
           </ApplicationPanel>
+          <ApplicationBatchOverview activity={batchActivity} onSelectWorkload={onSelectWorkload} />
         </div>
         <aside className="min-w-0 space-y-4">
-          <ApplicationSourceProvenance app={app} namespace={namespace} namespaces={namespaces} composition={composition} onOpenSource={onOpenSource} />
+          <ApplicationSourceProvenance app={app} namespace={namespace} namespaces={namespaces} composition={classComposition} onOpenSource={onOpenSource} />
           {hasDependencies && <ApplicationDependencies relationships={rel} />}
         </aside>
       </div>
     </div>
   )
+}
+
+function workloadKindComposition(workloads: AppWorkload[]): string {
+  const counts = new Map<string, number>()
+  for (const workload of workloads) {
+    if (!workload.kind) continue
+    counts.set(workload.kind, (counts.get(workload.kind) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort(([aKind, aCount], [bKind, bCount]) => bCount - aCount || aKind.localeCompare(bKind))
+    .map(([kind, count]) => pluralize(count, kind))
+    .join(' / ')
 }
 
 function ApplicationSourceProvenance({
@@ -826,75 +844,117 @@ function ApplicationRelatedChip({ kind, name }: { kind: string; name: string }) 
   )
 }
 
-function ApplicationNow({
-  issues,
-  ready,
-  desired,
+function ApplicationBatchOverview({
+  activity,
   onSelectWorkload,
 }: {
-  issues: AppIssue[]
-  ready: number
-  desired: number
+  activity: AppBatchActivity[]
   onSelectWorkload: (workload: AppWorkload) => void
 }) {
-  if (issues.length === 0) {
-    return (
-      <section className="rounded-lg border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ring-1 ring-inset ${CHIP_TONE.emerald}`}>
-            <CheckCircle2 className="h-4 w-4" aria-hidden />
-          </span>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-semibold text-theme-text-primary">No application issues detected</h2>
-            <p className="mt-0.5 text-sm text-theme-text-secondary">
-              {desired === 0 ? 'No desired workload replicas are currently expected.' : `${ready}/${desired} workload replicas are ready.`}
-            </p>
-          </div>
-        </div>
-      </section>
-    )
-  }
+  if (activity.length === 0) return null
 
-  const top = issues[0]
+  const stats = batchOverviewStats(activity)
+  const latestRuns = latestBatchRuns(activity).slice(0, 5)
+
   return (
-    <section className="rounded-lg border border-theme-border bg-theme-surface shadow-theme-sm">
-      <div className="flex flex-wrap items-start gap-3 border-b border-theme-border px-4 py-3">
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ring-1 ring-inset ${issueTone(top.severity)}`}>
-          <AlertTriangle className="h-4 w-4" aria-hidden />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-sm font-semibold text-theme-text-primary">{top.title}</h2>
-            <span className={`${CHIP} ${issueTone(top.severity)}`}>{top.severity === 'error' ? 'Needs attention' : 'Warning'}</span>
-          </div>
-          {top.detail && <p className="mt-0.5 text-sm text-theme-text-secondary">{top.detail}</p>}
+    <ApplicationPanel title="Batch activity">
+      <div className="grid gap-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <ApplicationFact variant="bare" label="Latest run" value={stats.latestValue} detail={stats.latestDetail} />
+          <ApplicationFact variant="bare" label="Retained runs" value={stats.retainedValue} detail="Kubernetes-retained history" />
+          <ApplicationFact variant="bare" label="Active work" value={stats.activeValue} detail={stats.activeDetail} />
+          <ApplicationFact variant="bare" label="Schedules" value={stats.scheduleValue} detail={stats.scheduleDetail} monoValue={stats.scheduleMono} />
         </div>
-        {top.workload && (
-          <button type="button" onClick={() => onSelectWorkload(top.workload!)} className="rounded-md px-2.5 py-1.5 text-sm font-medium text-accent-text hover:bg-theme-hover">
-            Open workload
-          </button>
-        )}
+        <div className="divide-y divide-theme-border border-t border-theme-border">
+          {latestRuns.map((item) => {
+            const timestamp = latestRunTimestamp(item)
+            return (
+              <button
+                key={`${item.workload.kind}/${item.workload.namespace}/${item.workload.name}`}
+                type="button"
+                onClick={() => onSelectWorkload(item.workload)}
+                className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3 text-left hover:bg-theme-hover/60"
+              >
+                <span className="min-w-0">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <StatusDot tone={mapHealthToTone(batchActivityHealth(item))} />
+                    <span className="truncate text-sm font-medium text-theme-text-primary">{item.latestRunName || item.workload.name}</span>
+                  </span>
+                  <span className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-theme-text-tertiary">
+                    <span>{item.workload.kind}/{item.workload.name}</span>
+                    {timestamp && <span>{relativeTime(timestamp)}</span>}
+                    {item.schedule && <span className="font-mono">{item.schedule}</span>}
+                  </span>
+                </span>
+                <span className={`${CHIP} ${CHIP_TONE[item.tone]}`}>{item.latestRunPhase || item.label}</span>
+              </button>
+            )
+          })}
+        </div>
       </div>
-      {issues.length > 1 && (
-        <div className="divide-y divide-theme-border px-4">
-          {issues.slice(1, 5).map((issue) => (
-            <div key={issue.key} className="flex items-start gap-3 py-3">
-              <StatusDot tone={issue.severity === 'error' ? 'unhealthy' : issue.severity === 'warning' ? 'degraded' : 'neutral'} className="mt-1" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-theme-text-primary">{issue.title}</div>
-                {issue.detail && <div className="truncate text-sm text-theme-text-tertiary">{issue.detail}</div>}
-              </div>
-              {issue.workload && (
-                <button type="button" onClick={() => onSelectWorkload(issue.workload!)} className="shrink-0 text-sm font-medium text-accent-text hover:underline">
-                  Open
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
+    </ApplicationPanel>
   )
+}
+
+function latestBatchRuns(activity: AppBatchActivity[]): AppBatchActivity[] {
+  return [...activity].sort((a, b) => latestRunTime(b) - latestRunTime(a) || a.workload.name.localeCompare(b.workload.name))
+}
+
+function latestRunTimestamp(item: AppBatchActivity): string | undefined {
+  return item.latestStartedAt || item.latestFinishedAt || item.lastScheduledAt || item.lastSuccessfulAt
+}
+
+function latestRunTime(item: AppBatchActivity): number {
+  const value = latestRunTimestamp(item)
+  if (!value) return 0
+  const t = Date.parse(value)
+  return Number.isNaN(t) ? 0 : t
+}
+
+function batchActivityHealth(item: AppBatchActivity): AppHealth {
+  if (item.latestRunPhase === 'Failed' || item.latestRunPhase === 'Error') return 'unhealthy'
+  if (item.activeRuns > 0 || item.latestRunPhase === 'Running') return 'healthy'
+  if (item.latestRunPhase === 'Succeeded') return 'healthy'
+  if (item.tone === 'sky') return 'neutral'
+  return 'unknown'
+}
+
+function batchOverviewStats(activity: AppBatchActivity[]) {
+  const latest = latestBatchRuns(activity)[0]
+  const schedules = Array.from(new Set(activity.map((item) => item.schedule).filter((s): s is string => Boolean(s))))
+  const retained = activity.reduce((n, item) => n + item.retainedRuns, 0)
+  const succeeded = activity.reduce((n, item) => n + (item.workload.batch?.succeededRuns ?? 0), 0)
+  const failed = activity.reduce((n, item) => n + item.failedRuns, 0)
+  const active = activity.reduce((n, item) => n + item.activeRuns, 0)
+
+  return {
+    latestValue: latest?.latestRunPhase || latest?.label || 'None',
+    latestDetail: latest ? `${latest.latestRunName || latest.workload.name}${latestRunTimestamp(latest) ? ` · ${relativeTime(latestRunTimestamp(latest)!)} ` : ''}`.trim() : 'No retained runs',
+    retainedValue: retained > 0 ? `${succeeded} succeeded / ${failed} failed` : '0 retained',
+    activeValue: active > 0 ? `${active} running` : 'None',
+    activeDetail: active > 0 ? activeWorkloadNames(activity) : 'No active batch work',
+    scheduleValue: schedules.length === 0 ? 'None' : schedules.length === 1 ? schedules[0] : `${schedules.length} schedules`,
+    scheduleDetail: schedules.length === 1 && latest?.lastSuccessfulAt ? `last success ${relativeTime(latest.lastSuccessfulAt)}` : undefined,
+    scheduleMono: schedules.length === 1,
+  }
+}
+
+function activeWorkloadNames(activity: AppBatchActivity[]): string {
+  const active = activity.filter((item) => item.activeRuns > 0).map((item) => item.workload.name)
+  if (active.length <= 2) return active.join(', ')
+  return `${active.slice(0, 2).join(', ')} +${active.length - 2} more`
+}
+
+function relativeTime(value: string): string {
+  const t = Date.parse(value)
+  if (Number.isNaN(t)) return value
+  const diff = Date.now() - t
+  if (diff < 60_000) return 'just now'
+  const minutes = Math.floor(diff / 60_000)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 48) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
 }
 
 function ApplicationLatestHistory({
@@ -1180,64 +1240,6 @@ function HistoryIncidentLine({ incident, action }: { incident: NonNullable<AppHi
   )
 }
 
-function buildAppIssues(workloads: AppWorkload[], events: NonNullable<AppRow['events']>): AppIssue[] {
-  const issues: AppIssue[] = []
-  const issueByWorkload = new Map<string, AppIssue>()
-
-  for (const w of workloads) {
-    const health = healthOf(w.health)
-    const notReady = w.desired > 0 && w.ready < w.desired
-    const hasRestarts = (w.restarts ?? 0) > 0
-    const hasReason = !!w.reason
-    const hasHealthProblem = health === 'degraded' || health === 'unhealthy'
-    if (!hasHealthProblem && !notReady && !hasRestarts && !hasReason) continue
-
-    const severity: AppIssueSeverity = health === 'unhealthy' || (w.desired > 0 && w.ready === 0) ? 'error' : 'warning'
-    const parts = [
-      notReady ? `${w.ready}/${w.desired} ready` : undefined,
-      hasRestarts ? pluralize(w.restarts, 'restart') : undefined,
-      w.reason,
-    ].filter(Boolean)
-    const issue: AppIssue = {
-      key: `workload:${workloadKey(w)}`,
-      severity,
-      title: `${w.name} ${health === 'unhealthy' ? 'is down' : health === 'degraded' || notReady ? 'is degraded' : 'needs attention'}`,
-      detail: parts.join(' · '),
-      workload: w,
-    }
-    issueByWorkload.set(workloadKey(w), issue)
-    issues.push(issue)
-  }
-
-  for (const event of events) {
-    const workload = directWorkloadForEvent(event, workloads)
-    if (workload) {
-      const existing = issueByWorkload.get(workloadKey(workload))
-      if (existing) {
-        existing.detail = [existing.detail, event.reason].filter(Boolean).join(' · ')
-        continue
-      }
-      issues.push({
-        key: `event:${event.object}:${event.reason}`,
-        severity: 'warning',
-        title: `${event.reason} on ${workload.name}`,
-        detail: event.message,
-        workload,
-      })
-      continue
-    }
-    issues.push({
-      key: `event:${event.object}:${event.reason}`,
-      severity: 'warning',
-      title: `${event.reason} on ${event.object}`,
-      detail: event.message,
-    })
-  }
-
-  const rank: Record<AppIssueSeverity, number> = { error: 0, warning: 1, info: 2 }
-  return issues.sort((a, b) => rank[a.severity] - rank[b.severity] || a.title.localeCompare(b.title))
-}
-
 function directWorkloadForEvent(event: NonNullable<AppRow['events']>[number], workloads: AppWorkload[]): AppWorkload | undefined {
   const parsed = parseEventObject(event.object)
   if (!parsed) return undefined
@@ -1249,12 +1251,6 @@ function parseEventObject(object: string): { kind: string; name: string } | null
   const slash = object.indexOf('/')
   if (slash <= 0 || slash === object.length - 1) return null
   return { kind: object.slice(0, slash), name: object.slice(slash + 1) }
-}
-
-function issueTone(severity: AppIssueSeverity): string {
-  if (severity === 'error') return CHIP_TONE.rose
-  if (severity === 'warning') return CHIP_TONE.amber
-  return CHIP_TONE.blue
 }
 
 function historyStatusTone(status: string): string {

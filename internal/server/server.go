@@ -479,6 +479,7 @@ func (s *Server) setupRoutes() {
 
 			// Workload logs (non-streaming)
 			r.Get("/workloads/{kind}/{namespace}/{name}/logs", s.handleWorkloadLogs)
+			r.Get("/workloads/{kind}/{namespace}/{name}/runs", s.handleWorkloadRuns)
 			r.Get("/workloads/{kind}/{namespace}/{name}/pods", s.handleWorkloadPods)
 
 			// Helm routes

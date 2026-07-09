@@ -45,7 +45,9 @@ import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { useResourceAudit, useResourceIssues, useResources } from '../../api/client'
 import { AuditAlerts, ResourceIssuesSection } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
+import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
+import { BatchDrawerExecutionSummary, BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { useCanUpdateSecrets, useCanNodeWrite, useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs, useOpenNodeTerminal } from '../dock'
 import { PortForwardButton, PortForwardInlineButton } from '../portforward/PortForwardButton'
@@ -71,6 +73,7 @@ import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../../utils/navigation'
 
 type TabType = WorkloadTabType
+const BATCH_EXECUTION_KINDS = new Set(['Job', 'CronJob', 'Workflow', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob'])
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
@@ -675,6 +678,11 @@ export function WorkloadView({
       onTabChange={handleTabChange}
       // Render props
       renderLogsTab={(props) => <LogsTabContent {...props} />}
+      renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
+        BATCH_EXECUTION_KINDS.has(k) && res ? (
+          <BatchExecutionFullscreen kind={k} apiKind={apiKind} namespace={ns} name={n} resource={res} onNavigateToResource={rest.onNavigateToResource} />
+        ) : null
+      }
       renderRelatedYaml={(ref) => <RelatedResourceYaml key={`${ref.kind}/${ref.namespace}/${ref.name}`} target={ref} />}
       renderMetricsTab={({ kind, namespace: ns, name: n }) => (
         <MetricsTabContent kind={kind} namespace={ns} name={n} resource={resource} expanded={expanded} />
@@ -687,6 +695,11 @@ export function WorkloadView({
       actionsBarProps={actionsBarProps}
       rendererOverrides={rendererOverrides}
       resolvedEnvFrom={resolvedEnvFrom}
+      renderOverviewIntro={({ kind: k, namespace: ns, name: n }) =>
+        BATCH_EXECUTION_KINDS.has(k) ? (
+          <BatchDrawerExecutionSummary kind={k} apiKind={kindProp} namespace={ns} name={n} resource={resource} />
+        ) : null
+      }
       renderOverviewExtra={({ kind: k, namespace: ns, name: n }) => (
         <>
           <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
@@ -911,7 +924,8 @@ function hasGitOpsStatusPayload(owner: GitOpsOwnerRef, resource: any): boolean {
 // LOGS TAB — platform-specific (uses data-fetching hooks)
 // ============================================================================
 
-const WORKLOAD_LOG_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet'])
+const WORKLOAD_LOG_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'Workflow'])
+const SCHEDULED_LOG_KINDS = new Set(['CronJob', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob'])
 
 function LogsTabContent({
   kind,
@@ -936,11 +950,19 @@ function LogsTabContent({
   initialContainer: string | null
   onConsumeInitialContainer: () => void
 }) {
-  // Workload kinds (Deployment, StatefulSet, DaemonSet) use the aggregated workload logs viewer
+  if (SCHEDULED_LOG_KINDS.has(kind)) {
+    return (
+      <div className="h-full">
+        <ScheduledWorkloadLogsViewer kind={apiKind} namespace={namespace} name={name} />
+      </div>
+    )
+  }
+
+  // Workload kinds with stable pod selectors use the aggregated workload logs viewer
   if (WORKLOAD_LOG_KINDS.has(kind)) {
     return (
       <div className="h-full">
-        <WorkloadLogsViewer kind={apiKind} namespace={namespace} name={name} />
+        <WorkloadLogsViewer kind={apiKind} namespace={namespace} name={name} autoStream={shouldAutoStreamWorkloadLogs(kind, resource)} />
       </div>
     )
   }
@@ -960,6 +982,17 @@ function LogsTabContent({
       initialContainer={initialContainer}
     />
   )
+}
+
+function shouldAutoStreamWorkloadLogs(kind: string, resource: any): boolean {
+  if (kind === 'Job') {
+    return (resource?.status?.active ?? 0) > 0
+  }
+  if (kind === 'Workflow') {
+    const phase = resource?.status?.phase
+    return phase === 'Running' || phase === 'Pending'
+  }
+  return true
 }
 
 function PodLogsTab({ namespace, name, resource, initialContainer, onConsumeInitialContainer }: {

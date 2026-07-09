@@ -1,23 +1,15 @@
 import { Play, Clock, CheckCircle, XCircle, Loader2, SkipForward, PauseCircle } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { formatAge, formatDuration } from '../resource-utils'
+import { buildWorkflowExecutionModel, WorkflowExecutionNode, WorkflowTemplateReference } from '../../../utils/workflow-execution'
 
 interface WorkflowRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
-interface WorkflowStep {
-  id: string
-  displayName: string
-  phase: string
-  startedAt: string | null
-  finishedAt: string | null
-  message: string | null
-  nodeType: string
-}
-
-function getStepDuration(step: WorkflowStep): string | null {
+function getStepDuration(step: WorkflowExecutionNode): string | null {
   if (!step.startedAt) return null
   const start = new Date(step.startedAt)
   const end = step.finishedAt ? new Date(step.finishedAt) : new Date()
@@ -74,7 +66,7 @@ function formatEstimatedDuration(seconds: number): string {
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
 }
 
-function getWorkflowProblems(data: any): string[] {
+function getWorkflowProblems(data: any, steps: WorkflowExecutionNode[]): string[] {
   const problems: string[] = []
   const status = data.status || {}
   const phase = status.phase
@@ -85,10 +77,7 @@ function getWorkflowProblems(data: any): string[] {
     problems.push(status.message || 'Workflow error')
   }
 
-  // Check for failed nodes — include error messages when available
-  const nodes = status.nodes || {}
-  const failedNodes = Object.values(nodes)
-    .filter((node: any) => (node.type === 'Pod' || node.type === 'Suspend' || node.type === 'Skipped') && (node.phase === 'Failed' || node.phase === 'Error'))
+  const failedNodes = steps.filter((node) => (node.type === 'Pod' || node.type === 'Suspend' || node.type === 'Skipped') && (node.phase === 'Failed' || node.phase === 'Error'))
 
   if (failedNodes.length > 0) {
     const withMessages = failedNodes.filter((node: any) => node.message)
@@ -104,36 +93,12 @@ function getWorkflowProblems(data: any): string[] {
   return problems
 }
 
-const VISIBLE_NODE_TYPES = new Set(['Pod', 'Skipped', 'Suspend'])
-
-function extractSteps(data: any): WorkflowStep[] {
-  const nodes = data.status?.nodes || {}
-  const steps: WorkflowStep[] = Object.entries(nodes)
-    .filter(([, node]: [string, any]) => VISIBLE_NODE_TYPES.has(node.type))
-    .map(([id, node]: [string, any]) => ({
-      id,
-      displayName: node.displayName || id,
-      phase: node.phase || (node.type === 'Skipped' ? 'Skipped' : 'Pending'),
-      startedAt: node.startedAt || null,
-      finishedAt: node.finishedAt || null,
-      message: node.message || null,
-      nodeType: node.type,
-    }))
-
-  steps.sort((a, b) => {
-    if (!a.startedAt && !b.startedAt) return 0
-    if (!a.startedAt) return 1
-    if (!b.startedAt) return -1
-    return new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
-  })
-
-  return steps
-}
-
-export function WorkflowRenderer({ data }: WorkflowRendererProps) {
+export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const phase = status.phase || 'Unknown'
+  const execution = buildWorkflowExecutionModel(data)
+  const steps = execution.visibleSteps
 
   // Compute duration
   const startedAt = status.startedAt ? new Date(status.startedAt) : null
@@ -144,18 +109,13 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
     ? formatDuration(Date.now() - startedAt.getTime(), true) + ' (running)'
     : null
 
-  // Extract problems
-  const problems = getWorkflowProblems(data)
+  const problems = getWorkflowProblems(data, steps)
   const hasProblems = problems.length > 0
-
-  // Extract steps
-  const steps = extractSteps(data)
 
   // Arguments
   const parameters = spec.arguments?.parameters || []
 
-  // Template reference
-  const templateName = spec.workflowTemplateRef?.name || null
+  const workflowTemplateRef = execution.templateRefs.find((ref) => ref.source === 'workflow')
 
   // Estimated duration
   const estimatedDuration = status.estimatedDuration
@@ -183,7 +143,7 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
           {duration && <Property label="Duration" value={duration} />}
           {status.startedAt && <Property label="Started" value={formatAge(status.startedAt)} />}
           <Property label="Finished" value={status.finishedAt ? formatAge(status.finishedAt) : 'Running...'} />
-          {templateName && <Property label="Template" value={templateName} />}
+          {workflowTemplateRef && <Property label="Template" value={<TemplateRefLink refInfo={workflowTemplateRef} onNavigate={onNavigate} />} />}
           {status.progress && (
             <Property label="Progress" value={status.progress} />
           )}
@@ -209,15 +169,15 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
           <div className="space-y-1.5">
             {steps.map(step => {
               const isFailed = step.phase === 'Failed' || step.phase === 'Error'
-              const isSkipped = step.nodeType === 'Skipped' || step.phase === 'Skipped'
-              const isSuspend = step.nodeType === 'Suspend'
+              const isSkipped = step.type === 'Skipped' || step.phase === 'Skipped'
+              const isSuspend = step.type === 'Suspend'
               return (
                 <div key={step.id} className={clsx(
                   'text-sm card-inner px-3 py-2',
                   isFailed && 'border-l-2 border-red-500'
                 )}>
                   <div className="flex items-center gap-2">
-                    <StepStatusIcon phase={step.phase} nodeType={step.nodeType} />
+                    <StepStatusIcon phase={step.phase} nodeType={step.type} />
                     <span className={clsx(
                       'flex-1',
                       isSkipped ? 'text-theme-text-tertiary' : isSuspend ? 'text-yellow-400' : 'text-theme-text-primary'
@@ -238,6 +198,22 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
         </Section>
       )}
 
+      {execution.templateRefs.length > 1 && (
+        <Section title={`Template References (${execution.templateRefs.length})`} defaultExpanded={false}>
+          <div className="space-y-1.5">
+            {execution.templateRefs.map((ref) => (
+              <div key={`${ref.resourceKind}/${ref.namespace}/${ref.name}/${ref.source}/${ref.template || ''}/${ref.taskName || ''}`} className="flex items-center justify-between gap-3 text-sm card-inner px-3 py-2">
+                <div className="min-w-0">
+                  <TemplateRefLink refInfo={ref} onNavigate={onNavigate} />
+                  {ref.template && <span className="ml-2 text-xs text-theme-text-tertiary">template {ref.template}</span>}
+                </div>
+                <span className="text-xs text-theme-text-tertiary">{ref.source === 'workflow' ? 'workflow' : ref.taskName || 'task'}</span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
       {/* Arguments section */}
       {parameters.length > 0 && (
         <Section title={`Arguments (${parameters.length})`} defaultExpanded={parameters.length <= 5}>
@@ -252,5 +228,18 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
       {/* Conditions section */}
       <ConditionsSection conditions={status.conditions} />
     </>
+  )
+}
+
+function TemplateRefLink({ refInfo, onNavigate }: { refInfo: WorkflowTemplateReference; onNavigate?: WorkflowRendererProps['onNavigate'] }) {
+  return (
+    <ResourceLink
+      name={refInfo.name}
+      kind={refInfo.resourceKind}
+      namespace={refInfo.namespace}
+      group="argoproj.io"
+      label={refInfo.clusterScope ? `${refInfo.name} (cluster)` : refInfo.name}
+      onNavigate={onNavigate}
+    />
   )
 }

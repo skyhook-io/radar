@@ -167,6 +167,8 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "rollouts", Kind: "Rollout", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "workflows", Kind: "Workflow", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "cronworkflows", Kind: "CronWorkflow", Namespaced: true},
+	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "workflowtemplates", Kind: "WorkflowTemplate", Namespaced: true},
+	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "clusterworkflowtemplates", Kind: "ClusterWorkflowTemplate", Namespaced: false},
 	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "certificates", Kind: "Certificate", Namespaced: true},
 	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "issuers", Kind: "Issuer", Namespaced: true},
 	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "clusterissuers", Kind: "ClusterIssuer", Namespaced: false},

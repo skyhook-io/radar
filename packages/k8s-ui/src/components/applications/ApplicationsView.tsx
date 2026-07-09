@@ -17,6 +17,7 @@ import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
 import {
   type AppEntry,
+  type AppRow,
   type AppHealth,
   type AppWorkloadClass,
   type AppSource,
@@ -36,10 +37,11 @@ import {
   isSystemNamespace,
   searchTextForEntry,
   foldAppGroups,
+  batchSignalForApp,
   type FoldedRow,
 } from '../../utils/applications'
 import { ReadyBar } from './ReadyBar'
-import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo } from './AppChips'
+import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo, BatchSignalChip } from './AppChips'
 import { AppIdentityTooltip, EnvHint } from './AppTooltips'
 
 // ApplicationsView — the shared, variant-agnostic core behind the Applications
@@ -457,6 +459,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           </Tooltip>
                           <ChevronRight className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', r.expanded && 'rotate-90')} aria-hidden />
                           <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
+                          <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />
                           <Tooltip
                             content={<AppIdentityTooltip identityKey={r.label} source={r.members[0]?.row.identity?.source} portable={r.members[0]?.row.identity?.portable} fleet={variant === 'fleet'} members={r.members.map((m) => ({ name: m.row.name, env: m.row.identity!.env, confidence: m.row.identity!.confidence, evidence: m.row.identity!.evidence }))} />}
                             delay={150}
@@ -535,6 +538,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[e.health].bar)} />
                           </Tooltip>
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
+                          <BatchSignalChip signal={batchSignalForApp(e.row)} />
                           <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />
                           <CategoryChip category={e.category} addonReason={e.row.addonReason} />
                         </span>
@@ -639,4 +643,27 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
       </div>
     </div>
   )
+}
+
+function firstBatchSignal(rows: AppRow[]) {
+  let best = null as ReturnType<typeof batchSignalForApp>
+  const rank = (tone: string | undefined) => {
+    switch (tone) {
+      case 'rose':
+        return 5
+      case 'amber':
+        return 4
+      case 'sky':
+        return 3
+      case 'emerald':
+        return 2
+      default:
+        return 0
+    }
+  }
+  for (const row of rows) {
+    const signal = batchSignalForApp(row)
+    if (signal && rank(signal.tone) > rank(best?.tone)) best = signal
+  }
+  return best
 }
