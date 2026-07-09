@@ -853,6 +853,24 @@ func (r *Run) markStale() {
 	r.updatedAt = nowUTC()
 	sum := r.summaryLocked()
 	hydrated := r.hydrated
+	// Deliver the terminal pair to live subscribers BEFORE closing their
+	// channels (finalize's pattern) — an abrupt close forces an EventSource
+	// reconnect round-trip instead of a clean terminal replay. Sequence
+	// numbers: continue the in-memory log for hydrated runs; the unhydrated
+	// case has no subscribers to speak of (Subscribe hydrates first), so the
+	// in-flight delivery uses provisional seqs and the STORE keeps the
+	// authoritative ones.
+	staleEv := StreamEvent{Type: "error", Error: "Cluster context changed — this investigation was about a different cluster."}
+	closedEv := StreamEvent{Type: "closed"}
+	for i, ev := range []StreamEvent{staleEv, closedEv} {
+		re := RunEvent{Seq: len(r.events) + 1 + i, Event: ev}
+		for _, ch := range r.subs {
+			select {
+			case ch <- re:
+			default:
+			}
+		}
+	}
 	for id, ch := range r.subs {
 		delete(r.subs, id)
 		close(ch)
@@ -866,8 +884,8 @@ func (r *Run) markStale() {
 		// The in-memory log is authoritative — persist with explicit seqs so
 		// memory and store stay aligned.
 		r.mu.Lock()
-		stale := RunEvent{Seq: len(r.events) + 1, Event: StreamEvent{Type: "error", Error: "Cluster context changed — this investigation was about a different cluster."}}
-		closed := RunEvent{Seq: len(r.events) + 2, Event: StreamEvent{Type: "closed"}}
+		stale := RunEvent{Seq: len(r.events) + 1, Event: staleEv}
+		closed := RunEvent{Seq: len(r.events) + 2, Event: closedEv}
 		r.events = append(r.events, stale, closed)
 		r.mu.Unlock()
 		r.store.AppendEvent(r.ID, stale, nil)
@@ -877,8 +895,8 @@ func (r *Run) markStale() {
 	// The stale status rides BOTH events: if the second write is lost, the DB
 	// must never show a non-terminal status over a log that already carries the
 	// cluster-change marker.
-	r.store.AppendEvent(r.ID, RunEvent{Event: StreamEvent{Type: "error", Error: "Cluster context changed — this investigation was about a different cluster."}}, &sum)
-	r.store.AppendEvent(r.ID, RunEvent{Event: StreamEvent{Type: "closed"}}, &sum)
+	r.store.AppendEvent(r.ID, RunEvent{Event: staleEv}, &sum)
+	r.store.AppendEvent(r.ID, RunEvent{Event: closedEv}, &sum)
 }
 
 // matchesTarget reports whether r is the same investigation as a Start request —

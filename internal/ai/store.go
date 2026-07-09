@@ -7,6 +7,7 @@ package ai
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -301,7 +302,7 @@ func (s *sqliteRunStore) DeleteRun(id string) {
 
 func (s *sqliteRunStore) Clear(keep []string) error {
 	var out error
-	s.enqueueWait(func(db *sql.DB) error {
+	ran := s.enqueueWait(func(db *sql.DB) error {
 		tx, err := db.Begin()
 		if err != nil {
 			out = err
@@ -333,6 +334,11 @@ func (s *sqliteRunStore) Clear(keep []string) error {
 		out = tx.Commit()
 		return out
 	})
+	if !ran {
+		// A closed store didn't run the delete at all — reporting success here
+		// would let callers drop state the DB still holds.
+		return errors.New("history store is closed")
+	}
 	return out
 }
 

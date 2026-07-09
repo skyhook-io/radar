@@ -627,7 +627,7 @@ func TestClearHistoryRestoresOnFailure(t *testing.T) {
 	st.Close() // Clear will fail
 
 	if err := m.ClearHistory(); err == nil {
-		t.Skip("closed store reported success — Clear noop contract changed")
+		t.Fatal("clear on a closed store must fail — memory was about to drop state the DB still holds")
 	}
 	if m.Get("run-1") == nil {
 		t.Fatal("failed clear must restore the run to the list")
