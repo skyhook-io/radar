@@ -57,7 +57,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 	if body.UseCLIToken {
 		cliToken, err := argocd.TokenFromCLI(rawURL)
 		if err != nil {
-			log.Printf("[argocd] CLI token lookup failed: %v", err)
+			log.Printf("[argocd] CLI token lookup failed: %s", sanitizeForLog(err.Error()))
 			s.writeError(w, http.StatusBadRequest,
 				"No Argo CD CLI session found for this server — run `argocd login` first, or paste a token directly")
 			return
@@ -76,15 +76,15 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	argocd.SetConfig(rawURL, token, body.ArgoCDInsecureTLS)
+	argocd.SetConfig(rawURL, token, body.ArgoCDInsecureTLS, suppliesNewToken)
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
 	if err := argocd.Probe(ctx); err != nil {
-		argocd.SetConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS)
+		argocd.SetConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, false)
 		// The upstream error can embed the raw response body (proxy headers, a
 		// render error with Secret data). Log it server-side; return only the
 		// mapped guidance so nothing from Argo's body reaches the browser.
-		log.Printf("[argocd] Probe of candidate settings failed: %v", err)
+		log.Printf("[argocd] Probe of candidate settings failed: %s", sanitizeForLog(err.Error()))
 		if errors.Is(err, argocd.ErrTokenInvalid) {
 			s.writeError(w, http.StatusBadRequest, "Argo CD rejected the token — check that it is valid and not expired.")
 			return
@@ -99,7 +99,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		c.ArgoCDInsecureTLS = body.ArgoCDInsecureTLS
 	}); err != nil {
 		// The running client must agree with the on-disk config; roll it back.
-		argocd.SetConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS)
+		argocd.SetConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, false)
 		log.Printf("[argocd] Failed to persist Argo CD config: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

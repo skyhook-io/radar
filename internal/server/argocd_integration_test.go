@@ -37,7 +37,7 @@ func setupArgoCDTest(t *testing.T) *Server {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
-	t.Cleanup(func() { argocd.SetConfig("", "", false) })
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
 	return &Server{}
 }
 

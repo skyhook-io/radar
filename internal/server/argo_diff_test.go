@@ -58,8 +58,8 @@ func startFakeArgoServer(t *testing.T, managedFn managedResourcesFunc) (*httptes
 // argocd.Get() returns connected. Cleanup resets the manager.
 func connectArgo(t *testing.T, url string) {
 	t.Helper()
-	argocd.SetConfig(url, "good-token", false)
-	t.Cleanup(func() { argocd.SetConfig("", "", false) })
+	argocd.SetConfig(url, "good-token", false, true)
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
 	if err := argocd.Probe(context.Background()); err != nil {
 		t.Fatalf("probe fake Argo: %v", err)
 	}
@@ -299,8 +299,8 @@ func TestArgoResourceDiff_NotInManagedSet(t *testing.T) {
 
 func TestArgoResourceDiff_NotConnected(t *testing.T) {
 	// Ensure the manager is unconfigured/disconnected: Get() returns false.
-	argocd.SetConfig("", "", false)
-	t.Cleanup(func() { argocd.SetConfig("", "", false) })
+	argocd.SetConfig("", "", false, true)
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
 
 	req := newDiffRequest("argocd", "guestbook", "kind=Deployment&resourceNamespace=default&resourceName=guestbook-ui")
 	w := httptest.NewRecorder()
@@ -311,6 +311,22 @@ func TestArgoResourceDiff_NotConnected(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "not connected") {
 		t.Errorf("body = %s, want not-connected message", w.Body.String())
+	}
+}
+
+// TestArgoResourceDiff_EmptyNamespace pins that a request with no Application
+// namespace is rejected with 400 before any RBAC gate or Argo call — an empty
+// segment would otherwise skip the namespace-access check.
+func TestArgoResourceDiff_EmptyNamespace(t *testing.T) {
+	req := newDiffRequest("", "guestbook", "kind=Deployment&resourceNamespace=default&resourceName=guestbook-ui")
+	w := httptest.NewRecorder()
+	(&Server{}).handleArgoResourceDiff(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "namespace is required") {
+		t.Errorf("body = %s, want namespace-required message", w.Body.String())
 	}
 }
 

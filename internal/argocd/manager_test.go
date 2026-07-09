@@ -66,32 +66,66 @@ func newTestManager(cfg config.Config) *Manager {
 
 // TestAutoDiscoveryTokenBoundToContext pins that an auto-discovery token
 // (empty URL) is bound to the context it was configured under, and that a
-// context switch makes the probe drop it (never sending it to a different
-// cluster's discovered Argo). Discovery has no k8s client here, so the probe
-// can't connect — the assertion is that the token was neutralized for the
-// wrong context.
+// context switch makes Probe refuse to connect (never sending the token to a
+// different cluster's discovered Argo) by returning errTokenContextMismatch.
 func TestAutoDiscoveryTokenBoundToContext(t *testing.T) {
 	ctx := "cluster-a"
 	m := newTestManager(config.Config{})
 	m.contextName = func() string { return ctx }
 
-	m.SetConfig("", "secret-token", false) // auto-discovery mode
+	m.SetConfig("", "secret-token", false, true) // auto-discovery mode
 	if m.tokenContext != "cluster-a" {
 		t.Fatalf("tokenContext = %q, want the config-time context", m.tokenContext)
 	}
 
-	// Same context: the snapshot keeps the token.
-	m.mu.Lock()
-	snap := m.snapshotLocked()
-	m.mu.Unlock()
-	if snap.manualURL == "" && snap.token != "" && snap.tokenContext != m.currentContextName() {
-		t.Fatal("token should be usable in the bound context")
+	// Switch to a different context: the token is bound to cluster-a, so Probe
+	// must refuse rather than send it to cluster-b's discovered argocd-server.
+	ctx = "cluster-b"
+	if err := m.Probe(context.Background()); !errors.Is(err, errTokenContextMismatch) {
+		t.Fatalf("Probe after context switch = %v, want errTokenContextMismatch", err)
+	}
+}
+
+// TestSetConfigPreservesTokenContext pins that re-saving with a carried-forward
+// token (tokenIsFresh=false) does NOT rebind the token to the current context.
+// Only an explicitly-provided token (tokenIsFresh=true) re-stamps tokenContext;
+// otherwise editing an unrelated setting after a context switch would silently
+// defeat the auto-discovery context guard.
+func TestSetConfigPreservesTokenContext(t *testing.T) {
+	ctx := "cluster-a"
+	m := newTestManager(config.Config{})
+	m.contextName = func() string { return ctx }
+
+	m.SetConfig("", "secret-token", false, true) // fresh token on cluster-a
+	if m.tokenContext != "cluster-a" {
+		t.Fatalf("tokenContext = %q, want cluster-a", m.tokenContext)
 	}
 
-	// Switch context: the same guard now drops the token.
+	// Switch context, then re-save carrying the same token forward.
 	ctx = "cluster-b"
-	if !(snap.manualURL == "" && snap.token != "" && snap.tokenContext != m.currentContextName()) {
-		t.Fatal("token must be dropped after a context switch (bound to cluster-a, now on cluster-b)")
+	m.SetConfig("", "secret-token", false, false) // stale token, not fresh
+	if m.tokenContext != "cluster-a" {
+		t.Fatalf("tokenContext = %q after non-fresh re-save, want it still bound to cluster-a", m.tokenContext)
+	}
+	if err := m.Probe(context.Background()); !errors.Is(err, errTokenContextMismatch) {
+		t.Fatalf("Probe = %v, want errTokenContextMismatch (token still bound to cluster-a)", err)
+	}
+}
+
+// TestIsConfigured pins that IsConfigured reflects whether the integration has
+// connection settings (explicit URL or token), independent of any live probe.
+func TestIsConfigured(t *testing.T) {
+	m := newTestManager(config.Config{})
+	if m.IsConfigured() {
+		t.Fatal("IsConfigured = true on a fresh manager, want false")
+	}
+	m.SetConfig("https://argocd.example.com", "", false, false)
+	if !m.IsConfigured() {
+		t.Fatal("IsConfigured = false after setting an explicit URL, want true")
+	}
+	m.SetConfig("", "just-a-token", false, true)
+	if !m.IsConfigured() {
+		t.Fatal("IsConfigured = false after setting a token, want true")
 	}
 }
 
@@ -101,7 +135,7 @@ func TestProbeManualURL(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(config.Config{})
-	m.SetConfig(srv.URL, "good", false)
+	m.SetConfig(srv.URL, "good", false, true)
 
 	if _, ok := m.Get(); ok {
 		t.Fatal("Get should report not connected before Probe")
@@ -119,7 +153,7 @@ func TestProbeManualURL(t *testing.T) {
 
 func TestProbeUnreachable(t *testing.T) {
 	m := newTestManager(config.Config{})
-	m.SetConfig("http://127.0.0.1:1", "", false)
+	m.SetConfig("http://127.0.0.1:1", "", false, true)
 
 	err := m.Probe(context.Background())
 	if !errors.Is(err, ErrUnreachable) {
@@ -136,7 +170,7 @@ func TestProbeTokenInvalid(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(config.Config{})
-	m.SetConfig(srv.URL, "wrong", false)
+	m.SetConfig(srv.URL, "wrong", false, true)
 
 	err := m.Probe(context.Background())
 	if !errors.Is(err, ErrTokenInvalid) {
@@ -153,7 +187,7 @@ func TestProbeLoggedOutTokenInvalid(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(config.Config{})
-	m.SetConfig(srv.URL, "some-token", false)
+	m.SetConfig(srv.URL, "some-token", false, true)
 
 	if err := m.Probe(context.Background()); !errors.Is(err, ErrTokenInvalid) {
 		t.Fatalf("err = %v, want ErrTokenInvalid", err)
@@ -166,7 +200,7 @@ func TestProbeNoTokenSkipsAuthCheck(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(config.Config{})
-	m.SetConfig(srv.URL, "", false)
+	m.SetConfig(srv.URL, "", false, true)
 
 	if err := m.Probe(context.Background()); err != nil {
 		t.Fatalf("Probe without token should only check reachability: %v", err)
@@ -193,7 +227,7 @@ func TestManagedResourcesCachedTTL(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(config.Config{})
-	m.SetConfig(srv.URL, "", false)
+	m.SetConfig(srv.URL, "", false, true)
 
 	q := argoapi.ManagedResourcesQuery{AppName: "guestbook", AppNamespace: "argocd"}
 	first, err := m.ManagedResourcesCached(context.Background(), q)
@@ -233,7 +267,7 @@ func TestResetDropsConnectionKeepsConfig(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(config.Config{})
-	m.SetConfig(srv.URL, "", false)
+	m.SetConfig(srv.URL, "", false, true)
 	if err := m.Probe(context.Background()); err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
@@ -253,12 +287,12 @@ func TestSetConfigRepoints(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(config.Config{})
-	m.SetConfig(srv.URL, "", false)
+	m.SetConfig(srv.URL, "", false, true)
 	if err := m.Probe(context.Background()); err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
 
-	m.SetConfig("http://127.0.0.1:1", "", false)
+	m.SetConfig("http://127.0.0.1:1", "", false, true)
 	if _, ok := m.Get(); ok {
 		t.Fatal("Get should report not connected immediately after SetConfig")
 	}

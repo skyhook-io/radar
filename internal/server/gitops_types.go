@@ -2,28 +2,20 @@ package server
 
 import "strings"
 
-// sanitizeForLog replaces CR/LF/tab with U+FFFD so user-controlled URL
-// params (kind, namespace, name) can't forge log lines when shipped to
-// shared aggregators in in-cluster deployments. Other characters pass
-// through so legitimate names log readably.
+// sanitizeForLog replaces CR/LF/tab with U+FFFD so user-controlled values
+// (URL params like kind/namespace/name, and error strings that wrap them)
+// can't forge log lines when shipped to shared aggregators in in-cluster
+// deployments. Other characters pass through so legitimate names log readably.
+// Uses strings.ReplaceAll on the line-terminator runes specifically so static
+// analysis recognizes it as a log-injection barrier.
 func sanitizeForLog(s string) string {
 	if s == "" {
 		return s
 	}
-	if !strings.ContainsAny(s, "\r\n\t") {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch r {
-		case '\r', '\n', '\t':
-			b.WriteRune('�')
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	s = strings.ReplaceAll(s, "\r", "�")
+	s = strings.ReplaceAll(s, "\n", "�")
+	s = strings.ReplaceAll(s, "\t", "�")
+	return s
 }
 
 // GitOpsResourceRef identifies a GitOps resource

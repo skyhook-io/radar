@@ -69,15 +69,20 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusBadRequest, "kind and resourceName query parameters are required")
 		return
 	}
+	// An Argo Application always lives in a namespace; an empty segment would
+	// skip gate 1 below, so require it explicitly rather than silently degrade
+	// to a single gate.
+	if appNamespace == "" {
+		s.writeError(w, http.StatusBadRequest, "application namespace is required")
+		return
+	}
 
 	// Gate 1: the Application root. A caller who can't see the Application's
 	// namespace is denied here, before any upstream fetch. Matches the
 	// namespace-access check parseGitOpsRequest runs for /api/gitops/insights.
-	if appNamespace != "" {
-		if noNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
-			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", appNamespace))
-			return
-		}
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
+		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", appNamespace))
+		return
 	}
 
 	// Gate 2: the target resource. The same preflight the resource drawer's GET
@@ -89,13 +94,15 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, ok := argocd.Get(); !ok {
+	if !argocd.IsConfigured() {
 		s.writeError(w, http.StatusServiceUnavailable, "Argo CD integration is not connected")
 		return
 	}
 
 	// App-level query (no per-resource filter) so it shares the manager's 15s
-	// cache; per-resource filters would bypass the cache. We filter in-process.
+	// cache; per-resource filters would bypass the cache. ManagedResourcesCached
+	// connects on demand (synchronous probe) when the background reconnect hasn't
+	// landed yet, so the first diff after a restart works. We filter in-process.
 	items, err := argocd.ManagedResourcesCached(r.Context(), argoapi.ManagedResourcesQuery{
 		AppName:      appName,
 		AppNamespace: appNamespace,
@@ -355,7 +362,7 @@ func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name strin
 		// The upstream error can wrap Argo's raw response body (proxy headers,
 		// a render error containing Secret data). Keep it in the server log
 		// only; the client gets a generic message.
-		log.Printf("[argo] resource-diff for %s/%s failed: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
+		log.Printf("[argo] resource-diff for %s/%s failed: %s", sanitizeForLog(namespace), sanitizeForLog(name), sanitizeForLog(err.Error()))
 		s.writeError(w, http.StatusBadGateway, "Failed to fetch the diff from the Argo CD API server.")
 	}
 }

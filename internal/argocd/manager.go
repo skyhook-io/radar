@@ -50,6 +50,10 @@ type cacheEntry struct {
 type Manager struct {
 	mu sync.Mutex
 
+	// probeMu serializes Probe executions (see Probe). Always acquired BEFORE
+	// mu within a probe; never held together with mu across network I/O.
+	probeMu sync.Mutex
+
 	seeded      bool
 	manualURL   string
 	token       string
@@ -109,9 +113,12 @@ func NewManager() *Manager {
 var defaultManager = NewManager()
 
 // SetConfig applies new connection settings on the default manager.
-func SetConfig(url, token string, insecureTLS bool) {
-	defaultManager.SetConfig(url, token, insecureTLS)
+func SetConfig(url, token string, insecureTLS bool, tokenIsFresh bool) {
+	defaultManager.SetConfig(url, token, insecureTLS, tokenIsFresh)
 }
+
+// IsConfigured reports whether the default manager has connection settings.
+func IsConfigured() bool { return defaultManager.IsConfigured() }
 
 // Reset clears the default manager's connection state (used on context switch).
 func Reset() { defaultManager.Reset() }
@@ -139,23 +146,40 @@ func TokenFromCLI(serverURL string) (string, error) {
 
 // SetConfig re-points the manager immediately: connection state and cache are
 // dropped so the next Probe/Get resolves against the new settings. Empty url
-// enables auto-discovery.
-func (m *Manager) SetConfig(url, token string, insecureTLS bool) {
+// enables auto-discovery. tokenIsFresh must be true ONLY when the token was
+// explicitly provided by the user (typed or CLI-adopted) — a genuine "this
+// token is for this cluster" action — and false when it's the stored token
+// being carried forward. That distinction is load-bearing: re-saving other
+// settings after a context switch must NOT rebind a preserved token to the new
+// context (which would defeat the auto-discovery context guard), so tokenContext
+// is only re-stamped for a fresh token.
+func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bool) {
 	m.mu.Lock()
 	m.seeded = true
 	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
 	m.token = token
 	m.insecureTLS = insecureTLS
-	// Bind the token to the current context for the auto-discovery case; empty
-	// URL means the token will be used against whatever argocd-server the
-	// current cluster exposes, so it's only valid while that cluster is active.
-	m.tokenContext = m.currentContextName()
+	if tokenIsFresh {
+		m.tokenContext = m.currentContextName()
+	}
 	m.generation++
 	fwd := m.dropConnectionLocked()
 	m.mu.Unlock()
 	if fwd != nil {
 		fwd.stop()
 	}
+}
+
+// IsConfigured reports whether the Argo CD integration has connection settings
+// (an explicit URL or a token) — i.e. the user has set it up, even if a live
+// probe hasn't landed yet. Used to offer the deep-diff capability immediately
+// after a restart while the background reconnect is still in flight, instead of
+// showing "not connected" until the first probe completes.
+func (m *Manager) IsConfigured() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSeededLocked()
+	return m.manualURL != "" || m.token != ""
 }
 
 func (m *Manager) currentContextName() string {
@@ -247,6 +271,15 @@ func (m *Manager) Address() string {
 // session/userinfo. Errors wrap ErrUnreachable or ErrTokenInvalid so callers
 // can map them to distinct messages.
 func (m *Manager) Probe(ctx context.Context) error {
+	// Serialize probes. Background reconnection and the synchronous probe from
+	// ManagedResourcesCached would otherwise run discovery + port-forward setup
+	// concurrently and race on m.forward / m.baseURL / m.client — the generation
+	// check only discards STALE results, it doesn't stop two same-generation
+	// probes from both committing (and leaking a port-forward). One probe at a
+	// time; the second re-snapshots and either no-ops or supersedes cleanly.
+	m.probeMu.Lock()
+	defer m.probeMu.Unlock()
+
 	m.mu.Lock()
 	m.ensureSeededLocked()
 	// Bracket the client/config capture with two context reads. The kubeconfig
@@ -259,16 +292,17 @@ func (m *Manager) Probe(ctx context.Context) error {
 	m.mu.Unlock()
 
 	// Auto-discovery (empty URL) resolves whatever argocd-server the CURRENT
-	// cluster exposes. A token bound to a different context must not be sent to
+	// cluster exposes. A token bound to a different context must NOT be sent to
 	// it — the in-cluster Service DNS is identical across clusters, so the URL
-	// can't distinguish them. Drop the token when it isn't bound to the captured
-	// context, OR when a switch raced the capture (ctxBefore != ctxAfter). The
-	// probe then fails auth (or connects unauthenticated) rather than leak the
-	// token to another cluster's Argo. Explicit-URL tokens are governed by the
-	// origin guard, not this check.
+	// can't distinguish them. When the configured token isn't bound to the
+	// captured context (or a switch raced the capture), refuse to connect at all
+	// rather than connect unauthenticated: an unauthenticated "connected" state
+	// would light the deep-diff capability while every managed-resource call
+	// 403s. Stay disconnected until the user re-confirms the token for this
+	// cluster. Explicit-URL tokens are governed by the origin guard instead.
 	contextStable := ctxBefore == ctxAfter
 	if snap.manualURL == "" && snap.token != "" && (!contextStable || snap.tokenContext != ctxAfter) {
-		snap.token = ""
+		return errTokenContextMismatch
 	}
 
 	// All network I/O below uses `snap` — a single coherent (url-intent, token,
@@ -347,6 +381,13 @@ func (m *Manager) staleLocked(snap probeSnapshot) bool {
 // changed under it and refused to commit. Not surfaced to users — callers treat
 // a Probe as "not connected yet" and retry.
 var errStaleProbe = errors.New("argocd: probe superseded by a config change")
+
+// errTokenContextMismatch means the configured token is bound to a different
+// kubeconfig context than the current one (auto-discovery mode), so the probe
+// refused to connect rather than send the token to another cluster or connect
+// unauthenticated. Not surfaced to users — callers treat it as "not connected";
+// the user re-confirms the token for this cluster in Settings.
+var errTokenContextMismatch = errors.New("argocd: token not valid for the current cluster context")
 
 // ManagedResourcesCached returns the app's managed-resource diffs, serving
 // from a 15s TTL cache keyed by (appNamespace, appName). Queries carrying

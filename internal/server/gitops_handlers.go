@@ -182,12 +182,12 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	insight = s.filterGitOpsInsightForUser(r, req, insight)
 	// The resource-diff endpoint pulls desired-vs-live manifests from the Argo
 	// CD API server, so it's only offered for Argo roots when that integration
-	// is connected. Build can't decide this — it has no view of integration
-	// connectivity — so the flag is set here.
-	if insight.Summary.Tool == "argocd" {
-		if _, ok := argocd.Get(); ok {
-			insight.Capabilities.ArgoDiffAvailable = true
-		}
+	// is configured. Gate on IsConfigured, not a live client: after a restart
+	// the background reconnect may not have landed yet, and gating on Get()
+	// would flap the capability off (show "Connect Argo CD") until a probe
+	// completes + insights refetches. The diff endpoint connects on demand.
+	if insight.Summary.Tool == "argocd" && argocd.IsConfigured() {
+		insight.Capabilities.ArgoDiffAvailable = true
 	}
 	s.writeJSON(w, insight)
 }
