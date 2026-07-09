@@ -201,7 +201,6 @@ func TestPersistenceRestartRoundtrip(t *testing.T) {
 	m1.mu.Lock()
 	m1.runs[r.ID] = r
 	m1.order = append(m1.order, r.ID)
-	m1.nextID = 1
 	m1.mu.Unlock()
 	st.SaveRun(r.Summary())
 
@@ -220,10 +219,6 @@ func TestPersistenceRestartRoundtrip(t *testing.T) {
 	runs := m2.List()
 	if len(runs) != 1 || runs[0].Status != "done" || runs[0].SessionID != "sess-42" || runs[0].Preview != "bad image" {
 		t.Fatalf("restart lost state: %+v", runs)
-	}
-	// ID generation must not collide with the persisted run.
-	if m2.nextID != 1 {
-		t.Errorf("nextID = %d, want 1 (seeded from run-1)", m2.nextID)
 	}
 	// Replay parity: Subscribe hydrates the transcript from the store.
 	r2 := m2.Get("run-1")
@@ -540,5 +535,23 @@ func TestHistoryUnavailableSurfaces(t *testing.T) {
 	}
 	if _, err := os.Stat(m2.brokenDBPath); !os.IsNotExist(err) {
 		t.Error("broken history DB file must be removed by clear")
+	}
+}
+
+// TestNewRunIDUnique pins the cross-process safety property: ids are random,
+// not a counter — two processes sharing the history DB (standalone next to a
+// long-running instance) must never mint the same id and overwrite each
+// other's transcripts.
+func TestNewRunIDUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 1000; i++ {
+		id := newRunID()
+		if !strings.HasPrefix(id, "run-") || len(id) < 10 {
+			t.Fatalf("unexpected id shape %q", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate id %q", id)
+		}
+		seen[id] = true
 	}
 }

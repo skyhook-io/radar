@@ -510,7 +510,15 @@ func healthFrame(target string, health *ResourceHealthSignal) string {
 				fmt.Fprintf(&b, ": %s", health.TopFinding)
 			}
 		}
-		b.WriteString(". Treat audit findings as configuration risk, not proof of a live outage.")
+		b.WriteString(".")
+		for _, line := range health.AuditFindings {
+			fmt.Fprintf(&b, " [%s] %s", line.Severity, line.Reason)
+			if line.Message != "" {
+				fmt.Fprintf(&b, ": %s", line.Message)
+			}
+			b.WriteString(".")
+		}
+		b.WriteString(" Treat audit findings as configuration risk, not proof of a live outage.")
 	}
 	return b.String()
 }

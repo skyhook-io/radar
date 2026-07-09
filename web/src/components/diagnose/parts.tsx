@@ -519,6 +519,23 @@ export function RunContextCard({ run }: { run: RunSummary }) {
         </div>,
       );
     }
+  } else if (issueCount > 0) {
+    // Runs persisted before per-row capture carry only the rollup — never
+    // let a known-unhealthy run read as "0 active issues".
+    lines.push(
+      <div key="agg" className="flex items-start gap-1.5">
+        <StatusDot
+          tone={h?.highestSeverity === "critical" ? "unhealthy" : "degraded"}
+          className="mt-1 shrink-0"
+        />
+        <span className="min-w-0">
+          <span className="font-medium text-theme-text-primary">
+            {issueCount} active issue{issueCount === 1 ? "" : "s"}
+          </span>
+          {h?.topReason ? <> — {h.topReason}</> : null}
+        </span>
+      </div>,
+    );
   } else if (h?.health === "healthy") {
     lines.push(
       <div key="healthy" className="flex items-center gap-1.5">

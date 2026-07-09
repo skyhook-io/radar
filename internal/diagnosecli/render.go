@@ -168,7 +168,12 @@ func (r *renderer) header(run runSummary, base string) {
 			}
 			fmt.Fprintf(r.w, "%s %s — %s\n", sev, r.c(cBold, line.Reason), line.Message)
 		}
-		if extra := h.IssueCount - len(h.Issues); extra > 0 {
+		if len(h.Issues) == 0 && h.IssueCount > 0 {
+			// Runs persisted before per-row capture carry only the rollup.
+			fmt.Fprintf(r.w, "%s %s\n", r.c(cAmber, "●"),
+				r.c(cBold, fmt.Sprintf("%d active issue(s)", h.IssueCount)))
+		}
+		if extra := h.IssueCount - len(h.Issues); extra > 0 && len(h.Issues) > 0 {
 			fmt.Fprintf(r.w, "%s\n", r.c(cDim, fmt.Sprintf("  +%d more active issues", extra)))
 		}
 		for _, f := range h.AuditFindings {
