@@ -220,6 +220,42 @@ export function zoomWindowWithinBounds(
   return bounds ? clampWindowToBounds(next, bounds) : next
 }
 
+// Continuous-zoom floor: don't let the wheel shrink the window below a minute.
+// Matches the scrubber's MIN_SELECTION_MS so wheel and drag bottom out together.
+const MIN_WINDOW_MS = 60_000
+
+/**
+ * Continuous analog of {@link zoomWindowWithinBounds} for smooth wheel/pinch
+ * zoom: scale the window WIDTH by `factor` (>1 widens = zoom out, <1 narrows =
+ * zoom in) instead of snapping to the preset ladder. End-anchored and
+ * bounds-clamped exactly like the stepped version, so the wheel and the zoom
+ * buttons land the view in the same place — they differ only in granularity.
+ */
+export function zoomWindowContinuous(
+  win: TimeWindow,
+  factor: number,
+  bounds?: TimeWindow,
+): TimeWindow {
+  const curWidth = win.toMs - win.fromMs
+  const maxWidth = bounds ? bounds.toMs - bounds.fromMs : Number.POSITIVE_INFINITY
+  const nextWidth = Math.max(MIN_WINDOW_MS, Math.min(curWidth * factor, maxWidth))
+  const next = { fromMs: win.toMs - nextWidth, toMs: win.toMs }
+  return bounds ? clampWindowToBounds(next, bounds) : next
+}
+
+// Map a wheel delta to a continuous zoom factor. Normalizing the delta mode and
+// clamping the per-event delta makes one mouse notch a consistent step across
+// devices, while a trackpad pinch (many tiny ctrl-wheel events) accumulates
+// smoothly. >1 zooms out (wider window), <1 zooms in. Pure + exported for tests.
+const WHEEL_ZOOM_SENSITIVITY = 0.0025
+export function wheelZoomFactor(deltaY: number, deltaMode = 0): number {
+  let dy = deltaY
+  if (deltaMode === 1) dy *= 16 // DOM_DELTA_LINE → ~16px/line
+  else if (deltaMode === 2) dy *= 400 // DOM_DELTA_PAGE → ~one viewport
+  dy = Math.max(-100, Math.min(100, dy))
+  return Math.exp(dy * WHEEL_ZOOM_SENSITIVITY)
+}
+
 /**
  * True when the entire view window sits inside a recording gap — the swimlane is
  * empty because nothing was recorded, not because the period was quiet. Pure +
@@ -1417,29 +1453,23 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     }
   }, [isDragging, handleMouseMove, handleMouseUp])
 
-  // Wheel: ctrl/cmd = zoom (snap to levels); horizontal scroll = pan the view
-  // window, same motion as dragging the canvas. Attached as a NATIVE
+  // Wheel: ctrl/cmd = zoom CONTINUOUSLY (scale by the wheel delta, not the preset
+  // ladder — the +/- buttons keep the round preset stops); horizontal scroll =
+  // pan the view window, same motion as dragging the canvas. Attached as a NATIVE
   // non-passive listener (not React's onWheel, which is passive at the root)
   // so preventDefault actually blocks the browser's horizontal back/forward
   // overscroll gesture.
   const handleWheel = useCallback((e: WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault()
+      const factor = wheelZoomFactor(e.deltaY, e.deltaMode)
       if (controlled) {
-        onViewWindowChange?.(zoomWindowWithinBounds(viewWindow!, e.deltaY > 0 ? 'out' : 'in', bounds))
+        onViewWindowChange?.(zoomWindowContinuous(viewWindow!, factor, bounds))
         return
       }
-      setZoom((z) => {
-        const currentIdx = ZOOM_LEVELS.findIndex(level => level >= z)
-        const idx = currentIdx === -1 ? ZOOM_LEVELS.length - 1 : currentIdx
-        if (e.deltaY > 0) {
-          // Zoom out - go to next larger level
-          return ZOOM_LEVELS[Math.min(ZOOM_LEVELS.length - 1, idx + 1)]
-        } else {
-          // Zoom in - go to next smaller level
-          return ZOOM_LEVELS[Math.max(0, idx - 1)]
-        }
-      })
+      // Uncontrolled: `zoom` is a free hours value (rungs only snap in the
+      // buttons), so scale it directly and clamp to the ladder's span.
+      setZoom((z) => Math.max(ZOOM_LEVELS[0], Math.min(z * factor, ZOOM_LEVELS[ZOOM_LEVELS.length - 1])))
       return
     }
 
@@ -1542,27 +1572,23 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     // (a DaemonSet over its Pods) show their own events, not a rollup.
     const showGhostAggregate = hasVisibleChildren && isExpanded && lane.isAppGroup
     const track = (heightClass: string, small?: boolean) => (
-      <div className={clsx('flex-1 relative mr-8', heightClass)}>
-        <LaneBackdrop gridXs={gridXs} />
-        <HealthBarTrack
-          events={trackEvents}
-          ownResource={ownResource}
-          // A collapsed parent/app-group row shows an AGGREGATE: sweep its
-          // members' state families instead of blending latest-event-wins.
-          aggregateLane={hasVisibleChildren && (!isExpanded || showGhostAggregate) ? lane : undefined}
-          ghost={showGhostAggregate}
-          startTime={visibleTimeRange.start}
-          windowMs={visibleTimeRange.windowMs}
-          now={visibleTimeRange.now}
-        />
-        <LaneEventMarkers
-          events={trackEvents}
-          timeToX={timeToX}
-          selectedEvent={selectedEvent}
-          onSelectCluster={openCluster}
-          small={small}
-        />
-      </div>
+      <LaneTrack
+        className={clsx('flex-1 mr-8', heightClass)}
+        events={trackEvents}
+        ownResource={ownResource}
+        // A collapsed parent/app-group row shows an AGGREGATE: sweep its members'
+        // state families instead of blending latest-event-wins.
+        aggregateLane={hasVisibleChildren && (!isExpanded || showGhostAggregate) ? lane : undefined}
+        ghost={showGhostAggregate}
+        startTime={visibleTimeRange.start}
+        windowMs={visibleTimeRange.windowMs}
+        now={visibleTimeRange.now}
+        timeToX={timeToX}
+        selectedEvent={selectedEvent}
+        onSelectCluster={openCluster}
+        small={small}
+        gridXs={gridXs}
+      />
     )
     const childRows = isExpanded && hasVisibleChildren && (
       <div
@@ -1580,7 +1606,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
         <div key={keyPrefix + lane.id}>
           {/* Parent lane */}
           <div className="border-b-subtle">
-            <div className="flex">
+            <div className="flex items-center">
               {/* Lane label */}
               <div className="relative w-[360px] shrink-0 border-r border-theme-border px-3 py-2 flex items-center gap-1 group/pin">
                 {/* Descender: when expanded, carry the tree line from this row's
@@ -1606,30 +1632,36 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 {lane.isAppGroup ? (
                   <AppGroupLaneLabel lane={lane} memberCount={visibleChildren.length} onToggle={() => toggleLane(lane.id)} onAppClick={onAppClick} />
                 ) : (
-                  /* Single-line owner lane (6a): chip · name (bold, truncates) ·
-                     ns · +N · ⚠. Only the NAME navigates; the rest is inert. */
+                  /* Two-line owner lane: chip · [ name (bold) · +N · ⚠ / ns ]. The
+                     namespace drops to a quiet subtitle so the name gets the full
+                     first line instead of competing with metadata for the budget.
+                     Only the NAME navigates; the rest is inert. */
                   <div className="flex-1 min-w-0 flex items-center gap-1.5">
                     <KindChip kind={lane.kind} title={kindBadgeTitle} />
                     {showGroupChip && <GroupChip group={lane.group!} />}
-                    <Tooltip content={lane.name} wrapperClassName="min-w-0">
-                      <span
-                        onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
-                        className="min-w-0 w-full text-sm font-semibold font-mono text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer"
-                      >
-                        <MiddleEllipsis text={lane.name} className="block" />
-                      </span>
-                    </Tooltip>
-                    {lane.namespace && (
-                      <span className="shrink-0 text-[11.5px] text-theme-text-tertiary whitespace-nowrap">
-                        {lane.namespace}
-                      </span>
-                    )}
-                    {hasVisibleChildren && (
-                      <span className="shrink-0 text-[11.5px] font-semibold text-theme-text-tertiary">
-                        {`+${visibleChildren.length}`}
-                      </span>
-                    )}
-                    <LaneWarnChip events={lane.allEventsSorted || []} />
+                    <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Tooltip content={lane.name} wrapperClassName="min-w-0 flex-1">
+                          <span
+                            onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
+                            className="min-w-0 w-full text-sm font-semibold font-mono text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer"
+                          >
+                            <MiddleEllipsis text={lane.name} className="block" />
+                          </span>
+                        </Tooltip>
+                        {hasVisibleChildren && (
+                          <span className="shrink-0 text-[11.5px] font-semibold text-theme-text-tertiary">
+                            {`+${visibleChildren.length}`}
+                          </span>
+                        )}
+                        <LaneWarnChip events={lane.allEventsSorted || []} />
+                      </div>
+                      {lane.namespace && (
+                        <span className="text-[11px] text-theme-text-tertiary truncate">
+                          {lane.namespace}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
                 {/* Pin toggle. Real lanes pin the resource; app-group headers pin
@@ -1847,25 +1879,25 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           {/* Time axis header */}
           <div className="sticky top-0 z-30 bg-theme-surface border-b border-theme-border">
             <div className="flex">
-              <div className="w-[360px] shrink-0 border-r border-theme-border px-3 py-2 flex items-center">
+              <div className="w-[360px] shrink-0 border-r border-theme-border px-3 h-8 flex items-center">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Resource</span>
                 {/* Single morphing toggle (10a): ≥half the groups open → offers
                     collapse-all; otherwise expand-all. Tooltip names the action
-                    and its shortcut. */}
-                <span className="ml-auto">
-                  <Tooltip content={mostlyExpanded ? 'Collapse all (E)' : 'Expand all (E)'}>
-                    <button
-                      type="button"
-                      onClick={() => setAllExpanded(!mostlyExpanded)}
-                      className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
-                      aria-label={mostlyExpanded ? 'Collapse all resources' : 'Expand all resources'}
-                    >
-                      {mostlyExpanded
-                        ? <ChevronsDownUp className="h-3.5 w-3.5" />
-                        : <ChevronsUpDown className="h-3.5 w-3.5" />}
-                    </button>
-                  </Tooltip>
-                </span>
+                    and its shortcut. ml-auto rides the Tooltip's own flex wrapper
+                    so the button stays vertically centered (a plain span around it
+                    inflates to the line-height and top-aligns the glyph). */}
+                <Tooltip content={mostlyExpanded ? 'Collapse all (E)' : 'Expand all (E)'} wrapperClassName="ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => setAllExpanded(!mostlyExpanded)}
+                    className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
+                    aria-label={mostlyExpanded ? 'Collapse all resources' : 'Expand all resources'}
+                  >
+                    {mostlyExpanded
+                      ? <ChevronsDownUp className="h-3.5 w-3.5" />
+                      : <ChevronsUpDown className="h-3.5 w-3.5" />}
+                  </button>
+                </Tooltip>
               </div>
               <div className="flex-1 relative h-8 mr-8">
                 {(() => {
@@ -2296,8 +2328,9 @@ function AppGroupLaneLabel({ lane, memberCount, onToggle, onAppClick }: { lane: 
     : (lane.evidence || undefined)
   return (
     <div
-      // Single-line app header (6a): App chip · name (bold, truncates) · env? ·
-      // ns · +N · ⚠. The row toggles expand; only the name links to Applications.
+      // Two-line app header: App chip · [ name (bold) · +N · ⚠ / ns ]. The
+      // namespace drops to a quiet subtitle so the name gets the full first line;
+      // the row toggles expand, only the name links to Applications.
       className="flex-1 min-w-0 flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-theme-surface/30"
       onClick={onToggle}
     >
@@ -2315,34 +2348,100 @@ function AppGroupLaneLabel({ lane, memberCount, onToggle, onAppClick }: { lane: 
           App
         </span>
       </Tooltip>
-      <Tooltip content={linkable ? 'Open in Applications' : (lane.title ?? lane.name)} wrapperClassName="min-w-0">
-        <span
-          className={clsx(
-            'min-w-0 w-full text-sm font-semibold',
-            dimmed ? 'text-theme-text-secondary' : 'text-theme-text-primary',
-            linkable && 'hover:text-accent-text hover:underline cursor-pointer',
-          )}
-          // Name click navigates to the app's Applications page — mirroring how a
-          // resource name routes to its detail; the row body still toggles expand.
-          onClick={linkable ? (e) => { e.stopPropagation(); onAppClick!(lane.appKey!) } : undefined}
-          role={linkable ? 'button' : undefined}
-          aria-label={linkable ? 'Open in Applications' : undefined}
-        >
-          <MiddleEllipsis text={lane.title ?? lane.name} className="block" />
-        </span>
-      </Tooltip>
-      {lane.env && (
-        <span className="shrink-0 inline-flex items-center rounded-sm bg-theme-hover px-1.5 py-px text-[10px] font-medium text-theme-text-secondary ring-1 ring-inset ring-theme-border">
-          {lane.env}
-        </span>
-      )}
-      {lane.namespace && (
-        <span className="shrink-0 text-[11.5px] text-theme-text-tertiary whitespace-nowrap">{lane.namespace}</span>
-      )}
-      <span className="shrink-0 text-[11.5px] font-semibold text-theme-text-tertiary">
-        {`+${memberCount}`}
-      </span>
-      <LaneWarnChip events={lane.allEventsSorted || []} />
+      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Tooltip content={linkable ? 'Open in Applications' : (lane.title ?? lane.name)} wrapperClassName="min-w-0 flex-1">
+            <span
+              className={clsx(
+                'min-w-0 w-full text-sm font-semibold',
+                dimmed ? 'text-theme-text-secondary' : 'text-theme-text-primary',
+                linkable && 'hover:text-accent-text hover:underline cursor-pointer',
+              )}
+              // Name click navigates to the app's Applications page — mirroring how a
+              // resource name routes to its detail; the row body still toggles expand.
+              onClick={linkable ? (e) => { e.stopPropagation(); onAppClick!(lane.appKey!) } : undefined}
+              role={linkable ? 'button' : undefined}
+              aria-label={linkable ? 'Open in Applications' : undefined}
+            >
+              <MiddleEllipsis text={lane.title ?? lane.name} className="block" />
+            </span>
+          </Tooltip>
+          <span className="shrink-0 text-[11.5px] font-semibold text-theme-text-tertiary">
+            {`+${memberCount}`}
+          </span>
+          <LaneWarnChip events={lane.allEventsSorted || []} />
+        </div>
+        {lane.namespace && (
+          <span className="text-[11px] text-theme-text-tertiary truncate">{lane.namespace}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export interface LaneTrackProps {
+  /** Events attributed to this lane (already scoped/attributed by the caller). */
+  events: TimelineEvent[]
+  /** The lane's own resource identity — used to derive its health spans. */
+  ownResource?: { kind: string; namespace: string; name: string }
+  /** When set, paint the members' aggregate sweep instead of a single resource's
+   *  timeline (a collapsed parent / app-group rollup). */
+  aggregateLane?: ResourceLane
+  /** Dim + thin the aggregate to a ghost (an expanded app header's rollup). */
+  ghost?: boolean
+  startTime: number
+  windowMs: number
+  now: number
+  timeToX: (ms: number) => number
+  selectedEvent?: TimelineEvent | null
+  onSelectCluster?: (cluster: TimelineEventCluster) => void
+  small?: boolean
+  /** Vertical grid-line x positions (0–100); omit for just the center guide. */
+  gridXs?: number[]
+  /** Extra classes for the track container (height, flex, right margin). */
+  className?: string
+}
+
+/**
+ * One lane's timeline strip — the backdrop grid, the centered health bar, and the
+ * event-dot markers riding on it. This is THE composable unit shared by the full
+ * timeline page (`TimelineSwimlanes`) and the workload/app detail embed, so the
+ * health-bar + dot rendering can never diverge between them again.
+ */
+export function LaneTrack({
+  events,
+  ownResource,
+  aggregateLane,
+  ghost,
+  startTime,
+  windowMs,
+  now,
+  timeToX,
+  selectedEvent = null,
+  onSelectCluster,
+  small,
+  gridXs,
+  className,
+}: LaneTrackProps) {
+  return (
+    <div className={clsx('relative', className)}>
+      <LaneBackdrop gridXs={gridXs ?? []} />
+      <HealthBarTrack
+        events={events}
+        ownResource={ownResource}
+        aggregateLane={aggregateLane}
+        ghost={ghost}
+        startTime={startTime}
+        windowMs={windowMs}
+        now={now}
+      />
+      <LaneEventMarkers
+        events={events}
+        timeToX={timeToX}
+        selectedEvent={selectedEvent}
+        onSelectCluster={onSelectCluster ?? (() => {})}
+        small={small}
+      />
     </div>
   )
 }
@@ -2411,7 +2510,7 @@ function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggrega
   // floating on nothing read as footnotes with no page). Paint a faint neutral
   // baseline so the row still has its line.
   if (spans.length === 0) {
-    return <div className="absolute bottom-0 left-0 right-0 z-0 h-[7px] rounded-[2px] bg-gray-400/25" />
+    return <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 z-0 h-[7px] rounded-[2px] bg-gray-400/25" />
   }
 
   return (
@@ -2439,7 +2538,7 @@ function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggrega
           <Tooltip
             key={i}
             content={`Health: ${span.health} · ${new Date(span.start).toLocaleTimeString()} - ${new Date(span.end).toLocaleTimeString()}`}
-            wrapperClassName="absolute bottom-0 h-[7px]"
+            wrapperClassName="absolute top-1/2 -translate-y-1/2 h-[7px]"
             wrapperStyle={{ left: `${clampedLeft}%`, width: `${clampedWidth}%` }}
           >
             <div className={clsx('relative h-full w-full', getHealthStripColor(span.health))}>
@@ -2477,7 +2576,7 @@ function AggregateHealthTrack({ lane, startTime, windowMs, now, ghost }: {
   // paints the faint neutral baseline (same as leaf rows) so event pills never
   // float on nothing.
   if (segments.length === 0) {
-    return <div className={clsx('absolute bottom-0 left-0 right-0 z-0 rounded-[2px] bg-gray-400/25', ghost ? 'h-[4px]' : 'h-[7px]')} />
+    return <div className={clsx('absolute top-1/2 -translate-y-1/2 left-0 right-0 z-0 rounded-[2px] bg-gray-400/25', ghost ? 'h-[4px]' : 'h-[7px]')} />
   }
 
   return (
@@ -2494,7 +2593,7 @@ function AggregateHealthTrack({ lane, startTime, windowMs, now, ghost }: {
           <Tooltip
             key={i}
             content={formatAggregateHealthTooltip(seg)}
-            wrapperClassName={ghost ? 'absolute bottom-0 h-[4px]' : 'absolute bottom-0 h-[7px]'}
+            wrapperClassName={ghost ? 'absolute top-1/2 -translate-y-1/2 h-[4px]' : 'absolute top-1/2 -translate-y-1/2 h-[7px]'}
             wrapperStyle={{ left: `${clampedLeft}%`, width: `${clampedWidth}%` }}
           >
             <div
@@ -2799,8 +2898,10 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
   const tooltipLines: string[] = []
   tooltipLines.push(getOperationLabel())
   if (event.message) {
-    // Truncate long messages
-    const msg = event.message.length > 60 ? event.message.slice(0, 60) + '...' : event.message
+    // Truncate long messages — the tooltip is a scannable preview, the drawer
+    // carries the full text. Wide enough to keep a k8s event's gist (reason +
+    // first clause) without spilling into a paragraph.
+    const msg = event.message.length > 110 ? event.message.slice(0, 110) + '…' : event.message
     tooltipLines.push(msg)
   }
   tooltipLines.push(getRelativeTime(event.timestamp))
@@ -2815,6 +2916,7 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
         content={tooltipText}
         position="top"
         delay={100}
+        className="max-w-sm!"
         wrapperClassName={clsx('absolute top-1/2 -translate-y-1/2 z-20', markerAnchor(x).anchorClass)}
         wrapperStyle={{ left: markerAnchor(x).left }}
       >
@@ -2849,6 +2951,7 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
       content={tooltipText}
       position="top"
       delay={100}
+      className="max-w-sm!"
       wrapperClassName={clsx(
         'absolute top-1/2 -translate-y-1/2',
         markerAnchor(x).anchorClass,

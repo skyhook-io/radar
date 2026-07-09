@@ -6,6 +6,8 @@ import {
   chipKindLabel,
   clampWindowToBounds,
   zoomWindowWithinBounds,
+  zoomWindowContinuous,
+  wheelZoomFactor,
   clusterEventsByPosition,
   clusterBreakdown,
   clusterDrawerState,
@@ -92,6 +94,67 @@ describe('zoomWindowWithinBounds (preset stepping, end-anchored)', () => {
     const win: TimeWindow = { fromMs: NOW - 2 * HOUR, toMs: NOW }
     const next = zoomWindowWithinBounds(win, 'in')
     expect(next.toMs - next.fromMs).toBe(HOUR)
+  })
+})
+
+describe('wheelZoomFactor (continuous wheel zoom)', () => {
+  it('returns a factor > 1 scrolling down (zoom out) and < 1 up (zoom in)', () => {
+    expect(wheelZoomFactor(100)).toBeGreaterThan(1)
+    expect(wheelZoomFactor(-100)).toBeLessThan(1)
+  })
+
+  it('is symmetric: a down notch and an up notch cancel out', () => {
+    expect(wheelZoomFactor(100) * wheelZoomFactor(-100)).toBeCloseTo(1, 10)
+  })
+
+  it('a zero delta is a no-op (factor 1)', () => {
+    expect(wheelZoomFactor(0)).toBe(1)
+  })
+
+  it('clamps a jumpy delta so one event can never leap octaves', () => {
+    // A 2000px delta is treated the same as the 100px clamp — a bounded step.
+    expect(wheelZoomFactor(2000)).toBe(wheelZoomFactor(100))
+  })
+
+  it('normalizes line-mode deltas so wheel feel is device-independent', () => {
+    // deltaMode 1 (lines): a small line delta scales up to the pixel equivalent.
+    expect(wheelZoomFactor(6.25, 1)).toBeCloseTo(wheelZoomFactor(100, 0), 10)
+  })
+
+  it('accumulates smoothly for a trackpad pinch (tiny sub-notch deltas)', () => {
+    // Ten small pinch events compound toward — but stay gentler than — one notch.
+    const pinch = wheelZoomFactor(-4) ** 10
+    expect(pinch).toBeLessThan(1)
+    expect(pinch).toBeGreaterThan(wheelZoomFactor(-100))
+  })
+})
+
+describe('zoomWindowContinuous (smooth window scaling, end-anchored)', () => {
+  it('scales the window width by the factor, keeping the END fixed', () => {
+    const win: TimeWindow = { fromMs: NOW - 2 * HOUR, toMs: NOW - HOUR } // 1h wide
+    const next = zoomWindowContinuous(win, 1.5, BOUNDS)
+    expect(next.toMs - next.fromMs).toBeCloseTo(1.5 * HOUR, 0)
+    expect(next.toMs).toBe(win.toMs)
+  })
+
+  it('lands between preset rungs — the whole point (no ladder snap)', () => {
+    const win: TimeWindow = { fromMs: NOW - HOUR, toMs: NOW } // 1h
+    const next = zoomWindowContinuous(win, 1.3, BOUNDS)
+    const widthHours = (next.toMs - next.fromMs) / HOUR
+    expect(widthHours).toBeCloseTo(1.3, 5) // not 1 and not the next rung (2)
+  })
+
+  it('caps zoom-out at the bounds width', () => {
+    const win: TimeWindow = { fromMs: NOW - 6 * DAY, toMs: NOW } // 6d, near 7d bounds
+    const next = zoomWindowContinuous(win, 4, BOUNDS) // would be 24d
+    expect(next).toEqual({ fromMs: BOUNDS.fromMs, toMs: BOUNDS.toMs })
+  })
+
+  it('floors zoom-in at one minute', () => {
+    const win: TimeWindow = { fromMs: NOW - 2 * 60_000, toMs: NOW } // 2min
+    const next = zoomWindowContinuous(win, 0.01, BOUNDS) // would be ~1.2s
+    expect(next.toMs - next.fromMs).toBe(60_000)
+    expect(next.toMs).toBe(win.toMs)
   })
 })
 
@@ -373,7 +436,7 @@ describe('windowInsideGap (view fully inside a recording gap)', () => {
 })
 
 describe('app-group header lane (grouping=app + appIndex)', () => {
-  it('renders an app header with the app name, env chip, and member count', () => {
+  it('renders an app header with the app name and member count', () => {
     const now = Date.now()
     const ev = (name: string): TimelineEvent => ({
       id: name, timestamp: new Date(now).toISOString(), source: 'informer',
@@ -391,7 +454,6 @@ describe('app-group header lane (grouping=app + appIndex)', () => {
       <TimelineSwimlanes events={[ev('billing-api'), ev('billing-worker')]} grouping="app" appIndex={buildAppMembershipIndex(rows)} />,
     )
     expect(html).toContain('billing')
-    expect(html).toContain('>prod<')
     expect(html).toContain('+2')
   })
 
