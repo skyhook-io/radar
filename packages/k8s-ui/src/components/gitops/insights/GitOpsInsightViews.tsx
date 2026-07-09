@@ -975,21 +975,34 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
           </div>
         )}
         {ignoredDiffs && ignoredDiffs.ruleCount > 0 && (
-          <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
-            <span className="text-theme-text-secondary">
-              {ignoredDiffs.ruleCount} comparison {ignoredDiffs.ruleCount === 1 ? 'exclusion' : 'exclusions'} configured
+          <div className="flex items-center gap-1.5 border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
+            <span>
+              Some fields are intentionally excluded from drift comparison, so a resource can read as in sync
+              even if those fields differ.
             </span>
-            {ignoredDiffs.kinds.length > 0 && <> on {ignoredDiffs.kinds.join(', ')}</>} — these fields are
-            hidden from drift comparison.
-            {ignoredDiffs.unsupportedRuleCount > 0 && (
-              <>
-                {' '}
-                {ignoredDiffs.unsupportedRuleCount}{' '}
-                {ignoredDiffs.unsupportedRuleCount === 1 ? 'rule uses' : 'rules use'} features Radar does not
-                evaluate (jq expressions, managed-fields managers) — some entries Argo suppresses may appear
-                here.
-              </>
-            )}
+            <Tooltip
+              content={
+                <div className="max-w-[46ch] space-y-1 text-left">
+                  <div>
+                    {ignoredDiffs.ruleCount} exclusion {ignoredDiffs.ruleCount === 1 ? 'rule' : 'rules'} configured
+                    {ignoredDiffs.kinds.length > 0 && <> on {ignoredDiffs.kinds.join(', ')}</>} (Argo CD{' '}
+                    <code className="inline-code">spec.ignoreDifferences</code>).
+                  </div>
+                  {ignoredDiffs.unsupportedRuleCount > 0 && (
+                    <div>
+                      {ignoredDiffs.unsupportedRuleCount} of them use jq expressions or managed-fields managers,
+                      which Radar doesn&apos;t evaluate — so a few fields Argo hides may still appear here.
+                    </div>
+                  )}
+                </div>
+              }
+              delay={200}
+            >
+              <span className="inline-flex cursor-help items-center text-theme-text-tertiary hover:text-theme-text-secondary">
+                <Info className="h-3 w-3" />
+                <span className="ml-1 underline decoration-dotted underline-offset-2">details</span>
+              </span>
+            </Tooltip>
           </div>
         )}
         {totalCount === 0 ? (
