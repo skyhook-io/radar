@@ -22,6 +22,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/skyhook-io/radar/internal/ai"
+	"github.com/skyhook-io/radar/internal/config"
 )
 
 // kindAliases maps kubectl-style short/plural names to the canonical Kind.
@@ -160,9 +161,12 @@ Flags:
 
 	if standalone {
 		// Consent BEFORE the boot: nobody wants to answer a prompt after
-		// watching a cluster connect for 30 seconds.
-		if !o.yes && !consentGiven() {
-			if !promptConsent(localAgentLabel(o.agent)) {
+		// watching a cluster connect for 30 seconds. No server exists yet, so
+		// read/write the shared machine-scoped store (~/.radar/config.json)
+		// directly — the ephemeral server then sees it as already given.
+		surface := consentSurface(o.agent)
+		if !o.yes && !consentGivenLocal(surface) {
+			if !promptConsent(localAgentLabel(o.agent), surface, recordConsentLocal) {
 				fmt.Fprintln(os.Stderr, "aborted")
 				return 1
 			}
@@ -193,8 +197,9 @@ Flags:
 		return 1
 	}
 
-	if !o.yes && !consentGiven() {
-		if !promptConsent(agents.label(o.agent)) {
+	surface := consentSurface(o.agent)
+	if !o.yes && !agents.Consented[surface] {
+		if !promptConsent(agents.label(o.agent), surface, func(sf string) { recordConsentHTTP(base, sf) }) {
 			fmt.Fprintln(os.Stderr, "aborted")
 			return 1
 		}
@@ -262,8 +267,9 @@ func resolveServer(explicit string) (string, error) {
 }
 
 type agentsResponse struct {
-	Enabled bool `json:"enabled"`
-	Agents  []struct {
+	Enabled   bool            `json:"enabled"`
+	Consented map[string]bool `json:"consented"`
+	Agents    []struct {
 		Name      string `json:"name"`
 		Label     string `json:"label"`
 		Supported bool   `json:"supported"`
@@ -287,33 +293,58 @@ func fetchAgents(base string) (agentsResponse, error) {
 
 // --- consent ----------------------------------------------------------------
 
-func consentMarkerPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+// consentSurface maps an agent pick to its disclosure surface — Cursor's trust
+// model is materially different (its global MCP servers can't be excluded), so
+// it has its own.
+func consentSurface(agent string) string {
+	if agent == "cursor-agent" {
+		return "cursor"
 	}
-	return filepath.Join(home, ".radar", "cli-ai-consent")
+	return "standard"
 }
 
-func consentGiven() bool {
-	p := consentMarkerPath()
-	if p == "" {
-		return false
+// Consent versions mirror the server's (internal/server/ai_diagnose.go) — the
+// standalone path reads/writes the shared store directly, pre-boot.
+var consentVersions = map[string]string{"standard": "v3", "cursor": "v2"}
+
+func consentGivenLocal(surface string) bool {
+	return config.Load().AIConsent[surface] == consentVersions[surface]
+}
+
+func recordConsentLocal(surface string) {
+	_, _ = config.Update(func(c *config.Config) {
+		if c.AIConsent == nil {
+			c.AIConsent = map[string]string{}
+		}
+		c.AIConsent[surface] = consentVersions[surface]
+	})
+}
+
+// recordConsentHTTP persists consent via the running instance (same store).
+func recordConsentHTTP(base, surface string) {
+	body, _ := json.Marshal(map[string]string{"surface": surface})
+	resp, err := http.Post(base+"/api/diagnose/consent", "application/json", strings.NewReader(string(body)))
+	if err == nil {
+		_ = resp.Body.Close()
 	}
-	_, err := os.Stat(p)
-	return err == nil
 }
 
 // promptConsent mirrors the UI's one-time consent card. Interactive terminals
 // get a real y/N gate; non-interactive callers (CI) get the disclosure on
 // stderr and proceed — an explicit `radar diagnose` invocation in a script is
 // already an informed act, and a blocking prompt there would just break CI.
-func promptConsent(agentLabel string) bool {
+// record persists the acknowledgment to the shared machine-scoped store.
+func promptConsent(agentLabel, surface string, record func(surface string)) bool {
 	notice := fmt.Sprintf(`This runs your own %s on your machine — no Radar cloud, no API key.
 Radar sends the resource's spec, recent events, and pod logs to it (and on to
 its model provider under your account). Through Radar the agent can only READ
 your cluster. Transcripts are kept in your local Radar history until cleared.
 `, agentLabel)
+	if surface == "cursor" {
+		notice += `Note: Cursor also loads your own global MCP servers (Radar can't exclude
+them) — if any of those can make changes, Cursor could use them.
+`
+	}
 	fmt.Fprint(os.Stderr, notice)
 	// A real ioctl-backed check — os.ModeCharDevice would misread /dev/null
 	// (and daemon-inherited stdin) as an interactive terminal.
@@ -325,10 +356,7 @@ your cluster. Transcripts are kept in your local Radar history until cleared.
 	if s := strings.ToLower(strings.TrimSpace(line)); s != "y" && s != "yes" {
 		return false
 	}
-	if p := consentMarkerPath(); p != "" {
-		_ = os.MkdirAll(filepath.Dir(p), 0o700)
-		_ = os.WriteFile(p, []byte("1\n"), 0o600)
-	}
+	record(surface)
 	return true
 }
 

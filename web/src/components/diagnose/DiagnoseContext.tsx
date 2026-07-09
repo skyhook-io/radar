@@ -19,6 +19,7 @@ import {
   fetchAgents,
   listRuns,
   createRun,
+  recordConsent,
   DiagnoseError,
 } from "../../api/diagnose";
 import { type RunSummary, type AgentInfo } from "../../api/diagnose";
@@ -103,15 +104,15 @@ const MIN_W = 400;
 const MAX_W = 1100;
 const PANEL_BOUNDS = { min: MIN_W, max: MAX_W }; // stable ref for the layout context
 const WIDTH_KEY = "radar-ai-panel-width";
-// v3: transcripts now persist to local Radar history (~/.radar) — a material
-// change to the disclosure, so prior consent doesn't carry over.
-const CONSENT_KEY = "radar-ai-consent-v3";
-// Cursor's trust model is materially different (it can't be isolated — the user's
-// own global MCP servers also load), so it gets its OWN consent: a user who already
-// approved Claude/Codex must still see Cursor's distinct disclosure before it runs.
-const CURSOR_CONSENT_KEY = "radar-ai-consent-cursor-v2"; // v2: local history disclosure
-function consentKeyFor(agent: string): string {
-  return agent === "cursor-agent" ? CURSOR_CONSENT_KEY : CONSENT_KEY;
+// Consent is machine-scoped and lives server-side (~/.radar): it gates a
+// machine-scoped action (spawn this machine's agent CLI, persist transcripts to
+// this machine's disk), so one acknowledgment covers this panel AND the
+// `radar diagnose` CLI. Cursor gets its own surface — its trust model is
+// materially different (the user's global MCP servers can't be excluded), so
+// approving Claude/Codex never bypasses Cursor's distinct disclosure.
+type ConsentSurface = "standard" | "cursor";
+function consentSurfaceFor(agent: string): ConsentSurface {
+  return agent === "cursor-agent" ? "cursor" : "standard";
 }
 const AGENT_KEY = "radar-ai-agent";
 const ISOLATED_KEY = "radar-ai-isolated";
@@ -141,15 +142,6 @@ export function openDiagnoseSettings() {
   window.dispatchEvent(new CustomEvent("radar:open-settings"));
 }
 
-// localStorage can throw (private mode); never let it crash the always-mounted provider.
-function readConsent(agent: string): boolean {
-  try {
-    return localStorage.getItem(consentKeyFor(agent)) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function readStored(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -168,6 +160,9 @@ function writeStored(key: string, value: string) {
 export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [available, setAvailable] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [consented, setConsented] = useState<
+    Record<ConsentSurface, boolean>
+  >({ standard: false, cursor: false });
   const [selectedAgent, setSelectedAgentState] = useState<string>(
     () => readStored(AGENT_KEY) || "",
   );
@@ -210,6 +205,10 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       .then((r) => {
         if (!live) return;
         setAvailable(r.enabled);
+        setConsented({
+          standard: !!r.consented?.standard,
+          cursor: !!r.consented?.cursor,
+        });
         const supported = r.agents.filter((a) => a.supported);
         setAgents(supported);
         // Keep the stored pick only if it's still installed; else default to the
@@ -317,6 +316,8 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   // (consent is agent-specific, so they must read the CURRENT pick, not a closure).
   const selectedAgentRef = useRef(selectedAgent);
   selectedAgentRef.current = selectedAgent;
+  const consentedRef = useRef(consented);
+  consentedRef.current = consented;
 
   // Monotonic token so an earlier createRun that resolves late can't steal focus
   // from a later click on a different resource (only the latest start wins).
@@ -351,7 +352,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const openInvestigation = useCallback((t: Target) => {
     setStartError(null);
     setOpen(true);
-    if (!readConsent(selectedAgentRef.current)) {
+    if (!consentedRef.current[consentSurfaceFor(selectedAgentRef.current)]) {
       setPendingTarget(t);
       setView("investigation");
       return;
@@ -395,11 +396,12 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const goHome = useCallback(() => setView("home"), []);
   const close = useCallback(() => setOpen(false), []);
   const approveConsent = useCallback(() => {
-    try {
-      localStorage.setItem(consentKeyFor(selectedAgentRef.current), "1");
-    } catch {
-      /* storage disabled — consent holds for this session */
-    }
+    const surface = consentSurfaceFor(selectedAgentRef.current);
+    // Optimistic: the user just consented — the run proceeds regardless. The
+    // server write makes it durable (and shared with the CLI); if it fails,
+    // the only cost is being asked again next session.
+    setConsented((prev) => ({ ...prev, [surface]: true }));
+    recordConsent(surface).catch(() => {});
     const t = pendingTarget;
     setPendingTarget(null);
     if (t) startRunRef.current(t);

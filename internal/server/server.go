@@ -353,6 +353,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/diagnose/runs/{id}/turns", s.handleDiagnoseTurn)
 			r.Post("/diagnose/runs/{id}/stop", s.handleDiagnoseStop)
 			r.Post("/diagnose/history/clear", s.handleDiagnoseHistoryClear)
+			r.Post("/diagnose/consent", s.handleDiagnoseConsent)
 			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)

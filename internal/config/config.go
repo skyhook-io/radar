@@ -41,6 +41,12 @@ type Config struct {
 	AIHistory *bool `json:"aiHistory,omitempty"`
 	// AIHistoryDBPath overrides the history DB location (default ~/.radar/ai-runs.db).
 	AIHistoryDBPath string `json:"aiHistoryDbPath,omitempty"`
+	// AIConsent records the acknowledged AI-diagnosis disclosure version per
+	// surface ("standard", "cursor"). Machine-scoped on purpose: consent gates a
+	// machine-scoped action (spawn this machine's agent CLI, persist transcripts
+	// to this machine's disk), so one acknowledgment covers the web panel and
+	// the `radar diagnose` CLI alike.
+	AIConsent map[string]string `json:"aiConsent,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent writes

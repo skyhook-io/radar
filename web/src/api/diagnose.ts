@@ -15,6 +15,9 @@ export interface AgentInfo {
 export interface AgentsResponse {
   agents: AgentInfo[];
   enabled: boolean;
+  // Machine-scoped consent per disclosure surface, recorded server-side
+  // (~/.radar) — one acknowledgment covers the web panel and the CLI.
+  consented?: { standard?: boolean; cursor?: boolean };
 }
 
 export interface DiagnoseStep {
@@ -173,6 +176,19 @@ export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
   const d = await res.json();
   return { runs: d.runs ?? [], historyDegraded: !!d.historyDegraded };
+}
+
+// recordConsent acknowledges the current disclosure for a surface, server-side.
+export async function recordConsent(
+  surface: "standard" | "cursor",
+): Promise<void> {
+  const res = await fetch(`${getApiBase()}/diagnose/consent`, {
+    method: "POST",
+    credentials: getCredentialsMode(),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ surface }),
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
 }
 
 // clearHistory wipes the persisted investigation history (finished runs); live

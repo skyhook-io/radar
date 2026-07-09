@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/ai"
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
@@ -117,6 +118,26 @@ func managedByFromMeta(obj *unstructured.Unstructured) string {
 	return ""
 }
 
+// Consent disclosure versions. Bump when the consent card's claims change
+// materially (standard v3: transcripts persist to local history; cursor v2:
+// same disclosure on Cursor's distinct trust model) — recorded consent for an
+// older version doesn't carry over.
+const (
+	consentStandardVersion = "v3"
+	consentCursorVersion   = "v2"
+)
+
+// currentConsents reports whether the CURRENT disclosure version has been
+// acknowledged, per surface. Machine-scoped (~/.radar/config.json): one
+// acknowledgment covers the web panel and the CLI.
+func currentConsents() map[string]bool {
+	c := config.Load().AIConsent
+	return map[string]bool{
+		"standard": c["standard"] == consentStandardVersion,
+		"cursor":   c["cursor"] == consentCursorVersion,
+	}
+}
+
 // handleListAgents reports the local agent CLIs detected on PATH, for the OSS
 // "AI Agent" picker. Safe: only fixed known names are probed (see ai.DetectAgents).
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
@@ -124,9 +145,52 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	// (e.g. a settings/picker view) so the Diagnose button's check stays instant.
 	withVersions := r.URL.Query().Get("versions") == "1"
 	s.writeJSON(w, map[string]any{
-		"agents":  ai.DetectAgents(r.Context(), withVersions),
-		"enabled": s.aiRuns != nil,
+		"agents":    ai.DetectAgents(r.Context(), withVersions),
+		"enabled":   s.aiRuns != nil,
+		"consented": currentConsents(),
 	})
+}
+
+// handleDiagnoseConsent records the user's acknowledgment of the current
+// disclosure for a surface ("standard" = Claude/Codex, "cursor" = Cursor's
+// distinct trust model). Doesn't require a connected cluster — consent can be
+// given while Radar is still connecting.
+func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
+	if !localOriginOK(r) {
+		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if s.aiRuns == nil {
+		s.writeError(w, http.StatusNotImplemented, "AI diagnosis is not available")
+		return
+	}
+	var body struct {
+		Surface string `json:"surface"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	version := ""
+	switch body.Surface {
+	case "standard":
+		version = consentStandardVersion
+	case "cursor":
+		version = consentCursorVersion
+	default:
+		s.writeError(w, http.StatusBadRequest, "surface must be \"standard\" or \"cursor\"")
+		return
+	}
+	if _, err := config.Update(func(c *config.Config) {
+		if c.AIConsent == nil {
+			c.AIConsent = map[string]string{}
+		}
+		c.AIConsent[body.Surface] = version
+	}); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "couldn't record consent: "+err.Error())
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true, "consented": currentConsents()})
 }
 
 // aiReady gates every diagnose endpoint: the engine is built only in no-auth
