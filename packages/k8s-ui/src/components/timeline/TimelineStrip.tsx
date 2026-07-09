@@ -516,9 +516,14 @@ export function TimelineStrip({
   return (
     // ONE row (Turn 12): the range picker + window stepper cap the histogram on
     // the left, Live docks right, and the edge stamps + state caption sit under
-    // the track — the former label row above the strip was mostly air.
-    <div ref={containerRef} className={clsx('relative flex items-center gap-3', className)}>
-      <div ref={pickerRef} className="relative shrink-0">
+    // the track. Turn 13 metrics: every control is a fixed 34px whose vertical
+    // center sits on the 48px track's midline (labels float in the airspace
+    // above) — content-driven heights made true centering impossible. Cap
+    // columns: 7px top + 13px label + 4px gap + 34px control → center 41 ≈
+    // the track's 16px offset + 24.
+    <div ref={containerRef} className={clsx('relative flex items-start gap-3', className)}>
+      <div ref={pickerRef} className="relative mt-[7px] shrink-0">
+          <span className="mb-1 block text-center text-[10.5px] font-bold uppercase leading-[13px] tracking-[0.08em] text-theme-text-tertiary">Query range</span>
           <Tooltip content={absoluteRange} position="bottom" disabled={pickerOpen}>
             <button
               type="button"
@@ -526,7 +531,7 @@ export function TimelineStrip({
               aria-expanded={pickerOpen}
               aria-haspopup="dialog"
               className={clsx(
-                'flex items-center gap-2 whitespace-nowrap rounded-md border bg-theme-elevated px-3 py-1.5 text-[13px] font-semibold text-theme-text-primary',
+                'flex h-[34px] items-center gap-2 whitespace-nowrap rounded-md border bg-theme-elevated px-3 text-[13px] font-semibold text-theme-text-primary',
                 pickerOpen ? 'border-accent' : 'border-theme-border hover:border-accent',
               )}
             >
@@ -539,6 +544,9 @@ export function TimelineStrip({
             // dialog's bottom edge and were getting clipped to a header sliver.
             // The footer rounds its own bottom corners instead.
             <div className="absolute left-0 top-full z-50 mt-2 w-[460px] max-w-[92vw] rounded-xl border border-theme-border bg-theme-surface shadow-theme-lg" role="dialog" aria-label="Query range picker">
+              <p className="border-b border-theme-border/60 px-4 py-2.5 text-[11px] leading-relaxed text-theme-text-secondary">
+                How much history to load. The blue window narrows what's shown.
+              </p>
               {presets && presets.length > 0 && (
                 <div className="flex flex-col gap-2 border-b border-theme-border/60 px-4 py-3">
                   <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-theme-text-tertiary">
@@ -599,22 +607,26 @@ export function TimelineStrip({
         </div>
 
       {windowMs != null && lensResizable && (
-        <Tooltip content="Window — the slice shown in the lanes below, always within the query range" position="bottom" wrapperClassName="shrink-0">
-          <div className="inline-flex items-center overflow-hidden rounded-md border border-theme-border bg-theme-elevated">
-            <button type="button" aria-label="Narrow visible window" onClick={() => stepWindow(-1)} className="flex h-6 w-6 items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
-              <Minus className="h-3 w-3" />
-            </button>
-            <span className="border-x border-theme-border-light px-2 text-[11.5px] font-semibold tabular-nums text-theme-text-primary">{formatLensDuration(windowMs)}</span>
-            <button type="button" aria-label="Widen visible window" onClick={() => stepWindow(1)} className="flex h-6 w-6 items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
-              <Plus className="h-3 w-3" />
-            </button>
-          </div>
-        </Tooltip>
+        <div className="mt-[7px] shrink-0">
+          <span className="mb-1 block text-center text-[10.5px] font-bold uppercase leading-[13px] tracking-[0.08em] text-theme-text-tertiary">Window</span>
+          <Tooltip content="The slice shown in the lanes below — always within the query range" position="bottom" wrapperClassName="shrink-0">
+            <div className="inline-flex h-[34px] items-center overflow-hidden rounded-md border border-theme-border bg-theme-elevated">
+              <button type="button" aria-label="Narrow visible window" onClick={() => stepWindow(-1)} className="flex h-full w-[30px] items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
+                <Minus className="h-3 w-3" />
+              </button>
+              <span className="flex h-full items-center border-x border-theme-border-light px-2 text-[11.5px] font-semibold tabular-nums text-theme-text-primary">{formatLensDuration(windowMs)}</span>
+              <button type="button" aria-label="Widen visible window" onClick={() => stepWindow(1)} className="flex h-full w-[30px] items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
+          </Tooltip>
+        </div>
       )}
 
       {/* Histogram block — the flexible center: track above, edge stamps +
-          state caption below. */}
-      <div className="min-w-0 flex-1">
+          state caption below. mt-4 = the label airspace, putting the 48px
+          track's midline level with the 34px controls' centers. */}
+      <div className="mt-4 min-w-0 flex-1">
       <div className="relative">
         {hoverLabel != null && hoverX != null && (
           <div
@@ -776,7 +788,8 @@ export function TimelineStrip({
       </div>
 
       {liveState && (
-        <div className="shrink-0">
+        // mt: track offset (16) + track center (24) − chip half-height (17).
+        <div className="mt-[23px] shrink-0">
           <StripLiveChip state={liveState} onClick={onLiveChipClick} />
         </div>
       )}
@@ -793,7 +806,7 @@ function StripLiveChip({ state, onClick }: { state: TimelineLiveState; onClick?:
   if (state.kind === 'live') {
     if (state.latched) {
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-transparent bg-theme-hover px-2.5 py-1 text-xs font-semibold text-theme-text-secondary">
+        <span className="inline-flex h-[34px] items-center gap-1.5 rounded-full border border-transparent bg-theme-hover px-3 text-xs font-semibold text-theme-text-secondary">
           <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
           Live
         </span>
@@ -801,7 +814,7 @@ function StripLiveChip({ state, onClick }: { state: TimelineLiveState; onClick?:
     }
     return (
       <Tooltip content="The window is behind the live edge — click to jump to now" position="bottom">
-        <button type="button" onClick={onClick} className="inline-flex items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-2.5 py-1 text-xs font-semibold text-theme-text-secondary hover:bg-theme-hover">
+        <button type="button" onClick={onClick} className="inline-flex h-[34px] items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-3 text-xs font-semibold text-theme-text-secondary hover:bg-theme-hover">
           <span className="h-1.5 w-1.5 rounded-full border border-green-500 bg-transparent" />
           Live
         </button>
@@ -814,7 +827,7 @@ function StripLiveChip({ state, onClick }: { state: TimelineLiveState; onClick?:
       type="button"
       onClick={onClick}
       className={clsx(
-        'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold text-white',
+        'inline-flex h-[34px] items-center gap-1.5 rounded-full px-3 text-xs font-semibold text-white',
         stale ? 'bg-amber-500 hover:bg-amber-600' : 'bg-green-600 hover:bg-green-700',
       )}
     >
