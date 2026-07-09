@@ -4198,19 +4198,29 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := config.Update(func(c *config.Config) {
-		preservedHeaders := c.PrometheusHeaders
-		preservedArgoToken := c.ArgoCDToken
-		prevArgoURL := c.ArgoCDURL
-		*c = updated
-		c.PrometheusHeaders = preservedHeaders
-		// The Argo token is redacted from GET /api/config, so a full-config PUT
-		// echoes it back empty; preserve the stored one. But NEVER carry it to a
-		// different Argo origin — that would stage the credential to be sent to a
-		// new host on next startup. On an origin change with no new token, drop it.
-		c.ArgoCDToken = preservedArgoToken
-		if !sameArgoOrigin(c.ArgoCDURL, prevArgoURL) {
-			c.ArgoCDToken = ""
+		// Integration connection fields are owned exclusively by the live
+		// /api/integrations/* endpoints, not this startup-config PUT. Preserve
+		// ALL of them so a full-config save (which is a full replacement) can
+		// never disturb a live integration — even if it races an in-flight
+		// Apply/Connect or echoes back the redacted token as empty.
+		preserved := struct {
+			promHeaders    map[string]string
+			promHeadersEnv map[string]string
+			promURL        string
+			argoURL        string
+			argoToken      string
+			argoInsecure   bool
+		}{
+			c.PrometheusHeaders, c.PrometheusHeadersFromEnv, c.PrometheusURL,
+			c.ArgoCDURL, c.ArgoCDToken, c.ArgoCDInsecureTLS,
 		}
+		*c = updated
+		c.PrometheusHeaders = preserved.promHeaders
+		c.PrometheusHeadersFromEnv = preserved.promHeadersEnv
+		c.PrometheusURL = preserved.promURL
+		c.ArgoCDURL = preserved.argoURL
+		c.ArgoCDToken = preserved.argoToken
+		c.ArgoCDInsecureTLS = preserved.argoInsecure
 	})
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)

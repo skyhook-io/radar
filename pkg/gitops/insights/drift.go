@@ -373,10 +373,7 @@ func filterIgnoredPaths(entries []DriftEntry, pointers []string) []DriftEntry {
 		if p == "" {
 			continue
 		}
-		// "/spec/replicas" → "spec.replicas"
-		p = strings.TrimPrefix(p, "/")
-		p = strings.ReplaceAll(p, "/", ".")
-		prefixes = append(prefixes, p)
+		prefixes = append(prefixes, pointerToDotPath(p))
 	}
 	// Fresh allocation rather than `entries[:0]` aliasing — the caller may
 	// still hold the original slice (e.g., for a pre-filter count or audit
@@ -392,6 +389,19 @@ func filterIgnoredPaths(entries []DriftEntry, pointers []string) []DriftEntry {
 	return out
 }
 
+// pointerToDotPath converts an RFC 6902 JSON pointer ("/spec/template/spec/
+// containers/0/image") into the dot-path shape diffValues emits ("spec.template.
+// spec.containers.[0].image"). Numeric segments are wrapped in brackets to match
+// joinPath, so an ignoreDifferences rule that points into a specific array index
+// still matches the corresponding drift entry.
+func pointerToDotPath(pointer string) string {
+	out := ""
+	for seg := range strings.SplitSeq(strings.TrimPrefix(pointer, "/"), "/") {
+		out = joinPath(out, seg)
+	}
+	return out
+}
+
 func pathMatchesAnyPrefix(path string, prefixes []string) bool {
 	for _, prefix := range prefixes {
 		if path == prefix || strings.HasPrefix(path, prefix+".") || strings.HasPrefix(path, prefix+".[") {
@@ -402,9 +412,9 @@ func pathMatchesAnyPrefix(path string, prefixes []string) bool {
 }
 
 // diffValues recursively walks desired vs live and emits entries where they
-// differ. Maps are descended; arrays and scalars are compared by serialized
-// equality (cheaper than deep-comparing array elements field-by-field, and
-// arrays of structs are typically rewritten wholesale anyway). nil/absent
+// differ. Maps and arrays are both descended (arrays element-by-element by
+// index — see the array branch for the order-alignment assumption); scalars are
+// compared by serialized equality. nil/absent
 // values are normalized so {a: nil} and missing-a are treated as equal.
 //
 // out is passed by reference to avoid allocations per recursion level.

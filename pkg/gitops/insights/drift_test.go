@@ -325,6 +325,27 @@ func TestFilterIgnoredPaths_PrefixMatch(t *testing.T) {
 	}
 }
 
+// TestFilterIgnoredPaths_ArrayIndexPointer pins that an ignoreDifferences JSON
+// pointer into a specific array index matches the bracketed drift path that
+// array descent now emits — a rule on /spec/containers/0/image must strip
+// spec.containers.[0].image.
+func TestFilterIgnoredPaths_ArrayIndexPointer(t *testing.T) {
+	entries := []DriftEntry{
+		{Path: "spec.containers.[0].image", Op: DriftOpChanged},
+		{Path: "spec.containers.[0].resources.limits.memory", Op: DriftOpChanged},
+		{Path: "spec.replicas", Op: DriftOpChanged},
+	}
+	out := filterIgnoredPaths(entries, []string{"/spec/containers/0/image"})
+	if len(out) != 2 {
+		t.Fatalf("expected the indexed image entry stripped, got %d (%v)", len(out), out)
+	}
+	for _, e := range out {
+		if e.Path == "spec.containers.[0].image" {
+			t.Errorf("array-index ignore pointer failed to match bracketed drift path")
+		}
+	}
+}
+
 // TestFilterIgnoredPaths_PrefixDoesNotMatchPartialSegment pins that
 // "/spec/replic" doesn't accidentally match "spec.replicas". Prefix
 // matching must respect path segment boundaries.

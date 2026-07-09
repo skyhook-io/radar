@@ -267,3 +267,48 @@ func TestPutConfigPreservesArgoCDToken(t *testing.T) {
 		t.Errorf("Port = %d, want 9999", saved.Port)
 	}
 }
+
+// TestPutConfigPreservesIntegrationFields pins that the startup-config PUT owns
+// NONE of the live integration connection fields: a full-replacement PUT that
+// carries different (or empty) prometheusUrl / argoCdUrl / argoCdInsecureTls
+// must leave the stored integration config untouched. This is the guardrail
+// against a startup Save racing an in-flight Apply/Connect and reverting — or
+// clearing the token on — a live integration.
+func TestPutConfigPreservesIntegrationFields(t *testing.T) {
+	s := setupArgoCDTest(t)
+
+	if _, err := config.Update(func(c *config.Config) {
+		c.ArgoCDURL = "https://argo.internal:8080"
+		c.ArgoCDToken = "tok"
+		c.ArgoCDInsecureTLS = true
+		c.PrometheusURL = "http://prom.internal:9090"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Startup PUT that echoes back stale/empty integration fields.
+	req := httptest.NewRequest(http.MethodPut, "/api/config",
+		strings.NewReader(`{"port": 9999, "argoCdUrl": "https://attacker.example", "prometheusUrl": ""}`))
+	w := httptest.NewRecorder()
+	s.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	saved := config.Load()
+	if saved.ArgoCDURL != "https://argo.internal:8080" {
+		t.Errorf("argoCdUrl = %q, want unchanged (integration-owned)", saved.ArgoCDURL)
+	}
+	if saved.ArgoCDToken != "tok" {
+		t.Errorf("token = %q, want preserved (origin unchanged, not cleared)", saved.ArgoCDToken)
+	}
+	if !saved.ArgoCDInsecureTLS {
+		t.Error("argoCdInsecureTls flipped by a startup PUT")
+	}
+	if saved.PrometheusURL != "http://prom.internal:9090" {
+		t.Errorf("prometheusUrl = %q, want unchanged", saved.PrometheusURL)
+	}
+	if saved.Port != 9999 {
+		t.Errorf("Port = %d, want the startup field applied", saved.Port)
+	}
+}

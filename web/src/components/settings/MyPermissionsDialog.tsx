@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Loader2, Lock, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQuery } from '@tanstack/react-query'
@@ -23,6 +23,18 @@ export function MyPermissionsContent({ active }: { active: boolean }) {
   const { data: namespaces } = useNamespaces()
   const { data: whoami, isLoading, error } = useRBACWhoami(namespace, active)
 
+  // Land on an accessible namespace: once the list loads, if the current pick
+  // ('default' initially) isn't among the user's namespaces and they haven't
+  // chosen one, switch to the first accessible one — otherwise a user scoped to
+  // e.g. team-a would open on an empty 'default'.
+  const userPicked = useRef(false)
+  useEffect(() => {
+    if (userPicked.current || !namespaces?.length) return
+    if (!namespaces.some((ns) => ns.name === namespace)) {
+      setNamespace(namespaces[0].name)
+    }
+  }, [namespaces, namespace])
+
   return (
     <div className="space-y-4">
       {/* Identity + namespace selector */}
@@ -37,7 +49,7 @@ export function MyPermissionsContent({ active }: { active: boolean }) {
           <label className="block text-xs text-theme-text-tertiary mb-1">Namespace</label>
           <select
             value={namespace}
-            onChange={(e) => setNamespace(e.target.value)}
+            onChange={(e) => { userPicked.current = true; setNamespace(e.target.value) }}
             className="w-full px-2 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded text-theme-text-primary focus:outline-none focus:border-blue-500"
           >
             {namespaces?.map((ns) => (
