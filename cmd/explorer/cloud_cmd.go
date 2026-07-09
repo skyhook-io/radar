@@ -116,7 +116,7 @@ func cloudConnect(args []string) {
 	fileCfg := config.Load()
 	if len(fileCfg.KubeconfigDirs) > 0 {
 		fmt.Fprintln(os.Stderr, "`radar cloud connect` doesn't support a kubeconfigDirs (multi-cluster) config — it can't pick one cluster.")
-		fmt.Fprintln(os.Stderr, "Use a single kubeconfig instead (--kubeconfig, KUBECONFIG, or a config.json `kubeconfig`).")
+		fmt.Fprintln(os.Stderr, "Point it at a single kubeconfig instead — set KUBECONFIG or config.json's `kubeconfig`.")
 		os.Exit(1)
 	}
 	kubeconfig := fileCfg.Kubeconfig
@@ -202,7 +202,7 @@ func cloudInstall(args []string) {
 	fileCfg := config.Load()
 	if len(fileCfg.KubeconfigDirs) > 0 {
 		fmt.Fprintln(os.Stderr, "`radar cloud install` doesn't support a kubeconfigDirs (multi-cluster) config — it can't pick one cluster.")
-		fmt.Fprintln(os.Stderr, "Use a single kubeconfig instead (--kubeconfig, KUBECONFIG, or a config.json `kubeconfig`).")
+		fmt.Fprintln(os.Stderr, "Point it at a single kubeconfig instead — set KUBECONFIG or config.json's `kubeconfig`.")
 		os.Exit(1)
 	}
 	kubeconfig := fileCfg.Kubeconfig
