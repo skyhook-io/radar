@@ -317,7 +317,11 @@ func (s *Server) handleDiagnoseHistoryClear(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
-	if !s.aiReady(w) {
+	// Deliberately NOT aiReady: clearing local history is a disk operation —
+	// requiring a connected cluster (like starting a run does) would make the
+	// privacy control fail exactly when a user is cleaning up a broken setup.
+	if s.aiRuns == nil {
+		s.writeError(w, http.StatusNotImplemented, "AI diagnosis is not available")
 		return
 	}
 	if err := s.aiRuns.ClearHistory(); err != nil {
