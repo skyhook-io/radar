@@ -264,9 +264,14 @@ type Capabilities struct {
 	// connected; the frontend gates its inline/full-screen diff affordance on
 	// it. Set by the insights HTTP handler, not by Build (which has no view of
 	// integration connectivity).
-	ArgoDiffAvailable bool     `json:"argoDiffAvailable,omitempty"`
-	UnsupportedReason string   `json:"unsupportedReason,omitempty"`
-	Warnings          []string `json:"warnings,omitempty"`
+	ArgoDiffAvailable bool `json:"argoDiffAvailable,omitempty"`
+	// RevisionMetadataAvailable reports that the Argo CD revision-metadata
+	// endpoint can resolve Git commit details (author, message, signature) for
+	// this Application's deployed revisions. Same gating as ArgoDiffAvailable:
+	// Argo roots with the integration connected. Set by the HTTP handler.
+	RevisionMetadataAvailable bool     `json:"revisionMetadataAvailable,omitempty"`
+	UnsupportedReason         string   `json:"unsupportedReason,omitempty"`
+	Warnings                  []string `json:"warnings,omitempty"`
 }
 
 // Resolver supplies the cluster-state lookups insights needs beyond what's

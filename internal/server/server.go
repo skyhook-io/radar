@@ -510,6 +510,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/argo/applications/{namespace}/{name}/suspend", s.handleArgoSuspend)
 			r.Post("/argo/applications/{namespace}/{name}/resume", s.handleArgoResume)
 			r.Get("/argo/applications/{namespace}/{name}/resource-diff", s.handleArgoResourceDiff)
+			r.Get("/argo/applications/{namespace}/{name}/revision-metadata", s.handleArgoRevisionMetadata)
 
 			// AI resource preview (minified output for MCP/debugging).
 			// Mounted as a sub-group so agent-log middleware applies only

@@ -67,6 +67,7 @@ import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { CodeViewer } from '../ui/CodeViewer'
 import { ArgoResourceDiffLoader } from './ArgoResourceDiffLoader'
+import { RevisionMetaChip } from './RevisionMetaChip'
 import type { GitOpsHistoryItem } from '@skyhook-io/k8s-ui'
 
 const GITOPS_KINDS: APIResource[] = [
@@ -580,6 +581,13 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       detail={detail}
       insight={insightsQ.data ?? null}
       insightLoading={insightsQ.isLoading}
+      renderRevisionMeta={
+        isArgoApp && insightsQ.data?.capabilities?.revisionMetadataAvailable
+          ? (revision) => (
+              <RevisionMetaChip appNamespace={namespace} appName={name} revision={revision} enabled />
+            )
+          : undefined
+      }
       onSelectIssue={(issue) => {
         const ref = issue.refs?.[0]
         if (!ref) return

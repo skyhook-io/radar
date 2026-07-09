@@ -219,8 +219,23 @@ export interface GitOpsCapabilities {
   // app's managed resources. Absent/false → offer only the last-applied field
   // diff and (for disconnected Argo apps) the "connect Argo CD" hint.
   argoDiffAvailable?: boolean
+  // True on an Argo CD Application detail when the integration is connected,
+  // meaning the revision-metadata endpoint can resolve Git commit details
+  // (author, message, signature) for this app's deployed revisions.
+  revisionMetadataAvailable?: boolean
   unsupportedReason?: string
   warnings?: string[]
+}
+
+// Response of GET /api/argo/applications/{ns}/{name}/revision-metadata — the Git
+// commit metadata for one deployed revision. Every field is best-effort (varies
+// across Argo CD versions); signatureInfo non-empty means a signature was checked.
+export interface ArgoRevisionMetadata {
+  author?: string
+  date?: string
+  tags?: string[]
+  message?: string
+  signatureInfo?: string
 }
 
 // Response of GET /api/argo/applications/{ns}/{name}/resource-diff. `desired`

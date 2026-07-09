@@ -47,6 +47,10 @@ func startFakeArgoServer(t *testing.T, managedFn managedResourcesFunc) (*httptes
 			managedFn(w, r)
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/metadata") {
+			_, _ = w.Write([]byte(`{"author":"Jane Doe","date":"2026-07-09T12:00:00Z","message":"fix: bump memory","signatureInfo":"gpg: Good signature"}`))
+			return
+		}
 		w.WriteHeader(http.StatusNotFound)
 	})
 	srv := httptest.NewServer(mux)
@@ -97,6 +101,14 @@ func newDiffRequest(appNamespace, appName, query string) *http.Request {
 	rctx.URLParams.Add("namespace", appNamespace)
 	rctx.URLParams.Add("name", appName)
 	req := httptest.NewRequest(http.MethodGet, "/api/argo/applications/"+appNamespace+"/"+appName+"/resource-diff?"+query, nil)
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+}
+
+func newRevMetaRequest(appNamespace, appName, query string) *http.Request {
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("namespace", appNamespace)
+	rctx.URLParams.Add("name", appName)
+	req := httptest.NewRequest(http.MethodGet, "/api/argo/applications/"+appNamespace+"/"+appName+"/revision-metadata?"+query, nil)
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
@@ -379,5 +391,57 @@ func TestArgoResourceDiff_RBACDeniesBeforeArgoCall(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(managedHits); got != 0 {
 		t.Errorf("Argo managed-resources was called %d times; RBAC deny must short-circuit before any Argo call", got)
+	}
+}
+
+func TestArgoRevisionMetadata_HappyPath(t *testing.T) {
+	srv, _ := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(managedResourcesJSON(t))
+	})
+	connectArgo(t, srv.URL)
+
+	req := newRevMetaRequest("argocd", "guestbook", "revision=abc123")
+	w := httptest.NewRecorder()
+	(&Server{}).handleArgoRevisionMetadata(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	var meta argoapi.RevisionMetadata
+	if err := json.Unmarshal(w.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if meta.Author != "Jane Doe" || meta.Message != "fix: bump memory" {
+		t.Errorf("meta = %+v", meta)
+	}
+}
+
+func TestArgoRevisionMetadata_RequiresRevision(t *testing.T) {
+	req := newRevMetaRequest("argocd", "guestbook", "")
+	w := httptest.NewRecorder()
+	(&Server{}).handleArgoRevisionMetadata(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestArgoRevisionMetadata_EmptyNamespace(t *testing.T) {
+	req := newRevMetaRequest("", "guestbook", "revision=abc")
+	w := httptest.NewRecorder()
+	(&Server{}).handleArgoRevisionMetadata(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestArgoRevisionMetadata_NotConnected(t *testing.T) {
+	argocd.SetConfig("", "", false, true)
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+
+	req := newRevMetaRequest("argocd", "guestbook", "revision=abc")
+	w := httptest.NewRecorder()
+	(&Server{}).handleArgoRevisionMetadata(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body = %s", w.Code, w.Body.String())
 	}
 }

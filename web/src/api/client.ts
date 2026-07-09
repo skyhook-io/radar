@@ -33,6 +33,7 @@ import type {
   GitOpsInsight,
   GitOpsInsightRef,
   GitOpsResourceDiff,
+  ArgoRevisionMetadata,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath } from './config'
@@ -1070,6 +1071,30 @@ export function useArgoResourceDiff(appNamespace: string, appName: string, ref: 
     queryFn: () => fetchJSON(`/argo/applications/${ns}/${appName}/resource-diff?${params.toString()}`),
     enabled: Boolean(appName && ref.kind && ref.name),
     staleTime: 15_000,
+  })
+}
+
+// Git commit metadata for one deployed revision of an Argo CD Application.
+// Enabled only when a revision is known and the caller passes `enabled` (gated
+// on capabilities.revisionMetadataAvailable). Cached long — a resolved SHA's
+// metadata is effectively immutable.
+export function useArgoRevisionMetadata(
+  appNamespace: string,
+  appName: string,
+  revision: string | undefined,
+  opts?: { sourceIndex?: number; project?: string; enabled?: boolean },
+) {
+  const ns = appNamespace || '_'
+  const params = new URLSearchParams()
+  if (revision) params.set('revision', revision)
+  if (opts?.sourceIndex != null) params.set('sourceIndex', String(opts.sourceIndex))
+  if (opts?.project) params.set('project', opts.project)
+
+  return useQuery<ArgoRevisionMetadata>({
+    queryKey: ['argo-revision-metadata', appNamespace, appName, revision, opts?.sourceIndex],
+    queryFn: () => fetchJSON(`/argo/applications/${ns}/${appName}/revision-metadata?${params.toString()}`),
+    enabled: Boolean(appName && revision) && (opts?.enabled ?? true),
+    staleTime: 5 * 60_000,
   })
 }
 

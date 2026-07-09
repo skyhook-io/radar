@@ -42,3 +42,30 @@ type ManagedResourcesQuery struct {
 	Namespace    string
 	Name         string
 }
+
+// RevisionMetadata is the Git commit metadata for a deployed revision, from
+// GET /api/v1/applications/{name}/revisions/{revision}/metadata. Every field is
+// best-effort: they vary across Argo CD versions (signatureInfo is deprecated
+// upstream in favor of a structured source-integrity result) and any may be
+// empty — consumers must tolerate missing fields.
+type RevisionMetadata struct {
+	Author  string   `json:"author,omitempty"`
+	Date    string   `json:"date,omitempty"`
+	Tags    []string `json:"tags,omitempty"`
+	Message string   `json:"message,omitempty"`
+	// SignatureInfo is the raw GPG verification line. Non-empty means Argo
+	// checked a signature; treat it as opaque — presence, not content, is what
+	// the UI renders (a signed/unverified chip). Empty means no signature check.
+	SignatureInfo string `json:"signatureInfo,omitempty"`
+}
+
+// RevisionMetadataQuery identifies a revision to look up. AppName + Revision are
+// required; AppNamespace/Project/SourceIndex disambiguate multi-source apps and
+// satisfy Argo CD's project-scoped identity check.
+type RevisionMetadataQuery struct {
+	AppName      string
+	Revision     string
+	AppNamespace string
+	Project      string
+	SourceIndex  string // stringified source index; omitted when empty
+}

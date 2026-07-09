@@ -155,6 +155,64 @@ func TestManagedResourcesRequiresAppName(t *testing.T) {
 	}
 }
 
+func TestRevisionMetadata(t *testing.T) {
+	var gotPath, gotAuth string
+	var gotParams url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotParams = r.URL.Query()
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{
+			"author": "Jane Doe <jane@example.com>",
+			"date": "2026-07-09T12:00:00Z",
+			"tags": ["v1.2.0"],
+			"message": "fix: raise memory to 512Mi",
+			"signatureInfo": "gpg: Good signature from Jane"
+		}`))
+	}))
+	defer srv.Close()
+
+	c := New(Options{BaseURL: srv.URL, Token: "test-token"})
+	meta, err := c.RevisionMetadata(context.Background(), RevisionMetadataQuery{
+		AppName:      "guestbook",
+		AppNamespace: "argocd",
+		Project:      "default",
+		SourceIndex:  "1",
+		Revision:     "abc123",
+	})
+	if err != nil {
+		t.Fatalf("RevisionMetadata: %v", err)
+	}
+	if gotPath != "/api/v1/applications/guestbook/revisions/abc123/metadata" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Errorf("Authorization = %q", gotAuth)
+	}
+	if gotParams.Get("appNamespace") != "argocd" || gotParams.Get("project") != "default" || gotParams.Get("sourceIndex") != "1" {
+		t.Errorf("params = %v", gotParams)
+	}
+	if meta.Author != "Jane Doe <jane@example.com>" || meta.Message != "fix: raise memory to 512Mi" {
+		t.Errorf("meta = %+v", meta)
+	}
+	if len(meta.Tags) != 1 || meta.Tags[0] != "v1.2.0" {
+		t.Errorf("tags = %v", meta.Tags)
+	}
+	if meta.SignatureInfo == "" {
+		t.Error("signatureInfo empty, want a value")
+	}
+}
+
+func TestRevisionMetadataRequiresAppAndRevision(t *testing.T) {
+	c := New(Options{BaseURL: "http://unused"})
+	if _, err := c.RevisionMetadata(context.Background(), RevisionMetadataQuery{Revision: "abc"}); err == nil {
+		t.Error("expected error for empty AppName")
+	}
+	if _, err := c.RevisionMetadata(context.Background(), RevisionMetadataQuery{AppName: "app"}); err == nil {
+		t.Error("expected error for empty Revision")
+	}
+}
+
 func TestStatusErrors(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -188,6 +188,7 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	// completes + insights refetches. The diff endpoint connects on demand.
 	if insight.Summary.Tool == "argocd" && argocd.IsConfigured() {
 		insight.Capabilities.ArgoDiffAvailable = true
+		insight.Capabilities.RevisionMetadataAvailable = true
 	}
 	s.writeJSON(w, insight)
 }

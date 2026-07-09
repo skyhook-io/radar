@@ -32,6 +32,19 @@ var (
 
 const managedResourcesTTL = 15 * time.Second
 
+// Git commit metadata is small and per-revision; a longer TTL makes browsing
+// deploy history cheap while still refreshing drifting tags/signature. The cap
+// bounds memory across many revisions.
+const (
+	revisionMetadataTTL      = 5 * time.Minute
+	revisionMetadataCacheCap = 256
+)
+
+type revMetaEntry struct {
+	meta    *argoapi.RevisionMetadata
+	expires time.Time
+}
+
 // probeTimeout bounds the background probe of persisted settings;
 // probeRetryInterval throttles retries after a failed probe so a dead
 // argocd-server doesn't get hammered on every insights request.
@@ -73,6 +86,11 @@ type Manager struct {
 	forward *activeForward
 
 	cache map[string]cacheEntry
+
+	// revMetaCache holds Git commit metadata keyed by
+	// (appNamespace, app, sourceIndex, revision). Cleared alongside `cache` on
+	// reconnect/context switch so it never serves another cluster's data.
+	revMetaCache map[string]revMetaEntry
 
 	// tokenContext is the kubeconfig context the stored token is bound to when
 	// the URL is empty (auto-discovery). Discovery resolves whatever
@@ -135,6 +153,10 @@ func Address() string { return defaultManager.Address() }
 // ManagedResourcesCached fetches managed resources via the default manager.
 func ManagedResourcesCached(ctx context.Context, q argoapi.ManagedResourcesQuery) ([]argoapi.ResourceDiff, error) {
 	return defaultManager.ManagedResourcesCached(ctx, q)
+}
+
+func RevisionMetadataCached(ctx context.Context, q argoapi.RevisionMetadataQuery) (*argoapi.RevisionMetadata, error) {
+	return defaultManager.RevisionMetadataCached(ctx, q)
 }
 
 // TokenFromCLI reads the auth token from the user's Argo CD CLI config
@@ -206,6 +228,7 @@ func (m *Manager) dropConnectionLocked() *activeForward {
 	m.baseURL = ""
 	m.client = nil
 	m.cache = nil
+	m.revMetaCache = nil
 	fwd := m.forward
 	m.forward = nil
 	return fwd
@@ -328,6 +351,7 @@ func (m *Manager) Probe(ctx context.Context) error {
 	if m.baseURL != url {
 		m.baseURL = url
 		m.cache = nil
+		m.revMetaCache = nil
 	}
 	m.client = newClient(url, snap.token, snap.insecureTLS)
 	return nil
@@ -437,6 +461,60 @@ func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedR
 		m.mu.Unlock()
 	}
 	return items, nil
+}
+
+// RevisionMetadataCached returns Git commit metadata for a revision, cached per
+// (appNamespace, app, sourceIndex, revision) with a bounded TTL, and connecting
+// on demand like ManagedResourcesCached. The cache is cleared on reconnect /
+// context switch (dropConnectionLocked), so it never serves another cluster's
+// data.
+func (m *Manager) RevisionMetadataCached(ctx context.Context, q argoapi.RevisionMetadataQuery) (*argoapi.RevisionMetadata, error) {
+	key := q.AppNamespace + "\x00" + q.AppName + "\x00" + q.SourceIndex + "\x00" + q.Revision
+
+	m.mu.Lock()
+	if e, ok := m.revMetaCache[key]; ok && time.Now().Before(e.expires) {
+		meta := e.meta
+		m.mu.Unlock()
+		return meta, nil
+	}
+	m.mu.Unlock()
+
+	client, ok := m.Get()
+	if !ok {
+		if err := m.Probe(ctx); err != nil {
+			return nil, err
+		}
+		if client, ok = m.Get(); !ok {
+			return nil, fmt.Errorf("%w: connection was reset", ErrUnreachable)
+		}
+	}
+
+	meta, err := client.RevisionMetadata(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	if m.revMetaCache == nil {
+		m.revMetaCache = make(map[string]revMetaEntry)
+	}
+	now := time.Now()
+	for k, e := range m.revMetaCache {
+		if now.After(e.expires) {
+			delete(m.revMetaCache, k)
+		}
+	}
+	// Hard cap: if still full after the expiry sweep, drop an arbitrary entry.
+	// Metadata is cheap to refetch, so exact LRU isn't worth the bookkeeping.
+	if len(m.revMetaCache) >= revisionMetadataCacheCap {
+		for k := range m.revMetaCache {
+			delete(m.revMetaCache, k)
+			break
+		}
+	}
+	m.revMetaCache[key] = revMetaEntry{meta: meta, expires: now.Add(revisionMetadataTTL)}
+	m.mu.Unlock()
+	return meta, nil
 }
 
 // resolve returns a reachable base URL: the already-connected one if it still

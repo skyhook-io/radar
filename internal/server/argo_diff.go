@@ -366,3 +366,60 @@ func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name strin
 		s.writeError(w, http.StatusBadGateway, "Failed to fetch the diff from the Argo CD API server.")
 	}
 }
+
+// handleArgoRevisionMetadata returns the Git commit metadata (author, message,
+// date, signature) for a deployed revision of an Argo CD Application. Unlike the
+// resource diff, this is app-scoped Git data — not a K8s resource — so it gates
+// on Application-namespace access only (no per-resource SAR) and needs no Secret
+// redaction. Available only when the Argo CD API integration is connected.
+func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	appNamespace := chi.URLParam(r, "namespace")
+	appName := chi.URLParam(r, "name")
+	revision := r.URL.Query().Get("revision")
+	if appNamespace == "" {
+		s.writeError(w, http.StatusBadRequest, "application namespace is required")
+		return
+	}
+	if revision == "" {
+		s.writeError(w, http.StatusBadRequest, "revision query parameter is required")
+		return
+	}
+
+	// Gate: the caller must be able to see the Application's namespace, matching
+	// the resource-diff and insights handlers.
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
+		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", appNamespace))
+		return
+	}
+
+	if !argocd.IsConfigured() {
+		s.writeError(w, http.StatusServiceUnavailable, "Argo CD integration is not connected")
+		return
+	}
+
+	meta, err := argocd.RevisionMetadataCached(r.Context(), argoapi.RevisionMetadataQuery{
+		AppName:      appName,
+		AppNamespace: appNamespace,
+		Project:      r.URL.Query().Get("project"),
+		SourceIndex:  r.URL.Query().Get("sourceIndex"),
+		Revision:     revision,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):
+			s.writeError(w, http.StatusForbidden, "Argo CD rejected the configured token; re-authenticate the integration in Settings.")
+		case errors.Is(err, argocd.ErrUnreachable):
+			s.writeError(w, http.StatusServiceUnavailable, "Argo CD API server is unreachable.")
+		case errors.Is(err, argoapi.ErrNotFound):
+			s.writeError(w, http.StatusNotFound, "Argo CD has no metadata for this revision.")
+		default:
+			log.Printf("[argo] revision-metadata for %s/%s failed: %s", sanitizeForLog(appNamespace), sanitizeForLog(appName), sanitizeForLog(err.Error()))
+			s.writeError(w, http.StatusBadGateway, "Failed to fetch revision metadata from the Argo CD API server.")
+		}
+		return
+	}
+	s.writeJSON(w, meta)
+}

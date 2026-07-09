@@ -32,6 +32,10 @@ import {
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
   loading?: boolean
+  // Optional host slot: given the latest revision, render inline Git commit
+  // metadata (author, signature) next to the revision SHA. The host wires this
+  // to a data loader; when absent, only the SHA is shown.
+  renderRevisionMeta?: (revision: string) => ReactNode
 }
 
 // Status strip carries the operation chip (when a sync is in flight or
@@ -51,7 +55,7 @@ interface GitOpsStatusStripProps {
 //
 // Health and Sync badges live next to the title in the page header —
 // pair them there with identity, not here.
-export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) {
+export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitOpsStatusStripProps) {
   const summary = insight?.summary
   if (loading) {
     return <div className="h-8 animate-pulse border-b border-theme-border bg-theme-base" />
@@ -135,6 +139,7 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
                 </Tooltip>
               )}
               {reconcileAge && <span className="text-theme-text-tertiary">· {reconcileAge}</span>}
+              {revision && renderRevisionMeta?.(revision)}
             </span>
           )}
           {!shortRev && reconcileAge && <MetaFact label="Last reconcile" value={reconcileAge} />}

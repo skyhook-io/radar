@@ -104,6 +104,26 @@ func (c *Client) ManagedResources(ctx context.Context, q ManagedResourcesQuery) 
 	return out.Items, nil
 }
 
+// RevisionMetadata returns the Git commit metadata for a revision via
+// GET /api/v1/applications/{name}/revisions/{revision}/metadata.
+func (c *Client) RevisionMetadata(ctx context.Context, q RevisionMetadataQuery) (*RevisionMetadata, error) {
+	if q.AppName == "" || q.Revision == "" {
+		return nil, errors.New("argoapi: RevisionMetadata requires AppName and Revision")
+	}
+	params := url.Values{}
+	setNonEmpty(params, "appNamespace", q.AppNamespace)
+	setNonEmpty(params, "project", q.Project)
+	setNonEmpty(params, "sourceIndex", q.SourceIndex)
+
+	var out RevisionMetadata
+	path := "/api/v1/applications/" + url.PathEscape(q.AppName) +
+		"/revisions/" + url.PathEscape(q.Revision) + "/metadata"
+	if err := c.get(ctx, path, params, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // UserInfo probes token validity via GET /api/v1/session/userinfo.
 func (c *Client) UserInfo(ctx context.Context) (*UserInfo, error) {
 	var out UserInfo
