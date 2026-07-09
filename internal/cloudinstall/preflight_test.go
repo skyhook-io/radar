@@ -78,7 +78,7 @@ func TestInstallPreflight_CanCreateButCannotEscalate(t *testing.T) {
 	if !res.OK() {
 		t.Fatalf("create-capable caller must not be blocked, got Blocking=%v", res.Blocking)
 	}
-	if len(res.Advisory) != 4 { // escalate + bind admin/edit/view
+	if len(res.Advisory) != 5 { // escalate + 3 binds + update-secrets advisory
 		t.Errorf("expected 4 advisory (escalate + 3 binds), got %v", res.Advisory)
 	}
 }

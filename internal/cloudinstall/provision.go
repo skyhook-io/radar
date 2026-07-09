@@ -80,6 +80,16 @@ func Provision(ctx context.Context, hc *helm.Client, kc kubernetes.Interface, cf
 	}
 	ns := cfg.namespace()
 
+	// Gate before ANY side effect (namespace, Secret) — a fresh install can't
+	// replace a deployed release. The CLI checks this pre-mint too; this catches
+	// a release that appeared in between (race), so we never write an orphaned
+	// token Secret for an install that will fail.
+	if blocked, err := hc.ReleaseInstallBlocked(ns, cfg.releaseName()); err != nil {
+		return fmt.Errorf("inspect existing release: %w", err)
+	} else if blocked {
+		return ErrReleaseExists
+	}
+
 	if err := ensureNamespace(ctx, kc, ns); err != nil {
 		return fmt.Errorf("ensure namespace %q: %w", ns, err)
 	}
@@ -97,8 +107,7 @@ func Provision(ctx context.Context, hc *helm.Client, kc kubernetes.Interface, cf
 		Values:          cloudInstallValues(cfg.CloudURL, cfg.ClusterID),
 	}
 	if _, err := hc.Install(req); err != nil {
-		// A pre-existing release is the one error we translate into a typed
-		// signal so the driver can offer the guided-upgrade path instead.
+		// Belt-and-suspenders for a race that slips past the pre-check.
 		var exists *helm.ReleaseExistsError
 		if errors.As(err, &exists) {
 			return ErrReleaseExists

@@ -55,6 +55,10 @@ func installPreflightChecks(namespace string, nsExists bool) []preflightCheck {
 		{"create ServiceAccounts", true, authv1.ResourceAttributes{Namespace: namespace, Resource: "serviceaccounts", Verb: "create"}},
 		{"create Services", true, authv1.ResourceAttributes{Namespace: namespace, Resource: "services", Verb: "create"}},
 		{"create Secrets", true, authv1.ResourceAttributes{Namespace: namespace, Resource: "secrets", Verb: "create"}},
+		// upsertTokenSecret does get+update only when the token Secret already
+		// exists (a re-run after an uninstalled-but-not-purged release) — advisory
+		// so a fresh install (the common case, create-only) isn't false-blocked.
+		{"update Secrets (only if a prior token Secret exists)", false, authv1.ResourceAttributes{Namespace: namespace, Resource: "secrets", Verb: "update"}},
 		{"create ClusterRoles", true, authv1.ResourceAttributes{Group: rbacGroup, Resource: "clusterroles", Verb: "create"}},
 		{"create ClusterRoleBindings", true, authv1.ResourceAttributes{Group: rbacGroup, Resource: "clusterrolebindings", Verb: "create"}},
 		// rbac.selfUpgrade=true (which the driver sets) renders a namespaced

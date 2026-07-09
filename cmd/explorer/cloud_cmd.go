@@ -241,7 +241,21 @@ func cloudInstall(args []string) {
 		fmt.Println()
 	}
 
-	// 2. Dry-run stops here — before any token mint or browser.
+	// 2. Existing-release gate — BEFORE the token mint. A fresh install can't
+	//    replace a deployed release (upgrading an existing Radar to Cloud mode
+	//    from the CLI isn't supported yet), and minting past this point would
+	//    leave a live token + Secret in-cluster with no connected agent.
+	if blocked, berr := hc.ReleaseInstallBlocked(*namespace, *release); berr != nil {
+		fmt.Fprintf(os.Stderr, "couldn't inspect the existing Radar release: %v\n", berr)
+		os.Exit(1)
+	} else if blocked {
+		fmt.Fprintf(os.Stderr, "Radar is already installed in namespace %q (release %q).\n", *namespace, *release)
+		fmt.Fprintln(os.Stderr, "Upgrading an existing install to Cloud mode from `radar cloud install` isn't supported yet —")
+		fmt.Fprintf(os.Stderr, "uninstall it first (helm uninstall %s -n %s) and re-run.\n", *release, *namespace)
+		os.Exit(1)
+	}
+
+	// 3. Dry-run stops here — before any token mint or browser.
 	if *dryRun {
 		fmt.Printf("Dry run — would install chart skyhook/radar (version %s) as release %q in namespace %q with cloud.enabled=true.\n",
 			chartVersionOrLatest(*chartVersion), *release, *namespace)
@@ -249,7 +263,7 @@ func cloudInstall(args []string) {
 		return
 	}
 
-	// 3. Device flow → approve → cluster token (deployment_mode=in-cluster, so the
+	// 4. Device flow → approve → cluster token (deployment_mode=in-cluster, so the
 	//    hub tags the cluster source=connect_incluster).
 	meta := gatherConnectMetadata(clusterName, kubeconfig)
 	meta.DeploymentMode = "in-cluster"
@@ -286,12 +300,9 @@ func cloudInstall(args []string) {
 		Token:        pr.Token,
 	})
 	if errors.Is(perr, cloudinstall.ErrReleaseExists) {
-		// The token Secret was already created; reference it rather than printing
-		// the token into a --set (which would land in shell history + the release).
-		fmt.Fprintf(os.Stderr, "\nRadar is already installed in namespace %q. The Cloud token has been written to\n", *namespace)
-		fmt.Fprintf(os.Stderr, "the %q Secret — upgrade the release to Cloud mode with:\n\n", cloudinstall.CloudTokenSecretName)
-		fmt.Fprintf(os.Stderr, "  helm upgrade %s skyhook/radar -n %s --reuse-values \\\n    --set cloud.enabled=true --set cloud.url=%s --set cloud.clusterName=%s --set cloud.existingSecret=%s\n\n",
-			*release, *namespace, cloudURL, pr.ClusterID, cloudinstall.CloudTokenSecretName)
+		// Rare: a release appeared between the pre-mint gate and Provision. No
+		// Secret was written (Provision gates before side effects).
+		fmt.Fprintf(os.Stderr, "\nRadar was installed into namespace %q concurrently. Uninstall it (helm uninstall %s -n %s) and re-run.\n", *namespace, *release, *namespace)
 		os.Exit(1)
 	}
 	if perr != nil {

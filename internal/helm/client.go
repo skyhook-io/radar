@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -3082,6 +3083,27 @@ func (c *Client) Install(req *InstallRequest) (*HelmRelease, error) {
 		return nil, err
 	}
 	return c.installWith(actionConfig, req)
+}
+
+// ReleaseInstallBlocked reports whether a release named name already exists in
+// namespace in a state a fresh Install would reject (currently-deployed or
+// stuck-pending). Lets a caller gate side effects (token mint, Secret write)
+// BEFORE attempting the install, rather than discovering the conflict after.
+func (c *Client) ReleaseInstallBlocked(namespace, name string) (bool, error) {
+	actionConfig, err := c.getActionConfig(namespace)
+	if err != nil {
+		return false, err
+	}
+	_, perr := preInstallCheck(actionConfig, name, namespace)
+	var exists *ReleaseExistsError
+	var pending *ReleasePendingError
+	if errors.As(perr, &exists) || errors.As(perr, &pending) {
+		return true, nil
+	}
+	if perr != nil {
+		return false, perr
+	}
+	return false, nil
 }
 
 // InstallAsUser installs a new Helm release with K8s impersonation.
