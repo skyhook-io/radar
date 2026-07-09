@@ -640,14 +640,13 @@ function NavItem({
   onSelect: () => void
 }) {
   const Icon = item.icon
-  return (
+  const button = (
     <button
       type="button"
       role="tab"
       aria-selected={active}
       onClick={onSelect}
       disabled={disabled}
-      title={disabled ? 'Owner access required' : undefined}
       className={clsx(
         'group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm transition-colors',
         horizontal ? 'shrink-0' : 'w-full text-left',
@@ -662,9 +661,18 @@ function NavItem({
       {disabled ? (
         <Lock className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
       ) : item.dirty ? (
-        <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" title="Unsaved changes" />
+        <Tooltip content="Unsaved changes" delay={200} wrapperClassName="flex shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+        </Tooltip>
       ) : null}
     </button>
+  )
+  return disabled ? (
+    <Tooltip content="Owner access required" delay={200} wrapperClassName={horizontal ? 'shrink-0' : 'w-full'}>
+      {button}
+    </Tooltip>
+  ) : (
+    button
   )
 }
 
