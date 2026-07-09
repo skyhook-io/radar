@@ -574,6 +574,7 @@ func (s *Server) setupRoutes() {
 			r.Put("/config", s.handlePutConfig)
 			r.Put("/integrations/prometheus", s.handleApplyPrometheusURL)
 			r.Put("/integrations/argocd", s.handleApplyArgoCDConfig)
+			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)

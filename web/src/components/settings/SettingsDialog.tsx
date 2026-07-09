@@ -3,13 +3,16 @@ import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
   Plus, Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
+  LayoutDashboard, ChevronRight, ExternalLink, Download,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
-import { useCloudRole, useVersionCheck } from '../../api/client'
+import {
+  useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
+} from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
@@ -55,7 +58,7 @@ interface SettingsDialogProps {
 //     re-point the running server; effect immediately, NOT part of footer dirty.
 //   • AI diagnose — client-side prefs, self-saving, editable by everyone.
 type SectionId =
-  | 'perms' | 'connection' | 'prometheus' | 'argocd' | 'ai' | 'advanced'
+  | 'overview' | 'perms' | 'connection' | 'prometheus' | 'argocd' | 'ai' | 'advanced'
 
 // Only STARTUP fields count toward footer dirty. Integration fields (prometheusUrl,
 // argoCdUrl, argoCdInsecureTls) apply live and are excluded here. Every field is
@@ -93,7 +96,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [section, setSection] = useState<SectionId>('perms')
+  const [section, setSection] = useState<SectionId>('overview')
   const [confirmingClose, setConfirmingClose] = useState(false)
 
   // AI Diagnosis prefs are client-side (localStorage) and now SELF-SAVING: the
@@ -149,10 +152,11 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
       model: diag.model,
       effort: diag.effort,
     })
-    // My permissions is inline and available to everyone, so it's always the
-    // landing section — an informative default (your access) rather than an
-    // empty launcher.
-    setSection('perms')
+    // Overview is the landing section — a status-at-a-glance of what Radar is
+    // connected to (cluster, integrations, MCP, AI), useful to owners and
+    // viewers alike, rather than dropping owners on a config form or everyone
+    // on a permissions dump.
+    setSection('overview')
 
     fetch(apiUrl('/config'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => {
@@ -277,14 +281,18 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const deploymentMode = capabilities.deployment?.mode ?? 'local'
   const showBrowserLaunchControls = !isDesktop && deploymentMode === 'local'
 
-  // Flat, un-grouped nav — the per-section captions carry the restart-vs-live
-  // semantics, so group labels would only add visual weight to a 6-item list.
+  // Flat, un-grouped nav ordered as a narrative — at-a-glance, then you, then how
+  // Radar connects, then data integrations, then AI, then advanced. The
+  // per-section captions carry the restart-vs-live semantics, so group labels
+  // would only add visual weight. AI diagnose is always shown (the section
+  // explains how to enable it when no agent CLI is installed).
   const navItems: NavItemDef[] = [
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, visible: true, dirty: false },
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, visible: true, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, visible: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Prometheus', icon: Activity, ownerOnly: true, visible: true, dirty: false },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, visible: true, dirty: false },
-    { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, visible: aiAvailable, dirty: aiDirty },
+    { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, visible: true, dirty: aiDirty },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, visible: true, dirty: advancedDirty },
   ]
   const flatVisible = navItems.filter((i) => i.visible)
@@ -375,6 +383,19 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 {loadError}
               </div>
             )}
+
+            {/* Overview — status at a glance; the landing section */}
+            <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel">
+              <div className="mb-1">
+                <h3 className="text-base font-semibold text-theme-text-primary">Overview</h3>
+                <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                  What this Radar is connected to right now — select a row to manage it.
+                </p>
+              </div>
+              <div className="mt-3">
+                <OverviewPanel active={section === 'overview'} onNavigate={setSection} />
+              </div>
+            </div>
 
             {/* My permissions — usable by everyone, rendered inline (no launcher) */}
             <div className={clsx(section !== 'perms' && 'hidden')} role="tabpanel">
@@ -468,34 +489,39 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
               />
             </SectionPane>
 
-            {/* AI diagnose — self-saving, usable by everyone. AISettingsSection
-                carries its own heading + "applies to new investigations" note. */}
+            {/* AI diagnose — self-saving, usable by everyone. When an agent CLI is
+                installed, AISettingsSection carries its own heading + note; when
+                not, we explain the feature and how to turn it on. */}
             <div className={clsx(section !== 'ai' && 'hidden')} role="tabpanel">
-              <AISettingsSection
-                available={diag.available}
-                agents={diag.agents}
-                draft={aiDraft}
-                onChange={(patch) => {
-                  setAiDraft((d) => ({ ...d, ...patch }))
-                  setAiSaved(false)
-                }}
-              />
-              {aiAvailable && (
-                <div className="flex items-center justify-end gap-3">
-                  {aiSaved && !aiDirty && (
-                    <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
-                      <Check className="w-3 h-3" />
-                      Saved
-                    </span>
-                  )}
-                  <button
-                    onClick={saveAi}
-                    disabled={!aiDirty}
-                    className="px-4 py-1.5 text-sm font-medium btn-brand rounded-md disabled:opacity-50 disabled:pointer-events-none"
-                  >
-                    Save
-                  </button>
-                </div>
+              {aiAvailable ? (
+                <>
+                  <AISettingsSection
+                    available={diag.available}
+                    agents={diag.agents}
+                    draft={aiDraft}
+                    onChange={(patch) => {
+                      setAiDraft((d) => ({ ...d, ...patch }))
+                      setAiSaved(false)
+                    }}
+                  />
+                  <div className="flex items-center justify-end gap-3">
+                    {aiSaved && !aiDirty && (
+                      <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+                        <Check className="w-3 h-3" />
+                        Saved
+                      </span>
+                    )}
+                    <button
+                      onClick={saveAi}
+                      disabled={!aiDirty}
+                      className="px-4 py-1.5 text-sm font-medium btn-brand rounded-md disabled:opacity-50 disabled:pointer-events-none"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <AIUnavailableNotice />
               )}
             </div>
 
@@ -739,6 +765,173 @@ function LockWall() {
   )
 }
 
+// -- Overview (landing) -------------------------------------------------------
+
+type OverviewTone = 'ok' | 'warn' | 'off' | 'unknown'
+
+interface OverviewRow {
+  id: SectionId
+  icon: LucideIcon
+  label: string
+  tone: OverviewTone
+  value: string
+  detail?: string
+  copyable?: boolean
+}
+
+// OverviewPanel is the Settings landing: a status-at-a-glance of what Radar is
+// connected to right now. Each row navigates to the section that manages it.
+// Status queries are gated on `active` so opening Settings elsewhere doesn't
+// fetch integration status the user isn't looking at.
+function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s: SectionId) => void }) {
+  const { data: cluster } = useClusterInfo()
+  const { data: prom } = usePrometheusStatus()
+  const { data: argo } = useArgoStatus(active)
+  const { data: version } = useVersionCheck()
+  const capabilities = useCapabilitiesContext()
+  const diag = useDiagnose()
+  const [copied, setCopied] = useState(false)
+
+  const aiAvailable = diag.available && diag.agents.length > 0
+  const agentLabel =
+    diag.agents.find((a) => a.name === diag.selectedAgent)?.label ?? diag.agents[0]?.label
+  const mcpOn = capabilities.mcpEnabled
+  const port = Number(window.location.port) || 80
+  const mcpUrl = `http://localhost:${port}/mcp`
+
+  const rows: OverviewRow[] = [
+    {
+      id: 'connection', icon: Boxes, label: 'Cluster',
+      tone: cluster ? 'ok' : 'unknown',
+      value: cluster?.context ?? 'Connecting…',
+      detail: cluster ? `Kubernetes ${cluster.kubernetesVersion} · ${cluster.nodeCount} nodes` : undefined,
+    },
+    {
+      id: 'prometheus', icon: Activity, label: 'Prometheus',
+      tone: prom?.connected ? 'ok' : prom?.available ? 'warn' : 'off',
+      value: prom?.connected ? 'Connected' : prom?.available ? 'Not reachable' : 'Not configured',
+      detail: prom?.connected ? prom.address : undefined,
+    },
+    {
+      id: 'argocd', icon: GitBranch, label: 'Argo CD',
+      tone: argo?.connected ? 'ok' : argo?.configured ? 'warn' : 'off',
+      value: argo?.connected ? 'Connected' : argo?.configured ? 'Reconnecting…' : 'Not connected',
+      detail: argo?.connected ? argo.address : undefined,
+    },
+    {
+      id: 'advanced', icon: Zap, label: 'MCP',
+      tone: mcpOn ? 'ok' : 'off',
+      value: mcpOn ? 'On' : 'Off',
+      detail: mcpOn ? mcpUrl : undefined,
+      copyable: mcpOn,
+    },
+    {
+      id: 'ai', icon: Sparkles, label: 'AI diagnose',
+      tone: aiAvailable ? 'ok' : 'off',
+      value: aiAvailable ? 'Ready' : 'No agent CLI',
+      detail: aiAvailable ? agentLabel : undefined,
+    },
+  ]
+
+  const copyMcp = () => {
+    navigator.clipboard.writeText(mcpUrl)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="space-y-4">
+      {version?.updateAvailable && (
+        <a
+          href={version.releaseUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-2 px-3 py-2 text-xs rounded-md border border-skyhook-500/30 bg-skyhook-500/10 hover:bg-skyhook-500/15 transition-colors"
+        >
+          <Download className="w-3.5 h-3.5 shrink-0 text-skyhook-500" />
+          <span className="flex-1 text-theme-text-primary">
+            Radar {version.latestVersion} is available
+            <span className="text-theme-text-tertiary"> — you're on {version.currentVersion}</span>
+          </span>
+          <ExternalLink className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
+        </a>
+      )}
+
+      <div className="rounded-md border border-theme-border divide-y divide-theme-border-subtle overflow-hidden">
+        {rows.map((row) => {
+          const Icon = row.icon
+          return (
+            <div
+              key={row.label}
+              role="button"
+              tabIndex={0}
+              onClick={() => onNavigate(row.id)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate(row.id) } }}
+              className="group flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-theme-hover transition-colors"
+            >
+              <Icon className="w-4 h-4 shrink-0 text-theme-text-tertiary" />
+              <span className="text-sm text-theme-text-primary w-24 shrink-0 truncate">{row.label}</span>
+              <OverviewStatus tone={row.tone} />
+              <div className="flex-1 min-w-0 flex items-baseline gap-1.5">
+                <span className="text-sm text-theme-text-secondary shrink-0">{row.value}</span>
+                {row.detail && (
+                  <span className="text-xs text-theme-text-tertiary truncate">{row.detail}</span>
+                )}
+              </div>
+              {row.copyable && (
+                <Tooltip content="Copy MCP URL" wrapperClassName="shrink-0">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); copyMcp() }}
+                    className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded transition-colors"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </Tooltip>
+              )}
+              <ChevronRight className="w-4 h-4 shrink-0 text-theme-text-disabled group-hover:text-theme-text-tertiary" />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function OverviewStatus({ tone }: { tone: OverviewTone }) {
+  const cls =
+    tone === 'ok' ? 'bg-green-500'
+      : tone === 'warn' ? 'bg-amber-500'
+        : tone === 'unknown' ? 'bg-theme-text-tertiary animate-pulse'
+          : 'bg-theme-text-disabled'
+  return <span className={clsx('w-2 h-2 rounded-full shrink-0', cls)} />
+}
+
+// AIUnavailableNotice explains the local-agent diagnosis feature and how to turn
+// it on, shown in place of the agent controls when no supported CLI is installed
+// (so the AI tab is discoverable to the person who'd set it up).
+function AIUnavailableNotice() {
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-base font-semibold text-theme-text-primary">AI diagnose</h3>
+        <p className="mt-0.5 text-xs text-theme-text-tertiary">
+          Ask Radar to investigate an incident and it drives an AI agent — running on your own
+          machine — to read logs, events, and topology and explain what's wrong. No Radar cloud and
+          no API key: it uses an agent CLI you already have.
+        </p>
+      </div>
+      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
+        <p className="text-sm font-medium text-theme-text-primary">No supported agent CLI found</p>
+        <p className="mt-1 text-xs text-theme-text-tertiary">
+          Install <span className="text-theme-text-secondary">Claude Code</span> or{' '}
+          <span className="text-theme-text-secondary">Codex</span>, then restart Radar — this
+          section will show the agent, model, and effort controls.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 // -- Startup section bodies ---------------------------------------------------
 
 function ClusterSection({
@@ -897,6 +1090,10 @@ function MCPSection({
 
   return (
     <div className="space-y-3">
+      <p className="text-xs text-theme-text-tertiary">
+        Lets AI tools (Claude Code, Cursor, …) query and act on this cluster through Radar over the
+        Model Context Protocol. Point your agent at the endpoint below.
+      </p>
       <ConfigToggle
         label="MCP Server"
         value={mcpEnabled}
@@ -1047,11 +1244,14 @@ function PrometheusConfigField({
 
   return (
     <div>
+      <p className="text-xs text-theme-text-tertiary mb-3">
+        Powers the CPU / memory graphs, usage history, and rightsizing hints on workload and node pages.
+      </p>
       <label className="block text-sm font-medium text-theme-text-primary mb-1">
-        Prometheus URL
+        Server URL
       </label>
       <p className="text-xs text-theme-text-tertiary mb-1">
-        Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)
+        Manual Prometheus / VictoriaMetrics URL — set this to skip auto-discovery.
       </p>
       <div className="flex items-center gap-2">
         <input
@@ -1279,11 +1479,11 @@ function ArgoCDConfigField({
 
   return (
     <div>
-      <label className="block text-sm font-medium text-theme-text-primary mb-1">Argo CD</label>
-      <p className="text-xs text-theme-text-tertiary mb-1">
-        Enables the full Git-rendered diff on GitOps Application pages.
+      <p className="text-xs text-theme-text-tertiary mb-3">
+        Enables the full Git-rendered desired-vs-live diff on GitOps Application pages.
       </p>
 
+      <label className="block text-sm font-medium text-theme-text-primary mb-1">Server URL</label>
       <input
         type="text"
         value={url}

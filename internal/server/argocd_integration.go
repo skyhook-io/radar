@@ -15,6 +15,29 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 )
 
+// handleArgoCDStatus reports the live Argo CD integration state for the Settings
+// Overview: configured (a URL or token is set), connected (a probe has landed),
+// and the resolved address. Read-only and NOT owner-gated — the Overview is shown
+// to every user, and this mirrors the Prometheus status endpoint. Get() nudges a
+// throttled background reconnect when disconnected, so opening Overview after a
+// restart helps the integration come back.
+func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
+	_, connected := argocd.Get()
+	resp := struct {
+		Configured bool   `json:"configured"`
+		Connected  bool   `json:"connected"`
+		Address    string `json:"address,omitempty"`
+	}{
+		Configured: argocd.IsConfigured(),
+		Connected:  connected,
+	}
+	if connected {
+		resp.Address = argocd.Address()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 // handleApplyArgoCDConfig re-points the running Argo CD client at new settings
 // immediately and persists them, mirroring handleApplyPrometheusURL. The probe
 // runs against the candidate settings BEFORE anything is persisted, so a bad

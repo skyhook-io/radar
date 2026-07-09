@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,48 @@ func fakeArgoCDServer(t *testing.T) *httptest.Server {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// TestArgoCDStatus pins the Settings Overview status endpoint: unconfigured
+// reports configured/connected false, and a probed connection reports both true
+// plus the resolved address.
+func TestArgoCDStatus(t *testing.T) {
+	s := setupArgoCDTest(t)
+
+	var out struct {
+		Configured bool   `json:"configured"`
+		Connected  bool   `json:"connected"`
+		Address    string `json:"address"`
+	}
+	getStatus := func() {
+		rec := httptest.NewRecorder()
+		s.handleArgoCDStatus(rec, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status code = %d, want 200; body = %s", rec.Code, rec.Body.String())
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+	}
+
+	getStatus()
+	if out.Configured || out.Connected {
+		t.Fatalf("unconfigured: configured=%v connected=%v, want false/false", out.Configured, out.Connected)
+	}
+
+	srv := fakeArgoCDServer(t)
+	argocd.SetConfig(srv.URL, "good-token", false, true)
+	if err := argocd.Probe(context.Background()); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+
+	getStatus()
+	if !out.Configured || !out.Connected {
+		t.Fatalf("connected: configured=%v connected=%v, want true/true", out.Configured, out.Connected)
+	}
+	if out.Address != srv.URL {
+		t.Fatalf("address = %q, want %q", out.Address, srv.URL)
+	}
 }
 
 // setupArgoCDTest isolates the on-disk config and the live argocd manager.

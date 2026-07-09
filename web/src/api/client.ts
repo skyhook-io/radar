@@ -1591,6 +1591,24 @@ export function usePrometheusStatus() {
   })
 }
 
+export interface ArgoStatus {
+  // configured = a URL or token is set; connected = a probe has landed and the
+  // client is live. The two differ right after a restart (configured, reconnecting).
+  configured: boolean
+  connected: boolean
+  address?: string
+}
+
+export function useArgoStatus(enabled = true) {
+  return useQuery<ArgoStatus>({
+    queryKey: ['argocd-status'],
+    queryFn: () => fetchJSON('/integrations/argocd/status'),
+    enabled,
+    staleTime: 30000,
+    refetchInterval: 60000,
+  })
+}
+
 // Connect to Prometheus (trigger discovery)
 export function usePrometheusConnect() {
   const queryClient = useQueryClient()
