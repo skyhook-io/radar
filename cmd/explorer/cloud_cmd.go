@@ -312,9 +312,11 @@ func cloudInstall(args []string) {
 		Token:        pr.Token,
 	})
 	if errors.Is(perr, cloudinstall.ErrReleaseExists) {
-		// Rare: a release appeared between the pre-mint gate and Provision. No
-		// Secret was written (Provision gates before side effects).
-		fmt.Fprintf(os.Stderr, "\nRadar was installed into namespace %q concurrently. Uninstall it (helm uninstall %s -n %s) and re-run.\n", *namespace, *release, *namespace)
+		// Rare: a release appeared after the pre-mint gate. If it landed before
+		// Provision's block-check nothing was written; in the narrow window
+		// between that check and helm install, the token Secret may have been.
+		fmt.Fprintf(os.Stderr, "\nRadar was installed into namespace %q concurrently, so this install stopped.\n", *namespace)
+		fmt.Fprintf(os.Stderr, "Reconcile the existing install (or `helm uninstall %s -n %s`); a %q Secret may have been written — verify it before re-running.\n", *release, *namespace, cloudinstall.CloudTokenSecretName)
 		os.Exit(1)
 	}
 	if perr != nil {
