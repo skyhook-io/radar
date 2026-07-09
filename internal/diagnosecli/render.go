@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/term"
+
+	"github.com/skyhook-io/radar/internal/ai"
 )
 
 const (
@@ -157,7 +159,7 @@ func (r *renderer) header(run runSummary, base string) {
 	}
 	target += run.Name
 	fmt.Fprintf(r.w, "%s %s\n", r.c(cBold, "◉ Investigating"), r.c(cBold, r.c(cCyan, target)))
-	fmt.Fprintf(r.w, "%s\n", r.c(cDim, fmt.Sprintf("%s · via %s · watch: %s/?ai-run=%s", run.ID, agentDisplay(run.Agent), base, run.ID)))
+	fmt.Fprintf(r.w, "%s\n", r.c(cDim, fmt.Sprintf("%s · via %s · watch: %s/?ai-run=%s", run.ID, ai.AgentLabel(run.Agent), base, run.ID)))
 	// Radar's read at start — the concrete issue rows the server captured, shown
 	// before the agent produces anything (its boot is the longest silent gap).
 	if h := run.Health; h != nil {
@@ -168,12 +170,7 @@ func (r *renderer) header(run runSummary, base string) {
 			}
 			fmt.Fprintf(r.w, "%s %s — %s\n", sev, r.c(cBold, line.Reason), line.Message)
 		}
-		if len(h.Issues) == 0 && h.IssueCount > 0 {
-			// Runs persisted before per-row capture carry only the rollup.
-			fmt.Fprintf(r.w, "%s %s\n", r.c(cAmber, "●"),
-				r.c(cBold, fmt.Sprintf("%d active issue(s)", h.IssueCount)))
-		}
-		if extra := h.IssueCount - len(h.Issues); extra > 0 && len(h.Issues) > 0 {
+		if extra := h.IssueCount - len(h.Issues); extra > 0 {
 			fmt.Fprintf(r.w, "%s\n", r.c(cDim, fmt.Sprintf("  +%d more active issues", extra)))
 		}
 		for _, f := range h.AuditFindings {
@@ -184,18 +181,6 @@ func (r *renderer) header(run runSummary, base string) {
 		fmt.Fprintf(r.w, "%s\n", r.c(cDim, "  managed by "+run.ManagedBy))
 	}
 	fmt.Fprintln(r.w)
-}
-
-func agentDisplay(name string) string {
-	switch name {
-	case "claude":
-		return "Claude Code"
-	case "codex":
-		return "Codex"
-	case "cursor-agent":
-		return "Cursor"
-	}
-	return name
 }
 
 func (r *renderer) c(code, s string) string {

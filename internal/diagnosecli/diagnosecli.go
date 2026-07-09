@@ -164,7 +164,7 @@ Flags:
 		// watching a cluster connect for 30 seconds. No server exists yet, so
 		// read/write the shared machine-scoped store (~/.radar/config.json)
 		// directly — the ephemeral server then sees it as already given.
-		surface := consentSurface(o.agent)
+		surface := ai.ConsentSurfaceFor(o.agent)
 		if !consentGivenLocal(surface) {
 			if o.yes {
 				recordConsentLocal(surface)
@@ -173,7 +173,7 @@ Flags:
 				return 1
 			}
 		}
-		b, shutdown, err := bootEphemeral(o.kubeconfig, false)
+		b, shutdown, err := bootEphemeral(o.kubeconfig)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -199,7 +199,7 @@ Flags:
 		return 1
 	}
 
-	surface := consentSurface(o.agent)
+	surface := ai.ConsentSurfaceFor(o.agent)
 	if !agents.Consented[surface] {
 		if o.yes {
 			// --yes acknowledges the disclosure; the server enforces consent at
@@ -298,16 +298,6 @@ func fetchAgents(base string) (agentsResponse, error) {
 }
 
 // --- consent ----------------------------------------------------------------
-
-// consentSurface maps an agent pick to its disclosure surface — Cursor's trust
-// model is materially different (its global MCP servers can't be excluded), so
-// it has its own.
-func consentSurface(agent string) string {
-	if agent == "cursor-agent" {
-		return "cursor"
-	}
-	return "standard"
-}
 
 // The standalone path reads/writes the shared store directly, pre-boot —
 // versions live in internal/config (one source of truth with the server).

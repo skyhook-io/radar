@@ -24,7 +24,7 @@ import (
 // transcript still shows up in the UI later. Radar's boot logging is captured
 // to a tail buffer and surfaced only on failure; the terminal shows a single
 // connecting spinner instead.
-func bootEphemeral(kubeconfig string, quiet bool) (base string, shutdown func(), err error) {
+func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) {
 	tail := &tailBuffer{limit: 64 << 10}
 	log.SetOutput(tail) // for the whole process — request logs would drown the transcript
 	// client-go logs through klog, which writes DIRECTLY to stderr by default
@@ -75,9 +75,7 @@ func bootEphemeral(kubeconfig string, quiet bool) (base string, shutdown func(),
 	base = fmt.Sprintf("http://localhost:%d", srv.ActualPort())
 
 	stopSpin := make(chan struct{})
-	if !quiet {
-		go bootSpinner(stopSpin)
-	}
+	go bootSpinner(stopSpin) // self-gates on TTY + NO_COLOR
 	app.InitializeCluster()
 
 	// Connected = the diagnose endpoints stop returning 503 (requireConnected).

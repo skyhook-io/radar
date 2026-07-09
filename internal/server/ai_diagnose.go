@@ -253,11 +253,7 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	// and shipping cluster data to a model provider must not depend on client
 	// code remembering to check. Surface derives from the RESOLVED agent (an
 	// unknown name falls back to the default, never across trust surfaces).
-	surface := "standard"
-	if agent == "cursor-agent" {
-		surface = "cursor"
-	}
-	if !config.AIConsentGiven(surface) {
+	if !config.AIConsentGiven(ai.ConsentSurfaceFor(agent)) {
 		s.writeError(w, http.StatusForbidden, "AI disclosure not acknowledged for this agent — approve the consent prompt first")
 		return
 	}
