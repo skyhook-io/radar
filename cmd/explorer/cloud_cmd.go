@@ -419,15 +419,18 @@ func maybeResumeCloud(fileCfg config.Config) {
 			return
 		}
 	}
-	// Auto-resume ONLY when the served cluster is unambiguously the default
-	// kubecontext. Saved credentials are keyed by the default context name; if a
-	// non-default kubeconfig is selected (--kubeconfig / --kubeconfig-dir flag,
-	// or a persisted path in config), the cluster actually served could differ
-	// from that context — resuming then would serve cluster B under context A's
-	// Cloud identity. In those cases require an explicit `radar cloud connect`.
-	if fileCfg.Kubeconfig != "" || len(fileCfg.KubeconfigDirs) > 0 {
+	// Multi-cluster mode (config.json kubeconfigDirs) serves an ambiguous set of
+	// contexts, not one — the credential's single context name can't identify
+	// which cluster is being served, so require an explicit `radar cloud connect`.
+	if len(fileCfg.KubeconfigDirs) > 0 {
 		return
 	}
+	// A CLI --kubeconfig / --kubeconfig-dir override selects a kubeconfig we can't
+	// cheaply resolve here (flags aren't parsed yet), and the saved cred wasn't
+	// keyed to it — decline. A single-file config.json `kubeconfig` is fine: main
+	// serves that same file (the --kubeconfig flag defaults to it) and connect
+	// keyed the cred + server_url against it via currentKubeContextName/
+	// currentClusterServerURL below, so the server-URL guard makes resume safe.
 	for _, a := range os.Args[1:] {
 		if isKubeconfigOverrideArg(a) {
 			return
