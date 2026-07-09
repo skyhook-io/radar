@@ -113,7 +113,13 @@ func cloudConnect(args []string) {
 
 	// Honor a config.json kubeconfig so the metadata + saved ServerURL describe
 	// the SAME cluster main() will serve (not the default context).
-	kubeconfig := config.Load().Kubeconfig
+	fileCfg := config.Load()
+	if len(fileCfg.KubeconfigDirs) > 0 {
+		fmt.Fprintln(os.Stderr, "`radar cloud connect` doesn't support a kubeconfigDirs (multi-cluster) config — it can't pick one cluster.")
+		fmt.Fprintln(os.Stderr, "Use a single kubeconfig instead (--kubeconfig, KUBECONFIG, or a config.json `kubeconfig`).")
+		os.Exit(1)
+	}
+	kubeconfig := fileCfg.Kubeconfig
 	ctxName := currentKubeContextName(kubeconfig)
 	clusterName := *name
 	if clusterName == "" {
@@ -193,7 +199,13 @@ func cloudInstall(args []string) {
 
 	// Honor a config.json kubeconfig so we install into (and describe) the SAME
 	// cluster the operator's config points at, not the default context.
-	kubeconfig := config.Load().Kubeconfig
+	fileCfg := config.Load()
+	if len(fileCfg.KubeconfigDirs) > 0 {
+		fmt.Fprintln(os.Stderr, "`radar cloud install` doesn't support a kubeconfigDirs (multi-cluster) config — it can't pick one cluster.")
+		fmt.Fprintln(os.Stderr, "Use a single kubeconfig instead (--kubeconfig, KUBECONFIG, or a config.json `kubeconfig`).")
+		os.Exit(1)
+	}
+	kubeconfig := fileCfg.Kubeconfig
 	ctxName := currentKubeContextName(kubeconfig)
 	clusterName := *name
 	if clusterName == "" {
