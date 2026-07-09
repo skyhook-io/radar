@@ -15,8 +15,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // RunOptions provides optional data sources for checks that need them.
@@ -49,6 +49,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		ServiceAccountsNamespace: serviceAccountScopeNamespace(),
 		LimitRanges:              listNamespaced(cache.LimitRanges(), namespaces),
 	}
+	input.GitOpsToolsPresent, input.ArgoAppNames = gitOpsRoots()
 
 	if opts != nil {
 		input.ClusterVersion = opts.ClusterVersion
@@ -388,6 +389,54 @@ func extractNamespace(obj any) string {
 		return v.Namespace
 	}
 	return ""
+}
+
+// gitOpsRoots reports whether the cluster actually does GitOps — at least one
+// Argo Application / Flux Kustomization / Flux HelmRelease OBJECT exists — and
+// collects the Argo Application names for the coverage check's label-tracking
+// cross-reference. CRD registration alone is deliberately not enough: leftover
+// CRDs after an uninstall (or CRDs applied without a controller) would gate the
+// coverage check open and flag every workload on a cluster that doesn't do
+// GitOps at all.
+//
+// Argo app names matter because Argo's label tracking mode
+// (application.resourceTrackingMethod: label) stamps managed resources with
+// only app.kubernetes.io/instance — by shape indistinguishable from a generic
+// Helm/kustomize label. The coverage check treats that label as GitOps-managed
+// only when its value names a real Application.
+func gitOpsRoots() (present bool, argoAppNames map[string]struct{}) {
+	discovery := k8s.GetResourceDiscovery()
+	if discovery == nil {
+		return false, nil
+	}
+	dc := k8s.GetDynamicResourceCache()
+	if dc == nil {
+		return false, nil
+	}
+	list := func(kind, group string) []*unstructured.Unstructured {
+		gvr, ok := discovery.GetGVRWithGroup(kind, group)
+		if !ok {
+			return nil
+		}
+		items, err := dc.ListWatched(gvr)
+		if err != nil {
+			return nil
+		}
+		return items
+	}
+	apps := list("Application", "argoproj.io")
+	if len(apps) > 0 {
+		present = true
+		argoAppNames = make(map[string]struct{}, len(apps))
+		for _, app := range apps {
+			argoAppNames[app.GetName()] = struct{}{}
+		}
+	}
+	if !present {
+		present = len(list("Kustomization", "kustomize.toolkit.fluxcd.io")) > 0 ||
+			len(list("HelmRelease", "helm.toolkit.fluxcd.io")) > 0
+	}
+	return present, argoAppNames
 }
 
 // serviceAccountScopeNamespace reports the single namespace the SA informer

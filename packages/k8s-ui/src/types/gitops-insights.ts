@@ -32,7 +32,13 @@ export type GitOpsCategory =
   | 'Suspended'
   | 'Unknown'
 
-export type GitOpsDriftSource = 'lastAppliedAnnotation'
+// How a Drift's field entries were computed. `lastAppliedAnnotation` is the
+// built-in path (kubectl.kubernetes.io/last-applied-configuration); `argocd-api`
+// means the diff came from a connected Argo CD server's managed-resource diff.
+// The `(string & {})` arm keeps the union open: a library consumer may lag the
+// backend and receive a source it doesn't recognize — such values MUST render
+// with the neutral fallback (no source label), never crash a switch.
+export type GitOpsDriftSource = 'lastAppliedAnnotation' | 'argocd-api' | (string & {})
 
 export interface GitOpsInsightSummary {
   tool: GitOpsTool
@@ -66,6 +72,21 @@ export interface GitOpsInsightSummary {
   // Finalizers blocking deletion. When stuck, naming the finalizer points
   // the user at the controller they need to investigate.
   finalizers?: string[]
+  // Argo comparison-coverage disclosure: the field exclusions declared in
+  // spec.ignoreDifferences that suppress drift from comparison (both Argo's
+  // and Radar's). Undefined for Flux roots and Applications without any
+  // exclusions. unsupportedRuleCount counts entries Radar does NOT evaluate
+  // (jqPathExpressions / managedFieldsManagers rules) — the
+  // drift panel may surface fields Argo's own UI suppresses.
+  ignoredDifferences?: GitOpsIgnoredDifferences
+}
+
+export interface GitOpsIgnoredDifferences {
+  ruleCount: number
+  unsupportedRuleCount: number
+  // Sorted unique "Group/Kind" targets ("Kind" for core resources,
+  // "group/*" for a group-wide rule that omits kind).
+  kinds: string[]
 }
 
 export interface GitOpsInsightRef {
@@ -192,6 +213,33 @@ export interface GitOpsCapabilities {
   syncWithSource: boolean
   selectiveSync: boolean
   rollback: boolean
+  // True on an Argo CD Application detail when the Argo CD integration is
+  // connected, meaning the full Git-rendered desired-vs-live diff endpoint
+  // (/api/argo/applications/{ns}/{name}/resource-diff) can be called for this
+  // app's managed resources. Absent/false → offer only the last-applied field
+  // diff and (for disconnected Argo apps) the "connect Argo CD" hint.
+  argoDiffAvailable?: boolean
   unsupportedReason?: string
   warnings?: string[]
+}
+
+// Response of GET /api/argo/applications/{ns}/{name}/resource-diff. `desired`
+// is the Git-rendered manifest, `live` the normalized cluster state — both YAML
+// for the line-by-line view. `fieldEntries` is the same diff structured per
+// path for a compact summary. `redacted` is set when Secret values were masked
+// server-side; `hook` marks Argo sync-hook resources.
+export interface GitOpsResourceDiff {
+  source: string
+  desired: string
+  live: string
+  fieldEntries: GitOpsResourceDiffFieldEntry[]
+  redacted: boolean
+  hook: boolean
+}
+
+export interface GitOpsResourceDiffFieldEntry {
+  path: string
+  op: 'added' | 'removed' | 'changed'
+  desired?: string
+  live?: string
 }

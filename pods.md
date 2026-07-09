@@ -1,0 +1,685 @@
+- generic [ref=e3]:
+  - complementary "Primary navigation" [ref=e4]:
+    - button "Radar — go to home" [ref=e6] [cursor=pointer]:
+      - img [ref=e9]
+      - generic [ref=e10]:
+        - generic [ref=e11]: Radar
+        - generic [ref=e12]: by Skyhook
+    - navigation [ref=e13]:
+      - button "Home" [ref=e15] [cursor=pointer]:
+        - img [ref=e18]
+        - generic [ref=e21]: Home
+      - button "Resources" [ref=e23] [cursor=pointer]:
+        - img [ref=e26]
+        - generic [ref=e27]: Resources
+      - button "Issues" [ref=e29] [cursor=pointer]:
+        - img [ref=e32]
+        - generic [ref=e34]: Issues
+      - button "Topology" [ref=e36] [cursor=pointer]:
+        - img [ref=e39]
+        - generic [ref=e44]: Topology
+      - button "Applications" [ref=e46] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e59]: Applications
+      - button "Timeline" [ref=e61] [cursor=pointer]:
+        - img [ref=e64]
+        - generic [ref=e67]: Timeline
+      - button "Live Traffic" [ref=e69] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e74]: Live Traffic
+      - button "Helm" [ref=e76] [cursor=pointer]:
+        - img [ref=e79]
+        - generic [ref=e83]: Helm
+      - button "GitOps" [ref=e85] [cursor=pointer]:
+        - img [ref=e88]
+        - generic [ref=e92]: GitOps
+      - button "Checks" [ref=e94] [cursor=pointer]:
+        - img [ref=e97]
+        - generic [ref=e100]: Checks
+      - button "Cost" [ref=e102] [cursor=pointer]:
+        - img [ref=e105]
+        - generic [ref=e107]: Cost
+    - navigation [ref=e108]:
+      - button "Settings" [ref=e110] [cursor=pointer]:
+        - img [ref=e112]
+        - generic [ref=e115]: Settings
+    - button "Collapse navigation" [ref=e118] [cursor=pointer]:
+      - img [ref=e120]
+      - generic [ref=e123]: Collapse
+  - generic [ref=e124]:
+    - banner [ref=e125]:
+      - button "GKE cluster nonprod-cluster-us-east1" [ref=e129] [cursor=pointer]:
+        - generic [ref=e131]:
+          - img "GKE cluster" [ref=e132]
+          - generic [ref=e134]: nonprod-cluster-us-east1
+        - img [ref=e135]
+      - generic [ref=e142]:
+        - img [ref=e143]
+        - textbox "Search resources and commands" [ref=e146]:
+          - /placeholder: Search resources & commands…
+        - generic [ref=e147]:
+          - button "Search syntax help" [ref=e148] [cursor=pointer]:
+            - img [ref=e149]
+          - generic [ref=e152]: ⌘K
+      - generic [ref=e153]:
+        - button "Switch active namespaces" [ref=e155] [cursor=pointer]:
+          - generic [ref=e156]: dev
+          - img [ref=e157]
+        - link "2,496" [ref=e161] [cursor=pointer]:
+          - /url: https://github.com/skyhook-io/radar
+          - img [ref=e162]
+          - img [ref=e164]
+          - generic [ref=e167]: 2,496
+        - button [ref=e169] [cursor=pointer]:
+          - img [ref=e170]
+        - button [ref=e175] [cursor=pointer]:
+          - img [ref=e176]
+        - button [ref=e179] [cursor=pointer]:
+          - img [ref=e180]
+        - button [ref=e184] [cursor=pointer]:
+          - img [ref=e185]
+    - generic [ref=e195]:
+      - generic [ref=e196]:
+        - generic [ref=e198]:
+          - img [ref=e199]
+          - textbox "Filter resources..." [active] [ref=e202]
+        - navigation [ref=e203]:
+          - generic [ref=e204]:
+            - button "Favorites" [ref=e205] [cursor=pointer]:
+              - img [ref=e206]
+              - generic [ref=e208]: Favorites
+            - generic [ref=e210]:
+              - text: No pinned resources. Click
+              - img [ref=e211]
+              - text: on any resource type to pin it here.
+          - generic [ref=e213]:
+            - button "Workloads" [ref=e214] [cursor=pointer]:
+              - img [ref=e215]
+              - generic [ref=e217]: Workloads
+            - generic [ref=e220]:
+              - button "CronJob 1" [ref=e519] [cursor=pointer]:
+                - img [ref=e222]
+                - generic [ref=e226]: CronJob
+                - generic [ref=e227]
+              - button "DaemonSet 0" [ref=e232] [cursor=pointer]:
+                - img [ref=e233]
+                - generic [ref=e236]: DaemonSet
+                - generic [ref=e237]
+              - button "Deployment 10" [ref=e520] [cursor=pointer]:
+                - img [ref=e243]
+                - generic [ref=e249]: Deployment
+                - generic [ref=e250]
+              - button "Job 4" [ref=e521] [cursor=pointer]:
+                - img [ref=e256]
+                - generic [ref=e259]: Job
+                - generic [ref=e260]
+              - button "Pod 13" [ref=e522] [cursor=pointer]:
+                - img [ref=e266]
+                - generic [ref=e270]: Pod
+                - generic [ref=e271]
+              - button "ReplicaSet 105" [ref=e523] [cursor=pointer]:
+                - img [ref=e277]
+                - generic [ref=e281]: ReplicaSet
+                - generic [ref=e282]
+              - button "StatefulSet 0" [ref=e287] [cursor=pointer]:
+                - img [ref=e288]
+                - generic [ref=e294]: StatefulSet
+                - generic [ref=e295]
+          - generic [ref=e300]:
+            - button "Networking" [ref=e301] [cursor=pointer]:
+              - img [ref=e302]
+              - generic [ref=e304]: Networking
+            - generic [ref=e307]:
+              - button "EndpointSlice 20" [ref=e524] [cursor=pointer]:
+                - img [ref=e525]
+                - generic [ref=e532]: EndpointSlice
+                - generic [ref=e533]
+              - button "Ingress 12" [ref=e538] [cursor=pointer]:
+                - img [ref=e309]
+                - generic [ref=e313]: Ingress
+                - generic [ref=e314]
+              - button "NetworkPolicy 0" [ref=e319] [cursor=pointer]:
+                - img [ref=e320]
+                - generic [ref=e324]: NetworkPolicy
+                - generic [ref=e325]
+              - button "Service 20" [ref=e539] [cursor=pointer]:
+                - img [ref=e331]
+                - generic [ref=e334]: Service
+                - generic [ref=e335]
+          - generic [ref=e340]:
+            - button "Configuration" [ref=e341] [cursor=pointer]:
+              - img [ref=e342]
+              - generic [ref=e344]: Configuration
+            - generic [ref=e347]:
+              - button "ConfigMap 117" [ref=e540] [cursor=pointer]:
+                - img [ref=e349]
+                - generic [ref=e353]: ConfigMap
+                - generic [ref=e354]
+              - button "HorizontalPodAutoscaler 1" [ref=e541] [cursor=pointer]:
+                - img [ref=e360]
+                - generic [ref=e366]: HorizontalPodAutoscaler
+                - generic [ref=e367]
+              - button "Secret 46" [ref=e542] [cursor=pointer]:
+                - img [ref=e373]
+                - generic [ref=e377]: Secret
+                - generic [ref=e378]
+          - generic [ref=e383]:
+            - button "Storage 22" [ref=e543] [cursor=pointer]:
+              - img [ref=e385]
+              - generic [ref=e387]: Storage
+              - generic [ref=e388]: "22"
+            - generic [ref=e389]:
+              - button "PersistentVolume 18" [ref=e544] [cursor=pointer]:
+                - img [ref=e545]
+                - generic [ref=e549]: PersistentVolume
+                - generic [ref=e550]
+              - button "PersistentVolumeClaim 0" [ref=e390] [cursor=pointer]:
+                - img [ref=e391]
+                - generic [ref=e394]: PersistentVolumeClaim
+                - generic [ref=e395]
+              - button "StorageClass 4" [ref=e555] [cursor=pointer]:
+                - img [ref=e556]
+                - generic [ref=e561]: StorageClass
+                - generic [ref=e562]
+          - generic [ref=e400]:
+            - button "Access Control 557" [ref=e567] [cursor=pointer]:
+              - img [ref=e402]
+              - generic [ref=e404]: Access Control
+              - generic [ref=e405]: "557"
+            - generic [ref=e406]:
+              - button "ClusterRole 293" [ref=e568] [cursor=pointer]:
+                - img [ref=e569]
+                - generic [ref=e573]: ClusterRole
+                - generic [ref=e574]
+              - button "ClusterRoleBinding 247" [ref=e579] [cursor=pointer]:
+                - img [ref=e580]
+                - generic [ref=e584]: ClusterRoleBinding
+                - generic [ref=e585]
+              - button "Role 3" [ref=e590] [cursor=pointer]:
+                - img [ref=e591]
+                - generic [ref=e595]: Role
+                - generic [ref=e596]
+              - button "RoleBinding 4" [ref=e601] [cursor=pointer]:
+                - img [ref=e602]
+                - generic [ref=e606]: RoleBinding
+                - generic [ref=e607]
+              - button "ServiceAccount 10" [ref=e612] [cursor=pointer]:
+                - img [ref=e408]
+                - generic [ref=e421]: ServiceAccount
+                - generic [ref=e422]
+          - generic [ref=e427]:
+            - button "Cluster 12" [ref=e613] [cursor=pointer]:
+              - img [ref=e429]
+              - generic [ref=e431]: Cluster
+              - generic [ref=e432]: "12"
+            - generic [ref=e433]:
+              - button "Event 2" [ref=e614] [cursor=pointer]:
+                - img [ref=e435]
+                - generic [ref=e438]: Event
+                - generic [ref=e439]
+              - button "Namespace 1" [ref=e615] [cursor=pointer]:
+                - img [ref=e445]
+                - generic [ref=e448]: Namespace
+                - generic [ref=e449]
+              - button "Node 9" [ref=e616] [cursor=pointer]:
+                - img [ref=e455]
+                - generic [ref=e459]: Node
+                - generic [ref=e460]
+          - generic [ref=e617]:
+            - button "cloud.google.com 3" [ref=e618] [cursor=pointer]:
+              - img [ref=e619]
+              - generic [ref=e621]: cloud.google.com
+              - generic [ref=e622]: "3"
+            - button "ComputeClass 3" [ref=e624] [cursor=pointer]:
+              - img [ref=e625]
+              - generic [ref=e628]: ComputeClass
+              - generic [ref=e629]:
+                - button "Pin to favorites" [ref=e630]
+                - generic [ref=e633]: "3"
+          - generic [ref=e634]:
+            - button "gateway.envoyproxy.io 1" [ref=e635] [cursor=pointer]:
+              - img [ref=e636]
+              - generic [ref=e638]: gateway.envoyproxy.io
+              - generic [ref=e639]: "1"
+            - button "EnvoyPatchPolicy 1" [ref=e641] [cursor=pointer]:
+              - img [ref=e642]
+              - generic [ref=e645]: EnvoyPatchPolicy
+              - generic [ref=e646]:
+                - button "Pin to favorites" [ref=e647]
+                - generic [ref=e650]: "1"
+          - generic [ref=e651]:
+            - button "monitoring.googleapis.com 5" [ref=e652] [cursor=pointer]:
+              - img [ref=e653]
+              - generic [ref=e655]: monitoring.googleapis.com
+              - generic [ref=e656]: "5"
+            - button "PodMonitoring 5" [ref=e658] [cursor=pointer]:
+              - img [ref=e659]
+              - generic [ref=e662]: PodMonitoring
+              - generic [ref=e663]:
+                - button "Pin to favorites" [ref=e664]
+                - generic [ref=e667]: "5"
+          - generic [ref=e668]:
+            - button "Cert Manager 91" [ref=e669] [cursor=pointer]:
+              - img [ref=e670]
+              - generic [ref=e672]: Cert Manager
+              - generic [ref=e673]: "91"
+            - generic [ref=e674]:
+              - button "Certificate 6" [ref=e675] [cursor=pointer]:
+                - img [ref=e676]
+                - generic [ref=e680]: Certificate
+                - generic [ref=e681]
+              - button "CertificateRequest 40" [ref=e686] [cursor=pointer]:
+                - img [ref=e687]
+                - generic [ref=e691]: CertificateRequest
+                - generic [ref=e692]
+              - button "ClusterIssuer 6" [ref=e697] [cursor=pointer]:
+                - img [ref=e698]
+                - generic [ref=e702]: ClusterIssuer
+                - generic [ref=e703]
+              - button "Order 39" [ref=e708] [cursor=pointer]:
+                - img [ref=e709]
+                - generic [ref=e712]: Order
+                - generic [ref=e713]
+          - generic [ref=e718]:
+            - button "External Secrets 1" [ref=e719] [cursor=pointer]:
+              - img [ref=e720]
+              - generic [ref=e722]: External Secrets
+              - generic [ref=e723]: "1"
+            - button "ClusterSecretStore 1" [ref=e725] [cursor=pointer]:
+              - img [ref=e726]
+              - generic [ref=e729]: ClusterSecretStore
+              - generic [ref=e730]:
+                - button "Pin to favorites" [ref=e731]
+                - generic [ref=e734]: "1"
+          - generic [ref=e735]:
+            - button "warden.gke.io 13" [ref=e736] [cursor=pointer]:
+              - img [ref=e737]
+              - generic [ref=e739]: warden.gke.io
+              - generic [ref=e740]: "13"
+            - button "Audit 13" [ref=e742] [cursor=pointer]:
+              - img [ref=e743]
+              - generic [ref=e746]: Audit
+              - generic [ref=e747]:
+                - button "Pin to favorites" [ref=e748]
+                - generic [ref=e751]: "13"
+          - generic [ref=e752]:
+            - button "Karpenter 2" [ref=e753] [cursor=pointer]:
+              - img [ref=e754]
+              - generic [ref=e756]: Karpenter
+              - generic [ref=e757]: "2"
+            - generic [ref=e758]:
+              - button "EC2NodeClass 1" [ref=e759] [cursor=pointer]:
+                - img [ref=e760]
+                - generic [ref=e764]: EC2NodeClass
+                - generic [ref=e765]
+              - button "NodePool 1" [ref=e770] [cursor=pointer]:
+                - img [ref=e771]
+                - generic [ref=e775]: NodePool
+                - generic [ref=e776]
+          - generic [ref=e781]:
+            - button "networking.gke.io 1" [ref=e782] [cursor=pointer]:
+              - img [ref=e783]
+              - generic [ref=e785]: networking.gke.io
+              - generic [ref=e786]: "1"
+            - button "NodeTopology 1" [ref=e788] [cursor=pointer]:
+              - img [ref=e789]
+              - generic [ref=e792]: NodeTopology
+              - generic [ref=e793]:
+                - button "Pin to favorites" [ref=e794]
+                - generic [ref=e797]: "1"
+          - generic [ref=e798]:
+            - button "policies.kyverno.io 1" [ref=e799] [cursor=pointer]:
+              - img [ref=e800]
+              - generic [ref=e802]: policies.kyverno.io
+              - generic [ref=e803]: "1"
+            - button "DeletingPolicy 1" [ref=e805] [cursor=pointer]:
+              - img [ref=e806]
+              - generic [ref=e809]: DeletingPolicy
+              - generic [ref=e810]:
+                - button "Pin to favorites" [ref=e811]
+                - generic [ref=e814]: "1"
+          - generic [ref=e815]:
+            - button "Gateway API 16" [ref=e816] [cursor=pointer]:
+              - img [ref=e817]
+              - generic [ref=e819]: Gateway API
+              - generic [ref=e820]: "16"
+            - generic [ref=e821]:
+              - button "Gateway 1" [ref=e822] [cursor=pointer]:
+                - img [ref=e823]
+                - generic [ref=e827]: Gateway
+                - generic [ref=e828]
+              - button "GatewayClass 12" [ref=e833] [cursor=pointer]:
+                - img [ref=e834]
+                - generic [ref=e837]: GatewayClass
+                - generic [ref=e838]
+              - button "HTTPRoute 2" [ref=e843] [cursor=pointer]:
+                - img [ref=e844]
+                - generic [ref=e848]: HTTPRoute
+                - generic [ref=e849]
+              - button "ReferenceGrant 1" [ref=e854] [cursor=pointer]:
+                - img [ref=e855]
+                - generic [ref=e858]: ReferenceGrant
+                - generic [ref=e859]
+          - generic [ref=e864]:
+            - button "Dynamic Resource Allocation 2" [ref=e865] [cursor=pointer]:
+              - img [ref=e866]
+              - generic [ref=e868]: Dynamic Resource Allocation
+              - generic [ref=e869]: "2"
+            - button "DeviceClass 2" [ref=e871] [cursor=pointer]:
+              - img [ref=e872]
+              - generic [ref=e875]: DeviceClass
+              - generic [ref=e876]:
+                - button "Pin to favorites" [ref=e877]
+                - generic [ref=e880]: "2"
+          - generic [ref=e881]:
+            - button "apiregistration.k8s.io 89" [ref=e882] [cursor=pointer]:
+              - img [ref=e883]
+              - generic [ref=e885]: apiregistration.k8s.io
+              - generic [ref=e886]: "89"
+            - button "APIService 89" [ref=e888] [cursor=pointer]:
+              - img [ref=e889]
+              - generic [ref=e892]: APIService
+              - generic [ref=e893]:
+                - button "Pin to favorites" [ref=e894]
+                - generic [ref=e897]: "89"
+          - generic [ref=e898]:
+            - button "Argo 80" [ref=e899] [cursor=pointer]:
+              - img [ref=e900]
+              - generic [ref=e902]: Argo
+              - generic [ref=e903]: "80"
+            - generic [ref=e904]:
+              - button "Rollout 2" [ref=e905] [cursor=pointer]:
+                - img [ref=e906]
+                - generic [ref=e912]: Rollout
+                - generic [ref=e913]
+              - button "Workflow 73" [ref=e918] [cursor=pointer]:
+                - img [ref=e919]
+                - generic [ref=e922]: Workflow
+                - generic [ref=e923]
+              - button "WorkflowTemplate 5" [ref=e928] [cursor=pointer]:
+                - img [ref=e929]
+                - generic [ref=e932]: WorkflowTemplate
+                - generic [ref=e933]
+          - generic [ref=e938]:
+            - button "Bitnami 13" [ref=e939] [cursor=pointer]:
+              - img [ref=e940]
+              - generic [ref=e942]: Bitnami
+              - generic [ref=e943]: "13"
+            - button "SealedSecret 13" [ref=e945] [cursor=pointer]:
+              - img [ref=e946]
+              - generic [ref=e950]: SealedSecret
+              - generic [ref=e951]:
+                - button "Pin to favorites" [ref=e952]
+                - generic [ref=e955]: "13"
+          - button "Show 189 empty (30 groups)" [ref=e956] [cursor=pointer]:
+            - img [ref=e466]
+            - generic [ref=e469]: Show 189 empty (30 groups)
+      - generic [ref=e470]:
+        - generic [ref=e471]:
+          - generic [ref=e473]:
+            - img [ref=e474]
+            - textbox "Search... (press /)" [ref=e477]
+            - button "Enable regex search" [ref=e478] [cursor=pointer]:
+              - img [ref=e479]
+          - button "Labels" [ref=e958] [cursor=pointer]:
+            - img [ref=e959]
+            - generic [ref=e962]: Labels
+          - button "Clear filters" [ref=e484] [cursor=pointer]:
+            - img [ref=e485]
+            - generic [ref=e488]: Clear filters
+          - generic [ref=e963]:
+            - img [ref=e964]
+            - generic [ref=e967]: Updated just now
+          - button "Configure columns" [ref=e490] [cursor=pointer]:
+            - img [ref=e491]
+          - button "Refresh" [ref=e493] [cursor=pointer]:
+            - img [ref=e494]
+          - button [ref=e500] [cursor=pointer]:
+            - img [ref=e501]
+          - button [ref=e503] [cursor=pointer]:
+            - img [ref=e504]
+          - button [ref=e510] [cursor=pointer]:
+            - img [ref=e511]
+        - table [ref=e970] [cursor=pointer]:
+          - rowgroup [ref=e981]:
+            - row "Name Namespace Containers Status CPU Memory Restarts Node Age" [ref=e982]:
+              - columnheader "Name" [ref=e983]:
+                - generic [ref=e984]
+              - columnheader "Namespace" [ref=e992]:
+                - generic [ref=e993]
+              - columnheader "Containers" [ref=e1001]:
+                - generic [ref=e1002]
+              - columnheader "Status" [ref=e1011]:
+                - generic [ref=e1012]
+              - columnheader "CPU" [ref=e1020]:
+                - generic [ref=e1021]
+              - columnheader "Memory" [ref=e1030]:
+                - generic [ref=e1031]
+              - columnheader "Restarts" [ref=e1040]:
+                - generic [ref=e1041]
+              - columnheader "Node" [ref=e1049]:
+                - generic [ref=e1050]
+              - columnheader "Age" [ref=e1057]:
+                - generic [ref=e1058]
+          - rowgroup [ref=e1066]:
+            - row "app-6dfc8f5cbb-sbsfj dev Running 0m / 1000m 0% 0Mi / 2.0Gi 0% 0 gke-nonprod-cluster--nonprod-cluster--16275362-jkc2 1d" [ref=e1067]:
+              - cell "app-6dfc8f5cbb-sbsfj" [ref=e1068]:
+                - generic [ref=e1069]
+              - cell "dev" [ref=e1076]:
+                - generic [ref=e1078]: dev
+              - cell [ref=e1079]
+              - cell "Running" [ref=e1083]:
+                - generic "Running" [ref=e1085]
+              - cell "0m / 1000m 0%" [ref=e1086]:
+                - generic [ref=e1089]
+              - cell "0Mi / 2.0Gi 0%" [ref=e1095]:
+                - generic [ref=e1098]
+              - cell "0" [ref=e1105]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-jkc2" [ref=e1106]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-jkc2" [ref=e1108]
+              - cell "1d" [ref=e1109]:
+                - generic [ref=e1111]: 1d
+            - row "argo-rollouts-demo-6dbc6f7578-9t8wh dev Running 0m / 1000m 0% 12Mi / 2.0Gi 1% 0 gke-nonprod-cluster--nonprod-cluster--16275362-k6zt 1d" [ref=e1112]:
+              - cell "argo-rollouts-demo-6dbc6f7578-9t8wh" [ref=e1113]:
+                - generic [ref=e1114]
+              - cell "dev" [ref=e1121]:
+                - generic [ref=e1123]: dev
+              - cell [ref=e1124]
+              - cell "Running" [ref=e1128]:
+                - generic "Running" [ref=e1130]
+              - cell "0m / 1000m 0%" [ref=e1131]:
+                - generic [ref=e1134]
+              - cell "12Mi / 2.0Gi 1%" [ref=e1140]:
+                - generic [ref=e1143]
+              - cell "0" [ref=e1150]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-k6zt" [ref=e1151]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-k6zt" [ref=e1153]
+              - cell "1d" [ref=e1154]:
+                - generic [ref=e1156]: 1d
+            - row "billing-858c47779b-pdmrk dev Running 3m / 1000m 0% 74Mi / 2.0Gi 4% 0 gke-nonprod-cluster--nonprod-cluster--16275362-jkc2 1d" [ref=e1157]:
+              - cell "billing-858c47779b-pdmrk" [ref=e1158]:
+                - generic [ref=e1159]
+              - cell "dev" [ref=e1166]:
+                - generic [ref=e1168]: dev
+              - cell [ref=e1169]
+              - cell "Running" [ref=e1173]:
+                - generic "Running" [ref=e1175]
+              - cell "3m / 1000m 0%" [ref=e1176]:
+                - generic [ref=e1179]
+              - cell "74Mi / 2.0Gi 4%" [ref=e1186]:
+                - generic [ref=e1189]
+              - cell "0" [ref=e1196]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-jkc2" [ref=e1197]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-jkc2" [ref=e1199]
+              - cell "1d" [ref=e1200]:
+                - generic [ref=e1202]: 1d
+            - row "cluster-agent-controller-887f7f767-df2zg dev Running 4m / 1000m 0% 48Mi / 1000Mi 5% 0 gke-nonprod-cluster--nonprod-cluster--16275362-jkc2 1d" [ref=e1203]:
+              - cell "cluster-agent-controller-887f7f767-df2zg" [ref=e1204]:
+                - generic [ref=e1205]
+              - cell "dev" [ref=e1212]:
+                - generic [ref=e1214]: dev
+              - cell [ref=e1215]
+              - cell "Running" [ref=e1219]:
+                - generic "Running" [ref=e1221]
+              - cell "4m / 1000m 0%" [ref=e1222]:
+                - generic [ref=e1225]
+              - cell "48Mi / 1000Mi 5%" [ref=e1232]:
+                - generic [ref=e1235]
+              - cell "0" [ref=e1242]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-jkc2" [ref=e1243]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-jkc2" [ref=e1245]
+              - cell "1d" [ref=e1246]:
+                - generic [ref=e1248]: 1d
+            - row "deployments-7cf58bc5f9-j8pw4 dev Running 4m / 500m 1% 102Mi / 1.0Gi 10% 0 gke-nonprod-cluster--nonprod-cluster--16275362-hel7 1d" [ref=e1249]:
+              - cell "deployments-7cf58bc5f9-j8pw4" [ref=e1250]:
+                - generic [ref=e1251]
+              - cell "dev" [ref=e1258]:
+                - generic [ref=e1260]: dev
+              - cell [ref=e1261]
+              - cell "Running" [ref=e1265]:
+                - generic "Running" [ref=e1267]
+              - cell "4m / 500m 1%" [ref=e1268]:
+                - generic [ref=e1271]
+              - cell "102Mi / 1.0Gi 10%" [ref=e1278]:
+                - generic [ref=e1281]
+              - cell "0" [ref=e1288]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-hel7" [ref=e1289]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-hel7" [ref=e1291]
+              - cell "1d" [ref=e1292]:
+                - generic [ref=e1294]: 1d
+            - row "finops-667766f9d7-n5tmf dev Running 0m / 1000m 0% 140Mi / 2.0Gi 7% 0 gke-nonprod-cluster--nonprod-cluster--16275362-k7ph 1d" [ref=e1295]:
+              - cell "finops-667766f9d7-n5tmf" [ref=e1296]:
+                - generic [ref=e1297]
+              - cell "dev" [ref=e1304]:
+                - generic [ref=e1306]: dev
+              - cell [ref=e1307]
+              - cell "Running" [ref=e1311]:
+                - generic "Running" [ref=e1313]
+              - cell "0m / 1000m 0%" [ref=e1314]:
+                - generic [ref=e1317]
+              - cell "140Mi / 2.0Gi 7%" [ref=e1323]:
+                - generic [ref=e1326]
+              - cell "0" [ref=e1333]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-k7ph" [ref=e1334]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-k7ph" [ref=e1336]
+              - cell "1d" [ref=e1337]:
+                - generic [ref=e1339]: 1d
+            - row "koala-backend-6cf845d585-hg2wc dev Running 8m / 1000m 1% 27Mi / 1000Mi 3% 0 gke-nonprod-cluster--nonprod-cluster--16275362-6roy 1d" [ref=e1340]:
+              - cell "koala-backend-6cf845d585-hg2wc" [ref=e1341]:
+                - generic [ref=e1342]
+              - cell "dev" [ref=e1349]:
+                - generic [ref=e1351]: dev
+              - cell [ref=e1352]
+              - cell "Running" [ref=e1356]:
+                - generic "Running" [ref=e1358]
+              - cell "8m / 1000m 1%" [ref=e1359]:
+                - generic [ref=e1362]
+              - cell "27Mi / 1000Mi 3%" [ref=e1369]:
+                - generic [ref=e1372]
+              - cell "0" [ref=e1379]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-6roy" [ref=e1380]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-6roy" [ref=e1382]
+              - cell "1d" [ref=e1383]:
+                - generic [ref=e1385]: 1d
+            - row "koala-backend-6cf845d585-wnn99 dev Running 8m / 1000m 1% 24Mi / 1000Mi 2% 0 gke-nonprod-cluster--nonprod-cluster--16275362-k7ph 1d" [ref=e1386]:
+              - cell "koala-backend-6cf845d585-wnn99" [ref=e1387]:
+                - generic [ref=e1388]
+              - cell "dev" [ref=e1395]:
+                - generic [ref=e1397]: dev
+              - cell [ref=e1398]
+              - cell "Running" [ref=e1402]:
+                - generic "Running" [ref=e1404]
+              - cell "8m / 1000m 1%" [ref=e1405]:
+                - generic [ref=e1408]
+              - cell "24Mi / 1000Mi 2%" [ref=e1415]:
+                - generic [ref=e1418]
+              - cell "0" [ref=e1425]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-k7ph" [ref=e1426]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-k7ph" [ref=e1428]
+              - cell "1d" [ref=e1429]:
+                - generic [ref=e1431]: 1d
+            - row "my-service-74db8868bf-qps44 dev Running 2m / 500m 0% 35Mi / 500Mi 7% 0 gke-nonprod-cluster--nonprod-cluster--16275362-k7ph 1d" [ref=e1432]:
+              - cell "my-service-74db8868bf-qps44" [ref=e1433]:
+                - generic [ref=e1434]
+              - cell "dev" [ref=e1441]:
+                - generic [ref=e1443]: dev
+              - cell [ref=e1444]
+              - cell "Running" [ref=e1448]:
+                - generic "Running" [ref=e1450]
+              - cell "2m / 500m 0%" [ref=e1451]:
+                - generic [ref=e1454]
+              - cell "35Mi / 500Mi 7%" [ref=e1461]:
+                - generic [ref=e1464]
+              - cell "0" [ref=e1471]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-k7ph" [ref=e1472]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-k7ph" [ref=e1474]
+              - cell "1d" [ref=e1475]:
+                - generic [ref=e1477]: 1d
+            - row "node-js-api-2-674b7556cc-zzm56 dev Running 0m / 1000m 0% 43Mi / 2.0Gi 2% 0 gke-nonprod-cluster--nonprod-cluster--16275362-8pvf 1d" [ref=e1478]:
+              - cell "node-js-api-2-674b7556cc-zzm56" [ref=e1479]:
+                - generic [ref=e1480]
+              - cell "dev" [ref=e1487]:
+                - generic [ref=e1489]: dev
+              - cell [ref=e1490]
+              - cell "Running" [ref=e1494]:
+                - generic "Running" [ref=e1496]
+              - cell "0m / 1000m 0%" [ref=e1497]:
+                - generic [ref=e1500]
+              - cell "43Mi / 2.0Gi 2%" [ref=e1506]:
+                - generic [ref=e1509]
+              - cell "0" [ref=e1516]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-8pvf" [ref=e1517]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-8pvf" [ref=e1519]
+              - cell "1d" [ref=e1520]:
+                - generic [ref=e1522]: 1d
+            - row "org-settings-6cfc9695f-7xwlw dev Running 2m / 500m 0% 78Mi / 1.0Gi 8% 0 gke-nonprod-cluster--nonprod-cluster--16275362-k7ph 1d" [ref=e1523]:
+              - cell "org-settings-6cfc9695f-7xwlw" [ref=e1524]:
+                - generic [ref=e1525]
+              - cell "dev" [ref=e1532]:
+                - generic [ref=e1534]: dev
+              - cell [ref=e1535]
+              - cell "Running" [ref=e1539]:
+                - generic "Running" [ref=e1541]
+              - cell "2m / 500m 0%" [ref=e1542]:
+                - generic [ref=e1545]
+              - cell "78Mi / 1.0Gi 8%" [ref=e1552]:
+                - generic [ref=e1555]
+              - cell "0" [ref=e1562]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-k7ph" [ref=e1563]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-k7ph" [ref=e1565]
+              - cell "1d" [ref=e1566]:
+                - generic [ref=e1568]: 1d
+            - row "skyhook-connector-85f64558bb-jsvdz dev Running 11m / 500m 2% 76Mi / 1000Mi 8% 0 gke-nonprod-cluster--nonprod-cluster--16275362-6roy 1d" [ref=e1569]:
+              - cell "skyhook-connector-85f64558bb-jsvdz" [ref=e1570]:
+                - generic [ref=e1571]
+              - cell "dev" [ref=e1578]:
+                - generic [ref=e1580]: dev
+              - cell [ref=e1581]
+              - cell "Running" [ref=e1585]:
+                - generic "Running" [ref=e1587]
+              - cell "11m / 500m 2%" [ref=e1588]:
+                - generic [ref=e1591]
+              - cell "76Mi / 1000Mi 8%" [ref=e1598]:
+                - generic [ref=e1601]
+              - cell "0" [ref=e1608]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-6roy" [ref=e1609]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-6roy" [ref=e1611]
+              - cell "1d" [ref=e1612]:
+                - generic [ref=e1614]: 1d
+            - row "vcs-6574bfcd4b-d9pft dev Running 3m / 1800m 0% 88Mi / 2.0Gi 4% 0 gke-nonprod-cluster--nonprod-cluster--16275362-fu9l 1d" [ref=e1615]:
+              - cell "vcs-6574bfcd4b-d9pft" [ref=e1616]:
+                - generic [ref=e1617]
+              - cell "dev" [ref=e1624]:
+                - generic [ref=e1626]: dev
+              - cell [ref=e1627]
+              - cell "Running" [ref=e1631]:
+                - generic "Running" [ref=e1633]
+              - cell "3m / 1800m 0%" [ref=e1634]:
+                - generic [ref=e1637]
+              - cell "88Mi / 2.0Gi 4%" [ref=e1644]:
+                - generic [ref=e1647]
+              - cell "0" [ref=e1654]
+              - cell "gke-nonprod-cluster--nonprod-cluster--16275362-fu9l" [ref=e1655]:
+                - button "gke-nonprod-cluster--nonprod-cluster--16275362-fu9l" [ref=e1657]
+              - cell "1d" [ref=e1658]:
+                - generic [ref=e1660]: 1d

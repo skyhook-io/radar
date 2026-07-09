@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug, Plus } from 'lucide-react'
+import { Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug, Plus, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
@@ -23,6 +23,8 @@ interface Config {
   timelineDbPath?: string
   historyLimit?: number
   prometheusUrl?: string
+  argoCdUrl?: string
+  argoCdInsecureTls?: boolean
   mcp?: boolean | null
 }
 
@@ -31,6 +33,10 @@ interface ConfigResponse {
   effective: Config
   isDesktop: boolean
   prometheusHeaderKeys?: string[]
+  // True when an Argo CD auth token is stored. The token itself is never
+  // returned — the card shows a "configured" placeholder and omits the token
+  // from the PUT unless the user changes or clears it.
+  argoCdTokenSet?: boolean
 }
 
 interface SettingsDialogProps {
@@ -278,6 +284,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
               isDesktop={isDesktop}
               deploymentMode={deploymentMode}
               prometheusHeaderKeys={configData?.prometheusHeaderKeys ?? []}
+              argoCdTokenSet={configData?.argoCdTokenSet ?? false}
               onChange={updateConfigField}
             />
           ) : (
@@ -375,6 +382,7 @@ function StartupConfigTab({
   isDesktop,
   deploymentMode,
   prometheusHeaderKeys,
+  argoCdTokenSet,
   onChange,
 }: {
   config: Config
@@ -382,6 +390,7 @@ function StartupConfigTab({
   isDesktop: boolean
   deploymentMode: DeploymentMode
   prometheusHeaderKeys: string[]
+  argoCdTokenSet: boolean
   onChange: <K extends keyof Config>(field: K, value: Config[K]) => void
 }) {
   const showBrowserLaunchControls = !isDesktop && deploymentMode === 'local'
@@ -497,6 +506,15 @@ function StartupConfigTab({
           configuredHeaderKeys={prometheusHeaderKeys}
           onChange={(v) => onChange('prometheusUrl', v || undefined)}
         />
+        <div className="border-t border-theme-border/60 pt-4">
+          <ArgoCDConfigField
+            url={config.argoCdUrl ?? ''}
+            insecureTls={config.argoCdInsecureTls ?? false}
+            tokenSet={argoCdTokenSet}
+            onChangeUrl={(v) => onChange('argoCdUrl', v || undefined)}
+            onChangeInsecureTls={(v) => onChange('argoCdInsecureTls', v || undefined)}
+          />
+        </div>
       </ConfigSection>
     </div>
   )
@@ -800,6 +818,190 @@ function PrometheusConfigField({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// -- Argo CD (live-appliable) -------------------------------------------------
+
+// The Argo CD integration powers the full Git-rendered desired-vs-live diff on
+// GitOps Application pages. Like Prometheus, it applies to the running server
+// without a restart: both actions PUT /integrations/argocd, which persists the
+// settings AND re-points the running client, then verifies reachability (the
+// server returns 400 distinguishing unreachable from an invalid token). The
+// URL + insecure-TLS flag are bound to the shared config so the global Save
+// persists them too; the token is write-only — never returned, and omitted
+// from the PUT unless the user types a new value or clicks Clear.
+type ArgoState =
+  | { status: 'idle' }
+  | { status: 'connecting' }
+  | { status: 'connected' }
+  | { status: 'error'; error: string }
+
+function ArgoCDConfigField({
+  url,
+  insecureTls,
+  tokenSet,
+  onChangeUrl,
+  onChangeInsecureTls,
+}: {
+  url: string
+  insecureTls: boolean
+  tokenSet: boolean
+  onChangeUrl: (value: string) => void
+  onChangeInsecureTls: (value: boolean) => void
+}) {
+  const [state, setState] = useState<ArgoState>({ status: 'idle' })
+  // Token editor three-way state: `touched` = user typed a value (replaces the
+  // stored token); `cleared` = user hit Clear (send "" to wipe it); neither =
+  // leave the stored token untouched (omit from the PUT).
+  const [token, setToken] = useState('')
+  const [tokenTouched, setTokenTouched] = useState(false)
+  const [tokenCleared, setTokenCleared] = useState(false)
+  // Optimistic "is a token stored" after a successful apply (config isn't
+  // refetched), so the placeholder reflects the new reality without a reopen.
+  const [tokenSetLocal, setTokenSetLocal] = useState<boolean | null>(null)
+  const effectiveTokenSet = tokenSetLocal ?? tokenSet
+
+  const clearStatus = () => setState((s) => (s.status === 'connecting' ? s : { status: 'idle' }))
+
+  // Drop a stale "Connected"/error line when the URL changes out from under us
+  // (footer Reset, external edit) so it doesn't describe an emptied field.
+  useEffect(() => {
+    setState((s) => (s.status === 'idle' || s.status === 'connecting' ? s : { status: 'idle' }))
+  }, [url])
+
+  const put = async (body: Record<string, unknown>, resultingTokenSet?: boolean) => {
+    setState({ status: 'connecting' })
+    try {
+      const res = await fetch(apiUrl('/integrations/argocd'), {
+        method: 'PUT',
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setState({ status: 'error', error: data?.error || res.statusText })
+        return
+      }
+      // Reset the token editor so the field reflects the now-stored token.
+      setToken('')
+      setTokenTouched(false)
+      setTokenCleared(false)
+      if (resultingTokenSet !== undefined) setTokenSetLocal(resultingTokenSet)
+      setState({ status: 'connected' })
+    } catch (err) {
+      setState({ status: 'error', error: String(err) })
+    }
+  }
+
+  const handleConnect = () => {
+    let argoCdToken: string | undefined
+    let resultingTokenSet = effectiveTokenSet
+    if (tokenCleared) {
+      argoCdToken = ''
+      resultingTokenSet = false
+    } else if (tokenTouched && token !== '') {
+      argoCdToken = token
+      resultingTokenSet = true
+    }
+    put(
+      {
+        argoCdUrl: url.trim(),
+        argoCdInsecureTls: insecureTls,
+        ...(argoCdToken !== undefined ? { argoCdToken } : {}),
+      },
+      resultingTokenSet,
+    )
+  }
+
+  const handleUseCliToken = () => {
+    put({ argoCdUrl: url.trim(), argoCdInsecureTls: insecureTls, useCliToken: true }, true)
+  }
+
+  const showConfiguredPlaceholder = effectiveTokenSet && !tokenTouched && !tokenCleared
+  const connecting = state.status === 'connecting'
+
+  return (
+    <div>
+      <label className="block text-sm font-medium text-theme-text-primary mb-1">Argo CD</label>
+      <p className="text-xs text-theme-text-tertiary mb-1">
+        Enables the full Git-rendered diff on GitOps Application pages.
+      </p>
+
+      <input
+        type="text"
+        value={url}
+        onChange={(e) => { onChangeUrl(e.target.value); clearStatus() }}
+        placeholder="auto-discover argocd-server"
+        className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+      />
+
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          type="password"
+          value={showConfiguredPlaceholder ? '' : token}
+          onChange={(e) => { setToken(e.target.value); setTokenTouched(true); setTokenCleared(false); clearStatus() }}
+          placeholder={showConfiguredPlaceholder ? '•••• configured' : 'Argo CD auth token'}
+          className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+        />
+        {effectiveTokenSet && !tokenCleared && (
+          <button
+            onClick={() => { setToken(''); setTokenTouched(false); setTokenCleared(true); clearStatus() }}
+            className="shrink-0 px-2.5 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {tokenCleared && (
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">Token will be cleared on save.</p>
+      )}
+
+      <label className="mt-2 flex items-center gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={insecureTls}
+          onChange={(e) => { onChangeInsecureTls(e.target.checked); clearStatus() }}
+          className="h-3.5 w-3.5 accent-skyhook-600"
+        />
+        <span className="text-xs text-theme-text-secondary">Skip TLS verification (self-signed Argo CD server)</span>
+      </label>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          onClick={handleConnect}
+          disabled={connecting}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
+        >
+          {connecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plug className="w-3.5 h-3.5" />}
+          Connect &amp; save
+        </button>
+        <Tooltip content="Use the token from your local `argocd login` session">
+          <button
+            onClick={handleUseCliToken}
+            disabled={connecting}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated border border-theme-border rounded-md transition-colors disabled:opacity-50"
+          >
+            <Terminal className="w-3.5 h-3.5" />
+            Use Argo CD CLI session
+          </button>
+        </Tooltip>
+      </div>
+
+      {state.status === 'connected' ? (
+        <p className="mt-2 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+          <Check className="w-3 h-3 shrink-0" />
+          Connected to Argo CD — applied, no restart needed
+        </p>
+      ) : state.status === 'error' ? (
+        <p className="mt-2 text-xs text-red-600 dark:text-red-400/80">{state.error}</p>
+      ) : (
+        <p className="mt-2 text-xs text-theme-text-tertiary">
+          Applies immediately — no restart needed. Leave the URL blank to auto-discover the in-cluster argocd-server.
+        </p>
+      )}
     </div>
   )
 }

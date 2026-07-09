@@ -87,6 +87,7 @@ const (
 	CategoryGitOpsOperationFailed Category = "gitops_operation_failed" // sync apply failed (operationState / Flux install/upgrade)
 	CategoryGitOpsOutOfSync       Category = "gitops_out_of_sync"      // live state drifted from desired
 	CategoryGitOpsHealthDegraded  Category = "gitops_health_degraded"  // managed resources unhealthy/missing
+	CategoryGitOpsStale           Category = "gitops_stale"            // sync/drift verdict frozen (controller down or re-compare backlog)
 	CategoryHelmReleaseFailed     Category = "helm_release_failed"
 	CategoryWebhookBackendDown    Category = "webhook_backend_down"
 	CategoryControlPlaneNotReady  Category = "control_plane_not_ready"
@@ -156,6 +157,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryGitOpsOperationFailed:    GroupControlPlane,
 	CategoryGitOpsOutOfSync:          GroupControlPlane,
 	CategoryGitOpsHealthDegraded:     GroupControlPlane,
+	CategoryGitOpsStale:              GroupControlPlane,
 	CategoryHelmReleaseFailed:        GroupControlPlane,
 	CategoryWebhookBackendDown:       GroupControlPlane,
 	CategoryControlPlaneNotReady:     GroupControlPlane,

@@ -36,6 +36,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/skyhook-io/radar/internal/ai"
+	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
@@ -171,6 +172,10 @@ func New(cfg Config) *Server {
 	// for mcpPermCache.
 	k8s.OnContextSwitch(func(_ string) {
 		s.finalizePostContextSwitch()
+		// Alongside the subsystem resets in PerformContextSwitch (prometheus,
+		// traffic, helm): the Argo CD connection references the previous
+		// cluster's endpoint/port-forward.
+		argocd.Reset()
 	})
 	// Cancel + stale AI investigations BEFORE the client repoints at the new
 	// cluster, so an in-flight agent (especially an apply) can't write to it.
@@ -504,6 +509,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/argo/applications/{namespace}/{name}/terminate", s.handleArgoTerminate)
 			r.Post("/argo/applications/{namespace}/{name}/suspend", s.handleArgoSuspend)
 			r.Post("/argo/applications/{namespace}/{name}/resume", s.handleArgoResume)
+			r.Get("/argo/applications/{namespace}/{name}/resource-diff", s.handleArgoResourceDiff)
 
 			// AI resource preview (minified output for MCP/debugging).
 			// Mounted as a sub-group so agent-log middleware applies only
@@ -567,6 +573,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/config", s.handleGetConfig)
 			r.Put("/config", s.handlePutConfig)
 			r.Put("/integrations/prometheus", s.handleApplyPrometheusURL)
+			r.Put("/integrations/argocd", s.handleApplyArgoCDConfig)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)
@@ -4144,6 +4151,8 @@ type configResponse struct {
 	// PrometheusHeaderKeys lists the configured Prometheus header names so the UI
 	// can show what's set without ever receiving the (secret) values.
 	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
+	// ArgoCDTokenSet tells the UI a token is configured without exposing it.
+	ArgoCDTokenSet bool `json:"argoCdTokenSet,omitempty"`
 }
 
 // handleGetConfig returns the on-disk config file alongside the effective startup config.
@@ -4157,14 +4166,18 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(headerKeys)
 	file.PrometheusHeaders = nil
+	tokenSet := file.ArgoCDToken != ""
+	file.ArgoCDToken = ""
 	resp := configResponse{
 		File:                 file,
 		IsDesktop:            version.IsDesktop(),
 		PrometheusHeaderKeys: headerKeys,
+		ArgoCDTokenSet:       tokenSet,
 	}
 	if s.effectiveConfig != nil {
 		effective := *s.effectiveConfig
 		effective.PrometheusHeaders = nil
+		effective.ArgoCDToken = ""
 		resp.Effective = effective
 	}
 	s.writeJSON(w, resp)
@@ -4172,8 +4185,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // handlePutConfig replaces the entire config file. Changes take effect on next restart.
 // Unlike handlePutSettings (which merges fields), this is a full replacement.
-// PrometheusHeaders are preserved from the on-disk file: the GET response redacts them,
-// so a UI round-trip would otherwise silently wipe the user's auth headers.
+// PrometheusHeaders and the Argo CD token are preserved from the on-disk file: the GET
+// response redacts them, so a UI round-trip would otherwise silently wipe the user's
+// credentials.
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
@@ -4184,9 +4198,19 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := config.Update(func(c *config.Config) {
-		preserved := c.PrometheusHeaders
+		preservedHeaders := c.PrometheusHeaders
+		preservedArgoToken := c.ArgoCDToken
+		prevArgoURL := c.ArgoCDURL
 		*c = updated
-		c.PrometheusHeaders = preserved
+		c.PrometheusHeaders = preservedHeaders
+		// The Argo token is redacted from GET /api/config, so a full-config PUT
+		// echoes it back empty; preserve the stored one. But NEVER carry it to a
+		// different Argo origin — that would stage the credential to be sent to a
+		// new host on next startup. On an origin change with no new token, drop it.
+		c.ArgoCDToken = preservedArgoToken
+		if !sameArgoOrigin(c.ArgoCDURL, prevArgoURL) {
+			c.ArgoCDToken = ""
+		}
 	})
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)
@@ -4194,6 +4218,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result.PrometheusHeaders = nil
+	result.ArgoCDToken = ""
 	s.writeJSON(w, result)
 }
 

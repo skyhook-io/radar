@@ -1,0 +1,309 @@
+- generic [ref=e3]:
+  - complementary "Primary navigation" [ref=e4]:
+    - button "Radar — go to home" [ref=e6] [cursor=pointer]:
+      - img [ref=e9]
+      - generic [ref=e10]:
+        - generic [ref=e11]: Radar
+        - generic [ref=e12]: by Skyhook
+    - navigation [ref=e13]:
+      - button "Home" [ref=e15] [cursor=pointer]:
+        - img [ref=e18]
+        - generic [ref=e21]: Home
+      - button "Resources" [ref=e23] [cursor=pointer]:
+        - img [ref=e26]
+        - generic [ref=e27]: Resources
+      - button "Issues" [ref=e29] [cursor=pointer]:
+        - img [ref=e32]
+        - generic [ref=e34]: Issues
+      - button "Topology" [ref=e36] [cursor=pointer]:
+        - img [ref=e39]
+        - generic [ref=e44]: Topology
+      - button "Applications" [ref=e46] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e59]: Applications
+      - button "Timeline" [ref=e61] [cursor=pointer]:
+        - img [ref=e64]
+        - generic [ref=e67]: Timeline
+      - button "Live Traffic" [ref=e69] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e74]: Live Traffic
+      - button "Helm" [ref=e76] [cursor=pointer]:
+        - img [ref=e79]
+        - generic [ref=e83]: Helm
+      - button "GitOps" [ref=e85] [cursor=pointer]:
+        - img [ref=e88]
+        - generic [ref=e92]: GitOps
+      - button "Checks" [ref=e94] [cursor=pointer]:
+        - img [ref=e97]
+        - generic [ref=e100]: Checks
+      - button "Cost" [ref=e102] [cursor=pointer]:
+        - img [ref=e105]
+        - generic [ref=e107]: Cost
+    - navigation [ref=e108]:
+      - button "Settings" [ref=e110] [cursor=pointer]:
+        - img [ref=e112]
+        - generic [ref=e115]: Settings
+    - button "Collapse navigation" [ref=e118] [cursor=pointer]:
+      - img [ref=e120]
+      - generic [ref=e123]: Collapse
+  - generic [ref=e124]:
+    - banner [ref=e125]:
+      - button "EKS cluster us-east-1-nonprod" [ref=e129] [cursor=pointer]:
+        - generic [ref=e131]:
+          - img "EKS cluster" [ref=e132]
+          - generic [ref=e134]: us-east-1-nonprod
+        - img [ref=e135]
+      - generic [ref=e142]:
+        - img [ref=e143]
+        - textbox "Search resources and commands" [ref=e146]:
+          - /placeholder: Search resources & commands…
+        - generic [ref=e147]:
+          - button "Search syntax help" [ref=e148] [cursor=pointer]:
+            - img [ref=e149]
+          - generic [ref=e152]: ⌘K
+      - generic [ref=e153]:
+        - button "Switch active namespaces" [ref=e193] [cursor=pointer]:
+          - img [ref=e194]
+          - generic [ref=e197]: All namespaces
+          - img [ref=e198]
+        - link "2,496" [ref=e200] [cursor=pointer]:
+          - /url: https://github.com/skyhook-io/radar
+          - img [ref=e157]
+          - img [ref=e159]
+          - generic [ref=e202]: 2,496
+        - button [ref=e162] [cursor=pointer]:
+          - img [ref=e163]
+        - button [ref=e168] [cursor=pointer]:
+          - img [ref=e169]
+        - button [ref=e172] [cursor=pointer]:
+          - img [ref=e173]
+        - button [ref=e177] [cursor=pointer]:
+          - img [ref=e178]
+    - generic [ref=e203]:
+      - generic [ref=e204]:
+        - generic [ref=e205]:
+          - generic [ref=e206]:
+            - img [ref=e207]
+            - heading "Issues" [level=1] [ref=e209]
+          - paragraph [ref=e210]: Live cluster problems — crashes, scheduling failures, bad references — grouped by the resource they affect.
+        - generic [ref=e211]:
+          - generic [ref=e212]:
+            - generic [ref=e213]: "35"
+            - generic [ref=e214]: issues
+          - button "23 Critical" [ref=e215] [cursor=pointer]:
+            - generic [ref=e216]: "23"
+            - generic [ref=e217]: Critical
+          - button "12 Warning" [ref=e218] [cursor=pointer]:
+            - generic [ref=e219]: "12"
+            - generic [ref=e220]: Warning
+      - list [ref=e221]:
+        - listitem [ref=e222]:
+          - button "PVC pending Storage Missing StorageClass — references StorageClass \"local-path\" which does not exist PersistentVolumeClaim chaos / data-ledger-0 since deploy Critical" [ref=e223] [cursor=pointer]:
+            - img [ref=e224]
+            - generic [ref=e226]
+            - time [ref=e235]
+            - generic [ref=e239]: Critical
+        - listitem [ref=e240]:
+          - button "PVC pending Storage Missing StorageClass — references StorageClass \"local-path\" which does not exist PersistentVolumeClaim chaos / chaos-scratch since deploy Critical" [ref=e241] [cursor=pointer]:
+            - img [ref=e242]
+            - generic [ref=e244]
+            - time [ref=e253]
+            - generic [ref=e257]: Critical
+        - listitem [ref=e258]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"validation.awscluster.infrastructure.cluster.x-k8s.io\" clientConfig.service references Service \"capa-webhook-service\" in namespace \"capa-system\" which does not exist ValidatingWebhookConfiguration capa-validating-webhook-configuration 78d Critical" [ref=e259] [cursor=pointer]:
+            - img [ref=e260]
+            - generic [ref=e262]
+            - time [ref=e271]
+            - generic [ref=e275]: Critical
+        - listitem [ref=e276]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"validation-scale.kubeadmcontrolplane.controlplane.cluster.x-k8s.io\" clientConfig.service references Service \"capi-kubeadm-control-plane-webhook-service\" in namespace \"capi-kubeadm-control-plane-system\" which does not exist ValidatingWebhookConfiguration capi-kubeadm-control-plane-validating-webhook-configuration 78d Critical" [ref=e277] [cursor=pointer]:
+            - img [ref=e278]
+            - generic [ref=e280]
+            - time [ref=e289]
+            - generic [ref=e293]: Critical
+        - listitem [ref=e294]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"default.kubeadmcontrolplane.controlplane.cluster.x-k8s.io\" clientConfig.service references Service \"capi-kubeadm-control-plane-webhook-service\" in namespace \"capi-kubeadm-control-plane-system\" which does not exist MutatingWebhookConfiguration capi-kubeadm-control-plane-mutating-webhook-configuration 78d Critical" [ref=e295] [cursor=pointer]:
+            - img [ref=e296]
+            - generic [ref=e298]
+            - time [ref=e307]
+            - generic [ref=e311]: Critical
+        - listitem [ref=e312]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"default.kubeadmconfigtemplate.bootstrap.cluster.x-k8s.io\" clientConfig.service references Service \"capi-kubeadm-bootstrap-webhook-service\" in namespace \"capi-kubeadm-bootstrap-system\" which does not exist MutatingWebhookConfiguration capi-kubeadm-bootstrap-mutating-webhook-configuration 78d Critical" [ref=e313] [cursor=pointer]:
+            - img [ref=e314]
+            - generic [ref=e316]
+            - time [ref=e325]
+            - generic [ref=e329]: Critical
+        - listitem [ref=e330]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"validation.kubeadmconfig.bootstrap.cluster.x-k8s.io\" clientConfig.service references Service \"capi-kubeadm-bootstrap-webhook-service\" in namespace \"capi-kubeadm-bootstrap-system\" which does not exist ValidatingWebhookConfiguration capi-kubeadm-bootstrap-validating-webhook-configuration 78d Critical" [ref=e331] [cursor=pointer]:
+            - img [ref=e332]
+            - generic [ref=e334]
+            - time [ref=e343]
+            - generic [ref=e347]: Critical
+        - listitem [ref=e348]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"default.cluster.cluster.x-k8s.io\" clientConfig.service references Service \"capi-webhook-service\" in namespace \"capi-system\" which does not exist MutatingWebhookConfiguration capi-mutating-webhook-configuration 78d Critical" [ref=e349] [cursor=pointer]:
+            - img [ref=e350]
+            - generic [ref=e352]
+            - time [ref=e361]
+            - generic [ref=e365]: Critical
+        - listitem [ref=e366]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"validation.cluster.cluster.x-k8s.io\" clientConfig.service references Service \"capi-webhook-service\" in namespace \"capi-system\" which does not exist ValidatingWebhookConfiguration capi-validating-webhook-configuration 78d Critical" [ref=e367] [cursor=pointer]:
+            - img [ref=e368]
+            - generic [ref=e370]
+            - time [ref=e379]
+            - generic [ref=e383]: Critical
+        - listitem [ref=e384]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"rev.validation.istio.io\" clientConfig.service references Service \"istiod\" in namespace \"istio-system\" which does not exist ValidatingWebhookConfiguration istio-validator-istio-system 125d Critical" [ref=e385] [cursor=pointer]:
+            - img [ref=e386]
+            - generic [ref=e388]
+            - time [ref=e397]
+            - generic [ref=e401]: Critical
+        - listitem [ref=e402]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"rev.namespace.sidecar-injector.istio.io\" clientConfig.service references Service \"istiod\" in namespace \"istio-system\" which does not exist MutatingWebhookConfiguration istio-sidecar-injector 125d Critical" [ref=e403] [cursor=pointer]:
+            - img [ref=e404]
+            - generic [ref=e406]
+            - time [ref=e415]
+            - generic [ref=e419]: Critical
+        - listitem [ref=e420]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"validation.istio.io\" clientConfig.service references Service \"istiod\" in namespace \"istio-system\" which does not exist ValidatingWebhookConfiguration istiod-default-validator 126d Critical" [ref=e421] [cursor=pointer]:
+            - img [ref=e422]
+            - generic [ref=e424]
+            - time [ref=e433]
+            - generic [ref=e437]: Critical
+        - listitem [ref=e438]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"webhook.cert-manager.io\" clientConfig.service references Service \"cert-manager-webhook\" in namespace \"cert-manager\" which does not exist ValidatingWebhookConfiguration cert-manager-webhook 131d Critical" [ref=e439] [cursor=pointer]:
+            - img [ref=e440]
+            - generic [ref=e442]
+            - time [ref=e451]
+            - generic [ref=e455]: Critical
+        - listitem [ref=e456]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"webhook.cert-manager.io\" clientConfig.service references Service \"cert-manager-webhook\" in namespace \"cert-manager\" which does not exist MutatingWebhookConfiguration cert-manager-webhook 131d Critical" [ref=e457] [cursor=pointer]:
+            - img [ref=e458]
+            - generic [ref=e460]
+            - time [ref=e469]
+            - generic [ref=e473]: Critical
+        - listitem [ref=e474]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"vscaledobject.kb.io\" clientConfig.service references Service \"keda-admission-webhooks\" in namespace \"keda\" which does not exist ValidatingWebhookConfiguration keda-admission 131d Critical" [ref=e475] [cursor=pointer]:
+            - img [ref=e476]
+            - generic [ref=e478]
+            - time [ref=e487]
+            - generic [ref=e491]: Critical
+        - listitem [ref=e492]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"validate.nginx.ingress.kubernetes.io\" clientConfig.service references Service \"ingress-nginx-controller-admission\" in namespace \"ingress-nginx\" which does not exist ValidatingWebhookConfiguration ingress-nginx-admission 375d Critical" [ref=e493] [cursor=pointer]:
+            - img [ref=e494]
+            - generic [ref=e496]
+            - time [ref=e505]
+            - generic [ref=e509]: Critical
+        - listitem [ref=e510]:
+          - 'button "API extension unavailable Control plane Available: ServiceNotFound — service/keda-operator-metrics-apiserver in \"keda\" is not present APIService v1beta1.external.metrics.k8s.io 77d Critical" [ref=e511] [cursor=pointer]':
+            - img [ref=e512]
+            - generic [ref=e514]
+            - time [ref=e523]
+            - generic [ref=e527]: Critical
+        - listitem [ref=e528]:
+          - 'button "Stuck terminating Control plane Namespace terminating stuck — NamespaceDeletionDiscoveryFailure: DiscoveryFailed - Discovery failed for some groups, 1 failing: unable to retrieve the complete list of server APIs: external.metrics.k8s.io/v1beta1: stale GroupVersion discovery: external.metrics.k8s.io/v1beta1 Namespace radar-pr605-test 57d Critical" [ref=e529] [cursor=pointer]':
+            - img [ref=e530]
+            - generic [ref=e532]
+            - time [ref=e541]
+            - generic [ref=e545]: Critical
+        - listitem [ref=e546]:
+          - button "OOM killed Runtime CrashLoopBackOff — back-off 5m0s restarting failed container=hog pod=oom-killer-678ffb5c5f-mglc5_chaos(08b43a35-66d9-420a-a9d9-795ba51dd85f) Deployment chaos / oom-killer 1 pod 57d Critical" [ref=e547] [cursor=pointer]:
+            - img [ref=e548]
+            - generic [ref=e550]
+            - time [ref=e561]
+            - generic [ref=e565]: Critical
+        - listitem [ref=e566]:
+          - button "Crash loop Runtime CrashLoopBackOff — back-off 5m0s restarting failed container=app pod=bad-config-5cbff4b845-lqs2x_chaos(503374fb-cbbb-430b-afde-490d0dde152d) Deployment chaos / bad-config 2 pods 57d Critical" [ref=e567] [cursor=pointer]:
+            - img [ref=e568]
+            - generic [ref=e570]
+            - time [ref=e581]
+            - generic [ref=e585]: Critical
+        - listitem [ref=e586]:
+          - 'button "Image pull failed Startup ImagePullBackOff — Not authorized to pull image: ghcr.io/skyhook-io/this-image-does-not-exist:v1.0.0 Deployment chaos / missing-image 1 pod since deploy Critical" [ref=e587] [cursor=pointer]':
+            - img [ref=e588]
+            - generic [ref=e590]
+            - time [ref=e601]
+            - generic [ref=e605]: Critical
+        - listitem [ref=e606]:
+          - 'button "Helm release failed Control plane HelmUpgradeFailed — Upgrade failed at rev 2. Upgrade \"karpenter\" failed: resource Deployment/kube-system/karpenter not ready. status: InProgress, message: Available: 0/1 context deadline exceeded HelmRelease kube-system / karpenter 118d Critical" [ref=e607] [cursor=pointer]':
+            - img [ref=e608]
+            - generic [ref=e610]
+            - time [ref=e619]
+            - generic [ref=e623]: Critical
+        - listitem [ref=e624]:
+          - button [ref=e625] [cursor=pointer]:
+            - img [ref=e626]
+            - generic [ref=e628]
+            - time [ref=e637]
+            - generic [ref=e641]: Critical
+        - listitem [ref=e642]:
+          - button "Missing reference Configuration Missing scaleTargetRef — spec.scaleTargetRef references Deployment \"test-app\" which does not exist ScaledObject keda-test / test-scaledobject 130d Warning" [ref=e643] [cursor=pointer]:
+            - img [ref=e644]
+            - generic [ref=e646]
+            - time [ref=e655]
+            - generic [ref=e659]: Warning
+        - listitem [ref=e660]:
+          - button "Missing reference Configuration Missing scaleTargetRef — spec.scaleTargetRef references Deployment \"notification-service\" which does not exist ScaledObject keda-demo / notification-scaler 131d Warning" [ref=e661] [cursor=pointer]:
+            - img [ref=e662]
+            - generic [ref=e664]
+            - time [ref=e673]
+            - generic [ref=e677]: Warning
+        - listitem [ref=e678]:
+          - button "Missing reference Configuration Missing scaleTargetRef — spec.scaleTargetRef references Deployment \"order-processor\" which does not exist ScaledObject keda-demo / order-processor-scaler 131d Warning" [ref=e679] [cursor=pointer]:
+            - img [ref=e680]
+            - generic [ref=e682]
+            - time [ref=e691]
+            - generic [ref=e695]: Warning
+        - listitem [ref=e696]:
+          - 'button "Autoscaling limited Scaling Ready: ScaledJobCheckFailed — Failed to ensure ScaledJob is correctly created ScaledJob keda-demo / batch-email-sender 28s Warning" [ref=e858] [cursor=pointer]':
+            - img [ref=e698]
+            - generic [ref=e700]
+            - time [ref=e709]
+            - generic [ref=e713]: Warning
+        - listitem [ref=e714]:
+          - 'button "Node provisioning failed Control plane Ready: UnhealthyDependents — ValidationSucceeded=False, SecurityGroupsReady=False, SubnetsReady=False, InstanceProfileReady=Unknown EC2NodeClass gpu-optimized 118d Warning" [ref=e715] [cursor=pointer]':
+            - img [ref=e716]
+            - generic [ref=e718]
+            - time [ref=e727]
+            - generic [ref=e731]: Warning
+        - listitem [ref=e732]:
+          - 'button "Node provisioning failed Control plane Ready: UnhealthyDependents — Registered=False NodeClaim general-purpose-def34 118d Warning" [ref=e733] [cursor=pointer]':
+            - img [ref=e734]
+            - generic [ref=e736]
+            - time [ref=e745]
+            - generic [ref=e749]: Warning
+        - listitem [ref=e750]:
+          - 'button "Node provisioning failed Control plane Ready: UnhealthyDependents — NodeClassReady=False NodePool gpu-workloads 118d Warning" [ref=e751] [cursor=pointer]':
+            - img [ref=e752]
+            - generic [ref=e754]
+            - time [ref=e763]
+            - generic [ref=e767]: Warning
+        - listitem [ref=e768]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=ledger Service chaos / ledger 57d Warning" [ref=e769] [cursor=pointer]':
+            - img [ref=e770]
+            - generic [ref=e772]
+            - time [ref=e781]
+            - generic [ref=e785]: Warning
+        - listitem [ref=e786]:
+          - button "Missing reference Configuration Missing referenced Service — Env SHOPPING_ASSISTANT_SERVICE_ADDR in container server points to shoppingassistantservice:80, but Service/shoppingassistantservice does not exist in namespace online-boutique. Deployment online-boutique / frontend 57d Warning" [ref=e787] [cursor=pointer]:
+            - img [ref=e788]
+            - generic [ref=e790]
+            - time [ref=e799]
+            - generic [ref=e803]: Warning
+        - listitem [ref=e804]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: component=kube-controller-manager Service kube-system / kube-prometheus-stack-kube-controller-manager 126d Warning" [ref=e805] [cursor=pointer]':
+            - img [ref=e806]
+            - generic [ref=e808]
+            - time [ref=e817]
+            - generic [ref=e821]: Warning
+        - listitem [ref=e822]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: component=etcd Service kube-system / kube-prometheus-stack-kube-etcd 126d Warning" [ref=e823] [cursor=pointer]':
+            - img [ref=e824]
+            - generic [ref=e826]
+            - time [ref=e835]
+            - generic [ref=e839]: Warning
+        - listitem [ref=e840]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: component=kube-scheduler Service kube-system / kube-prometheus-stack-kube-scheduler 126d Warning" [ref=e841] [cursor=pointer]':
+            - img [ref=e842]
+            - generic [ref=e844]
+            - time [ref=e853]
+            - generic [ref=e857]: Warning

@@ -1,0 +1,140 @@
+package argoapi
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+const cliConfigFixture = `contexts:
+- name: prod
+  server: argocd.example.com
+  user: prod
+- name: local
+  server: localhost:8080
+  user: local
+current-context: local
+servers:
+- server: argocd.example.com
+  grpc-web: true
+- server: localhost:8080
+  insecure: true
+  plain-text: true
+users:
+- name: prod
+  auth-token: prod-token
+  refresh-token: prod-refresh
+- name: local
+  auth-token: local-token
+`
+
+func writeFixture(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestTokenFromCLIConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		config    string
+		serverURL string
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:      "match by bare host",
+			config:    cliConfigFixture,
+			serverURL: "argocd.example.com",
+			want:      "prod-token",
+		},
+		{
+			name:      "match tolerates scheme on serverURL",
+			config:    cliConfigFixture,
+			serverURL: "https://argocd.example.com",
+			want:      "prod-token",
+		},
+		{
+			name:      "match tolerates trailing path",
+			config:    cliConfigFixture,
+			serverURL: "https://argocd.example.com/",
+			want:      "prod-token",
+		},
+		{
+			name:      "match by host with port picks the right context",
+			config:    cliConfigFixture,
+			serverURL: "http://localhost:8080",
+			want:      "local-token",
+		},
+		{
+			name:      "empty serverURL falls back to current-context",
+			config:    cliConfigFixture,
+			serverURL: "",
+			want:      "local-token",
+		},
+		{
+			name:      "unknown server errors",
+			config:    cliConfigFixture,
+			serverURL: "https://other.example.com",
+			wantErr:   true,
+		},
+		{
+			name: "missing user errors",
+			config: `contexts:
+- name: prod
+  server: argocd.example.com
+  user: ghost
+current-context: prod
+users: []
+`,
+			serverURL: "argocd.example.com",
+			wantErr:   true,
+		},
+		{
+			name: "user without auth-token errors",
+			config: `contexts:
+- name: prod
+  server: argocd.example.com
+  user: prod
+users:
+- name: prod
+`,
+			serverURL: "argocd.example.com",
+			wantErr:   true,
+		},
+		{
+			name:      "empty serverURL without current-context errors",
+			config:    "contexts: []\nusers: []\n",
+			serverURL: "",
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeFixture(t, tt.config)
+			got, err := TokenFromCLIConfig(path, tt.serverURL)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got token %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("TokenFromCLIConfig: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("token = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTokenFromCLIConfigMissingFile(t *testing.T) {
+	if _, err := TokenFromCLIConfig(filepath.Join(t.TempDir(), "nope"), "argocd.example.com"); err == nil {
+		t.Fatal("expected error for missing config file")
+	}
+}

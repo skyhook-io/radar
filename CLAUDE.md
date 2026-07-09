@@ -134,6 +134,7 @@ Use `/visual-test` command for the full workflow (cluster check, Playwright MCP,
 - Helm: `/api/helm/releases/...`
 - Workloads: `/api/workloads/{kind}/{ns}/{name}/...` (logs, restart, scale, rollback)
 - GitOps controller actions: `/api/argo/applications/...` (sync, refresh, terminate, suspend, resume, rollback, selective-sync), `/api/flux/{kind}/...` (reconcile, suspend, resume, sync-with-source)
+- Argo CD API integration: `PUT /api/integrations/argocd` (URL/token, probe-before-persist, token preserved across GET-redaction round-trips); `/api/argo/applications/{ns}/{name}/resource-diff` (Git-rendered desired vs live via argocd-server managed-resources; dual RBAC gate + structural Secret redaction; see docs/gitops.md)
 - GitOps detail data: `/api/gitops/tree/{kind}/{ns}/{name}` (resource tree + ownership edges), `/api/gitops/insights/{kind}/{ns}/{name}` (curated diagnosis: summary + issues + drift + events + plan + history + capabilities)
 - Nodes: `/api/nodes/{name}/...` (cordon, uncordon, drain, debug)
 - Audit: `/api/audit`, `/api/audit/resource/{kind}/{ns}/{name}`, `/api/settings/audit` (GET/PUT)

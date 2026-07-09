@@ -111,6 +111,10 @@ type ResourceChange = k8score.ResourceChange
 type ResourceCache struct {
 	*k8score.ResourceCache
 	secretsEnabled bool // Whether secrets informer is running (requires RBAC)
+	// argoDrift tracks how long each manual-sync ArgoCD Application has been
+	// continuously OutOfSync. Lives here so its lifecycle is the cache's:
+	// recreated per cluster, dropped on a kubeconfig context switch.
+	argoDrift *argoDriftTracker
 }
 
 var (
@@ -212,6 +216,7 @@ func InitResourceCache(ctx context.Context) error {
 		resourceCache = &ResourceCache{
 			ResourceCache:  core,
 			secretsEnabled: scopes["secrets"].Enabled,
+			argoDrift:      newArgoDriftTracker(),
 		}
 	})
 	return initErr

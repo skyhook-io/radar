@@ -4,3 +4,4 @@ export {
   GitOpsIssuesBand,
   GitOpsStatusStrip,
 } from './GitOpsInsightViews'
+export { ArgoResourceDiff } from './ArgoResourceDiff'

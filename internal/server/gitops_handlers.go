@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -179,6 +180,15 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	insight := gitopsinsights.Build(root, tree, resolver)
 	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
 	insight = s.filterGitOpsInsightForUser(r, req, insight)
+	// The resource-diff endpoint pulls desired-vs-live manifests from the Argo
+	// CD API server, so it's only offered for Argo roots when that integration
+	// is connected. Build can't decide this — it has no view of integration
+	// connectivity — so the flag is set here.
+	if insight.Summary.Tool == "argocd" {
+		if _, ok := argocd.Get(); ok {
+			insight.Capabilities.ArgoDiffAvailable = true
+		}
+	}
 	s.writeJSON(w, insight)
 }
 

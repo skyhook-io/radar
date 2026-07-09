@@ -99,6 +99,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   gitops_operation_failed: 'GitOps operation failed',
   gitops_out_of_sync: 'GitOps out of sync',
   gitops_health_degraded: 'GitOps health degraded',
+  gitops_stale: 'GitOps comparisons stale',
   helm_release_failed: 'Helm release failed',
   webhook_backend_down: 'Webhook backend down',
   control_plane_not_ready: 'Control plane not ready',

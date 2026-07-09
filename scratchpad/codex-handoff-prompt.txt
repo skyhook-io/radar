@@ -1,0 +1,207 @@
+=== HANDOFF: Radar audit fix program (Linear SKY-1090) — autonomous build ===
+
+YOU ARE: Codex, running unsupervised for the next few hours. The human (Nadav,
+founder/CEO of Skyhook) is away and will do the FINAL review when he returns. Your
+job is to take the whole fix program from "filed in Linear" to "implemented,
+reviewed, tested, vetted, PRs open, ready for his final review" — across as many of
+the work items as you can, in parallel where safe.
+
+────────────────────────────────────────────────────────────────────────────
+1. WHERE EVERYTHING IS
+────────────────────────────────────────────────────────────────────────────
+- Repo: KoalaOps/radar (the "radar" repo). Primary checkout:
+  /Users/nadaverell/workspace/sky/ws6/radar  (a second checkout exists at
+  /Users/nadaverell/sky/ws6/radar). Branch base for ALL work: origin/main.
+- Linear: team Skyhook (SKY), project "Radar Cloud Revamp - June 2026".
+  Parent/umbrella issue: SKY-1090 — READ IT FIRST. It holds the shared ground
+  rules, the issue-model recap, the resolved scope decisions, the sequence, and
+  the "verify-only" + "highlights/don't-regress" lists. Every child sub-issue
+  restates its own full spec, so each stands alone.
+- Children (all parented to SKY-1090):
+    SKY-1091  PR-2 Detector precision (webhook failurePolicy, kindnet, scheduler,
+              volume-conflict)               [High] — HIGHEST real-cluster value
+    SKY-1092  PR-1 Frontend polish (role badge, PVC note, CRD names, a11y) [Low]
+    SKY-1093  PR-3 Remediation copy order    [Med]
+    SKY-1094  PR-4 Diagnosis copy: Argo+Helm [Med]
+    SKY-1095  PR-5 Connection-error auth-masked-as-timeout + auto-recover [Med]
+    SKY-1096  PR-6 Metrics absent-handling   [Low]
+    SKY-1097  Chronic-vs-acute issue triage  [High] — feature, needs its own plan-loop
+    SKY-1098  HPA per-condition-shape diagnosis [Med]
+    SKY-1099  DaemonSet downgrade-only-when-by-design [Med]
+    SKY-1100  Audit "Unused ConfigMap/Secret" precision [Med]
+    SKY-1101  Checks vs Issues ownership/dedup [Low] — decision
+    SKY-1102  Webhook guardrail exception     [Low] — decision (gates a special-case on SKY-1091)
+    SKY-1103  Renderer AlertBanners host-signal [Low] — abstraction decision
+- Extra detail (primary checkout only, untracked): AUDIT-FIX-HANDOFF.md and
+  AUDIT-FINDINGS.md (37-row finding table with cluster/resource/URL/fix-area), plus
+  23 audit screenshots under .playwright-mcp/vt-audit/. Linear is the source of
+  truth; these are supplementary. Note: a fresh git worktree will NOT contain these
+  untracked files — read them from the primary checkout if you need them.
+
+────────────────────────────────────────────────────────────────────────────
+2. HARD RULES (you are unsupervised — these are non-negotiable)
+────────────────────────────────────────────────────────────────────────────
+- NEVER merge, NEVER push to main, NEVER deploy. Open PRs only; the human merges.
+- DO NOT TOUCH PR #1057 (open + converged, incident_parent per-resource pointer).
+  origin/main already contains #1056.
+- Commits & PR bodies: NO "Co-Authored-By" lines, NO "Generated with Claude/Codex"
+  attribution. Code comments: NO ticket/PR/bug references (no "SKY-1091", "fixes
+  #15", "Bugbot caught…") — that rots; the WHY goes in the PR description.
+- Push only with --force-with-lease, never plain --force. Never resolve merge
+  conflicts automatically — stop and leave a note.
+- Stage only files relevant to each PR (git add <specific paths>); never `git add .`;
+  preserve unrelated untracked files (incl. the AUDIT-*.md docs).
+- radar is a PUBLIC, open-source repo. Any screenshot you attach to a PR must use
+  synthetic/demo data (the kind gitops-demo cluster), never real customer names.
+- Before writing a new helper, grep for an existing one (utils/, packages/*/src/
+  utils, packages/*/src/components, existing tests). Reuse beats reinvent.
+- Build pipeline: ALWAYS `make build` (frontend → embed → binary). `cd web && npm
+  run build` then `go build` serves STALE assets (skips the embed step). For quick
+  loops: `make restart-fe`, `make tsc`, `make test`. DO NOT run `npm run lint` (broken).
+- API/openapi changes (unlikely here) require regeneration — see repo CLAUDE.md.
+
+────────────────────────────────────────────────────────────────────────────
+3. THE PER-ITEM CYCLE — run a full autodev cycle on EACH item
+────────────────────────────────────────────────────────────────────────────
+For every work item, do not just code it. Run the full loop:
+
+  a) RE-VALIDATE FIRST. Do not trust the ticket blindly. Open the cited files at the
+     cited line anchors and confirm the problem still exists and the anchor is still
+     accurate (the code moves). If a finding is stale, already fixed, or the anchor
+     is wrong, say so in the Linear issue and adjust — don't implement a phantom fix.
+  b) RE-PLAN. Run your plan-loop on the item: challenge the approach, confirm it's
+     the right fix and right altitude (is this the right thing to build, not just
+     "can I make the cited change"). For the bigger items (SKY-1091, 1095, 1097,
+     1098, 1099, 1100) this matters most. Keep trivial items light.
+  c) IMPLEMENT per the (re-validated) plan. Add unit tests for every backend change
+     (Go: internal/k8s, internal/issues — table tests in the style already there).
+  d) REVIEW LOOP — cross-model. YOU ARE CODEX, so your cross-review must be done by
+     CLAUDE (the inverse of the usual setup). Run your review-loop: self-review +
+     /simple (dead-weight) + cross-review with Claude. Triage every finding
+     skeptically — never auto-accept, cite evidence on skips, don't ping-pong.
+     Review at altitude first (right thing / right design), then line-level.
+  e) QA. `make tsc` + `make test` (or the focused subset). For UI changes, see §5.
+  f) PR. Open one PR per item with /pr discipline: title conveys real scope; body =
+     why+impact, then the substantive design, then testing (commands + visual-test
+     status), then tradeoffs/follow-ups. No review-journey trivia in the body. Link
+     the PR to its Linear issue (use the issue's git branch name from Linear, e.g.
+     `nadav/sky-1091-…`, so Linear auto-links — or reference SKY-#### in the PR body).
+  g) CONVERGE. Run your fix-pr-loop: wait for CI + Cursor Bugbot/CodeRabbit/other
+     bots, triage skeptically, fix the real ones, push, repeat until settled or
+     capped. Don't block forever on slow scanners (e.g. CodeQL > ~5 min → proceed,
+     note it).
+  h) UPDATE LINEAR. Move the issue to In Progress when you start and In Review (or
+     your equivalent) when the PR is up; post a short comment with the PR link and
+     any decisions/assumptions you made.
+
+────────────────────────────────────────────────────────────────────────────
+4. WHAT "BUILD ALL" MEANS — tiering (be honest, don't guess product calls)
+────────────────────────────────────────────────────────────────────────────
+TIER 1 — BUILD FULLY, one PR each (these are bounded engineering, ready to go):
+  SKY-1091, SKY-1092, SKY-1093, SKY-1094, SKY-1095, SKY-1096.
+  Notes:
+  - SKY-1091 is the highest-value item and has an implementation gotcha (multi-
+    webhook worst-severity aggregation) and a relocation (kindnet is in
+    detect_config.go, NOT detect_missing_refs.go; "kind-control-plane:6443" IS
+    service-name-shaped so suppress by node-host match, not by shape). Read the
+    ticket carefully.
+  - SKY-1095 (connection-error) is a behavior change and hard to live-verify without
+    forcing an AWS SSO expiry — rely on unit tests for ClassifyError + a clear
+    description of the manual verification steps; do not fake it as "verified live."
+
+TIER 2 — BUILD FULLY, but plan-loop carefully first (bounded, yet design-sensitive):
+  SKY-1098 (HPA per-shape diagnosis — design the message-shape matrix from real
+  FailedGetResourceMetric/ContainerResource/External reasons; reuse the missing-
+  request distinction already in internal/issues/diagnostic_context.go from #1047),
+  SKY-1099 (DaemonSet — design the "by-design vs real coverage gap" predicate before
+  coding; heavy on tests; do NOT blanket-downgrade), SKY-1100 (audit "unused"
+  precision — account for projected-volume/envFrom/CSI/controller consumption edges
+  and/or collapse-by-default).
+
+TIER 3 — DO NOT GUESS PRODUCT DIRECTION. These were filed as tickets (not PRs)
+because they need a human product/architecture decision. For each: run the full
+plan-loop + product-review + Claude cross-review, then POST A SETTLED, DECISION-READY
+RECOMMENDATION to the Linear issue (options, your recommended option, why, and the
+exact decision the human needs to make). Build a low-risk PROTOTYPE branch/PR ONLY
+where it clarifies the choice, and mark it explicitly "PROPOSAL — product call still
+open, do not merge as-is." Items: SKY-1097 (chronic-vs-acute — biggest one; this is
+a feature needing its own plan-loop, so deliver the plan + recommendation, not a
+guessed full build), SKY-1101 (checks-vs-issues ownership), SKY-1102 (webhook
+guardrail exception — note it gates a special-case ON TOP of SKY-1091's generic
+rule, which ships regardless), SKY-1103 (renderer host-signal abstraction).
+
+If you finish Tier 1+2 with time to spare and a Tier-3 recommendation is clearly
+non-controversial, you may implement it behind the most defensible default and flag
+it loudly — but never present a guessed product decision as settled.
+
+────────────────────────────────────────────────────────────────────────────
+5. VISUAL-TEST & PRODUCT-REVIEW — where needed (don't over- or under-do it)
+────────────────────────────────────────────────────────────────────────────
+- VISUAL-TEST (use the repo's /visual-test workflow, Playwright MCP):
+  * SKY-1092 (PVC drawer must no longer contradict the critical issue; CRD sidebar
+    labels; role badge gone) — YES.
+  * SKY-1096 (Node + Pod drawers → 0 console errors, graceful "no metrics" state on
+    a cluster WITHOUT metrics-server) — YES; the kind gitops-demo cluster has no
+    metrics-server, use it.
+  * SKY-1091/1093/1094 (backend copy/severity) surface in the UI but are better
+    pinned by unit tests; a quick capture is optional, not required.
+  * Backend-only logic / Go-only / type-only → SKIP visual-test (say so explicitly).
+  For a realistic cluster with variety, run `make gitops-demo` then
+  `kubectl config use-context kind-radar-gitops-demo` before visual-testing.
+  Set the Playwright viewport to 1920x1080 first. Screenshots → .playwright-mcp/.
+- PRODUCT-REVIEW (use /product-review or the equivalent critique):
+  * SKY-1092 (PVC copy + role-badge comprehension for a non-k8s-expert operator) —
+    light pass.
+  * All TIER 3 decision tickets — product-review is CENTRAL there (premise,
+    journeys, UX shape). SKY-1097 especially.
+  * Pure backend precision/copy (1091/1093/1094/1098/1099/1100) — not needed.
+
+────────────────────────────────────────────────────────────────────────────
+6. PARALLELISM — use it, but serialize the shared resources
+────────────────────────────────────────────────────────────────────────────
+- The PRs are independent and all branch off origin/main, so parallelize the CODING:
+  use `git worktree add` to give each item its own working dir + branch (or use the
+  second checkout at /Users/nadaverell/sky/ws6/radar as a second lane). Building/
+  testing several backend PRs concurrently is fine.
+- SERIALIZE anything that touches shared global state:
+  * kubectl context + the kind demo cluster: do NOT run two kind/demo clusters at
+    once (two kind control planes on one Docker daemon can deadlock). Do the
+    visual-test items one at a time against the single demo cluster.
+  * Dev server ports (9280/9273) and the visual-test launcher pick a port; don't run
+    two visual-test sessions simultaneously.
+  * `make build` writes into the same embed dir — per-worktree builds are fine since
+    each worktree has its own tree, but don't run two builds in the SAME checkout at
+    once.
+- Real customer clusters (GCP/AWS nonprod) may have expired auth and you can't
+  re-auth while the human is away. Do NOT block on them. Rely on unit tests + the
+  kind demo cluster; where a live-verify against a real cluster was the ideal, note
+  it as "deferred to human — needs cluster auth" in the PR/issue.
+
+────────────────────────────────────────────────────────────────────────────
+7. WHEN BLOCKED
+────────────────────────────────────────────────────────────────────────────
+- Genuine product/UX/architecture decision (the Tier-3 spirit, or one surfaces
+  mid-build): do NOT guess. Post the question + your recommendation to the Linear
+  issue, leave the code in the best safe state, and move on to the next item. Keep
+  momentum — a parked decision must not stall the other 12 items.
+- A finding turns out stale/wrong on re-validation: record that in Linear, skip the
+  phantom fix, move on.
+- The same review finding survives two fix attempts, or CI is wedged: stop on THAT
+  item, summarize the blocker in the issue, continue with the rest.
+
+────────────────────────────────────────────────────────────────────────────
+8. WHAT I EXPECT WHEN I'M BACK
+────────────────────────────────────────────────────────────────────────────
+- Tier 1 + Tier 2 (9 items): each implemented, unit-tested, tsc+test green,
+  cross-reviewed with Claude and triaged, visual-tested where §5 says, PR open and
+  CI/bot-converged, Linear issue updated with the PR link.
+- Tier 3 (4 items): a settled, decision-ready recommendation posted to each Linear
+  issue (+ prototype PRs only where flagged "needs product sign-off").
+- A single summary comment on the PARENT issue SKY-1090: a table of all 13 items
+  with status (PR # / link, checks state, review verdict, visual-test ran/skipped+why,
+  product-review verdict where run), every assumption or product call you made and
+  why, and anything still open for my decision. Make it scannable — I want to triage
+  the whole program in one read, then do final reviews and merges myself.
+
+Start by reading SKY-1090 and SKY-1091 in full, re-validating SKY-1091's anchors,
+and kicking off the highest-value item first. Then fan out. Go.

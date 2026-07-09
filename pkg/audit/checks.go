@@ -143,6 +143,12 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// operators see the same "long enough to flag" semantics across surfaces.
 	findings = append(findings, checkCrossplaneStuck(tr, input)...)
 
+	// --- GitOps coverage: workloads not tracked by a GitOps controller ---
+	// Self-gates on input.GitOpsToolsPresent; a no-GitOps cluster records
+	// nothing, so the check is absent from CheckCounts rather than reported as a
+	// missing input (the gate is "not applicable here", not "couldn't list").
+	findings = append(findings, checkGitOpsCoverage(tr, input)...)
+
 	return buildResults(findings, tr, missingInputs)
 }
 

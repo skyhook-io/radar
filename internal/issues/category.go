@@ -137,6 +137,14 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	if in.Reason == "Terminating stuck" || in.Reason == "Namespace terminating stuck" {
 		return issuesapi.CategoryTerminationStuck
 	}
+	// GitOps controller-staleness reasons are emitted on the controller workload
+	// subject (StatefulSet/Deployment/Pod) as well as per-Application, so they
+	// must be classified by reason before the kind switch below routes a
+	// StatefulSet subject into workload_degraded.
+	switch in.Reason {
+	case "GitOpsControllerStalled", "GitOpsComparisonsStale", "ComparisonStale":
+		return issuesapi.CategoryGitOpsStale
+	}
 	switch in.Reason {
 	case "CoreDNS NXDOMAIN override", "CoreDNS service DNS rewrite":
 		return issuesapi.CategoryDNSFailure
@@ -317,8 +325,10 @@ func classifyGitOpsReason(reason string, fallback issuesapi.Category) issuesapi.
 		return issuesapi.CategoryGitOpsSpecInvalid
 	case "OperationFailed", "SyncError", "StuckDriftLoop":
 		return issuesapi.CategoryGitOpsOperationFailed
-	case "OutOfSync":
+	case "OutOfSync", "OutOfSyncManual":
 		return issuesapi.CategoryGitOpsOutOfSync
+	case "GitOpsControllerStalled", "GitOpsComparisonsStale", "ComparisonStale":
+		return issuesapi.CategoryGitOpsStale
 	// Flux: couldn't fetch/build the source or render manifests.
 	case "BuildFailed", "ArtifactFailed", "ArtifactFetchFailed", "SourceNotReady", "GitOperationFailed", "ChartNotReady", "ChartPullFailed", "ChartPullError":
 		return issuesapi.CategoryGitOpsRenderFailed

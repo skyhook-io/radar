@@ -31,6 +31,8 @@ import type {
   ArtifactHubChartDetail,
   GitOpsResourceTree,
   GitOpsInsight,
+  GitOpsInsightRef,
+  GitOpsResourceDiff,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath } from './config'
@@ -1047,6 +1049,27 @@ export function useGitOpsInsights(kind: string, namespace: string, name: string,
       const phase = query.state.data?.summary?.operationPhase
       return phase === 'Running' ? INSIGHTS_RUNNING_POLL_MS : false
     },
+  })
+}
+
+// Full Git-rendered desired-vs-live diff for one Argo CD managed resource.
+// ns/name identify the Application; the ref identifies the managed resource.
+// Fetched on demand — the caller mounts this only when the user opens "Full
+// diff", so it's enabled whenever the ref is resolvable. Errors surface via
+// fetchJSON's ApiError (server {"error"} string as .message).
+export function useArgoResourceDiff(appNamespace: string, appName: string, ref: GitOpsInsightRef) {
+  const ns = appNamespace || '_'
+  const params = new URLSearchParams()
+  if (ref.group) params.set('group', ref.group)
+  params.set('kind', ref.kind)
+  if (ref.namespace) params.set('resourceNamespace', ref.namespace)
+  params.set('resourceName', ref.name)
+
+  return useQuery<GitOpsResourceDiff>({
+    queryKey: ['argo-resource-diff', appNamespace, appName, ref.group, ref.kind, ref.namespace, ref.name],
+    queryFn: () => fetchJSON(`/argo/applications/${ns}/${appName}/resource-diff?${params.toString()}`),
+    enabled: Boolean(appName && ref.kind && ref.name),
+    staleTime: 15_000,
   })
 }
 

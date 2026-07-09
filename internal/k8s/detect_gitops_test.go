@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
@@ -224,7 +225,7 @@ func TestDetectArgoAppProblems_OperationFailedOutranksDegraded(t *testing.T) {
 			"operationState": map[string]any{"phase": "Failed", "message": `namespaces "demo-x" not found`},
 		},
 	}}
-	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, now)
+	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
 	if len(got) != 1 || got[0].Reason != "OperationFailed" {
 		t.Fatalf("a Failed operation must win over Degraded (honest category), got %+v", got)
 	}
@@ -245,7 +246,7 @@ func TestDetectArgoAppProblems_OperationFailedOutranksProgressing(t *testing.T) 
 			"operationState": map[string]any{"phase": "Failed", "message": `namespaces "demo-x" not found`},
 		},
 	}}
-	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, now)
+	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
 	if len(got) != 1 || got[0].Reason != "OperationFailed" {
 		t.Fatalf("a Failed operation must win over Progressing health, got %+v", got)
 	}
@@ -263,13 +264,13 @@ func TestDetectArgoAppProblems_EnabledFalseIsManual(t *testing.T) {
 		"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"enabled": false}}},
 		"status":   map[string]any{"health": map[string]any{"status": "Missing"}, "sync": map[string]any{"status": "OutOfSync"}},
 	}}
-	if got := detectArgoAppProblems([]*unstructured.Unstructured{disabled}, now); len(got) != 0 {
+	if got := detectArgoAppProblems([]*unstructured.Unstructured{disabled}, nil, now); len(got) != 0 {
 		t.Errorf("automated.enabled:false is manual — Missing/OutOfSync must NOT flag, got %+v", got)
 	}
 	// automated present without enabled (the common case) => automated => flags.
 	enabled := disabled.DeepCopy()
 	_ = unstructured.SetNestedMap(enabled.Object, map[string]any{}, "spec", "syncPolicy", "automated")
-	if got := detectArgoAppProblems([]*unstructured.Unstructured{enabled}, now); len(got) != 1 {
+	if got := detectArgoAppProblems([]*unstructured.Unstructured{enabled}, nil, now); len(got) != 1 {
 		t.Errorf("automated present (no enabled key) should flag Missing, got %+v", got)
 	}
 }
@@ -300,7 +301,7 @@ func TestDetectArgoAppProblems_OperationFailedParsesCause(t *testing.T) {
 			},
 		},
 	}}
-	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, now)
+	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
 	if len(got) != 1 {
 		t.Fatalf("want exactly 1 problem (operation failure supersedes SyncError), got %d: %+v", len(got), got)
 	}
@@ -342,7 +343,7 @@ func TestDetectArgoAppProblems_OperationFailedUsesOperationTimestamp(t *testing.
 		},
 	}}
 	app.SetCreationTimestamp(metav1.NewTime(now.Add(-365 * 24 * time.Hour)))
-	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, now)
+	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
 	if len(got) != 1 {
 		t.Fatalf("want one failed operation, got %+v", got)
 	}
@@ -370,7 +371,7 @@ func TestDetectArgoAppProblems_ErrorConditionUsesTransitionTimestamp(t *testing.
 		},
 	}}
 	app.SetCreationTimestamp(metav1.NewTime(now.Add(-365 * 24 * time.Hour)))
-	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, now)
+	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
 	if len(got) != 1 || got[0].Reason != "ComparisonError" {
 		t.Fatalf("want one ComparisonError, got %+v", got)
 	}
@@ -419,7 +420,7 @@ func TestDetectArgoAppProblems_StuckDriftLoop(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := detectArgoAppProblems([]*unstructured.Unstructured{mk(tc.phase, tc.reconciled)}, now)
+			got := detectArgoAppProblems([]*unstructured.Unstructured{mk(tc.phase, tc.reconciled)}, nil, now)
 			if len(got) != 1 || got[0].Reason != tc.wantReason {
 				t.Fatalf("want 1 %s, got %+v", tc.wantReason, got)
 			}
@@ -494,7 +495,7 @@ func TestGitOpsOperationDiagnosisParity(t *testing.T) {
 					"operationState": map[string]any{"phase": tc.phase, "message": tc.msg},
 				},
 			}}
-			canon := detectArgoAppProblems([]*unstructured.Unstructured{app}, now)
+			canon := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
 			if len(canon) != 1 || canon[0].Reason != "OperationFailed" {
 				t.Fatalf("issues engine: want 1 OperationFailed, got %+v", canon)
 			}
@@ -545,7 +546,7 @@ func TestDetectArgoAppProblems_EmptyOpMessagePrefersCondition(t *testing.T) {
 	// Empty op message + ComparisonError → the condition wins.
 	got := detectArgoAppProblems([]*unstructured.Unstructured{mk([]any{
 		map[string]any{"type": "ComparisonError", "message": "app path does not exist"},
-	})}, now)
+	})}, nil, now)
 	if len(got) != 1 || got[0].Reason != "ComparisonError" || got[0].Action == "" {
 		t.Fatalf("empty op message should defer to the ComparisonError condition with an action, got %+v", got)
 	}
@@ -553,7 +554,7 @@ func TestDetectArgoAppProblems_EmptyOpMessagePrefersCondition(t *testing.T) {
 	// message is still parsed so remediation/retry data survives.
 	got = detectArgoAppProblems([]*unstructured.Unstructured{mk([]any{
 		map[string]any{"type": "SyncError", "message": `namespaces "demo-x" not found (retried 5 times)`},
-	})}, now)
+	})}, nil, now)
 	if len(got) != 1 || got[0].Reason != "SyncError" {
 		t.Fatalf("empty op message should defer to the SyncError condition, got %+v", got)
 	}
@@ -564,7 +565,7 @@ func TestDetectArgoAppProblems_EmptyOpMessagePrefersCondition(t *testing.T) {
 		t.Fatalf("structured remediation should be the next step; got extra action %q", got[0].Action)
 	}
 	// Empty op message + no condition → generic OperationFailed (not dropped).
-	got = detectArgoAppProblems([]*unstructured.Unstructured{mk(nil)}, now)
+	got = detectArgoAppProblems([]*unstructured.Unstructured{mk(nil)}, nil, now)
 	if len(got) != 1 || got[0].Reason != "OperationFailed" {
 		t.Fatalf("empty op message without a condition should still emit OperationFailed, got %+v", got)
 	}
@@ -595,5 +596,219 @@ func TestDetectCronJobProblems_CadenceAware(t *testing.T) {
 	}
 	if !stale["daily-stale"] {
 		t.Error("daily CronJob silent for 3 days must be flagged stale")
+	}
+}
+
+func findDetectionReason(dets []Detection, reason string) (Detection, bool) {
+	for _, d := range dets {
+		if d.Reason == reason {
+			return d, true
+		}
+	}
+	return Detection{}, false
+}
+
+func hasDetectionReason(dets []Detection, reason string) bool {
+	_, ok := findDetectionReason(dets, reason)
+	return ok
+}
+
+// TestDetectArgoAppProblems_ManualDriftGate pins Feature A: a manual-sync app
+// only warns once it has been continuously OutOfSync past manualDriftGate, the
+// warning anchors its duration to drift onset, an in-sync observation resets the
+// clock, and auto-synced apps are never routed here.
+func TestDetectArgoAppProblems_ManualDriftGate(t *testing.T) {
+	base := time.Now()
+	mkManual := func(uid, sync string) *unstructured.Unstructured {
+		app := argoApp("payments", "argocd", "Healthy", sync, "", false, nil)
+		app.SetUID(types.UID(uid))
+		app.SetCreationTimestamp(metav1.NewTime(base.Add(-400 * 24 * time.Hour)))
+		return app
+	}
+
+	t.Run("below the gate does not flag", func(t *testing.T) {
+		tr := newArgoDriftTracker()
+		detectArgoAppProblems([]*unstructured.Unstructured{mkManual("u1", "OutOfSync")}, tr, base)
+		got := detectArgoAppProblems([]*unstructured.Unstructured{mkManual("u1", "OutOfSync")}, tr, base.Add(23*time.Hour))
+		if hasDetectionReason(got, "OutOfSyncManual") {
+			t.Fatalf("manual drift under 24h must not flag, got %+v", got)
+		}
+	})
+
+	t.Run("past the gate flags with the drift duration", func(t *testing.T) {
+		tr := newArgoDriftTracker()
+		detectArgoAppProblems([]*unstructured.Unstructured{mkManual("u1", "OutOfSync")}, tr, base)
+		got := detectArgoAppProblems([]*unstructured.Unstructured{mkManual("u1", "OutOfSync")}, tr, base.Add(25*time.Hour))
+		d, ok := findDetectionReason(got, "OutOfSyncManual")
+		if !ok {
+			t.Fatalf("manual drift past 24h must flag, got %+v", got)
+		}
+		if d.Severity != "warning" {
+			t.Errorf("severity = %q, want warning", d.Severity)
+		}
+		if d.DurationSeconds != int64((25 * time.Hour).Seconds()) {
+			t.Errorf("DurationSeconds = %d, want the observed 25h drift", d.DurationSeconds)
+		}
+		if d.Action == "" {
+			t.Error("OutOfSyncManual should carry an Action")
+		}
+	})
+
+	t.Run("returning to Synced resets the clock", func(t *testing.T) {
+		tr := newArgoDriftTracker()
+		detectArgoAppProblems([]*unstructured.Unstructured{mkManual("u1", "OutOfSync")}, tr, base)
+		detectArgoAppProblems([]*unstructured.Unstructured{mkManual("u1", "Synced")}, tr, base.Add(25*time.Hour))
+		// Drift resumes, but from a fresh firstSeen — not the original onset.
+		got := detectArgoAppProblems([]*unstructured.Unstructured{mkManual("u1", "OutOfSync")}, tr, base.Add(26*time.Hour))
+		if hasDetectionReason(got, "OutOfSyncManual") {
+			t.Fatalf("a Synced observation must reset the drift clock, got %+v", got)
+		}
+	})
+
+	t.Run("automated apps are unaffected", func(t *testing.T) {
+		tr := newArgoDriftTracker()
+		auto := argoApp("auto", "argocd", "Healthy", "OutOfSync", "", true, nil)
+		auto.SetUID(types.UID("auto"))
+		detectArgoAppProblems([]*unstructured.Unstructured{auto}, tr, base)
+		got := detectArgoAppProblems([]*unstructured.Unstructured{auto}, tr, base.Add(25*time.Hour))
+		if hasDetectionReason(got, "OutOfSyncManual") {
+			t.Fatalf("automated apps must never emit OutOfSyncManual, got %+v", got)
+		}
+		if !hasDetectionReason(got, "OutOfSync") {
+			t.Fatalf("automated OutOfSync app should still flag ordinary OutOfSync, got %+v", got)
+		}
+	})
+}
+
+func staleArgoApp(name, ns, reconciledAt, phase string) *unstructured.Unstructured {
+	status := map[string]any{}
+	if reconciledAt != "" {
+		status["reconciledAt"] = reconciledAt
+	}
+	if phase != "" {
+		status["operationState"] = map[string]any{"phase": phase}
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"name": name, "namespace": ns},
+		"status":   status,
+	}}
+}
+
+// TestDetectArgoStale pins Feature B's two-level verdict: a down controller
+// rolls up to a single critical (no per-app noise); a healthy controller with a
+// stale majority of a non-trivial fleet rolls up to one warning; otherwise each
+// stale app gets its own row; and never-reconciled / terminating / mid-op apps
+// are ineligible.
+func TestDetectArgoStale(t *testing.T) {
+	now := time.Now()
+	threshold := 30 * time.Minute
+	stale := now.Add(-2 * time.Hour).UTC().Format(time.RFC3339)
+	fresh := now.Add(-5 * time.Minute).UTC().Format(time.RFC3339)
+	ctrl := func(ready int) argoControllerHealth {
+		return argoControllerHealth{visible: true, ready: ready, subjectKind: "StatefulSet", subjectName: "argocd-application-controller", subjectNamespace: "argocd"}
+	}
+	ctrlDown := ctrl(0)
+	ctrlUp := ctrl(1)
+	ctrlHidden := argoControllerHealth{}
+
+	t.Run("controller down rolls up to one critical, no per-app rows", func(t *testing.T) {
+		apps := []*unstructured.Unstructured{
+			staleArgoApp("a", "argocd", stale, ""),
+			staleArgoApp("b", "argocd", stale, ""),
+		}
+		got := detectArgoStale(apps, ctrlDown, threshold, now)
+		if len(got) != 1 {
+			t.Fatalf("want exactly one controller rollup, got %+v", got)
+		}
+		if got[0].Reason != "GitOpsControllerStalled" || got[0].Severity != "critical" {
+			t.Errorf("got %q/%q, want GitOpsControllerStalled/critical", got[0].Reason, got[0].Severity)
+		}
+		if got[0].Kind != "StatefulSet" || got[0].Name != "argocd-application-controller" || got[0].Group != "apps" {
+			t.Errorf("rollup subject = %s.%s/%s, want the controller workload", got[0].Group, got[0].Kind, got[0].Name)
+		}
+	})
+
+	t.Run("healthy controller, 1 of 5 stale, one per-app row", func(t *testing.T) {
+		apps := []*unstructured.Unstructured{
+			staleArgoApp("a", "argocd", stale, ""),
+			staleArgoApp("b", "argocd", fresh, ""),
+			staleArgoApp("c", "argocd", fresh, ""),
+			staleArgoApp("d", "argocd", fresh, ""),
+			staleArgoApp("e", "argocd", fresh, ""),
+		}
+		got := detectArgoStale(apps, ctrlUp, threshold, now)
+		if len(got) != 1 || got[0].Reason != "ComparisonStale" || got[0].Name != "a" {
+			t.Fatalf("want one per-app ComparisonStale on 'a', got %+v", got)
+		}
+		if got[0].Severity != "warning" || got[0].DurationSeconds == 0 {
+			t.Errorf("per-app stale = %q sev, %ds dur; want warning with a non-zero comparison age", got[0].Severity, got[0].DurationSeconds)
+		}
+	})
+
+	t.Run("stale majority of >=3 eligible rolls up to one warning", func(t *testing.T) {
+		apps := []*unstructured.Unstructured{
+			staleArgoApp("a", "argocd", stale, ""),
+			staleArgoApp("b", "argocd", stale, ""),
+			staleArgoApp("c", "argocd", stale, ""),
+			staleArgoApp("d", "argocd", fresh, ""),
+		}
+		got := detectArgoStale(apps, ctrlUp, threshold, now)
+		if len(got) != 1 || got[0].Reason != "GitOpsComparisonsStale" || got[0].Severity != "warning" {
+			t.Fatalf("want one GitOpsComparisonsStale rollup, got %+v", got)
+		}
+	})
+
+	t.Run("fewer than 3 eligible never rolls up", func(t *testing.T) {
+		apps := []*unstructured.Unstructured{
+			staleArgoApp("a", "argocd", stale, ""),
+			staleArgoApp("b", "argocd", stale, ""),
+		}
+		got := detectArgoStale(apps, ctrlUp, threshold, now)
+		if len(got) != 2 {
+			t.Fatalf("want two per-app rows (no rollup under 3 eligible), got %+v", got)
+		}
+		for _, d := range got {
+			if d.Reason != "ComparisonStale" {
+				t.Errorf("got %q, want per-app ComparisonStale", d.Reason)
+			}
+		}
+	})
+
+	t.Run("never-reconciled, terminating, and mid-op apps are ineligible", func(t *testing.T) {
+		never := staleArgoApp("never", "argocd", "", "")
+		mid := staleArgoApp("mid", "argocd", stale, "Running")
+		term := staleArgoApp("term", "argocd", stale, "")
+		term.SetDeletionTimestamp(&metav1.Time{Time: now})
+		got := detectArgoStale([]*unstructured.Unstructured{never, mid, term}, ctrlUp, threshold, now)
+		if len(got) != 0 {
+			t.Fatalf("ineligible apps must not produce stale rows, got %+v", got)
+		}
+	})
+
+	t.Run("hidden controller falls back to per-app rows", func(t *testing.T) {
+		got := detectArgoStale([]*unstructured.Unstructured{staleArgoApp("a", "argocd", stale, "")}, ctrlHidden, threshold, now)
+		if len(got) != 1 || got[0].Reason != "ComparisonStale" {
+			t.Fatalf("hidden controller should fall back to per-app rows, got %+v", got)
+		}
+	})
+}
+
+func TestArgoStaleThresholdFromValue(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"6m", 60 * time.Minute},   // 10× 6m clears the floor
+		{"180s", 30 * time.Minute}, // 10× 180s == floor
+		{"3m", 30 * time.Minute},   // 10× 3m == floor
+		{"", 30 * time.Minute},     // absent → floor
+		{"garbage", 30 * time.Minute},
+		{"0s", 30 * time.Minute},
+	}
+	for _, tc := range cases {
+		if got := argoStaleThresholdFromValue(tc.raw); got != tc.want {
+			t.Errorf("argoStaleThresholdFromValue(%q) = %v, want %v", tc.raw, got, tc.want)
+		}
 	}
 }

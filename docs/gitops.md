@@ -115,6 +115,53 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 | `Shift+R` | Hard refresh (Argo) |
 | `t` | Terminate running sync (Argo, only when an op is in flight) |
 
+## Argo CD API integration (deep diff)
+
+Radar's inline field-level drift approximates desired state from the
+`kubectl.kubernetes.io/last-applied-configuration` annotation — absent under
+server-side apply and Helm-installed resources. Connecting Radar to the
+argocd-server API upgrades the Changes tab with the **canonical Git-rendered
+diff**: desired (rendered from Git, with Argo's own normalizations and every
+`ignoreDifferences` rule applied — including jq rules Radar can't evaluate)
+vs live, per managed resource, as a full YAML line diff.
+
+Setup (Settings → Argo CD, or `PUT /api/integrations/argocd`):
+
+1. Create a get-only local account in `argocd-cm` (`accounts.radar: apiKey`)
+   and grant it `p, role:radar, applications, get, */*, allow` in
+   `argocd-rbac-cm`, then mint a token
+   (`argocd account generate-token --account radar`). A project-scoped token
+   works too. Don't use an admin/personal token.
+2. Paste the token in Settings. Leave the URL empty for in-cluster
+   auto-discovery (the `argocd-server` Service, port-forwarded automatically
+   when Radar runs outside the cluster), or set it explicitly for external
+   endpoints. Self-signed installs need the insecure-TLS toggle.
+   Alternatively "Use Argo CD CLI session" adopts your local
+   `~/.config/argocd` token — an explicit action, never silent.
+
+Behavior and guarantees:
+
+- The token is transport, not authorization: every diff request passes
+  Radar's own per-user RBAC (Application access + a `get` SubjectAccessReview
+  on the target resource's kind) before Argo is consulted. Users can never
+  see manifests through Radar's token that Radar's RBAC would deny.
+- **Secret manifests are structurally redacted** — `data`/`stringData` values
+  are masked with per-key changed/unchanged markers on both sides of the
+  diff. There is no un-redact option.
+- The token lives in `~/.radar/config.json` (written `0600`) and is redacted
+  from `GET /api/config`; saving settings never erases it.
+- A token is bound to the server it was issued for: changing the Argo CD URL
+  requires re-entering the token, and a token saved in auto-discovery mode
+  (empty URL) is bound to the kubeconfig context it was saved under — after a
+  context switch or a Radar restart it must be re-confirmed in Settings, so it
+  is never sent to a different cluster's argocd-server.
+- Argo CD *core* installs have no argocd-server — Radar degrades to the
+  annotation-based drift view. Same when the server is unreachable or the
+  token expires; the Changes tab keeps working, only the deep diff goes away.
+
+The gitops-demo cluster mints a ready-to-use token into
+`scripts/gitops-demo/.radar-argocd-token` (see the demo section below).
+
 ## Cross-linking from the rest of Radar
 
 The GitOps tab isn't the only place Argo/Flux ownership matters. Surfaces across Radar know about GitOps and route into the right detail page when they should:

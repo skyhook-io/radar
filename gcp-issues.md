@@ -1,0 +1,1546 @@
+- generic [ref=e3]:
+  - complementary "Primary navigation" [ref=e4]:
+    - button "Radar — go to home" [ref=e6] [cursor=pointer]:
+      - img [ref=e9]
+      - generic [ref=e10]:
+        - generic [ref=e11]: Radar
+        - generic [ref=e12]: by Skyhook
+    - navigation [ref=e13]:
+      - button "Home" [ref=e15] [cursor=pointer]:
+        - img [ref=e18]
+        - generic [ref=e21]: Home
+      - button "Resources" [ref=e23] [cursor=pointer]:
+        - img [ref=e26]
+        - generic [ref=e27]: Resources
+      - button "Issues" [ref=e29] [cursor=pointer]:
+        - img [ref=e32]
+        - generic [ref=e34]: Issues
+      - button "Topology" [ref=e36] [cursor=pointer]:
+        - img [ref=e39]
+        - generic [ref=e44]: Topology
+      - button "Applications" [ref=e46] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e59]: Applications
+      - button "Timeline" [ref=e61] [cursor=pointer]:
+        - img [ref=e64]
+        - generic [ref=e67]: Timeline
+      - button "Live Traffic" [ref=e69] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e74]: Live Traffic
+      - button "Helm" [ref=e76] [cursor=pointer]:
+        - img [ref=e79]
+        - generic [ref=e83]: Helm
+      - button "GitOps" [ref=e85] [cursor=pointer]:
+        - img [ref=e88]
+        - generic [ref=e92]: GitOps
+      - button "Checks" [ref=e94] [cursor=pointer]:
+        - img [ref=e97]
+        - generic [ref=e100]: Checks
+      - button "Cost" [ref=e102] [cursor=pointer]:
+        - img [ref=e105]
+        - generic [ref=e107]: Cost
+    - navigation [ref=e108]:
+      - button "Settings" [ref=e110] [cursor=pointer]:
+        - img [ref=e112]
+        - generic [ref=e115]: Settings
+    - button "Collapse navigation" [ref=e118] [cursor=pointer]:
+      - img [ref=e120]
+      - generic [ref=e123]: Collapse
+  - generic [ref=e124]:
+    - banner [ref=e125]:
+      - button "GKE cluster nonprod-cluster-us-east1" [ref=e129] [cursor=pointer]:
+        - generic [ref=e131]:
+          - img "GKE cluster" [ref=e132]
+          - generic [ref=e134]: nonprod-cluster-us-east1
+        - img [ref=e135]
+      - generic [ref=e142]:
+        - img [ref=e143]
+        - textbox "Search resources and commands" [ref=e146]:
+          - /placeholder: Search resources & commands…
+        - generic [ref=e147]:
+          - button "Search syntax help" [ref=e148] [cursor=pointer]:
+            - img [ref=e149]
+          - generic [ref=e152]: ⌘K
+      - generic [ref=e153]:
+        - button "Switch active namespaces" [ref=e155] [cursor=pointer]:
+          - img [ref=e156]
+          - generic [ref=e159]: All namespaces
+          - img [ref=e160]
+        - link "2,496" [ref=e164] [cursor=pointer]:
+          - /url: https://github.com/skyhook-io/radar
+          - img [ref=e165]
+          - img [ref=e167]
+          - generic [ref=e170]: 2,496
+        - button [ref=e172] [cursor=pointer]:
+          - img [ref=e173]
+        - button [ref=e178] [cursor=pointer]:
+          - img [ref=e179]
+        - button [ref=e182] [cursor=pointer]:
+          - img [ref=e183]
+        - button [ref=e187] [cursor=pointer]:
+          - img [ref=e188]
+    - generic [ref=e202]:
+      - generic [ref=e203]:
+        - generic [ref=e204]:
+          - generic [ref=e205]:
+            - img [ref=e206]
+            - heading "Issues" [level=1] [ref=e208]
+          - paragraph [ref=e209]: Live cluster problems — crashes, scheduling failures, bad references — grouped by the resource they affect.
+        - generic [ref=e210]:
+          - generic [ref=e211]:
+            - generic [ref=e212]: "85"
+            - generic [ref=e213]: issues
+          - button "32 Critical" [ref=e214] [cursor=pointer]:
+            - generic [ref=e215]: "32"
+            - generic [ref=e216]: Critical
+          - button "53 Warning" [ref=e1774] [cursor=pointer]:
+            - generic [ref=e218]: "53"
+            - generic [ref=e219]: Warning
+      - list [ref=e220]:
+        - listitem [ref=e221]:
+          - button "Can't be scheduled Scheduling Unschedulable — 8 node(s) didn't satisfy plugin(s) [NodeAffinity]. no new claims to deallocate,, 1 node(s) no free host ports (0/9 nodes available) DaemonSet prometheus-node-exporter / prometheus-node-exporter 4 pods 1d Critical" [ref=e222] [cursor=pointer]:
+            - img [ref=e223]
+            - generic [ref=e225]:
+              - generic [ref=e226]:
+                - generic [ref=e227]: Can't be scheduled
+                - generic [ref=e228]: Scheduling
+                - generic [ref=e229]:
+                  - text: Unschedulable
+                  - generic [ref=e230]: — 8 node(s) didn't satisfy plugin(s) [NodeAffinity]. no new claims to deallocate,, 1 node(s) no free host ports (0/9 nodes available)
+              - generic [ref=e231]:
+                - generic [ref=e232]: DaemonSet
+                - generic [ref=e233]: prometheus-node-exporter / prometheus-node-exporter
+                - generic [ref=e234]: ·
+                - generic [ref=e235]: 4 pods
+            - time [ref=e236]:
+              - img [ref=e237]
+              - text: 1d
+            - generic [ref=e240]: Critical
+        - listitem [ref=e241]:
+          - button "Can't be scheduled Scheduling Unschedulable — 8 node(s) didn't satisfy plugin(s) [NodeAffinity]. no new claims to deallocate,, 1 node(s) no free host ports (0/9 nodes available) DaemonSet opencost / prometheus-prometheus-node-exporter 5 pods 1d Critical" [ref=e242] [cursor=pointer]:
+            - img [ref=e243]
+            - generic [ref=e245]:
+              - generic [ref=e246]:
+                - generic [ref=e247]: Can't be scheduled
+                - generic [ref=e248]: Scheduling
+                - generic [ref=e249]:
+                  - text: Unschedulable
+                  - generic [ref=e250]: — 8 node(s) didn't satisfy plugin(s) [NodeAffinity]. no new claims to deallocate,, 1 node(s) no free host ports (0/9 nodes available)
+              - generic [ref=e251]:
+                - generic [ref=e252]: DaemonSet
+                - generic [ref=e253]: opencost / prometheus-prometheus-node-exporter
+                - generic [ref=e254]: ·
+                - generic [ref=e255]: 5 pods
+            - time [ref=e256]:
+              - img [ref=e257]
+              - text: 1d
+            - generic [ref=e260]: Critical
+        - listitem [ref=e261]:
+          - button "Gateway route invalid Networking Missing Gateway backend Service — spec.rules[0].backendRefs[0] references Service \"node-js-api-2\" in namespace \"staging\" which does not exist HTTPRoute staging / node-js-api-2 84d Critical" [ref=e262] [cursor=pointer]:
+            - img [ref=e263]
+            - generic [ref=e265]:
+              - generic [ref=e266]:
+                - generic [ref=e267]: Gateway route invalid
+                - generic [ref=e268]: Networking
+                - generic [ref=e269]:
+                  - text: Missing Gateway backend Service
+                  - generic [ref=e270]: — spec.rules[0].backendRefs[0] references Service "node-js-api-2" in namespace "staging" which does not exist
+              - generic [ref=e271]:
+                - generic [ref=e272]: HTTPRoute
+                - generic [ref=e273]: staging / node-js-api-2
+            - time [ref=e274]:
+              - img [ref=e275]
+              - text: 84d
+            - generic [ref=e278]: Critical
+        - listitem [ref=e279]:
+          - button "Gateway route invalid Networking Missing Gateway backend Service — spec.rules[0].backendRefs[0] references Service \"node-js-api-2\" in namespace \"dev\" which does not exist HTTPRoute dev / node-js-api-2 84d Critical" [ref=e280] [cursor=pointer]:
+            - img [ref=e281]
+            - generic [ref=e283]:
+              - generic [ref=e284]:
+                - generic [ref=e285]: Gateway route invalid
+                - generic [ref=e286]: Networking
+                - generic [ref=e287]:
+                  - text: Missing Gateway backend Service
+                  - generic [ref=e288]: — spec.rules[0].backendRefs[0] references Service "node-js-api-2" in namespace "dev" which does not exist
+              - generic [ref=e289]:
+                - generic [ref=e290]: HTTPRoute
+                - generic [ref=e291]: dev / node-js-api-2
+            - time [ref=e292]:
+              - img [ref=e293]
+              - text: 84d
+            - generic [ref=e296]: Critical
+        - listitem [ref=e297]:
+          - button "Gateway route invalid Networking Missing Gateway backend Service — spec.rules[0].backendRefs[0] references Service \"project-infra\" in namespace \"skyhook-clients-frps\" which does not exist HTTPRoute skyhook-clients-frps / frps-hisco-login 93d Critical" [ref=e298] [cursor=pointer]:
+            - img [ref=e299]
+            - generic [ref=e301]:
+              - generic [ref=e302]:
+                - generic [ref=e303]: Gateway route invalid
+                - generic [ref=e304]: Networking
+                - generic [ref=e305]:
+                  - text: Missing Gateway backend Service
+                  - generic [ref=e306]: — spec.rules[0].backendRefs[0] references Service "project-infra" in namespace "skyhook-clients-frps" which does not exist
+              - generic [ref=e307]:
+                - generic [ref=e308]: HTTPRoute
+                - generic [ref=e309]: skyhook-clients-frps / frps-hisco-login
+            - time [ref=e310]:
+              - img [ref=e311]
+              - text: 93d
+            - generic [ref=e314]: Critical
+        - listitem [ref=e315]:
+          - button "Gateway route invalid Networking Missing Gateway backend Service — spec.rules[0].backendRefs[0] references Service \"project-infra\" in namespace \"skyhook-clients-frps\" which does not exist HTTPRoute skyhook-clients-frps / frps-koalaops-login 93d Critical" [ref=e316] [cursor=pointer]:
+            - img [ref=e317]
+            - generic [ref=e319]:
+              - generic [ref=e320]:
+                - generic [ref=e321]: Gateway route invalid
+                - generic [ref=e322]: Networking
+                - generic [ref=e323]:
+                  - text: Missing Gateway backend Service
+                  - generic [ref=e324]: — spec.rules[0].backendRefs[0] references Service "project-infra" in namespace "skyhook-clients-frps" which does not exist
+              - generic [ref=e325]:
+                - generic [ref=e326]: HTTPRoute
+                - generic [ref=e327]: skyhook-clients-frps / frps-koalaops-login
+            - time [ref=e328]:
+              - img [ref=e329]
+              - text: 93d
+            - generic [ref=e332]: Critical
+        - listitem [ref=e333]:
+          - button "Gateway route invalid Networking Missing Gateway backend Service — spec.rules[0].backendRefs[0] references Service \"argo-rollout-arlen\" in namespace \"prod\" which does not exist HTTPRoute prod / argo-rollout-arlen 112d Critical" [ref=e334] [cursor=pointer]:
+            - img [ref=e335]
+            - generic [ref=e337]:
+              - generic [ref=e338]:
+                - generic [ref=e339]: Gateway route invalid
+                - generic [ref=e340]: Networking
+                - generic [ref=e341]:
+                  - text: Missing Gateway backend Service
+                  - generic [ref=e342]: — spec.rules[0].backendRefs[0] references Service "argo-rollout-arlen" in namespace "prod" which does not exist
+              - generic [ref=e343]:
+                - generic [ref=e344]: HTTPRoute
+                - generic [ref=e345]: prod / argo-rollout-arlen
+            - time [ref=e346]:
+              - img [ref=e347]
+              - text: 112d
+            - generic [ref=e350]: Critical
+        - listitem [ref=e351]:
+          - button "Gateway route invalid Networking Missing Gateway backend Service — spec.rules[0].backendRefs[0] references Service \"argo-rollout-arlen\" in namespace \"default\" which does not exist HTTPRoute default / argo-rollout-arlen 113d Critical" [ref=e352] [cursor=pointer]:
+            - img [ref=e353]
+            - generic [ref=e355]:
+              - generic [ref=e356]:
+                - generic [ref=e357]: Gateway route invalid
+                - generic [ref=e358]: Networking
+                - generic [ref=e359]:
+                  - text: Missing Gateway backend Service
+                  - generic [ref=e360]: — spec.rules[0].backendRefs[0] references Service "argo-rollout-arlen" in namespace "default" which does not exist
+              - generic [ref=e361]:
+                - generic [ref=e362]: HTTPRoute
+                - generic [ref=e363]: default / argo-rollout-arlen
+            - time [ref=e364]:
+              - img [ref=e365]
+              - text: 113d
+            - generic [ref=e368]: Critical
+        - listitem [ref=e369]:
+          - button "Ingress backend missing Networking Missing backend Service — rule[host=\"staging.argo-rollout-arlen.nonprod-cluster-us-east1.skyhook.io\"].path[\"/\"] references Service \"argo-rollout-arlen\" which does not exist Ingress staging / argo-rollout-arlen 117d Critical" [ref=e370] [cursor=pointer]:
+            - img [ref=e371]
+            - generic [ref=e373]:
+              - generic [ref=e374]:
+                - generic [ref=e375]: Ingress backend missing
+                - generic [ref=e376]: Networking
+                - generic [ref=e377]:
+                  - text: Missing backend Service
+                  - generic [ref=e378]: — rule[host="staging.argo-rollout-arlen.nonprod-cluster-us-east1.skyhook.io"].path["/"] references Service "argo-rollout-arlen" which does not exist
+              - generic [ref=e379]:
+                - generic [ref=e380]: Ingress
+                - generic [ref=e381]: staging / argo-rollout-arlen
+            - time [ref=e382]:
+              - img [ref=e383]
+              - text: 117d
+            - generic [ref=e386]: Critical
+        - listitem [ref=e387]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"sinkbindings.webhook.sources.knative.dev\" clientConfig.service references Service \"eventing-webhook\" in namespace \"knative-eventing\" which does not exist MutatingWebhookConfiguration sinkbindings.webhook.sources.knative.dev 120d Critical" [ref=e388] [cursor=pointer]:
+            - img [ref=e389]
+            - generic [ref=e391]:
+              - generic [ref=e392]:
+                - generic [ref=e393]: Webhook backend down
+                - generic [ref=e394]: Control plane
+                - generic [ref=e395]:
+                  - text: Missing webhook backend Service
+                  - generic [ref=e396]: — webhook "sinkbindings.webhook.sources.knative.dev" clientConfig.service references Service "eventing-webhook" in namespace "knative-eventing" which does not exist
+              - generic [ref=e397]:
+                - generic [ref=e398]: MutatingWebhookConfiguration
+                - generic [ref=e399]: sinkbindings.webhook.sources.knative.dev
+            - time [ref=e400]:
+              - img [ref=e401]
+              - text: 120d
+            - generic [ref=e404]: Critical
+        - listitem [ref=e405]:
+          - button "Ingress backend missing Networking Missing backend Service — rule[host=\"dev.ai-temp.nonprod-cluster-us-east1.koalaops.com\"].path[\"/\"] references Service \"ai-temp\" which does not exist Ingress dev / ai-temp 537d Critical" [ref=e406] [cursor=pointer]:
+            - img [ref=e407]
+            - generic [ref=e409]:
+              - generic [ref=e410]:
+                - generic [ref=e411]: Ingress backend missing
+                - generic [ref=e412]: Networking
+                - generic [ref=e413]:
+                  - text: Missing backend Service
+                  - generic [ref=e414]: — rule[host="dev.ai-temp.nonprod-cluster-us-east1.koalaops.com"].path["/"] references Service "ai-temp" which does not exist
+              - generic [ref=e415]:
+                - generic [ref=e416]: Ingress
+                - generic [ref=e417]: dev / ai-temp
+            - time [ref=e418]:
+              - img [ref=e419]
+              - text: 537d
+            - generic [ref=e422]: Critical
+        - listitem [ref=e423]:
+          - button "Missing reference Configuration Missing scaleTargetRef — scaleTargetRef references Deployment \"dev-test-autoscaling\" which does not exist HorizontalPodAutoscaler dev / dev-test-autoscaling-hpa 855d Critical" [ref=e424] [cursor=pointer]:
+            - img [ref=e425]
+            - generic [ref=e427]:
+              - generic [ref=e428]:
+                - generic [ref=e429]: Missing reference
+                - generic [ref=e430]: Configuration
+                - generic [ref=e431]:
+                  - text: Missing scaleTargetRef
+                  - generic [ref=e432]: — scaleTargetRef references Deployment "dev-test-autoscaling" which does not exist
+              - generic [ref=e433]:
+                - generic [ref=e434]: HorizontalPodAutoscaler
+                - generic [ref=e435]: dev / dev-test-autoscaling-hpa
+            - time [ref=e436]:
+              - img [ref=e437]
+              - text: 855d
+            - generic [ref=e440]: Critical
+        - listitem [ref=e441]:
+          - button "Webhook backend down Control plane Missing webhook backend Service — webhook \"datadog.webhook.config\" clientConfig.service references Service \"datadog-admission-controller\" in namespace \"datadog\" which does not exist MutatingWebhookConfiguration datadog-webhook 881d Critical" [ref=e442] [cursor=pointer]:
+            - img [ref=e443]
+            - generic [ref=e445]:
+              - generic [ref=e446]:
+                - generic [ref=e447]: Webhook backend down
+                - generic [ref=e448]: Control plane
+                - generic [ref=e449]:
+                  - text: Missing webhook backend Service
+                  - generic [ref=e450]: — webhook "datadog.webhook.config" clientConfig.service references Service "datadog-admission-controller" in namespace "datadog" which does not exist
+              - generic [ref=e451]:
+                - generic [ref=e452]: MutatingWebhookConfiguration
+                - generic [ref=e453]: datadog-webhook
+            - time [ref=e454]:
+              - img [ref=e455]
+              - text: 881d
+            - generic [ref=e458]: Critical
+        - listitem [ref=e459]:
+          - button "Ingress backend missing Networking Missing backend Service — rule[host=\"hello.nonprod-cluster-us-east1.koalaops.com\"].path[\"/hello\"] references Service \"hello-app\" which does not exist Ingress default / ingress-resource 1063d Critical" [ref=e460] [cursor=pointer]:
+            - img [ref=e461]
+            - generic [ref=e463]:
+              - generic [ref=e464]:
+                - generic [ref=e465]: Ingress backend missing
+                - generic [ref=e466]: Networking
+                - generic [ref=e467]:
+                  - text: Missing backend Service
+                  - generic [ref=e468]: — rule[host="hello.nonprod-cluster-us-east1.koalaops.com"].path["/hello"] references Service "hello-app" which does not exist
+              - generic [ref=e469]:
+                - generic [ref=e470]: Ingress
+                - generic [ref=e471]: default / ingress-resource
+            - time [ref=e472]:
+              - img [ref=e473]
+              - text: 1063d
+            - generic [ref=e476]: Critical
+        - listitem [ref=e477]:
+          - 'button "Rollout stalled Scaling InvalidSpec — The Rollout \"my-service\" is invalid: spec.strategy.canary.stableService: Invalid value: \"my-service-service\": service \"my-service-service\" not found Rollout dev / my-service 230d Critical" [ref=e478] [cursor=pointer]':
+            - img [ref=e479]
+            - generic [ref=e481]:
+              - generic [ref=e482]:
+                - generic [ref=e483]: Rollout stalled
+                - generic [ref=e484]: Scaling
+                - generic [ref=e485]:
+                  - text: InvalidSpec
+                  - generic [ref=e486]: "— The Rollout \"my-service\" is invalid: spec.strategy.canary.stableService: Invalid value: \"my-service-service\": service \"my-service-service\" not found"
+              - generic [ref=e487]:
+                - generic [ref=e488]: Rollout
+                - generic [ref=e489]: dev / my-service
+            - time [ref=e490]:
+              - img [ref=e491]
+              - text: 230d
+            - generic [ref=e494]: Critical
+        - listitem [ref=e495]:
+          - 'button "Autoscaling limited Scaling cannot-scale — FailedGetResourceMetric: the HPA was unable to compute the replica count: No recommendation HorizontalPodAutoscaler kourier-system / 3scale-kourier-gateway 2m Critical" [ref=e1795] [cursor=pointer]':
+            - img [ref=e497]
+            - generic [ref=e499]:
+              - generic [ref=e500]:
+                - generic [ref=e501]: Autoscaling limited
+                - generic [ref=e502]: Scaling
+                - generic [ref=e503]:
+                  - text: cannot-scale
+                  - generic [ref=e504]: "— FailedGetResourceMetric: the HPA was unable to compute the replica count: No recommendation"
+              - generic [ref=e505]:
+                - generic [ref=e506]: HorizontalPodAutoscaler
+                - generic [ref=e507]: kourier-system / 3scale-kourier-gateway
+            - time [ref=e508]:
+              - img [ref=e509]
+              - text: 2m
+            - generic [ref=e512]: Critical
+        - listitem [ref=e513]:
+          - 'button "GitOps operation failed Control plane OperationFailed — one or more objects failed to apply, reason: Internal error occurred: failed calling webhook \"mcluster.cnpg.io\": failed to call webhook: Post \"https://cnpg-webhook-service.cloud-native-pg.svc:443/mutate-postgresql-cnpg-io-v1-cluster?timeout=10s\": no endpoints available for service \"cnpg-webhook-service\" (retried 5 times). Application argocd / clusters-nonprod-cluster-us-east1 1d Critical" [ref=e514] [cursor=pointer]':
+            - img [ref=e515]
+            - generic [ref=e517]:
+              - generic [ref=e518]:
+                - generic [ref=e519]: GitOps operation failed
+                - generic [ref=e520]: Control plane
+                - generic [ref=e521]:
+                  - text: OperationFailed
+                  - generic [ref=e522]: "— one or more objects failed to apply, reason: Internal error occurred: failed calling webhook \"mcluster.cnpg.io\": failed to call webhook: Post \"https://cnpg-webhook-service.cloud-native-pg.svc:443/mutate-postgresql-cnpg-io-v1-cluster?timeout=10s\": no endpoints available for service \"cnpg-webhook-service\" (retried 5 times)."
+              - generic [ref=e523]:
+                - generic [ref=e524]: Application
+                - generic [ref=e525]: argocd / clusters-nonprod-cluster-us-east1
+            - time [ref=e526]:
+              - img [ref=e527]
+              - text: 1d
+            - generic [ref=e530]: Critical
+        - listitem [ref=e531]:
+          - button "Rollout stalled Scaling Rollout stuck — ReplicaSet \"envoy-dev-skyhook-frp-gateway-1e8c27ea-9db949b9d\" has timed out progressing. Deployment envoy-gateway-system / envoy-dev-skyhook-frp-gateway-1e8c27ea 1d Critical" [ref=e532] [cursor=pointer]:
+            - img [ref=e533]
+            - generic [ref=e535]:
+              - generic [ref=e536]:
+                - generic [ref=e537]: Rollout stalled
+                - generic [ref=e538]: Scaling
+                - generic [ref=e539]:
+                  - text: Rollout stuck
+                  - generic [ref=e540]: — ReplicaSet "envoy-dev-skyhook-frp-gateway-1e8c27ea-9db949b9d" has timed out progressing.
+              - generic [ref=e541]:
+                - generic [ref=e542]: Deployment
+                - generic [ref=e543]: envoy-gateway-system / envoy-dev-skyhook-frp-gateway-1e8c27ea
+            - time [ref=e544]:
+              - img [ref=e545]
+              - text: 1d
+            - generic [ref=e548]: Critical
+        - listitem [ref=e1775]:
+          - 'button "Health check failing Runtime LivenessProbeFailed — Liveness probe failed: Get \"http://10.192.9.21:8081/ready\": dial tcp 10.192.9.21:8081: connect: connection refused Deployment kourier-system / 3scale-kourier-gateway 1 pod 1d Critical" [ref=e1776] [cursor=pointer]':
+            - img [ref=e1777]
+            - generic [ref=e1779]:
+              - generic [ref=e1780]:
+                - generic [ref=e1781]: Health check failing
+                - generic [ref=e1782]: Runtime
+                - generic [ref=e1783]:
+                  - text: LivenessProbeFailed
+                  - generic [ref=e1784]: "— Liveness probe failed: Get \"http://10.192.9.21:8081/ready\": dial tcp 10.192.9.21:8081: connect: connection refused"
+              - generic [ref=e1785]:
+                - generic [ref=e1786]: Deployment
+                - generic [ref=e1787]: kourier-system / 3scale-kourier-gateway
+                - generic [ref=e1788]: ·
+                - generic [ref=e1789]: 1 pod
+            - time [ref=e1790]:
+              - img [ref=e1791]
+              - text: 1d
+            - generic [ref=e1794]: Critical
+        - listitem [ref=e549]:
+          - button "Rollout stalled Scaling Rollout stuck — ReplicaSet \"envoy-primary-gateway-system-primary-gateway-a2ee8938-5b4dbbfcbb\" has timed out progressing. Deployment envoy-gateway-system / envoy-primary-gateway-system-primary-gateway-a2ee8938 1d Critical" [ref=e550] [cursor=pointer]:
+            - img [ref=e551]
+            - generic [ref=e553]:
+              - generic [ref=e554]:
+                - generic [ref=e555]: Rollout stalled
+                - generic [ref=e556]: Scaling
+                - generic [ref=e557]:
+                  - text: Rollout stuck
+                  - generic [ref=e558]: — ReplicaSet "envoy-primary-gateway-system-primary-gateway-a2ee8938-5b4dbbfcbb" has timed out progressing.
+              - generic [ref=e559]:
+                - generic [ref=e560]: Deployment
+                - generic [ref=e561]: envoy-gateway-system / envoy-primary-gateway-system-primary-gateway-a2ee8938
+            - time [ref=e562]:
+              - img [ref=e563]
+              - text: 1d
+            - generic [ref=e566]: Critical
+        - listitem [ref=e567]:
+          - button "Rollout stalled Scaling Rollout stuck — ReplicaSet \"envoy-staging-skyhook-frp-gateway-1b2e6134-dc9bcf9d4\" has timed out progressing. Deployment envoy-gateway-system / envoy-staging-skyhook-frp-gateway-1b2e6134 1d Critical" [ref=e568] [cursor=pointer]:
+            - img [ref=e569]
+            - generic [ref=e571]:
+              - generic [ref=e572]:
+                - generic [ref=e573]: Rollout stalled
+                - generic [ref=e574]: Scaling
+                - generic [ref=e575]:
+                  - text: Rollout stuck
+                  - generic [ref=e576]: — ReplicaSet "envoy-staging-skyhook-frp-gateway-1b2e6134-dc9bcf9d4" has timed out progressing.
+              - generic [ref=e577]:
+                - generic [ref=e578]: Deployment
+                - generic [ref=e579]: envoy-gateway-system / envoy-staging-skyhook-frp-gateway-1b2e6134
+            - time [ref=e580]:
+              - img [ref=e581]
+              - text: 1d
+            - generic [ref=e584]: Critical
+        - listitem [ref=e585]:
+          - button "GitOps health degraded Control plane HealthDegraded — Application health is Degraded (managed resources are unhealthy) Application argocd / radar-hub-staging 6d Critical" [ref=e586] [cursor=pointer]:
+            - img [ref=e587]
+            - generic [ref=e589]:
+              - generic [ref=e590]:
+                - generic [ref=e591]: GitOps health degraded
+                - generic [ref=e592]: Control plane
+                - generic [ref=e593]:
+                  - text: HealthDegraded
+                  - generic [ref=e594]: — Application health is Degraded (managed resources are unhealthy)
+              - generic [ref=e595]:
+                - generic [ref=e596]: Application
+                - generic [ref=e597]: argocd / radar-hub-staging
+            - time [ref=e598]:
+              - img [ref=e599]
+              - text: 6d
+            - generic [ref=e602]: Critical
+        - listitem [ref=e603]:
+          - 'button "Stuck terminating Control plane Namespace terminating stuck — NamespaceContentRemaining: SomeResourcesRemain - Some resources are remaining: datadogagents.datadoghq.com has 1 resource instances; NamespaceFinalizersRemaining: SomeFinalizersRemain - Some content in the namespace has finalizers remaining: finalizer.agent.datadoghq.com in 1 resource instances Namespace datadog 35d Critical" [ref=e604] [cursor=pointer]':
+            - img [ref=e605]
+            - generic [ref=e607]:
+              - generic [ref=e608]:
+                - generic [ref=e609]: Stuck terminating
+                - generic [ref=e610]: Control plane
+                - generic [ref=e611]:
+                  - text: Namespace terminating stuck
+                  - generic [ref=e612]: "— NamespaceContentRemaining: SomeResourcesRemain - Some resources are remaining: datadogagents.datadoghq.com has 1 resource instances; NamespaceFinalizersRemaining: SomeFinalizersRemain - Some content in the namespace has finalizers remaining: finalizer.agent.datadoghq.com in 1 resource instances"
+              - generic [ref=e613]:
+                - generic [ref=e614]: Namespace
+                - generic [ref=e615]: datadog
+            - time [ref=e616]:
+              - img [ref=e617]
+              - text: 35d
+            - generic [ref=e620]: Critical
+        - listitem [ref=e621]:
+          - button "Stuck terminating Control plane Namespace terminating stuck — Resource is still present after deletion started Namespace capi-kubeadm-control-plane-system 77d Critical" [ref=e622] [cursor=pointer]:
+            - img [ref=e623]
+            - generic [ref=e625]:
+              - generic [ref=e626]:
+                - generic [ref=e627]: Stuck terminating
+                - generic [ref=e628]: Control plane
+                - generic [ref=e629]:
+                  - text: Namespace terminating stuck
+                  - generic [ref=e630]: — Resource is still present after deletion started
+              - generic [ref=e631]:
+                - generic [ref=e632]: Namespace
+                - generic [ref=e633]: capi-kubeadm-control-plane-system
+            - time [ref=e634]:
+              - img [ref=e635]
+              - text: 77d
+            - generic [ref=e638]: Critical
+        - listitem [ref=e639]:
+          - button "Stuck terminating Control plane Namespace terminating stuck — Resource is still present after deletion started Namespace capi-kubeadm-bootstrap-system 77d Critical" [ref=e640] [cursor=pointer]:
+            - img [ref=e641]
+            - generic [ref=e643]:
+              - generic [ref=e644]:
+                - generic [ref=e645]: Stuck terminating
+                - generic [ref=e646]: Control plane
+                - generic [ref=e647]:
+                  - text: Namespace terminating stuck
+                  - generic [ref=e648]: — Resource is still present after deletion started
+              - generic [ref=e649]:
+                - generic [ref=e650]: Namespace
+                - generic [ref=e651]: capi-kubeadm-bootstrap-system
+            - time [ref=e652]:
+              - img [ref=e653]
+              - text: 77d
+            - generic [ref=e656]: Critical
+        - listitem [ref=e657]:
+          - button "Stuck terminating Control plane Namespace terminating stuck — Resource is still present after deletion started Namespace capi-system 77d Critical" [ref=e658] [cursor=pointer]:
+            - img [ref=e659]
+            - generic [ref=e661]:
+              - generic [ref=e662]:
+                - generic [ref=e663]: Stuck terminating
+                - generic [ref=e664]: Control plane
+                - generic [ref=e665]:
+                  - text: Namespace terminating stuck
+                  - generic [ref=e666]: — Resource is still present after deletion started
+              - generic [ref=e667]:
+                - generic [ref=e668]: Namespace
+                - generic [ref=e669]: capi-system
+            - time [ref=e670]:
+              - img [ref=e671]
+              - text: 77d
+            - generic [ref=e674]: Critical
+        - listitem [ref=e675]:
+          - button "Stuck terminating Control plane Namespace terminating stuck — Resource is still present after deletion started Namespace capg-system 77d Critical" [ref=e676] [cursor=pointer]:
+            - img [ref=e677]
+            - generic [ref=e679]:
+              - generic [ref=e680]:
+                - generic [ref=e681]: Stuck terminating
+                - generic [ref=e682]: Control plane
+                - generic [ref=e683]:
+                  - text: Namespace terminating stuck
+                  - generic [ref=e684]: — Resource is still present after deletion started
+              - generic [ref=e685]:
+                - generic [ref=e686]: Namespace
+                - generic [ref=e687]: capg-system
+            - time [ref=e688]:
+              - img [ref=e689]
+              - text: 77d
+            - generic [ref=e692]: Critical
+        - listitem [ref=e693]:
+          - button "GitOps operation failed Control plane StuckDriftLoop — Sync succeeded but the application is still OutOfSync — a controller or admission webhook is likely mutating resources after each apply. Application argocd / kyverno-nonprod-cluster-us-east1 91d Critical" [ref=e694] [cursor=pointer]:
+            - img [ref=e695]
+            - generic [ref=e697]:
+              - generic [ref=e698]:
+                - generic [ref=e699]: GitOps operation failed
+                - generic [ref=e700]: Control plane
+                - generic [ref=e701]:
+                  - text: StuckDriftLoop
+                  - generic [ref=e702]: — Sync succeeded but the application is still OutOfSync — a controller or admission webhook is likely mutating resources after each apply.
+              - generic [ref=e703]:
+                - generic [ref=e704]: Application
+                - generic [ref=e705]: argocd / kyverno-nonprod-cluster-us-east1
+            - time [ref=e706]:
+              - img [ref=e707]
+              - text: 91d
+            - generic [ref=e710]: Critical
+        - listitem [ref=e728]:
+          - 'button "Stuck terminating Control plane Namespace terminating stuck — NamespaceContentRemaining: SomeResourcesRemain - Some resources are remaining: pingsources.sources.knative.dev has 1 resource instances; NamespaceFinalizersRemaining: SomeFinalizersRemain - Some content in the namespace has finalizers remaining: pingsources.sources.knative.dev in 1 resource instances Namespace knative-test 112d Critical" [ref=e729] [cursor=pointer]':
+            - img [ref=e730]
+            - generic [ref=e732]:
+              - generic [ref=e733]:
+                - generic [ref=e734]: Stuck terminating
+                - generic [ref=e735]: Control plane
+                - generic [ref=e736]:
+                  - text: Namespace terminating stuck
+                  - generic [ref=e737]: "— NamespaceContentRemaining: SomeResourcesRemain - Some resources are remaining: pingsources.sources.knative.dev has 1 resource instances; NamespaceFinalizersRemaining: SomeFinalizersRemain - Some content in the namespace has finalizers remaining: pingsources.sources.knative.dev in 1 resource instances"
+              - generic [ref=e738]:
+                - generic [ref=e739]: Namespace
+                - generic [ref=e740]: knative-test
+            - time [ref=e741]:
+              - img [ref=e742]
+              - text: 112d
+            - generic [ref=e745]: Critical
+        - listitem [ref=e746]:
+          - button "No endpoints Networking 0/1 selected pods ready Service kourier-system / kourier-internal 120d Critical" [ref=e747] [cursor=pointer]:
+            - img [ref=e748]
+            - generic [ref=e750]:
+              - generic [ref=e751]:
+                - generic [ref=e752]: No endpoints
+                - generic [ref=e753]: Networking
+                - generic [ref=e754]: 0/1 selected pods ready
+              - generic [ref=e755]:
+                - generic [ref=e756]: Service
+                - generic [ref=e757]: kourier-system / kourier-internal
+            - time [ref=e758]:
+              - img [ref=e759]
+              - text: 120d
+            - generic [ref=e762]: Critical
+        - listitem [ref=e763]:
+          - button "No endpoints Networking 0/1 selected pods ready Service kourier-system / kourier 120d Critical" [ref=e764] [cursor=pointer]:
+            - img [ref=e765]
+            - generic [ref=e767]:
+              - generic [ref=e768]:
+                - generic [ref=e769]: No endpoints
+                - generic [ref=e770]: Networking
+                - generic [ref=e771]: 0/1 selected pods ready
+              - generic [ref=e772]:
+                - generic [ref=e773]: Service
+                - generic [ref=e774]: kourier-system / kourier
+            - time [ref=e775]:
+              - img [ref=e776]
+              - text: 120d
+            - generic [ref=e779]: Critical
+        - listitem [ref=e780]:
+          - 'button "Helm release failed Control plane HelmReleaseFailed — Release failed at rev 1. Release \"prometheus\" failed: context deadline exceeded HelmRelease opencost / prometheus 157d Critical" [ref=e781] [cursor=pointer]':
+            - img [ref=e782]
+            - generic [ref=e784]:
+              - generic [ref=e785]:
+                - generic [ref=e786]: Helm release failed
+                - generic [ref=e787]: Control plane
+                - generic [ref=e788]:
+                  - text: HelmReleaseFailed
+                  - generic [ref=e789]: "— Release failed at rev 1. Release \"prometheus\" failed: context deadline exceeded"
+              - generic [ref=e790]:
+                - generic [ref=e791]: HelmRelease
+                - generic [ref=e792]: opencost / prometheus
+            - time [ref=e793]:
+              - img [ref=e794]
+              - text: 157d
+            - generic [ref=e797]: Critical
+        - listitem [ref=e798]:
+          - button "Missing reference Configuration Missing Rollout Service — spec.strategy.canary.stableService references Service \"my-service-service\" which does not exist Rollout dev / my-service 683d Warning" [ref=e799] [cursor=pointer]:
+            - img [ref=e800]
+            - generic [ref=e802]:
+              - generic [ref=e803]:
+                - generic [ref=e804]: Missing reference
+                - generic [ref=e805]: Configuration
+                - generic [ref=e806]:
+                  - text: Missing Rollout Service
+                  - generic [ref=e807]: — spec.strategy.canary.stableService references Service "my-service-service" which does not exist
+              - generic [ref=e808]:
+                - generic [ref=e809]: Rollout
+                - generic [ref=e810]: dev / my-service
+            - time [ref=e811]:
+              - img [ref=e812]
+              - text: 683d
+            - generic [ref=e815]: Warning
+        - listitem [ref=e816]:
+          - button "Missing reference Configuration Missing Rollout Service — spec.strategy.canary.canaryService references Service \"my-service-service-canary\" which does not exist Rollout dev / my-service 683d Warning" [ref=e817] [cursor=pointer]:
+            - img [ref=e818]
+            - generic [ref=e820]:
+              - generic [ref=e821]:
+                - generic [ref=e822]: Missing reference
+                - generic [ref=e823]: Configuration
+                - generic [ref=e824]:
+                  - text: Missing Rollout Service
+                  - generic [ref=e825]: — spec.strategy.canary.canaryService references Service "my-service-service-canary" which does not exist
+              - generic [ref=e826]:
+                - generic [ref=e827]: Rollout
+                - generic [ref=e828]: dev / my-service
+            - time [ref=e829]:
+              - img [ref=e830]
+              - text: 683d
+            - generic [ref=e833]: Warning
+        - listitem [ref=e852]:
+          - 'button "Gateway route invalid Networking Accepted: NoMatchingListenerHostname — Gateway primary-gateway-system/primary-gateway listener https: There were no hostname intersections between the HTTPRoute and this parent ref''s Listener(s). HTTPRoute staging / radar-hub since deploy Warning" [ref=e853] [cursor=pointer]':
+            - img [ref=e854]
+            - generic [ref=e856]:
+              - generic [ref=e857]:
+                - generic [ref=e858]: Gateway route invalid
+                - generic [ref=e859]: Networking
+                - generic [ref=e860]:
+                  - text: "Accepted: NoMatchingListenerHostname"
+                  - generic [ref=e861]: "— Gateway primary-gateway-system/primary-gateway listener https: There were no hostname intersections between the HTTPRoute and this parent ref's Listener(s)."
+              - generic [ref=e862]:
+                - generic [ref=e863]: HTTPRoute
+                - generic [ref=e864]: staging / radar-hub
+            - time [ref=e865]:
+              - img [ref=e866]
+              - text: since deploy
+            - generic [ref=e869]: Warning
+        - listitem [ref=e834]:
+          - 'button "Gateway route invalid Networking Accepted: NoMatchingListenerHostname — Gateway primary-gateway-system/primary-gateway listener http: There were no hostname intersections between the HTTPRoute and this parent ref''s Listener(s). HTTPRoute staging / radar-hub since deploy Warning" [ref=e835] [cursor=pointer]':
+            - img [ref=e836]
+            - generic [ref=e838]:
+              - generic [ref=e839]:
+                - generic [ref=e840]: Gateway route invalid
+                - generic [ref=e841]: Networking
+                - generic [ref=e842]:
+                  - text: "Accepted: NoMatchingListenerHostname"
+                  - generic [ref=e843]: "— Gateway primary-gateway-system/primary-gateway listener http: There were no hostname intersections between the HTTPRoute and this parent ref's Listener(s)."
+              - generic [ref=e844]:
+                - generic [ref=e845]: HTTPRoute
+                - generic [ref=e846]: staging / radar-hub
+            - time [ref=e847]:
+              - img [ref=e848]
+              - text: since deploy
+            - generic [ref=e851]: Warning
+        - listitem [ref=e888]:
+          - 'button "Controller reports a problem Control plane Ready: ErrGetKeyPair — Error getting keypair for CA issuer: secrets \"my-shared-db-client-ca\" not found ClusterIssuer my-shared-db-client-ca since deploy Warning" [ref=e889] [cursor=pointer]':
+            - img [ref=e890]
+            - generic [ref=e892]:
+              - generic [ref=e893]:
+                - generic [ref=e894]: Controller reports a problem
+                - generic [ref=e895]: Control plane
+                - generic [ref=e896]:
+                  - text: "Ready: ErrGetKeyPair"
+                  - generic [ref=e897]: "— Error getting keypair for CA issuer: secrets \"my-shared-db-client-ca\" not found"
+              - generic [ref=e898]:
+                - generic [ref=e899]: ClusterIssuer
+                - generic [ref=e900]: my-shared-db-client-ca
+            - time [ref=e901]:
+              - img [ref=e902]
+              - text: since deploy
+            - generic [ref=e905]: Warning
+        - listitem [ref=e870]:
+          - 'button "Certificate not ready Security Ready: DoesNotExist — Issuing certificate as Secret does not exist Certificate cnpg-clusters / my-shared-db-server-tls since deploy Warning" [ref=e871] [cursor=pointer]':
+            - img [ref=e872]
+            - generic [ref=e874]:
+              - generic [ref=e875]:
+                - generic [ref=e876]: Certificate not ready
+                - generic [ref=e877]: Security
+                - generic [ref=e878]:
+                  - text: "Ready: DoesNotExist"
+                  - generic [ref=e879]: — Issuing certificate as Secret does not exist
+              - generic [ref=e880]:
+                - generic [ref=e881]: Certificate
+                - generic [ref=e882]: cnpg-clusters / my-shared-db-server-tls
+            - time [ref=e883]:
+              - img [ref=e884]
+              - text: since deploy
+            - generic [ref=e887]: Warning
+        - listitem [ref=e906]:
+          - button "Controller reports a problem Control plane Synced=False — no key could decrypt secret (MONGO_PASSWORD, MONGO_USER) SealedSecret autopush / project-infra since deploy Warning" [ref=e907] [cursor=pointer]:
+            - img [ref=e908]
+            - generic [ref=e910]:
+              - generic [ref=e911]:
+                - generic [ref=e912]: Controller reports a problem
+                - generic [ref=e913]: Control plane
+                - generic [ref=e914]:
+                  - text: Synced=False
+                  - generic [ref=e915]: — no key could decrypt secret (MONGO_PASSWORD, MONGO_USER)
+              - generic [ref=e916]:
+                - generic [ref=e917]: SealedSecret
+                - generic [ref=e918]: autopush / project-infra
+            - time [ref=e919]:
+              - img [ref=e920]
+              - text: since deploy
+            - generic [ref=e923]: Warning
+        - listitem [ref=e924]:
+          - button "Controller reports a problem Control plane Synced=False — no key could decrypt secret (KOALA_SANDBOX_GITHUB_TOKEN, OPENAI_API_KEY, AUTH0_CLIENT_ID, GITHUB_APP_PRIVATE_KEY, KOALABOT_SLACK_CLIENT_SECRET, KOALABOT_SLACK_CLIENT_ID, MONGO_PASSWORD, MONGO_USER, AUTH0_CLIENT_SECRET, CUSTOMER_SECRETS_ENCRYPTION_KEY, GITHUB_APP_ID) SealedSecret staging / koala-backend 460d Warning" [ref=e925] [cursor=pointer]:
+            - img [ref=e926]
+            - generic [ref=e928]:
+              - generic [ref=e929]:
+                - generic [ref=e930]: Controller reports a problem
+                - generic [ref=e931]: Control plane
+                - generic [ref=e932]:
+                  - text: Synced=False
+                  - generic [ref=e933]: — no key could decrypt secret (KOALA_SANDBOX_GITHUB_TOKEN, OPENAI_API_KEY, AUTH0_CLIENT_ID, GITHUB_APP_PRIVATE_KEY, KOALABOT_SLACK_CLIENT_SECRET, KOALABOT_SLACK_CLIENT_ID, MONGO_PASSWORD, MONGO_USER, AUTH0_CLIENT_SECRET, CUSTOMER_SECRETS_ENCRYPTION_KEY, GITHUB_APP_ID)
+              - generic [ref=e934]:
+                - generic [ref=e935]: SealedSecret
+                - generic [ref=e936]: staging / koala-backend
+            - time [ref=e937]:
+              - img [ref=e938]
+              - text: 460d
+            - generic [ref=e941]: Warning
+        - listitem [ref=e942]:
+          - button "Controller reports a problem Control plane Synced=False — no key could decrypt secret (MONGO_USER, OPENAI_API_KEY, AUTH0_CLIENT_SECRET, CUSTOMER_SECRETS_ENCRYPTION_KEY, KOALA_SANDBOX_GITHUB_TOKEN, KOALABOT_SLACK_CLIENT_ID, KOALABOT_SLACK_CLIENT_SECRET, MONGO_PASSWORD, AUTH0_CLIENT_ID, GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY) SealedSecret autopush / koala-backend 460d Warning" [ref=e943] [cursor=pointer]:
+            - img [ref=e944]
+            - generic [ref=e946]:
+              - generic [ref=e947]:
+                - generic [ref=e948]: Controller reports a problem
+                - generic [ref=e949]: Control plane
+                - generic [ref=e950]:
+                  - text: Synced=False
+                  - generic [ref=e951]: — no key could decrypt secret (MONGO_USER, OPENAI_API_KEY, AUTH0_CLIENT_SECRET, CUSTOMER_SECRETS_ENCRYPTION_KEY, KOALA_SANDBOX_GITHUB_TOKEN, KOALABOT_SLACK_CLIENT_ID, KOALABOT_SLACK_CLIENT_SECRET, MONGO_PASSWORD, AUTH0_CLIENT_ID, GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY)
+              - generic [ref=e952]:
+                - generic [ref=e953]: SealedSecret
+                - generic [ref=e954]: autopush / koala-backend
+            - time [ref=e955]:
+              - img [ref=e956]
+              - text: 460d
+            - generic [ref=e959]: Warning
+        - listitem [ref=e960]:
+          - button "Controller reports a problem Control plane Synced=False — no key could decrypt secret (MY_ENV_VAR) SealedSecret dev / dev-openai-flask-service-secrets since deploy Warning" [ref=e961] [cursor=pointer]:
+            - img [ref=e962]
+            - generic [ref=e964]:
+              - generic [ref=e965]:
+                - generic [ref=e966]: Controller reports a problem
+                - generic [ref=e967]: Control plane
+                - generic [ref=e968]:
+                  - text: Synced=False
+                  - generic [ref=e969]: — no key could decrypt secret (MY_ENV_VAR)
+              - generic [ref=e970]:
+                - generic [ref=e971]: SealedSecret
+                - generic [ref=e972]: dev / dev-openai-flask-service-secrets
+            - time [ref=e973]:
+              - img [ref=e974]
+              - text: since deploy
+            - generic [ref=e977]: Warning
+        - listitem [ref=e997]:
+          - button "Not ready for traffic Runtime ReadinessProbeFailed Deployment envoy-gateway-system / envoy-primary-gateway-system-primary-gateway-a2ee8938 1 pod 1d Warning" [ref=e998] [cursor=pointer]:
+            - img [ref=e999]
+            - generic [ref=e1001]:
+              - generic [ref=e1002]:
+                - generic [ref=e1003]: Not ready for traffic
+                - generic [ref=e1004]: Runtime
+                - generic [ref=e1005]: ReadinessProbeFailed
+              - generic [ref=e1006]:
+                - generic [ref=e1007]: Deployment
+                - generic [ref=e1008]: envoy-gateway-system / envoy-primary-gateway-system-primary-gateway-a2ee8938
+                - generic [ref=e1009]: ·
+                - generic [ref=e1010]: 1 pod
+            - time [ref=e1011]:
+              - img [ref=e1012]
+              - text: 1d
+            - generic [ref=e1015]: Warning
+        - listitem [ref=e1016]:
+          - button "Not ready for traffic Runtime ReadinessProbeFailed Deployment envoy-gateway-system / envoy-staging-skyhook-frp-gateway-1b2e6134 1 pod 1d Warning" [ref=e1017] [cursor=pointer]:
+            - img [ref=e1018]
+            - generic [ref=e1020]:
+              - generic [ref=e1021]:
+                - generic [ref=e1022]: Not ready for traffic
+                - generic [ref=e1023]: Runtime
+                - generic [ref=e1024]: ReadinessProbeFailed
+              - generic [ref=e1025]:
+                - generic [ref=e1026]: Deployment
+                - generic [ref=e1027]: envoy-gateway-system / envoy-staging-skyhook-frp-gateway-1b2e6134
+                - generic [ref=e1028]: ·
+                - generic [ref=e1029]: 1 pod
+            - time [ref=e1030]:
+              - img [ref=e1031]
+              - text: 1d
+            - generic [ref=e1034]: Warning
+        - listitem [ref=e1035]:
+          - button "Not ready for traffic Runtime ReadinessProbeFailed Deployment envoy-gateway-system / envoy-dev-skyhook-frp-gateway-1e8c27ea 1 pod 1d Warning" [ref=e1036] [cursor=pointer]:
+            - img [ref=e1037]
+            - generic [ref=e1039]:
+              - generic [ref=e1040]:
+                - generic [ref=e1041]: Not ready for traffic
+                - generic [ref=e1042]: Runtime
+                - generic [ref=e1043]: ReadinessProbeFailed
+              - generic [ref=e1044]:
+                - generic [ref=e1045]: Deployment
+                - generic [ref=e1046]: envoy-gateway-system / envoy-dev-skyhook-frp-gateway-1e8c27ea
+                - generic [ref=e1047]: ·
+                - generic [ref=e1048]: 1 pod
+            - time [ref=e1049]:
+              - img [ref=e1050]
+              - text: 1d
+            - generic [ref=e1053]: Warning
+        - listitem [ref=e1054]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: component=kube-controller-manager Service kube-system / kube-prometheus-stack-kube-controller-manager 40d Warning" [ref=e1055] [cursor=pointer]':
+            - img [ref=e1056]
+            - generic [ref=e1058]:
+              - generic [ref=e1059]:
+                - generic [ref=e1060]: No endpoints
+                - generic [ref=e1061]: Networking
+                - generic [ref=e1062]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1063]: "— selector: component=kube-controller-manager"
+              - generic [ref=e1064]:
+                - generic [ref=e1065]: Service
+                - generic [ref=e1066]: kube-system / kube-prometheus-stack-kube-controller-manager
+            - time [ref=e1067]:
+              - img [ref=e1068]
+              - text: 40d
+            - generic [ref=e1071]: Warning
+        - listitem [ref=e1072]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: component=etcd Service kube-system / kube-prometheus-stack-kube-etcd 40d Warning" [ref=e1073] [cursor=pointer]':
+            - img [ref=e1074]
+            - generic [ref=e1076]:
+              - generic [ref=e1077]:
+                - generic [ref=e1078]: No endpoints
+                - generic [ref=e1079]: Networking
+                - generic [ref=e1080]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1081]: "— selector: component=etcd"
+              - generic [ref=e1082]:
+                - generic [ref=e1083]: Service
+                - generic [ref=e1084]: kube-system / kube-prometheus-stack-kube-etcd
+            - time [ref=e1085]:
+              - img [ref=e1086]
+              - text: 40d
+            - generic [ref=e1089]: Warning
+        - listitem [ref=e1090]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: k8s-app=kube-proxy Service kube-system / kube-prometheus-stack-kube-proxy 40d Warning" [ref=e1091] [cursor=pointer]':
+            - img [ref=e1092]
+            - generic [ref=e1094]:
+              - generic [ref=e1095]:
+                - generic [ref=e1096]: No endpoints
+                - generic [ref=e1097]: Networking
+                - generic [ref=e1098]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1099]: "— selector: k8s-app=kube-proxy"
+              - generic [ref=e1100]:
+                - generic [ref=e1101]: Service
+                - generic [ref=e1102]: kube-system / kube-prometheus-stack-kube-proxy
+            - time [ref=e1103]:
+              - img [ref=e1104]
+              - text: 40d
+            - generic [ref=e1107]: Warning
+        - listitem [ref=e1108]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: component=kube-scheduler Service kube-system / kube-prometheus-stack-kube-scheduler 40d Warning" [ref=e1109] [cursor=pointer]':
+            - img [ref=e1110]
+            - generic [ref=e1112]:
+              - generic [ref=e1113]:
+                - generic [ref=e1114]: No endpoints
+                - generic [ref=e1115]: Networking
+                - generic [ref=e1116]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1117]: "— selector: component=kube-scheduler"
+              - generic [ref=e1118]:
+                - generic [ref=e1119]: Service
+                - generic [ref=e1120]: kube-system / kube-prometheus-stack-kube-scheduler
+            - time [ref=e1121]:
+              - img [ref=e1122]
+              - text: 40d
+            - generic [ref=e1125]: Warning
+        - listitem [ref=e1126]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: alertmanager=kube-prometheus-stack-alertmanager, app.kubernetes.io/name=alertmanager Service monitoring / kube-prometheus-stack-alertmanager 40d Warning" [ref=e1127] [cursor=pointer]':
+            - img [ref=e1128]
+            - generic [ref=e1130]:
+              - generic [ref=e1131]:
+                - generic [ref=e1132]: No endpoints
+                - generic [ref=e1133]: Networking
+                - generic [ref=e1134]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1135]: "— selector: alertmanager=kube-prometheus-stack-alertmanager, app.kubernetes.io/name=alertmanager"
+              - generic [ref=e1136]:
+                - generic [ref=e1137]: Service
+                - generic [ref=e1138]: monitoring / kube-prometheus-stack-alertmanager
+            - time [ref=e1139]:
+              - img [ref=e1140]
+              - text: 40d
+            - generic [ref=e1143]: Warning
+        - listitem [ref=e1144]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=prometheus, operator.prometheus.io/name=kube-prometheus-stack-prometheus Service monitoring / kube-prometheus-stack-prometheus 40d Warning" [ref=e1145] [cursor=pointer]':
+            - img [ref=e1146]
+            - generic [ref=e1148]:
+              - generic [ref=e1149]:
+                - generic [ref=e1150]: No endpoints
+                - generic [ref=e1151]: Networking
+                - generic [ref=e1152]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1153]: "— selector: app.kubernetes.io/name=prometheus, operator.prometheus.io/name=kube-prometheus-stack-prometheus"
+              - generic [ref=e1154]:
+                - generic [ref=e1155]: Service
+                - generic [ref=e1156]: monitoring / kube-prometheus-stack-prometheus
+            - time [ref=e1157]:
+              - img [ref=e1158]
+              - text: 40d
+            - generic [ref=e1161]: Warning
+        - listitem [ref=e1162]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/instance=kube-prometheus-stack, app.kubernetes.io/name=prometheus-node-exporter Service monitoring / kube-prometheus-stack-prometheus-node-exporter 40d Warning" [ref=e1163] [cursor=pointer]':
+            - img [ref=e1164]
+            - generic [ref=e1166]:
+              - generic [ref=e1167]:
+                - generic [ref=e1168]: No endpoints
+                - generic [ref=e1169]: Networking
+                - generic [ref=e1170]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1171]: "— selector: app.kubernetes.io/instance=kube-prometheus-stack, app.kubernetes.io/name=prometheus-node-exporter"
+              - generic [ref=e1172]:
+                - generic [ref=e1173]: Service
+                - generic [ref=e1174]: monitoring / kube-prometheus-stack-prometheus-node-exporter
+            - time [ref=e1175]:
+              - img [ref=e1176]
+              - text: 40d
+            - generic [ref=e1179]: Warning
+        - listitem [ref=e1180]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=java-multi-modules2 Service staging / java-multi-modules2 60d Warning" [ref=e1181] [cursor=pointer]':
+            - img [ref=e1182]
+            - generic [ref=e1184]:
+              - generic [ref=e1185]:
+                - generic [ref=e1186]: No endpoints
+                - generic [ref=e1187]: Networking
+                - generic [ref=e1188]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1189]: "— selector: app.kubernetes.io/name=java-multi-modules2"
+              - generic [ref=e1190]:
+                - generic [ref=e1191]: Service
+                - generic [ref=e1192]: staging / java-multi-modules2
+            - time [ref=e1193]:
+              - img [ref=e1194]
+              - text: 60d
+            - generic [ref=e1197]: Warning
+        - listitem [ref=e1198]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=java-multi-modules Service staging / java-multi-modules 63d Warning" [ref=e1199] [cursor=pointer]':
+            - img [ref=e1200]
+            - generic [ref=e1202]:
+              - generic [ref=e1203]:
+                - generic [ref=e1204]: No endpoints
+                - generic [ref=e1205]: Networking
+                - generic [ref=e1206]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1207]: "— selector: app.kubernetes.io/name=java-multi-modules"
+              - generic [ref=e1208]:
+                - generic [ref=e1209]: Service
+                - generic [ref=e1210]: staging / java-multi-modules
+            - time [ref=e1211]:
+              - img [ref=e1212]
+              - text: 63d
+            - generic [ref=e1215]: Warning
+        - listitem [ref=e1216]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=use-esm-package-after-node22 Service staging / use-esm-package-after-node22 72d Warning" [ref=e1217] [cursor=pointer]':
+            - img [ref=e1218]
+            - generic [ref=e1220]:
+              - generic [ref=e1221]:
+                - generic [ref=e1222]: No endpoints
+                - generic [ref=e1223]: Networking
+                - generic [ref=e1224]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1225]: "— selector: app.kubernetes.io/name=use-esm-package-after-node22"
+              - generic [ref=e1226]:
+                - generic [ref=e1227]: Service
+                - generic [ref=e1228]: staging / use-esm-package-after-node22
+            - time [ref=e1229]:
+              - img [ref=e1230]
+              - text: 72d
+            - generic [ref=e1233]: Warning
+        - listitem [ref=e1234]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=using-esm-packages Service staging / using-esm-packages 72d Warning" [ref=e1235] [cursor=pointer]':
+            - img [ref=e1236]
+            - generic [ref=e1238]:
+              - generic [ref=e1239]:
+                - generic [ref=e1240]: No endpoints
+                - generic [ref=e1241]: Networking
+                - generic [ref=e1242]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1243]: "— selector: app.kubernetes.io/name=using-esm-packages"
+              - generic [ref=e1244]:
+                - generic [ref=e1245]: Service
+                - generic [ref=e1246]: staging / using-esm-packages
+            - time [ref=e1247]:
+              - img [ref=e1248]
+              - text: 72d
+            - generic [ref=e1251]: Warning
+        - listitem [ref=e1252]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=sql-typeorm Service staging / sql-typeorm 75d Warning" [ref=e1253] [cursor=pointer]':
+            - img [ref=e1254]
+            - generic [ref=e1256]:
+              - generic [ref=e1257]:
+                - generic [ref=e1258]: No endpoints
+                - generic [ref=e1259]: Networking
+                - generic [ref=e1260]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1261]: "— selector: app.kubernetes.io/name=sql-typeorm"
+              - generic [ref=e1262]:
+                - generic [ref=e1263]: Service
+                - generic [ref=e1264]: staging / sql-typeorm
+            - time [ref=e1265]:
+              - img [ref=e1266]
+              - text: 75d
+            - generic [ref=e1269]: Warning
+        - listitem [ref=e1270]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: cluster.x-k8s.io/provider=cluster-api Service capi-system / capi-webhook-service 77d Warning" [ref=e1271] [cursor=pointer]':
+            - img [ref=e1272]
+            - generic [ref=e1274]:
+              - generic [ref=e1275]:
+                - generic [ref=e1276]: No endpoints
+                - generic [ref=e1277]: Networking
+                - generic [ref=e1278]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1279]: "— selector: cluster.x-k8s.io/provider=cluster-api"
+              - generic [ref=e1280]:
+                - generic [ref=e1281]: Service
+                - generic [ref=e1282]: capi-system / capi-webhook-service
+            - time [ref=e1283]:
+              - img [ref=e1284]
+              - text: 77d
+            - generic [ref=e1287]: Warning
+        - listitem [ref=e1288]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=skyhook-agent Service dev / skyhook-agent 92d Warning" [ref=e1289] [cursor=pointer]':
+            - img [ref=e1290]
+            - generic [ref=e1292]:
+              - generic [ref=e1293]:
+                - generic [ref=e1294]: No endpoints
+                - generic [ref=e1295]: Networking
+                - generic [ref=e1296]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1297]: "— selector: app.kubernetes.io/name=skyhook-agent"
+              - generic [ref=e1298]:
+                - generic [ref=e1299]: Service
+                - generic [ref=e1300]: dev / skyhook-agent
+            - time [ref=e1301]:
+              - img [ref=e1302]
+              - text: 92d
+            - generic [ref=e1305]: Warning
+        - listitem [ref=e1306]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=python-flask-2 Service staging / python-flask-2 97d Warning" [ref=e1307] [cursor=pointer]':
+            - img [ref=e1308]
+            - generic [ref=e1310]:
+              - generic [ref=e1311]:
+                - generic [ref=e1312]: No endpoints
+                - generic [ref=e1313]: Networking
+                - generic [ref=e1314]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1315]: "— selector: app.kubernetes.io/name=python-flask-2"
+              - generic [ref=e1316]:
+                - generic [ref=e1317]: Service
+                - generic [ref=e1318]: staging / python-flask-2
+            - time [ref=e1319]:
+              - img [ref=e1320]
+              - text: 97d
+            - generic [ref=e1323]: Warning
+        - listitem [ref=e1324]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=java-maven-2 Service staging / java-maven-2 97d Warning" [ref=e1325] [cursor=pointer]':
+            - img [ref=e1326]
+            - generic [ref=e1328]:
+              - generic [ref=e1329]:
+                - generic [ref=e1330]: No endpoints
+                - generic [ref=e1331]: Networking
+                - generic [ref=e1332]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1333]: "— selector: app.kubernetes.io/name=java-maven-2"
+              - generic [ref=e1334]:
+                - generic [ref=e1335]: Service
+                - generic [ref=e1336]: staging / java-maven-2
+            - time [ref=e1337]:
+              - img [ref=e1338]
+              - text: 97d
+            - generic [ref=e1341]: Warning
+        - listitem [ref=e1342]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/instance=karpenter, app.kubernetes.io/name=karpenter Service karpenter / karpenter 109d Warning" [ref=e1343] [cursor=pointer]':
+            - img [ref=e1344]
+            - generic [ref=e1346]:
+              - generic [ref=e1347]:
+                - generic [ref=e1348]: No endpoints
+                - generic [ref=e1349]: Networking
+                - generic [ref=e1350]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1351]: "— selector: app.kubernetes.io/instance=karpenter, app.kubernetes.io/name=karpenter"
+              - generic [ref=e1352]:
+                - generic [ref=e1353]: Service
+                - generic [ref=e1354]: karpenter / karpenter
+            - time [ref=e1355]:
+              - img [ref=e1356]
+              - text: 109d
+            - generic [ref=e1359]: Warning
+        - listitem [ref=e1360]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=svc-test-orphan-1769525288 Service default / svc-test-orphan-1769525288 153d Warning" [ref=e1361] [cursor=pointer]':
+            - img [ref=e1362]
+            - generic [ref=e1364]:
+              - generic [ref=e1365]:
+                - generic [ref=e1366]: No endpoints
+                - generic [ref=e1367]: Networking
+                - generic [ref=e1368]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1369]: "— selector: app=svc-test-orphan-1769525288"
+              - generic [ref=e1370]:
+                - generic [ref=e1371]: Service
+                - generic [ref=e1372]: default / svc-test-orphan-1769525288
+            - time [ref=e1373]:
+              - img [ref=e1374]
+              - text: 153d
+            - generic [ref=e1377]: Warning
+        - listitem [ref=e1378]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=project-infra Service autopush / project-infra 159d Warning" [ref=e1379] [cursor=pointer]':
+            - img [ref=e1380]
+            - generic [ref=e1382]:
+              - generic [ref=e1383]:
+                - generic [ref=e1384]: No endpoints
+                - generic [ref=e1385]: Networking
+                - generic [ref=e1386]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1387]: "— selector: app.kubernetes.io/name=project-infra"
+              - generic [ref=e1388]:
+                - generic [ref=e1389]: Service
+                - generic [ref=e1390]: autopush / project-infra
+            - time [ref=e1391]:
+              - img [ref=e1392]
+              - text: 159d
+            - generic [ref=e1395]: Warning
+        - listitem [ref=e1396]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=project-infra Service dev / project-infra 159d Warning" [ref=e1397] [cursor=pointer]':
+            - img [ref=e1398]
+            - generic [ref=e1400]:
+              - generic [ref=e1401]:
+                - generic [ref=e1402]: No endpoints
+                - generic [ref=e1403]: Networking
+                - generic [ref=e1404]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1405]: "— selector: app.kubernetes.io/name=project-infra"
+              - generic [ref=e1406]:
+                - generic [ref=e1407]: Service
+                - generic [ref=e1408]: dev / project-infra
+            - time [ref=e1409]:
+              - img [ref=e1410]
+              - text: 159d
+            - generic [ref=e1413]: Warning
+        - listitem [ref=e1414]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=example-app Service dev / example-app 187d Warning" [ref=e1415] [cursor=pointer]':
+            - img [ref=e1416]
+            - generic [ref=e1418]:
+              - generic [ref=e1419]:
+                - generic [ref=e1420]: No endpoints
+                - generic [ref=e1421]: Networking
+                - generic [ref=e1422]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1423]: "— selector: app=example-app"
+              - generic [ref=e1424]:
+                - generic [ref=e1425]: Service
+                - generic [ref=e1426]: dev / example-app
+            - time [ref=e1427]:
+              - img [ref=e1428]
+              - text: 187d
+            - generic [ref=e1431]: Warning
+        - listitem [ref=e1432]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=skyhook-agent Service staging / skyhook-agent 202d Warning" [ref=e1433] [cursor=pointer]':
+            - img [ref=e1434]
+            - generic [ref=e1436]:
+              - generic [ref=e1437]:
+                - generic [ref=e1438]: No endpoints
+                - generic [ref=e1439]: Networking
+                - generic [ref=e1440]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1441]: "— selector: app.kubernetes.io/name=skyhook-agent"
+              - generic [ref=e1442]:
+                - generic [ref=e1443]: Service
+                - generic [ref=e1444]: staging / skyhook-agent
+            - time [ref=e1445]:
+              - img [ref=e1446]
+              - text: 202d
+            - generic [ref=e1449]: Warning
+        - listitem [ref=e1450]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/name=arlen-demo Service dev / arlen-demo 259d Warning" [ref=e1451] [cursor=pointer]':
+            - img [ref=e1452]
+            - generic [ref=e1454]:
+              - generic [ref=e1455]:
+                - generic [ref=e1456]: No endpoints
+                - generic [ref=e1457]: Networking
+                - generic [ref=e1458]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1459]: "— selector: app.kubernetes.io/name=arlen-demo"
+              - generic [ref=e1460]:
+                - generic [ref=e1461]: Service
+                - generic [ref=e1462]: dev / arlen-demo
+            - time [ref=e1463]:
+              - img [ref=e1464]
+              - text: 259d
+            - generic [ref=e1467]: Warning
+        - listitem [ref=e1468]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app.kubernetes.io/instance=cloud-native-pg, app.kubernetes.io/name=cloudnative-pg Service cloud-native-pg / cnpg-webhook-service 285d Warning" [ref=e1469] [cursor=pointer]':
+            - img [ref=e1470]
+            - generic [ref=e1472]:
+              - generic [ref=e1473]:
+                - generic [ref=e1474]: No endpoints
+                - generic [ref=e1475]: Networking
+                - generic [ref=e1476]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1477]: "— selector: app.kubernetes.io/instance=cloud-native-pg, app.kubernetes.io/name=cloudnative-pg"
+              - generic [ref=e1478]:
+                - generic [ref=e1479]: Service
+                - generic [ref=e1480]: cloud-native-pg / cnpg-webhook-service
+            - time [ref=e1481]:
+              - img [ref=e1482]
+              - text: 285d
+            - generic [ref=e1485]: Warning
+        - listitem [ref=e1486]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=cloud-provisioner Service dev / cloud-provisioner 295d Warning" [ref=e1487] [cursor=pointer]':
+            - img [ref=e1488]
+            - generic [ref=e1490]:
+              - generic [ref=e1491]:
+                - generic [ref=e1492]: No endpoints
+                - generic [ref=e1493]: Networking
+                - generic [ref=e1494]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1495]: "— selector: app=cloud-provisioner"
+              - generic [ref=e1496]:
+                - generic [ref=e1497]: Service
+                - generic [ref=e1498]: dev / cloud-provisioner
+            - time [ref=e1499]:
+              - img [ref=e1500]
+              - text: 295d
+            - generic [ref=e1503]: Warning
+        - listitem [ref=e1504]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=cloud-prov-wizard Service staging / cloud-prov-wizard 321d Warning" [ref=e1505] [cursor=pointer]':
+            - img [ref=e1506]
+            - generic [ref=e1508]:
+              - generic [ref=e1509]:
+                - generic [ref=e1510]: No endpoints
+                - generic [ref=e1511]: Networking
+                - generic [ref=e1512]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1513]: "— selector: app=cloud-prov-wizard"
+              - generic [ref=e1514]:
+                - generic [ref=e1515]: Service
+                - generic [ref=e1516]: staging / cloud-prov-wizard
+            - time [ref=e1517]:
+              - img [ref=e1518]
+              - text: 321d
+            - generic [ref=e1521]: Warning
+        - listitem [ref=e1522]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=components-mono-repo-test Service dev / components-mono-repo-test 341d Warning" [ref=e1523] [cursor=pointer]':
+            - img [ref=e1524]
+            - generic [ref=e1526]:
+              - generic [ref=e1527]:
+                - generic [ref=e1528]: No endpoints
+                - generic [ref=e1529]: Networking
+                - generic [ref=e1530]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1531]: "— selector: app=components-mono-repo-test"
+              - generic [ref=e1532]:
+                - generic [ref=e1533]: Service
+                - generic [ref=e1534]: dev / components-mono-repo-test
+            - time [ref=e1535]:
+              - img [ref=e1536]
+              - text: 341d
+            - generic [ref=e1539]: Warning
+        - listitem [ref=e1540]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=cats-demo Service dev / cats-demo 347d Warning" [ref=e1541] [cursor=pointer]':
+            - img [ref=e1542]
+            - generic [ref=e1544]:
+              - generic [ref=e1545]:
+                - generic [ref=e1546]: No endpoints
+                - generic [ref=e1547]: Networking
+                - generic [ref=e1548]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1549]: "— selector: app=cats-demo"
+              - generic [ref=e1550]:
+                - generic [ref=e1551]: Service
+                - generic [ref=e1552]: dev / cats-demo
+            - time [ref=e1553]:
+              - img [ref=e1554]
+              - text: 347d
+            - generic [ref=e1557]: Warning
+        - listitem [ref=e1558]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=gitworkflows Service dev / gitworkflows 347d Warning" [ref=e1559] [cursor=pointer]':
+            - img [ref=e1560]
+            - generic [ref=e1562]:
+              - generic [ref=e1563]:
+                - generic [ref=e1564]: No endpoints
+                - generic [ref=e1565]: Networking
+                - generic [ref=e1566]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1567]: "— selector: app=gitworkflows"
+              - generic [ref=e1568]:
+                - generic [ref=e1569]: Service
+                - generic [ref=e1570]: dev / gitworkflows
+            - time [ref=e1571]:
+              - img [ref=e1572]
+              - text: 347d
+            - generic [ref=e1575]: Warning
+        - listitem [ref=e1576]:
+          - button "No endpoints Networking Backing workload scaled to 0 — selector matches a Deployment/StatefulSet that is intentionally scaled to 0 replicas Service staging / onboarding-agent 385d Warning" [ref=e1577] [cursor=pointer]:
+            - img [ref=e1578]
+            - generic [ref=e1580]:
+              - generic [ref=e1581]:
+                - generic [ref=e1582]: No endpoints
+                - generic [ref=e1583]: Networking
+                - generic [ref=e1584]:
+                  - text: Backing workload scaled to 0
+                  - generic [ref=e1585]: — selector matches a Deployment/StatefulSet that is intentionally scaled to 0 replicas
+              - generic [ref=e1586]:
+                - generic [ref=e1587]: Service
+                - generic [ref=e1588]: staging / onboarding-agent
+            - time [ref=e1589]:
+              - img [ref=e1590]
+              - text: 385d
+            - generic [ref=e1593]: Warning
+        - listitem [ref=e1594]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=discovery-service Service staging / discovery-service 396d Warning" [ref=e1595] [cursor=pointer]':
+            - img [ref=e1596]
+            - generic [ref=e1598]:
+              - generic [ref=e1599]:
+                - generic [ref=e1600]: No endpoints
+                - generic [ref=e1601]: Networking
+                - generic [ref=e1602]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1603]: "— selector: app=discovery-service"
+              - generic [ref=e1604]:
+                - generic [ref=e1605]: Service
+                - generic [ref=e1606]: staging / discovery-service
+            - time [ref=e1607]:
+              - img [ref=e1608]
+              - text: 396d
+            - generic [ref=e1611]: Warning
+        - listitem [ref=e1612]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=github-mcp-server Service dev / github-mcp-server 407d Warning" [ref=e1613] [cursor=pointer]':
+            - img [ref=e1614]
+            - generic [ref=e1616]:
+              - generic [ref=e1617]:
+                - generic [ref=e1618]: No endpoints
+                - generic [ref=e1619]: Networking
+                - generic [ref=e1620]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1621]: "— selector: app=github-mcp-server"
+              - generic [ref=e1622]:
+                - generic [ref=e1623]: Service
+                - generic [ref=e1624]: dev / github-mcp-server
+            - time [ref=e1625]:
+              - img [ref=e1626]
+              - text: 407d
+            - generic [ref=e1629]: Warning
+        - listitem [ref=e1630]:
+          - button "No endpoints Networking Backing workload scaled to 0 — selector matches a Deployment/StatefulSet that is intentionally scaled to 0 replicas Service gmp-system / rule-evaluator 407d Warning" [ref=e1631] [cursor=pointer]:
+            - img [ref=e1632]
+            - generic [ref=e1634]:
+              - generic [ref=e1635]:
+                - generic [ref=e1636]: No endpoints
+                - generic [ref=e1637]: Networking
+                - generic [ref=e1638]:
+                  - text: Backing workload scaled to 0
+                  - generic [ref=e1639]: — selector matches a Deployment/StatefulSet that is intentionally scaled to 0 replicas
+              - generic [ref=e1640]:
+                - generic [ref=e1641]: Service
+                - generic [ref=e1642]: gmp-system / rule-evaluator
+            - time [ref=e1643]:
+              - img [ref=e1644]
+              - text: 407d
+            - generic [ref=e1647]: Warning
+        - listitem [ref=e1648]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=quack-temp Service dev / quack-temp 529d Warning" [ref=e1649] [cursor=pointer]':
+            - img [ref=e1650]
+            - generic [ref=e1652]:
+              - generic [ref=e1653]:
+                - generic [ref=e1654]: No endpoints
+                - generic [ref=e1655]: Networking
+                - generic [ref=e1656]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1657]: "— selector: app=quack-temp"
+              - generic [ref=e1658]:
+                - generic [ref=e1659]: Service
+                - generic [ref=e1660]: dev / quack-temp
+            - time [ref=e1661]:
+              - img [ref=e1662]
+              - text: 529d
+            - generic [ref=e1665]: Warning
+        - listitem [ref=e1666]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=koala-app-backend Service staging / koala-app-backend 637d Warning" [ref=e1667] [cursor=pointer]':
+            - img [ref=e1668]
+            - generic [ref=e1670]:
+              - generic [ref=e1671]:
+                - generic [ref=e1672]: No endpoints
+                - generic [ref=e1673]: Networking
+                - generic [ref=e1674]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1675]: "— selector: app=koala-app-backend"
+              - generic [ref=e1676]:
+                - generic [ref=e1677]: Service
+                - generic [ref=e1678]: staging / koala-app-backend
+            - time [ref=e1679]:
+              - img [ref=e1680]
+              - text: 637d
+            - generic [ref=e1683]: Warning
+        - listitem [ref=e1684]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=koala-app-backend Service dev / koala-app-backend 637d Warning" [ref=e1685] [cursor=pointer]':
+            - img [ref=e1686]
+            - generic [ref=e1688]:
+              - generic [ref=e1689]:
+                - generic [ref=e1690]: No endpoints
+                - generic [ref=e1691]: Networking
+                - generic [ref=e1692]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1693]: "— selector: app=koala-app-backend"
+              - generic [ref=e1694]:
+                - generic [ref=e1695]: Service
+                - generic [ref=e1696]: dev / koala-app-backend
+            - time [ref=e1697]:
+              - img [ref=e1698]
+              - text: 637d
+            - generic [ref=e1701]: Warning
+        - listitem [ref=e1702]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=koala-app-backend Service staging / koala-app-backend-service 638d Warning" [ref=e1703] [cursor=pointer]':
+            - img [ref=e1704]
+            - generic [ref=e1706]:
+              - generic [ref=e1707]:
+                - generic [ref=e1708]: No endpoints
+                - generic [ref=e1709]: Networking
+                - generic [ref=e1710]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1711]: "— selector: app=koala-app-backend"
+              - generic [ref=e1712]:
+                - generic [ref=e1713]: Service
+                - generic [ref=e1714]: staging / koala-app-backend-service
+            - time [ref=e1715]:
+              - img [ref=e1716]
+              - text: 638d
+            - generic [ref=e1719]: Warning
+        - listitem [ref=e1720]:
+          - 'button "No endpoints Networking Selector matches no pods — selector: app=koala-app-backend Service staging / staging-koala-app-backend-service 916d Warning" [ref=e1721] [cursor=pointer]':
+            - img [ref=e1722]
+            - generic [ref=e1724]:
+              - generic [ref=e1725]:
+                - generic [ref=e1726]: No endpoints
+                - generic [ref=e1727]: Networking
+                - generic [ref=e1728]:
+                  - text: Selector matches no pods
+                  - generic [ref=e1729]: "— selector: app=koala-app-backend"
+              - generic [ref=e1730]:
+                - generic [ref=e1731]: Service
+                - generic [ref=e1732]: staging / staging-koala-app-backend-service
+            - time [ref=e1733]:
+              - img [ref=e1734]
+              - text: 916d
+            - generic [ref=e1737]: Warning
+        - listitem [ref=e1738]:
+          - button "No endpoints Networking Backing workload scaled to 0 — selector matches a Deployment/StatefulSet that is intentionally scaled to 0 replicas Service gmp-system / alertmanager 1064d Warning" [ref=e1739] [cursor=pointer]:
+            - img [ref=e1740]
+            - generic [ref=e1742]:
+              - generic [ref=e1743]:
+                - generic [ref=e1744]: No endpoints
+                - generic [ref=e1745]: Networking
+                - generic [ref=e1746]:
+                  - text: Backing workload scaled to 0
+                  - generic [ref=e1747]: — selector matches a Deployment/StatefulSet that is intentionally scaled to 0 replicas
+              - generic [ref=e1748]:
+                - generic [ref=e1749]: Service
+                - generic [ref=e1750]: gmp-system / alertmanager
+            - time [ref=e1751]:
+              - img [ref=e1752]
+              - text: 1064d
+            - generic [ref=e1755]: Warning
+        - listitem [ref=e1756]:
+          - 'button "No endpoints Networking Unresolved named targetPort: webhook — No selected pod declares a container port with this name Service gmp-system / gmp-operator 1064d Warning" [ref=e1757] [cursor=pointer]':
+            - img [ref=e1758]
+            - generic [ref=e1760]:
+              - generic [ref=e1761]:
+                - generic [ref=e1762]: No endpoints
+                - generic [ref=e1763]: Networking
+                - generic [ref=e1764]:
+                  - text: "Unresolved named targetPort: webhook"
+                  - generic [ref=e1765]: — No selected pod declares a container port with this name
+              - generic [ref=e1766]:
+                - generic [ref=e1767]: Service
+                - generic [ref=e1768]: gmp-system / gmp-operator
+            - time [ref=e1769]:
+              - img [ref=e1770]
+              - text: 1064d
+            - generic [ref=e1773]: Warning

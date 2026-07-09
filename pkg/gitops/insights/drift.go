@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -91,12 +90,7 @@ func computeDriftFromLastApplied(live *unstructured.Unstructured, ignorePointers
 		// back to the textual explainer.
 		return nil
 	}
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
-	truncated := false
-	if len(entries) > driftEntryCap {
-		entries = entries[:driftEntryCap]
-		truncated = true
-	}
+	entries, truncated := sortAndCapDriftEntries(entries)
 	return &Drift{
 		Entries:   entries,
 		Source:    DriftSourceLastApplied,

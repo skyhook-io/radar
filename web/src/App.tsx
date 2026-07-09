@@ -2153,6 +2153,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               navigateToResource(resource)
             }}
             onClearNamespaces={clearAllNamespaces}
+            onOpenSettings={() => setShowSettings(true)}
           />
         )}
 

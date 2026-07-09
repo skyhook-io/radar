@@ -1,14 +1,20 @@
 package k8s
 
 import (
+	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // listScoped reads gvr at the right scope for a curated detector: an explicit
@@ -28,6 +34,88 @@ const (
 	fluxKustGrp = "kustomize.toolkit.fluxcd.io"
 	fluxHelmGrp = "helm.toolkit.fluxcd.io"
 )
+
+const (
+	// manualDriftGate is how long a manual-sync Application must sit
+	// continuously OutOfSync before we warn: short enough to catch a forgotten
+	// change, long enough not to nag about an in-progress one an operator is
+	// about to sync.
+	manualDriftGate = 24 * time.Hour
+	// argoDriftRetain drops drift entries for apps we stop seeing (deleted
+	// without a final in-sync observation); it must exceed the compose cadence
+	// by a wide margin so a live app is never purged mid-drift.
+	argoDriftRetain = time.Hour
+
+	// argoStaleFloor is the minimum "sync verdict is stale" threshold, used when
+	// argocd-cm's timeout.reconciliation is unreadable or small.
+	argoStaleFloor = 30 * time.Minute
+
+	argoControllerLabelKey = "app.kubernetes.io/name"
+	argoControllerLabelVal = "argocd-application-controller"
+)
+
+type argoDriftEntry struct {
+	firstSeen    time.Time
+	lastObserved time.Time
+}
+
+// argoDriftTracker records how long each manual-sync Application has been
+// continuously OutOfSync. It hangs off the per-cluster ResourceCache, so a
+// kubeconfig context switch drops it naturally; a Radar restart resets every
+// clock, which is why the gated warning is deliberately conservative (we would
+// rather under-warn than invent a drift-onset time we never observed).
+type argoDriftTracker struct {
+	mu      sync.Mutex
+	entries map[types.UID]argoDriftEntry
+}
+
+func newArgoDriftTracker() *argoDriftTracker {
+	return &argoDriftTracker{entries: map[types.UID]argoDriftEntry{}}
+}
+
+// observe records the app's current sync state and returns how long it has been
+// continuously OutOfSync. An in-sync observation clears the entry (drift
+// resolved) and returns 0.
+func (t *argoDriftTracker) observe(uid types.UID, outOfSync bool, now time.Time) time.Duration {
+	if t == nil || uid == "" {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !outOfSync {
+		delete(t.entries, uid)
+		return 0
+	}
+	e, ok := t.entries[uid]
+	if !ok {
+		e.firstSeen = now
+	}
+	e.lastObserved = now
+	t.entries[uid] = e
+	return now.Sub(e.firstSeen)
+}
+
+// purge drops entries not observed within retain, covering apps deleted without
+// a final in-sync observation.
+func (t *argoDriftTracker) purge(now time.Time, retain time.Duration) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for uid, e := range t.entries {
+		if now.Sub(e.lastObserved) > retain {
+			delete(t.entries, uid)
+		}
+	}
+}
+
+func driftTracker(cache *ResourceCache) *argoDriftTracker {
+	if cache == nil {
+		return nil
+	}
+	return cache.argoDrift
+}
 
 // DetectGitOpsProblems surfaces failing GitOps reconcilers — ArgoCD Applications
 // and Flux Kustomizations/HelmReleases — that the generic CRD-condition fallback
@@ -58,8 +146,26 @@ func DetectGitOpsProblems(dynamicCache *DynamicResourceCache, discovery *Resourc
 		return items
 	}
 
+	// The typed cache carries Radar-tracked state (manual-drift continuity) and
+	// the typed listers (controller pods, argocd-cm) the stale detector needs.
+	// nil in unit tests that only stand up the dynamic cache — every consumer
+	// here degrades gracefully.
+	cache := GetResourceCache()
+	argoApps := list("Application", argoGroup)
+
 	var problems []Detection
-	problems = append(problems, detectArgoAppProblems(list("Application", argoGroup), now)...)
+	problems = append(problems, detectArgoAppProblems(argoApps, driftTracker(cache), now)...)
+	// Controller-staleness is a cluster-wide signal: it needs global Application
+	// counts plus cross-namespace controller-pod health, and a namespace-scoped
+	// viewer can't see the controller pods anyway. Compute it only on the
+	// cluster-wide pass (namespace == ""), where argoApps is the full fleet.
+	// The drift tracker is purged here too, and ONLY here: a namespace-scoped
+	// pass observes just its slice of the fleet, so purging on it would drop
+	// other namespaces' drift clocks and restart their 24h gate.
+	if namespace == "" {
+		driftTracker(cache).purge(now, argoDriftRetain)
+		problems = append(problems, detectArgoStaleFromCache(cache, argoApps, now)...)
+	}
 	problems = append(problems, detectFluxProblems(list("Kustomization", fluxKustGrp), "Kustomization", fluxKustGrp, now)...)
 	problems = append(problems, detectFluxProblems(list("HelmRelease", fluxHelmGrp), "HelmRelease", fluxHelmGrp, now)...)
 	return problems
@@ -91,7 +197,7 @@ func gitopsProblem(kind, group, ns, name, severity, reason, message string, age 
 // (the sync=Unknown app-path-not-found case the generic path can't see); flag
 // Missing/OutOfSync only for auto-synced apps. One row per app, most-severe
 // cause first.
-func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []Detection {
+func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDriftTracker, now time.Time) []Detection {
 	var out []Detection
 	for _, app := range apps {
 		ns, name := app.GetNamespace(), app.GetName()
@@ -108,6 +214,17 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 				return healthMsg
 			}
 			return fallback
+		}
+
+		automated := argoIsAutomated(app)
+		outOfSync := strings.EqualFold(sync, "OutOfSync")
+		// Track manual-sync drift continuity before any gate short-circuits the
+		// loop, so a suspended-then-resumed or mid-degraded app that stays
+		// OutOfSync keeps one clock. Only manual apps matter here; auto-synced
+		// drift is flagged directly below.
+		var manualDriftFor time.Duration
+		if !automated {
+			manualDriftFor = tracker.observe(app.GetUID(), outOfSync, now)
 		}
 
 		if strings.EqualFold(phase, "Running") {
@@ -187,7 +304,6 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 			out = append(out, d)
 			continue
 		}
-		automated := argoIsAutomated(app)
 		if strings.EqualFold(health, "Missing") && automated {
 			// Auto-synced app whose managed resources are GONE is critical — the
 			// declared state isn't running at all.
@@ -197,7 +313,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 			out = append(out, dd)
 			continue
 		}
-		if strings.EqualFold(sync, "OutOfSync") && automated {
+		if outOfSync && automated {
 			// Stuck-drift loop: the last sync Succeeded yet the app is still
 			// OutOfSync and reconciled recently — something is mutating resources
 			// after each apply (mutating webhook, sibling controller, conversion
@@ -216,6 +332,19 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 				dd.Action = "Review the diff, then fix Git (or ignoreDifferences / the mutating controller) and refresh; check Argo events if it keeps drifting."
 				out = append(out, dd)
 			}
+		}
+		// A manual-sync app legitimately sits OutOfSync until an operator syncs
+		// it, so unlike the auto-synced branch above we only warn once the drift
+		// has persisted past manualDriftGate — long enough to be a forgotten
+		// change rather than one mid-review.
+		if !automated && outOfSync && manualDriftFor >= manualDriftGate {
+			dd := gitopsProblem("Application", argoGroup, ns, name, "warning", "OutOfSyncManual",
+				fmt.Sprintf("Application has been out of sync for %s and auto-sync is not enabled", FormatAge(manualDriftFor)), age)
+			// Anchor FirstSeen to drift onset, not resource age.
+			dd.DurationSeconds = int64(manualDriftFor.Seconds())
+			dd.Duration = FormatAge(manualDriftFor)
+			dd.Action = "Review the drift in Changes, then Sync the application (or enable auto-sync) if the drift is unintended."
+			out = append(out, dd)
 		}
 	}
 	return out
@@ -375,4 +504,205 @@ func detectFluxProblems(items []*unstructured.Unstructured, kind, group string, 
 		out = append(out, p)
 	}
 	return out
+}
+
+// argoControllerHealth summarizes the application-controller's pod health for
+// the stale-comparison detector. visible reports whether Radar can see the
+// controller pods at all — RBAC may hide them — in which case we cannot pin
+// staleness on the controller and fall back to per-app rows. subject* name the
+// controller workload the pods roll up to, used as the rollup issue's subject.
+type argoControllerHealth struct {
+	visible          bool
+	ready            int
+	subjectKind      string
+	subjectName      string
+	subjectNamespace string
+}
+
+func (h argoControllerHealth) healthy() bool { return h.ready >= 1 }
+
+// detectArgoStaleFromCache reads controller health + the reconciliation timeout
+// from the typed caches, then runs the pure staleness detector over the app
+// fleet. Argo only re-compares sync/drift on refresh, so a down or wedged
+// application-controller silently freezes every verdict; this surfaces that.
+func detectArgoStaleFromCache(cache *ResourceCache, apps []*unstructured.Unstructured, now time.Time) []Detection {
+	if len(apps) == 0 {
+		return nil
+	}
+	ctrl := argoControllerHealthFromCache(cache)
+	threshold := argoStaleThreshold(cache, ctrl.subjectNamespace)
+	return detectArgoStale(apps, ctrl, threshold, now)
+}
+
+// detectArgoStale applies the two-level staleness verdict. Level one: if the
+// controller is visible but has no Ready replica, every Application's verdict is
+// frozen — one critical rollup on the controller, the individual stale apps
+// being the symptom. Level two (controller healthy or hidden): a majority of a
+// non-trivial fleet stale rolls up to one warning; otherwise each stale app
+// gets its own warning. Pure over its inputs so the rules are unit-testable.
+func detectArgoStale(apps []*unstructured.Unstructured, ctrl argoControllerHealth, threshold time.Duration, now time.Time) []Detection {
+	if len(apps) == 0 {
+		return nil
+	}
+	if ctrl.visible && !ctrl.healthy() {
+		d := gitopsProblem(ctrl.subjectKind, argoControllerGroup(ctrl.subjectKind), ctrl.subjectNamespace, ctrl.subjectName,
+			"critical", "GitOpsControllerStalled",
+			fmt.Sprintf("Argo CD application-controller is not running — sync status and drift detection are frozen for %s", countApps(len(apps))), 0)
+		d.Stuck = true
+		d.Action = "Inspect the application-controller pods (logs, restarts, resource limits) — no Application will sync or re-compare until it is running again."
+		return []Detection{d}
+	}
+
+	var eligible, stale []*unstructured.Unstructured
+	for _, app := range apps {
+		if !argoAppEligibleForStale(app) {
+			continue
+		}
+		eligible = append(eligible, app)
+		if since, ok := durationFromTimestamp(now, argoReconciledAt(app)); ok && since > threshold {
+			stale = append(stale, app)
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	// A majority of a non-trivial fleet stale points at the controller, not the
+	// apps — one rollup instead of a row per app (noise-storm suppression). The
+	// >=3 floor keeps a tiny fleet (where one stale app is not a fleet signal)
+	// on the per-app path.
+	if ctrl.healthy() && len(eligible) >= 3 && len(stale)*2 > len(eligible) {
+		d := gitopsProblem(ctrl.subjectKind, argoControllerGroup(ctrl.subjectKind), ctrl.subjectNamespace, ctrl.subjectName,
+			"warning", "GitOpsComparisonsStale",
+			fmt.Sprintf("%d of %d Applications have stale sync/drift comparisons — the application-controller may be overloaded or wedged", len(stale), len(eligible)), 0)
+		d.Action = "Check the application-controller for reconcile backlog or throttling; individual Applications' verdicts are older than expected."
+		return []Detection{d}
+	}
+	out := make([]Detection, 0, len(stale))
+	for _, app := range stale {
+		since, _ := durationFromTimestamp(now, argoReconciledAt(app))
+		d := gitopsProblem("Application", argoGroup, app.GetNamespace(), app.GetName(),
+			"warning", "ComparisonStale",
+			fmt.Sprintf("Sync and drift status may be stale — last re-compared %s ago (the application-controller has not re-evaluated this Application recently)", FormatAge(since)), 0)
+		d.DurationSeconds = int64(since.Seconds())
+		d.Duration = FormatAge(since)
+		d.Action = "Refresh the Application to force a re-comparison; if it stays stale, check the application-controller health."
+		out = append(out, d)
+	}
+	return out
+}
+
+// argoAppEligibleForStale filters to apps whose comparison age is meaningful: a
+// never-reconciled app has no verdict to be stale, a terminating app is being
+// torn down, and a mid-operation app is expected to lag.
+func argoAppEligibleForStale(app *unstructured.Unstructured) bool {
+	if app.GetDeletionTimestamp() != nil {
+		return false
+	}
+	if strings.TrimSpace(argoReconciledAt(app)) == "" {
+		return false
+	}
+	phase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+	return !strings.EqualFold(phase, "Running")
+}
+
+func argoReconciledAt(app *unstructured.Unstructured) string {
+	v, _, _ := unstructured.NestedString(app.Object, "status", "reconciledAt")
+	return v
+}
+
+func argoControllerGroup(kind string) string {
+	switch kind {
+	case "StatefulSet", "Deployment":
+		return "apps"
+	default:
+		return ""
+	}
+}
+
+func countApps(n int) string {
+	if n == 1 {
+		return "1 Application"
+	}
+	return fmt.Sprintf("%d Applications", n)
+}
+
+// argoControllerHealthFromCache finds the application-controller pods across ALL
+// cached namespaces (the controller is not always in "argocd"), counts Ready
+// replicas, and resolves the workload subject the pods belong to.
+func argoControllerHealthFromCache(cache *ResourceCache) argoControllerHealth {
+	if cache == nil || cache.Pods() == nil {
+		return argoControllerHealth{}
+	}
+	pods, err := cache.Pods().List(labels.SelectorFromSet(labels.Set{argoControllerLabelKey: argoControllerLabelVal}))
+	if err != nil || len(pods) == 0 {
+		return argoControllerHealth{}
+	}
+	h := argoControllerHealth{visible: true}
+	for _, p := range pods {
+		if isPodReadyForProblem(p) {
+			h.ready++
+		}
+	}
+	h.subjectKind, h.subjectName, h.subjectNamespace = argoControllerSubject(cache, pods)
+	return h
+}
+
+// argoControllerSubject resolves the controller workload the pods roll up to
+// (StatefulSet in the standard install, Deployment via ReplicaSet in some),
+// falling back to a concrete pod so the rollup issue always has a subject.
+func argoControllerSubject(cache *ResourceCache, pods []*corev1.Pod) (kind, name, namespace string) {
+	for _, p := range pods {
+		ref := metav1.GetControllerOf(p)
+		if ref == nil {
+			continue
+		}
+		switch ref.Kind {
+		case "StatefulSet", "Deployment":
+			return ref.Kind, ref.Name, p.Namespace
+		case "ReplicaSet":
+			if dName, ok := deploymentForReplicaSet(cache, p.Namespace, ref.Name); ok {
+				return "Deployment", dName, p.Namespace
+			}
+		}
+	}
+	return "Pod", pods[0].Name, pods[0].Namespace
+}
+
+func deploymentForReplicaSet(cache *ResourceCache, namespace, rsName string) (string, bool) {
+	if cache == nil || cache.ReplicaSets() == nil {
+		return "", false
+	}
+	rs, err := cache.ReplicaSets().ReplicaSets(namespace).Get(rsName)
+	if err != nil || rs == nil {
+		return "", false
+	}
+	if ref := metav1.GetControllerOf(rs); ref != nil && ref.Kind == "Deployment" {
+		return ref.Name, true
+	}
+	return "", false
+}
+
+// argoStaleThreshold is max(argoStaleFloor, 10× argocd-cm's
+// timeout.reconciliation) — 10× the re-compare period tolerates a few missed
+// cycles before calling a verdict stale. Unreadable/absent config → the floor.
+func argoStaleThreshold(cache *ResourceCache, controllerNamespace string) time.Duration {
+	if cache == nil || controllerNamespace == "" || cache.ConfigMaps() == nil {
+		return argoStaleFloor
+	}
+	cm, err := cache.ConfigMaps().ConfigMaps(controllerNamespace).Get("argocd-cm")
+	if err != nil || cm == nil {
+		return argoStaleFloor
+	}
+	return argoStaleThresholdFromValue(cm.Data["timeout.reconciliation"])
+}
+
+func argoStaleThresholdFromValue(raw string) time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || d <= 0 {
+		return argoStaleFloor
+	}
+	if scaled := 10 * d; scaled > argoStaleFloor {
+		return scaled
+	}
+	return argoStaleFloor
 }

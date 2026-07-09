@@ -36,6 +36,14 @@ type Config struct {
 	// pods. Empty falls back to busybox:latest; set it to a reachable mirror for
 	// air-gapped / private-registry clusters.
 	DebugImage string `json:"debugImage,omitempty"`
+	// ArgoCDURL is the Argo CD API server URL. Empty enables auto-discovery.
+	ArgoCDURL string `json:"argoCdUrl,omitempty"`
+	// ArgoCDToken is the Argo CD API bearer token. Stored in plain text in
+	// ~/.radar/config.json — Save enforces 0600 on the file.
+	ArgoCDToken string `json:"argoCdToken,omitempty"`
+	// ArgoCDInsecureTLS disables TLS certificate verification for the Argo CD
+	// API client only.
+	ArgoCDInsecureTLS bool `json:"argoCdInsecureTls,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent writes
@@ -88,12 +96,17 @@ func Save(c Config) error {
 	}
 	data = append(data, '\n')
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// 0600: the config can carry credentials (Prometheus headers, Argo CD token).
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp) // best-effort cleanup
 		return err
+	}
+	// Tighten pre-existing files written before the 0600 policy.
+	if err := os.Chmod(path, 0o600); err != nil {
+		log.Printf("[config] Failed to chmod %s to 0600: %v", path, err)
 	}
 	return nil
 }
