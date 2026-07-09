@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -79,6 +80,10 @@ type Run struct {
 	ManagedBy string // immutable — GitOps/Helm owner of the target ("" = none), for the Apply warning
 	Health    *ResourceHealthSignal
 	CreatedAt time.Time
+	// OwnerPID is the process that owns this run's lifecycle. Persisted so a
+	// second process sharing the history DB (standalone beside a long-running
+	// instance) can tell a LIVE foreign run from one orphaned by a crash.
+	OwnerPID int
 
 	// store mirrors RunManager.store (nil = memory-only) so the event hot path
 	// can persist without reaching back to the manager.
@@ -121,6 +126,7 @@ type RunSummary struct {
 	Health    *ResourceHealthSignal `json:"health,omitempty"`
 	Status    string                `json:"status"`
 	SessionID string                `json:"sessionId,omitempty"`
+	OwnerPID  int                   `json:"ownerPid,omitempty"`
 	Preview   string                `json:"preview,omitempty"`
 	CreatedAt time.Time             `json:"createdAt"`
 	UpdatedAt time.Time             `json:"updatedAt"`
@@ -234,11 +240,22 @@ func (m *RunManager) loadPersisted() {
 		if s.Agent == "cursor-agent" {
 			s.SessionID = ""
 		}
+		// A "running" row owned by another LIVE process is not interrupted — it
+		// belongs to a long-running instance (or another standalone) sharing
+		// this DB right now. Repairing it would falsely fail their active run;
+		// adopting it would show a run this process can't stream. Leave it to
+		// its owner; a later boot repairs it once the owner is gone.
+		// At construction this manager owns nothing yet, so any alive-owner
+		// running row is foreign — even a same-pid one (another manager in
+		// this process).
+		if s.Status == "running" && pidAlive(s.OwnerPID) {
+			continue
+		}
 		r := &Run{
 			ID: s.ID, Kind: s.Kind, Namespace: s.Namespace, Name: s.Name,
 			Context: s.Context, Agent: s.Agent, Isolated: s.Isolated,
 			Model: s.Model, Effort: s.Effort, ManagedBy: s.ManagedBy,
-			Health: s.Health, CreatedAt: s.CreatedAt,
+			Health: s.Health, CreatedAt: s.CreatedAt, OwnerPID: s.OwnerPID,
 			store:  m.store,
 			status: s.Status, sessionID: s.SessionID, preview: s.Preview,
 			updatedAt: s.UpdatedAt,
@@ -264,6 +281,17 @@ func (m *RunManager) loadPersisted() {
 		m.order = append(m.order, r.ID)
 	}
 	m.evictLocked() // the retention cap may have shrunk since the DB was written
+}
+
+// pidAlive reports whether a process exists (signal 0; EPERM still means
+// alive). PID reuse is theoretically possible but irrelevant at this scale —
+// a false "alive" only delays crash repair until the next boot.
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // newRunID mints a process-independent id. Random (not a counter) because
@@ -411,8 +439,9 @@ func (m *RunManager) Start(kind, namespace, name, agent string, isolated bool, m
 		ID: id, Kind: kind, Namespace: namespace,
 		Name: name, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Isolated: isolated,
 		Model: model, Effort: effort, ManagedBy: managedBy, Health: health, CreatedAt: nowUTC(),
-		store:  m.store,
-		status: "running", inFlight: true, updatedAt: nowUTC(),
+		OwnerPID: os.Getpid(),
+		store:    m.store,
+		status:   "running", inFlight: true, updatedAt: nowUTC(),
 		hydrated: true, // born live — its full log is in memory by construction
 		subs:     map[int]chan RunEvent{},
 	}
@@ -652,25 +681,39 @@ func (m *RunManager) sweepForeignLocked() {
 // (running) runs survive and are re-persisted so their rows aren't orphaned by
 // the wipe.
 func (m *RunManager) ClearHistory() error {
-	// Snapshot which runs survive (live) vs go (terminal) under the lock.
+	// Remove terminal runs from ADDRESSABILITY first, atomically: a follow-up
+	// racing the clear would otherwise revive a run whose rows are about to be
+	// deleted, leaving a live agent on an orphaned object. Once out of m.runs,
+	// AddTurn/Get can't find them (ErrRunNotFound), so the window is closed.
 	m.mu.Lock()
+	origOrder := append([]string(nil), m.order...)
 	kept := make([]string, 0, len(m.order))
-	var dropped []string
+	var dropped []*Run
+	var droppedIDs []string
 	for _, id := range m.order {
-		if m.runs[id].snapshotStatus() == "running" {
+		r := m.runs[id]
+		if r.snapshotStatus() == "running" {
 			kept = append(kept, id)
-		} else {
-			dropped = append(dropped, id)
+			continue
 		}
+		dropped = append(dropped, r)
+		droppedIDs = append(droppedIDs, id)
+		delete(m.runs, id)
 	}
+	m.order = kept
 	m.mu.Unlock()
 
-	// Store FIRST, memory second: if the delete fails, the UI must keep showing
-	// the runs — dropping memory first would show "cleared" while a restart
-	// resurrects everything from the intact DB. One transaction deleting only
-	// the non-kept rows, so a crash mid-clear can't lose a live investigation.
+	// One transaction deleting only the non-kept rows, so a crash mid-clear
+	// can't lose a live investigation. On FAILURE, restore the removed runs —
+	// the UI must keep showing what the DB still holds.
 	if m.store != nil {
 		if err := m.store.Clear(kept); err != nil {
+			m.mu.Lock()
+			for i, r := range dropped {
+				m.runs[droppedIDs[i]] = r
+			}
+			m.order = origOrder
+			m.mu.Unlock()
 			return err
 		}
 	}
@@ -688,13 +731,7 @@ func (m *RunManager) ClearHistory() error {
 		}
 	}
 
-	m.mu.Lock()
-	for _, id := range dropped {
-		r, ok := m.runs[id]
-		if !ok {
-			continue
-		}
-		delete(m.runs, id)
+	for _, r := range dropped {
 		// Detach the store before finalizing: the run's rows were just deleted,
 		// and finalize's persisted closed-sentinel would re-create them.
 		r.mu.Lock()
@@ -703,14 +740,6 @@ func (m *RunManager) ClearHistory() error {
 		r.finalize()
 		r.removeWorkDir()
 	}
-	order := make([]string, 0, len(m.order))
-	for _, id := range m.order {
-		if _, ok := m.runs[id]; ok {
-			order = append(order, id)
-		}
-	}
-	m.order = order
-	m.mu.Unlock()
 	return nil
 }
 
@@ -763,7 +792,7 @@ func (r *Run) summaryLocked() RunSummary {
 		Context: r.Context, Agent: r.Agent, Isolated: r.Isolated,
 		Model: r.Model, Effort: r.Effort, ManagedBy: r.ManagedBy,
 		Health: r.Health,
-		Status: r.status, SessionID: r.sessionID,
+		Status: r.status, SessionID: r.sessionID, OwnerPID: r.OwnerPID,
 		Preview: r.preview, CreatedAt: r.CreatedAt, UpdatedAt: r.updatedAt,
 	}
 }

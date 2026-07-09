@@ -249,6 +249,18 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	agent := s.aiRuns.AgentName(strings.TrimSpace(body.Agent))
+	// The server owns the consent store, so it enforces it: spawning an agent
+	// and shipping cluster data to a model provider must not depend on client
+	// code remembering to check. Surface derives from the RESOLVED agent (an
+	// unknown name falls back to the default, never across trust surfaces).
+	surface := "standard"
+	if agent == "cursor-agent" {
+		surface = "cursor"
+	}
+	if !config.AIConsentGiven(surface) {
+		s.writeError(w, http.StatusForbidden, "AI disclosure not acknowledged for this agent — approve the consent prompt first")
+		return
+	}
 	isolated := body.Isolated == nil || *body.Isolated
 	model := strings.TrimSpace(body.Model)
 	if len(model) > 100 {

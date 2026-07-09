@@ -165,8 +165,10 @@ Flags:
 		// read/write the shared machine-scoped store (~/.radar/config.json)
 		// directly — the ephemeral server then sees it as already given.
 		surface := consentSurface(o.agent)
-		if !o.yes && !consentGivenLocal(surface) {
-			if !promptConsent(localAgentLabel(o.agent), surface, recordConsentLocal) {
+		if !consentGivenLocal(surface) {
+			if o.yes {
+				recordConsentLocal(surface)
+			} else if !promptConsent(localAgentLabel(o.agent), surface, recordConsentLocal) {
 				fmt.Fprintln(os.Stderr, "aborted")
 				return 1
 			}
@@ -198,8 +200,12 @@ Flags:
 	}
 
 	surface := consentSurface(o.agent)
-	if !o.yes && !agents.Consented[surface] {
-		if !promptConsent(agents.label(o.agent), surface, func(sf string) { recordConsentHTTP(base, sf) }) {
+	if !agents.Consented[surface] {
+		if o.yes {
+			// --yes acknowledges the disclosure; the server enforces consent at
+			// start, so it must be recorded, not just skipped.
+			recordConsentHTTP(base, surface)
+		} else if !promptConsent(agents.label(o.agent), surface, func(sf string) { recordConsentHTTP(base, sf) }) {
 			fmt.Fprintln(os.Stderr, "aborted")
 			return 1
 		}
@@ -342,6 +348,10 @@ them) — if any of those can make changes, Cursor could use them.
 	// A real ioctl-backed check — os.ModeCharDevice would misread /dev/null
 	// (and daemon-inherited stdin) as an interactive terminal.
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		// Non-interactive callers proceed after the disclosure (an explicit
+		// invocation in a script is an informed act) — and must RECORD it,
+		// because the server enforces consent at start.
+		record(surface)
 		return true
 	}
 	fmt.Fprint(os.Stderr, "Proceed? [y/N] ")

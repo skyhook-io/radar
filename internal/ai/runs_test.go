@@ -555,3 +555,81 @@ func TestNewRunIDUnique(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+// TestLoadSkipsLiveForeignRunning pins the shared-DB ownership rule: a
+// "running" row owned by another LIVE process must be neither repaired (that
+// would falsely fail their active run) nor adopted; once the owner is dead,
+// the next load repairs it as interrupted.
+func TestLoadSkipsLiveForeignRunning(t *testing.T) {
+	st, _ := testStore(t)
+	// Owned by THIS process (alive) but not this manager — must be skipped.
+	st.SaveRun(RunSummary{ID: "run-alive", Kind: "Pod", Name: "p", Context: "ctx",
+		Status: "running", OwnerPID: os.Getpid(), CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+	// Owned by a dead pid — must be repaired to error.
+	st.SaveRun(RunSummary{ID: "run-dead", Kind: "Pod", Name: "p2", Context: "ctx",
+		Status: "running", OwnerPID: 1 << 30, CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+	st.(*sqliteRunStore).barrier()
+
+	m := persistedManager(t, st, "ctx")
+	if m.Get("run-alive") != nil {
+		t.Error("live foreign running row must not be adopted")
+	}
+	dead := m.Get("run-dead")
+	if dead == nil || dead.snapshotStatus() != "error" {
+		t.Fatalf("dead-owner running row must be repaired, got %v", dead)
+	}
+	st.(*sqliteRunStore).barrier()
+	runs, _ := st.LoadRuns()
+	for _, r := range runs {
+		if r.ID == "run-alive" && r.Status != "running" {
+			t.Errorf("live foreign row was mutated: %+v", r)
+		}
+	}
+}
+
+// TestClearHistoryClosesFollowupRace pins the clear-vs-follow-up race: once
+// ClearHistory commits to dropping a terminal run, a concurrent follow-up must
+// get ErrRunNotFound — never revive a run whose rows are being deleted.
+func TestClearHistoryClosesFollowupRace(t *testing.T) {
+	st, _ := testStore(t)
+	m := persistedManager(t, st, "ctx-a")
+	r := &Run{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a", store: st,
+		status: "done", sessionID: "s", hydrated: true,
+		CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{}}
+	st.SaveRun(r.Summary())
+	m.mu.Lock()
+	m.runs[r.ID] = r
+	m.order = append(m.order, r.ID)
+	m.mu.Unlock()
+
+	if err := m.ClearHistory(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AddTurn("run-1", "revive?", false, ""); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("follow-up after clear = %v, want ErrRunNotFound", err)
+	}
+}
+
+// TestClearHistoryRestoresOnFailure pins the failure path: a failed store
+// clear must put the runs back — the UI keeps showing what the DB still holds.
+func TestClearHistoryRestoresOnFailure(t *testing.T) {
+	st, _ := testStore(t)
+	m := persistedManager(t, st, "ctx-a")
+	r := &Run{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a", store: st,
+		status: "done", hydrated: true,
+		CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{}}
+	st.SaveRun(r.Summary())
+	m.mu.Lock()
+	m.runs[r.ID] = r
+	m.order = append(m.order, r.ID)
+	m.mu.Unlock()
+	st.(*sqliteRunStore).barrier()
+	st.Close() // Clear will fail
+
+	if err := m.ClearHistory(); err == nil {
+		t.Skip("closed store reported success — Clear noop contract changed")
+	}
+	if m.Get("run-1") == nil {
+		t.Fatal("failed clear must restore the run to the list")
+	}
+}
