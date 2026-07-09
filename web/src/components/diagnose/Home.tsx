@@ -48,7 +48,9 @@ function statusWord(
     case "stopped":
       return { text: "Stopped", cls: "text-theme-text-tertiary" };
     case "stale":
-      return { text: "Stale", cls: "text-amber-500" };
+      // Plain words, not the internal status name: "stale" means the run was
+      // about a cluster that's no longer connected.
+      return { text: "Different cluster", cls: "text-amber-500" };
     default:
       return null;
   }
@@ -140,11 +142,20 @@ export function RecentList({
               )}
             </span>
           </div>
-          {r.preview && (
+          {(r.status === "stale" && r.context) || r.preview ? (
             <div className="truncate pl-3.5 text-xs text-theme-text-tertiary">
+              {/* A foreign-cluster run names its cluster — in mixed multi-
+                  context history, identical-looking rows otherwise give no way
+                  to tell WHICH cluster an investigation was about. */}
+              {r.status === "stale" && r.context ? (
+                <span className="text-amber-600/80 dark:text-amber-500/80">
+                  {r.context}
+                </span>
+              ) : null}
+              {r.status === "stale" && r.context && r.preview ? " · " : ""}
               {r.preview}
             </div>
-          )}
+          ) : null}
         </button>
       ))}
     </div>
