@@ -490,11 +490,10 @@ export function TimelineStrip({
     return { left, visualW }
   })()
 
-  // Window = range is a STATE, not a border (Turn 12): when the band coincides
-  // with the histogram frame its drag affordance vanishes and its label merely
-  // duplicates the edge stamps — so at full range the fill doesn't paint at
-  // all. Edge handles + the "viewing full range" caption carry the affordance;
-  // the band (fill + grip + accent bars) appears only once a handle narrows it.
+  // Full range still paints the ordinary band (fill + grip + handles) — the
+  // handles-only treatment made the window affordance nearly invisible. Only
+  // the CAPTION is state-aware: "viewing full range" instead of restating the
+  // edge stamps.
   const FULL_RANGE_EPS_PX = 2
   const fullRange = lens != null && width > 0 &&
     msToX(lens.fromMs, selection, width) <= FULL_RANGE_EPS_PX &&
@@ -662,14 +661,12 @@ export function TimelineStrip({
             if (endX <= 0 || startX >= width) return null
             const warnFrac = b.total > 0 ? Math.min(1, b.warnings / b.total) : 0
             const warnH = b.warnings > 0 ? Math.max(2, h * warnFrac) : 0
-            // Accent fill marks the window only while it's a SUB-range: bars in
-            // the window read bright, bars outside are muted context — including
-            // the warning overlay, or an out-of-window warning bar reads as
-            // "events here" when the window is empty. At full range (the quiet
-            // default state) every bar stays neutral — highlighting everything
-            // highlights nothing.
+            // Bars inside the WINDOW (what's shown in the lanes) read bright; bars
+            // in the query but outside the window are muted context — INCLUDING the
+            // warning overlay, or an out-of-window warning bar shows a bright red
+            // cap under the band and reads as "events here" when the window is empty.
             const mid = (b.startMs + b.endMs) / 2
-            const inWindow = lens != null && !fullRange && mid >= lens.fromMs && mid <= lens.toMs
+            const inWindow = !lens || (mid >= lens.fromMs && mid <= lens.toMs)
             return (
               <div key={i} className="absolute bottom-1" style={{ left: startX, width: w }}>
                 {/* Out-of-window bars are muted but still legible — the dimmed
@@ -724,29 +721,8 @@ export function TimelineStrip({
           )
         })}
 
-        {/* view-window band (the lens). At FULL RANGE the fill doesn't paint —
-            only the edge handles show, ready to narrow inward (Turn 12: a band
-            coinciding with the frame is a border, not an affordance). */}
-        {lensGeom && lens && (fullRange ? (
-          lensResizable && onLensChange && (
-            <>
-              <span
-                onPointerDown={beginLensDrag('resize-start')}
-                className="absolute left-0 top-1/2 z-10 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded-r"
-                style={{ background: 'var(--accent)' }}
-                aria-label="Drag to narrow the window from the start"
-                data-testid="strip-edge-handle"
-              />
-              <span
-                onPointerDown={beginLensDrag('resize-end')}
-                className="absolute right-0 top-1/2 z-10 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded-l"
-                style={{ background: 'var(--accent)' }}
-                aria-label="Drag to narrow the window from the end"
-                data-testid="strip-edge-handle"
-              />
-            </>
-          )
-        ) : (
+        {/* view-window band (the lens) */}
+        {lensGeom && lens && (
           <div
             role="slider"
             tabIndex={0}
@@ -777,7 +753,7 @@ export function TimelineStrip({
               <span onPointerDown={beginLensDrag('resize-end')} className="absolute right-[-4px] top-1/2 h-5 w-2 -translate-y-1/2 cursor-ew-resize rounded" style={{ background: 'var(--accent)' }} aria-hidden />
             )}
           </div>
-        ))}
+        )}
         </div>
       </div>
 
@@ -809,22 +785,27 @@ export function TimelineStrip({
 }
 
 // Go-live / frozen chip. Live+latched is inert (already following now); a frozen
-// or unlatched state is a clickable CTA back to the live edge.
+// or unlatched state is a clickable CTA back to the live edge. Both live states
+// render the SAME "Live" text — the unlatched variant's extra copy used to widen
+// the chip and shove the whole histogram over on every latch flip; the jump
+// affordance rides the hollow style, the click, and the tooltip instead.
 function StripLiveChip({ state, onClick }: { state: TimelineLiveState; onClick?: () => void }) {
   if (state.kind === 'live') {
     if (state.latched) {
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-theme-hover px-2.5 py-1 text-xs font-semibold text-theme-text-secondary">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-transparent bg-theme-hover px-2.5 py-1 text-xs font-semibold text-theme-text-secondary">
           <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
           Live
         </span>
       )
     }
     return (
-      <button type="button" onClick={onClick} className="inline-flex items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-2.5 py-1 text-xs font-semibold text-theme-text-secondary hover:bg-theme-hover">
-        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-        Live · jump to now
-      </button>
+      <Tooltip content="The window is behind the live edge — click to jump to now" position="bottom">
+        <button type="button" onClick={onClick} className="inline-flex items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-2.5 py-1 text-xs font-semibold text-theme-text-secondary hover:bg-theme-hover">
+          <span className="h-1.5 w-1.5 rounded-full border border-green-500 bg-transparent" />
+          Live
+        </button>
+      </Tooltip>
     )
   }
   const stale = Date.now() - state.asOfMs > STALE_AMBER_AFTER_MS

@@ -182,6 +182,7 @@ export function TimelineToolbar({
             scope={searchScope}
             shortcutId={searchShortcutId}
             className={searchClassName}
+            placeholder="Search..."
           />
 
           {/* Activity filter — two orthogonal axes: a single-select SOURCE pick

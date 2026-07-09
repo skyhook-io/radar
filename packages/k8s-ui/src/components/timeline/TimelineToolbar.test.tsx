@@ -165,7 +165,8 @@ describe('TimelineToolbar SSR', () => {
     const html = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
     // Always a real text input, even when empty — the collapsed magnifier button
     // is retired for this toolbar.
-    expect(html).toContain('placeholder="Search... (press /)"')
+    expect(html).toContain('placeholder="Search..."')
+    expect(html).not.toContain('(press /)')
     expect(html).toContain('value=""')
     expect(html).not.toContain('aria-label="Search"')
     // Compact static width — focus/typing can never resize it.
@@ -182,7 +183,9 @@ describe('TimelineToolbar SSR', () => {
   it('places the search first in the filters row, before the activity segments', () => {
     const html = renderToString(<TimelineToolbar {...baseProps} events={EVENTS} />)
     // Founder-locked order: search leads the filters row.
-    expect(html.indexOf('placeholder="Search... (press /)"')).toBeLessThan(html.indexOf('>All<'))
+    const searchIdx = html.indexOf('placeholder="Search..."')
+    expect(searchIdx).toBeGreaterThan(-1)
+    expect(searchIdx).toBeLessThan(html.indexOf('>All<'))
   })
 
   it('renders the range dropdown only when range props are supplied', () => {

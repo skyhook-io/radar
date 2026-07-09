@@ -166,24 +166,23 @@ describe('TimelineStrip render', () => {
   })
 })
 
-describe('band-as-state (Turn 12): full range paints handles, not a border', () => {
+describe('state caption (Turn 12): full range names the state, band always paints', () => {
   const buckets: ScrubberBucket[] = [
     { startMs: 0, endMs: 12 * HOUR, total: 5, warnings: 0 },
     { startMs: 12 * HOUR, endMs: 24 * HOUR, total: 8, warnings: 0 },
   ]
 
-  it('renders edge handles + the full-range caption when window == range', () => {
+  it('renders the ordinary band + the full-range caption when window == range', () => {
     const html = renderToString(
       <TimelineStrip
         buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}}
         lens={query} onLensChange={() => {}}
       />,
     )
-    expect(html).not.toContain('strip-lens')
-    expect((html.match(/strip-edge-handle/g) ?? []).length).toBe(2)
+    // The band (fill + grip + handles) stays visible even at full range — the
+    // handles-only treatment made the window affordance nearly invisible.
+    expect(html).toContain('strip-lens')
     expect(html).toContain('viewing full range')
-    // Quiet default: no accent-highlighted bars at full range.
-    expect(html).not.toContain('bg-accent/60')
   })
 
   it('renders the band + window caption with in-window count when narrowed', () => {
@@ -194,7 +193,6 @@ describe('band-as-state (Turn 12): full range paints handles, not a border', () 
       />,
     )
     expect(html).toContain('strip-lens')
-    expect(html).not.toContain('strip-edge-handle')
     // Midpoint rule: the 0–12h bucket's midpoint (6h) is inside the 4–8h
     // window (5 events); the 12–24h bucket's (18h) is not → 5 of 13.
     expect(html).toContain('5 of 13 events')
