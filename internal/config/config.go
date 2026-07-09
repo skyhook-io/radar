@@ -49,6 +49,42 @@ type Config struct {
 	AIConsent map[string]string `json:"aiConsent,omitempty"`
 }
 
+// AI-diagnosis consent disclosure versions, per surface. THE single source of
+// truth for the server endpoint and the CLI's standalone path alike — bump when
+// the consent copy's claims change materially, and prior acknowledgments stop
+// counting everywhere at once. (standard v3: transcripts persist to local
+// history; cursor v2: same disclosure on Cursor's distinct trust model.)
+var aiConsentVersions = map[string]string{
+	"standard": "v3",
+	"cursor":   "v2",
+}
+
+// AIConsentVersion returns the current disclosure version for a surface
+// ("" for an unknown surface).
+func AIConsentVersion(surface string) string { return aiConsentVersions[surface] }
+
+// AIConsentGiven reports whether the CURRENT disclosure version for the surface
+// has been acknowledged on this machine.
+func AIConsentGiven(surface string) bool {
+	v := aiConsentVersions[surface]
+	return v != "" && Load().AIConsent[surface] == v
+}
+
+// RecordAIConsent acknowledges the current disclosure version for a surface.
+func RecordAIConsent(surface string) error {
+	v := aiConsentVersions[surface]
+	if v == "" {
+		return os.ErrInvalid
+	}
+	_, err := Update(func(c *Config) {
+		if c.AIConsent == nil {
+			c.AIConsent = map[string]string{}
+		}
+		c.AIConsent[surface] = v
+	})
+	return err
+}
+
 // mu serializes Load-mutate-Save cycles to prevent concurrent writes
 // from overwriting each other's changes.
 var mu sync.Mutex

@@ -118,23 +118,14 @@ func managedByFromMeta(obj *unstructured.Unstructured) string {
 	return ""
 }
 
-// Consent disclosure versions. Bump when the consent card's claims change
-// materially (standard v3: transcripts persist to local history; cursor v2:
-// same disclosure on Cursor's distinct trust model) — recorded consent for an
-// older version doesn't carry over.
-const (
-	consentStandardVersion = "v3"
-	consentCursorVersion   = "v2"
-)
-
 // currentConsents reports whether the CURRENT disclosure version has been
-// acknowledged, per surface. Machine-scoped (~/.radar/config.json): one
+// acknowledged, per surface (versions live in internal/config — one source of
+// truth with the CLI). Machine-scoped (~/.radar/config.json): one
 // acknowledgment covers the web panel and the CLI.
 func currentConsents() map[string]bool {
-	c := config.Load().AIConsent
 	return map[string]bool{
-		"standard": c["standard"] == consentStandardVersion,
-		"cursor":   c["cursor"] == consentCursorVersion,
+		"standard": config.AIConsentGiven("standard"),
+		"cursor":   config.AIConsentGiven("cursor"),
 	}
 }
 
@@ -171,22 +162,11 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	version := ""
-	switch body.Surface {
-	case "standard":
-		version = consentStandardVersion
-	case "cursor":
-		version = consentCursorVersion
-	default:
+	if config.AIConsentVersion(body.Surface) == "" {
 		s.writeError(w, http.StatusBadRequest, "surface must be \"standard\" or \"cursor\"")
 		return
 	}
-	if _, err := config.Update(func(c *config.Config) {
-		if c.AIConsent == nil {
-			c.AIConsent = map[string]string{}
-		}
-		c.AIConsent[body.Surface] = version
-	}); err != nil {
+	if err := config.RecordAIConsent(body.Surface); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "couldn't record consent: "+err.Error())
 		return
 	}

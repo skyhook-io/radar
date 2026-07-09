@@ -44,9 +44,7 @@ func TestConsentMachineScoped(t *testing.T) {
 	if c := currentConsents(); c["standard"] || c["cursor"] {
 		t.Fatalf("fresh HOME must have no consent, got %v", c)
 	}
-	if _, err := config.Update(func(c *config.Config) {
-		c.AIConsent = map[string]string{"standard": consentStandardVersion}
-	}); err != nil {
+	if err := config.RecordAIConsent("standard"); err != nil {
 		t.Fatal(err)
 	}
 	c := currentConsents()

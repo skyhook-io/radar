@@ -303,21 +303,14 @@ func consentSurface(agent string) string {
 	return "standard"
 }
 
-// Consent versions mirror the server's (internal/server/ai_diagnose.go) — the
-// standalone path reads/writes the shared store directly, pre-boot.
-var consentVersions = map[string]string{"standard": "v3", "cursor": "v2"}
-
+// The standalone path reads/writes the shared store directly, pre-boot —
+// versions live in internal/config (one source of truth with the server).
 func consentGivenLocal(surface string) bool {
-	return config.Load().AIConsent[surface] == consentVersions[surface]
+	return config.AIConsentGiven(surface)
 }
 
 func recordConsentLocal(surface string) {
-	_, _ = config.Update(func(c *config.Config) {
-		if c.AIConsent == nil {
-			c.AIConsent = map[string]string{}
-		}
-		c.AIConsent[surface] = consentVersions[surface]
-	})
+	_ = config.RecordAIConsent(surface)
 }
 
 // recordConsentHTTP persists consent via the running instance (same store).
