@@ -2770,19 +2770,24 @@ function streamHelmProgress(
   })
 }
 
-// Upgrade a release with progress streaming via SSE
+// When `values` is provided, the upgrade applies exactly those edited values
+// instead of carrying the release's prior values over blindly.
 export function upgradeWithProgress(
   namespace: string,
   name: string,
   version: string,
   repositoryName: string | undefined,
-  onProgress: (event: InstallProgressEvent) => void
+  onProgress: (event: InstallProgressEvent) => void,
+  values?: Record<string, unknown>
 ): Promise<void> {
   const params = new URLSearchParams({ version })
   if (repositoryName) params.set('repository', repositoryName)
+  const options: RequestInit = values
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values }) }
+    : { method: 'POST' }
   return streamHelmProgress(
     `${getApiBase()}/helm/releases/${namespace}/${name}/upgrade-stream?${params.toString()}`,
-    { method: 'POST' },
+    options,
     onProgress,
     'Upgrade failed',
   ).then(() => {})
@@ -2803,14 +2808,15 @@ export function rollbackWithProgress(
   ).then(() => {})
 }
 
-// Preview values change (dry-run upgrade)
+// When `version` is supplied, preview renders against that target chart version
+// instead of the release's current chart.
 export function useHelmPreviewValues() {
-  return useMutation<ValuesPreviewResponse, Error, { namespace: string; name: string; values: Record<string, unknown> }>({
-    mutationFn: async ({ namespace, name, values }) => {
+  return useMutation<ValuesPreviewResponse, Error, { namespace: string; name: string; values: Record<string, unknown>; version?: string; repository?: string }>({
+    mutationFn: async ({ namespace, name, values, version, repository }) => {
       const response = await apiFetch(`${getApiBase()}/helm/releases/${namespace}/${name}/values/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values }),
+        body: JSON.stringify({ values, version, repository }),
       })
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))

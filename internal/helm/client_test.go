@@ -637,6 +637,22 @@ func TestGetValuesWithAllValuesKeepsComputedWhenUserValuesReadFails(t *testing.T
 	}
 }
 
+func TestChartForUpgradeTargetReusesReleaseChartForSameVersion(t *testing.T) {
+	client := testHelmClientWithRepoConfigOnly(t)
+	rel := helmTestRelease("argo-cd", "demo", 1, release.StatusDeployed, "deployed")
+	rel.Chart.Metadata.Version = "9.5.11"
+
+	got, err := client.chartForUpgradeTarget(nil, rel, "9.5.11", "missing-repo", func(phase, message, detail string) {
+		t.Fatalf("same-version chart selection should not resolve/download chart, got progress %q %q %q", phase, message, detail)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != rel.Chart {
+		t.Fatal("chartForUpgradeTarget returned a different chart, want current release chart")
+	}
+}
+
 func TestDiffResourceRefs(t *testing.T) {
 	left := []ResourceRef{
 		{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "demo", Name: "cart"},

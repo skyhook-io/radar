@@ -1,18 +1,21 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { flushSync } from 'react-dom'
 import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink } from 'lucide-react'
+import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, ChevronRight, ChevronDown, SlidersHorizontal, Eye, Loader2 } from 'lucide-react'
+import yaml from 'yaml'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { useHelmRelease, useHelmManifest, useHelmValues, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress } from '../../api/client'
+import { useHelmRelease, useHelmManifest, useHelmValues, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress, useHelmPreviewValues } from '../../api/client'
+import { YamlEditor } from '../ui/YamlEditor'
+import { ValuesDiffPreview } from './ValuesDiffPreview'
 import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
-import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HookDiagnostic, HookLogEvidence, UpgradeInfo } from '../../types'
+import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HookDiagnostic, HookLogEvidence, UpgradeInfo, ValuesPreviewResponse } from '../../types'
 import { apiVersionToGroup, kindToPlural, type NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor, getKindBadgeColor, getResourceStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
@@ -35,6 +38,12 @@ interface HelmReleaseDrawerProps {
 }
 
 type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks'
+
+interface UpgradePreviewRequest {
+  targetVersion: string
+  values: Record<string, unknown>
+  repositoryName?: string
+}
 
 type UpgradeSourceIssue = NonNullable<UpgradeInfo['sourceIssue']>
 type ActionableUpgradeSourceIssue = Exclude<UpgradeSourceIssue, 'ambiguous_repository'>
@@ -90,8 +99,16 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false)
   const [showTrackSource, setShowTrackSource] = useState(false)
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
+  const [adjustValues, setAdjustValues] = useState(false)
+  const [editedUpgradeYaml, setEditedUpgradeYaml] = useState('')
+  const [upgradeValuesSeeded, setUpgradeValuesSeeded] = useState(false)
+  const [upgradePreview, setUpgradePreview] = useState<ValuesPreviewResponse | null>(null)
+  const [upgradePreviewRequest, setUpgradePreviewRequest] = useState<UpgradePreviewRequest | null>(null)
+  const [showUpgradePreview, setShowUpgradePreview] = useState(false)
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(DEFAULT_WIDTH)
+  const targetVersionRef = useRef('')
+  const editedUpgradeYamlRef = useRef('')
   const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
   // Cloud viewers can't view release manifests / values / diffs
   // (backend gate at requireCloudRole('member')). Skip the queries
@@ -123,6 +140,16 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     canViewSensitive,
     selectedRevision,
   )
+  const {
+    data: upgradeValues,
+    isLoading: upgradeValuesLoading,
+    error: upgradeValuesError,
+  } = useHelmValues(
+    helmNamespace,
+    release.name,
+    false,
+    canViewSensitive && showUpgradeConfirm && adjustValues,
+  )
 
   // Lazy check for upgrade availability
   const { data: upgradeInfo, isLoading: upgradeLoading, error: upgradeError } = useHelmUpgradeInfo(
@@ -145,11 +172,21 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
   // Mutations for actions
   const uninstallMutation = useHelmUninstall()
+  const upgradePreviewMutation = useHelmPreviewValues()
+  const isPreviewingUpgrade = upgradePreviewMutation.isPending
   const queryClient = useQueryClient()
   const [upgradeProgress, setUpgradeProgress] = useState<{ phase: string; message: string }[]>([])
   const [isUpgrading, setIsUpgrading] = useState(false)
   const [rollbackProgress, setRollbackProgress] = useState<{ phase: string; message: string }[]>([])
   const [isRollingBack, setIsRollingBack] = useState(false)
+
+  useEffect(() => {
+    targetVersionRef.current = targetVersion
+  }, [targetVersion])
+
+  useEffect(() => {
+    editedUpgradeYamlRef.current = editedUpgradeYaml
+  }, [editedUpgradeYaml])
 
   // ESC key handler
   useEffect(() => {
@@ -296,8 +333,87 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     )
   }
 
-  const handleUpgradeConfirm = async () => {
-    if (!targetVersion) return
+  const resetUpgradeDialog = () => {
+    setUpgradeProgress([])
+    setSelectedVersion(null)
+    setAdjustValues(false)
+    setEditedUpgradeYaml('')
+    setUpgradeValuesSeeded(false)
+    setUpgradePreview(null)
+    setUpgradePreviewRequest(null)
+    setShowUpgradePreview(false)
+    upgradePreviewMutation.reset()
+  }
+
+  useEffect(() => {
+    if (!adjustValues || !upgradeValues || upgradeValuesSeeded) return
+    setEditedUpgradeYaml(userSuppliedToYaml(upgradeValues.userSupplied))
+    setUpgradeValuesSeeded(true)
+  }, [adjustValues, upgradeValues, upgradeValuesSeeded])
+
+  const handleToggleAdjustValues = () => {
+    if (!adjustValues) {
+      setEditedUpgradeYaml('')
+      setUpgradeValuesSeeded(false)
+    }
+    setAdjustValues(prev => !prev)
+  }
+
+  // Validity is derived from the SAME parser used at submit — not the editor's
+  // (more lenient) inline diagnostics — so an invalid doc always blocks the button
+  // rather than silently no-op'ing on click. Empty editor means "no overrides" ({}).
+  const { parsedUpgradeValues, upgradeYamlError } = useMemo<{
+    parsedUpgradeValues: Record<string, unknown> | null
+    upgradeYamlError: string | null
+  }>(() => {
+    if (!adjustValues) return { parsedUpgradeValues: {}, upgradeYamlError: null }
+    try {
+      const parsed = yaml.parse(editedUpgradeYaml)
+      if (parsed === null || parsed === undefined) return { parsedUpgradeValues: {}, upgradeYamlError: null }
+      if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { parsedUpgradeValues: null, upgradeYamlError: 'Values must be a YAML mapping (key: value), not a list or single value' }
+      }
+      return { parsedUpgradeValues: parsed as Record<string, unknown>, upgradeYamlError: null }
+    } catch (err) {
+      return { parsedUpgradeValues: null, upgradeYamlError: err instanceof Error ? err.message : 'Invalid YAML' }
+    }
+  }, [adjustValues, editedUpgradeYaml])
+
+  const handleUpgradePreview = async () => {
+    if (!targetVersion || upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded || upgradeYamlError || !parsedUpgradeValues) return
+    const previewYaml = editedUpgradeYaml
+    const previewRequest: UpgradePreviewRequest = {
+      targetVersion,
+      values: parsedUpgradeValues,
+      repositoryName: upgradeInfo?.repositoryName,
+    }
+    try {
+      const result = await upgradePreviewMutation.mutateAsync({
+        namespace: helmNamespace,
+        name: release.name,
+        values: previewRequest.values,
+        version: previewRequest.targetVersion,
+        repository: previewRequest.repositoryName,
+      })
+      if (targetVersionRef.current !== previewRequest.targetVersion || editedUpgradeYamlRef.current !== previewYaml) return
+      setUpgradePreview(result)
+      setUpgradePreviewRequest(previewRequest)
+      setShowUpgradePreview(true)
+    } catch {
+      return
+    }
+  }
+
+  const runUpgrade = async (versionToApply: string, editedValuesOverride: Record<string, unknown> | undefined, repositoryName: string | undefined) => {
+    if (!versionToApply) return
+
+    let editedValues = editedValuesOverride
+    if (editedValues === undefined && adjustValues) {
+      if (upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded || upgradeYamlError || !parsedUpgradeValues) return
+      editedValues = parsedUpgradeValues
+    }
+
+    setShowUpgradePreview(false)
     setIsUpgrading(true)
     setUpgradeProgress([])
 
@@ -305,8 +421,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       await upgradeWithProgress(
         helmNamespace,
         release.name,
-        targetVersion,
-        upgradeInfo?.repositoryName,
+        versionToApply,
+        repositoryName,
         (event) => {
           if (event.type === 'progress' && event.message) {
             setUpgradeProgress(prev => [...prev, {
@@ -314,24 +430,25 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               message: event.message || '',
             }])
           }
-        }
+        },
+        editedValues
       )
 
       setUpgradeProgress(prev => [...prev, {
         phase: 'complete',
-        message: `Successfully upgraded to ${targetVersion}`,
+        message: `Successfully upgraded to ${versionToApply}`,
       }])
 
       // Invalidate queries
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
       queryClient.invalidateQueries({ queryKey: ['helm-release', helmNamespace, release.name] })
       queryClient.invalidateQueries({ queryKey: ['helm-upgrade-info', helmNamespace, release.name] })
+      queryClient.invalidateQueries({ queryKey: ['helm-values', helmNamespace, release.name] })
       queryClient.invalidateQueries({ queryKey: ['helm-batch-upgrade-info'] })
 
       setTimeout(() => {
         setShowUpgradeConfirm(false)
-        setUpgradeProgress([])
-        setSelectedVersion(null)
+        resetUpgradeDialog()
         refetch()
         switchTab('resources')
       }, 1500)
@@ -343,6 +460,15 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     } finally {
       setIsUpgrading(false)
     }
+  }
+
+  const handleUpgradeConfirm = () => {
+    void runUpgrade(targetVersion, undefined, upgradeInfo?.repositoryName)
+  }
+
+  const handleApplyUpgradePreview = () => {
+    if (!upgradePreviewRequest) return
+    void runUpgrade(upgradePreviewRequest.targetVersion, upgradePreviewRequest.values, upgradePreviewRequest.repositoryName)
   }
 
   const headerHeight = 49
@@ -668,8 +794,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         open={showUpgradeConfirm}
         onClose={() => {
           setShowUpgradeConfirm(false)
-          setUpgradeProgress([])
-          setSelectedVersion(null)
+          resetUpgradeDialog()
           if (isUpgrading) {
             // Upgrade continues server-side — switch to resources tab to monitor
             setIsUpgrading(false)
@@ -680,12 +805,13 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         title="Upgrade Release"
         message={`Upgrade "${release.name}" to version ${targetVersion}?`}
         details={upgradeProgress.length === 0
-          ? `The chart will move from version ${upgradeInfo?.currentVersion} to ${targetVersion}. Your existing values will be preserved. The change is applied to your cluster immediately.`
+          ? `The chart will move from version ${upgradeInfo?.currentVersion} to ${targetVersion}. ${adjustValues ? 'Your edited values will be applied.' : 'Your existing values will be preserved.'} The change is applied to your cluster immediately.`
           : undefined
         }
         confirmLabel={isDowngrade ? 'Downgrade' : 'Upgrade'}
         variant="warning"
         isLoading={isUpgrading}
+        confirmDisabled={isPreviewingUpgrade || (adjustValues && (upgradeValuesLoading || !!upgradeValuesError || !upgradeValuesSeeded || !!upgradeYamlError))}
         isClosable
       >
         {upgradeProgress.length === 0 && availableVersions && availableVersions.length > 1 && (
@@ -696,8 +822,11 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             <select
               id="upgrade-version"
               value={targetVersion}
-              onChange={(e) => setSelectedVersion(e.target.value)}
-              disabled={isUpgrading}
+              onChange={(e) => {
+                targetVersionRef.current = e.target.value
+                setSelectedVersion(e.target.value)
+              }}
+              disabled={isUpgrading || isPreviewingUpgrade}
               className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
             >
               {availableVersions.map((v) => (
@@ -720,8 +849,83 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             )}
           </div>
         )}
+        {upgradeProgress.length === 0 && canHelmWrite && canViewSensitive && (
+          <div className="mt-3 border-t border-theme-border pt-3">
+            <button
+              type="button"
+              onClick={handleToggleAdjustValues}
+              disabled={isUpgrading || isPreviewingUpgrade}
+              className="flex items-center gap-1.5 text-sm font-medium text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-50"
+            >
+              {adjustValues ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              Adjust your values (optional)
+            </button>
+            {upgradeValuesError && (
+              <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
+                Couldn’t load current values: {upgradeValuesError instanceof Error ? upgradeValuesError.message : 'Unknown error'}
+              </div>
+            )}
+            {adjustValues && (
+              <div className="mt-2">
+                <p className="mb-2 text-xs text-theme-text-tertiary">
+                  These are your current settings — edit them to carry into {targetVersion}. What you see here is exactly what gets applied.
+                </p>
+                {upgradeValuesLoading && (
+                  <div className="flex items-center gap-2 h-24 px-3 text-sm text-theme-text-secondary bg-theme-elevated border border-theme-border rounded">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Loading current values...
+                  </div>
+                )}
+                {!upgradeValuesLoading && !upgradeValuesError && (
+                  <YamlEditor
+                    value={editedUpgradeYaml}
+                    onChange={(value) => {
+                      editedUpgradeYamlRef.current = value
+                      setEditedUpgradeYaml(value)
+                    }}
+                    readOnly={isPreviewingUpgrade || isUpgrading}
+                    height="240px"
+                  />
+                )}
+                {upgradeYamlError && (
+                  <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
+                    {upgradeYamlError}
+                  </div>
+                )}
+                {upgradePreviewMutation.error && (
+                  <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
+                    Couldn’t preview against {targetVersion}: {upgradePreviewMutation.error.message}. You can still upgrade.
+                  </div>
+                )}
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleUpgradePreview}
+                    disabled={upgradeValuesLoading || !!upgradeValuesError || !upgradeValuesSeeded || !!upgradeYamlError || isPreviewingUpgrade || isUpgrading}
+                    className="flex items-center gap-1 px-2.5 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded border border-theme-border disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {upgradePreviewMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                    Preview what changes
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {upgradeProgress.length > 0 && <ProgressLog entries={upgradeProgress} />}
       </ConfirmDialog>
+
+      {showUpgradePreview && upgradePreview && upgradePreviewRequest && (
+        <ValuesDiffPreview
+          previewData={upgradePreview}
+          onClose={() => setShowUpgradePreview(false)}
+          onApply={handleApplyUpgradePreview}
+          isApplying={isUpgrading}
+          title={`Preview upgrade to ${upgradePreviewRequest.targetVersion}`}
+          applyLabel={upgradeInfo?.currentVersion && compareVersions(upgradePreviewRequest.targetVersion, upgradeInfo.currentVersion) === -1 ? 'Downgrade' : 'Upgrade'}
+        />
+      )}
 
       <TrackChartSourceDialog
         open={showTrackSource}
@@ -732,6 +936,11 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       />
     </div>
   )
+}
+
+function userSuppliedToYaml(userSupplied: Record<string, unknown> | undefined): string {
+  if (!userSupplied || Object.keys(userSupplied).length === 0) return ''
+  return yaml.stringify(userSupplied, { lineWidth: 0 })
 }
 
 // Shared progress log for streaming Helm operations
