@@ -395,19 +395,28 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   }, []);
   const goHome = useCallback(() => setView("home"), []);
   const close = useCallback(() => setOpen(false), []);
+  const consentBusyRef = useRef(false);
   const approveConsent = useCallback(() => {
+    if (consentBusyRef.current) return;
+    consentBusyRef.current = true;
+    setStartError(null);
     const surface = consentSurfaceFor(selectedAgentRef.current);
     const t = pendingTarget;
-    setPendingTarget(null);
     // The server ENFORCES consent at start, so the acknowledgment must land
     // before the run request — awaiting also makes it durable for the CLI.
     recordConsent(surface)
       .then(() => {
         setConsented((prev) => ({ ...prev, [surface]: true }));
+        // Cleared only on success: a failed write keeps the consent card up
+        // (needsConsent = !!pendingTarget) so "try again" works in place.
+        setPendingTarget(null);
         if (t) startRunRef.current(t);
       })
       .catch(() => {
         setStartError("Couldn't record your consent — try again.");
+      })
+      .finally(() => {
+        consentBusyRef.current = false;
       });
   }, [pendingTarget]);
   const cancelConsent = useCallback(() => {
