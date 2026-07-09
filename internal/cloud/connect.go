@@ -152,11 +152,47 @@ func (c *ConnectClient) RunFlow(ctx context.Context, meta ConnectMetadata, out i
 	}
 	fmt.Fprintf(out, "  Waiting for approval… (Ctrl-C to cancel)\n")
 
-	// Clamp the hub-advertised interval to a sane band — don't trust a value
-	// that's implausibly small (busy-poll) or large (never checks before TTL).
+	pr, err := c.PollUntilApproved(ctx, cr)
+	if err != nil {
+		return nil, err
+	}
+	wss := pr.WSSURL
+	if wss == "" {
+		wss = cr.WSSURL
+	}
+	// Require everything needed to actually dial — a token-less or URL-less
+	// "approved" would print "Connected" but silently serve nothing (main skips
+	// the dial when --cloud-url is empty).
+	if pr.Token == "" || pr.ClusterID == "" || wss == "" {
+		return nil, errors.New("hub approved the connection but returned incomplete details (missing token, cluster id, or URL)")
+	}
+	return &FlowResult{
+		ClusterID:   pr.ClusterID,
+		Token:       pr.Token,
+		WSSURL:      wss,
+		ClusterName: meta.ClusterName,
+	}, nil
+}
+
+// PollUntilApproved polls the connect request until it reaches a terminal state,
+// honoring the hub-advertised poll interval (clamped to a sane 2–30s band) and
+// the request's expiry (floored at 60s). It is the single poll loop shared by
+// RunFlow (radar cloud connect) and the in-cluster install driver so their
+// interval, expiry, and terminal-state semantics can't drift apart.
+//
+// It polls immediately (catching an approval that landed during browser-open),
+// then waits between polls without ever sleeping past the deadline. Returns the
+// approved PollResponse, ErrConnectExpired on expiry, or an error on a consumed
+// request / transport failure / context cancellation.
+func (c *ConnectClient) PollUntilApproved(ctx context.Context, cr *CreateResponse) (*PollResponse, error) {
+	// Clamp the hub-advertised interval — don't trust a value that's implausibly
+	// small (busy-poll) or large (never checks before TTL); treat ≤0 as unset.
 	interval := time.Duration(cr.PollInterval) * time.Second
-	if interval < time.Second {
+	if interval <= 0 {
 		interval = 5 * time.Second
+	}
+	if interval < 2*time.Second {
+		interval = 2 * time.Second
 	}
 	if interval > 30*time.Second {
 		interval = 30 * time.Second
@@ -164,49 +200,32 @@ func (c *ConnectClient) RunFlow(ctx context.Context, meta ConnectMetadata, out i
 	deadline := time.Now().Add(time.Duration(max(cr.ExpiresIn, 60)) * time.Second)
 
 	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return nil, ErrConnectExpired
-		}
-		// Never sleep past the deadline (a large interval mustn't stretch the
-		// wait beyond expires_in).
-		wait := interval
-		if remaining < wait {
-			wait = remaining
-		}
-		if !sleep(ctx, wait) {
-			return nil, ctx.Err()
-		}
 		pr, err := c.Poll(ctx, cr.RequestID, cr.DeviceSecret)
 		if err != nil {
 			return nil, err
 		}
 		switch pr.Status {
 		case "approved":
-			wss := pr.WSSURL
-			if wss == "" {
-				wss = cr.WSSURL
-			}
-			// Require everything needed to actually dial — a token-less or
-			// URL-less "approved" would print "Connected" but silently serve
-			// nothing (main skips the dial when --cloud-url is empty).
-			if pr.Token == "" || pr.ClusterID == "" || wss == "" {
-				return nil, errors.New("hub approved the connection but returned incomplete details (missing token, cluster id, or URL)")
-			}
-			return &FlowResult{
-				ClusterID:   pr.ClusterID,
-				Token:       pr.Token,
-				WSSURL:      wss,
-				ClusterName: meta.ClusterName,
-			}, nil
+			return pr, nil
 		case "consumed":
-			// The token was already delivered + the cluster connected on a
-			// prior run. A fresh flow can't retrieve it; the user re-runs.
+			// The token was already delivered + the cluster connected on a prior
+			// run. A fresh flow can't retrieve it; the user re-runs.
 			return nil, errors.New("this connect request was already used — run connect again")
 		case "expired":
 			return nil, ErrConnectExpired
-		default: // pending
-			continue
+		}
+		// pending — wait, but never sleep past the deadline (a large interval
+		// mustn't stretch the wait beyond expires_in).
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, ErrConnectExpired
+		}
+		wait := interval
+		if remaining < wait {
+			wait = remaining
+		}
+		if !sleep(ctx, wait) {
+			return nil, ctx.Err()
 		}
 	}
 }

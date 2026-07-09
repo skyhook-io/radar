@@ -291,7 +291,7 @@ func cloudInstall(args []string) {
 	}
 	fmt.Println("  Waiting for approval… (Ctrl-C to cancel)")
 
-	pr, err := pollUntilApproved(ctx, client, cr)
+	pr, err := client.PollUntilApproved(ctx, cr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nconnect failed: %v\n", err)
 		os.Exit(1)
@@ -348,43 +348,6 @@ func buildLocalInstallClients(kubeconfig string) (kubernetes.Interface, *helm.Cl
 		return nil, nil, fmt.Errorf("helm init: %w", err)
 	}
 	return kc, helm.GetClient(), nil
-}
-
-// pollUntilApproved polls the connect request until it's approved, honoring the
-// hub's poll interval (clamped 2–10s) and the request's expiry.
-func pollUntilApproved(ctx context.Context, client *cloud.ConnectClient, cr *cloud.CreateResponse) (*cloud.PollResponse, error) {
-	interval := time.Duration(cr.PollInterval) * time.Second
-	if interval < 2*time.Second {
-		interval = 2 * time.Second
-	}
-	if interval > 10*time.Second {
-		interval = 10 * time.Second
-	}
-	deadline := time.Now().Add(time.Duration(cr.ExpiresIn) * time.Second)
-	for {
-		pr, err := client.Poll(ctx, cr.RequestID, cr.DeviceSecret)
-		if err != nil {
-			return nil, err
-		}
-		switch pr.Status {
-		case "approved":
-			return pr, nil
-		case "expired":
-			return nil, cloud.ErrConnectExpired
-		case "consumed":
-			// Already approved AND used by a tunnel — the token is gone; the user
-			// must start a fresh install.
-			return nil, fmt.Errorf("this connect request was already used; re-run to start a fresh one")
-		}
-		if !time.Now().Before(deadline) {
-			return nil, cloud.ErrConnectExpired
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(interval):
-		}
-	}
 }
 
 func chartVersionOrLatest(v string) string {
