@@ -1376,9 +1376,9 @@ function ChangeRow({
             <div className="ml-[18px] mt-1 text-xs text-theme-text-tertiary">{explanation}</div>
           )}
         </button>
-        <div className="self-start"><SyncStatusBadge sync={normalizeSyncStatus(change.sync ?? change.category)} /></div>
-        <div className="self-start"><HealthStatusBadge health={normalizeHealthStatus(change.health)} /></div>
-        <div className="self-start">
+        <div className="self-center"><SyncStatusBadge sync={normalizeSyncStatus(change.sync ?? change.category)} /></div>
+        <div className="self-center"><HealthStatusBadge health={normalizeHealthStatus(change.health)} /></div>
+        <div className="self-center">
           {/* Three affordance states:
               - Live resource (not Missing): "Open <kind> <name> →" opens the
                 K8s drawer.
