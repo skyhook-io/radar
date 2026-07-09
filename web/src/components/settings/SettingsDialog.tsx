@@ -318,7 +318,10 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         className={clsx(
           'relative bg-theme-surface border border-theme-border shadow-theme-lg w-full outline-none flex flex-col',
           'max-sm:inset-0 max-sm:absolute max-sm:rounded-none max-sm:max-h-full max-sm:border-0',
-          'sm:rounded-xl sm:max-w-4xl sm:mx-4 sm:max-h-[85vh]',
+          // Fixed height so the dialog doesn't jump when switching tabs — short
+          // tabs leave breathing room, tall ones scroll inside the content pane.
+          // max-h keeps it on-screen on short viewports.
+          'sm:rounded-xl sm:max-w-4xl sm:mx-4 sm:h-[620px] sm:max-h-[85vh]',
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
@@ -376,8 +379,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             ))}
           </div>
 
-          {/* Content pane */}
-          <div className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-5">
+          {/* Content pane — stable scrollbar gutter so switching between a
+              scrolling tab and a short one doesn't shift content sideways. */}
+          <div className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-5 [scrollbar-gutter:stable]">
             {loadError && (
               <div className="mb-3 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-md">
                 {loadError}
