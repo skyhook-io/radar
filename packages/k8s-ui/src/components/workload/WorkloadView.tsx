@@ -1149,16 +1149,34 @@ function EventsTab({
 
     const flattenChildren = (lane: ResourceLane): ResourceLane[] =>
       (lane.children || []).flatMap(child => [child, ...flattenChildren(child)])
-    const kindPriority: Record<string, number> = {
-      Service: 1, Deployment: 2, Rollout: 2, StatefulSet: 2, DaemonSet: 2,
-      ReplicaSet: 3, ConfigMap: 4, Secret: 4, Gateway: 5, HTTPRoute: 4,
-      GRPCRoute: 4, TCPRoute: 4, TLSRoute: 4, Ingress: 5, Pod: 6,
+    // Surface the resources an operator opens this view to check: the live Pods
+    // (where restarts/crashes show) and the ACTIVE ReplicaSet (the one that still
+    // owns Pods) rank high; the retired ReplicaSet graveyard — an event-derived
+    // lane keeps its Pod children only while it owns some — sinks to the bottom so
+    // it can't crowd the Pods out of the capped set.
+    const rank = (lane: ResourceLane): number => {
+      switch (lane.kind) {
+        case 'Service': return 1
+        case 'Pod': return 2
+        case 'ReplicaSet': return lane.children?.length ? 3 : 8
+        case 'Deployment': case 'Rollout': case 'StatefulSet':
+        case 'DaemonSet': case 'Job': case 'CronJob': return 4
+        case 'ConfigMap': case 'Secret': return 5
+        case 'Gateway': case 'Ingress': case 'HTTPRoute':
+        case 'GRPCRoute': case 'TCPRoute': case 'TLSRoute': return 6
+        default: return 7
+      }
     }
-    const allChildren = flattenChildren(rootLane).sort((a, b) => {
-      const ap = kindPriority[a.kind] || 10
-      const bp = kindPriority[b.kind] || 10
-      return ap !== bp ? ap - bp : b.events.length - a.events.length
-    })
+    const recency = (lane: ResourceLane): number =>
+      lane.events.reduce((m, e) => Math.max(m, new Date(e.timestamp).getTime()), 0)
+    const allChildren = flattenChildren(rootLane)
+      // Hide resources that did nothing in view — a retired ReplicaSet or a
+      // topology-only node with no events is a flat empty lane, pure noise.
+      .filter((c) => c.events.length > 0)
+      .sort((a, b) => {
+        const ra = rank(a), rb = rank(b)
+        return ra !== rb ? ra - rb : recency(b) - recency(a)
+      })
 
     for (const child of allChildren.slice(0, 6)) {
       lanes.push({
@@ -1169,6 +1187,11 @@ function EventsTab({
 
     return lanes
   }, [resourceLanes, events, resourceKind, resourceName, resourceNamespace])
+
+  // The swimlane earns its space only when there's more than one resource to lay
+  // out over time (a workload + its tree, an app's members). A single resource
+  // (a lone Pod, a ConfigMap) is served better by just the event feed below.
+  const showSwimlane = swimlanes.length > 1
 
   const formatTimeRangeDisplay = () => {
     const start = new Date(startTime)
@@ -1192,19 +1215,24 @@ function EventsTab({
       {/* Timeline toolbar */}
       <div className="shrink-0 px-4 py-2 border-b border-theme-border bg-theme-surface/50 flex items-center justify-between">
         <span className="text-sm font-medium text-theme-text-secondary">Events ({events.length})</span>
-        <div className="flex items-center gap-3">
-          <ZoomControls zoom={zoom} onZoomIn={handleZoomIn} onZoomOut={handleZoomOut} canZoomIn={canZoomIn} canZoomOut={canZoomOut} />
-          <span className="text-xs text-theme-text-tertiary">{formatTimeRangeDisplay()}</span>
+        {showSwimlane && (
+          <div className="flex items-center gap-3">
+            <ZoomControls zoom={zoom} onZoomIn={handleZoomIn} onZoomOut={handleZoomOut} canZoomIn={canZoomIn} canZoomOut={canZoomOut} />
+            <span className="text-xs text-theme-text-tertiary">{formatTimeRangeDisplay()}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Legend — only alongside the swimlane it explains */}
+      {showSwimlane && (
+        <div className="shrink-0 px-4 py-1.5 border-b border-theme-border bg-theme-surface/30 flex items-center justify-between">
+          <HealthSpanLegend />
+          <EventDotLegend />
         </div>
-      </div>
+      )}
 
-      {/* Legend */}
-      <div className="shrink-0 px-4 py-1.5 border-b border-theme-border bg-theme-surface/30 flex items-center justify-between">
-        <HealthSpanLegend />
-        <EventDotLegend />
-      </div>
-
-      {/* Swimlane Timeline */}
+      {/* Swimlane Timeline — multi-resource only */}
+      {showSwimlane && (
       <div ref={swimlaneRef} className="shrink-0 border-b border-theme-border bg-theme-base relative">
         {/* Scrollable swimlane area — up to 6 lanes + the pinned axis visible
             before scrolling. max-height, so a workload with fewer lanes stays
@@ -1254,6 +1282,7 @@ function EventsTab({
           </div>
         </div>
       </div>
+      )}
 
       {/* Events table */}
       <div ref={tableContainerRef} className="flex-1 overflow-auto">
@@ -1296,7 +1325,13 @@ function EventsTab({
                       <div className="flex items-center gap-2">
                         <EventDot event={evt} />
                         <span className={clsx('font-medium', isWarning ? 'text-amber-500' : 'text-theme-text-primary')}>
-                          {isHistoricalEvent(evt) && evt.reason ? evt.reason : isChangeEvent(evt) ? evt.eventType : evt.reason}
+                          {(() => {
+                            // Keep k8s reasons (Progressing, SuccessfulCreate — they carry real
+                            // meaning) but title-case the change types so "created" doesn't sit
+                            // lowercase next to them.
+                            const raw = isHistoricalEvent(evt) && evt.reason ? evt.reason : isChangeEvent(evt) ? evt.eventType : evt.reason
+                            return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : raw
+                          })()}
                         </span>
                       </div>
                     </td>
@@ -1314,8 +1349,10 @@ function EventsTab({
                     <td className="px-4 py-3">
                       {isWarning ? (
                         <span className="badge status-degraded">Active</span>
-                      ) : evt.healthState ? (
-                        <span className={clsx('badge', getHealthBadgeColor(evt.healthState))}>{evt.healthState}</span>
+                      ) : evt.healthState && evt.healthState !== 'neutral' && evt.healthState !== 'unknown' ? (
+                        <span className={clsx('badge', getHealthBadgeColor(evt.healthState))}>
+                          {evt.healthState.charAt(0).toUpperCase() + evt.healthState.slice(1)}
+                        </span>
                       ) : null}
                     </td>
                   </tr>
