@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -433,8 +434,32 @@ func diffValues(path string, desired, live any, out []DriftEntry) []DriftEntry {
 		}
 		return out
 	}
-	// At least one side is non-map (scalar, array, or one's a map and one's
-	// a scalar — schema mismatch). Compare by serialized form.
+	dArr, dIsArr := desired.([]any)
+	lArr, lIsArr := live.([]any)
+	if dIsArr && lIsArr {
+		// Descend element-by-element by index rather than dumping the whole
+		// array as one entry. A single field changing inside one list element
+		// (e.g. spec.template.spec.containers.[0].resources.limits.memory) then
+		// reads as that one path, not a wall of serialized JSON. Index
+		// alignment is accurate for our inputs: K8s controllers preserve list
+		// order between apply and observe, and the Argo API normalizes both
+		// sides — neither reorders. A length change surfaces the extra/missing
+		// elements as added/removed at their index.
+		n := max(len(dArr), len(lArr))
+		for i := range n {
+			var dv, lv any
+			if i < len(dArr) {
+				dv = dArr[i]
+			}
+			if i < len(lArr) {
+				lv = lArr[i]
+			}
+			out = diffValues(joinPath(path, strconv.Itoa(i)), dv, lv, out)
+		}
+		return out
+	}
+	// At least one side is a scalar, or the two sides have mismatched shapes
+	// (map vs array vs scalar — a schema change). Compare by serialized form.
 	desiredStr := jsonString(desired)
 	liveStr := jsonString(live)
 	if desiredStr == liveStr {
@@ -445,8 +470,8 @@ func diffValues(path string, desired, live any, out []DriftEntry) []DriftEntry {
 
 // joinPath produces dot-notation paths. If the segment looks like an array
 // index, it's wrapped in brackets ("foo.[0].bar"); otherwise concatenated
-// with a dot. Index detection is naive (all-digit) but sufficient — we
-// don't currently descend into arrays anyway.
+// with a dot. diffValues descends into arrays by index, so this is how those
+// element paths are formed.
 func joinPath(prefix, segment string) string {
 	if prefix == "" {
 		return segment
