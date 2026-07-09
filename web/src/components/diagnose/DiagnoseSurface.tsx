@@ -216,6 +216,15 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
       agentLabel={activeAgentLabel}
       maximized={maximized}
     />
+  ) : d.activeRunId && !d.runsLoaded ? (
+    // Deep-linked to a run before the list has ever loaded: show the load
+    // state (the 4s poll retries while the panel is open) — never the generic
+    // placeholder, and never a premature "no longer available".
+    <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-theme-text-tertiary">
+      {d.runsLoadFailed
+        ? "Couldn't load investigations — retrying…"
+        : "Loading investigations…"}
+    </div>
   ) : d.activeRunId && d.runsLoaded ? (
     // A focused id that isn't in the loaded list — a deep link (?ai-run=…) to a
     // cleared/evicted/unknown run. Say so; the generic "select an

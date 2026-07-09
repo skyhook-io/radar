@@ -46,6 +46,7 @@ interface DiagnoseCtx {
   activeRunId: string | null;
   runs: RunSummary[];
   runsLoaded: boolean; // first runs fetch landed (gates missing-run states)
+  runsLoadFailed: boolean; // latest runs fetch failed (poll keeps retrying)
   historyDegraded: boolean; // persistence broke — history won't survive a restart
   needsConsent: boolean; // a start is pending the one-time consent
   startError: string | null;
@@ -184,6 +185,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
+  const [runsLoadFailed, setRunsLoadFailed] = useState(false);
   const [historyDegraded, setHistoryDegraded] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
@@ -274,9 +276,15 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       .then((r) => {
         setRuns(r.runs);
         setRunsLoaded(true);
+        setRunsLoadFailed(false);
         setHistoryDegraded(!!r.historyDegraded);
       })
-      .catch(() => {});
+      .catch(() => {
+        // Leave runsLoaded false (a missing-run verdict needs a real list) but
+        // record the failure so the panel can say "retrying" instead of
+        // pretending nothing happened. The 4s poll keeps retrying while open.
+        setRunsLoadFailed(true);
+      });
   }, [available]);
 
   // A content-stable signature of the resources with a live (running) investigation,
@@ -423,6 +431,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     activeRunId,
     runs,
     runsLoaded,
+    runsLoadFailed,
     historyDegraded,
     // pendingTarget is set ONLY when the current agent's consent is missing, and
     // cleared on approve/cancel — so its presence is exactly "consent needed now".
