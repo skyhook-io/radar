@@ -1206,9 +1206,10 @@ function EventsTab({
 
       {/* Swimlane Timeline */}
       <div ref={swimlaneRef} className="shrink-0 border-b border-theme-border bg-theme-base relative">
-        {/* Scrollable swimlane area — up to 6 lanes visible before scrolling.
-            max-height, so a workload with fewer lanes stays compact. */}
-        <div className="max-h-[200px] overflow-y-auto relative">
+        {/* Scrollable swimlane area — up to 6 lanes + the pinned axis visible
+            before scrolling. max-height, so a workload with fewer lanes stays
+            compact. */}
+        <div className="max-h-[224px] overflow-y-auto relative">
           {nowX >= 0 && nowX <= 100 && (
             <div className="absolute top-0 bottom-0 w-0.5 bg-purple-500/50 z-20 pointer-events-none" style={{ left: `calc(280px + (100% - 280px) * ${nowX / 100})` }}>
               <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-xs text-purple-500 font-medium whitespace-nowrap">now</span>
@@ -1242,11 +1243,16 @@ function EventsTab({
               </div>
             </div>
           ))}
+          {/* Axis lives INSIDE the scroller so it shares the lanes' content width:
+              when 7 lanes overflow and a scrollbar appears, it narrows the axis and
+              the lanes by the same amount, so the tick row can't drift from the
+              bars. Sharing <TimeAxis> alone wasn't enough — the ticks and the lanes
+              must resolve to one track geometry, which only holds in one scroll
+              context. Sticky keeps it pinned at the bottom while lanes scroll. */}
+          <div className="sticky bottom-0 z-30 bg-theme-base">
+            <TimeAxis startTime={startTime} endTime={startTime + windowMs} labelColumnClass="w-[280px]" />
+          </div>
         </div>
-
-        {/* Time axis — the shared component so the tick row can't drift from the
-            main timeline's. */}
-        <TimeAxis startTime={startTime} endTime={startTime + windowMs} labelColumnClass="w-[280px]" />
       </div>
 
       {/* Events table */}
