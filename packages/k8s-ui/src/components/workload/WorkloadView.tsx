@@ -35,17 +35,14 @@ import { getKindBadgeColor, getHealthBadgeColor } from '../../utils/badge-colors
 import { buildResourceHierarchy, getAllEventsFromHierarchy, isProblematicEvent, type ResourceLane } from '../../utils/resource-hierarchy'
 import {
   ZOOM_LEVELS,
-  type ZoomLevel,
-  formatAxisTime,
-  EventMarker,
   EventDotLegend,
   HealthSpanLegend,
-  HealthSpan,
   ZoomControls,
-  buildHealthSpans,
+  TimeAxis,
   timeToX,
   calculateTimeRange,
 } from '../timeline/shared'
+import { LaneTrack, wheelZoomFactor } from '../timeline/TimelineSwimlanes'
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
 import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from '../shared/ResourceRendererDispatch'
@@ -349,7 +346,9 @@ export function WorkloadView({
   }, [])
 
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
-  const [zoom, setZoom] = useState<ZoomLevel>(1)
+  // Free hours value (window width). Buttons snap to ZOOM_LEVELS presets; ctrl+
+  // wheel over the swimlane scales it continuously — same model as the main page.
+  const [zoom, setZoom] = useState<number>(1)
   const [selectedPod, setSelectedPod] = useState<string | null>(null)
   const [initialContainer, setInitialContainer] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
@@ -869,6 +868,7 @@ export function WorkloadView({
             zoom={zoom}
             onZoomChange={setZoom}
             resourceKind={kind}
+            resourceNamespace={namespace}
             resourceName={name}
             selectedEventId={selectedEventId}
             onSelectEvent={setSelectedEventId}
@@ -1011,6 +1011,7 @@ function EventsTab({
   zoom,
   onZoomChange,
   resourceKind,
+  resourceNamespace,
   resourceName,
   selectedEventId,
   onSelectEvent,
@@ -1018,9 +1019,10 @@ function EventsTab({
   events: TimelineEvent[]
   resourceLanes: ResourceLane[]
   isLoading: boolean
-  zoom: ZoomLevel
-  onZoomChange: (zoom: ZoomLevel) => void
+  zoom: number
+  onZoomChange: (zoom: number) => void
   resourceKind: string
+  resourceNamespace: string
   resourceName: string
   selectedEventId: string | null
   onSelectEvent: (id: string | null) => void
@@ -1029,6 +1031,9 @@ function EventsTab({
   const tableContainerRef = useRef<HTMLDivElement>(null)
   const [hoveredEventId, setHoveredEventId] = useState<string | null>(null)
   const [visibleRowRange, setVisibleRowRange] = useState<{ first: number; last: number } | null>(null)
+  // The shared <LaneTrack> highlights the selected marker by event object; the
+  // detail view tracks it by id, so resolve it here.
+  const selectedEvent = useMemo(() => events.find(e => e.id === selectedEventId) ?? null, [events, selectedEventId])
 
   // Scroll to selected event
   useEffect(() => {
@@ -1084,76 +1089,86 @@ function EventsTab({
 
   const now = Date.now()
   const { start: startTime, windowMs } = calculateTimeRange(zoom, now)
-  const zoomIndex = ZOOM_LEVELS.indexOf(zoom)
-  const canZoomIn = zoomIndex > 0
-  const canZoomOut = zoomIndex < ZOOM_LEVELS.length - 1
-  const handleZoomIn = () => { if (canZoomIn) onZoomChange(ZOOM_LEVELS[zoomIndex - 1]) }
-  const handleZoomOut = () => { if (canZoomOut) onZoomChange(ZOOM_LEVELS[zoomIndex + 1]) }
   const localTimeToX = (ts: number) => timeToX(ts, startTime, windowMs)
 
-  // Build swimlanes
-  const swimlanes = useMemo(() => {
-    type SwimLane = {
-      id: string; label: string
-      spans: { start: number; end: number; health: string }[]
-      events: TimelineEvent[]
-      createdAt?: number; createdBeforeWindow: boolean
+  // Buttons snap to the adjacent preset either side of the (possibly continuous)
+  // current width — round stops for the buttons, fine control for the wheel.
+  const ZMIN = ZOOM_LEVELS[0]
+  const ZMAX = ZOOM_LEVELS[ZOOM_LEVELS.length - 1]
+  const canZoomIn = zoom > ZMIN + 1e-6
+  const canZoomOut = zoom < ZMAX - 1e-6
+  const handleZoomIn = () => {
+    const smaller = [...ZOOM_LEVELS].reverse().find(l => l < zoom - 1e-6)
+    if (smaller != null) onZoomChange(smaller)
+  }
+  const handleZoomOut = () => {
+    const larger = ZOOM_LEVELS.find(l => l > zoom + 1e-6)
+    if (larger != null) onZoomChange(larger)
+  }
+
+  // ctrl/cmd + wheel over the swimlane scales the window continuously (native
+  // non-passive listener so preventDefault blocks the browser's page zoom), via
+  // the same wheelZoomFactor the main timeline uses.
+  const swimlaneRef = useRef<HTMLDivElement>(null)
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
+  useEffect(() => {
+    const el = swimlaneRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      e.preventDefault()
+      const next = zoomRef.current * wheelZoomFactor(e.deltaY, e.deltaMode)
+      onZoomChange(Math.max(ZMIN, Math.min(next, ZMAX)))
     }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+    // isLoading: the swimlane (and its ref) doesn't exist during the loading
+    // early-return, so re-attach once it mounts.
+  }, [onZoomChange, ZMIN, ZMAX, isLoading])
+
+  // Which resources become swimlane rows: the root lane + its highest-signal
+  // descendants (kind-prioritized, capped at 6). Health spans + event dots render
+  // from each lane's own events inside the shared <LaneTrack>, so a row carries
+  // just its resource identity (for health attribution) and its events.
+  const swimlanes = useMemo(() => {
+    type SwimLane = { id: string; label: string; kind: string; namespace: string; name: string; events: TimelineEvent[] }
+    const label = (kind: string, name: string) =>
+      `${kind}: ${name.length > 40 ? name.slice(0, 20) + '…' + name.slice(-17) : name}`
 
     if (resourceLanes.length === 0) {
       const mainResourceEvents = events.filter(e => e.kind === resourceKind && e.name === resourceName)
-      const healthResult = buildHealthSpans(mainResourceEvents.filter(e => isChangeEvent(e)), startTime, now, mainResourceEvents)
-      return [{ id: 'main', label: `${resourceKind}: ${resourceName}`, spans: healthResult.spans, events: mainResourceEvents, createdAt: healthResult.createdAt, createdBeforeWindow: healthResult.createdBeforeWindow }]
+      return [{ id: 'main', label: label(resourceKind, resourceName), kind: resourceKind, namespace: resourceNamespace, name: resourceName, events: mainResourceEvents }]
     }
 
     const rootLane = resourceLanes[0]
-    const lanes: SwimLane[] = []
+    const lanes: SwimLane[] = [{
+      id: rootLane.id, label: label(rootLane.kind, rootLane.name),
+      kind: rootLane.kind, namespace: rootLane.namespace, name: rootLane.name, events: rootLane.events,
+    }]
 
-    const rootHealthResult = buildHealthSpans(rootLane.events.filter(e => isChangeEvent(e)), startTime, now, rootLane.events)
-    lanes.push({
-      id: rootLane.id,
-      label: `${rootLane.kind}: ${rootLane.name.length > 40 ? rootLane.name.slice(0, 20) + '...' + rootLane.name.slice(-17) : rootLane.name}`,
-      spans: rootHealthResult.spans, events: rootLane.events,
-      createdAt: rootHealthResult.createdAt, createdBeforeWindow: rootHealthResult.createdBeforeWindow,
-    })
-
-    const flattenChildren = (lane: ResourceLane): ResourceLane[] => {
-      const children = lane.children || []
-      return children.flatMap(child => [child, ...flattenChildren(child)])
-    }
-    const allChildren = flattenChildren(rootLane)
-
+    const flattenChildren = (lane: ResourceLane): ResourceLane[] =>
+      (lane.children || []).flatMap(child => [child, ...flattenChildren(child)])
     const kindPriority: Record<string, number> = {
       Service: 1, Deployment: 2, Rollout: 2, StatefulSet: 2, DaemonSet: 2,
       ReplicaSet: 3, ConfigMap: 4, Secret: 4, Gateway: 5, HTTPRoute: 4,
       GRPCRoute: 4, TCPRoute: 4, TLSRoute: 4, Ingress: 5, Pod: 6,
     }
-    allChildren.sort((a, b) => {
-      const aPriority = kindPriority[a.kind] || 10
-      const bPriority = kindPriority[b.kind] || 10
-      if (aPriority !== bPriority) return aPriority - bPriority
-      return b.events.length - a.events.length
+    const allChildren = flattenChildren(rootLane).sort((a, b) => {
+      const ap = kindPriority[a.kind] || 10
+      const bp = kindPriority[b.kind] || 10
+      return ap !== bp ? ap - bp : b.events.length - a.events.length
     })
 
     for (const child of allChildren.slice(0, 6)) {
-      const childHealthResult = buildHealthSpans(child.events.filter(e => isChangeEvent(e)), startTime, now, child.events)
       lanes.push({
-        id: child.id,
-        label: `${child.kind}: ${child.name.length > 40 ? child.name.slice(0, 20) + '...' + child.name.slice(-17) : child.name}`,
-        spans: childHealthResult.spans, events: child.events,
-        createdAt: childHealthResult.createdAt, createdBeforeWindow: childHealthResult.createdBeforeWindow,
+        id: child.id, label: label(child.kind, child.name),
+        kind: child.kind, namespace: child.namespace, name: child.name, events: child.events,
       })
     }
 
     return lanes
-  }, [resourceLanes, events, resourceKind, resourceName, startTime, now])
-
-  // Time axis ticks
-  const tickCount = 8
-  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => {
-    const t = startTime + (windowMs * i) / tickCount
-    return { time: t, label: formatAxisTime(new Date(t)) }
-  })
+  }, [resourceLanes, events, resourceKind, resourceName, resourceNamespace])
 
   const formatTimeRangeDisplay = () => {
     const start = new Date(startTime)
@@ -1190,9 +1205,10 @@ function EventsTab({
       </div>
 
       {/* Swimlane Timeline */}
-      <div className="shrink-0 border-b border-theme-border bg-theme-base relative">
-        {/* Scrollable swimlane area — max 4 lanes visible before scrolling */}
-        <div className="max-h-[140px] overflow-y-auto relative">
+      <div ref={swimlaneRef} className="shrink-0 border-b border-theme-border bg-theme-base relative">
+        {/* Scrollable swimlane area — up to 6 lanes visible before scrolling.
+            max-height, so a workload with fewer lanes stays compact. */}
+        <div className="max-h-[200px] overflow-y-auto relative">
           {nowX >= 0 && nowX <= 100 && (
             <div className="absolute top-0 bottom-0 w-0.5 bg-purple-500/50 z-20 pointer-events-none" style={{ left: `calc(280px + (100% - 280px) * ${nowX / 100})` }}>
               <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-xs text-purple-500 font-medium whitespace-nowrap">now</span>
@@ -1201,66 +1217,36 @@ function EventsTab({
 
           {swimlanes.map((lane) => (
             <div key={lane.id} className="flex border-b border-theme-border/50 last:border-b-0">
-              <div className="w-[280px] shrink-0 px-3 py-1 bg-theme-surface/50 border-r border-theme-border text-xs font-medium text-theme-text-secondary truncate flex items-center">
+              <div className="w-[280px] shrink-0 px-3 h-8 bg-theme-surface/50 border-r border-theme-border text-xs font-medium text-theme-text-secondary truncate flex items-center">
                 {lane.label}
               </div>
-              <div className="flex-1 relative h-7 bg-theme-base">
+              <div className="flex-1 relative h-8 bg-theme-base">
+                <LaneTrack
+                  className="absolute inset-0"
+                  events={lane.events}
+                  ownResource={{ kind: lane.kind, namespace: lane.namespace, name: lane.name }}
+                  startTime={startTime}
+                  windowMs={windowMs}
+                  now={now}
+                  timeToX={localTimeToX}
+                  selectedEvent={selectedEvent}
+                  onSelectCluster={(cluster) => onSelectEvent(cluster.events[0]?.id ?? null)}
+                  small
+                />
                 {visibleTimeRangeFromRows && (
-                  <div className="absolute top-0 bottom-0 bg-blue-500/10 border-x border-blue-500/30 pointer-events-none" style={{
+                  <div className="absolute top-0 bottom-0 z-20 bg-blue-500/10 border-x border-blue-500/30 pointer-events-none" style={{
                     left: `${Math.max(0, localTimeToX(visibleTimeRangeFromRows.start))}%`,
                     width: `${Math.max(2, Math.min(100, localTimeToX(visibleTimeRangeFromRows.end)) - Math.max(0, localTimeToX(visibleTimeRangeFromRows.start)))}%`,
                   }} />
                 )}
-                {lane.spans.map((span, i) => {
-                  const left = Math.max(0, localTimeToX(span.start))
-                  const right = Math.min(100, localTimeToX(span.end))
-                  const width = right - left
-                  const showCreatedBefore = i === 0 && lane.createdBeforeWindow && lane.createdAt
-                  return (
-                    <HealthSpan
-                      key={i}
-                      health={span.health}
-                      left={left}
-                      width={width}
-                      title={`${span.health} (${new Date(span.start).toLocaleTimeString()} - ${new Date(span.end).toLocaleTimeString()})`}
-                      createdBefore={showCreatedBefore ? new Date(lane.createdAt!) : undefined}
-                    />
-                  )
-                })}
-                {lane.events.map((evt, i) => {
-                  const x = localTimeToX(new Date(evt.timestamp).getTime())
-                  if (x < 0 || x > 100) return null
-                  return (
-                    <EventMarker
-                      key={`${evt.id}-${i}`}
-                      event={evt}
-                      x={x}
-                      selected={selectedEventId === evt.id}
-                      onClick={() => onSelectEvent(selectedEventId === evt.id ? null : evt.id)}
-                      small
-                    />
-                  )
-                })}
               </div>
             </div>
           ))}
         </div>
 
-        {/* Time axis */}
-        <div className="flex">
-          <div className="w-[280px] shrink-0 bg-theme-surface/50 border-r border-theme-border" />
-          <div className="flex-1 relative h-5 bg-theme-elevated/30">
-            {ticks.map((tick, i) => {
-              const x = localTimeToX(tick.time)
-              return (
-                <div key={i} className="absolute top-0 flex flex-col items-center" style={{ left: `${x}%`, transform: 'translateX(-50%)' }}>
-                  <div className="h-1.5 w-px bg-theme-border" />
-                  <span className="text-[10px] text-theme-text-tertiary">{tick.label}</span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
+        {/* Time axis — the shared component so the tick row can't drift from the
+            main timeline's. */}
+        <TimeAxis startTime={startTime} endTime={startTime + windowMs} labelColumnClass="w-[280px]" />
       </div>
 
       {/* Events table */}

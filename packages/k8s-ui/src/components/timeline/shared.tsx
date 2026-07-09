@@ -9,7 +9,7 @@ import { clsx } from 'clsx'
 import { ZoomIn, ZoomOut } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
 import type { TimelineEvent } from '../../types/core'
-import { isChangeEvent, isDeploymentLikeWorkloadKind, isHistoricalEvent } from '../../types/core'
+import { isChangeEvent, isDeploymentLikeWorkloadKind } from '../../types/core'
 import { isProblematicEvent, type ResourceLane } from '../../utils/resource-hierarchy'
 
 // ============================================================================
@@ -151,7 +151,9 @@ export function HealthSpanLegend() {
  * Zoom controls for the timeline (zoom in/out buttons + current level display).
  */
 interface ZoomControlsProps {
-  zoom: ZoomLevel
+  // Free hours value — the current window width — so callers can drive it
+  // continuously (wheel zoom) and still render a clean label via formatZoomLevel.
+  zoom: number
   onZoomIn: () => void
   onZoomOut: () => void
   canZoomIn: boolean
@@ -215,108 +217,6 @@ export function QuickZoomSelector({ zoom, onZoomChange }: QuickZoomSelectorProps
         </button>
       ))}
     </div>
-  )
-}
-
-/**
- * Event marker dot for timeline visualization.
- */
-interface EventMarkerProps {
-  event: TimelineEvent
-  x: number
-  selected?: boolean
-  onClick: () => void
-  dimmed?: boolean
-  small?: boolean
-}
-
-export function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarkerProps) {
-  const isChange = isChangeEvent(event)
-  const isProblematic = isProblematicEvent(event)
-  const isHistorical = isHistoricalEvent(event)
-
-  const getMarkerStyle = () => {
-    if (isHistorical) {
-      if (isProblematic) {
-        return 'bg-amber-500/20 border-2 border-dashed border-amber-500/60'
-      }
-      if (isChange) {
-        switch (event.eventType) {
-          case 'add':
-            return 'bg-green-500/20 border-2 border-dashed border-green-500/60'
-          case 'delete':
-            return 'bg-red-500/20 border-2 border-dashed border-red-500/60'
-          case 'update':
-            return 'bg-blue-500/20 border-2 border-dashed border-blue-500/60'
-        }
-      }
-      return 'bg-theme-hover/30 border-2 border-dashed border-theme-border-light'
-    }
-
-    if (isProblematic) {
-      return dimmed ? 'bg-amber-500/50' : 'bg-amber-500'
-    }
-    if (isChange) {
-      switch (event.eventType) {
-        case 'add':
-          return dimmed ? 'bg-green-500/50' : 'bg-green-500'
-        case 'delete':
-          return dimmed ? 'bg-red-500/50' : 'bg-red-500'
-        case 'update':
-          return dimmed ? 'bg-blue-500/50' : 'bg-blue-500'
-      }
-    }
-    return dimmed ? 'bg-theme-text-tertiary/50' : 'bg-theme-text-tertiary'
-  }
-
-  const getOperationLabel = () => {
-    if (isProblematic) {
-      return `⚠ ${event.reason || 'Warning'}`
-    }
-    if (isChange) {
-      switch (event.eventType) {
-        case 'add': return '● Created'
-        case 'delete': return '● Deleted'
-        case 'update': return '● Modified'
-        default: return '● Changed'
-      }
-    }
-    if (event.reason) {
-      return `● ${event.reason}`
-    }
-    return '● Event'
-  }
-
-  const tooltipLines: string[] = []
-  tooltipLines.push(getOperationLabel())
-  if (event.message) {
-    const msg = event.message.length > 60 ? event.message.slice(0, 60) + '...' : event.message
-    tooltipLines.push(msg)
-  }
-  tooltipLines.push(formatRelativeTime(event.timestamp))
-  if (isHistorical) tooltipLines.push('(from metadata)')
-
-  const tooltipText = tooltipLines.join(' · ')
-
-  return (
-    <button
-      className={clsx(
-        'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full transition-all group',
-        small ? 'w-2.5 h-2.5' : 'w-3 h-3',
-        getMarkerStyle(),
-        selected ? 'ring-2 ring-white ring-offset-2 ring-offset-theme-base scale-150' : 'hover:scale-125',
-        dimmed ? 'z-5' : isHistorical ? 'z-5' : 'z-10'
-      )}
-      style={{ left: `${x}%` }}
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick()
-      }}
-    >
-      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 text-xs bg-theme-base text-theme-text-primary rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity duration-75">
-        {tooltipText}
-      </span>
-    </button>
   )
 }
 
@@ -393,81 +293,10 @@ export function TimeAxis({ startTime, endTime, tickCount = 8, labelColumnClass =
 }
 
 /**
- * Health span bar showing a health state over a time range.
- */
-interface HealthSpanProps {
-  health: 'healthy' | 'rolling' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown' | string
-  left: number // percentage
-  width: number // percentage
-  title?: string
-  /** Show indicator that resource was created before visible window */
-  createdBefore?: Date
-}
-
-export function HealthSpan({ health, left, width, title, createdBefore }: HealthSpanProps) {
-  if (width <= 0) return null
-
-  const getHealthColor = () => {
-    switch (health) {
-      case 'healthy':
-        return 'bg-green-500/60 dark:bg-green-600/60'
-      case 'rolling':
-        return 'bg-blue-500/60 dark:bg-blue-500/60'
-      case 'degraded':
-        return 'bg-amber-500/60 dark:bg-[#b8861e]'
-      case 'unhealthy':
-        return 'bg-red-500/60 dark:bg-red-500/60'
-      case 'neutral':
-        // intentional/idle (suspended, scaled-to-0) — sky, calm
-        return 'bg-sky-500/60 dark:bg-sky-500/60'
-      default:
-        // Unknown or other states
-        return 'bg-gray-400/40'
-    }
-  }
-
-  return (
-    <div
-      className={clsx(
-        'absolute top-1 bottom-1 rounded-sm group',
-        getHealthColor()
-      )}
-      style={{ left: `${left}%`, width: `${width}%` }}
-      title={title}
-    >
-      {createdBefore && left === 0 && (
-        <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[9px] text-black/70 dark:text-black/60 whitespace-nowrap pointer-events-none group-hover:text-black/90 dark:group-hover:text-black/80">
-          ← {formatCreatedBefore(createdBefore)}
-        </span>
-      )}
-    </div>
-  )
-}
-
-/**
- * Format the "created before" date for display.
- * Shows relative time for recent dates, or short date for older ones.
- */
-function formatCreatedBefore(date: Date): string {
-  const now = Date.now()
-  const diffMs = now - date.getTime()
-  const diffHours = diffMs / (1000 * 60 * 60)
-  const diffDays = diffHours / 24
-
-  if (diffDays < 1) {
-    return `${Math.round(diffHours)}h ago`
-  } else if (diffDays < 7) {
-    return `${Math.round(diffDays)}d ago`
-  } else {
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
-  }
-}
-
-/**
  * Calculate visible time range from zoom level and optional pan offset.
  */
 export function calculateTimeRange(
-  zoom: ZoomLevel,
+  zoom: number,
   now: number,
   panOffset: number = 0
 ): { start: number; end: number; windowMs: number } {
