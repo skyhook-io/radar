@@ -291,7 +291,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   // panel closed — and only re-render when the set actually changes, not every poll.
   const runningSig = runs
     .filter((r) => r.status === "running")
-    .map((r) => `${r.kind} ${r.namespace} ${r.name}`)
+    .map((r) => `${r.kind}\x00${r.namespace}\x00${r.name}`)
     .sort()
     .join("|");
   const runningKeys = useMemo(

@@ -164,11 +164,15 @@ Flags:
 		// watching a cluster connect for 30 seconds. No server exists yet, so
 		// read/write the shared machine-scoped store (~/.radar/config.json)
 		// directly — the ephemeral server then sees it as already given.
-		surface := ai.ConsentSurfaceFor(o.agent)
+		effective := ai.EffectiveAgent(o.agent, ai.DetectAgents(context.Background(), false))
+		surface := ai.ConsentSurfaceFor(effective)
 		if !consentGivenLocal(surface) {
 			if o.yes {
-				recordConsentLocal(surface)
-			} else if !promptConsent(localAgentLabel(o.agent), surface, recordConsentLocal) {
+				if err := recordConsentLocal(surface); err != nil {
+					fmt.Fprintf(os.Stderr, "couldn't record consent: %v\n", err)
+					return 1
+				}
+			} else if !promptConsent(consentLabel(effective), surface, recordConsentLocal) {
 				fmt.Fprintln(os.Stderr, "aborted")
 				return 1
 			}
@@ -199,13 +203,17 @@ Flags:
 		return 1
 	}
 
-	surface := ai.ConsentSurfaceFor(o.agent)
+	effective := ai.EffectiveAgent(o.agent, agents.Agents)
+	surface := ai.ConsentSurfaceFor(effective)
 	if !agents.Consented[surface] {
 		if o.yes {
 			// --yes acknowledges the disclosure; the server enforces consent at
 			// start, so it must be recorded, not just skipped.
-			recordConsentHTTP(base, surface)
-		} else if !promptConsent(agents.label(o.agent), surface, func(sf string) { recordConsentHTTP(base, sf) }) {
+			if err := recordConsentHTTP(base, surface); err != nil {
+				fmt.Fprintf(os.Stderr, "couldn't record consent: %v\n", err)
+				return 1
+			}
+		} else if !promptConsent(consentLabel(effective), surface, func(sf string) error { return recordConsentHTTP(base, sf) }) {
 			fmt.Fprintln(os.Stderr, "aborted")
 			return 1
 		}
@@ -236,20 +244,6 @@ Flags:
 	return 0
 }
 
-// localAgentLabel names the agent for the standalone consent prompt by probing
-// PATH directly — there's no server to ask yet.
-func localAgentLabel(pick string) string {
-	for _, info := range ai.DetectAgents(context.Background(), false) {
-		if !info.Supported {
-			continue
-		}
-		if pick == "" || info.Name == pick {
-			return info.Label
-		}
-	}
-	return "your agent CLI"
-}
-
 // --- server discovery -------------------------------------------------------
 
 func resolveServer(explicit string) (string, error) {
@@ -275,20 +269,7 @@ func resolveServer(explicit string) (string, error) {
 type agentsResponse struct {
 	Enabled   bool            `json:"enabled"`
 	Consented map[string]bool `json:"consented"`
-	Agents    []struct {
-		Name      string `json:"name"`
-		Label     string `json:"label"`
-		Supported bool   `json:"supported"`
-	} `json:"agents"`
-}
-
-func (a agentsResponse) label(pick string) string {
-	for _, ag := range a.Agents {
-		if ag.Name == pick || (pick == "" && ag.Supported) {
-			return ag.Label
-		}
-	}
-	return "your agent CLI"
+	Agents    []ai.AgentInfo  `json:"agents"`
 }
 
 func fetchAgents(base string) (agentsResponse, error) {
@@ -305,17 +286,33 @@ func consentGivenLocal(surface string) bool {
 	return config.AIConsentGiven(surface)
 }
 
-func recordConsentLocal(surface string) {
-	_ = config.RecordAIConsent(surface)
+func recordConsentLocal(surface string) error {
+	return config.RecordAIConsent(surface)
 }
 
 // recordConsentHTTP persists consent via the running instance (same store).
-func recordConsentHTTP(base, surface string) {
+// Failures must surface: the server enforces consent at start, so a swallowed
+// write here turns into a baffling 403 one request later.
+func recordConsentHTTP(base, surface string) error {
 	body, _ := json.Marshal(map[string]string{"surface": surface})
 	resp, err := http.Post(base+"/api/diagnose/consent", "application/json", strings.NewReader(string(body)))
-	if err == nil {
-		_ = resp.Body.Close()
+	if err != nil {
+		return err
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s", apiError(resp))
+	}
+	return nil
+}
+
+// consentLabel names the agent in the disclosure. effective is "" only when no
+// supported CLI is detected — the run fails later with its own clearer error.
+func consentLabel(effective string) string {
+	if effective == "" {
+		return "your agent CLI"
+	}
+	return ai.AgentLabel(effective)
 }
 
 // promptConsent mirrors the UI's one-time consent card. Interactive terminals
@@ -323,7 +320,7 @@ func recordConsentHTTP(base, surface string) {
 // stderr and proceed — an explicit `radar diagnose` invocation in a script is
 // already an informed act, and a blocking prompt there would just break CI.
 // record persists the acknowledgment to the shared machine-scoped store.
-func promptConsent(agentLabel, surface string, record func(surface string)) bool {
+func promptConsent(agentLabel, surface string, record func(surface string) error) bool {
 	notice := fmt.Sprintf(`This runs your own %s on your machine — no Radar cloud, no API key.
 Radar sends the resource's spec, recent events, and pod logs to it (and on to
 its model provider under your account). Through Radar the agent can only READ
@@ -341,15 +338,21 @@ them) — if any of those can make changes, Cursor could use them.
 		// Non-interactive callers proceed after the disclosure (an explicit
 		// invocation in a script is an informed act) — and must RECORD it,
 		// because the server enforces consent at start.
-		record(surface)
-		return true
+		return recordOrReport(record, surface)
 	}
 	fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	if s := strings.ToLower(strings.TrimSpace(line)); s != "y" && s != "yes" {
 		return false
 	}
-	record(surface)
+	return recordOrReport(record, surface)
+}
+
+func recordOrReport(record func(string) error, surface string) bool {
+	if err := record(surface); err != nil {
+		fmt.Fprintf(os.Stderr, "couldn't record consent: %v\n", err)
+		return false
+	}
 	return true
 }
 

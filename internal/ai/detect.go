@@ -37,6 +37,26 @@ func AgentLabel(name string) string {
 	return name
 }
 
+// EffectiveAgent resolves an agent pick exactly the way the server will at
+// Start (Diagnoser.AgentName + defName): the pick when it names a supported
+// agent, else the first supported one, else "". Pre-boot/remote clients must
+// derive consent surfaces from THIS — an empty pick can resolve to Cursor.
+func EffectiveAgent(pick string, agents []AgentInfo) string {
+	def := ""
+	for _, a := range agents {
+		if !a.Supported {
+			continue
+		}
+		if a.Name == pick {
+			return pick
+		}
+		if def == "" {
+			def = a.Name
+		}
+	}
+	return def
+}
+
 // ConsentSurfaceFor maps an agent to its consent-disclosure surface. Cursor's
 // trust model is materially different (its global MCP servers can't be
 // excluded), so it has its own; drift between enforcement sites would silently
