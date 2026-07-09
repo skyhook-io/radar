@@ -493,12 +493,19 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
               />
             </SectionPane>
 
-            {/* AI diagnose — self-saving, usable by everyone. When an agent CLI is
-                installed, AISettingsSection carries its own heading + note; when
-                not, we explain the feature and how to turn it on. */}
+            {/* AI diagnose — self-saving, usable by everyone. Same heading block
+                as every other tab; the body is the agent controls (when a CLI is
+                installed) or an enable explainer (when not). */}
             <div className={clsx(section !== 'ai' && 'hidden')} role="tabpanel">
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-theme-text-primary">AI diagnose</h3>
+                <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                  Investigate incidents with an AI agent that runs on your own machine — reading
+                  logs, events, and topology to explain what's wrong. No Radar cloud, no API key.
+                </p>
+              </div>
               {aiAvailable ? (
-                <>
+                <div className="space-y-4">
                   <AISettingsSection
                     available={diag.available}
                     agents={diag.agents}
@@ -523,7 +530,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                       Save
                     </button>
                   </div>
-                </>
+                </div>
               ) : (
                 <AIUnavailableNotice />
               )}
@@ -910,28 +917,19 @@ function OverviewStatus({ tone }: { tone: OverviewTone }) {
   return <span className={clsx('w-2 h-2 rounded-full shrink-0', cls)} />
 }
 
-// AIUnavailableNotice explains the local-agent diagnosis feature and how to turn
-// it on, shown in place of the agent controls when no supported CLI is installed
-// (so the AI tab is discoverable to the person who'd set it up).
+// AIUnavailableNotice is the body of the AI diagnose tab when no supported agent
+// CLI is installed — the heading/description are provided by the tab itself, so
+// this is just the enable explainer (keeping the feature discoverable to whoever
+// would set it up).
 function AIUnavailableNotice() {
   return (
-    <div className="space-y-3">
-      <div>
-        <h3 className="text-base font-semibold text-theme-text-primary">AI diagnose</h3>
-        <p className="mt-0.5 text-xs text-theme-text-tertiary">
-          Ask Radar to investigate an incident and it drives an AI agent — running on your own
-          machine — to read logs, events, and topology and explain what's wrong. No Radar cloud and
-          no API key: it uses an agent CLI you already have.
-        </p>
-      </div>
-      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
-        <p className="text-sm font-medium text-theme-text-primary">No supported agent CLI found</p>
-        <p className="mt-1 text-xs text-theme-text-tertiary">
-          Install <span className="text-theme-text-secondary">Claude Code</span> or{' '}
-          <span className="text-theme-text-secondary">Codex</span>, then restart Radar — this
-          section will show the agent, model, and effort controls.
-        </p>
-      </div>
+    <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
+      <p className="text-sm font-medium text-theme-text-primary">No supported agent CLI found</p>
+      <p className="mt-1 text-xs text-theme-text-tertiary">
+        Install <span className="text-theme-text-secondary">Claude Code</span> or{' '}
+        <span className="text-theme-text-secondary">Codex</span>, then restart Radar — this tab
+        will show the agent, model, and effort controls.
+      </p>
     </div>
   )
 }
@@ -1269,7 +1267,7 @@ function PrometheusConfigField({
           <button
             onClick={handleApply}
             disabled={apply.status === 'applying'}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated border border-theme-border rounded-md transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
           >
             {apply.status === 'applying'
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1484,10 +1482,15 @@ function ArgoCDConfigField({
   return (
     <div>
       <p className="text-xs text-theme-text-tertiary mb-3">
-        Enables the full Git-rendered desired-vs-live diff on GitOps Application pages.
+        Connect your Argo CD server for the full Git-rendered desired-vs-live diff on GitOps
+        Application pages — what Git declares vs what's actually running. Without it, Radar falls
+        back to a lighter annotation-based drift that can miss fields.
       </p>
 
       <label className="block text-sm font-medium text-theme-text-primary mb-1">Server URL</label>
+      <p className="text-xs text-theme-text-tertiary mb-1">
+        Leave blank to auto-discover the argocd-server in this cluster, or enter its API URL.
+      </p>
       <input
         type="text"
         value={url}
@@ -1496,7 +1499,13 @@ function ArgoCDConfigField({
         className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
       />
 
-      <div className="mt-2 flex items-center gap-2">
+      <label className="block text-sm font-medium text-theme-text-primary mt-3 mb-1">Auth token</label>
+      <p className="text-xs text-theme-text-tertiary mb-1">
+        Lets Radar read your applications. Create one with{' '}
+        <code className="inline-code">argocd account generate-token</code>, or in the Argo CD UI under
+        Settings → Accounts. Already signed in with the CLI? Skip this and use “Argo CD CLI session” below.
+      </p>
+      <div className="flex items-center gap-2">
         <input
           type="password"
           value={showConfiguredPlaceholder ? '' : token}
@@ -1536,7 +1545,7 @@ function ArgoCDConfigField({
           {connecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plug className="w-3.5 h-3.5" />}
           Connect &amp; save
         </button>
-        <Tooltip content="Use the token from your local `argocd login` session">
+        <Tooltip content="Reuse the token from your `argocd login` session on this machine — nothing to generate or paste">
           <button
             onClick={handleUseCliToken}
             disabled={connecting}
@@ -1557,7 +1566,7 @@ function ArgoCDConfigField({
         <p className="mt-2 text-xs text-red-600 dark:text-red-400/80">{state.error}</p>
       ) : (
         <p className="mt-2 text-xs text-theme-text-tertiary">
-          Applies immediately — no restart needed. Leave the URL blank to auto-discover the in-cluster argocd-server.
+          Connecting verifies the URL and token before anything is saved.
         </p>
       )}
     </div>
