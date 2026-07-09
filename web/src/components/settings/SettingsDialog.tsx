@@ -13,6 +13,7 @@ import { useCloudRole, useVersionCheck } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
+import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 
 interface Config {
@@ -45,7 +46,6 @@ interface ConfigResponse {
 interface SettingsDialogProps {
   open: boolean
   onClose: () => void
-  onShowMyPermissions?: () => void
 }
 
 // The settings surface splits into three honest apply buckets:
@@ -75,7 +75,7 @@ function normalizeStartup(c: Config) {
   }
 }
 
-export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsDialogProps) {
+export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
   const { data: versionInfo } = useVersionCheck()
@@ -149,16 +149,10 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
       model: diag.model,
       effort: diag.effort,
     })
-    // First accessible section: My permissions for everyone when wired, else the
-    // first host-config section for owners, else AI for non-owners.
-    const firstId: SectionId = onShowMyPermissions
-      ? 'perms'
-      : canEditConfig
-        ? 'connection'
-        : diag.available && diag.agents.length > 0
-          ? 'ai'
-          : 'connection'
-    setSection(firstId)
+    // My permissions is inline and available to everyone, so it's always the
+    // landing section — an informative default (your access) rather than an
+    // empty launcher.
+    setSection('perms')
 
     fetch(apiUrl('/config'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => {
@@ -286,7 +280,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
   // Flat, un-grouped nav — the per-section captions carry the restart-vs-live
   // semantics, so group labels would only add visual weight to a 6-item list.
   const navItems: NavItemDef[] = [
-    { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, visible: !!onShowMyPermissions, dirty: false },
+    { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, visible: true, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, visible: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Prometheus', icon: Activity, ownerOnly: true, visible: true, dirty: false },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, visible: true, dirty: false },
@@ -382,22 +376,18 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
               </div>
             )}
 
-            {/* My permissions — usable by everyone */}
+            {/* My permissions — usable by everyone, rendered inline (no launcher) */}
             <div className={clsx(section !== 'perms' && 'hidden')} role="tabpanel">
-              <div className="mb-4">
+              <div className="mb-1">
                 <h3 className="text-base font-semibold text-theme-text-primary">My permissions</h3>
+                <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                  What your current identity can do in this cluster — roles bound to you and your
+                  effective, flattened permissions.
+                </p>
               </div>
-              <p className="text-sm text-theme-text-secondary">
-                See what your current identity can do in this cluster — the roles bound to you
-                and your effective, flattened permissions.
-              </p>
-              <button
-                onClick={onShowMyPermissions}
-                className="mt-4 flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
-              >
-                <Shield className="w-3.5 h-3.5" />
-                Open my permissions
-              </button>
+              <div className="mt-3">
+                <MyPermissionsContent active={section === 'perms'} />
+              </div>
             </div>
 
             {/* Connection — Cluster + Server merged */}

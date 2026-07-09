@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
-import { Shield, X, Loader2, Lock, ExternalLink } from 'lucide-react'
+import { useState } from 'react'
+import { Loader2, Lock, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -11,137 +10,76 @@ import {
   rbacNonResourceUrlBadgeClass,
   type RBACWhoamiResponse,
 } from '@skyhook-io/k8s-ui'
-import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
-import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { useNamespaces, useAuthMe, fetchJSON } from '../../api/client'
 import { useRBACWhoami } from '../../api/rbac'
 
-interface MyPermissionsDialogProps {
-  open: boolean
-  onClose: () => void
-}
-
-export function MyPermissionsDialog({ open, onClose }: MyPermissionsDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null)
-  const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
+// MyPermissionsContent renders the "your access on this cluster" viewer inline
+// (no modal chrome) so the Settings dialog can host it directly in its content
+// pane. `active` gates the apiserver queries so opening Settings on another
+// section doesn't fire a SelfSubjectRulesReview the user never asked for.
+export function MyPermissionsContent({ active }: { active: boolean }) {
   const [namespace, setNamespace] = useState('default')
-
   const { data: authMe } = useAuthMe()
   const { data: namespaces } = useNamespaces()
-  const { data: whoami, isLoading, error } = useRBACWhoami(namespace, open)
+  const { data: whoami, isLoading, error } = useRBACWhoami(namespace, active)
 
-  // ESC + focus
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    document.addEventListener('keydown', handler, true)
-    return () => document.removeEventListener('keydown', handler, true)
-  }, [open, onClose])
-  useEffect(() => {
-    if (open && dialogRef.current) dialogRef.current.focus()
-  }, [open])
-
-  if (!shouldRender) return null
-
-  return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div
-        className={clsx(
-          'absolute inset-0 bg-black/60 backdrop-blur-sm',
-          TRANSITION_BACKDROP,
-          isOpen ? 'opacity-100' : 'opacity-0',
-        )}
-        onClick={onClose}
-      />
-      <div
-        ref={dialogRef}
-        tabIndex={-1}
-        className={clsx(
-          'relative bg-theme-surface border border-theme-border shadow-theme-lg w-full outline-none flex flex-col',
-          'max-sm:inset-0 max-sm:absolute max-sm:rounded-none max-sm:max-h-full max-sm:border-0',
-          'sm:rounded-xl sm:max-w-3xl sm:mx-4 sm:max-h-[85vh]',
-          TRANSITION_PANEL,
-          isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95',
-        )}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
-          <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-theme-text-secondary" />
-            <h2 className="text-lg font-semibold text-theme-text-primary">Your access on this cluster</h2>
+  return (
+    <div className="space-y-4">
+      {/* Identity + namespace selector */}
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-[180px]">
+          <label className="block text-xs text-theme-text-tertiary mb-1">Identity</label>
+          <div className="px-2 py-1.5 text-sm bg-theme-elevated rounded border border-theme-border text-theme-text-primary truncate">
+            {authMe?.username || '(current kubeconfig user)'}
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-          >
-            <X className="w-5 h-5" />
-          </button>
         </div>
-
-        <div className="overflow-y-auto p-4 flex-1 space-y-4">
-          {/* Identity + namespace selector */}
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex-1 min-w-[180px]">
-              <label className="block text-xs text-theme-text-tertiary mb-1">Identity</label>
-              <div className="px-2 py-1.5 text-sm bg-theme-elevated rounded border border-theme-border text-theme-text-primary truncate">
-                {authMe?.username || '(current kubeconfig user)'}
-              </div>
-            </div>
-            <div className="flex-1 min-w-[180px]">
-              <label className="block text-xs text-theme-text-tertiary mb-1">Namespace</label>
-              <select
-                value={namespace}
-                onChange={(e) => setNamespace(e.target.value)}
-                className="w-full px-2 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded text-theme-text-primary focus:outline-none focus:border-blue-500"
-              >
-                {namespaces?.map((ns) => (
-                  <option key={ns.name} value={ns.name}>{ns.name}</option>
-                ))}
-                {!namespaces?.some((ns) => ns.name === namespace) && (
-                  <option value={namespace}>{namespace}</option>
-                )}
-              </select>
-            </div>
-          </div>
-
-          <p className="text-xs text-theme-text-tertiary">
-            Computed by the Kubernetes API via{' '}
-            <code className="inline-code">SelfSubjectRulesReview</code>.
-            Shows what you can do in <span className="text-theme-text-secondary">{namespace}</span>,
-            plus any cluster-scoped rules that apply everywhere.
-          </p>
-
-          {whoami?.incomplete && (
-            <div className="px-2.5 py-1.5 text-xs bg-amber-500/10 border border-amber-500/20 rounded">
-              The apiserver returned an incomplete rule set
-              {whoami.evaluationError ? ` (${whoami.evaluationError})` : ''}.
-              The list below may understate your actual permissions.
-            </div>
-          )}
-
-          {isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-theme-text-tertiary">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Querying apiserver…
-            </div>
-          ) : error ? (
-            <div className="text-sm text-red-400">
-              Failed to load: {(error as Error).message}
-            </div>
-          ) : whoami ? (
-            <PermissionsTable whoami={whoami} />
-          ) : null}
-
-          <RestrictedResources enabled={open} />
+        <div className="flex-1 min-w-[180px]">
+          <label className="block text-xs text-theme-text-tertiary mb-1">Namespace</label>
+          <select
+            value={namespace}
+            onChange={(e) => setNamespace(e.target.value)}
+            className="w-full px-2 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded text-theme-text-primary focus:outline-none focus:border-blue-500"
+          >
+            {namespaces?.map((ns) => (
+              <option key={ns.name} value={ns.name}>{ns.name}</option>
+            ))}
+            {!namespaces?.some((ns) => ns.name === namespace) && (
+              <option value={namespace}>{namespace}</option>
+            )}
+          </select>
         </div>
       </div>
-    </div>,
-    document.body,
+
+      <p className="text-xs text-theme-text-tertiary">
+        Computed by the Kubernetes API via{' '}
+        <code className="inline-code">SelfSubjectRulesReview</code>.
+        Shows what you can do in <span className="text-theme-text-secondary">{namespace}</span>,
+        plus any cluster-scoped rules that apply everywhere.
+      </p>
+
+      {whoami?.incomplete && (
+        <div className="px-2.5 py-1.5 text-xs bg-amber-500/10 border border-amber-500/20 rounded">
+          The apiserver returned an incomplete rule set
+          {whoami.evaluationError ? ` (${whoami.evaluationError})` : ''}.
+          The list below may understate your actual permissions.
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-theme-text-tertiary">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          Querying apiserver…
+        </div>
+      ) : error ? (
+        <div className="text-sm text-red-400">
+          Failed to load: {(error as Error).message}
+        </div>
+      ) : whoami ? (
+        <PermissionsTable whoami={whoami} />
+      ) : null}
+
+      <RestrictedResources enabled={active} />
+    </div>
   )
 }
 

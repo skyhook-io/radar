@@ -61,7 +61,6 @@ import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog } from './components/settings/SettingsDialog'
-import { MyPermissionsDialog } from './components/settings/MyPermissionsDialog'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { kindToPlural, pluralToKind, openExternal, apiVersionToGroup, buildWorkloadPath, searchHitToSelectedResource } from './utils/navigation'
 import { type OmnibarHandle } from './components/ui/Omnibar'
@@ -501,7 +500,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Settings dialog state
   const [showSettings, setShowSettings] = useState(false)
-  const [showMyPermissions, setShowMyPermissions] = useState(false)
 
   // Listen for "open-settings" DOM event (used by MCPSetupDialog etc.)
   useEffect(() => {
@@ -2380,16 +2378,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Diagnostics overlay */}
       {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} onClose={() => setShowDiagnostics(false)} />}
 
-      {/* Settings dialog */}
+      {/* Settings dialog — My permissions is rendered inline in its own section */}
       <SettingsDialog
         open={showSettings}
         onClose={() => setShowSettings(false)}
-        onShowMyPermissions={() => {
-          setShowSettings(false)
-          setShowMyPermissions(true)
-        }}
       />
-      <MyPermissionsDialog open={showMyPermissions} onClose={() => setShowMyPermissions(false)} />
 
       {/* Debug overlay — dev mode, standalone only. Embedded hosts (Radar Hub)
           own their own dev tooling; ours would collide with theirs bottom-right. */}
