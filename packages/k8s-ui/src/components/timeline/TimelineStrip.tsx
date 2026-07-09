@@ -667,8 +667,17 @@ export function TimelineStrip({
             // uniformly across the strip at positions unrelated to their actual
             // time — a bar would sit "under the window" while holding events
             // from a different hour, and an empty window looked populated.
-            const startX = msToX(Math.max(b.startMs, selection.fromMs), selection, width)
+            // Bars also clip at the recording floor: a bucket straddling it
+            // otherwise bleeds under the pre-data dimming and renders as a
+            // two-toned bar, even though all its events are after the floor.
+            const barFromMs = Math.max(
+              b.startMs,
+              selection.fromMs,
+              historyUnavailableBeforeMs ?? selection.fromMs,
+            )
+            const startX = msToX(barFromMs, selection, width)
             const endX = msToX(Math.min(b.endMs, selection.toMs), selection, width)
+            if (endX <= startX) return null
             const w = Math.max(1, endX - startX - 1)
             if (endX <= 0 || startX >= width) return null
             const warnFrac = b.total > 0 ? Math.min(1, b.warnings / b.total) : 0
