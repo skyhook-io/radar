@@ -7,7 +7,7 @@
 
 🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Releases](https://github.com/skyhook-io/radar/releases)
 
-Topology, events, Helm, GitOps, audit, and AI — one binary, run it your way.
+Topology, resources, Helm, GitOps, traffic, audit, and MCP context for AI agents — from your laptop or in-cluster.
 
 [![CI](https://github.com/skyhook-io/radar/actions/workflows/ci.yml/badge.svg)](https://github.com/skyhook-io/radar/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/skyhook-io/radar?logo=github)](https://github.com/skyhook-io/radar/releases/latest)
@@ -68,7 +68,7 @@ curl -fsSL https://get.radarhq.io | sh
 brew install skyhook-io/tap/radar
 ```
 
-Then run: `kubectl radar`. (The bare `radar` command works if you installed via Homebrew or Scoop, or added a symlink yourself.)
+Then run: `kubectl radar`. Quick install, PowerShell, Homebrew, and Scoop also set up the `radar` shorthand. Krew and direct downloads use `kubectl radar` unless you add your own `radar` symlink.
 
 <details>
 <summary><b>More install options</b> — Desktop App (macOS/Linux/Windows), Krew, Scoop, In-Cluster Helm</summary>
@@ -141,7 +141,7 @@ See the [In-Cluster Deployment Guide](docs/in-cluster.md) for ingress, authentic
 # Opens browser automatically
 kubectl radar
 
-# Homebrew and Scoop installs also get the bare command
+# Quick install, PowerShell, Homebrew, and Scoop also set up the bare command
 radar
 ```
 
