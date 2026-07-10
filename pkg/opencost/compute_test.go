@@ -135,6 +135,28 @@ func TestComputeCostSummary_HappyPath(t *testing.T) {
 	}
 }
 
+func TestComputeCostSummary_ExcludesNamespacesAndDisablesNodeCostFloor(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"app": 2.0, "kube-system": 10.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"app": 1.0, "kube-system": 5.0})},
+		{contains: "node_total_hourly_cost", body: scalarBody(20.0)},
+	})
+
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{
+		ExcludedNamespaces:   []string{"kube-system"},
+		DisableNodeCostFloor: true,
+	})
+	if !got.Available {
+		t.Fatalf("summary unavailable: %+v", got)
+	}
+	if got.TotalHourlyCost != 3.0 {
+		t.Errorf("TotalHourlyCost=%v, want included namespace sum 3.0", got.TotalHourlyCost)
+	}
+	if len(got.Namespaces) != 1 || got.Namespaces[0].Name != "app" {
+		t.Errorf("unexpected namespaces: %+v", got.Namespaces)
+	}
+}
+
 func TestComputeCostSummary_NoMetricsReason(t *testing.T) {
 	client := scriptedProm(t, []scriptedCase{
 		// All queries return empty vector results.

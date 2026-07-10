@@ -127,6 +127,27 @@ func TestComputeCostSummary_REST_HappyPath(t *testing.T) {
 	}
 }
 
+func TestComputeCostSummary_REST_ExcludesNamespaces(t *testing.T) {
+	body := buildAllocationResponse(t, map[string]float64{
+		"app":         3.00,
+		"kube-system": 15.00,
+	})
+	client := fakeOpenCost(t, body)
+
+	got := ComputeCostSummary(context.Background(), client, SummaryOptions{
+		ExcludedNamespaces: []string{"kube-system"},
+	})
+	if !got.Available {
+		t.Fatalf("expected Available=true; got %+v", got)
+	}
+	if got.TotalHourlyCost != 3.0 {
+		t.Errorf("TotalHourlyCost=%v, want included namespace sum 3.0", got.TotalHourlyCost)
+	}
+	if len(got.Namespaces) != 1 || got.Namespaces[0].Name != "app" {
+		t.Errorf("unexpected namespaces: %+v", got.Namespaces)
+	}
+}
+
 func TestComputeCostSummary_REST_IdleRowSurfaced(t *testing.T) {
 	// OpenCost emits __idle__ for unallocated node capacity. We surface it
 	// as TotalIdleCost (not a namespace row), and do NOT roll it into

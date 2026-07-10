@@ -71,6 +71,13 @@ type SummaryOptions struct {
 	// filter rows by their Properties["namespace"] to actually honor the
 	// drill-down scope.
 	NamespaceFilter string
+
+	// ExcludedNamespaces removes exact namespace matches from rows and totals.
+	ExcludedNamespaces []string
+
+	// DisableNodeCostFloor keeps Prometheus summaries based on namespace
+	// allocations when node capacity is not the provider's billing unit.
+	DisableNodeCostFloor bool
 }
 
 // ComputeCostSummary is the default compute path: asks OpenCost's REST API
@@ -179,8 +186,16 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 	namespaces := make([]NamespaceCost, 0, len(combined))
 	var totalHourlyCost, totalStorageCost, totalNetworkCost, totalIdleCost float64
 	var totalAllocCost, totalUsageCost float64
+	excluded := namespaceSet(opts.ExcludedNamespaces)
 
 	for name, a := range combined {
+		ns := name
+		if propertyNamespace, ok := a.Properties["namespace"].(string); ok && propertyNamespace != "" {
+			ns = propertyNamespace
+		}
+		if namespaceExcluded(excluded, ns) {
+			continue
+		}
 		// OpenCost emits __idle__ as a synthetic row for unallocated node
 		// capacity. Surface it as a dedicated idle total, not a namespace.
 		//
@@ -407,7 +422,11 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 
 	var totalHourlyCost, totalStorageCost, totalUsageCost, totalAllocCost float64
 	namespaces := make([]NamespaceCost, 0, len(nsMap))
+	excluded := namespaceSet(opts.ExcludedNamespaces)
 	for _, nc := range nsMap {
+		if namespaceExcluded(excluded, nc.Name) {
+			continue
+		}
 		nc.HourlyCost = nc.CPUCost + nc.MemoryCost
 		nc.StorageCost = storageMap[nc.Name]
 		nc.HourlyCost += nc.StorageCost
@@ -425,9 +444,11 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		namespaces = append(namespaces, *nc)
 	}
 
-	if nodeResult, err := client.Query(ctx, `sum(node_total_hourly_cost)`); err == nil && len(nodeResult.Series) > 0 && len(nodeResult.Series[0].DataPoints) > 0 {
-		if nodeCost := nodeResult.Series[0].DataPoints[0].Value; nodeCost > totalHourlyCost {
-			totalHourlyCost = nodeCost
+	if !opts.DisableNodeCostFloor {
+		if nodeResult, err := client.Query(ctx, `sum(node_total_hourly_cost)`); err == nil && len(nodeResult.Series) > 0 && len(nodeResult.Series[0].DataPoints) > 0 {
+			if nodeCost := nodeResult.Series[0].DataPoints[0].Value; nodeCost > totalHourlyCost {
+				totalHourlyCost = nodeCost
+			}
 		}
 	}
 
@@ -461,6 +482,24 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		ClusterEfficiency: clusterEfficiency,
 		Namespaces:        namespaces,
 	}
+}
+
+func namespaceSet(names []string) map[string]struct{} {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			set[name] = struct{}{}
+		}
+	}
+	return set
+}
+
+func namespaceExcluded(excluded map[string]struct{}, namespace string) bool {
+	_, ok := excluded[namespace]
+	return ok
 }
 
 func mergeSeriesIntoNamespaceField(result *prom.QueryResult, nsMap map[string]*NamespaceCost, set func(*NamespaceCost, float64)) {

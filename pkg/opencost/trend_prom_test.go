@@ -113,6 +113,30 @@ func TestComputeCostTrendFromProm_TopNAndOther(t *testing.T) {
 	}
 }
 
+func TestComputeCostTrendFromProm_ExcludedNamespacesDoNotBecomeOther(t *testing.T) {
+	client := rangeProm(t, matrixBody([]namespaceSeries{
+		{"kube-system", []dpoint{{1700000000, 100}, {1700003600, 100}}},
+		{"app", []dpoint{{1700000000, 9}, {1700003600, 10}}},
+		{"jobs", []dpoint{{1700000000, 4}, {1700003600, 5}}},
+		{"monitoring", []dpoint{{1700000000, 1}, {1700003600, 2}}},
+	}))
+
+	got := ComputeCostTrendFromProm(context.Background(), client, TrendPromOptions{
+		Range:              "24h",
+		MaxSeries:          1,
+		ExcludedNamespaces: []string{"kube-system"},
+	})
+	if !got.Available {
+		t.Fatalf("expected Available=true, got %+v", got)
+	}
+	if len(got.Series) != 2 || got.Series[0].Namespace != "app" || got.Series[1].Namespace != "other" {
+		t.Fatalf("unexpected series: %v", namesOf(got.Series))
+	}
+	if got.Series[1].DataPoints[1].Value != 7 {
+		t.Errorf("other latest value=%v, want jobs+monitoring=7", got.Series[1].DataPoints[1].Value)
+	}
+}
+
 func TestComputeCostTrendFromProm_AllUnderMaxSeriesNoOther(t *testing.T) {
 	// 2 namespaces, MaxSeries=8 → no "other" series.
 	client := rangeProm(t, matrixBody([]namespaceSeries{

@@ -18,6 +18,10 @@ type TrendPromOptions struct {
 	// MaxSeries is the top-N namespaces kept; the rest are aggregated into
 	// a single "other" series. Defaults to 8 when zero.
 	MaxSeries int
+
+	// ExcludedNamespaces removes exact namespace matches before ranking and
+	// aggregation into the other series.
+	ExcludedNamespaces []string
 }
 
 // ComputeCostTrendFromProm returns a stacked per-namespace cost trend from
@@ -59,10 +63,11 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 		lastCost float64
 		idx      int
 	}
+	excluded := namespaceSet(opts.ExcludedNamespaces)
 	ranks := make([]nsRank, 0, len(result.Series))
 	for i, s := range result.Series {
 		ns := s.Labels["namespace"]
-		if ns == "" {
+		if ns == "" || namespaceExcluded(excluded, ns) {
 			continue
 		}
 		var last float64
@@ -92,6 +97,10 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 		otherMap := make(map[int64]float64)
 		for i, s := range result.Series {
 			if topSet[i] {
+				continue
+			}
+			ns := s.Labels["namespace"]
+			if ns == "" || namespaceExcluded(excluded, ns) {
 				continue
 			}
 			for _, dp := range s.DataPoints {
