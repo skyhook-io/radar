@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 import type { TimelineEvent, Topology } from '../types/core'
 
-import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, isPinnedLaneRef, laneTrackEvents, laneHasEventInWindow, isChildVisibleInWindow, subtreeEvents, collidingLaneKeys, laneCollisionKey, type ResourceLane } from './resource-hierarchy'
+import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, isPinnedLaneRef, laneTrackEvents, laneHasEventInWindow, isChildVisibleInWindow, subtreeEvents, getAllEventsFromHierarchy, collidingLaneKeys, laneCollisionKey, type ResourceLane } from './resource-hierarchy'
 import type { AppMembershipIndex, AppMembership } from './applications'
 
 function svcEvent(namespace: string, name: string): TimelineEvent {
@@ -487,6 +487,17 @@ describe('buildResourceHierarchy CronJob → Job → Pod attribution', () => {
     expect(pod.events.map((e) => e.id).sort()).toEqual(['pod-add', 'pod-sched', 'pod-start'])
     // No event was double-attached to an ancestor.
     expect(cron.events.some((e) => e.id.startsWith('pod-') || e.id.startsWith('job-'))).toBe(false)
+  })
+
+  it('getAllEventsFromHierarchy flattens the FULL depth — grandchild Pod events included', () => {
+    const lanes = buildResourceHierarchy({ events: cronChainEvents(), grouping: 'owner' })
+    const all = getAllEventsFromHierarchy(lanes)
+    // CronJob (2) + Job (2) + grandchild Pod (3) = 7. A one-level walk would drop
+    // the Pod's 3, undercounting the events the swimlane (built from the full
+    // tree) shows — this pins the recursion that fixes that.
+    expect(all).toHaveLength(7)
+    expect(all.filter((e) => e.id.startsWith('pod-'))).toHaveLength(3)
+    expect(all.map((e) => e.id)).toContain('pod-start')
   })
 
   it('laneTrackEvents: collapsed parent = subtree aggregate, expanded parent = own only', () => {

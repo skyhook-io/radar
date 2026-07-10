@@ -88,6 +88,10 @@ type TimelineMode =
 // Default query: the last hour. Wide-enough for "what just happened" without
 // burying the lanes in a day of history; presets/URL widen it deliberately.
 const DEFAULT_LIVE_WIDTH_MS = 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+// Fallback cap for a retained hand-entered ?from&to when the source doesn't
+// declare maxRangeDays — mirrors the retained source's own default.
+const DEFAULT_MAX_RANGE_DAYS = 7
 const DEFAULT_VIEW: TimelineViewMode = 'swimlane'
 const DEFAULT_GROUPING: TimelineGrouping = 'app'
 const DEFAULT_SORT: TimelineSort = 'importance'
@@ -139,8 +143,10 @@ function parseEnum<T extends string>(value: string | null, allowed: readonly T[]
 }
 
 // Absolute [from,to] wins (a frozen link); else a relative live window; else the
-// pristine default live window. Only meaningful in retained mode.
-function parseTimeMode(sp: URLSearchParams, isRetained: boolean): TimelineMode {
+// pristine default live window. Only meaningful in retained mode. `maxRangeDays`
+// caps a hand-entered ?from&to to the same horizon the preset/fetch path
+// enforces (retained only; local loads the whole ring and passes it undefined).
+function parseTimeMode(sp: URLSearchParams, isRetained: boolean, maxRangeDays?: number): TimelineMode {
   if (isRetained) {
     const from = sp.get('from')
     const to = sp.get('to')
@@ -148,7 +154,8 @@ function parseTimeMode(sp: URLSearchParams, isRetained: boolean): TimelineMode {
       const f = Number(from)
       const t = Number(to)
       if (Number.isInteger(f) && Number.isInteger(t) && f > 0 && f < t) {
-        return { kind: 'frozen', fromMs: f, toMs: t }
+        const fromMs = maxRangeDays != null ? Math.max(f, t - maxRangeDays * DAY_MS) : f
+        return { kind: 'frozen', fromMs, toMs: t }
       }
     }
     const w = sp.get('window')
@@ -327,6 +334,10 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   const timelineSource = useTimelineSource()
   const isRetained = timelineSource.capabilities.mode === 'retained'
   const isLocal = timelineSource.capabilities.mode === 'local'
+  // Cap for a hand-entered ?from&to, mirroring the retained fetch window's cap.
+  // Local mode loads the whole ring and carries no day horizon, so it stays
+  // uncapped (undefined).
+  const retainedMaxRangeDays = isRetained ? (timelineSource.capabilities.maxRangeDays ?? DEFAULT_MAX_RANGE_DAYS) : undefined
   // The local strip rides both views, matching retained: the ring fetch below
   // is enabled whenever the strip is shown, so list mode has data to bucket.
   // Large clusters that require a namespace filter skip the strip — the same
@@ -345,7 +356,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   //   FROZEN (absolute) — an explicit [from,to] pinned by any range action.
   // The concrete selection is DERIVED each render so it drives both the list and
   // swimlane fetches and survives the view toggle.
-  const [mode, setMode] = useState<TimelineMode>(() => parseTimeMode(searchParams, isRetained || isLocal))
+  const [mode, setMode] = useState<TimelineMode>(() => parseTimeMode(searchParams, isRetained || isLocal, retainedMaxRangeDays))
   // Freeze time surfaced on the paused chip ("as of HH:MM"); bumped by manual
   // refresh. Null while live.
   const [frozenAsOfMs, setFrozenAsOfMs] = useState<number | null>(null)
@@ -441,6 +452,13 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Picking a query preset shows the WHOLE new span (band == query): "Last 24h"
+  // renders 24h, not just its recent hour. Window-narrowing stays reserved for
+  // explicit zoom/drag, which routes through resetLensToRecent.
+  const resetLensToFull = useCallback((sel: ScrubberRange) => {
+    setLensWindow({ fromMs: sel.fromMs, toMs: sel.toMs })
+  }, [])
+
   // Any explicit range action from the scrubber (brush Run-query, pan arrows,
   // zoom ±, grab-pan, handle drag, domain clamp) → FROZEN. Nothing auto-updates
   // until a manual refresh. The lens resets to the recent slice of the new range.
@@ -468,7 +486,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   }, [resetLensToRecent])
 
   // Preset click → LIVE with that width (capped to the retained window). Pins to
-  // now and starts the tick.
+  // now, starts the tick, and shows the whole new span (window == query).
   const handlePresetSelect = useCallback((widthMs: number) => {
     const capped = scrubberDomain ? Math.min(widthMs, scrubberDomain.maxSelectionMs) : widthMs
     // Only local mode has a domain-tracking maximum ("All" = the whole ring);
@@ -479,8 +497,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     setMode({ kind: 'live', widthMs: capped, all: all || undefined })
     setFrozenAsOfMs(null)
     setNowTick(now)
-    resetLensToRecent(deriveLiveSelection(capped, now))
-  }, [isLocal, scrubberDomain, resetLensToRecent])
+    resetLensToFull(deriveLiveSelection(capped, now))
+  }, [isLocal, scrubberDomain, resetLensToFull])
 
   // "→ Now" → LIVE, width = current selection width. Pins to now and resets the
   // lens to the live edge.
@@ -554,7 +572,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const sp = searchParams
     const nextView = requiresNamespaceFilter ? 'list' : (parseView(sp) ?? DEFAULT_VIEW)
     setViewMode((prev) => (prev === nextView ? prev : nextView))
-    const nextMode = parseTimeMode(sp, isRetained || isLocal)
+    const nextMode = parseTimeMode(sp, isRetained || isLocal, retainedMaxRangeDays)
     setMode((prev) => (timeModeEqual(prev, nextMode) ? prev : nextMode))
     const nextDeleted = sp.get('deleted') !== '0'
     setShowDeleted((prev) => (prev === nextDeleted ? prev : nextDeleted))
@@ -574,7 +592,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     setSort((prev) => (prev === nextSort ? prev : nextSort))
     const nextEvent = sp.get('event')
     setSelectedEventId((prev) => (prev === nextEvent ? prev : nextEvent))
-  }, [searchParams, isRetained, isLocal, requiresNamespaceFilter, pinnedLanes])
+  }, [searchParams, isRetained, isLocal, requiresNamespaceFilter, pinnedLanes, retainedMaxRangeDays])
 
   useEffect(() => {
     const current = searchParamsRef.current

@@ -8,7 +8,7 @@ import {
   isLensLatched,
   quantizeBaseWindow,
 } from './timeline-live'
-import { clampSelection, type ScrubberRange } from './TimelineScrubber'
+import { clampSelection, type ScrubberRange } from './scrubber-math'
 
 const MIN = 60_000
 const HOUR = 60 * MIN

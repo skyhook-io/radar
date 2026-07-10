@@ -8,6 +8,12 @@ import { AlertTriangle, RefreshCw } from 'lucide-react'
 
 export type { ActivityTypeFilter, ActivityFilterKey }
 
+// Server-side cap on the list fetch. Generous so a busy query window isn't
+// silently truncated — the list is already bounded to the selection range, so
+// this only caps pathological bursts. Surfaced to the list as `truncatedAt` so a
+// window that does hit it shows an end-of-list note instead of dropping silently.
+const LIST_FETCH_LIMIT = 2000
+
 interface TimelineListProps {
   namespaces: string[]
   onViewChange?: (view: 'list' | 'swimlane') => void
@@ -58,9 +64,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     timeRange: queryParams.timeRange,
     includeK8sEvents: true,
     includeDeleted: showDeleted,
-    // Generous so a busy query window isn't silently truncated — the list is
-    // already bounded to the selection range, so this only caps pathological bursts.
-    limit: 2000,
+    limit: LIST_FETCH_LIMIT,
     fromMs: selectionWindow?.fromMs,
     toMs: selectionWindow?.toMs,
     sliding,
@@ -105,6 +109,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
       onKindFilterChange={onKindFilterChange}
       onVisibleWindowChange={onVisibleWindowChange}
       scrollToMs={scrollToMs}
+      truncatedAt={LIST_FETCH_LIMIT}
     />
   )
 }

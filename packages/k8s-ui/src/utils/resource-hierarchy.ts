@@ -1104,14 +1104,14 @@ export function isChildVisibleInWindow(
 export function getAllEventsFromHierarchy(lanes: ResourceLane[]): TimelineEvent[] {
   const allEvents: TimelineEvent[] = []
 
-  for (const lane of lanes) {
+  // Recurse the whole tree — a Deployment's Pod events hang two levels down
+  // (Deployment → ReplicaSet → Pod); a one-level walk drops them, so the list
+  // undercounts the events the swimlane (built from the full tree) shows.
+  const collect = (lane: ResourceLane) => {
     allEvents.push(...lane.events)
-    if (lane.children) {
-      for (const child of lane.children) {
-        allEvents.push(...child.events)
-      }
-    }
+    lane.children?.forEach(collect)
   }
+  lanes.forEach(collect)
 
   // Deduplicate by event ID
   const uniqueEvents = Array.from(new Map(allEvents.map(e => [e.id, e])).values())
@@ -1312,17 +1312,15 @@ export function extractPinnedLanes(allLanes: ResourceLane[], pinnedRefs: PinnedL
 }
 
 /**
- * Count total events in a hierarchy.
+ * Count total events in a hierarchy (full depth — grandchild Pod events under a
+ * Deployment→ReplicaSet→Pod chain count too, matching getAllEventsFromHierarchy).
  */
 export function countEventsInHierarchy(lanes: ResourceLane[]): number {
   let count = 0
-  for (const lane of lanes) {
+  const walk = (lane: ResourceLane) => {
     count += lane.events.length
-    if (lane.children) {
-      for (const child of lane.children) {
-        count += child.events.length
-      }
-    }
+    lane.children?.forEach(walk)
   }
+  lanes.forEach(walk)
   return count
 }

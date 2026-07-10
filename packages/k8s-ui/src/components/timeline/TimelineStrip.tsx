@@ -35,7 +35,7 @@ import {
   type ScrubberBucket,
   type ScrubberRange,
   type ScrubberPreset,
-} from './TimelineScrubber'
+} from './scrubber-math'
 import { STALE_AMBER_AFTER_MS, type TimelineLiveState } from './timeline-live'
 
 const TRACK_HEIGHT = 48
@@ -81,21 +81,6 @@ function msToX(ms: number, domain: ScrubberRange, width: number): number {
   const span = domain.toMs - domain.fromMs
   if (span <= 0) return 0
   return ((ms - domain.fromMs) / span) * width
-}
-
-const UNIT_MS: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 }
-
-// Parse a From/To field: `now`, a relative duration (`24h`, `3d`, `45m`, `2w` —
-// interpreted as "ago"), or any absolute date the browser understands. Returns
-// null when it can't parse — the field then previews "unrecognized".
-export function parseTimeInput(raw: string, nowMs: number): number | null {
-  const s = raw.trim().toLowerCase()
-  if (!s) return null
-  if (s === 'now') return nowMs
-  const rel = s.match(/^(\d+(?:\.\d+)?)\s*([smhdw])[a-z]*$/)
-  if (rel) return nowMs - parseFloat(rel[1]) * UNIT_MS[rel[2]]
-  const abs = new Date(raw.trim()).getTime()
-  return Number.isFinite(abs) ? abs : null
 }
 
 // Field stamp for the custom-range pickers, e.g. "Jul 8, 12:01 AM".
@@ -500,15 +485,14 @@ export function TimelineStrip({
     msToX(lens.toMs, selection, width) >= width - FULL_RANGE_EPS_PX
 
   const totalEvents = totalInQueryRange ?? buckets.reduce((sum, b) => sum + b.total, 0)
-  // Bucket-approximate count inside the window (midpoint rule; edge buckets
-  // straddle, same caveat as every strip count).
-  const inWindowEvents = lens == null ? totalEvents : buckets.reduce((sum, b) => {
-    const mid = (b.startMs + b.endMs) / 2
-    return mid >= lens.fromMs && mid <= lens.toMs ? sum + b.total : sum
-  }, 0)
   const gapsSuffix = gaps && gaps.length > 0 ? ` · ${gaps.length} gap${gaps.length > 1 ? 's' : ''}` : ''
+  // Windowed: show the window's time range + the exact query total. The per-window
+  // count is deliberately NOT shown here — from hourly buckets it can only be
+  // approximate (reads "0 of N" on a sub-hour window over a busy hour), and the
+  // toolbar already renders the exact in-view count. Two numbers for one thing,
+  // one of them wrong, erodes trust; the strip owns the range, the toolbar the count.
   const centerCaption = lens && !fullRange
-    ? `${bandTime(lens.fromMs)} — ${bandTime(lens.toMs)} · ${inWindowEvents.toLocaleString()} of ${totalEvents.toLocaleString()} events${gapsSuffix}`
+    ? `${bandTime(lens.fromMs)} — ${bandTime(lens.toMs)} · ${totalEvents.toLocaleString()} in query range${gapsSuffix}`
     : lens && lensResizable && onLensChange
       ? `${totalEvents.toLocaleString()} events · viewing full range — drag a handle to narrow${gapsSuffix}`
       : `${totalEvents.toLocaleString()} events in query range${gapsSuffix}`
@@ -840,7 +824,7 @@ function StripLiveChip({ state, onClick }: { state: TimelineLiveState; onClick?:
         stale ? 'bg-amber-500 hover:bg-amber-600' : 'bg-green-600 hover:bg-green-700',
       )}
     >
-      <span className="h-1.5 w-1.5 rounded-full bg-white" />
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
       Go live{state.newEventCount ? ` · ${state.newEventCount.toLocaleString()} new` : ''}
     </button>
   )

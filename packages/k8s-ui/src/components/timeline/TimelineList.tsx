@@ -25,8 +25,8 @@ import {
   type ActivityFilterKey,
 } from './timeline-filters'
 import type { TimelineEvent, TimeRange } from '../../types'
-import { isChangeEvent, isHistoricalEvent, isOperation } from '../../types'
-import { getOperationColor, getHealthBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
+import { isChangeEvent, isHistoricalEvent } from '../../types'
+import { getHealthBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { ResourceRefBadge } from '../ui/drawer-components'
 import type { NavigateToResource } from '../../utils/navigation'
 import { kindToPlural, refToSelectedResource, apiVersionToGroup } from '../../utils/navigation'
@@ -87,6 +87,17 @@ export interface TimelineListProps {
   // On mount/switch, scroll the list so the row nearest this time sits at the
   // top — carries the swimlane's view window over when switching to list view.
   scrollToMs?: number
+  // Strip the toolbar (search / filters / range / view toggle) for an embedded
+  // list where those controls are overkill — e.g. the workload detail. Default false.
+  compact?: boolean
+  // Externally-controlled selection for bidirectional sync with a swimlane: the
+  // matching card is highlighted and scrolled into view; a card click reports up.
+  selectedEventId?: string | null
+  onSelectEvent?: (id: string | null) => void
+  // The server-side fetch cap the events were limited to (e.g. 2000). When the
+  // returned set reaches it, the list surfaces an end-of-list note so the drop of
+  // older events isn't silent. Omit when the source isn't capped (e.g. compact).
+  truncatedAt?: number
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -98,7 +109,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs, compact = false, selectedEventId, onSelectEvent, truncatedAt }: TimelineListProps) {
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
@@ -239,6 +250,34 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
 
   // Group activity by time period
   const groupedActivity = useMemo(() => {
+    // Compact (single-subject embed): a resource's events are often all old, so
+    // the relative buckets below collapse into one meaningless "Older". Group by
+    // calendar date instead.
+    if (compact) {
+      const nowDate = new Date()
+      const todayKey = nowDate.toDateString()
+      const yKey = new Date(nowDate.getTime() - 86_400_000).toDateString()
+      const byDay = new Map<string, TimelineEvent[]>()
+      for (const item of filteredActivity) {
+        const key = new Date(item.timestamp).toDateString()
+        const arr = byDay.get(key)
+        if (arr) arr.push(item)
+        else byDay.set(key, [item])
+      }
+      return [...byDay.entries()]
+        .sort((a, b) => (new Date(b[0]).getTime() || 0) - (new Date(a[0]).getTime() || 0))
+        .map(([key, items]) => {
+          const d = new Date(key)
+          const label = isNaN(d.getTime()) ? 'Unknown date'
+            : key === todayKey ? 'Today'
+            : key === yKey ? 'Yesterday'
+            : d.getFullYear() === nowDate.getFullYear()
+              ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+              : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+          return { label, items: aggregateEvents(items) }
+        })
+    }
+
     const groups: { label: string; items: AggregatedItem[] }[] = []
     const now = Date.now()
 
@@ -338,28 +377,40 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     }
   }, [scrollToMs, groupedActivity, reportVisibleWindow])
 
+  // Bidirectional sync: when the selection changes externally (a swimlane marker
+  // click), scroll the matching card into view. Re-runs on groupedActivity so a
+  // selection made before the rows exist still lands once they render.
+  useEffect(() => {
+    if (!selectedEventId) return
+    const container = scrollRef.current
+    const card = container?.querySelector<HTMLElement>(`[data-event-id="${CSS.escape(selectedEventId)}"]`)
+    card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [selectedEventId, groupedActivity])
+
   return (
     <div className="flex flex-col h-full w-full">
-      <TimelineToolbar
-        search={searchTerm}
-        onSearchChange={setSearchTerm}
-        searchShortcutId="timeline-list-search"
-        activityFilter={activityTypeFilter}
-        onActivityFilterChange={setActivityTypeFilter}
-        events={events}
-        showDeleted={showDeleted}
-        onShowDeletedChange={setShowDeleted}
-        kindFilter={kindFilter}
-        onKindFilterChange={setKindFilter}
-        kindOptions={kindOptions}
-        rangeOptions={hideRangeSelector ? undefined : rangeOptions}
-        timeRange={hideRangeSelector ? undefined : timeRange}
-        onTimeRangeChange={hideRangeSelector ? undefined : setTimeRange}
-        counts={{ events: filteredActivity.length }}
-        view={currentView}
-        onViewChange={onViewChange}
-        onRefresh={onRefresh}
-      />
+      {!compact && (
+        <TimelineToolbar
+          search={searchTerm}
+          onSearchChange={setSearchTerm}
+          searchShortcutId="timeline-list-search"
+          activityFilter={activityTypeFilter}
+          onActivityFilterChange={setActivityTypeFilter}
+          events={events}
+          showDeleted={showDeleted}
+          onShowDeletedChange={setShowDeleted}
+          kindFilter={kindFilter}
+          onKindFilterChange={setKindFilter}
+          kindOptions={kindOptions}
+          rangeOptions={hideRangeSelector ? undefined : rangeOptions}
+          timeRange={hideRangeSelector ? undefined : timeRange}
+          onTimeRangeChange={hideRangeSelector ? undefined : setTimeRange}
+          counts={{ events: filteredActivity.length }}
+          view={currentView}
+          onViewChange={onViewChange}
+          onRefresh={onRefresh}
+        />
+      )}
 
       {/* Timeline content */}
       <div className="flex-1 overflow-auto" ref={scrollRef} onScroll={onVisibleWindowChange ? handleListScroll : undefined}>
@@ -420,6 +471,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                     aggItem.type === 'aggregated' ? (
                       <div
                         key={`agg-${aggItem.first.id}-${aggItem.last.id}`}
+                        data-event-id={aggItem.first.id}
                         data-ts-from={new Date(aggItem.first.timestamp).getTime()}
                         data-ts-to={new Date(aggItem.last.timestamp).getTime()}
                       >
@@ -431,11 +483,15 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                           expanded={expandedItem === aggItem.first.id}
                           onToggle={() => setExpandedItem(expandedItem === aggItem.first.id ? null : aggItem.first.id)}
                           onResourceClick={onResourceClick}
+                          compact={compact}
+                          selected={selectedEventId === aggItem.first.id}
+                          onSelect={() => onSelectEvent?.(selectedEventId === aggItem.first.id ? null : aggItem.first.id)}
                         />
                       </div>
                     ) : (
                       <div
                         key={aggItem.item.id}
+                        data-event-id={aggItem.item.id}
                         data-ts-from={new Date(aggItem.item.timestamp).getTime()}
                         data-ts-to={new Date(aggItem.item.timestamp).getTime()}
                       >
@@ -444,6 +500,9 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                           expanded={expandedItem === aggItem.item.id}
                           onToggle={() => setExpandedItem(expandedItem === aggItem.item.id ? null : aggItem.item.id)}
                           onResourceClick={onResourceClick}
+                          compact={compact}
+                          selected={selectedEventId === aggItem.item.id}
+                          onSelect={() => onSelectEvent?.(selectedEventId === aggItem.item.id ? null : aggItem.item.id)}
                         />
                       </div>
                     )
@@ -451,6 +510,12 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                 </div>
               </div>
             ))}
+            {truncatedAt != null && events.length >= truncatedAt && (
+              <div className="flex items-center justify-center gap-2 py-4 text-sm text-theme-text-tertiary">
+                <Clock className="h-4 w-4 opacity-50" />
+                <span>Showing the newest {truncatedAt.toLocaleString()} events in this range — narrow the query to see older ones</span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -463,44 +528,38 @@ interface ActivityCardProps {
   expanded: boolean
   onToggle: () => void
   onResourceClick?: NavigateToResource
+  compact?: boolean
+  selected?: boolean
+  onSelect?: () => void
 }
 
-function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCardProps) {
+function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, selected, onSelect }: ActivityCardProps) {
   const isChange = isChangeEvent(item)
   const isHistorical = isHistoricalEvent(item)
   const isWarning = item.eventType === 'Warning'
-  const time = formatTime(item.timestamp)
+  const time = formatTime(item.timestamp, compact)
 
   // Only expandable if there's a diff to show
   const hasExpandableContent = isChange && !!item.diff
 
-  // Determine card styling based on type
-  const getCardStyle = () => {
-    if (isChange) {
-      switch (item.eventType) {
-        case 'add':
-          return 'bg-green-500/5 border-green-500/30 hover:border-green-500/50'
-        case 'delete':
-          return 'bg-red-500/5 border-red-500/30 hover:border-red-500/50'
-        case 'update':
-          return 'bg-blue-500/5 border-blue-500/30 hover:border-blue-500/50'
-        default:
-          return 'bg-theme-surface/50 border-theme-border hover:border-theme-border-light'
-      }
-    }
-    if (isWarning) {
-      return 'bg-amber-500/5 border-amber-500/30 hover:border-amber-500/50'
-    }
-    return 'bg-theme-surface/50 border-theme-border hover:border-theme-border-light'
-  }
+  // Turn-11 color budget: a change's operation is carried by the icon SHAPE, not
+  // by card/text hue — a routine delete must not read as an alarming red failure
+  // (it looked red here while the swimlane paints it a neutral blue ▼). Color is
+  // reserved for status: only a Warning tints the card (amber); the per-event
+  // health badge below carries any unhealthy state.
+  const getCardStyle = () =>
+    isWarning
+      ? 'bg-amber-500/5 border-amber-500/30 hover:border-amber-500/50'
+      : 'bg-theme-surface/50 border-theme-border hover:border-theme-border-light'
 
   const getIcon = () => {
     if (isChange) {
+      // One activity hue (info-blue); Plus/Trash2/RefreshCw distinguish add/delete/update.
       switch (item.eventType) {
         case 'add':
-          return <Plus className="w-4 h-4 text-green-400" />
+          return <Plus className="w-4 h-4 text-blue-400" />
         case 'delete':
-          return <Trash2 className="w-4 h-4 text-red-400" />
+          return <Trash2 className="w-4 h-4 text-blue-400" />
         case 'update':
           return <RefreshCw className="w-4 h-4 text-blue-400" />
         default:
@@ -510,13 +569,18 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
     if (isWarning) {
       return <AlertCircle className="w-4 h-4 text-amber-400" />
     }
-    return <CheckCircle className="w-4 h-4 text-green-400" />
+    return <CheckCircle className="w-4 h-4 text-theme-text-secondary" />
   }
 
   return (
     <div
-      className={clsx('rounded-lg border transition-all', getCardStyle(), hasExpandableContent && 'cursor-pointer')}
-      onClick={hasExpandableContent ? onToggle : undefined}
+      className={clsx(
+        'rounded-lg border transition-all',
+        (hasExpandableContent || onSelect) && 'cursor-pointer',
+        getCardStyle(),
+        selected && 'ring-2 ring-skyhook-500/60 ring-offset-1 ring-offset-theme-base',
+      )}
+      onClick={() => { onSelect?.(); if (hasExpandableContent) onToggle() }}
     >
       <div className="p-3">
         {/* Header row */}
@@ -536,7 +600,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >
                 <span className="badge-sm bg-theme-elevated text-theme-text-secondary group-hover:bg-theme-hover">
-                  {item.kind}
+                  {item.kind || 'Event'}
                 </span>
                 <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{item.name}</span>
               </button>
@@ -570,7 +634,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               {isChange ? (
                 <>
-                  <span className={clsx('text-sm font-medium', isOperation(item.eventType) && getOperationColor(item.eventType))}>
+                  <span className="text-sm font-medium text-theme-text-primary">
                     {isHistorical && item.reason ? item.reason : item.eventType}
                   </span>
                   {item.diff && <DiffBadge diff={item.diff} />}
@@ -635,12 +699,15 @@ interface AggregatedActivityCardProps {
   expanded: boolean
   onToggle: () => void
   onResourceClick?: NavigateToResource
+  compact?: boolean
+  selected?: boolean
+  onSelect?: () => void
 }
 
-function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle, onResourceClick }: AggregatedActivityCardProps) {
+function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle, onResourceClick, compact, selected, onSelect }: AggregatedActivityCardProps) {
   const isWarning = first.eventType === 'Warning'
-  const firstTime = formatTime(first.timestamp)
-  const lastTime = formatTime(last.timestamp)
+  const firstTime = formatTime(first.timestamp, compact)
+  const lastTime = formatTime(last.timestamp, compact)
 
   // Card styling - warning/unhealthy style for aggregated events
   const cardStyle = isWarning
@@ -653,8 +720,12 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
 
   return (
     <div
-      className={clsx('rounded-lg border transition-all cursor-pointer', cardStyle)}
-      onClick={onToggle}
+      className={clsx(
+        'rounded-lg border transition-all cursor-pointer',
+        cardStyle,
+        selected && 'ring-2 ring-skyhook-500/60 ring-offset-1 ring-offset-theme-base',
+      )}
+      onClick={() => { onSelect?.(); onToggle() }}
     >
       <div className="p-3">
         {/* Header row */}
@@ -685,7 +756,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >
                 <span className="badge-sm bg-theme-elevated text-theme-text-secondary group-hover:bg-theme-hover">
-                  {first.kind}
+                  {first.kind || 'Event'}
                 </span>
                 <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{first.name}</span>
               </button>
@@ -756,9 +827,13 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
   )
 }
 
-function formatTime(timestamp: string): string {
+function formatTime(timestamp: string, compact = false): string {
   if (!timestamp) return '-'
   const date = new Date(timestamp)
+  if (isNaN(date.getTime())) return '-'
+  // Compact (date-grouped) rows show the clock time — the group header carries
+  // the date, and "5m ago" / a bare date is useless for a batch of same-day events.
+  if (compact) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffMins = Math.floor(diffMs / 60000)

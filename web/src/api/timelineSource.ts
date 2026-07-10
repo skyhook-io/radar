@@ -13,7 +13,7 @@
 // Both sources expose the same `useEvents(query)` hook shape so the timeline
 // wrappers stay source-agnostic: pick the source from context, call useEvents.
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { quantizeBaseWindow } from '@skyhook-io/k8s-ui'
 import { useChanges, apiFetch, ApiError, type UseChangesOptions } from './client'
 import { apiUrl, getApiBase } from './config'
@@ -56,6 +56,13 @@ export interface TimelineCoverageRecord {
   [key: string]: unknown
 }
 
+// A recording-coverage span within an overview bucket. Event-time bounds are
+// owned by the retained (hub) backend; a bucket may carry one span or several.
+export interface TimelineCoverageSpan {
+  eventTimeStartMs?: number
+  eventTimeEndMs?: number
+}
+
 export interface TimelineOverviewBucket {
   hourStartMs: number
   summary: {
@@ -67,12 +74,12 @@ export interface TimelineOverviewBucket {
     worstHealth: string
     namespaces: string[]
   }
-  coverage?: unknown
+  coverage?: TimelineCoverageSpan | TimelineCoverageSpan[]
 }
 
-// Overview response. Tolerates both the legacy bare-array body and the new
-// envelope that carries `availableFromMs` (oldest event-time the server holds
-// for this cluster) so the scrubber domain reflects real retention.
+// Overview response envelope: the hourly `buckets` plus `availableFromMs` (the
+// oldest event-time the server holds for this cluster) so the scrubber domain
+// reflects real retention.
 export interface TimelineOverviewResult {
   buckets: TimelineOverviewBucket[]
   availableFromMs?: number
@@ -374,7 +381,7 @@ function applyClientFilters(events: TimelineEvent[], query: TimelineQuery): Time
       return true
     })
   }
-  out = [...out].sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+  out = [...out].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
   if (query.limit && out.length > query.limit) {
     out = out.slice(0, query.limit)
   }
@@ -402,13 +409,18 @@ function createRetainedEventsHook(
     // live poll's job.
     const window = useMemo<TimelineRange>(() => {
       if (query.fromMs != null && query.toMs != null) {
+        // An explicit window (frozen brush, or a hand-entered ?from&to) must not
+        // reach further back than maxRangeDays — the same cap rangeSpanMs applies
+        // to the range-derived branch below. Anchor at the recent edge.
+        const capMs = (capabilities.maxRangeDays ?? DEFAULT_RETAINED_MAX_RANGE_DAYS) * DAY_MS
+        const from = Math.max(query.fromMs, query.toMs - capMs)
         // Sliding: quantize so two ticks inside one step share a query key (no
         // refetch). The precise [from,to] is still enforced by applyClientFilters.
         if (query.sliding) {
-          const q = quantizeBaseWindow(query.fromMs, query.toMs)
+          const q = quantizeBaseWindow(from, query.toMs)
           return { from: q.fromMs, to: q.toMs }
         }
-        return { from: query.fromMs, to: query.toMs }
+        return { from, to: query.toMs }
       }
       const to = Date.now()
       return { from: to - rangeSpanMs(query.timeRange, capabilities.maxRangeDays), to }
@@ -422,6 +434,10 @@ function createRetainedEventsHook(
       queryFn: ({ signal }) => fetchRetainedWindow(window.from, window.to, signal),
       enabled,
       staleTime: LIVE_REFETCH_MS,
+      // The base window quantizes to fixed steps, so its key rotates every few
+      // minutes even while live. Hold the previous window's events through the
+      // refetch instead of blanking the range on each rotation.
+      placeholderData: keepPreviousData,
     })
 
     // Fixed recent-window re-poll. Key is stable; queryFn reads the clock fresh

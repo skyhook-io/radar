@@ -115,7 +115,12 @@ export function describeActiveFilters(opts: {
   const parts: string[] = []
   const search = opts.search.trim()
   if (search) parts.push(`search "${search}"`)
-  if (opts.activityFilter.length > 0) parts.push(pluralize(opts.activityFilter.length, 'activity filter'))
+  // Count what the user set (source segment + Problems toggle), not the raw key
+  // array: the single Problems toggle expands to two keys (warnings+unhealthy),
+  // which would otherwise read as "2 activity filters" for one pick.
+  const sel = activityKeysToSelection(opts.activityFilter)
+  const activityCount = (sel.source !== 'all' ? 1 : 0) + (sel.problemsOnly ? 1 : 0)
+  if (activityCount > 0) parts.push(pluralize(activityCount, 'activity filter'))
   if (opts.kindFilter.length > 0) parts.push(pluralize(opts.kindFilter.length, 'kind'))
   if (!opts.showDeleted) parts.push('deleted hidden')
   return parts.join(' · ')

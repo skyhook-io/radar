@@ -5,7 +5,7 @@
 // tracking the live edge — all unit-testable without a DOM (web has no test
 // runner; these are the contract tests).
 
-import type { ScrubberRange } from './TimelineScrubber'
+import type { ScrubberRange } from './scrubber-math'
 
 // Live/paused indicator model for the retained timeline, surfaced as one chip in
 // the scrubber header. LIVE = the selection tracks now; `latched` is whether the

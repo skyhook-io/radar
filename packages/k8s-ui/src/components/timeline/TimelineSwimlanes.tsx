@@ -40,7 +40,7 @@ import { pluralize } from '../../utils/pluralize'
 import { gitOpsRouteForKind } from '../../utils/gitops-route'
 import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../../types'
 import { DiffViewer } from './DiffViewer'
-import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
+import { getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
 import { MiddleEllipsis } from '../ui/MiddleEllipsis'
 import { Tooltip } from '../ui/Tooltip'
 import { ResourceRefBadge } from '../ui/drawer-components'
@@ -58,7 +58,7 @@ import {
   timeToX as sharedTimeToX,
 } from './shared'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
-import { clampLensToSelection, type ScrubberRange } from './TimelineScrubber'
+import { clampLensToSelection, type ScrubberRange } from './scrubber-math'
 
 // Predefined zoom levels (window widths in hours): 15m, 30m, 1h, 2h, 4h, 8h,
 // 12h, 1d, 2d, 3d, 7d. Hoisted so the controlled-window adapter can size the
@@ -176,12 +176,12 @@ export function mergeLaneOrderById(
   return out
 }
 
-// Fixed resource-label column + 32px (mr-8) right gutter frame the event track;
-// gap bands and the "Now" line map their x into `calc(label + (100% - inset) *
-// frac)`. MUST match the label cells' w-[360px] — a stale value here draws the
-// Now line and gap bands against a track shifted left of the real one.
+// Base resource-label column width; compact widens it (see the laneLabelPx /
+// laneTrackInsetPx locals). The label column + 32px (mr-8) right gutter frame the
+// event track; gap bands and the "Now" line map x into `calc(label + (100% -
+// inset) * frac)`, so those per-mode locals MUST match the rendered label cells
+// or the Now line and gap bands draw against a track shifted left of the real one.
 const LANE_LABEL_PX = 360
-const LANE_TRACK_INSET_PX = LANE_LABEL_PX + 32
 
 // A gap band wider than this (px) has room for its "connector offline" caption.
 const GAP_LABEL_MIN_PX = 80
@@ -636,6 +636,11 @@ export interface TimelineSwimlanesProps {
   // adopts the fresh importance rank. Absent/false → fresh rank every render
   // (local mode / WorkloadView unchanged).
   isLive?: boolean
+  // Strip the power-user toolbar (search / activity + kind filters / deleted /
+  // view menu / counts / legend) for an embedded, single-subject swimlane where
+  // those controls are overkill — e.g. the workload detail's Timeline tab. The
+  // lanes, axis, Now line, and clustering are unchanged. Default false.
+  compact?: boolean
 }
 
 interface ResourceLane extends BaseResourceLane {
@@ -759,9 +764,15 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
   return breakdown
 }
 
-export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange, pinnedOnly: pinnedOnlyProp, onPinnedOnlyChange, viewWindow, onViewWindowChange, bounds, onExtendRequest, onJumpToNow, nowMs, gaps, onAppClick, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, appIndex, grouping: groupingProp, onGroupingChange, sort: sortProp, onSortChange, pinnedLanes, onTogglePin, selectedEventId, onSelectedEventChange, isLive }: TimelineSwimlanesProps) {
+export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange, pinnedOnly: pinnedOnlyProp, onPinnedOnlyChange, viewWindow, onViewWindowChange, bounds, onExtendRequest, onJumpToNow, nowMs, gaps, onAppClick, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, appIndex, grouping: groupingProp, onGroupingChange, sort: sortProp, onSortChange, pinnedLanes, onTogglePin, selectedEventId, onSelectedEventChange, isLive, compact = false }: TimelineSwimlanesProps) {
   // Controlled when the host drives the visible window (retained-mode lens).
   const controlled = viewWindow != null
+  // Compact gives the label column extra width — no namespace subtitle or nested
+  // tree competing for it, and resource names (esp. hashed Pod/RS names) are long.
+  // The overlay geometry (Now line, gap bands) must track the same width or drift.
+  const laneLabelPx = compact ? 440 : LANE_LABEL_PX
+  const laneTrackInsetPx = laneLabelPx + 32
+  const laneLabelWidthClass = compact ? 'w-[440px]' : 'w-[360px]'
   // Timeline lane labels for GitOps CRs (Application/Kustomization/HelmRelease)
   // deep-link to GitOps detail rather than the resource drawer — the lane is
   // already telling the user "this controller had changes/events"; the GitOps
@@ -853,12 +864,12 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   useEffect(() => {
     const node = containerRef.current
     if (!node) return
-    const measure = () => setTrackPx(Math.max(0, node.clientWidth - LANE_TRACK_INSET_PX))
+    const measure = () => setTrackPx(Math.max(0, node.clientWidth - laneTrackInsetPx))
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(node)
     return () => ro.disconnect()
-  }, [])
+  }, [laneTrackInsetPx])
 
   // Auto-adjust zoom based on event distribution (only once on initial load).
   // Skipped when controlled — the host owns the window, so internal zoom is inert.
@@ -1250,37 +1261,31 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   const axisTicks = useMemo(() => {
     const { start, end } = visibleTimeRange
     const ticks: { time: number; label: string }[] = []
+    const span = end - start
+    if (span <= 0) return ticks
 
-    let intervalMs: number
-    if (windowHours <= 0.25) {
-      intervalMs = 2 * 60 * 1000 // 2 min intervals for 15m window
-    } else if (windowHours <= 0.5) {
-      intervalMs = 5 * 60 * 1000 // 5 min intervals for 30m window
-    } else if (windowHours <= 1) {
-      intervalMs = 10 * 60 * 1000
-    } else if (windowHours <= 3) {
-      intervalMs = 30 * 60 * 1000
-    } else if (windowHours <= 6) {
-      intervalMs = 60 * 60 * 1000
-    } else if (windowHours <= 24) {
-      intervalMs = 2 * 60 * 60 * 1000 // 2 hour intervals
-    } else if (windowHours <= 72) {
-      intervalMs = 6 * 60 * 60 * 1000 // 6 hour intervals for up to 3 days
-    } else {
-      intervalMs = 24 * 60 * 60 * 1000 // 1 day intervals for larger windows
-    }
+    // Pick the smallest "nice" interval that keeps the tick count under a cap —
+    // so ANY window (a 15-minute view or a 2-year one) renders ~6–10 readable
+    // ticks instead of hundreds smearing into a band. The ladder tops out at a
+    // year; a wider window just steps by years.
+    const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR
+    const NICE = [
+      MIN, 2 * MIN, 5 * MIN, 10 * MIN, 15 * MIN, 30 * MIN,
+      HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR,
+      DAY, 2 * DAY, 7 * DAY, 14 * DAY, 30 * DAY, 90 * DAY, 180 * DAY, 365 * DAY,
+    ]
+    const MAX_TICKS = 10
+    const target = span / MAX_TICKS
+    let intervalMs = NICE.find((n) => n >= target)
+      ?? Math.ceil(target / (365 * DAY)) * 365 * DAY
 
     const firstTick = Math.ceil(start / intervalMs) * intervalMs
-
     for (let t = firstTick; t <= end; t += intervalMs) {
-      ticks.push({
-        time: t,
-        label: formatAxisTime(new Date(t)),
-      })
+      ticks.push({ time: t, label: formatAxisTime(new Date(t)) })
     }
 
     return ticks
-  }, [visibleTimeRange, windowHours])
+  }, [visibleTimeRange])
 
   // Convert timestamp to X position (0-100%)
   const timeToX = useCallback(
@@ -1346,10 +1351,17 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   // Doubles as the guard's `settledId`: a fresh selectedEventId (never settled)
   // keeps restoreIsPending true so a still-loading restore wins over the strip.
   const restoredForRef = useRef<string | null>(null)
+  // The last selectedEventId this effect observed, so it can tell a SELECTION
+  // change (re-resolve the open drawer to it) from a DRAWER or window change
+  // (leave an open drawer alone — a user opening a cluster, or a pan, is
+  // authoritative and must not be re-resolved back to the prior selection).
+  const prevSelRef = useRef<string | null>(selectedEventId ?? null)
 
   useEffect(() => {
     if (!onSelectedEventChange) return
     const want = selectedEventId ?? null
+    const selectionChanged = prevSelRef.current !== want
+    prevSelRef.current = want
     // Clearing the selection re-arms the machine: an id ruled out once must be
     // resolvable again if the user re-selects it (ref is keyed by id, not reset).
     // The dismissed id is cleared here too: once the selection has settled to
@@ -1360,8 +1372,15 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
       dismissedIdRef.current = null
       return
     }
-    // Restore only into a CLOSED drawer; an open drawer is authoritative.
-    if (drawer) return
+    // Skip only when the drawer already shows the EXACT wanted event; otherwise a
+    // new external selection (host list click, back/forward nav) re-resolves the
+    // drawer to it — including a different member of the same time-cluster, so its
+    // selectedId follows — instead of the report effect reverting to the stale id.
+    if (drawer && drawer.selectedId === want) return
+    // Only re-resolve an OPEN drawer when the selection itself changed. If this
+    // fire is from a drawer change (the user just opened a different cluster) or a
+    // pan, leave it — otherwise it snaps the click back to the stale selection.
+    if (drawer && !selectionChanged) return
     if (restoredForRef.current === want) return
     // A user close wins: the id the user just dismissed must not be reopened by
     // the ?event=<id> the strip hasn't cleared yet. Once the selection settles to
@@ -1608,7 +1627,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           <div className="border-b-subtle">
             <div className="flex items-center">
               {/* Lane label */}
-              <div className="relative w-[360px] shrink-0 border-r border-theme-border px-3 py-2 flex items-center gap-1 group/pin">
+              <div className={clsx('relative shrink-0 border-r border-theme-border px-3 flex items-center gap-1 group/pin', laneLabelWidthClass, compact ? 'py-1' : 'py-2')}>
                 {/* Descender: when expanded, carry the tree line from this row's
                     chevron down to its first child's incoming trunk (rail 0). */}
                 {hasVisibleChildren && isExpanded && (
@@ -1626,7 +1645,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                       isExpanded && 'rotate-90'
                     )} />
                   </button>
-                ) : (
+                ) : compact ? null : (
                   <div className="w-4" />
                 )}
                 {lane.isAppGroup ? (
@@ -1644,7 +1663,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                         <Tooltip content={lane.name} wrapperClassName="min-w-0 flex-1">
                           <span
                             onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
-                            className="min-w-0 w-full text-sm font-semibold font-mono text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer"
+                            className={clsx('min-w-0 w-full text-sm text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer', compact ? 'font-medium' : 'font-semibold font-mono')}
                           >
                             <MiddleEllipsis text={lane.name} className="block" />
                           </span>
@@ -1656,7 +1675,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                         )}
                         <LaneWarnChip events={lane.allEventsSorted || []} />
                       </div>
-                      {lane.namespace && (
+                      {lane.namespace && !compact && (
                         <span className="text-[11px] text-theme-text-tertiary truncate">
                           {lane.namespace}
                         </span>
@@ -1669,7 +1688,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     name text, so the pin sits inert alongside it. */}
                 {renderPinButton(lane)}
               </div>
-              {track('h-11')}
+              {track(compact ? 'h-9' : 'h-11')}
             </div>
           </div>
           {childRows}
@@ -1688,6 +1707,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             showGroupChip={showGroupChip}
             kindTitle={kindBadgeTitle}
             name={lane.name}
+            labelWidthClass={laneLabelWidthClass}
             isLast={isLast && !(isExpanded && hasVisibleChildren)}
             depth={depth}
             hasChildren={hasVisibleChildren}
@@ -1767,9 +1787,13 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   )
 
   return (
-    <div className="flex flex-col h-full w-full">
-      {/* Toolbar with search and zoom */}
+    // Compact sizes to its content (up to the lane area's cap) so a workload with
+    // two lanes doesn't reserve a full pane; the standalone view fills its parent.
+    <div className={clsx('flex flex-col w-full', compact ? 'min-h-0' : 'h-full')}>
+      {/* Toolbar with search and zoom. Hidden in compact mode (embedded
+          single-subject swimlane) — the power-user controls are overkill there. */}
       {/* No overflow-hidden here: the toolbar's kinds/view-options popovers must overhang. */}
+      {!compact && (
       <div className="border-b border-theme-border bg-theme-surface/30 relative z-40">
         <TimelineToolbar
           search={searchTerm}
@@ -1867,9 +1891,11 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           </>
         )}
       </div>
+      )}
 
-      {/* Timeline container */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden">
+      {/* Timeline container. Compact caps the lane area (content-height until then,
+          scrolls past it) so the swimlane grows with the number of lanes. */}
+      <div className={clsx('overflow-y-auto overflow-x-hidden', compact ? 'max-h-[240px]' : 'flex-1')}>
         <div
           ref={containerRef}
           className="min-w-full"
@@ -1879,25 +1905,28 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           {/* Time axis header */}
           <div className="sticky top-0 z-30 bg-theme-surface border-b border-theme-border">
             <div className="flex">
-              <div className="w-[360px] shrink-0 border-r border-theme-border px-3 h-8 flex items-center">
+              <div className={clsx('shrink-0 border-r border-theme-border px-3 h-8 flex items-center', laneLabelWidthClass)}>
                 <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Resource</span>
                 {/* Single morphing toggle (10a): ≥half the groups open → offers
                     collapse-all; otherwise expand-all. Tooltip names the action
                     and its shortcut. ml-auto rides the Tooltip's own flex wrapper
                     so the button stays vertically centered (a plain span around it
                     inflates to the line-height and top-aligns the glyph). */}
-                <Tooltip content={mostlyExpanded ? 'Collapse all (E)' : 'Expand all (E)'} wrapperClassName="ml-auto">
-                  <button
-                    type="button"
-                    onClick={() => setAllExpanded(!mostlyExpanded)}
-                    className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
-                    aria-label={mostlyExpanded ? 'Collapse all resources' : 'Expand all resources'}
-                  >
-                    {mostlyExpanded
-                      ? <ChevronsDownUp className="h-3.5 w-3.5" />
-                      : <ChevronsUpDown className="h-3.5 w-3.5" />}
-                  </button>
-                </Tooltip>
+                {/* Flat compact lanes never nest, so bulk expand/collapse is a no-op. */}
+                {!compact && (
+                  <Tooltip content={mostlyExpanded ? 'Collapse all (E)' : 'Expand all (E)'} wrapperClassName="ml-auto">
+                    <button
+                      type="button"
+                      onClick={() => setAllExpanded(!mostlyExpanded)}
+                      className="rounded p-1 text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
+                      aria-label={mostlyExpanded ? 'Collapse all resources' : 'Expand all resources'}
+                    >
+                      {mostlyExpanded
+                        ? <ChevronsDownUp className="h-3.5 w-3.5" />
+                        : <ChevronsUpDown className="h-3.5 w-3.5" />}
+                    </button>
+                  </Tooltip>
+                )}
               </div>
               <div className="flex-1 relative h-8 mr-8">
                 {(() => {
@@ -1960,7 +1989,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     aria-label="Extend the loaded range further into the past"
                   >
                     <ChevronLeft className="h-3 w-3" />
-                    End of loaded range — extend
+                    Start of loaded range — extend
                   </button>
                 )}
                 {atFutureEdge && (
@@ -1997,7 +2026,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
               return (
                 <div
                   className="absolute top-0 bottom-0 w-0.5 bg-purple-500/50 z-10 pointer-events-none"
-                  style={{ left: `calc(${LANE_LABEL_PX}px + (100% - ${LANE_TRACK_INSET_PX}px) * ${nowX / 100})` }}
+                  style={{ left: `calc(${laneLabelPx}px + (100% - ${laneTrackInsetPx}px) * ${nowX / 100})` }}
                 />
               )
             })()}
@@ -2013,8 +2042,8 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                   key={`gap-${i}`}
                   className="pointer-events-none absolute top-0 bottom-0 z-0 flex items-center justify-center overflow-hidden"
                   style={{
-                    left: `calc(${LANE_LABEL_PX}px + (100% - ${LANE_TRACK_INSET_PX}px) * ${fromFrac})`,
-                    width: `calc((100% - ${LANE_TRACK_INSET_PX}px) * ${toFrac - fromFrac})`,
+                    left: `calc(${laneLabelPx}px + (100% - ${laneTrackInsetPx}px) * ${fromFrac})`,
+                    width: `calc((100% - ${laneTrackInsetPx}px) * ${toFrac - fromFrac})`,
                     background:
                       'repeating-linear-gradient(45deg, transparent 0, transparent 5px, var(--border-default) 5px, var(--border-default) 6px)',
                     opacity: 0.5,
@@ -2034,7 +2063,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             {pinnedLaneRows.length > 0 && (
               <div data-testid="timeline-pinned-section">
                 <div className="flex">
-                  <div className="w-[360px] shrink-0 border-r border-theme-border px-3 py-1.5">
+                  <div className={clsx('shrink-0 border-r border-theme-border px-3 py-1.5', laneLabelWidthClass)}>
                     <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Pinned</span>
                   </div>
                   <div className="flex-1" />
@@ -2060,7 +2089,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                         as the empty states. */}
                     <div className="flex items-center justify-center gap-2 py-6 text-sm text-theme-text-tertiary">
                       <Clock className="h-4 w-4 opacity-50" />
-                      <span>The timeline shows only resources with activity in this query range</span>
+                      <span>{compact ? 'Only resources with activity in this time span are shown' : 'The timeline shows only resources with activity in this query range'}</span>
                     </div>
                   </>
                 )}
@@ -2070,7 +2099,11 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
       </div>
 
       {/* Event detail drawer — single event, or a cluster's full member list. */}
-      {drawer && (
+      {/* The bottom detail drawer is suppressed in compact mode: the embedded
+          host (workload detail) already shows the full event list, so selection is
+          reported upward via onSelectedEventChange instead of opening a redundant
+          second detail surface. */}
+      {drawer && !compact && (
         <EventDetailPanel
           events={drawer.events}
           selectedId={drawer.selectedId}
@@ -2150,7 +2183,7 @@ function LaneWarnChip({ events }: { events: TimelineEvent[] }) {
   const issueCount = events.filter((e) => isCriticalIssue(e)).length
   if (issueCount === 0) return null
   return (
-    <Tooltip content={`${pluralize(issueCount, 'critical issue')} (OOMKilled, CrashLoopBackOff, etc.)`} position="top">
+    <Tooltip content={`${pluralize(issueCount, 'problem')} (OOMKilled, CrashLoopBackOff, etc.)`} position="top">
       <span className="flex items-center gap-0.5 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400">
         <AlertTriangle className="w-3 h-3" />
         {issueCount}
@@ -2192,12 +2225,11 @@ export function chipKindLabel(kind: string): { label: string; abbreviated: boole
   const short = CHIP_KIND_SHORT[kind]
   if (short) return { label: short, abbreviated: true }
   const display = displayKind(kind)
-  // Still long after displayKind: compress ≥3-word CamelCase kinds to their
-  // initials — the idiom k8s itself uses (CRD, HPA, PVC), so e.g.
-  // VerticalPodAutoscalerCheckpoint → VPAC.
+  // Unmapped long kinds truncate (full kind stays in the tooltip) rather than
+  // mint an initials acronym: auto-initials produced misleading labels —
+  // ClusterSecretStore→CSS collides with an unrelated term, VPAC reads as noise.
   if (display.length > 14) {
-    const words = kind.match(/[A-Z][a-z0-9]*/g) ?? []
-    if (words.length >= 3) return { label: words.map((w) => w[0]).join(''), abbreviated: true }
+    return { label: `${display.slice(0, 13)}…`, abbreviated: true }
   }
   return { label: display, abbreviated: display !== kind }
 }
@@ -2238,7 +2270,7 @@ function GroupChip({ group }: { group: string }) {
   )
 }
 
-function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, isLast, onClick, pinButton, title, depth = 1, hasChildren, expanded, onToggle }: { kind: string; group?: string; showGroupChip?: boolean; kindTitle?: string; name: string; isLast: boolean; onClick: () => void; pinButton?: React.ReactNode; title?: string; depth?: number; hasChildren?: boolean; expanded?: boolean; onToggle?: () => void }) {
+function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, labelWidthClass = 'w-[360px]', isLast, onClick, pinButton, title, depth = 1, hasChildren, expanded, onToggle }: { kind: string; group?: string; showGroupChip?: boolean; kindTitle?: string; name: string; labelWidthClass?: string; isLast: boolean; onClick: () => void; pinButton?: React.ReactNode; title?: string; depth?: number; hasChildren?: boolean; expanded?: boolean; onToggle?: () => void }) {
   // Tree rails: the INCOMING trunk sits under the parent's chevron (rail d-1), the
   // row's own chevron sits on its CHILDREN's rail (rail d). Deriving both from one
   // ROOT keeps every level's vertical aligned under the chevron above it.
@@ -2247,9 +2279,9 @@ function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, isLast, o
   const contentPadPx = selfRailPx + 14
   return (
     <div
-      // w-[360px] matches the top-level label column exactly — a narrower child
-      // width left the label column's right border ragged across depths.
-      className="relative w-[360px] shrink-0 border-r border-theme-border/50 pr-3 flex items-center gap-1.5 group/pin bg-theme-surface/40"
+      // width matches the top-level label column exactly (compact widens it) — a
+      // narrower child width left the label column's right border ragged.
+      className={clsx('relative shrink-0 border-r border-theme-border/50 pr-3 flex items-center gap-1.5 group/pin bg-theme-surface/40', labelWidthClass)}
       style={{ paddingLeft: contentPadPx }}
     >
       {/* Incoming trunk (under the parent's chevron) — elbow (half height) on the
@@ -3168,9 +3200,7 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
             <dd className="flex flex-wrap items-center gap-2">
               <span className={clsx(
                 'font-medium',
-                isChangeEvent(selected) && isOperation(selected.eventType)
-                  ? getOperationColor(selected.eventType)
-                  : isProblematic ? 'text-amber-700 dark:text-amber-300' : 'text-theme-text-primary',
+                isProblematic ? 'text-amber-700 dark:text-amber-300' : 'text-theme-text-primary',
               )}>
                 {selected.reason || selected.eventType}
               </span>

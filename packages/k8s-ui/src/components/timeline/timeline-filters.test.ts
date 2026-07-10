@@ -167,11 +167,18 @@ describe('describeActiveFilters', () => {
     expect(
       describeActiveFilters({
         search: 'dfasdf',
-        activityFilter: ['changes', 'warnings'],
+        // Canonical: source=changes + Problems toggle → two activity picks.
+        activityFilter: ['unhealthy'],
         kindFilter: ['Pod', 'Service', 'ConfigMap'],
         showDeleted: false,
       }),
     ).toBe('search "dfasdf" · 2 activity filters · 3 kinds · deleted hidden')
+  })
+
+  it('counts the two-axis Problems toggle as ONE activity filter, not two keys', () => {
+    // source=all + Problems expands to keys [warnings, unhealthy] but is one pick;
+    // counting raw keys read "2 activity filters" for a single toggle.
+    expect(describeActiveFilters({ ...none, activityFilter: ['warnings', 'unhealthy'] })).toBe('1 activity filter')
   })
 })
 

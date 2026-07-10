@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { TimelineStrip, resizeWindowWithinQuery, nextWindowRungMs, parseTimeInput } from './TimelineStrip'
-import type { ScrubberBucket, ScrubberRange } from './TimelineScrubber'
+import { TimelineStrip, resizeWindowWithinQuery, nextWindowRungMs } from './TimelineStrip'
+import type { ScrubberBucket, ScrubberRange } from './scrubber-math'
 
 const HOUR = 60 * 60 * 1000
 const query: ScrubberRange = { fromMs: 0, toMs: 24 * HOUR }
@@ -22,26 +22,6 @@ describe('nextWindowRungMs — consistent round jumps', () => {
   it('never exceeds the query-span cap', () => {
     expect(nextWindowRungMs(12 * HOUR, 1, 24 * HOUR)).toBe(24 * HOUR)
     expect(nextWindowRungMs(24 * HOUR, 1, 24 * HOUR)).toBe(24 * HOUR)
-  })
-})
-
-describe('parseTimeInput — relative / now / absolute', () => {
-  const now = Date.parse('2026-07-07T21:00:00Z')
-  it('resolves "now"', () => {
-    expect(parseTimeInput('now', now)).toBe(now)
-  })
-  it('resolves relative durations as "ago"', () => {
-    expect(parseTimeInput('24h', now)).toBe(now - 24 * HOUR)
-    expect(parseTimeInput('3d', now)).toBe(now - 3 * 24 * HOUR)
-    expect(parseTimeInput('45m', now)).toBe(now - 45 * 60_000)
-    expect(parseTimeInput('2w', now)).toBe(now - 14 * 24 * HOUR)
-  })
-  it('resolves absolute dates', () => {
-    expect(parseTimeInput('2026-07-06T21:00:00Z', now)).toBe(now - 24 * HOUR)
-  })
-  it('returns null for empty or unrecognized input', () => {
-    expect(parseTimeInput('', now)).toBeNull()
-    expect(parseTimeInput('gibberish', now)).toBeNull()
   })
 })
 
@@ -185,7 +165,7 @@ describe('state caption (Turn 12): full range names the state, band always paint
     expect(html).toContain('viewing full range')
   })
 
-  it('renders the band + window caption with in-window count when narrowed', () => {
+  it('renders the band + window-range caption and highlights in-window buckets when narrowed', () => {
     const html = renderToString(
       <TimelineStrip
         buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}}
@@ -193,10 +173,12 @@ describe('state caption (Turn 12): full range names the state, band always paint
       />,
     )
     expect(html).toContain('strip-lens')
-    // Midpoint rule: the 0–12h bucket's midpoint (6h) is inside the 4–8h
-    // window (5 events); the 12–24h bucket's (18h) is not → 5 of 13.
-    expect(html).toContain('5 of 13 events')
-    // The in-window bucket highlights accent; the other stays neutral.
+    // The caption shows the window's time range + the exact query total (13); the
+    // per-window count is NOT rendered here — from hourly buckets it can only be
+    // approximate, and the toolbar already owns the exact in-view count.
+    expect(html).toContain('13 in query range')
+    // The in-window bucket (0–12h midpoint 6h is inside 4–8h) highlights accent;
+    // the other stays neutral.
     expect(html).toContain('bg-accent/60')
   })
 

@@ -261,8 +261,11 @@ describe('chipKindLabel — chip abbreviations with full kind on hover', () => {
     expect(chipKindLabel('CustomResourceDefinition')).toEqual({ label: 'CRD', abbreviated: true })
     expect(chipKindLabel('PodDisruptionBudget')).toEqual({ label: 'PDB', abbreviated: true })
   })
-  it('compresses unknown long CamelCase kinds to their initials', () => {
-    expect(chipKindLabel('VerticalPodAutoscalerCheckpoint')).toEqual({ label: 'VPAC', abbreviated: true })
+  it('truncates unknown long kinds instead of minting a misleading acronym', () => {
+    // Auto-initials produced misleading chips (ClusterSecretStore→CSS); truncate
+    // the real kind (full kind stays in the tooltip via abbreviated:true).
+    expect(chipKindLabel('VerticalPodAutoscalerCheckpoint')).toEqual({ label: 'VerticalPodAu…', abbreviated: true })
+    expect(chipKindLabel('ClusterSecretStore')).toEqual({ label: 'ClusterSecret…', abbreviated: true })
   })
   it('leaves short kinds alone and keeps displayKind short forms', () => {
     expect(chipKindLabel('Pod')).toEqual({ label: 'Pod', abbreviated: false })
@@ -286,6 +289,29 @@ describe('bulk expand/collapse toggle (10a: single morphing control)', () => {
     expect(html).not.toContain('aria-label="Collapse all resources"')
     // The "(E)" shortcut hint rides the custom Tooltip (not SSR'd) — the
     // aria-labels above are the state-aware affordance.
+  })
+})
+
+describe('compact mode (embedded detail-view swimlane)', () => {
+  const ev = (name: string): TimelineEvent => ({
+    id: name, timestamp: new Date().toISOString(), source: 'informer',
+    kind: 'Deployment', namespace: 'team-a', name, eventType: 'update',
+  })
+
+  it('hides the bulk expand/collapse toggle — flat lanes never nest', () => {
+    const full = renderToString(<TimelineSwimlanes events={[ev('web')]} />)
+    expect(full).toContain('aria-label="Expand all resources"')
+    const compact = renderToString(<TimelineSwimlanes events={[ev('web')]} grouping="flat" compact />)
+    expect(compact).not.toContain('aria-label="Expand all resources"')
+    expect(compact).not.toContain('aria-label="Collapse all resources"')
+  })
+
+  it('widens the label column (no namespace subtitle or tree competing for it)', () => {
+    const full = renderToString(<TimelineSwimlanes events={[ev('web')]} />)
+    expect(full).toContain('w-[360px]')
+    const compact = renderToString(<TimelineSwimlanes events={[ev('web')]} grouping="flat" compact />)
+    expect(compact).toContain('w-[440px]')
+    expect(compact).not.toContain('w-[360px]')
   })
 })
 

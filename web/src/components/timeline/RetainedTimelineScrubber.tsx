@@ -53,11 +53,10 @@ function coverageNumber(v: unknown): number | undefined {
 }
 
 /**
- * Collect recording-gap spans from every bucket's opaque, backend-owned coverage
- * field into merged, domain-clipped time ranges. The hub emits event-time bounds
- * (`eventTimeStartMs` / `eventTimeEndMs`); older shapes are read as fallbacks so a
- * field rename degrades to "no gap band" rather than a crash. Merge/dedupe/clamp
- * is delegated to the pure `mergeGapRanges`.
+ * Collect recording-gap spans from every bucket's backend-owned coverage field
+ * into merged, domain-clipped time ranges. The hub emits event-time bounds
+ * (`eventTimeStartMs` / `eventTimeEndMs`); a span missing either bound is
+ * skipped. Merge/dedupe/clamp is delegated to the pure `mergeGapRanges`.
  */
 export function extractRecordingGaps(
   hourBuckets: TimelineOverviewBucket[],
@@ -68,48 +67,14 @@ export function extractRecordingGaps(
     const cov = b.coverage
     const list = Array.isArray(cov) ? cov : cov ? [cov] : []
     for (const item of list) {
-      if (!item || typeof item !== 'object') continue
-      const r = item as Record<string, unknown>
-      const start = coverageNumber(r.eventTimeStartMs) ?? coverageNumber(r.startMs) ?? coverageNumber(r.start)
-      const end = coverageNumber(r.eventTimeEndMs) ?? coverageNumber(r.endMs) ?? coverageNumber(r.end)
+      if (!item) continue
+      const start = coverageNumber(item.eventTimeStartMs)
+      const end = coverageNumber(item.eventTimeEndMs)
       if (start == null || end == null) continue
       raw.push({ fromMs: start, toMs: end })
     }
   }
   return mergeGapRanges(raw, domain)
-}
-
-// How much context frames a selection: the display window is the selection
-// width times this, so the selection band always occupies ~1/8 of the strip —
-// wide enough to grab handles and drag the lens. Without framing, a 1h preset
-// on a weeks-wide ring renders the selection sub-pixel: invisible and
-// un-manipulable.
-export const DOMAIN_FRAME_FACTOR = 8
-
-// The sub-range of the full data span the strip should display so `sel` stays
-// usable. Returns the full domain untouched when the selection is already a
-// large fraction of it. Centered on the selection, clamped inside the domain.
-export function frameDomainForSelection(
-  sel: ScrubberRange,
-  fullDomain: ScrubberRange,
-  factor = DOMAIN_FRAME_FACTOR,
-): ScrubberRange {
-  const fullWidth = fullDomain.toMs - fullDomain.fromMs
-  const selWidth = Math.max(1, sel.toMs - sel.fromMs)
-  const width = selWidth * factor
-  if (width >= fullWidth) return fullDomain
-  const center = (sel.fromMs + sel.toMs) / 2
-  let fromMs = center - width / 2
-  let toMs = center + width / 2
-  if (toMs > fullDomain.toMs) {
-    fromMs -= toMs - fullDomain.toMs
-    toMs = fullDomain.toMs
-  }
-  if (fromMs < fullDomain.fromMs) {
-    toMs = Math.min(fullDomain.toMs, toMs + (fullDomain.fromMs - fromMs))
-    fromMs = fullDomain.fromMs
-  }
-  return { fromMs, toMs }
 }
 
 export function buildPresets(maxRangeDays: number): ScrubberPreset[] {
@@ -261,6 +226,17 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
   const gaps = useMemo(() => extractRecordingGaps(hourBuckets, domain), [hourBuckets, domain])
   const presets = useMemo(() => buildPresets(maxRangeDays), [maxRangeDays])
 
+  // Floor for dimming "not recorded yet": the first real event, clamped into the
+  // visible domain. Below the domain floor (availableFromMs can predate the
+  // retention window by years via synthesized historical event times) it collapses
+  // to the domain start — the pre-retention dead zone is as unreachable as
+  // pre-recording time. Above it (a fresh cluster whose oldest event is <1h old)
+  // the [domain start .. first event] band dims as "not recorded yet" instead of
+  // reading as a quiet hour.
+  const historyFloorMs = availableFromMs != null
+    ? Math.min(Math.max(availableFromMs, domain.fromMs), domain.toMs)
+    : undefined
+
   // Lift the resolved domain + cap so the host can clamp extend requests to the
   // real retained window rather than an estimate.
   useEffect(() => {
@@ -312,14 +288,10 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
         loading={overview.isLoading}
         gaps={gaps}
         domain={domain}
-        // The honest coverage floor is the CLAMPED one: data older than the
-        // retention window is as unreachable as data from before recording
-        // began, so raw availableFromMs (which can predate retention by years
-        // via synthesized historical events) would fail to dim the dead zone.
         // No totalInQueryRange here — the hour-granular rollup can't produce an
         // exact count for an arbitrary sub-hour-aligned range, so the strip's
         // bucket-sum footer (± edge-bucket spillover) is the best available.
-        historyUnavailableBeforeMs={availableFromMs != null ? domain.fromMs : undefined}
+        historyUnavailableBeforeMs={historyFloorMs}
         selection={selection}
         onSelectionChange={onSelectionChange}
         maxSelectionMs={maxSelectionMs}
