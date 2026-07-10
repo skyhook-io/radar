@@ -709,7 +709,7 @@ func TestSummary_CronJobIssue(t *testing.T) {
 }
 
 // TestSummary_TerminatingFields pins the lifecycle fields on the AI
-// summary output. AI assistants (and the MCP list_resources tool)
+// summary output. AI agents (and the MCP list_resources tool)
 // rely on these to spot zombie/finalizer-stuck resources at a glance
 // — without them, an LLM advising on "why is this not converging"
 // has no way to detect a Terminating resource short of fetching the

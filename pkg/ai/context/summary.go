@@ -31,7 +31,7 @@ type ResourceSummary struct {
 	Issue     string `json:"issue,omitempty"`
 	Age       string `json:"age,omitempty"`
 	// Terminating signals that metadata.deletionTimestamp is set on the
-	// resource. AI assistants need this signal to avoid suggesting
+	// resource. AI agents need this signal to avoid suggesting
 	// mutating actions that will fail (e.g. "run kubectl rollout restart"
 	// on a Pod that's being torn down) and to correctly diagnose "why is
 	// this stuck" scenarios where the resource is a finalizer-blocked

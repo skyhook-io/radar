@@ -44,12 +44,12 @@ curl -fsSL https://get.radarhq.io | sh && kubectl radar
 
 - **Zero install on your cluster** — runs on your laptop, talks to the K8s API directly
 - **Single binary** — no dependencies, no agents, no CRDs
-- **Fast on big clusters** — relationship-index caching, progressive loading, and SSE delta streaming keep the UI responsive at thousands of pods
+- **Fast on big clusters** — tested on tens of thousands of pods, with responsive views and live updates under real cluster churn
 - **Private by design** — your cluster data stays on your machine. No account, no agents, no cloud sync, no cluster telemetry
 - **Airgapped-friendly** — runs as a single binary against the Kubernetes API and works in locked-down environments with outbound egress blocked
 - **Real-time** — watches your cluster via informers, pushes updates to the browser via SSE
 - **Works everywhere** — GKE, EKS, AKS, minikube, kind, k3s, or any conformant cluster
-- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI assistants query your cluster through Radar
+- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI agents query your cluster through Radar
 - **In-cluster option** — deploy with Helm for shared team access with RBAC-scoped permissions
 
 > "Have Radar deployed at work. As far as Kubernetes dashboards go, this is one of the best." — u/TheRealNetroxen
@@ -389,13 +389,13 @@ Inspect what any ServiceAccount can actually do — without three `kubectl descr
 - **Role / ClusterRole detail**: who is bound to this role, with subject summaries inline
 - **RoleBinding detail**: inline preview of the rules the binding grants + warnings when subjects include wide groups (`system:authenticated`, `system:unauthenticated`, `system:masters`)
 - **"My Permissions" panel**: namespace-scoped live `SelfSubjectRulesReview` for the current user — for fast "why can't I do X" debugging
-- **MCP**: `get_subject_permissions` tool exposes the same data to AI assistants for "is this SA over-privileged?" / "blast radius if compromised?" queries
+- **MCP**: `get_subject_permissions` tool exposes the same data to AI agents for "is this SA over-privileged?" / "blast radius if compromised?" queries
 
 Read-only visibility ships first; the considered follow-ups (RBAC audit checks, verb × resource matrix, subject explorer, graph view, in-UI edits, "can-i" queries) are tracked in [#1090](https://github.com/skyhook-io/radar/issues/1090).
 
 ### AI Integration (MCP)
 
-Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants — Claude, Cursor, Copilot, and others — query your cluster through Radar.
+Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI agents — Claude, Cursor, Copilot, and others — query your cluster through Radar.
 
 Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. Read tools are strictly read-only; write tools (restart, scale, sync, and the like) carry explicit destructive-action hints and run under your cluster's RBAC, so the apiserver enforces what each identity is allowed to do.
 
