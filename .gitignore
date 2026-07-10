@@ -45,6 +45,7 @@ tmp/
 /radar-amd64
 /*.png
 /AGENTS.md
+.worktrees/
 
 # Local visual-test screenshot artifacts (never commit)
 vt-shots/
