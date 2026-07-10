@@ -605,6 +605,16 @@ func TestGroupApplications_MatchKeys(t *testing.T) {
 		t.Errorf("helm matchKeys = %+v, want [helm:demo:podinfo]", r)
 	}
 
+	// Native Helm winner → NO match key: release identity is an annotation
+	// (meta.helm.sh/release-name), which events never carry, so the key could
+	// never join a timeline event to the app.
+	nativeHelm := groupApplications([]appWorkloadInput{
+		overlayInput("Deployment", "prod", "checkout-api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium),
+	})
+	if r := rowByName(nativeHelm, "checkout"); r == nil || len(r.MatchKeys) != 0 {
+		t.Errorf("native helm matchKeys = %+v, want none", r)
+	}
+
 	// Argo tracking-id winner → "argo:<name>".
 	argo := groupApplications([]appWorkloadInput{
 		overlayInput("Deployment", "team-a", "storefront-api", "2.0.0", "healthy", subject.TierArgoTrackingID, "argocd/Application/storefront", subject.ConfidenceHigh),

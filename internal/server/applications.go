@@ -1054,7 +1054,15 @@ func signalMatchKind(sig subject.Signal) (kind, value string, ok bool) {
 		return "", "", false
 	}
 	switch sig.Tier {
-	case subject.TierFluxHelmRelease, subject.TierHelmRelease:
+	// Native Helm (TierHelmRelease) is deliberately absent: its identity is
+	// the meta.helm.sh/release-name ANNOTATION, and timeline events carry only
+	// labels, so a key derived from it can never join. The chart's recommended
+	// labels (instance/name/part-of) surface through their own tiers. Flux
+	// HelmRelease identity is a label (helm.toolkit.fluxcd.io/name) — joinable.
+	// TierArgoTrackingID stays even though the tracking id is an annotation:
+	// its key equals the argocd.argoproj.io/instance label's, so it joins
+	// whenever Argo's tracking mode also applies the label.
+	case subject.TierFluxHelmRelease:
 		return "helm", value, true
 	case subject.TierArgoTrackingID, subject.TierArgoInstance:
 		return "argo", value, true
