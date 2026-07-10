@@ -441,6 +441,13 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   function openResourceFromTree(ref: GitOpsTreeRef | GitOpsInsightRef) {
     if (isGitOpsDetailRef(ref) && isValidKubernetesName(ref.name)) {
       const detailKind = kindToPlural(ref.kind)
+      // The tree's root node is this page's own subject — clicking it must not
+      // open a nested copy of the same detail page (which stacks an identical
+      // "GitOps / X / X" breadcrumb, and again, ad infinitum). A self-reference
+      // is a no-op; the header already represents this resource.
+      if (detailKind === kind && (ref.namespace || '') === (namespace || '') && ref.name === name) {
+        return
+      }
       const params = new URLSearchParams()
       if (ref.group) params.set('apiGroup', ref.group)
       // Lineage breadcrumb support: when the user opens a child GitOps CR

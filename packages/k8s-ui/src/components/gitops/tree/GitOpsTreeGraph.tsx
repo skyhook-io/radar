@@ -658,6 +658,11 @@ function isNodeTerminating(node: GitOpsTreeNode): boolean {
 // treatment around them (tool icon overlay, "→" affordance, stronger
 // border) advertises that they're not just leaves.
 function gitopsToolForNode(node: GitOpsTreeNode): 'argocd' | 'fluxcd' | undefined {
+  // The root node IS the resource this detail page is already showing — it is
+  // the subject, not a portal to another page. Never give it the portal
+  // treatment (tool badge, chevron, click-to-dive ring): clicking the thing
+  // you're already viewing would just stack an identical page onto itself.
+  if (node.role === 'root') return undefined
   const t = node.data?.gitopsTool
   if (t === 'argocd' || t === 'fluxcd') return t
   return undefined
