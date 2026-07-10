@@ -62,7 +62,7 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog } from './components/settings/SettingsDialog'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPlural, pluralToKind, openExternal, apiVersionToGroup, buildWorkloadPath, searchHitToSelectedResource } from './utils/navigation'
+import { kindToPlural, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource } from './utils/navigation'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
 import type { ContextSwitcherHandle } from './components/ContextSwitcher'
@@ -2113,7 +2113,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <TimelineView
             namespaces={namespaces}
             onResourceClick={(resource) => {
-              navigate(buildWorkloadPath(resource))
+              navigate(relatedResourcePath(resource))
             }}
             initialViewMode={(searchParams.get('view') as 'list' | 'swimlane') || undefined}
             initialFilter={(searchParams.get('filter') as 'all' | 'changes' | 'k8s_events' | 'warnings' | 'unhealthy') || undefined}
@@ -2224,7 +2224,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         {mainView === 'workload' && (
           <WorkloadViewRoute
             onNavigateToResource={(resource) => {
-              navigate(buildWorkloadPath(resource))
+              navigate(relatedResourcePath(resource))
             }}
           />
         )}

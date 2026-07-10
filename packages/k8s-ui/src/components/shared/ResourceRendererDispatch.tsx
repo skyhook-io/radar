@@ -406,6 +406,8 @@ interface ResourceRendererDispatchProps {
   eventsHint?: React.ReactNode
   /** When provided, sidebar sections (related resources, events, labels, annotations, metadata) are passed to this render prop instead of being rendered inline */
   renderSidebar?: (sections: React.ReactNode) => React.ReactNode
+  /** Additional overview content that belongs in the main content column after the resource renderer sections. */
+  mainFooter?: React.ReactNode
   /** K8s events for the focused resource — always shown (no toggle hides them)
    *  so resource history can't go missing. */
   events?: TimelineEvent[]
@@ -440,6 +442,7 @@ export function ResourceRendererDispatch({
   onOpenLogs,
   eventsHint,
   renderSidebar,
+  mainFooter,
   events,
   eventsLoading,
   updates,
@@ -712,6 +715,7 @@ export function ResourceRendererDispatch({
             {!renderSidebar && sidebarContent}
           </>
         )}
+        {mainFooter}
       </div>
       {renderSidebar && sidebarContent && renderSidebar(sidebarContent)}
     </div>

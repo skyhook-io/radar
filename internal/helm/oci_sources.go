@@ -269,6 +269,13 @@ func (c *Client) resolveOCIUpgradeURL(chartName, targetVersion string) (string, 
 	if lister == nil {
 		return "", false
 	}
+	return c.resolveOCIUpgradeURLWithLister(chartName, targetVersion, lister)
+}
+
+func (c *Client) resolveOCIUpgradeURLWithLister(chartName, targetVersion string, lister ociTagLister) (string, bool) {
+	if lister == nil || len(ListOCISources()) == 0 {
+		return "", false
+	}
 	prefix, tags := c.selectBestOCIPrefix(chartName, lister, nil)
 	if prefix != "" && slices.Contains(tags, targetVersion) {
 		return ociChartURL(prefix, chartName), true

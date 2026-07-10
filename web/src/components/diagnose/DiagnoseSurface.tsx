@@ -216,6 +216,31 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
       agentLabel={activeAgentLabel}
       maximized={maximized}
     />
+  ) : d.activeRunId && !d.runsLoaded ? (
+    // Deep-linked to a run before the list has ever loaded: show the load
+    // state (the 4s poll retries while the panel is open) — never the generic
+    // placeholder, and never a premature "no longer available".
+    <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-theme-text-tertiary">
+      {d.runsLoadFailed
+        ? "Couldn't load investigations — retrying…"
+        : "Loading investigations…"}
+    </div>
+  ) : d.activeRunId && d.runsLoaded ? (
+    // A focused id that isn't in the loaded list — a deep link (?ai-run=…) to a
+    // cleared/evicted/unknown run. Say so; the generic "select an
+    // investigation" placeholder would read as a broken link.
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <p className="text-sm text-theme-text-secondary">
+        This investigation is no longer available — history keeps the most
+        recent investigations, and this one has been cleared.
+      </p>
+      <button
+        onClick={d.goHome}
+        className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+      >
+        View investigations
+      </button>
+    </div>
   ) : d.startError ? (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <p className="text-sm text-theme-text-secondary">{d.startError}</p>
@@ -333,6 +358,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
               runs={d.runs}
               selectedId={d.activeRunId}
               onSelect={d.openRun}
+              historyDegraded={d.historyDegraded}
             />
           </aside>
         )}
@@ -345,6 +371,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
               agentLabel={d.agentLabel}
               runs={d.runs}
               onSelect={d.openRun}
+              historyDegraded={d.historyDegraded}
             />
           </div>
         ) : (

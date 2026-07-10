@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import { Search, X } from 'lucide-react'
 import { clsx } from 'clsx'
+import { Input } from './Input'
 import { useRegisterShortcut, type ShortcutScope } from '../../hooks/useKeyboardShortcuts'
 
 /** The standard list-view search box: themed input with a `/`-to-focus
@@ -46,9 +47,8 @@ export function SearchBox({
   return (
     <div className={clsx('relative', className)}>
       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-text-tertiary" />
-      <input
+      <Input
         ref={inputRef}
-        type="text"
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}

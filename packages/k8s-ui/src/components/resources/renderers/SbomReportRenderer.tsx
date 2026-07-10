@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Package, ChevronDown, ChevronRight, Search } from 'lucide-react'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { Input } from '../../ui/Input'
 import { formatAge } from '../resource-utils'
 import { formatTrivyImage } from './trivy-shared'
 
@@ -74,8 +75,7 @@ export function SbomReportRenderer({ data }: SbomReportRendererProps) {
               <div className="flex items-center gap-2 mb-2 px-1">
                 <div className="relative flex-1">
                   <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary" />
-                  <input
-                    type="text"
+                  <Input
                     placeholder="Filter by name, type, or purl..."
                     value={searchTerm}
                     onChange={(e) => { setSearchTerm(e.target.value); setShowAll(false) }}

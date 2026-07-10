@@ -217,6 +217,8 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
                       ref={textareaRef}
                       value={editValue}
                       onChange={(e) => setEditValue(e.target.value)}
+                      autoCorrect="off"
+                      autoCapitalize="off"
                       className="w-full bg-theme-base rounded p-2 text-xs text-theme-text-secondary font-mono border border-blue-500/50 focus:border-blue-500 focus:outline-none resize-none overflow-hidden whitespace-pre-wrap"
                       style={{ minHeight: '60px' }}
                       disabled={isSaving}

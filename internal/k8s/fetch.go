@@ -21,16 +21,13 @@ import (
 // is not a built-in typed resource. The caller should fall through to the dynamic cache.
 var ErrUnknownKind = fmt.Errorf("unknown typed kind")
 
-// builtinGVRs maps every lowercase kind form the typed informer cache serves
-// (plural, singular, and abbreviations — the union of what
-// FetchResource/FetchResourceList and the REST switch in internal/server
-// accept) to its canonical GroupVersionResource. Versions are the GA
-// group/versions every supported cluster serves.
+// builtinGVRs maps lowercase built-in kind forms to their canonical
+// GroupVersionResource. Versions are the GA group/versions every supported
+// cluster serves.
 //
 // One table, two jobs:
 //   - TypedKindOwnsGroup decides typed-vs-dynamic routing for the resource
-//     GET/LIST handlers (a built-in addressed by its own group must use the
-//     typed cache, not the dynamic/CRD cache).
+//     GET/LIST handlers. Only kinds with typed cache listers participate there.
 //   - BuiltinGVR is a static fallback for live/dynamic fetches when API
 //     discovery can't resolve a built-in's GVR (partial discovery under
 //     restricted RBAC, or a transient refresh miss). The drift/insights live
@@ -38,52 +35,64 @@ var ErrUnknownKind = fmt.Errorf("unknown typed kind")
 //     it needs last-applied, which the typed cache strips — so without this it
 //     would silently return nil and drop drift for built-in managed resources.
 //
-// Keep in sync with the typed switches in this file and internal/server.
-var builtinGVRs = func() map[string]schema.GroupVersionResource {
+// Keep typed=true in sync with the typed switches in this file and internal/server.
+var builtinGVRs, typedBuiltinGVRs = func() (map[string]schema.GroupVersionResource, map[string]schema.GroupVersionResource) {
 	defs := []struct {
 		forms    []string
 		group    string
 		version  string
 		resource string
+		typed    bool
 	}{
-		{[]string{"pod", "pods", "po"}, "", "v1", "pods"},
-		{[]string{"service", "services", "svc"}, "", "v1", "services"},
-		{[]string{"configmap", "configmaps", "cm"}, "", "v1", "configmaps"},
-		{[]string{"secret", "secrets"}, "", "v1", "secrets"},
-		{[]string{"event", "events"}, "", "v1", "events"},
-		{[]string{"persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs"}, "", "v1", "persistentvolumeclaims"},
-		{[]string{"node", "nodes", "no"}, "", "v1", "nodes"},
-		{[]string{"namespace", "namespaces", "ns"}, "", "v1", "namespaces"},
-		{[]string{"persistentvolume", "persistentvolumes", "pv", "pvs"}, "", "v1", "persistentvolumes"},
-		{[]string{"serviceaccount", "serviceaccounts", "sa"}, "", "v1", "serviceaccounts"},
-		{[]string{"limitrange", "limitranges"}, "", "v1", "limitranges"},
-		{[]string{"resourcequota", "resourcequotas"}, "", "v1", "resourcequotas"},
-		{[]string{"deployment", "deployments", "deploy", "deploys"}, "apps", "v1", "deployments"},
-		{[]string{"daemonset", "daemonsets", "ds"}, "apps", "v1", "daemonsets"},
-		{[]string{"statefulset", "statefulsets", "sts"}, "apps", "v1", "statefulsets"},
-		{[]string{"replicaset", "replicasets", "rs"}, "apps", "v1", "replicasets"},
-		{[]string{"job", "jobs"}, "batch", "v1", "jobs"},
-		{[]string{"cronjob", "cronjobs", "cj"}, "batch", "v1", "cronjobs"},
-		{[]string{"hpa", "hpas", "horizontalpodautoscaler", "horizontalpodautoscalers"}, "autoscaling", "v2", "horizontalpodautoscalers"},
-		{[]string{"ingress", "ingresses"}, "networking.k8s.io", "v1", "ingresses"},
-		{[]string{"networkpolicy", "networkpolicies", "netpol", "netpols"}, "networking.k8s.io", "v1", "networkpolicies"},
-		{[]string{"ingressclass", "ingressclasses"}, "networking.k8s.io", "v1", "ingressclasses"},
-		{[]string{"endpointslice", "endpointslices"}, "discovery.k8s.io", "v1", "endpointslices"},
-		{[]string{"poddisruptionbudget", "poddisruptionbudgets", "pdb", "pdbs"}, "policy", "v1", "poddisruptionbudgets"},
-		{[]string{"storageclass", "storageclasses", "sc"}, "storage.k8s.io", "v1", "storageclasses"},
-		{[]string{"role", "roles"}, "rbac.authorization.k8s.io", "v1", "roles"},
-		{[]string{"clusterrole", "clusterroles"}, "rbac.authorization.k8s.io", "v1", "clusterroles"},
-		{[]string{"rolebinding", "rolebindings"}, "rbac.authorization.k8s.io", "v1", "rolebindings"},
-		{[]string{"clusterrolebinding", "clusterrolebindings"}, "rbac.authorization.k8s.io", "v1", "clusterrolebindings"},
+		{[]string{"pod", "pods", "po"}, "", "v1", "pods", true},
+		{[]string{"service", "services", "svc"}, "", "v1", "services", true},
+		{[]string{"configmap", "configmaps", "cm"}, "", "v1", "configmaps", true},
+		{[]string{"secret", "secrets"}, "", "v1", "secrets", true},
+		{[]string{"event", "events"}, "", "v1", "events", true},
+		{[]string{"endpoint", "endpoints", "ep"}, "", "v1", "endpoints", false},
+		{[]string{"persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs"}, "", "v1", "persistentvolumeclaims", true},
+		{[]string{"node", "nodes", "no"}, "", "v1", "nodes", true},
+		{[]string{"namespace", "namespaces", "ns"}, "", "v1", "namespaces", true},
+		{[]string{"persistentvolume", "persistentvolumes", "pv", "pvs"}, "", "v1", "persistentvolumes", true},
+		{[]string{"serviceaccount", "serviceaccounts", "sa"}, "", "v1", "serviceaccounts", true},
+		{[]string{"limitrange", "limitranges"}, "", "v1", "limitranges", true},
+		{[]string{"resourcequota", "resourcequotas"}, "", "v1", "resourcequotas", true},
+		{[]string{"deployment", "deployments", "deploy", "deploys"}, "apps", "v1", "deployments", true},
+		{[]string{"daemonset", "daemonsets", "ds"}, "apps", "v1", "daemonsets", true},
+		{[]string{"statefulset", "statefulsets", "sts"}, "apps", "v1", "statefulsets", true},
+		{[]string{"replicaset", "replicasets", "rs"}, "apps", "v1", "replicasets", true},
+		{[]string{"job", "jobs"}, "batch", "v1", "jobs", true},
+		{[]string{"cronjob", "cronjobs", "cj"}, "batch", "v1", "cronjobs", true},
+		{[]string{"hpa", "hpas", "horizontalpodautoscaler", "horizontalpodautoscalers"}, "autoscaling", "v2", "horizontalpodautoscalers", true},
+		{[]string{"ingress", "ingresses"}, "networking.k8s.io", "v1", "ingresses", true},
+		{[]string{"networkpolicy", "networkpolicies", "netpol", "netpols"}, "networking.k8s.io", "v1", "networkpolicies", true},
+		{[]string{"ingressclass", "ingressclasses"}, "networking.k8s.io", "v1", "ingressclasses", true},
+		{[]string{"endpointslice", "endpointslices"}, "discovery.k8s.io", "v1", "endpointslices", false},
+		{[]string{"lease", "leases"}, "coordination.k8s.io", "v1", "leases", false},
+		{[]string{"priorityclass", "priorityclasses", "pc"}, "scheduling.k8s.io", "v1", "priorityclasses", false},
+		{[]string{"runtimeclass", "runtimeclasses"}, "node.k8s.io", "v1", "runtimeclasses", false},
+		{[]string{"mutatingwebhookconfiguration", "mutatingwebhookconfigurations"}, "admissionregistration.k8s.io", "v1", "mutatingwebhookconfigurations", false},
+		{[]string{"validatingwebhookconfiguration", "validatingwebhookconfigurations"}, "admissionregistration.k8s.io", "v1", "validatingwebhookconfigurations", false},
+		{[]string{"volumeattachment", "volumeattachments"}, "storage.k8s.io", "v1", "volumeattachments", false},
+		{[]string{"poddisruptionbudget", "poddisruptionbudgets", "pdb", "pdbs"}, "policy", "v1", "poddisruptionbudgets", true},
+		{[]string{"storageclass", "storageclasses", "sc"}, "storage.k8s.io", "v1", "storageclasses", true},
+		{[]string{"role", "roles"}, "rbac.authorization.k8s.io", "v1", "roles", true},
+		{[]string{"clusterrole", "clusterroles"}, "rbac.authorization.k8s.io", "v1", "clusterroles", true},
+		{[]string{"rolebinding", "rolebindings"}, "rbac.authorization.k8s.io", "v1", "rolebindings", true},
+		{[]string{"clusterrolebinding", "clusterrolebindings"}, "rbac.authorization.k8s.io", "v1", "clusterrolebindings", true},
 	}
 	m := make(map[string]schema.GroupVersionResource)
+	typed := make(map[string]schema.GroupVersionResource)
 	for _, d := range defs {
 		gvr := schema.GroupVersionResource{Group: d.group, Version: d.version, Resource: d.resource}
 		for _, f := range d.forms {
 			m[f] = gvr
+			if d.typed {
+				typed[f] = gvr
+			}
 		}
 	}
-	return m
+	return m, typed
 }()
 
 // TypedKindOwnsGroup reports whether (kind, group) names a built-in kind
@@ -94,10 +103,7 @@ var builtinGVRs = func() map[string]schema.GroupVersionResource {
 // dynamic cache" dispatch so built-in workloads addressed with their real group
 // don't fall through to the dynamic cache (which has no informer for them).
 func TypedKindOwnsGroup(kind, group string) bool {
-	gvr, ok := builtinGVRs[strings.ToLower(kind)]
-	if ok && gvr.Group == "discovery.k8s.io" && gvr.Resource == "endpointslices" {
-		return false
-	}
+	gvr, ok := typedBuiltinGVRs[strings.ToLower(kind)]
 	return ok && gvr.Group == group
 }
 

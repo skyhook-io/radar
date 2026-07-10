@@ -6,6 +6,7 @@ import { clsx } from 'clsx'
 import { apiFetch } from '../../api/client'
 import { apiUrl } from '../../api/config'
 import { Tooltip } from '../ui/Tooltip'
+import { Input } from '@skyhook-io/k8s-ui'
 
 // A port is "curl-able" only if it plausibly speaks HTTP — probing a raw TCP
 // port (Postgres, Redis) with a GET returns noise, so we don't offer it there
@@ -345,8 +346,7 @@ export function CurlPanel({
         </select>
         <div className="flex-1 min-w-0 flex items-center bg-theme-base border border-theme-border rounded px-2 focus-within:border-blue-500">
           <span className="text-xs text-theme-text-tertiary font-mono select-none pointer-events-none">/</span>
-          <input
-            type="text"
+          <Input
             value={path}
             onChange={(e) => setPath(e.target.value.replace(/^\/+/, ''))}
             placeholder="healthz"

@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/ai"
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
@@ -49,8 +50,8 @@ func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name
 	if canonicalKind == "" {
 		canonicalKind = kind
 	}
-	issueSum := computeIssueSummaryForResource(cache, gvk.Group, canonicalKind, namespace, name)
-	auditSum := computeAuditSummaryForResource(cache, gvk.Group, canonicalKind, namespace, name)
+	issueSum, issueRows := computeIssueSummaryAndRows(cache, gvk.Group, canonicalKind, namespace, name)
+	auditSum, auditRows := computeAuditSummaryAndRows(cache, gvk.Group, canonicalKind, namespace, name)
 
 	var issueCount int
 	signal := &ai.ResourceHealthSignal{}
@@ -59,6 +60,13 @@ func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name
 		signal.IssueCount = issueSum.Count
 		signal.HighestSeverity = issueSum.HighestSeverity
 		signal.TopReason = issueSum.TopReason
+		for _, row := range issueRows[:min(len(issueRows), maxHealthLines)] {
+			signal.Issues = append(signal.Issues, ai.HealthLine{
+				Severity: string(row.Severity),
+				Reason:   row.Reason,
+				Message:  capHealthMessage(row.Message),
+			})
+		}
 	}
 	if summary := resourcecontext.BuildSummary(obj, resourcecontext.SummaryOptions{IssueCount: issueCount}); summary != nil {
 		signal.Health = summary.Health
@@ -67,8 +75,31 @@ func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name
 		signal.AuditCount = auditSum.Count
 		signal.AuditSeverity = auditSum.HighestSeverity
 		signal.TopFinding = auditSum.TopFinding
+		for _, row := range auditRows[:min(len(auditRows), maxHealthAuditLines)] {
+			signal.AuditFindings = append(signal.AuditFindings, ai.HealthLine{
+				Severity: normalizeAuditSeverity(row.Severity),
+				Reason:   row.CheckID,
+				Message:  capHealthMessage(row.Message),
+			})
+		}
 	}
 	return signal
+}
+
+const (
+	// maxHealthLines / maxHealthAuditLines cap the rows carried on the health
+	// frame: enough to make the context card + prompt concrete, small enough to
+	// stay a frame rather than a report (the agent reads the full state itself).
+	maxHealthLines      = 3
+	maxHealthAuditLines = 2
+)
+
+func capHealthMessage(msg string) string {
+	const max = 220
+	if len(msg) <= max {
+		return msg
+	}
+	return msg[:max-1] + "…"
 }
 
 func managedByFromMeta(obj *unstructured.Unstructured) string {
@@ -87,6 +118,17 @@ func managedByFromMeta(obj *unstructured.Unstructured) string {
 	return ""
 }
 
+// currentConsents reports whether the CURRENT disclosure version has been
+// acknowledged, per surface (versions live in internal/config — one source of
+// truth with the CLI). Machine-scoped (~/.radar/config.json): one
+// acknowledgment covers the web panel and the CLI.
+func currentConsents() map[string]bool {
+	return map[string]bool{
+		"standard": config.AIConsentGiven("standard"),
+		"cursor":   config.AIConsentGiven("cursor"),
+	}
+}
+
 // handleListAgents reports the local agent CLIs detected on PATH, for the OSS
 // "AI Agent" picker. Safe: only fixed known names are probed (see ai.DetectAgents).
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
@@ -94,9 +136,41 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	// (e.g. a settings/picker view) so the Diagnose button's check stays instant.
 	withVersions := r.URL.Query().Get("versions") == "1"
 	s.writeJSON(w, map[string]any{
-		"agents":  ai.DetectAgents(r.Context(), withVersions),
-		"enabled": s.aiRuns != nil,
+		"agents":    ai.DetectAgents(r.Context(), withVersions),
+		"enabled":   s.aiRuns != nil,
+		"consented": currentConsents(),
 	})
+}
+
+// handleDiagnoseConsent records the user's acknowledgment of the current
+// disclosure for a surface ("standard" = Claude/Codex, "cursor" = Cursor's
+// distinct trust model). Doesn't require a connected cluster — consent can be
+// given while Radar is still connecting.
+func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
+	if !localOriginOK(r) {
+		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if s.aiRuns == nil {
+		s.writeError(w, http.StatusNotImplemented, "AI diagnosis is not available")
+		return
+	}
+	var body struct {
+		Surface string `json:"surface"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if config.AIConsentVersion(body.Surface) == "" {
+		s.writeError(w, http.StatusBadRequest, "surface must be \"standard\" or \"cursor\"")
+		return
+	}
+	if err := config.RecordAIConsent(body.Surface); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "couldn't record consent: "+err.Error())
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true, "consented": currentConsents()})
 }
 
 // aiReady gates every diagnose endpoint: the engine is built only in no-auth
@@ -175,6 +249,14 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	agent := s.aiRuns.AgentName(strings.TrimSpace(body.Agent))
+	// The server owns the consent store, so it enforces it: spawning an agent
+	// and shipping cluster data to a model provider must not depend on client
+	// code remembering to check. Surface derives from the RESOLVED agent (an
+	// unknown name falls back to the default, never across trust surfaces).
+	if !config.AIConsentGiven(ai.ConsentSurfaceFor(agent)) {
+		s.writeError(w, http.StatusForbidden, "AI disclosure not acknowledged for this agent — approve the consent prompt first")
+		return
+	}
 	isolated := body.Isolated == nil || *body.Isolated
 	model := strings.TrimSpace(body.Model)
 	if len(model) > 100 {
@@ -203,12 +285,38 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, run)
 }
 
-// handleDiagnoseList returns all in-memory runs (newest first).
+// handleDiagnoseList returns all retained runs (newest first). historyDegraded
+// warns that persistence stopped working, so the UI can say history won't
+// survive a restart instead of letting the user believe otherwise.
 func (s *Server) handleDiagnoseList(w http.ResponseWriter, r *http.Request) {
 	if !s.aiReady(w) {
 		return
 	}
-	s.writeJSON(w, map[string]any{"runs": s.aiRuns.List()})
+	s.writeJSON(w, map[string]any{
+		"runs":            s.aiRuns.List(),
+		"historyDegraded": s.aiRuns.HistoryDegraded(),
+	})
+}
+
+// handleDiagnoseHistoryClear wipes the persisted investigation history (and
+// drops finished runs from memory). Live runs survive. POST, same-origin only.
+func (s *Server) handleDiagnoseHistoryClear(w http.ResponseWriter, r *http.Request) {
+	if !localOriginOK(r) {
+		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	// Deliberately NOT aiReady: clearing local history is a disk operation —
+	// requiring a connected cluster (like starting a run does) would make the
+	// privacy control fail exactly when a user is cleaning up a broken setup.
+	if s.aiRuns == nil {
+		s.writeError(w, http.StatusNotImplemented, "AI diagnosis is not available")
+		return
+	}
+	if err := s.aiRuns.ClearHistory(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "couldn't clear history: "+err.Error())
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true})
 }
 
 // handleDiagnoseTurn adds a follow-up or apply turn to a run. POST {question?,

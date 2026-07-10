@@ -259,6 +259,16 @@ type ResourceDiff struct {
 	ParseErrorCount int              `json:"parseErrorCount,omitempty"`
 }
 
+// UpgradeSourceIssue identifies why Radar could not resolve the upstream chart
+// source for upgrade checks.
+type UpgradeSourceIssue string
+
+const (
+	UpgradeSourceIssueUntracked           UpgradeSourceIssue = "untracked"
+	UpgradeSourceIssueRepoIndexError      UpgradeSourceIssue = "repo_index_error"
+	UpgradeSourceIssueAmbiguousRepository UpgradeSourceIssue = "ambiguous_repository"
+)
+
 // UpgradeInfo contains information about available upgrades
 type UpgradeInfo struct {
 	CurrentVersion  string `json:"currentVersion"`
@@ -271,13 +281,12 @@ type UpgradeInfo struct {
 	SourceType string `json:"sourceType,omitempty"`
 	// ChartRef is the oci:// chart reference an OCI-sourced upgrade lives at
 	// (display only — the upgrade path re-derives it from registered sources).
-	ChartRef string `json:"chartRef,omitempty"`
-	Error    string `json:"error,omitempty"`
+	ChartRef    string             `json:"chartRef,omitempty"`
+	Error       string             `json:"error,omitempty"`
+	SourceIssue UpgradeSourceIssue `json:"sourceIssue,omitempty"`
 	// Untracked marks the specific error state where Radar genuinely can't tell
 	// where the chart comes from — i.e. registering a chart source could fix it.
-	// It is deliberately NOT set for repo-side errors (stale/broken index, classic
-	// ambiguity) so the UI doesn't steer the user to register an OCI source when
-	// the real fix is refreshing or disambiguating repos.
+	// Kept for compatibility; SourceIssue is the richer reason code.
 	Untracked bool `json:"untracked,omitempty"`
 }
 

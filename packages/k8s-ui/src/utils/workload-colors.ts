@@ -6,9 +6,8 @@ import { seriesColor, seriesFill } from '../components/charts/colors'
 // categorical palette for multi-series charts (10 well-separated 500-level
 // shades, vetted on both themes) — so workload colors match the rest of the UI.
 //
-// Solid swatch for the rail legend; faint fill for the node card background. The
-// node wash is applied only to healthy/unknown cards (see K8sResourceNode), so a
-// warm hue here never competes with the red/amber a degraded card owns.
+// Solid swatch for the rail legend; faint fill for node card ownership. Health
+// remains encoded separately by the node border and status dot.
 
 export interface WorkloadHue {
   /** Solid — the rail legend chip. */

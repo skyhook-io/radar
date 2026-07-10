@@ -308,6 +308,7 @@ type Relationships struct {
 	ConfigRefs  []ResourceRef `json:"configRefs,omitempty"`  // ConfigMaps/Secrets used by this
 	Consumers   []ResourceRef `json:"consumers,omitempty"`   // For ConfigMap/Secret: workloads that reference this
 	Scalers     []ResourceRef `json:"scalers,omitempty"`     // HPA/ScaledObject/ScaledJob scaling this
+	StorageRefs []ResourceRef `json:"storageRefs,omitempty"` // PersistentVolumeClaims used by this workload
 	ScaleTarget *ResourceRef  `json:"scaleTarget,omitempty"` // For HPA/ScaledObject: what it scales
 	PDBs            []ResourceRef `json:"pdbs,omitempty"`            // PodDisruptionBudgets protecting this workload
 	NetworkPolicies []ResourceRef `json:"networkPolicies,omitempty"` // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy / CiliumClusterwideNetworkPolicy selecting this workload

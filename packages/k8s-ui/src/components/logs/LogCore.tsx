@@ -5,6 +5,7 @@ import type { LogEntry, LogLevel } from './useLogBuffer'
 import { useLogSearch } from './useLogSearch'
 import { StructuredLogLine } from './StructuredLogLine'
 import { Tooltip } from '../ui/Tooltip'
+import { Input } from '../ui/Input'
 import {
   formatLogTimestamp,
   highlightSearchMatches,
@@ -694,8 +695,7 @@ export function LogCore({
       {search.isOpen && (
         <div className={`flex items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBgMuted}`}>
           <Search className={`w-4 h-4 ${palette.textSecondary} shrink-0`} />
-          <input
-            type="text"
+          <Input
             value={search.query}
             onChange={(e) => search.setQuery(e.target.value)}
             onKeyDown={(e) => {

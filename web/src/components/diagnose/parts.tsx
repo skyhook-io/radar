@@ -26,7 +26,9 @@ import {
   type Diagnosis,
   type DiagnoseStep,
   type AgentInfo,
+  type RunSummary,
 } from "../../api/diagnose";
+import { StatusDot } from "@skyhook-io/k8s-ui";
 import { Markdown } from "../ui/Markdown";
 
 // Segmented two-or-more-way selector — shared shape for the agent picker and the
@@ -474,6 +476,98 @@ export function TurnView({
   );
 }
 
+// RunContextCard opens every investigation with what RADAR already knows — the
+// health frame the server captured at run start. It renders instantly (no agent
+// round-trip), so the agent's boot time reads as "context, then deepening"
+// instead of dead air — and it anchors the verdict against Radar's own signal.
+function healthLineTone(severity?: string): "unhealthy" | "degraded" | "alert" {
+  if (severity === "critical") return "unhealthy";
+  if (severity === "warning") return "degraded";
+  return "alert";
+}
+
+export function RunContextCard({ run }: { run: RunSummary }) {
+  const h = run.health;
+  const issueCount = h?.issueCount ?? 0;
+  const issues = h?.issues ?? [];
+  const findings = h?.auditFindings ?? [];
+  const lines: ReactNode[] = [];
+  if (issues.length > 0) {
+    // The actual issue rows Radar's engine flagged — the reason bolded, the
+    // engine's own detail sentence after it. Concrete beats a count.
+    for (const [i, line] of issues.entries()) {
+      lines.push(
+        <div key={`issue-${i}`} className="flex items-start gap-1.5">
+          <StatusDot
+            tone={healthLineTone(line.severity)}
+            className="mt-1 shrink-0"
+          />
+          <span className="min-w-0">
+            <span className="font-medium text-theme-text-primary">
+              {line.reason}
+            </span>
+            {line.message ? <> — {line.message}</> : null}
+          </span>
+        </div>,
+      );
+    }
+    if (issueCount > issues.length) {
+      lines.push(
+        <div key="more" className="pl-3.5 text-theme-text-tertiary">
+          +{issueCount - issues.length} more active issue
+          {issueCount - issues.length === 1 ? "" : "s"}
+        </div>,
+      );
+    }
+  } else if (h?.health === "healthy") {
+    lines.push(
+      <div key="healthy" className="flex items-center gap-1.5">
+        <StatusDot tone="healthy" className="shrink-0" />
+        Reported healthy — 0 active issues
+      </div>,
+    );
+  } else if (h) {
+    lines.push(
+      <div key="none" className="flex items-center gap-1.5">
+        <StatusDot tone="unknown" className="shrink-0" />0 active issues
+        {h.health ? ` — status ${h.health}` : ""}
+      </div>,
+    );
+  }
+  for (const [i, f] of findings.entries()) {
+    lines.push(
+      <div key={`audit-${i}`} className="pl-3.5 text-theme-text-tertiary">
+        Audit: <span className="font-medium">{f.reason}</span>
+        {f.message ? <> — {f.message}</> : null}
+      </div>,
+    );
+  }
+  if ((h?.auditCount ?? 0) > findings.length && findings.length > 0) {
+    lines.push(
+      <div key="audit-more" className="pl-3.5 text-theme-text-tertiary">
+        +{h!.auditCount! - findings.length} more audit finding
+        {h!.auditCount! - findings.length === 1 ? "" : "s"}
+      </div>,
+    );
+  }
+  if (run.managedBy) {
+    lines.push(
+      <div key="managed" className="pl-3.5 text-theme-text-tertiary">
+        Managed by {run.managedBy}
+      </div>,
+    );
+  }
+  if (lines.length === 0) return null;
+  return (
+    <div className="rounded-md border border-theme-border/60 bg-theme-base/40 px-2.5 py-2">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+        Radar&apos;s read at start
+      </div>
+      <div className="space-y-1 text-xs text-theme-text-secondary">{lines}</div>
+    </div>
+  );
+}
+
 // The first-run consent + trust card. Its copy is the OSS BYO-local trust story
 // ("your own agent, on your machine, nothing to Radar").
 // TODO(cloud): this copy must become embedder-overridable for Radar Cloud, where
@@ -518,7 +612,8 @@ export function ConsentCard({
         </span>{" "}
         on your machine — no Radar cloud, no API key, no account. Radar sends
         this resource&apos;s spec, recent events, and pod logs to it (and on to
-        its model provider under your account, not to Radar).
+        its model provider under your account, not to Radar). Transcripts are
+        kept in your local Radar history on this machine until cleared.
         {isolated && !isCursor && (
           <>
             {" "}

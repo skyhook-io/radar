@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import { createPortal } from 'react-dom'
 import { ChevronDown, Globe, Search, AlertTriangle, X } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
+import { Input } from '../ui/Input'
 
 /**
  * Backend-reported namespace scope. Mirrors Radar's `/cluster/namespace-scope`
@@ -274,7 +275,7 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
             {items.length > 6 && (
               <div className="flex items-center gap-2 px-2 py-1.5 border-b border-theme-border">
                 <Search className="w-3.5 h-3.5 text-theme-text-tertiary" />
-                <input
+                <Input
                   autoFocus
                   value={search}
                   onChange={e => setSearch(e.target.value)}

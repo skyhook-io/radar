@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertCircle, AlertOctagon, AlertTriangle, ChevronDown, ChevronRight, ExternalLink, EyeOff, Info, Layers, MoreHorizontal, Search, ShieldCheck, Wrench, X } from 'lucide-react'
-import { CardBody, CardSection, ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip, NEUTRAL_CHIP_CLASS, renderProse } from '../ui'
+import { CardBody, CardSection, ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip, Input, NEUTRAL_CHIP_CLASS, renderProse } from '../ui'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import type { CheckMeta, CheckReference } from '../audit'
 import { CHECK_SEVERITIES, CHECK_SEVERITY_RANK, type Check, type CheckSeverity, type EffectiveCheckFinding, type CheckResourceRef } from './types'
@@ -265,8 +265,7 @@ export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceC
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-text-tertiary" />
-            <input
-              type="text"
+            <Input
               placeholder="Search checks…"
               value={search}
               onChange={(e) => filters.setString('q', e.target.value)}

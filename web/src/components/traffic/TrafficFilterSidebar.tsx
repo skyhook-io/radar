@@ -16,6 +16,7 @@ import { SEVERITY_BADGE } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import type { AddonMode } from './TrafficView'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
+import { Input } from '@skyhook-io/k8s-ui'
 
 // Connection threshold options
 const CONNECTION_THRESHOLDS = [
@@ -398,8 +399,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
             {(l7Protocol === 'all' || l7Protocol === 'DNS') && (
               <div>
                 <div className="text-[10px] text-theme-text-tertiary mb-1">DNS Query</div>
-                <input
-                  type="text"
+                <Input
                   value={dnsPattern}
                   onChange={(e) => setDnsPattern(e.target.value)}
                   placeholder="e.g. example.com"

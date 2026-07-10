@@ -93,23 +93,32 @@ function parseInterval(interval: string): number | null {
   if (!interval) return null
 
   let totalSeconds = 0
-  const regex = /(\d+)(h|m|s)/g
-  let match
+  let index = 0
 
-  while ((match = regex.exec(interval)) !== null) {
-    const value = parseInt(match[1], 10)
-    const unit = match[2]
-
-    switch (unit) {
-      case 'h':
-        totalSeconds += value * 3600
-        break
-      case 'm':
-        totalSeconds += value * 60
-        break
-      case 's':
-        totalSeconds += value
-        break
+  while (index < interval.length) {
+    const start = index
+    while (index < interval.length) {
+      const code = interval.charCodeAt(index)
+      if (code < 48 || code > 57) break
+      index += 1
+    }
+    if (start === index) {
+      index += 1
+      continue
+    }
+    const value = parseInt(interval.slice(start, index), 10)
+    const unit = interval[index]
+    if (unit === 'h') {
+      totalSeconds += value * 3600
+      index += 1
+    } else if (unit === 'm') {
+      totalSeconds += value * 60
+      index += 1
+    } else if (unit === 's') {
+      totalSeconds += value
+      index += 1
+    } else if (index < interval.length) {
+      index += 1
     }
   }
 

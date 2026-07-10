@@ -57,6 +57,8 @@ type AppConfig struct {
 	PrometheusHeadersFromEnv map[string]string
 	Version                  string
 	MCPEnabled               bool
+	AIHistory                bool   // persist AI investigations across restarts
+	AIHistoryDBPath          string // "" = ~/.radar/ai-runs.db
 	AuthConfig               auth.Config
 }
 
@@ -265,6 +267,18 @@ func CreateServer(cfg AppConfig) *server.Server {
 		AuthConfig: cfg.AuthConfig,
 	}
 
+	// AI-history DB path: resolved here (like the timeline DB) so the server
+	// only sees a ready-to-open path. Only meaningful where the AI engine can
+	// actually enable (no-auth + MCP mounted) — the server checks that gate.
+	if cfg.AIHistory {
+		dbPath := cfg.AIHistoryDBPath
+		if dbPath == "" {
+			homeDir, _ := os.UserHomeDir()
+			dbPath = filepath.Join(homeDir, ".radar", "ai-runs.db")
+		}
+		serverCfg.AIHistoryDB = dbPath
+	}
+
 	if cfg.MCPEnabled {
 		serverCfg.MCPHandler = mcppkg.NewHandler()
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
@@ -411,11 +425,19 @@ func InitializeCluster() {
 	}()
 }
 
+// mcpPortFileDisabled suppresses port-file writes AND removals — an ephemeral
+// instance (radar diagnose --standalone) must never clobber or delete the slot
+// a real long-running Radar owns.
+var mcpPortFileDisabled bool
+
+// DisableMCPPortFile makes Write/RemoveMCPPortFile no-ops for this process.
+func DisableMCPPortFile() { mcpPortFileDisabled = true }
+
 // WriteMCPPortFile writes the actual server port to ~/.radar/mcp-port so MCP
 // clients can discover the running instance without hardcoding a port.
 func WriteMCPPortFile(port int) {
 	path := mcpPortFilePath()
-	if path == "" {
+	if path == "" || mcpPortFileDisabled {
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -432,7 +454,7 @@ func WriteMCPPortFile(port int) {
 // RemoveMCPPortFile removes the port discovery file on shutdown.
 func RemoveMCPPortFile() {
 	path := mcpPortFilePath()
-	if path == "" {
+	if path == "" || mcpPortFileDisabled {
 		return
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

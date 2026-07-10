@@ -15,6 +15,9 @@ export interface AgentInfo {
 export interface AgentsResponse {
   agents: AgentInfo[];
   enabled: boolean;
+  // Machine-scoped consent per disclosure surface, recorded server-side
+  // (~/.radar) — one acknowledgment covers the web panel and the CLI.
+  consented?: { standard?: boolean; cursor?: boolean };
 }
 
 export interface DiagnoseStep {
@@ -41,14 +44,22 @@ export interface Diagnosis {
   sessionId?: string;
 }
 
+export interface HealthLine {
+  severity?: string;
+  reason?: string; // issue Reason / audit CheckID
+  message?: string;
+}
+
 export interface ResourceHealthSignal {
   health?: string;
   issueCount?: number;
   highestSeverity?: string;
   topReason?: string;
+  issues?: HealthLine[];
   auditCount?: number;
   auditSeverity?: string;
   topFinding?: string;
+  auditFindings?: HealthLine[];
 }
 
 export interface DiagnoseStreamEvent {
@@ -148,16 +159,46 @@ export async function createRun(
   return res.json();
 }
 
+export interface RunsResponse {
+  runs: RunSummary[];
+  // Persistence stopped working (disk error) — history will NOT survive a
+  // restart; the UI should say so instead of letting the user assume otherwise.
+  historyDegraded?: boolean;
+}
+
 // listRuns returns all server-side runs (newest first) — the source of truth for
 // the recent-investigations list.
-export async function listRuns(signal?: AbortSignal): Promise<RunSummary[]> {
+export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   const res = await fetch(RUNS(), {
     credentials: getCredentialsMode(),
     signal,
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
   const d = await res.json();
-  return d.runs ?? [];
+  return { runs: d.runs ?? [], historyDegraded: !!d.historyDegraded };
+}
+
+// recordConsent acknowledges the current disclosure for a surface, server-side.
+export async function recordConsent(
+  surface: "standard" | "cursor",
+): Promise<void> {
+  const res = await fetch(`${getApiBase()}/diagnose/consent`, {
+    method: "POST",
+    credentials: getCredentialsMode(),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ surface }),
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+}
+
+// clearHistory wipes the persisted investigation history (finished runs); live
+// investigations survive.
+export async function clearHistory(): Promise<void> {
+  const res = await fetch(`${getApiBase()}/diagnose/history/clear`, {
+    method: "POST",
+    credentials: getCredentialsMode(),
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
 }
 
 // addTurn appends a follow-up (question) or an apply turn (apply + confirmed fix).

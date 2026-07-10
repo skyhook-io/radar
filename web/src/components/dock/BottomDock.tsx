@@ -1,4 +1,4 @@
-import { BottomDock as K8sBottomDock, DockTab, useDock } from '@skyhook-io/k8s-ui'
+import { BottomDock as K8sBottomDock, DockTab, useDock, Input } from '@skyhook-io/k8s-ui'
 import { TerminalTab } from './TerminalTab'
 import { LogsTab } from './LogsTab'
 import { WorkloadLogsTab } from './WorkloadLogsTab'
@@ -70,8 +70,7 @@ function TrafficFlowSearchHeader() {
     <div className="flex-1 flex items-center ml-2">
       <div className="relative">
         <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary" />
-        <input
-          type="text"
+        <Input
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Filter flows..."

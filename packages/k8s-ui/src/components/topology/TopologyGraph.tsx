@@ -22,6 +22,7 @@ import { toCanvas } from 'html-to-image'
 
 import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Info, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield } from 'lucide-react'
 import { PaneLoader } from '../ui/PaneLoader'
+import { Input } from '../ui/Input'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
@@ -1240,9 +1241,8 @@ function ExportImageButton({ onExportingChange }: { onExportingChange: (v: boole
         >
           <div className="text-sm font-medium text-theme-text-primary mb-3">Export topology</div>
           <label className="block text-xs text-theme-text-secondary mb-1">Filename</label>
-          <input
+          <Input
             ref={inputRef}
-            type="text"
             value={filename}
             onChange={(e) => setFilename(e.target.value)}
             className="w-full px-2 py-1.5 text-sm bg-theme-base border border-theme-border rounded text-theme-text-primary outline-none focus:border-blue-500 mb-3"

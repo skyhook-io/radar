@@ -261,8 +261,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.Pods = append(rel.Pods, *ref)
 			}
 		case EdgeUses:
-			// HPA/ScaledObject/ScaledJob scales a workload
-			rel.ScaleTarget = ref
+			if isStorageRefKind(kindLower) {
+				rel.Consumers = append(rel.Consumers, *ref)
+			} else {
+				// HPA/ScaledObject/ScaledJob scales a workload
+				rel.ScaleTarget = ref
+			}
 		case EdgeProtects:
 			// Outgoing EdgeProtects fires when the queried resource IS a
 			// PDB, NetworkPolicy, CiliumNetworkPolicy, or MachineHealthCheck —
@@ -312,8 +316,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.Services = append(rel.Services, *ref)
 			}
 		case EdgeUses:
-			// An HPA/ScaledObject/ScaledJob scales this resource
-			rel.Scalers = append(rel.Scalers, *ref)
+			if isStorageRefKind(ref.Kind) {
+				rel.StorageRefs = append(rel.StorageRefs, *ref)
+			} else {
+				// An HPA/ScaledObject/ScaledJob scales this resource
+				rel.Scalers = append(rel.Scalers, *ref)
+			}
 		case EdgeProtects:
 			// Incoming EdgeProtects: dispatch on source kind so PDBs and
 			// NetworkPolicies land in distinct fields.
@@ -526,6 +534,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
+		len(rel.StorageRefs) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
 		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
@@ -533,6 +542,15 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	return rel
+}
+
+func isStorageRefKind(kind string) bool {
+	switch strings.ToLower(kind) {
+	case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
+		return true
+	default:
+		return false
+	}
 }
 
 // lookupObjectMetadata returns the typed K8s object (or *unstructured.Unstructured

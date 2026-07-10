@@ -10,6 +10,7 @@ import { ZoomIn, ZoomOut } from 'lucide-react'
 import type { TimelineEvent } from '../../types/core'
 import { isChangeEvent, isDeploymentLikeWorkloadKind, isHistoricalEvent } from '../../types/core'
 import { isProblematicEvent } from '../../utils/resource-hierarchy'
+import { Tooltip } from '../ui/Tooltip'
 
 // ============================================================================
 // Constants
@@ -160,23 +161,27 @@ interface ZoomControlsProps {
 export function ZoomControls({ zoom, onZoomIn, onZoomOut, canZoomIn, canZoomOut }: ZoomControlsProps) {
   return (
     <div className="flex items-center gap-1 text-theme-text-tertiary">
-      <button
-        onClick={onZoomOut}
-        disabled={!canZoomOut}
-        className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
-        title="Zoom out (show more time)"
-      >
-        <ZoomOut className="w-4 h-4" />
-      </button>
+      <Tooltip content="Zoom out (show more time)" delay={150}>
+        <button
+          onClick={onZoomOut}
+          disabled={!canZoomOut}
+          className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
+          aria-label="Zoom out"
+        >
+          <ZoomOut className="w-4 h-4" />
+        </button>
+      </Tooltip>
       <span className="text-xs min-w-[3ch] text-center">{formatZoomLevel(zoom)}</span>
-      <button
-        onClick={onZoomIn}
-        disabled={!canZoomIn}
-        className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
-        title="Zoom in (show less time)"
-      >
-        <ZoomIn className="w-4 h-4" />
-      </button>
+      <Tooltip content="Zoom in (show less time)" delay={150}>
+        <button
+          onClick={onZoomIn}
+          disabled={!canZoomIn}
+          className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
+          aria-label="Zoom in"
+        >
+          <ZoomIn className="w-4 h-4" />
+        </button>
+      </Tooltip>
     </div>
   )
 }
@@ -421,14 +426,12 @@ export function HealthSpan({ health, left, width, title, createdBefore }: Health
     }
   }
 
-  return (
+  const content = (
     <div
       className={clsx(
-        'absolute top-1 bottom-1 rounded-sm group',
+        'relative h-full w-full rounded-sm group',
         getHealthColor()
       )}
-      style={{ left: `${left}%`, width: `${width}%` }}
-      title={title}
     >
       {createdBefore && left === 0 && (
         <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[9px] text-black/70 dark:text-black/60 whitespace-nowrap pointer-events-none group-hover:text-black/90 dark:group-hover:text-black/80">
@@ -436,6 +439,30 @@ export function HealthSpan({ health, left, width, title, createdBefore }: Health
         </span>
       )}
     </div>
+  )
+
+  const placement = {
+    left: `${left}%`,
+    width: `${width}%`,
+  }
+
+  if (!title) {
+    return (
+      <div className="absolute top-1 bottom-1 rounded-sm" style={placement}>
+        {content}
+      </div>
+    )
+  }
+
+  return (
+    <Tooltip
+      content={title}
+      delay={150}
+      wrapperClassName="absolute top-1 bottom-1 rounded-sm"
+      wrapperStyle={placement}
+    >
+      {content}
+    </Tooltip>
   )
 }
 

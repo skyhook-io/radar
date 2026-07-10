@@ -7,6 +7,7 @@ func TestIsClusterOnlyKind(t *testing.T) {
 		"nodes", "node", "Node",
 		"persistentvolumes", "persistentvolume", "pv", "PV",
 		"storageclasses", "storageclass", "sc",
+		"volumeattachments", "volumeattachment",
 		"ingressclasses", "ingressclass",
 		"clusterroles", "clusterrole",
 		"clusterrolebindings", "clusterrolebinding",
@@ -51,6 +52,7 @@ func TestClusterOnlyKindGVR(t *testing.T) {
 		{"namespaces", "", "namespaces", true}, // GVR exists even though IsClusterOnlyKind=false
 		{"ns", "", "namespaces", true},
 		{"clusterroles", "rbac.authorization.k8s.io", "clusterroles", true},
+		{"volumeattachments", "storage.k8s.io", "volumeattachments", true},
 		{"crd", "apiextensions.k8s.io", "customresourcedefinitions", true},
 		{"NODES", "", "nodes", true}, // case-insensitive
 		{"pods", "", "", false},

@@ -362,20 +362,21 @@ export function ResourceActionsBar({
             </button>
           )}
           {isRollbackKind && onRollback && (
-            <button
-              onClick={() => setShowRevisions(true)}
-              disabled={!hasMultipleRevisions}
-              title={hasMultipleRevisions ? 'View revision history and rollback' : 'Only one revision exists'}
-              className={clsx(
-                "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors",
-                hasMultipleRevisions
-                  ? "text-white bg-amber-600 hover:bg-amber-700"
-                  : "text-theme-text-disabled bg-theme-elevated"
-              )}
-            >
-              <History className="w-3.5 h-3.5" />
-              Rollback
-            </button>
+            <Tooltip content={hasMultipleRevisions ? 'View revision history and rollback' : 'Only one revision exists'} delay={150}>
+              <button
+                onClick={() => setShowRevisions(true)}
+                disabled={!hasMultipleRevisions}
+                className={clsx(
+                  "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors",
+                  hasMultipleRevisions
+                    ? "text-white bg-amber-600 hover:bg-amber-700"
+                    : "text-theme-text-disabled bg-theme-elevated"
+                )}
+              >
+                <History className="w-3.5 h-3.5" />
+                Rollback
+              </button>
+            </Tooltip>
           )}
           {canViewLogs && !hideLogs && ['deployments', 'statefulsets', 'daemonsets'].includes(kind) && openWorkloadLogs && (
             <button
@@ -495,19 +496,20 @@ export function ResourceActionsBar({
           lives in the detail header chrome (see WorkloadView), set apart from these
           imperative ops. */}
       {onToggleYaml && (
-        <button
-          onClick={onToggleYaml}
-          className={clsx(
-            'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
-            showYaml
-              ? 'btn-brand'
-              : 'text-theme-text-secondary hover:text-theme-text-primary border border-theme-border-light hover:bg-theme-elevated'
-          )}
-          title="Toggle YAML view"
-        >
-          <FileCode2 className="w-3.5 h-3.5" />
-          YAML
-        </button>
+        <Tooltip content="Toggle YAML view" delay={150}>
+          <button
+            onClick={onToggleYaml}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+              showYaml
+                ? 'btn-brand'
+                : 'text-theme-text-secondary hover:text-theme-text-primary border border-theme-border-light hover:bg-theme-elevated'
+            )}
+          >
+            <FileCode2 className="w-3.5 h-3.5" />
+            YAML
+          </button>
+        </Tooltip>
       )}
 
       {(onCompareTo || onCompareAcrossClusters) && (
@@ -671,35 +673,37 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
   return (
     <>
       {onReconcile && (
-        <button
-          onClick={() => onReconcile({
-            kind: resource.kind,
-            namespace: resource.namespace,
-            name: resource.name,
-          })}
-          disabled={isReconciling || isSuspended}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
-          title={isSuspended ? 'Cannot reconcile while suspended' : 'Trigger reconciliation'}
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isReconciling ? 'animate-spin' : ''}`} />
-          {isReconciling ? 'Reconciling...' : 'Reconcile'}
-        </button>
+        <Tooltip content={isSuspended ? 'Cannot reconcile while suspended' : 'Trigger reconciliation'} delay={150}>
+          <button
+            onClick={() => onReconcile({
+              kind: resource.kind,
+              namespace: resource.namespace,
+              name: resource.name,
+            })}
+            disabled={isReconciling || isSuspended}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isReconciling ? 'animate-spin' : ''}`} />
+            {isReconciling ? 'Reconciling...' : 'Reconcile'}
+          </button>
+        </Tooltip>
       )}
 
       {hasSource && onSyncWithSource && (
-        <button
-          onClick={() => onSyncWithSource({
-            kind: resource.kind,
-            namespace: resource.namespace,
-            name: resource.name,
-          })}
-          disabled={isSyncing || isSuspended}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors disabled:opacity-50"
-          title={isSuspended ? 'Cannot sync while suspended' : 'Fetch latest from source, then reconcile'}
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-          {isSyncing ? 'Syncing...' : 'Sync with Source'}
-        </button>
+        <Tooltip content={isSuspended ? 'Cannot sync while suspended' : 'Fetch latest from source, then reconcile'} delay={150}>
+          <button
+            onClick={() => onSyncWithSource({
+              kind: resource.kind,
+              namespace: resource.namespace,
+              name: resource.name,
+            })}
+            disabled={isSyncing || isSuspended}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            {isSyncing ? 'Syncing...' : 'Sync with Source'}
+          </button>
+        </Tooltip>
       )}
 
       {isSuspended ? (
@@ -753,34 +757,36 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
   return (
     <>
       {onSync && (
-        <button
-          onClick={() => onSync({
-            namespace: resource.namespace,
-            name: resource.name,
-          })}
-          disabled={isSyncing}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
-          title="Sync application"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-          {isSyncing ? 'Syncing...' : 'Sync'}
-        </button>
+        <Tooltip content="Sync application" delay={150}>
+          <button
+            onClick={() => onSync({
+              namespace: resource.namespace,
+              name: resource.name,
+            })}
+            disabled={isSyncing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            {isSyncing ? 'Syncing...' : 'Sync'}
+          </button>
+        </Tooltip>
       )}
 
       {onRefresh && (
-        <button
-          onClick={() => onRefresh({
-            namespace: resource.namespace,
-            name: resource.name,
-            hard: false,
-          })}
-          disabled={isRefreshing}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
-          title="Refresh (re-read from git)"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-          {isRefreshing ? 'Refreshing...' : 'Refresh'}
-        </button>
+        <Tooltip content="Refresh (re-read from git)" delay={150}>
+          <button
+            onClick={() => onRefresh({
+              namespace: resource.namespace,
+              name: resource.name,
+              hard: false,
+            })}
+            disabled={isRefreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </Tooltip>
       )}
 
       {hasAutomatedSync ? (
@@ -947,8 +953,10 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                     <td className="py-2 pr-3 text-theme-text-primary font-mono">
                       #{rev.number}
                     </td>
-                    <td className="py-2 pr-3 text-theme-text-secondary font-mono truncate max-w-[180px]" title={rev.image}>
-                      {getImageTag(rev.image)}
+                    <td className="py-2 pr-3 text-theme-text-secondary font-mono max-w-[180px]">
+                      <Tooltip content={rev.image} delay={300} wrapperClassName="min-w-0">
+                        <span className="truncate">{getImageTag(rev.image)}</span>
+                      </Tooltip>
                     </td>
                     <td className="py-2 pr-3 text-theme-text-secondary whitespace-nowrap">
                       {formatTimeAgo(rev.createdAt)}
@@ -956,19 +964,20 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                     <td className="py-2 text-right">
                       <div className="flex items-center gap-1 justify-end">
                         {!rev.isCurrent && rev.template && currentRevision?.template && (
-                          <button
-                            onClick={() => setDiffRevision(diffRevision === rev.number ? null : rev.number)}
-                            className={clsx(
-                              "px-2 py-0.5 text-xs font-medium rounded transition-colors flex items-center gap-1",
-                              diffRevision === rev.number
-                                ? "bg-blue-500/20 text-blue-400 border border-blue-400/50"
-                                : "text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 border border-transparent"
-                            )}
-                            title={`Compare with current revision`}
-                          >
-                            <GitCompare className="w-3 h-3" />
-                            Diff
-                          </button>
+                          <Tooltip content="Compare with current revision" delay={150}>
+                            <button
+                              onClick={() => setDiffRevision(diffRevision === rev.number ? null : rev.number)}
+                              className={clsx(
+                                "px-2 py-0.5 text-xs font-medium rounded transition-colors flex items-center gap-1",
+                                diffRevision === rev.number
+                                  ? "bg-blue-500/20 text-blue-400 border border-blue-400/50"
+                                  : "text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 border border-transparent"
+                              )}
+                            >
+                              <GitCompare className="w-3 h-3" />
+                              Diff
+                            </button>
+                          </Tooltip>
                         )}
                         {rev.isCurrent ? (
                           <span className="badge status-healthy">

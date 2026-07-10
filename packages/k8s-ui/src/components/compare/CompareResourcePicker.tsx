@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { clsx } from 'clsx'
 import { GitCompare, Search, X } from 'lucide-react'
 import { DialogPortal } from '../ui/DialogPortal'
+import { Input } from '../ui/Input'
 import { pluralToKind } from '../../utils/navigation'
 import type { CompareResourceRef } from './ResourceCompareView'
 import { sortCandidates, filterCandidates } from './sort'
@@ -120,9 +121,8 @@ export function CompareResourcePicker({
         </div>
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-theme-text-tertiary pointer-events-none" />
-          <input
+          <Input
             autoFocus
-            type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}

@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
-import { PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir } from '@skyhook-io/k8s-ui'
+import { PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
@@ -240,9 +240,8 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
             <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
               <div className="flex-1 relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-                <input
+                <Input
                   ref={searchInputRef}
-                  type="text"
                   placeholder="Search releases..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}

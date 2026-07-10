@@ -28,6 +28,46 @@ var agentLabels = map[string]string{
 	"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI", "cursor-agent": "Cursor Agent",
 }
 
+// AgentLabel is the display name for an agent CLI — the ONE table every
+// surface (API, CLI header, consent prompts) reads, so labels can't drift.
+func AgentLabel(name string) string {
+	if l, ok := agentLabels[name]; ok {
+		return l
+	}
+	return name
+}
+
+// EffectiveAgent resolves an agent pick exactly the way the server will at
+// Start (Diagnoser.AgentName + defName): the pick when it names a supported
+// agent, else the first supported one, else "". Pre-boot/remote clients must
+// derive consent surfaces from THIS — an empty pick can resolve to Cursor.
+func EffectiveAgent(pick string, agents []AgentInfo) string {
+	def := ""
+	for _, a := range agents {
+		if !a.Supported {
+			continue
+		}
+		if a.Name == pick {
+			return pick
+		}
+		if def == "" {
+			def = a.Name
+		}
+	}
+	return def
+}
+
+// ConsentSurfaceFor maps an agent to its consent-disclosure surface. Cursor's
+// trust model is materially different (its global MCP servers can't be
+// excluded), so it has its own; drift between enforcement sites would silently
+// mis-gate consent, so both the server and the CLI call this.
+func ConsentSurfaceFor(agent string) string {
+	if agent == "cursor-agent" {
+		return "cursor"
+	}
+	return "standard"
+}
+
 // supportedAgents are the CLIs we can drive today (have a stream-json parser).
 func isSupportedAgent(name string) bool {
 	for _, c := range agentCLICandidates {

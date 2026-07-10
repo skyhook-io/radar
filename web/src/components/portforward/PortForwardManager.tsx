@@ -644,7 +644,7 @@ export function PortForwardPanel() {
       onMouseEnter={onPanelHoverEnter}
       onMouseLeave={onPanelHoverLeave}
       className={clsx(
-        'fixed z-[51] w-80',
+        'fixed z-[51] w-[26rem] max-w-[calc(100vw-2rem)]',
         'transition-opacity duration-150 ease-out',
         isPanelOpen
           ? 'opacity-100 pointer-events-auto'
@@ -726,14 +726,16 @@ export function PortForwardPanel() {
           </div>
         ) : (
           <div className="divide-y divide-theme-border">
-            {activeSessions.map((session) => (
-              <div
-                key={session.id}
-                className={clsx(
-                  'p-3 space-y-1',
-                  session.status === 'error' ? 'bg-red-500/10' : 'hover:bg-theme-elevated'
-                )}
-              >
+            {activeSessions.map((session) => {
+              const resourceName = session.serviceName || session.podName
+              return (
+                <div
+                  key={session.id}
+                  className={clsx(
+                    'p-3 space-y-1',
+                    session.status === 'error' ? 'bg-red-500/10' : 'hover:bg-theme-elevated'
+                  )}
+                >
                 {/* Row 1: status dot + name | stop button */}
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start gap-2 min-w-0 flex-1">
@@ -743,9 +745,11 @@ export function PortForwardPanel() {
                         session.status === 'running' ? 'bg-green-500' : 'bg-red-500'
                       )}
                     />
-                    <span className="text-sm text-theme-text-primary font-medium break-all line-clamp-2">
-                      {session.serviceName || session.podName}
-                    </span>
+                    <Tooltip content={resourceName} delay={300} position="bottom" disabled={!isPanelOpen} wrapperClassName="min-w-0 flex-1">
+                      <span className="block min-w-0 truncate text-sm font-medium text-theme-text-primary">
+                        {resourceName}
+                      </span>
+                    </Tooltip>
                     {session.status === 'error' && (
                       <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.error)}>Failed</span>
                     )}
@@ -916,8 +920,9 @@ export function PortForwardPanel() {
                     </div>
                   </div>
                 )}
-              </div>
-            ))}
+                </div>
+              )
+            })}
           </div>
         )}
       </div>

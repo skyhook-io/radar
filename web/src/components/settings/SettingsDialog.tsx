@@ -14,6 +14,7 @@ import {
   useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import { Input } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
@@ -514,6 +515,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                       setAiDraft((d) => ({ ...d, ...patch }))
                       setAiSaved(false)
                     }}
+                    onHistoryCleared={diag.refreshRuns}
                   />
                   <div className="flex items-center justify-end gap-3">
                     {aiSaved && !aiDirty && (
@@ -1256,8 +1258,7 @@ function PrometheusConfigField({
         Manual Prometheus / VictoriaMetrics URL — set this to skip auto-discovery.
       </p>
       <div className="flex items-center gap-2">
-        <input
-          type="text"
+        <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="http://prometheus-server.monitoring:9090"
@@ -1315,8 +1316,7 @@ function PrometheusConfigField({
           <div className="rounded-md border border-theme-border bg-theme-elevated/40 p-2.5 space-y-2">
             {headerRows.map((row, i) => (
               <div key={i} className="flex items-center gap-2">
-                <input
-                  type="text"
+                <Input
                   value={row.key}
                   onChange={(e) => {
                     setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, key: e.target.value } : r))
@@ -1491,8 +1491,7 @@ function ArgoCDConfigField({
       <p className="text-xs text-theme-text-tertiary mb-1">
         Leave blank to auto-discover the argocd-server in this cluster, or enter its API URL.
       </p>
-      <input
-        type="text"
+      <Input
         value={url}
         onChange={(e) => { onChangeUrl(e.target.value); clearStatus() }}
         placeholder="auto-discover argocd-server"
@@ -1596,8 +1595,7 @@ function ConfigField({
         {label}
       </label>
       {help && <p className="text-xs text-theme-text-tertiary mb-1">{help}</p>}
-      <input
-        type="text"
+      <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -1648,8 +1646,7 @@ function ConfigArrayField({
         {label}
       </label>
       {help && <p className="text-xs text-theme-text-tertiary mb-1">{help}</p>}
-      <input
-        type="text"
+      <Input
         value={text}
         onFocus={() => { focusedRef.current = true }}
         onBlur={() => {

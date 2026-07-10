@@ -1832,34 +1832,16 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 	}
 
 	if len(candidates) == 0 {
-		// A failed classic index could be hiding the release's real (classic)
-		// source, so surface that before OCI — matching resolveUpgradeChartPath —
-		// rather than mislabel a classic-repo release as OCI-tracked.
-		if indexLoadFailed {
-			info.Error = "failed to load one or more configured repository indexes"
-			return info, nil
-		}
-		// Genuine absence → registered OCI sources are the fallback for the user's
-		// own OCI-published charts. Only here, never on classic ambiguity below —
-		// falling back on ambiguity could advertise an OCI source for a release
-		// that actually came from a classic repo.
-		if c.applyOCIUpgrade(info, chartName, currentVersion, nil, nil) {
-			return info, nil
-		}
-		// Genuine untracked source — registering a chart source could fix it.
-		info.Untracked = true
-		if noClassicRepos && len(ListOCISources()) == 0 {
-			info.Error = "no chart sources configured"
-		} else {
-			info.Error = "chart not found in configured repositories or registered OCI sources"
-		}
+		applyNoClassicCandidateUpgrade(info, noClassicRepos, indexLoadFailed, len(ListOCISources()) > 0, func() bool {
+			return c.applyOCIUpgrade(info, chartName, currentVersion, nil, nil)
+		})
 		return info, nil
 	}
 
 	sourceHosts := chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources)
 	latestVersion, repoName := findBestUpgradeVersion(candidates, sourceHosts)
 	if latestVersion == "" {
-		info.Error = "could not identify upstream chart repository"
+		markUpgradeSourceIssue(info, UpgradeSourceIssueAmbiguousRepository, "could not identify upstream chart repository")
 		return info, nil
 	}
 
@@ -1869,6 +1851,27 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 	info.UpdateAvailable = compareVersions(latestVersion, currentVersion) > 0
 
 	return info, nil
+}
+
+func markUpgradeSourceIssue(info *UpgradeInfo, issue UpgradeSourceIssue, message string) {
+	info.Error = message
+	info.SourceIssue = issue
+	info.Untracked = issue == UpgradeSourceIssueUntracked
+}
+
+func applyNoClassicCandidateUpgrade(info *UpgradeInfo, noClassicRepos, indexLoadFailed, hasRegisteredOCISources bool, ociFallback func() bool) {
+	if ociFallback != nil && ociFallback() {
+		return
+	}
+	if indexLoadFailed {
+		markUpgradeSourceIssue(info, UpgradeSourceIssueRepoIndexError, "failed to load one or more configured repository indexes")
+		return
+	}
+	if noClassicRepos && !hasRegisteredOCISources {
+		markUpgradeSourceIssue(info, UpgradeSourceIssueUntracked, "no chart sources configured")
+		return
+	}
+	markUpgradeSourceIssue(info, UpgradeSourceIssueUntracked, "chart not found in configured repositories or registered OCI sources")
 }
 
 // applyOCIUpgrade probes registered OCI sources for chartName and, if one
@@ -2406,6 +2409,10 @@ type chartPathCandidate struct {
 }
 
 func (c *Client) resolveUpgradeChartPath(chartName, targetVersion, repositoryName string, sourceHosts []string) (chartPath, resolvedRepo string, err error) {
+	return c.resolveUpgradeChartPathWithOCIResolver(chartName, targetVersion, repositoryName, sourceHosts, c.resolveOCIUpgradeURL)
+}
+
+func (c *Client) resolveUpgradeChartPathWithOCIResolver(chartName, targetVersion, repositoryName string, sourceHosts []string, resolveOCIUpgradeURL func(string, string) (string, bool)) (chartPath, resolvedRepo string, err error) {
 	// A missing/unreadable repo config is not fatal: a pure-OCI user has no
 	// repositories.yaml, and discovery may have advertised an OCI upgrade. Proceed
 	// with an empty classic set so the OCI fallback below can still resolve.
@@ -2470,18 +2477,16 @@ func (c *Client) resolveUpgradeChartPath(chartName, targetVersion, repositoryNam
 		return "", "", fmt.Errorf("chart %s version %s not found in repository %s", chartName, targetVersion, repositoryName)
 	}
 
-	// Surface classic-repo index failures before the OCI fallback: a stale/missing
-	// index is a "fix your repo" condition the user should see, not something to
-	// silently paper over by pulling the same version from an OCI source.
-	if len(indexErrors) > 0 {
-		return "", "", fmt.Errorf("chart %s version %s not found in configured repositories; failed to load indexes: %s", chartName, targetVersion, strings.Join(indexErrors, "; "))
+	// No classic-repo match. Fall back to registered OCI sources before reporting
+	// unrelated index failures; the server re-derives the oci:// ref from a
+	// configured prefix (never a client-supplied ref), keeping the upgrade path
+	// configured-only.
+	if url, ok := resolveOCIUpgradeURL(chartName, targetVersion); ok {
+		return url, "oci", nil
 	}
 
-	// No classic-repo match and indexes loaded cleanly. Fall back to registered OCI
-	// sources — the server re-derives the oci:// ref from a configured prefix (never
-	// a client-supplied ref), keeping the upgrade path configured-only.
-	if url, ok := c.resolveOCIUpgradeURL(chartName, targetVersion); ok {
-		return url, "oci", nil
+	if len(indexErrors) > 0 {
+		return "", "", fmt.Errorf("chart %s version %s not found in configured repositories or registered OCI sources; failed to load indexes: %s", chartName, targetVersion, strings.Join(indexErrors, "; "))
 	}
 
 	return "", "", fmt.Errorf("chart %s version %s not found in configured repositories or registered OCI sources", chartName, targetVersion)
@@ -2577,11 +2582,15 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 	// the per-release OCI fallback run rather than failing every release here.
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
+	noClassicRepos := false
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("[helm] failed to load repository config %s (treating as no classic repos): %v", repoFile, err)
 		}
 		f = &repo.File{}
+	}
+	if len(f.Repositories) == 0 {
+		noClassicRepos = true
 	}
 
 	// Split into two maps: latest-per-repo drives ranking; per-repo full
@@ -2654,15 +2663,9 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 
 		baseCandidates, ok := chartRepoVersions[chartName]
 		if !ok {
-			// A failed classic index could be hiding this release's real source —
-			// surface that before OCI rather than mislabel it as OCI-tracked.
-			if indexLoadFailed {
-				info.Error = "failed to load one or more configured repository indexes"
-			} else if !ociFallback(info, chartName, currentVersion) {
-				// Genuine absence → OCI fallback for the user's own OCI charts.
-				info.Untracked = true
-				info.Error = "chart not found in configured repositories or registered OCI sources"
-			}
+			applyNoClassicCandidateUpgrade(info, noClassicRepos, indexLoadFailed, len(ListOCISources()) > 0, func() bool {
+				return ociFallback(info, chartName, currentVersion)
+			})
 			result.Releases[key] = info
 			continue
 		}
@@ -2673,7 +2676,7 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 		if latestVersion == "" {
 			// Classic candidates exist but are ambiguous — don't let OCI override
 			// a release that came from a classic repo.
-			info.Error = "could not identify upstream chart repository"
+			markUpgradeSourceIssue(info, UpgradeSourceIssueAmbiguousRepository, "could not identify upstream chart repository")
 		} else {
 			info.LatestVersion = latestVersion
 			info.RepositoryName = repoName

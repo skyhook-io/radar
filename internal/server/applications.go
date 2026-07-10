@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -17,7 +18,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/packages"
 	"github.com/skyhook-io/radar/pkg/subject"
@@ -104,9 +108,62 @@ type appRow struct {
 	VersionSkew   bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
 	AppVersion    string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
 	Identity      *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
+	SourceRef     *appSourceRef     `json:"sourceRef,omitempty"`      // exact source system object when known (GitOps / native Helm)
 	Workloads     []appWorkload     `json:"workloads"`
 	Events        []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
 	Relationships *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
+
+	sourceConflict bool
+	sourceStrict   bool
+}
+
+// appSourceRef is the source-of-truth object when the grouping signal names one
+// exactly enough to navigate. Label/name-stem apps intentionally have no source
+// ref: they are apps, but not tied to a GitOps or Helm object Radar can open.
+type appSourceRef struct {
+	Type      string `json:"type"` // gitops | helm
+	Tool      string `json:"tool,omitempty"`
+	Group     string `json:"group,omitempty"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+type appHistoryResponse struct {
+	AppKey         string               `json:"appKey"`
+	SourceRef      *appSourceRef        `json:"sourceRef,omitempty"`
+	Summary        *appHistorySummary   `json:"summary,omitempty"`
+	Anchors        []appHistoryAnchor   `json:"anchors,omitempty"`
+	Incidents      []appHistoryIncident `json:"incidents,omitempty"`
+	PartialSources []string             `json:"partialSources,omitempty"`
+}
+
+type appHistorySummary struct {
+	State     string `json:"state"` // change | incident | none
+	Title     string `json:"title"`
+	Detail    string `json:"detail,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+type appHistoryAnchor struct {
+	Type        string `json:"type"` // gitops | helm
+	Title       string `json:"title"`
+	Status      string `json:"status,omitempty"`
+	Revision    string `json:"revision,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Source      string `json:"source,omitempty"`
+	InitiatedBy string `json:"initiatedBy,omitempty"`
+	Timestamp   string `json:"timestamp,omitempty"`
+}
+
+type appHistoryIncident struct {
+	Severity  string `json:"severity"`
+	Title     string `json:"title"`
+	Object    string `json:"object"`
+	Message   string `json:"message,omitempty"`
+	Count     int    `json:"count,omitempty"`
+	FirstSeen string `json:"firstSeen,omitempty"`
+	LastSeen  string `json:"lastSeen,omitempty"`
 }
 
 // appRelationships is the structural neighborhood of an app, derived from the
@@ -118,22 +175,25 @@ type appRelationships struct {
 	Routes    []string `json:"routes,omitempty"`
 	Configs   int      `json:"configs,omitempty"`
 	Scalers   int      `json:"scalers,omitempty"`
+	Storage   int      `json:"storage,omitempty"`
 	PDBs      int      `json:"pdbs,omitempty"`
 
-	configRefs map[string]struct{}
-	scalerRefs map[string]struct{}
-	pdbRefs    map[string]struct{}
+	configRefs  map[string]struct{}
+	scalerRefs  map[string]struct{}
+	storageRefs map[string]struct{}
+	pdbRefs     map[string]struct{}
 }
 
 // appEvent is a recent k8s Warning event correlated to an app's workloads/pods
 // (the "why is it broken" feed — BackOff, FailedScheduling, FailedMount, …).
 type appEvent struct {
-	Type     string `json:"type"`
-	Reason   string `json:"reason"`
-	Message  string `json:"message,omitempty"`
-	Count    int    `json:"count"`
-	Object   string `json:"object"` // "<Kind>/<name>"
-	LastSeen string `json:"lastSeen,omitempty"`
+	Type      string `json:"type"`
+	Reason    string `json:"reason"`
+	Message   string `json:"message,omitempty"`
+	Count     int    `json:"count"`
+	Object    string `json:"object"` // "<Kind>/<name>"
+	FirstSeen string `json:"firstSeen,omitempty"`
+	LastSeen  string `json:"lastSeen,omitempty"`
 }
 
 // appWorkload is one concrete workload belonging to an app, with its primary
@@ -185,6 +245,249 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 	s.writeJSON(w, resp)
 }
 
+// handleApplicationHistory serves a focused app-level change narrative.
+//
+//	?app=<appRow.key>&namespaces=a,b,c
+//
+// The namespace filter is the same one used by /api/applications, so a row found
+// in the Overview is the exact subject used here. Slash-heavy app keys stay in a
+// query param instead of a path segment.
+func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	key := strings.TrimSpace(r.URL.Query().Get("app"))
+	if key == "" {
+		s.writeError(w, http.StatusBadRequest, "app query parameter is required")
+		return
+	}
+	namespaces := s.parseNamespacesForUser(r)
+	resp, err := ListApplications(r.Context(), namespaces)
+	if err != nil {
+		if errors.Is(err, errResourceCacheUnavailable) {
+			s.writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		log.Printf("[applications] ApplicationHistory list failed: %v", err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var app *appRow
+	for i := range resp.Applications {
+		if resp.Applications[i].Key == key {
+			app = &resp.Applications[i]
+			break
+		}
+	}
+	if app == nil {
+		s.writeError(w, http.StatusNotFound, "application not found")
+		return
+	}
+
+	history := appHistoryResponse{
+		AppKey:    app.Key,
+		SourceRef: app.SourceRef,
+		Incidents: historyIncidents(app.Events),
+	}
+	if app.SourceRef != nil {
+		anchors, partial := s.historyAnchorsForSource(r, app.SourceRef)
+		history.Anchors = anchors
+		history.PartialSources = append(history.PartialSources, partial...)
+	}
+	history.Summary = historySummary(history.Anchors, history.Incidents)
+	s.writeJSON(w, history)
+}
+
+func (s *Server) historyAnchorsForSource(r *http.Request, source *appSourceRef) ([]appHistoryAnchor, []string) {
+	if source == nil {
+		return nil, nil
+	}
+	switch source.Type {
+	case "gitops":
+		return s.gitOpsHistoryAnchors(r, source)
+	case "helm":
+		return s.helmHistoryAnchors(r, source)
+	default:
+		return nil, nil
+	}
+}
+
+func (s *Server) gitOpsHistoryAnchors(r *http.Request, source *appSourceRef) ([]appHistoryAnchor, []string) {
+	if source.Namespace != "" {
+		allowed := s.getUserNamespaces(r, []string{source.Namespace})
+		if noNamespaceAccess(allowed) {
+			return nil, []string{fmt.Sprintf("No access to source namespace %q.", source.Namespace)}
+		}
+	}
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil, []string{"Resource cache is not available."}
+	}
+	req := &gitopsRequest{
+		Kind:              gitOpsPluralKind(source.Kind),
+		Namespace:         source.Namespace,
+		Name:              source.Name,
+		Group:             source.Group,
+		Cache:             cache,
+		AllowedNamespaces: s.getUserNamespaces(r, nil),
+	}
+	if req.Kind == "" {
+		return nil, []string{"Unsupported GitOps source kind."}
+	}
+	if !req.HasNamespaceAccess() {
+		return nil, []string{"No namespace access for GitOps history."}
+	}
+	tree, root, err := s.buildGitOpsTree(r.Context(), req)
+	if err != nil {
+		return nil, []string{fmt.Sprintf("GitOps history unavailable: %v", err)}
+	}
+	tree = s.filterGitOpsTreeForUser(r, req, tree)
+	canAccess := func(group, kind, namespace, name string) bool {
+		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
+	}
+	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
+	insight := gitopsinsights.Build(root, tree, resolver)
+	anchors := make([]appHistoryAnchor, 0, len(insight.History))
+	for _, item := range insight.History {
+		title := "GitOps reconcile"
+		if source.Tool == "argocd" {
+			title = "Argo CD sync"
+		} else if source.Kind == "HelmRelease" {
+			title = "Flux Helm reconcile"
+		} else if source.Kind == "Kustomization" {
+			title = "Flux Kustomization reconcile"
+		}
+		status := item.Phase
+		if status == "" && item.Message != "" {
+			status = "Recorded"
+		}
+		anchors = append(anchors, appHistoryAnchor{
+			Type:        "gitops",
+			Title:       title,
+			Status:      status,
+			Revision:    item.Revision,
+			Message:     firstNonEmptyString(item.Message, item.RawMessage),
+			Source:      item.Source,
+			InitiatedBy: item.InitiatedBy,
+			Timestamp:   item.DeployedAt,
+		})
+	}
+	sort.SliceStable(anchors, func(i, j int) bool { return anchors[i].Timestamp > anchors[j].Timestamp })
+	return anchors, nil
+}
+
+func (s *Server) helmHistoryAnchors(r *http.Request, source *appSourceRef) ([]appHistoryAnchor, []string) {
+	client := helm.GetClient()
+	if client == nil {
+		return nil, []string{"Helm client is not initialized."}
+	}
+	username, groups := "", []string(nil)
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		username, groups = user.Username, user.Groups
+	}
+	release, err := client.GetReleaseAsUser(source.Namespace, source.Name, username, groups)
+	if err != nil {
+		if helm.IsForbiddenError(err) {
+			return nil, []string{"Insufficient permissions to read Helm release history."}
+		}
+		return nil, []string{fmt.Sprintf("Helm history unavailable: %v", err)}
+	}
+	anchors := make([]appHistoryAnchor, 0, len(release.History))
+	for _, rev := range release.History {
+		anchors = append(anchors, appHistoryAnchor{
+			Type:      "helm",
+			Title:     fmt.Sprintf("Helm revision %d", rev.Revision),
+			Status:    rev.Status,
+			Revision:  fmt.Sprintf("%d", rev.Revision),
+			Message:   rev.Description,
+			Source:    joinNonEmpty(rev.Chart, rev.AppVersion),
+			Timestamp: rev.Updated.UTC().Format(time.RFC3339),
+		})
+	}
+	sort.SliceStable(anchors, func(i, j int) bool { return anchors[i].Timestamp > anchors[j].Timestamp })
+	return anchors, nil
+}
+
+func historyIncidents(events []appEvent) []appHistoryIncident {
+	out := make([]appHistoryIncident, 0, len(events))
+	for _, event := range events {
+		title := event.Reason
+		if event.Object != "" {
+			title = event.Reason + " on " + event.Object
+		}
+		out = append(out, appHistoryIncident{
+			Severity:  "warning",
+			Title:     title,
+			Object:    event.Object,
+			Message:   event.Message,
+			Count:     event.Count,
+			FirstSeen: event.FirstSeen,
+			LastSeen:  event.LastSeen,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].LastSeen > out[j].LastSeen })
+	return out
+}
+
+func historySummary(anchors []appHistoryAnchor, incidents []appHistoryIncident) *appHistorySummary {
+	if len(incidents) > 0 {
+		incident := incidents[0]
+		return &appHistorySummary{
+			State:     "incident",
+			Title:     "Current incident: " + incident.Title,
+			Detail:    incident.Message,
+			Timestamp: incident.LastSeen,
+		}
+	}
+	if len(anchors) > 0 {
+		anchor := anchors[0]
+		detail := joinNonEmpty(anchor.Status, anchor.Revision, anchor.Message)
+		return &appHistorySummary{
+			State:     "change",
+			Title:     anchor.Title,
+			Detail:    detail,
+			Timestamp: anchor.Timestamp,
+		}
+	}
+	return &appHistorySummary{State: "none", Title: "No retained deployment history"}
+}
+
+func gitOpsPluralKind(kind string) string {
+	switch kind {
+	case "Application":
+		return "applications"
+	case "ApplicationSet":
+		return "applicationsets"
+	case "AppProject":
+		return "appprojects"
+	case "Kustomization":
+		return "kustomizations"
+	case "HelmRelease":
+		return "helmreleases"
+	default:
+		return ""
+	}
+}
+
+func joinNonEmpty(values ...string) string {
+	parts := make([]string, 0, len(values))
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			parts = append(parts, v)
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // appGraph bundles the topology graph and the primitives derived from it that
 // the collection pass needs. A nil graph (build failure / no cache) degrades
 // cleanly: every workload becomes its own structural root and carries no
@@ -219,6 +522,7 @@ func ListApplications(ctx context.Context, namespaces []string) (*applicationsRe
 	rows := groupApplications(wls)
 	sourcePaths, appSetChildren, argoItems := argoApplicationFacts(ctx, cache)
 	appSetByKey := appSetFanouts(appSetChildren)
+	enrichRowsWithManagedSourceRefs(ctx, cache, rows, argoItems)
 	resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(ctx, cache))
 	claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
 	applicationsCacheMu.Lock()
@@ -381,9 +685,10 @@ func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
 	if rel == nil {
 		return nil
 	}
-	out := &appRelationships{Configs: len(rel.ConfigRefs), Scalers: len(rel.Scalers), PDBs: len(rel.PDBs)}
+	out := &appRelationships{Configs: len(rel.ConfigRefs), Scalers: len(rel.Scalers), Storage: len(rel.StorageRefs), PDBs: len(rel.PDBs)}
 	out.configRefs = refsSet(rel.ConfigRefs)
 	out.scalerRefs = refsSet(rel.Scalers)
+	out.storageRefs = refsSet(rel.StorageRefs)
 	out.pdbRefs = refsSet(rel.PDBs)
 	for _, s := range rel.Services {
 		out.Services = append(out.Services, s.Name)
@@ -395,7 +700,7 @@ func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
 		out.Routes = append(out.Routes, r.Name)
 	}
 	if len(out.Services) == 0 && len(out.Ingresses) == 0 && len(out.Routes) == 0 &&
-		out.Configs == 0 && out.Scalers == 0 && out.PDBs == 0 {
+		out.Configs == 0 && out.Scalers == 0 && out.Storage == 0 && out.PDBs == 0 {
 		return nil
 	}
 	return out
@@ -407,6 +712,7 @@ func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
 type appWorkloadInput struct {
 	wl       appWorkload
 	overlay  *subject.AppOverlay
+	source   *appSourceRef
 	events   []appEvent
 	rels     *appRelationships
 	rootKey  string
@@ -430,6 +736,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 		pods := podsForSelector(podsByNS[ns], selector)
 		restarts, reason := podsRestarts(pods)
 		meta := metav1.ObjectMeta{Namespace: ns, Name: name, Labels: lbls, Annotations: anns}
+		overlay := subject.ResolveOverlay(&meta, false)
 		rootKey, rootKind := g.rootOf(kind, ns, name)
 		rels := g.relationshipsFor(kind, ns, name)
 		addon, why := packages.ClassifyAddon(lbls["helm.sh/chart"], lbls["app.kubernetes.io/name"], lbls["app.kubernetes.io/part-of"], name, lbls["addonmanager.kubernetes.io/mode"], image)
@@ -451,7 +758,8 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				nameLabel:     lbls["app.kubernetes.io/name"],
 				appAnnotation: strings.TrimSpace(anns[appIdentityAnnotation]),
 			},
-			overlay:  subject.ResolveOverlay(&meta, false),
+			overlay:  overlay,
+			source:   sourceRefForInput(overlay, rootKind, rootKey),
 			events:   eventsForWorkload(eventsByObj[ns], kind, name, pods),
 			rels:     rels,
 			rootKey:  rootKey,
@@ -616,6 +924,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			}
 			mergeRelationships(r, in.rels)
 		}
+		setStrictSourceRef(r, ins)
 		// The app lives where its WORKLOADS run — a Flux HelmRelease in
 		// flux-system deploying into demo is a demo app, not a flux-system one
 		// (the manager's home is provenance, not residence; it also must not
@@ -749,6 +1058,81 @@ func managerTier(kind string) (tier int, confidence string, ok bool) {
 	return 0, "", false
 }
 
+func sourceRefForInput(overlay *subject.AppOverlay, rootKind, rootKey string) *appSourceRef {
+	if overlay != nil {
+		if ref := sourceRefFromSubject(overlay.Winner.Ref); ref != nil {
+			return ref
+		}
+	}
+	return sourceRefFromRoot(rootKind, rootKey)
+}
+
+func sourceRefFromSubject(ref subject.Ref) *appSourceRef {
+	if ref.Name == "" || ref.Namespace == "" {
+		return nil
+	}
+	switch {
+	case ref.Kind == "HelmRelease" && ref.Group == "":
+		return &appSourceRef{Type: "helm", Tool: "helm", Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
+	case ref.Kind == "Application" && ref.Group == "argoproj.io":
+		return &appSourceRef{Type: "gitops", Tool: "argocd", Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
+	case ref.Kind == "Kustomization" && ref.Group == "kustomize.toolkit.fluxcd.io":
+		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
+	case ref.Kind == "HelmRelease" && ref.Group == "helm.toolkit.fluxcd.io":
+		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
+	default:
+		return nil
+	}
+}
+
+func sourceRefFromRoot(rootKind, rootKey string) *appSourceRef {
+	parts := strings.SplitN(rootKey, "/", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
+		return nil
+	}
+	ns, name := parts[0], parts[2]
+	switch rootKind {
+	case string(topology.KindApplication):
+		return &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: ns, Name: name}
+	case string(topology.KindKustomization):
+		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: ns, Name: name}
+	case string(topology.KindHelmRelease):
+		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: ns, Name: name}
+	default:
+		return nil
+	}
+}
+
+func mergeSourceRef(r *appRow, ref *appSourceRef) {
+	if ref == nil || r.sourceConflict {
+		return
+	}
+	if r.SourceRef == nil {
+		cp := *ref
+		r.SourceRef = &cp
+		return
+	}
+	if !sameSourceRef(r.SourceRef, ref) {
+		if r.sourceStrict {
+			return
+		}
+		r.SourceRef = nil
+		r.sourceConflict = true
+	}
+}
+
+func sameSourceRef(a, b *appSourceRef) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Type == b.Type &&
+		a.Tool == b.Tool &&
+		a.Group == b.Group &&
+		a.Kind == b.Kind &&
+		a.Namespace == b.Namespace &&
+		a.Name == b.Name
+}
+
 func argoApplicationNamespaces(inputs []appWorkloadInput) map[string]map[string]bool {
 	out := map[string]map[string]bool{}
 	add := func(kind, key string) {
@@ -826,12 +1210,16 @@ func mergeRelationships(r *appRow, rel *appRelationships) {
 	agg.Routes = append(agg.Routes, rel.Routes...)
 	agg.configRefs = mergeRefSets(agg.configRefs, rel.configRefs)
 	agg.scalerRefs = mergeRefSets(agg.scalerRefs, rel.scalerRefs)
+	agg.storageRefs = mergeRefSets(agg.storageRefs, rel.storageRefs)
 	agg.pdbRefs = mergeRefSets(agg.pdbRefs, rel.pdbRefs)
 	if len(rel.configRefs) == 0 {
 		agg.Configs += rel.Configs
 	}
 	if len(rel.scalerRefs) == 0 {
 		agg.Scalers += rel.Scalers
+	}
+	if len(rel.storageRefs) == 0 {
+		agg.Storage += rel.Storage
 	}
 	if len(rel.pdbRefs) == 0 {
 		agg.PDBs += rel.PDBs
@@ -850,6 +1238,9 @@ func finalizeRelationships(r *appRow) {
 	}
 	if len(r.Relationships.scalerRefs) > 0 {
 		r.Relationships.Scalers = len(r.Relationships.scalerRefs)
+	}
+	if len(r.Relationships.storageRefs) > 0 {
+		r.Relationships.Storage = len(r.Relationships.storageRefs)
 	}
 	if len(r.Relationships.pdbRefs) > 0 {
 		r.Relationships.PDBs = len(r.Relationships.pdbRefs)
@@ -1136,16 +1527,20 @@ func eventsForWorkload(byObject map[string][]*corev1.Event, workloadKind, worklo
 			}
 			if a, ok := byKey[key]; ok {
 				a.Count += c
-				if ts := e.LastTimestamp.Format(time.RFC3339); ts > a.LastSeen {
+				if ts := appEventLastSeen(e); ts > a.LastSeen {
 					a.LastSeen = ts
 					a.Message = e.Message
+				}
+				if ts := appEventFirstSeen(e); ts != "" && (a.FirstSeen == "" || ts < a.FirstSeen) {
+					a.FirstSeen = ts
 				}
 				continue
 			}
 			byKey[key] = &appEvent{
 				Type: e.Type, Reason: e.Reason, Message: e.Message, Count: c,
-				Object:   e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name,
-				LastSeen: e.LastTimestamp.Format(time.RFC3339),
+				Object:    e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name,
+				FirstSeen: appEventFirstSeen(e),
+				LastSeen:  appEventLastSeen(e),
 			}
 			order = append(order, key)
 		}
@@ -1155,6 +1550,38 @@ func eventsForWorkload(byObject map[string][]*corev1.Event, workloadKind, worklo
 		out = append(out, *byKey[k])
 	}
 	return out
+}
+
+func appEventFirstSeen(e *corev1.Event) string {
+	if e == nil {
+		return ""
+	}
+	if !e.FirstTimestamp.IsZero() {
+		return e.FirstTimestamp.Time.UTC().Format(time.RFC3339)
+	}
+	if !e.EventTime.IsZero() {
+		return e.EventTime.Time.UTC().Format(time.RFC3339)
+	}
+	if !e.CreationTimestamp.IsZero() {
+		return e.CreationTimestamp.Time.UTC().Format(time.RFC3339)
+	}
+	return ""
+}
+
+func appEventLastSeen(e *corev1.Event) string {
+	if e == nil {
+		return ""
+	}
+	if !e.LastTimestamp.IsZero() {
+		return e.LastTimestamp.Time.UTC().Format(time.RFC3339)
+	}
+	if !e.EventTime.IsZero() {
+		return e.EventTime.Time.UTC().Format(time.RFC3339)
+	}
+	if !e.CreationTimestamp.IsZero() {
+		return e.CreationTimestamp.Time.UTC().Format(time.RFC3339)
+	}
+	return ""
 }
 
 // imageTag extracts the tag from an image ref. Digest-pinned refs (@sha256:…)

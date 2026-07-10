@@ -84,14 +84,26 @@ type Request struct {
 // ResourceHealthSignal is the compact server-side health frame captured when a
 // run starts. Issue fields describe live operational findings; audit fields are
 // static posture findings and should not be treated as proof of an outage.
+// Issues/AuditFindings carry the top actual rows (capped) — aggregates alone
+// read as vague in the UI and starve the prompt of detail Radar already has.
 type ResourceHealthSignal struct {
-	Health          string `json:"health,omitempty"`
-	IssueCount      int    `json:"issueCount,omitempty"`
-	HighestSeverity string `json:"highestSeverity,omitempty"`
-	TopReason       string `json:"topReason,omitempty"`
-	AuditCount      int    `json:"auditCount,omitempty"`
-	AuditSeverity   string `json:"auditSeverity,omitempty"`
-	TopFinding      string `json:"topFinding,omitempty"`
+	Health          string       `json:"health,omitempty"`
+	IssueCount      int          `json:"issueCount,omitempty"`
+	HighestSeverity string       `json:"highestSeverity,omitempty"`
+	TopReason       string       `json:"topReason,omitempty"`
+	Issues          []HealthLine `json:"issues,omitempty"`
+	AuditCount      int          `json:"auditCount,omitempty"`
+	AuditSeverity   string       `json:"auditSeverity,omitempty"`
+	TopFinding      string       `json:"topFinding,omitempty"`
+	AuditFindings   []HealthLine `json:"auditFindings,omitempty"`
+}
+
+// HealthLine is one concrete issue/finding row: what Radar's issue engine or
+// audit suite actually said, not just a count.
+type HealthLine struct {
+	Severity string `json:"severity,omitempty"`
+	Reason   string `json:"reason,omitempty"`  // issue Reason / audit CheckID
+	Message  string `json:"message,omitempty"` // human detail, capped
 }
 
 // Diagnosis is the engine's final result.
@@ -473,6 +485,13 @@ func healthFrame(target string, health *ResourceHealthSignal) string {
 			}
 		}
 		b.WriteString(".")
+		for _, line := range health.Issues {
+			fmt.Fprintf(&b, " [%s] %s", line.Severity, line.Reason)
+			if line.Message != "" {
+				fmt.Fprintf(&b, ": %s", line.Message)
+			}
+			b.WriteString(".")
+		}
 	case health.Health == "healthy":
 		fmt.Fprintf(&b, "Radar currently reports %s as healthy and flags 0 active issues.", target)
 	case health.Health != "":
@@ -491,7 +510,15 @@ func healthFrame(target string, health *ResourceHealthSignal) string {
 				fmt.Fprintf(&b, ": %s", health.TopFinding)
 			}
 		}
-		b.WriteString(". Treat audit findings as configuration risk, not proof of a live outage.")
+		b.WriteString(".")
+		for _, line := range health.AuditFindings {
+			fmt.Fprintf(&b, " [%s] %s", line.Severity, line.Reason)
+			if line.Message != "" {
+				fmt.Fprintf(&b, ": %s", line.Message)
+			}
+			b.WriteString(".")
+		}
+		b.WriteString(" Treat audit findings as configuration risk, not proof of a live outage.")
 	}
 	return b.String()
 }

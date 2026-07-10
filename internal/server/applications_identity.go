@@ -1050,6 +1050,172 @@ func argoManagedWorkloads(item *unstructured.Unstructured) []workloadRef {
 	return out
 }
 
+func setStrictSourceRef(r *appRow, ins []appWorkloadInput) {
+	if len(ins) == 0 {
+		return
+	}
+	var ref *appSourceRef
+	for _, in := range ins {
+		if in.source == nil {
+			return
+		}
+		if ref == nil {
+			cp := *in.source
+			ref = &cp
+			continue
+		}
+		if !sameSourceRef(ref, in.source) {
+			r.sourceConflict = true
+			return
+		}
+	}
+	r.SourceRef = ref
+	r.sourceStrict = true
+}
+
+func enrichRowsWithManagedSourceRefs(ctx context.Context, cache resourceLister, rows []appRow, argoItems []*unstructured.Unstructured) {
+	sources := map[string][]appSourceRef{}
+	addArgoManagedSourceRefs(sources, argoItems)
+	addFluxKustomizationManagedSourceRefs(ctx, cache, sources)
+	if len(sources) == 0 {
+		return
+	}
+	for i := range rows {
+		ref := commonManagedSourceRef(rows[i].Workloads, sources)
+		if ref == nil {
+			continue
+		}
+		mergeSourceRef(&rows[i], ref)
+	}
+}
+
+func addArgoManagedSourceRefs(out map[string][]appSourceRef, items []*unstructured.Unstructured) {
+	for _, item := range items {
+		if item == nil || item.GetName() == "" || item.GetNamespace() == "" {
+			continue
+		}
+		ref := appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: item.GetNamespace(), Name: item.GetName()}
+		destNamespace := ""
+		if spec, _ := item.Object["spec"].(map[string]any); spec != nil {
+			if dest, _ := spec["destination"].(map[string]any); dest != nil {
+				destNamespace, _ = dest["namespace"].(string)
+			}
+		}
+		resources, _, _ := unstructured.NestedSlice(item.Object, "status", "resources")
+		for _, res := range resources {
+			resMap, _ := res.(map[string]any)
+			if resMap == nil {
+				continue
+			}
+			kind, _ := resMap["kind"].(string)
+			if !argoWorkloadKinds[kind] {
+				continue
+			}
+			name, _ := resMap["name"].(string)
+			ns, _ := resMap["namespace"].(string)
+			if ns == "" {
+				ns = destNamespace
+			}
+			addManagedSourceRef(out, kind, ns, name, ref)
+		}
+	}
+}
+
+func addFluxKustomizationManagedSourceRefs(ctx context.Context, cache resourceLister, out map[string][]appSourceRef) {
+	items, err := cache.ListDynamicWithGroup(ctx, "Kustomization", "", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		return
+	}
+	for _, item := range items {
+		if item == nil || item.GetName() == "" || item.GetNamespace() == "" {
+			continue
+		}
+		ref := appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: item.GetNamespace(), Name: item.GetName()}
+		entries, _, _ := unstructured.NestedSlice(item.Object, "status", "inventory", "entries")
+		for _, entry := range entries {
+			entryMap, _ := entry.(map[string]any)
+			if entryMap == nil {
+				continue
+			}
+			id, _ := entryMap["id"].(string)
+			kind, namespace, name, ok := parseFluxInventoryWorkloadID(id)
+			if !ok {
+				continue
+			}
+			if !argoWorkloadKinds[kind] {
+				continue
+			}
+			addManagedSourceRef(out, kind, namespace, name, ref)
+		}
+	}
+}
+
+func parseFluxInventoryWorkloadID(id string) (kind, namespace, name string, ok bool) {
+	parts := strings.Split(id, "_")
+	if len(parts) < 4 {
+		return "", "", "", false
+	}
+	kind = parts[len(parts)-1]
+	namespace = parts[0]
+	name = strings.Join(parts[1:len(parts)-2], "_")
+	if kind == "" || namespace == "" || name == "" {
+		return "", "", "", false
+	}
+	return kind, namespace, name, true
+}
+
+func addManagedSourceRef(out map[string][]appSourceRef, kind, namespace, name string, ref appSourceRef) {
+	if kind == "" || namespace == "" || name == "" {
+		return
+	}
+	key := managedWorkloadKey(kind, namespace, name)
+	for _, existing := range out[key] {
+		if sameSourceRef(&existing, &ref) {
+			return
+		}
+	}
+	out[key] = append(out[key], ref)
+}
+
+func commonManagedSourceRef(workloads []appWorkload, sources map[string][]appSourceRef) *appSourceRef {
+	if len(workloads) == 0 {
+		return nil
+	}
+	var common []appSourceRef
+	for i, w := range workloads {
+		refs := sources[managedWorkloadKey(w.Kind, w.Namespace, w.Name)]
+		if len(refs) == 0 {
+			return nil
+		}
+		if i == 0 {
+			common = append(common, refs...)
+			continue
+		}
+		next := make([]appSourceRef, 0, len(common))
+		for _, a := range common {
+			for _, b := range refs {
+				if sameSourceRef(&a, &b) {
+					next = append(next, a)
+					break
+				}
+			}
+		}
+		common = next
+		if len(common) == 0 {
+			return nil
+		}
+	}
+	if len(common) != 1 {
+		return nil
+	}
+	cp := common[0]
+	return &cp
+}
+
+func managedWorkloadKey(kind, namespace, name string) string {
+	return kind + "/" + namespace + "/" + name
+}
+
 // appSetFanout is one child's declared identity within a single-app fan-out set.
 type appSetFanout struct {
 	stem string

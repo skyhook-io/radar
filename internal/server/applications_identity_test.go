@@ -917,3 +917,22 @@ func TestFluxKustomizationFacts(t *testing.T) {
 		t.Fatalf("env-less path should be skipped: %v", got)
 	}
 }
+
+func TestAddFluxKustomizationManagedSourceRefsParsesInventoryIDFromRight(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "flux-system", "name": "platform"},
+		"status": map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "team_api_worker_apps_Deployment"},
+		}}},
+	}}
+	got := map[string][]appSourceRef{}
+	addFluxKustomizationManagedSourceRefs(context.Background(), &stubLister{items: []*unstructured.Unstructured{ks}}, got)
+
+	refs := got[managedWorkloadKey("Deployment", "team", "api_worker")]
+	if len(refs) != 1 {
+		t.Fatalf("managed source refs = %#v, want one ref keyed by full workload name", got)
+	}
+	if refs[0].Name != "platform" || refs[0].Namespace != "flux-system" || refs[0].Tool != "fluxcd" {
+		t.Fatalf("source ref = %+v, want flux-system/platform flux ref", refs[0])
+	}
+}
