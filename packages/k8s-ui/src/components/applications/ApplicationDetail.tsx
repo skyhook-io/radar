@@ -583,8 +583,14 @@ function ApplicationOverview({
   onOpenSource?: (source: AppSourceRef) => void
 }) {
   const rel = app.relationships
-  const hasEntrypoints = Boolean(rel && ((rel.services?.length ?? 0) > 0 || (rel.ingresses?.length ?? 0) > 0 || (rel.routes?.length ?? 0) > 0))
-  const hasDependencies = Boolean(rel && ((rel.configs ?? 0) > 0 || (rel.scalers ?? 0) > 0 || (rel.storage ?? 0) > 0 || (rel.pdbs ?? 0) > 0))
+  const hasEntrypoints = Boolean(rel && (relationshipRefs(rel, 'service').length > 0 || relationshipRefs(rel, 'ingress').length > 0 || relationshipRefs(rel, 'route').length > 0))
+  const hasDependencies = Boolean(rel && (
+    relationshipRefs(rel, 'config').length > 0 ||
+    relationshipRefs(rel, 'scaler').length > 0 ||
+    relationshipRefs(rel, 'storage').length > 0 ||
+    relationshipRefs(rel, 'pdb').length > 0 ||
+    relationshipRefs(rel, 'networkPolicy').length > 0
+  ))
   const composition = classCompositionOf(app)
     .map(({ cls, count }) => `${count} ${cls}`)
     .join(' / ')
@@ -595,7 +601,13 @@ function ApplicationOverview({
       <div className="grid w-full max-w-[2400px] gap-4 p-4 sm:p-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
         <div className="min-w-0 space-y-4">
           <ApplicationNow issues={issues} ready={ready} desired={desired} onSelectWorkload={onSelectWorkload} />
-          <ApplicationLatestHistory history={history} sourceRef={app.sourceRef} onSelectHistory={onSelectHistory} onOpenSource={onOpenSource} />
+          <ApplicationLatestHistory
+            history={history}
+            sourceRef={app.sourceRef}
+            showIncidentPreview={issues.length === 0}
+            onSelectHistory={onSelectHistory}
+            onOpenSource={onOpenSource}
+          />
           <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
             <ApplicationFact label="State" value={verdictLabel} />
             <ApplicationFact label="Workloads" value={String(workloads.length)} detail={composition || 'No workloads'} />
@@ -605,8 +617,6 @@ function ApplicationOverview({
           {hasEntrypoints && (
             <ApplicationEntrypoints
               relationships={rel}
-              namespace={namespace}
-              namespaces={namespaces}
               onNavigateToResource={onNavigateToResource}
             />
           )}
@@ -616,7 +626,7 @@ function ApplicationOverview({
         </div>
         <aside className="min-w-0 space-y-4">
           <ApplicationSourceProvenance app={app} namespace={namespace} namespaces={namespaces} composition={composition} onOpenSource={onOpenSource} />
-          {hasDependencies && <ApplicationDependencies relationships={rel} />}
+          {hasDependencies && <ApplicationDependencies relationships={rel} onNavigateToResource={onNavigateToResource} />}
         </aside>
       </div>
     </div>
@@ -671,18 +681,17 @@ function ApplicationSourceProvenance({
 
 function ApplicationEntrypoints({
   relationships,
-  namespace,
-  namespaces,
   onNavigateToResource,
 }: {
   relationships: AppRow['relationships']
-  namespace: string
-  namespaces: string[]
   onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
 }) {
-  const serviceCount = relationships?.services?.length ?? 0
-  const ingressCount = relationships?.ingresses?.length ?? 0
-  const routeCount = relationships?.routes?.length ?? 0
+  const serviceRefs = relationshipRefs(relationships, 'service')
+  const ingressRefs = relationshipRefs(relationships, 'ingress')
+  const routeRefs = relationshipRefs(relationships, 'route')
+  const serviceCount = serviceRefs.length
+  const ingressCount = ingressRefs.length
+  const routeCount = routeRefs.length
   const hasExternal = ingressCount + routeCount > 0
   if (serviceCount + ingressCount + routeCount === 0) return null
 
@@ -712,48 +721,63 @@ function ApplicationEntrypoints({
         <div className="space-y-3 border-t border-theme-border pt-3">
           <ApplicationRelatedNameGroup
             label="Services"
-            kind="Service"
-            names={relationships?.services}
-            namespace={namespace}
-            namespaces={namespaces}
+            refs={serviceRefs}
             onNavigateToResource={onNavigateToResource}
           />
           <ApplicationRelatedNameGroup
             label="Ingresses"
-            kind="Ingress"
-            names={relationships?.ingresses}
-            namespace={namespace}
-            namespaces={namespaces}
+            refs={ingressRefs}
             onNavigateToResource={onNavigateToResource}
           />
-          <ApplicationRelatedNameGroup label="Routes" kind="Route" names={relationships?.routes} namespace={namespace} namespaces={namespaces} />
+          <ApplicationRelatedNameGroup label="Routes" refs={routeRefs} onNavigateToResource={onNavigateToResource} />
         </div>
       </div>
     </ApplicationPanel>
   )
 }
 
-function ApplicationDependencies({ relationships }: { relationships: AppRow['relationships'] }) {
-  const configCount = relationships?.configs ?? 0
-  const scalerCount = relationships?.scalers ?? 0
-  const storageCount = relationships?.storage ?? 0
-  const pdbCount = relationships?.pdbs ?? 0
-  if (configCount + scalerCount + storageCount + pdbCount === 0) return null
+function ApplicationDependencies({
+  relationships,
+  onNavigateToResource,
+}: {
+  relationships: AppRow['relationships']
+  onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
+}) {
+  const configs = relationshipRefs(relationships, 'config')
+  const scalers = relationshipRefs(relationships, 'scaler')
+  const storage = relationshipRefs(relationships, 'storage')
+  const pdbs = relationshipRefs(relationships, 'pdb')
+  const networkPolicies = relationshipRefs(relationships, 'networkPolicy')
+  if (configs.length + scalers.length + storage.length + pdbs.length + networkPolicies.length === 0) return null
 
   return (
     <ApplicationPanel title="Dependencies">
       <div className="space-y-3">
-        <ApplicationDependencyRow label="Configuration" count={configCount} detail="ConfigMaps and Secrets referenced by app workloads." />
-        <ApplicationDependencyRow label="Autoscaling" count={scalerCount} detail="Autoscalers controlling app workloads." />
-        <ApplicationDependencyRow label="Storage" count={storageCount} detail="PersistentVolumeClaims mounted by app workloads." />
-        <ApplicationDependencyRow label="Availability policy" count={pdbCount} detail="PodDisruptionBudgets protecting app workloads." />
+        <ApplicationDependencyRow label="Configuration" refs={configs} totalCount={relationships?.configs} detail="ConfigMaps and Secrets referenced by app workloads." onNavigateToResource={onNavigateToResource} />
+        <ApplicationDependencyRow label="Autoscaling" refs={scalers} totalCount={relationships?.scalers} detail="Autoscalers controlling app workloads." onNavigateToResource={onNavigateToResource} />
+        <ApplicationDependencyRow label="Storage" refs={storage} totalCount={relationships?.storage} detail="PersistentVolumeClaims mounted by app workloads." onNavigateToResource={onNavigateToResource} />
+        <ApplicationDependencyRow label="Availability policy" refs={pdbs} totalCount={relationships?.pdbs} detail="PodDisruptionBudgets protecting app workloads." onNavigateToResource={onNavigateToResource} />
+        <ApplicationDependencyRow label="Network policy" refs={networkPolicies} totalCount={relationships?.networkPolicies} detail="Network policies selecting app workloads." onNavigateToResource={onNavigateToResource} />
       </div>
     </ApplicationPanel>
   )
 }
 
-function ApplicationDependencyRow({ label, count, detail }: { label: string; count: number; detail: string }) {
-  if (!count) return null
+function ApplicationDependencyRow({
+  label,
+  refs,
+  totalCount,
+  detail,
+  onNavigateToResource,
+}: {
+  label: string
+  refs: ResourceRef[]
+  totalCount?: number
+  detail: string
+  onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
+}) {
+  if (refs.length === 0) return null
+  const count = Math.max(totalCount ?? refs.length, refs.length)
   return (
     <div className="min-w-0 border-b border-theme-border pb-3 last:border-b-0">
       <div className="flex items-baseline justify-between gap-3">
@@ -761,69 +785,68 @@ function ApplicationDependencyRow({ label, count, detail }: { label: string; cou
         <span className={`${CHIP} ${CHIP_TONE.muted}`}>{pluralize(count, 'resource')}</span>
       </div>
       <div className="mt-1 text-xs text-theme-text-tertiary">{detail}</div>
+      <ApplicationRelatedNameGroup label={label} refs={refs} totalCount={count} onNavigateToResource={onNavigateToResource} hideLabel />
     </div>
   )
 }
 
 function ApplicationRelatedNameGroup({
   label,
-  kind,
-  names,
-  namespace,
-  namespaces,
+  refs,
+  totalCount,
   onNavigateToResource,
+  hideLabel,
 }: {
   label: string
-  kind: string
-  names?: string[]
-  namespace: string
-  namespaces: string[]
+  refs?: ResourceRef[]
+  totalCount?: number
   onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
+  hideLabel?: boolean
 }) {
-  if (!names || names.length === 0) return null
+  if (!refs || refs.length === 0) return null
 
-  // Routes are polymorphic — the backend ships "Kind/name" (e.g. HTTPRoute/web).
-  // Split so the real kind drives the chip label and navigation, not the literal
-  // "Route" (which rendered "Route/HTTPRoute/web" and never resolved).
-  const refs: ResourceRef[] = names.map((name) => {
-    if (kind === 'Route') {
-      const slash = name.indexOf('/')
-      if (slash > 0) return { kind: name.slice(0, slash), namespace, name: name.slice(slash + 1) }
-    }
-    return { kind, namespace, name }
-  })
-  const baseNav = Boolean(onNavigateToResource && namespace && namespaces.length <= 1)
   const visible = refs.slice(0, 12)
-  const overflow = Math.max(0, refs.length - visible.length)
+  const count = Math.max(totalCount ?? refs.length, refs.length)
+  const overflow = Math.max(0, count - visible.length)
   return (
-    <div>
-      <div className="mb-1 text-xs font-medium text-theme-text-tertiary">{label}{refs.length > 1 ? ` (${refs.length})` : ''}</div>
+    <div className={hideLabel ? 'mt-2' : undefined}>
+      {!hideLabel && <div className="mb-1 text-xs font-medium text-theme-text-tertiary">{label}{count > 1 ? ` (${count})` : ''}</div>}
       <div className="flex flex-wrap gap-1.5">
-        {visible.map((ref) =>
-          baseNav && ref.kind !== 'Route' ? (
-            <ResourceRefBadge
-              key={`${ref.kind}/${ref.namespace}/${ref.name}`}
-              resourceRef={ref}
-              onClick={(clicked) => onNavigateToResource?.(refToSelectedResource(clicked))}
-            />
-          ) : (
-            <ApplicationRelatedChip key={`${ref.kind}/${ref.name}`} kind={ref.kind} name={ref.name} />
-          ),
-        )}
+        {visible.map((ref) => (
+          <ResourceRefBadge
+            key={`${ref.group || ''}/${ref.kind}/${ref.namespace}/${ref.name}`}
+            resourceRef={ref}
+            onClick={onNavigateToResource ? (clicked) => onNavigateToResource(refToSelectedResource(clicked)) : undefined}
+          />
+        ))}
         {overflow > 0 && <span className={`${CHIP} ${CHIP_TONE.muted}`}>+{overflow} more</span>}
       </div>
     </div>
   )
 }
 
-function ApplicationRelatedChip({ kind, name }: { kind: string; name: string }) {
-  return (
-    <Tooltip content={`${kind}: ${name}`} delay={300}>
-      <span className={`${CHIP} ${CHIP_TONE.muted}`}>
-        <span className="opacity-70">{kind}/</span>{midTruncate(name, 28)}
-      </span>
-    </Tooltip>
-  )
+type RelationshipGroup = 'service' | 'ingress' | 'route' | 'config' | 'scaler' | 'storage' | 'pdb' | 'networkPolicy'
+
+function relationshipRefs(relationships: AppRow['relationships'] | undefined, group: RelationshipGroup): ResourceRef[] {
+  if (!relationships) return []
+  switch (group) {
+    case 'service':
+      return relationships.serviceRefs ?? []
+    case 'ingress':
+      return relationships.ingressRefs ?? []
+    case 'route':
+      return relationships.routeRefs ?? []
+    case 'config':
+      return relationships.configRefs ?? []
+    case 'scaler':
+      return relationships.scalerRefs ?? []
+    case 'storage':
+      return relationships.storageRefs ?? []
+    case 'pdb':
+      return relationships.pdbRefs ?? []
+    case 'networkPolicy':
+      return relationships.networkPolicyRefs ?? []
+  }
 }
 
 function ApplicationNow({
@@ -900,28 +923,34 @@ function ApplicationNow({
 function ApplicationLatestHistory({
   history,
   sourceRef,
+  showIncidentPreview,
   onSelectHistory,
   onOpenSource,
 }: {
   history?: AppHistory
   sourceRef?: AppSourceRef
+  showIncidentPreview?: boolean
   onSelectHistory: () => void
   onOpenSource?: (source: AppSourceRef) => void
 }) {
   const summary = history?.summary
-  if (!summary || summary.state !== 'change') return null
+  const showChange = summary?.state === 'change'
+  const showIncident = summary?.state === 'incident' && showIncidentPreview
+  if (!summary || (!showChange && !showIncident)) return null
   const resolvedSource = sourceRef ?? history?.sourceRef
+  const tone = showIncident ? CHIP_TONE.amber : CHIP_TONE.blue
+  const label = showIncident ? 'Latest incident' : 'Latest change'
 
   return (
     <section className="rounded-lg border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
       <div className="flex flex-wrap items-start gap-3">
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ring-1 ring-inset ${CHIP_TONE.blue}`}>
-          <Clock3 className="h-4 w-4" aria-hidden />
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ring-1 ring-inset ${tone}`}>
+          {showIncident ? <AlertTriangle className="h-4 w-4" aria-hidden /> : <Clock3 className="h-4 w-4" aria-hidden />}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-semibold text-theme-text-primary">{summary.title}</h2>
-            <span className={`${CHIP} ${CHIP_TONE.blue}`}>Latest change</span>
+            <span className={`${CHIP} ${tone}`}>{label}</span>
           </div>
           {summary.detail && <p className="mt-0.5 line-clamp-2 text-sm text-theme-text-secondary">{summary.detail}</p>}
           {summary.timestamp && <p className="mt-1 text-xs text-theme-text-tertiary">{formatAppEventTime(summary.timestamp)}</p>}

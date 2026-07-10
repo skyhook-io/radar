@@ -1,3 +1,5 @@
+import type { ResourceRef } from '../types/core'
+
 // Shared model for the Applications surface — host-agnostic. The OSS single-
 // cluster view and (eventually) the Cloud fleet view both build on these types
 // and helpers. No React, no fetching.
@@ -32,6 +34,15 @@ export interface AppRelationships {
   scalers?: number
   storage?: number
   pdbs?: number
+  networkPolicies?: number
+  serviceRefs?: ResourceRef[]
+  ingressRefs?: ResourceRef[]
+  routeRefs?: ResourceRef[]
+  configRefs?: ResourceRef[]
+  scalerRefs?: ResourceRef[]
+  storageRefs?: ResourceRef[]
+  pdbRefs?: ResourceRef[]
+  networkPolicyRefs?: ResourceRef[]
 }
 
 export interface AppEvent {

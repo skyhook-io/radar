@@ -41,6 +41,16 @@ const app: AppRow = {
     configs: 2,
     scalers: 1,
     storage: 1,
+    networkPolicies: 1,
+    serviceRefs: [{ kind: 'Service', namespace: 'prod', name: 'checkout-api' }],
+    ingressRefs: [{ kind: 'Ingress', namespace: 'prod', name: 'checkout' }],
+    configRefs: [
+      { kind: 'ConfigMap', namespace: 'prod', name: 'checkout-config' },
+      { kind: 'Secret', namespace: 'prod', name: 'checkout-secret' },
+    ],
+    scalerRefs: [{ kind: 'HorizontalPodAutoscaler', namespace: 'prod', name: 'checkout-api' }],
+    storageRefs: [{ kind: 'PersistentVolumeClaim', namespace: 'prod', name: 'checkout-data' }],
+    networkPolicyRefs: [{ kind: 'NetworkPolicy', namespace: 'prod', name: 'checkout-ingress' }],
   },
   events: [
     {
@@ -76,11 +86,12 @@ describe('ApplicationDetail shell', () => {
     expect(html).toContain('Source &amp; provenance')
     expect(html).toContain('Entrypoints')
     expect(html).toContain('Dependencies')
-    expect(html).toContain('Service<!-- -->/</span>checkout-api')
-    expect(html).toContain('Ingress<!-- -->/</span>checkout')
+    expect(html).toContain('svc<!-- -->/</span>checkout-api')
+    expect(html).toContain('ing<!-- -->/</span>checkout')
     expect(html).toContain('Configuration')
     expect(html).toContain('Autoscaling')
     expect(html).toContain('Storage')
+    expect(html).toContain('Network policy')
     expect(html).not.toContain('Related resources')
     expect(html).toContain('Workloads')
     expect(html).not.toContain('Runtime for')
@@ -186,6 +197,23 @@ describe('ApplicationDetail shell', () => {
     expect(html).toContain('BackOff on checkout-api')
     expect(html).not.toContain('Current incident: BackOff on Deployment/checkout-api')
     expect(html).not.toContain('Latest change')
+  })
+
+  it('previews retained incidents in Overview when no current issue card exists', () => {
+    const healthyApp: AppRow = { ...app, events: [] }
+    const history: AppHistory = {
+      appKey: healthyApp.key,
+      summary: { state: 'incident', title: 'Current incident: FailedScheduling on Pod/checkout-api-abc', detail: '0/9 nodes are available' },
+      incidents: [{ severity: 'warning', title: 'FailedScheduling on Pod/checkout-api-abc', object: 'Pod/checkout-api-abc' }],
+    }
+    const html = renderDetail({
+      app: healthyApp,
+      history,
+    })
+
+    expect(html).toContain('Latest incident')
+    expect(html).toContain('Current incident: FailedScheduling on Pod/checkout-api-abc')
+    expect(html).toContain('View history')
   })
 
   it('does not report idle zero-replica workloads as application issues', () => {
