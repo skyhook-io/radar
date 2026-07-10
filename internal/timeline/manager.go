@@ -157,11 +157,12 @@ func InitStore(cfg StoreConfig) error {
 			}
 			store, err := openSQLiteWithRecovery(cfg.Path)
 			if err != nil {
-				// SQLite is unusable even after quarantining and recreating the
-				// file. Degrade to an in-memory store so the timeline stays alive
-				// (without persistence) for this session instead of the whole
-				// subsystem going dark. initErr stays nil: the caller must not
-				// treat this as a fatal init failure.
+				// A transient open failure, or a corrupt file whose
+				// quarantine-and-recreate also failed. Degrade to an in-memory
+				// store so the timeline stays alive (without persistence) for
+				// this session instead of the whole subsystem going dark.
+				// initErr stays nil: the caller must not treat this as a fatal
+				// init failure.
 				maxSize := cfg.MaxSize
 				if maxSize <= 0 {
 					maxSize = 1000
@@ -194,12 +195,6 @@ func InitStore(cfg StoreConfig) error {
 	return initErr
 }
 
-// openSQLiteWithRecovery opens the SQLite store, and on a failed open (a
-// corrupt or otherwise unreadable file) quarantines the file to a fixed
-// ".corrupt" name and recreates it once. Transient locks are already handled by
-// busy_timeout; this is the corrupt-file case, where the file must be moved
-// aside to make progress. Returns the recreate error if that also fails, so the
-// caller can degrade to an in-memory store.
 // isCorruptedSQLiteError reports whether an open/schema failure signals actual
 // on-disk corruption — the only case where quarantining and recreating the file
 // is right. A transient or environmental failure (locked, permission denied,
@@ -223,6 +218,12 @@ func isCorruptedSQLiteError(err error) bool {
 	return false
 }
 
+// openSQLiteWithRecovery opens the SQLite store. Only an open failure that
+// isCorruptedSQLiteError classifies as on-disk corruption quarantines the file
+// (to a fixed ".corrupt" name, once) and recreates it; every other failure —
+// and a failed quarantine rename — surfaces the original open error unchanged
+// so the caller degrades to memory and the untouched file is retried next
+// start.
 func openSQLiteWithRecovery(path string) (*SQLiteStore, error) {
 	store, err := NewSQLiteStore(path)
 	if err == nil {

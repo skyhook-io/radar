@@ -108,7 +108,7 @@ type appRow struct {
 	VersionSkew   bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
 	AppVersion    string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
 	Identity      *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
-	MatchKeys     []string          `json:"matchKeys,omitempty"`      // exact grouping-signal evidence keys, namespace-scoped ("instance:ns:x","helm:ns:x",…) + informational "name-stem:x" (unscoped); the client joins timeline events to this app by these, matching on the event's namespace (see plan-timeline-app-grouping.md)
+	MatchKeys     []string          `json:"matchKeys,omitempty"`      // exact grouping-signal evidence keys, namespace-scoped ("instance:ns:x","helm:ns:x",…) + informational "name-stem:x" (unscoped); the client joins timeline events to this app by these, matching on the event's namespace
 	SourceRef     *appSourceRef     `json:"sourceRef,omitempty"`      // exact source system object when known (GitOps / native Helm)
 	Workloads     []appWorkload     `json:"workloads"`
 	Events        []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
@@ -1046,7 +1046,7 @@ func identifyApp(r *appRow, ins []appWorkloadInput) {
 // appNameFromKey(sig.Key), never a recomputed display name. Kinds are pinned to
 // the pkg/subject tiers: note that "instance" is app.kubernetes.io/instance
 // (TierInstance) while argocd.argoproj.io/instance (TierArgoInstance) maps to
-// "argo". TierFluxKustomize has no event-matchable label kind in v1, so it is
+// "argo". TierFluxKustomize has no event-matchable label kind, so it is
 // skipped. The caller namespace-scopes the final key (see collectExactMatchKeys).
 func signalMatchKind(sig subject.Signal) (kind, value string, ok bool) {
 	value = appNameFromKey(sig.Key)

@@ -2916,9 +2916,12 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		ClusterContext: k8s.ActiveClusterContext(),
 	}
 	if sinceSeqStr != "" {
-		if n, err := strconv.ParseInt(sinceSeqStr, 10, 64); err == nil && n > 0 {
-			opts.SinceSeq = n
+		n, err := strconv.ParseInt(sinceSeqStr, 10, 64)
+		if err != nil || n < 0 {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid since_seq %q (expected a non-negative integer)", sinceSeqStr))
+			return
 		}
+		opts.SinceSeq = n
 	}
 	if kind != "" {
 		opts.Kinds = []string{kind}
@@ -2955,14 +2958,17 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	// run of unreadable rows would pin a delta client's cursor in place while
 	// it re-fetches the same page forever.
 	//
-	// Known limitation: content filters applied INSIDE store.Query (managed
-	// resources, excluded K8s events, preset filters) drop rows before this
-	// point, so maxSeq can't advance past them. A delta client with active
-	// content filters therefore re-scans those filtered rows each poll until a
-	// matching row moves the cursor (the 5-min full resync bounds the lag).
-	// This is a re-scan inefficiency, not data loss — every matching row is
-	// still delivered. A precise fix needs a same-snapshot store max-seq that
-	// ignores content filters; deferred as not worth the concurrency risk here.
+	// Known limitation: rows dropped inside store.Query (managed resources,
+	// excluded K8s events, presets — and every filter in the memory store)
+	// can't advance maxSeq, so a client whose newest rows are all filtered
+	// re-reads that filtered tail on every poll. A re-scan inefficiency, not
+	// data loss: every matching row is still delivered. Worst case is the
+	// SQLite store, whose SQL LIMIT applies before the Go-side content filter
+	// — a matching row buried behind more than `limit` consecutive filtered
+	// rows in seq order never surfaces through the delta path and reaches the
+	// client only via its periodic full resync. A precise fix needs a
+	// same-snapshot store max-seq that ignores content filters; deferred as
+	// not worth the concurrency risk here.
 	var maxSeq int64
 	for _, e := range events {
 		if e.Seq > maxSeq {

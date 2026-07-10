@@ -19,6 +19,16 @@ import (
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
 )
 
+// sqliteTimeLayout is the storage format for timestamp columns compared
+// lexically by ORDER BY and range filters. RFC3339Nano is unsuitable: it
+// strips trailing fraction zeros, and '.' sorts before 'Z', so a
+// second-aligned stamp ("...T00:00:00Z") sorts lexically AFTER a sub-second
+// one in the same second ("...T00:00:00.5Z"). A fixed-width 9-digit fraction
+// on UTC ('Z') makes lexical order match chronological order. Reads still
+// parse with RFC3339Nano, which accepts any fraction width — required for
+// rows written before normalizeTimestamps ran.
+const sqliteTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
 // SQLiteStore is a persistent implementation of EventStore using SQLite.
 // Suitable for local development with persistence and in-cluster use with PVC.
 type SQLiteStore struct {
@@ -102,21 +112,26 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 
 	// Seed the monotonic seq counter from the persisted high-water mark so
 	// arrival numbers continue above the last issued value across restarts.
-	store.seedSeq()
+	if err := store.seedSeq(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to seed seq counter: %w", err)
+	}
 
 	return store, nil
 }
 
-// seedSeq initializes nextSeq to the current MAX(seq). Best-effort: a query
-// failure leaves it at 0, which only risks reusing arrival numbers on a store
-// that couldn't be read anyway. Safe to call only from the constructor.
-func (s *SQLiteStore) seedSeq() {
+// seedSeq initializes nextSeq to the current MAX(seq). A failure must fail the
+// open: seeding at 0 would issue seqs below rows already in the table, and a
+// delta client's cursor (the old high-water mark) would then read every new
+// event as already-seen — a live-looking timeline that only refreshes on the
+// periodic full resync.
+func (s *SQLiteStore) seedSeq() error {
 	var maxSeq int64
 	if err := s.db.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&maxSeq); err != nil {
-		log.Printf("[timeline] failed to seed seq counter from %s: %v", s.path, err)
-		return
+		return err
 	}
 	s.nextSeq.Store(maxSeq)
+	return nil
 }
 
 // initSchema creates the database tables if they don't exist
@@ -225,6 +240,9 @@ func (s *SQLiteStore) initSchema() error {
 			return err
 		}
 	}
+	if err := s.normalizeTimestamps(); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec("CREATE INDEX IF NOT EXISTS idx_events_cluster_ts ON events(cluster_context, timestamp DESC)"); err != nil {
 		return err
 	}
@@ -232,6 +250,66 @@ func (s *SQLiteStore) initSchema() error {
 		return err
 	}
 
+	return nil
+}
+
+// normalizeTimestamps rewrites rows whose timestamp doesn't match
+// sqliteTimeLayout. Older builds stored RFC3339Nano in the host's local zone;
+// both the zone offset and the variable fraction width break the
+// lexical-order-is-chronological invariant the layout exists for. One pass per
+// legacy row: rewritten rows match the GLOB and are skipped on later opens.
+func (s *SQLiteStore) normalizeTimestamps() error {
+	rows, err := s.db.Query(`SELECT id, timestamp FROM events WHERE timestamp NOT GLOB '????-??-??T??:??:??.?????????Z'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type fixup struct{ id, ts string }
+	var fixups []fixup
+	unparseable := 0
+	for rows.Next() {
+		var id, ts string
+		if err := rows.Scan(&id, &ts); err != nil {
+			return err
+		}
+		t, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			unparseable++
+			continue
+		}
+		fixups = append(fixups, fixup{id: id, ts: t.UTC().Format(sqliteTimeLayout)})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if unparseable > 0 {
+		log.Printf("[timeline] %d timeline rows have unparseable timestamps; left as-is", unparseable)
+	}
+	if len(fixups) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare("UPDATE events SET timestamp = ? WHERE id = ?")
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, f := range fixups {
+		if _, err := stmt.Exec(f.ts, f.id); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("[timeline] normalized %d legacy timeline timestamps to fixed-width UTC", len(fixups))
 	return nil
 }
 
@@ -324,15 +402,15 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 		}
 		var resourceCreatedAt any
 		if event.CreatedAt != nil {
-			resourceCreatedAt = event.CreatedAt.UTC().Format(time.RFC3339Nano)
+			resourceCreatedAt = event.CreatedAt.UTC().Format(sqliteTimeLayout)
 		}
 
 		// Timestamps hit a TEXT column compared lexically by ORDER BY / range
-		// filters. Informer events carry the host's local zone while K8s events
-		// are UTC; normalize to UTC ('Z') so lexical order matches chronological.
+		// filters; sqliteTimeLayout (fixed-width UTC) keeps lexical order
+		// chronological.
 		_, err = stmt.ExecContext(ctx,
 			event.ID,
-			event.Timestamp.UTC().Format(time.RFC3339Nano),
+			event.Timestamp.UTC().Format(sqliteTimeLayout),
 			string(event.Source),
 			event.Kind,
 			event.APIVersion,
@@ -410,12 +488,12 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 
 	if !opts.Since.IsZero() {
 		query.WriteString(" AND timestamp >= ?")
-		args = append(args, opts.Since.UTC().Format(time.RFC3339Nano))
+		args = append(args, opts.Since.UTC().Format(sqliteTimeLayout))
 	}
 
 	if !opts.Until.IsZero() {
 		query.WriteString(" AND timestamp <= ?")
-		args = append(args, opts.Until.UTC().Format(time.RFC3339Nano))
+		args = append(args, opts.Until.UTC().Format(sqliteTimeLayout))
 	}
 
 	if len(opts.Sources) > 0 {
@@ -618,7 +696,7 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 
 	if !since.IsZero() {
 		query += " AND timestamp >= ?"
-		args = append(args, since.UTC().Format(time.RFC3339Nano))
+		args = append(args, since.UTC().Format(sqliteTimeLayout))
 	}
 
 	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT %d", limit)
@@ -724,7 +802,7 @@ func (s *SQLiteStore) Close() error {
 
 // Cleanup removes events older than the given duration
 func (s *SQLiteStore) Cleanup(ctx context.Context, maxAge time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-maxAge).UTC().Format(time.RFC3339Nano)
+	cutoff := time.Now().Add(-maxAge).UTC().Format(sqliteTimeLayout)
 	result, err := s.db.ExecContext(ctx, "DELETE FROM events WHERE timestamp < ?", cutoff)
 	if err != nil {
 		return 0, err

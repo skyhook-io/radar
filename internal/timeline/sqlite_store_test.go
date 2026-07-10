@@ -1738,3 +1738,202 @@ func TestOpenSQLiteWithRecovery_QuarantinesCorruptFile(t *testing.T) {
 		t.Fatalf("recovered store not usable, got %+v", events)
 	}
 }
+
+// RFC3339Nano strips trailing fraction zeros, and '.' < 'Z' lexically, so a
+// second-aligned stamp would sort AFTER a sub-second one in the same second.
+// The fixed-width sqliteTimeLayout keeps lexical order chronological; K8s
+// Events (second precision) and informer events (sub-second) interleave within
+// one second constantly.
+func TestSQLiteStore_SubSecondLexicalOrdering(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// A: second-aligned (a K8s Event's metav1.Time precision).
+	a := TimelineEvent{
+		ID: "aligned", Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Source: SourceK8sEvent, Kind: "Pod", Namespace: "default", Name: "a", EventType: EventTypeNormal,
+	}
+	// B: half a second LATER (an informer event's time.Now() precision).
+	b := TimelineEvent{
+		ID: "subsecond", Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 500_000_000, time.UTC),
+		Source: SourceInformer, Kind: "Deployment", Namespace: "default", Name: "b", EventType: EventTypeUpdate,
+	}
+	if err := store.AppendBatch(ctx, []TimelineEvent{a, b}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	events, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if events[0].ID != "subsecond" || events[1].ID != "aligned" {
+		t.Fatalf("expected newest-first [subsecond, aligned], got [%s, %s]", events[0].ID, events[1].ID)
+	}
+
+	// A limit-1 page must pick the chronologically newest, not the
+	// lexically-greatest under the old variable-width encoding.
+	page, err := store.Query(ctx, QueryOptions{Limit: 1, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query limit 1: %v", err)
+	}
+	if len(page) != 1 || page[0].ID != "subsecond" {
+		t.Fatalf("limit-1 page picked %v, want subsecond", page)
+	}
+}
+
+// Rows written by older builds carry local-zone offsets and variable-width
+// fractions; reopening the store must rewrite them to sqliteTimeLayout so
+// ordering and range filters stay correct across the upgrade boundary.
+func TestSQLiteStore_NormalizeLegacyTimestamps(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "timeline-migrate-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	// Simulate an old build's rows: local zone, no fraction, and sub-second
+	// variable width. Instants: legacy-zone 00:00:00Z < legacy-plain
+	// 00:00:01Z < legacy-frac 00:00:01.5Z.
+	rawRows := []struct{ id, ts string }{
+		{"legacy-zone", "2026-01-01T02:00:00+02:00"},
+		{"legacy-plain", "2026-01-01T00:00:01Z"},
+		{"legacy-frac", "2026-01-01T00:00:01.5Z"},
+	}
+	for i, r := range rawRows {
+		if _, err := store.db.Exec(
+			`INSERT INTO events (id, timestamp, source, kind, namespace, name, uid, event_type, reason, message, diff_json, health_state, owner_kind, owner_name, labels_json, correlation_id, seq)
+			 VALUES (?, ?, 'informer', 'Deployment', 'default', ?, '', 'update', '', '', '', '', '', '', '', '', ?)`,
+			r.id, r.ts, r.id, i+1,
+		); err != nil {
+			t.Fatalf("raw insert %s: %v", r.id, err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+
+	rows, err := reopened.db.Query("SELECT id, timestamp FROM events")
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	defer rows.Close()
+	stamps := map[string]string{}
+	for rows.Next() {
+		var id, ts string
+		if err := rows.Scan(&id, &ts); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		stamps[id] = ts
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	want := map[string]string{
+		"legacy-zone":  "2026-01-01T00:00:00.000000000Z",
+		"legacy-plain": "2026-01-01T00:00:01.000000000Z",
+		"legacy-frac":  "2026-01-01T00:00:01.500000000Z",
+	}
+	for id, w := range want {
+		if stamps[id] != w {
+			t.Errorf("%s: normalized to %q, want %q", id, stamps[id], w)
+		}
+	}
+
+	// Ordering and a range filter across the formerly-mixed rows.
+	ctx := context.Background()
+	events, err := reopened.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	gotOrder := []string{}
+	for _, e := range events {
+		gotOrder = append(gotOrder, e.ID)
+	}
+	wantOrder := []string{"legacy-frac", "legacy-plain", "legacy-zone"}
+	if strings.Join(gotOrder, ",") != strings.Join(wantOrder, ",") {
+		t.Fatalf("order = %v, want %v", gotOrder, wantOrder)
+	}
+	since := time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)
+	filtered, err := reopened.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, Since: since})
+	if err != nil {
+		t.Fatalf("Query since: %v", err)
+	}
+	if len(filtered) != 2 {
+		t.Fatalf("since filter returned %d events, want 2 (plain + frac)", len(filtered))
+	}
+}
+
+// A transient open failure (permissions here) must propagate — NOT quarantine
+// the healthy database file the way corruption does.
+func TestOpenSQLiteWithRecovery_TransientErrorDoesNotQuarantine(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-denied simulation is a no-op as root")
+	}
+	tmpDir, err := os.MkdirTemp("", "timeline-transient-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	if err := store.Append(context.Background(), TimelineEvent{
+		ID: "keep", Timestamp: time.Now(), Source: SourceInformer,
+		Kind: "Deployment", Namespace: "default", Name: "keep", EventType: EventTypeUpdate,
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := os.Chmod(dbPath, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	defer os.Chmod(dbPath, 0o644)
+
+	if _, err := openSQLiteWithRecovery(dbPath); err == nil {
+		t.Fatalf("expected openSQLiteWithRecovery to propagate the transient error")
+	}
+	if _, statErr := os.Stat(dbPath + ".corrupt"); !os.IsNotExist(statErr) {
+		t.Fatalf("healthy file was quarantined: stat .corrupt = %v", statErr)
+	}
+	if _, statErr := os.Stat(dbPath); statErr != nil {
+		t.Fatalf("original file missing after transient failure: %v", statErr)
+	}
+
+	// Once the transient condition clears, the data is intact.
+	if err := os.Chmod(dbPath, 0o644); err != nil {
+		t.Fatalf("Chmod restore: %v", err)
+	}
+	recovered, err := openSQLiteWithRecovery(dbPath)
+	if err != nil {
+		t.Fatalf("open after restore: %v", err)
+	}
+	defer recovered.Close()
+	events, err := recovered.Query(context.Background(), QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 1 || events[0].ID != "keep" {
+		t.Fatalf("data lost across transient failure, got %+v", events)
+	}
+}
