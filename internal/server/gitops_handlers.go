@@ -189,6 +189,9 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	if insight.Summary.Tool == "argocd" && argocd.IsConfigured() {
 		insight.Capabilities.ArgoDiffAvailable = true
 		insight.Capabilities.RevisionMetadataAvailable = true
+		// Best-effort: surface a broken Git repo connection (a top hidden cause
+		// of stuck syncs) as an Issue. Never fails insights if the Argo call errors.
+		s.enrichArgoRepoHealth(root, &insight)
 	}
 	s.writeJSON(w, insight)
 }

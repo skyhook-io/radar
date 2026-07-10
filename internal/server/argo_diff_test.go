@@ -9,12 +9,15 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/pkg/argoapi"
+	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 )
 
 // managedResourcesFunc serves the /managed-resources response for a fake Argo
@@ -52,6 +55,12 @@ func startFakeArgoServer(t *testing.T, managedFn managedResourcesFunc) (*httptes
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/v1/repositories", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[
+			{"repo":"https://github.com/org/broken.git","connectionState":{"status":"Failed","message":"authentication required"}},
+			{"repo":"https://github.com/org/healthy","connectionState":{"status":"Successful"}}
+		]}`))
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -443,5 +452,107 @@ func TestArgoRevisionMetadata_NotConnected(t *testing.T) {
 	(&Server{}).handleArgoRevisionMetadata(w, req)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503; body = %s", w.Code, w.Body.String())
+	}
+}
+
+func argoAppRoot(sources ...string) *unstructured.Unstructured {
+	spec := map[string]any{}
+	switch {
+	case len(sources) == 1:
+		spec["source"] = map[string]any{"repoURL": sources[0]}
+	case len(sources) > 1:
+		arr := make([]any, 0, len(sources))
+		for _, s := range sources {
+			arr = append(arr, map[string]any{"repoURL": s})
+		}
+		spec["sources"] = arr
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"name": "guestbook", "namespace": "argocd"},
+		"spec":     spec,
+	}}
+}
+
+// waitRepoCache blocks until the manager's async repository refresh has
+// populated the cache (RepositoriesCached is non-blocking, so the first call
+// only kicks the background fetch).
+func waitRepoCache(t *testing.T) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		if len(argocd.RepositoriesCached()) > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("repository cache did not populate")
+}
+
+func TestEnrichArgoRepoHealth_FailedRepo(t *testing.T) {
+	srv, _ := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(managedResourcesJSON(t)) })
+	connectArgo(t, srv.URL)
+	waitRepoCache(t)
+
+	insight := &gitopsinsights.Insight{}
+	// Root sources ".../broken" (no .git); the repo list stores ".../broken.git"
+	// — the match must survive the .git normalization.
+	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/broken"), insight)
+
+	if len(insight.Issues) != 1 {
+		t.Fatalf("issues = %d, want 1: %+v", len(insight.Issues), insight.Issues)
+	}
+	iss := insight.Issues[0]
+	if iss.Reason != "RepoUnreachable" || iss.Severity != gitopsinsights.SeverityWarning {
+		t.Errorf("issue = %+v", iss)
+	}
+	if !strings.Contains(iss.Message, "github.com/org/broken") {
+		t.Errorf("message = %q", iss.Message)
+	}
+}
+
+func TestEnrichArgoRepoHealth_HealthyRepoNoIssue(t *testing.T) {
+	srv, _ := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(managedResourcesJSON(t)) })
+	connectArgo(t, srv.URL)
+	waitRepoCache(t)
+
+	insight := &gitopsinsights.Insight{}
+	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/healthy"), insight)
+	if len(insight.Issues) != 0 {
+		t.Fatalf("healthy repo must not add an issue: %+v", insight.Issues)
+	}
+}
+
+func TestEnrichArgoRepoHealth_UnknownRepoNoIssue(t *testing.T) {
+	srv, _ := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(managedResourcesJSON(t)) })
+	connectArgo(t, srv.URL)
+	waitRepoCache(t)
+
+	insight := &gitopsinsights.Insight{}
+	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/not-tracked"), insight)
+	if len(insight.Issues) != 0 {
+		t.Fatalf("unknown repo must be treated as unknown, not unhealthy: %+v", insight.Issues)
+	}
+}
+
+func TestEnrichArgoRepoHealth_MultiSource(t *testing.T) {
+	srv, _ := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(managedResourcesJSON(t)) })
+	connectArgo(t, srv.URL)
+	waitRepoCache(t)
+
+	insight := &gitopsinsights.Insight{}
+	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/healthy", "https://github.com/org/broken"), insight)
+	if len(insight.Issues) != 1 {
+		t.Fatalf("issues = %d, want 1 (only the broken source): %+v", len(insight.Issues), insight.Issues)
+	}
+}
+
+func TestEnrichArgoRepoHealth_NotConnectedNoIssue(t *testing.T) {
+	argocd.SetConfig("", "", false, true)
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+
+	insight := &gitopsinsights.Insight{}
+	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/broken"), insight)
+	if len(insight.Issues) != 0 {
+		t.Fatalf("disconnected Argo must not add an issue (best-effort): %+v", insight.Issues)
 	}
 }

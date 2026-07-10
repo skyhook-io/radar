@@ -45,6 +45,11 @@ type revMetaEntry struct {
 	expires time.Time
 }
 
+// repositoriesTTL keeps the (global, per-connection) repository list cached long
+// enough that the 2s insights poll hits the cache instead of re-listing repos
+// upstream on every request.
+const repositoriesTTL = 60 * time.Second
+
 // probeTimeout bounds the background probe of persisted settings;
 // probeRetryInterval throttles retries after a failed probe so a dead
 // argocd-server doesn't get hammered on every insights request.
@@ -91,6 +96,14 @@ type Manager struct {
 	// (appNamespace, app, sourceIndex, revision). Cleared alongside `cache` on
 	// reconnect/context switch so it never serves another cluster's data.
 	revMetaCache map[string]revMetaEntry
+
+	// repoCache holds the (global) repository list + connection state. Single
+	// entry with a TTL; repoFetchMu serializes the upstream list so a burst of
+	// insights requests triggers one fetch, not one per request. Cleared on
+	// reconnect/context switch.
+	repoCache        []argoapi.Repository
+	repoCacheExpires time.Time
+	repoFetchMu      sync.Mutex
 
 	// tokenContext is the kubeconfig context the stored token is bound to when
 	// the URL is empty (auto-discovery). Discovery resolves whatever
@@ -157,6 +170,10 @@ func ManagedResourcesCached(ctx context.Context, q argoapi.ManagedResourcesQuery
 
 func RevisionMetadataCached(ctx context.Context, q argoapi.RevisionMetadataQuery) (*argoapi.RevisionMetadata, error) {
 	return defaultManager.RevisionMetadataCached(ctx, q)
+}
+
+func RepositoriesCached() []argoapi.Repository {
+	return defaultManager.RepositoriesCached()
 }
 
 // TokenFromCLI reads the auth token from the user's Argo CD CLI config
@@ -229,6 +246,7 @@ func (m *Manager) dropConnectionLocked() *activeForward {
 	m.client = nil
 	m.cache = nil
 	m.revMetaCache = nil
+	m.repoCache = nil
 	fwd := m.forward
 	m.forward = nil
 	return fwd
@@ -515,6 +533,63 @@ func (m *Manager) RevisionMetadataCached(ctx context.Context, q argoapi.Revision
 	m.revMetaCache[key] = revMetaEntry{meta: meta, expires: now.Add(revisionMetadataTTL)}
 	m.mu.Unlock()
 	return meta, nil
+}
+
+// RepositoriesCached returns Argo CD's repository list with cached connection
+// state, and NEVER blocks the caller on network I/O — repo health rides the
+// insights hot path (polled every 2s), so it must not add the Argo client's
+// timeout to it. A fresh cache is returned immediately; a stale/cold cache
+// returns the last value (or nil) while a single background refresh runs, so
+// the data appears at most one poll late. Stale is always same-cluster (the
+// cache is cleared on reconnect/context switch).
+func (m *Manager) RepositoriesCached() []argoapi.Repository {
+	m.mu.Lock()
+	repos := m.repoCache
+	fresh := repos != nil && time.Now().Before(m.repoCacheExpires)
+	m.mu.Unlock()
+	if !fresh {
+		m.refreshRepositoriesAsync()
+	}
+	return repos
+}
+
+// refreshRepositoriesAsync kicks at most one background repository fetch
+// (TryLock skips if one is already running). It uses a detached, timeout-bounded
+// context — the triggering request may end immediately — and a generation guard
+// so a context switch mid-fetch can't cache the previous cluster's repos.
+func (m *Manager) refreshRepositoriesAsync() {
+	if !m.repoFetchMu.TryLock() {
+		return
+	}
+	m.mu.Lock()
+	gen := m.generation
+	m.mu.Unlock()
+	go func() {
+		defer m.repoFetchMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		defer cancel()
+
+		client, ok := m.Get()
+		if !ok {
+			if err := m.Probe(ctx); err != nil {
+				return
+			}
+			if client, ok = m.Get(); !ok {
+				return
+			}
+		}
+		repos, err := client.Repositories(ctx)
+		if err != nil {
+			log.Printf("[argocd] repository list failed: %v", err)
+			return
+		}
+		m.mu.Lock()
+		if m.generation == gen {
+			m.repoCache = repos
+			m.repoCacheExpires = time.Now().Add(repositoriesTTL)
+		}
+		m.mu.Unlock()
+	}()
 }
 
 // resolve returns a reachable base URL: the already-connected one if it still

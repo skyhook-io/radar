@@ -213,6 +213,43 @@ func TestRevisionMetadataRequiresAppAndRevision(t *testing.T) {
 	}
 }
 
+func TestRepositories(t *testing.T) {
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"items":[
+			{"repo":"https://github.com/org/broken","type":"git","connectionState":{"status":"Failed","message":"authentication required"}},
+			{"repo":"https://github.com/org/healthy","connectionState":{"status":"Successful"}}
+		]}`))
+	}))
+	defer srv.Close()
+
+	c := New(Options{BaseURL: srv.URL, Token: "test-token"})
+	repos, err := c.Repositories(context.Background())
+	if err != nil {
+		t.Fatalf("Repositories: %v", err)
+	}
+	if gotPath != "/api/v1/repositories" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Errorf("Authorization = %q", gotAuth)
+	}
+	if len(repos) != 2 {
+		t.Fatalf("len(repos) = %d, want 2", len(repos))
+	}
+	if repos[0].Repo != "https://github.com/org/broken" || repos[0].ConnectionState.Status != "Failed" {
+		t.Errorf("repos[0] = %+v", repos[0])
+	}
+	if repos[0].ConnectionState.Message != "authentication required" {
+		t.Errorf("repos[0] message = %q", repos[0].ConnectionState.Message)
+	}
+	if repos[1].ConnectionState.Status != "Successful" {
+		t.Errorf("repos[1] status = %q", repos[1].ConnectionState.Status)
+	}
+}
+
 func TestStatusErrors(t *testing.T) {
 	tests := []struct {
 		name          string

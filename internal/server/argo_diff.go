@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
 	"github.com/skyhook-io/radar/internal/argocd"
@@ -365,6 +366,121 @@ func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name strin
 		log.Printf("[argo] resource-diff for %s/%s failed: %s", sanitizeForLog(namespace), sanitizeForLog(name), sanitizeForLog(err.Error()))
 		s.writeError(w, http.StatusBadGateway, "Failed to fetch the diff from the Argo CD API server.")
 	}
+}
+
+// enrichArgoRepoHealth appends an Issue when Argo CD reports a failed connection
+// to a repository this Application sources from — a common, otherwise-invisible
+// cause of stuck syncs. Non-blocking: RepositoriesCached never hits the network
+// on the insights hot path. An unmatched repo is treated as unknown (not
+// asserted healthy) so we only ever surface a failure Argo actually reports; the
+// raw Argo error is deliberately not exposed (it can carry internal infra
+// detail) — the operator gets the raw cause in Argo itself.
+func (s *Server) enrichArgoRepoHealth(root *unstructured.Unstructured, insight *gitopsinsights.Insight) {
+	urls := appRepoURLs(root)
+	if len(urls) == 0 {
+		return
+	}
+	repos := argocd.RepositoriesCached()
+	if len(repos) == 0 {
+		return
+	}
+	project, _, _ := unstructured.NestedString(root.Object, "spec", "project")
+	if project == "" {
+		project = "default"
+	}
+	seen := make(map[string]bool, len(urls))
+	for _, u := range urls {
+		norm := normalizeRepoURL(u)
+		if seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		rp := matchRepo(repos, norm, project)
+		if rp == nil || !strings.EqualFold(rp.ConnectionState.Status, "Failed") {
+			continue
+		}
+		insight.Issues = append(insight.Issues, gitopsinsights.Issue{
+			Severity: gitopsinsights.SeverityWarning,
+			Scope:    gitopsinsights.ScopeCondition,
+			Reason:   "RepoUnreachable",
+			Message:  fmt.Sprintf("Argo CD can't reach the source repository %s", u),
+			Action:   "Check the repository's credentials and network access in Argo CD (Settings → Repositories).",
+		})
+	}
+}
+
+// matchRepo finds the repository entry for a normalized URL, preferring an entry
+// scoped to the app's project over a global (empty-project) one — mirroring how
+// Argo disambiguates the same URL registered under different projects, so we
+// never read project B's health for project A's app.
+func matchRepo(repos []argoapi.Repository, normURL, project string) *argoapi.Repository {
+	var global *argoapi.Repository
+	for i := range repos {
+		if normalizeRepoURL(repos[i].Repo) != normURL {
+			continue
+		}
+		if repos[i].Project == project {
+			return &repos[i]
+		}
+		if repos[i].Project == "" {
+			global = &repos[i]
+		}
+	}
+	return global
+}
+
+// appRepoURLs collects the Git source URLs of an Argo CD Application, covering
+// single-source (spec.source), multi-source (spec.sources[]), and source-hydrator
+// (spec.sourceHydrator.drySource) apps.
+func appRepoURLs(root *unstructured.Unstructured) []string {
+	if root == nil {
+		return nil
+	}
+	var urls []string
+	if u, ok, _ := unstructured.NestedString(root.Object, "spec", "source", "repoURL"); ok && u != "" {
+		urls = append(urls, u)
+	}
+	if sources, ok, _ := unstructured.NestedSlice(root.Object, "spec", "sources"); ok {
+		for _, s := range sources {
+			if m, ok := s.(map[string]any); ok {
+				if u, _ := m["repoURL"].(string); u != "" {
+					urls = append(urls, u)
+				}
+			}
+		}
+	}
+	if u, ok, _ := unstructured.NestedString(root.Object, "spec", "sourceHydrator", "drySource", "repoURL"); ok && u != "" {
+		urls = append(urls, u)
+	}
+	return urls
+}
+
+// normalizeRepoURL canonicalizes a Git repo URL for matching an app's source
+// against Argo's stored repositories, approximating Argo's own URL equivalence:
+// drop the scheme and any user@ prefix, convert scp-style "host:path" to
+// "host/path", and strip a trailing slash / ".git". This makes cross-protocol
+// forms of the same repo compare equal; anything still unmatched fails safe.
+func normalizeRepoURL(u string) string {
+	u = strings.ToLower(strings.TrimSpace(u))
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:] // strip scheme (https://, ssh://, git://)
+	}
+	// Strip a user@ that precedes the host (the '@' before the first '/').
+	if at := strings.Index(u, "@"); at >= 0 {
+		if slash := strings.Index(u, "/"); slash < 0 || at < slash {
+			u = u[at+1:]
+		}
+	}
+	// scp-style host:path → host/path, but leave host:port (':' before a digit).
+	if colon := strings.Index(u, ":"); colon >= 0 {
+		rest := u[colon+1:]
+		if rest == "" || rest[0] < '0' || rest[0] > '9' {
+			u = u[:colon] + "/" + rest
+		}
+	}
+	u = strings.TrimSuffix(u, "/")
+	u = strings.TrimSuffix(u, ".git")
+	return u
 }
 
 // handleArgoRevisionMetadata returns the Git commit metadata (author, message,

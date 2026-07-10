@@ -124,6 +124,18 @@ func (c *Client) RevisionMetadata(ctx context.Context, q RevisionMetadataQuery) 
 	return &out, nil
 }
 
+// Repositories returns the configured repositories and Argo CD's cached
+// connection state for each, via GET /api/v1/repositories.
+func (c *Client) Repositories(ctx context.Context) ([]Repository, error) {
+	var out struct {
+		Items []Repository `json:"items"`
+	}
+	if err := c.get(ctx, "/api/v1/repositories", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
+}
+
 // UserInfo probes token validity via GET /api/v1/session/userinfo.
 func (c *Client) UserInfo(ctx context.Context) (*UserInfo, error) {
 	var out UserInfo

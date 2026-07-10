@@ -59,6 +59,27 @@ type RevisionMetadata struct {
 	SignatureInfo string `json:"signatureInfo,omitempty"`
 }
 
+// Repository is one row from GET /api/v1/repositories — a configured Git source
+// and Argo CD's cached connection state for it.
+type Repository struct {
+	Repo string `json:"repo"`
+	Type string `json:"type,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Project scopes the repo to an AppProject; empty means a global repo. Argo
+	// allows the same URL registered under different projects, so matching an
+	// Application's source must respect this to avoid cross-project confusion.
+	Project         string          `json:"project,omitempty"`
+	ConnectionState ConnectionState `json:"connectionState"`
+}
+
+// ConnectionState is Argo CD's cached health for a repository connection. Status
+// is "Successful" | "Failed" | "Unknown" (best-effort — treat unknown values as
+// non-failing).
+type ConnectionState struct {
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
 // RevisionMetadataQuery identifies a revision to look up. AppName + Revision are
 // required; AppNamespace/Project/SourceIndex disambiguate multi-source apps and
 // satisfy Argo CD's project-scoped identity check.
