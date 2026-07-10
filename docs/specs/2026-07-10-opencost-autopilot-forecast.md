@@ -118,6 +118,28 @@ validation, then mark it ready. GitOps consumption waits for the first official
 Radar release containing the change. No private image release is used if the
 upstream release is delayed.
 
+## Execution Evidence
+
+Passed on 2026-07-10:
+
+```sh
+make test
+make test-chart
+helm lint deploy/helm/radar
+go test ./...
+go vet ./...
+(cd pkg && go test ./...)
+(cd pkg && go test -race ./opencost)
+(cd pkg && go vet ./...)
+git diff --check upstream/main...HEAD
+gitleaks protect --staged --redact --no-banner
+gitleaks detect --no-banner --redact --log-opts upstream/main..HEAD
+```
+
+Chart tests prove default values omit both arguments and configured values
+render exact namespace exclusions plus node-floor disablement. No frontend
+files changed, so visual browser validation was not required.
+
 ## Task Breakdown
 
 - [x] Commit this approved plan and open the Draft PR.
@@ -125,5 +147,5 @@ upstream release is delayed.
 - [x] Wire CLI flags and immutable handler configuration.
 - [x] Add Helm values, rendered arguments, and chart coverage.
 - [x] Update operator documentation.
-- [ ] Run focused and full validation.
+- [x] Run focused and full validation.
 - [ ] Push implementation and mark the upstream PR ready.
