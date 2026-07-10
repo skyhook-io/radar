@@ -140,6 +140,13 @@ func CLISessionFromConfig(configPath string) (*CLISession, error) {
 	if match == nil {
 		return nil, nil
 	}
+	// A loopback server is a port-forward artifact: the address is only valid
+	// while that specific forward runs, which is almost never true when Radar
+	// reads the config later. Offering it would just fail "unreachable" on
+	// click, so don't — the user connects via the URL field instead.
+	if isLoopbackHost(match.Server) {
+		return nil, nil
+	}
 	// Only offer a session the user can actually connect with.
 	hasToken := false
 	for _, u := range cfg.Users {
@@ -159,6 +166,16 @@ func CLISessionFromConfig(configPath string) (*CLISession, error) {
 		}
 	}
 	return &CLISession{Server: match.Server, User: match.User, Insecure: insecure}, nil
+}
+
+// isLoopbackHost reports whether a server reference points at localhost /
+// 127.x — i.e. a transient port-forward rather than a stable endpoint.
+func isLoopbackHost(server string) bool {
+	h := hostPort(server)
+	if strings.Count(h, ":") == 1 { // strip a trailing :port on a plain host:port
+		h = h[:strings.LastIndex(h, ":")]
+	}
+	return h == "localhost" || strings.HasPrefix(h, "127.")
 }
 
 // hostPort reduces a server reference to lowercase host[:port]. The CLI

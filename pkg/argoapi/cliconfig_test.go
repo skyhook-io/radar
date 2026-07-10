@@ -140,17 +140,37 @@ func TestTokenFromCLIConfigMissingFile(t *testing.T) {
 }
 
 func TestCLISessionFromConfig(t *testing.T) {
+	const realHostFixture = `contexts:
+- name: prod
+  server: argocd.example.com
+  user: prod
+current-context: prod
+servers:
+- server: argocd.example.com
+  insecure: true
+users:
+- name: prod
+  auth-token: prod-token
+`
+
 	t.Run("current-context session", func(t *testing.T) {
-		sess, err := CLISessionFromConfig(writeFixture(t, cliConfigFixture))
+		sess, err := CLISessionFromConfig(writeFixture(t, realHostFixture))
 		if err != nil {
 			t.Fatalf("CLISessionFromConfig: %v", err)
 		}
 		if sess == nil {
 			t.Fatal("expected a session, got nil")
 		}
-		// current-context is `local` (server localhost:8080, insecure: true).
-		if sess.Server != "localhost:8080" || sess.User != "local" || !sess.Insecure {
-			t.Errorf("session = %+v, want {localhost:8080 local true}", sess)
+		if sess.Server != "argocd.example.com" || sess.User != "prod" || !sess.Insecure {
+			t.Errorf("session = %+v, want {argocd.example.com prod true}", sess)
+		}
+	})
+
+	t.Run("loopback session suppressed (port-forward artifact)", func(t *testing.T) {
+		// cliConfigFixture's current-context is `local` → localhost:8080.
+		sess, err := CLISessionFromConfig(writeFixture(t, cliConfigFixture))
+		if err != nil || sess != nil {
+			t.Fatalf("loopback: got (%+v, %v), want (nil, nil)", sess, err)
 		}
 	})
 
