@@ -4,7 +4,7 @@ import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, ChevronRight, ChevronDown, SlidersHorizontal, Eye, Loader2 } from 'lucide-react'
+import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, ChevronRight, SlidersHorizontal, Eye, Loader2 } from 'lucide-react'
 import yaml from 'yaml'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
@@ -100,6 +100,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [showTrackSource, setShowTrackSource] = useState(false)
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
   const [adjustValues, setAdjustValues] = useState(false)
+  const [renderAdjustValues, setRenderAdjustValues] = useState(false)
+  const [upgradeEditorReady, setUpgradeEditorReady] = useState(false)
   const [editedUpgradeYaml, setEditedUpgradeYaml] = useState('')
   const [upgradeValuesSeeded, setUpgradeValuesSeeded] = useState(false)
   const [upgradePreview, setUpgradePreview] = useState<ValuesPreviewResponse | null>(null)
@@ -337,6 +339,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     setUpgradeProgress([])
     setSelectedVersion(null)
     setAdjustValues(false)
+    setRenderAdjustValues(false)
+    setUpgradeEditorReady(false)
     setEditedUpgradeYaml('')
     setUpgradeValuesSeeded(false)
     setUpgradePreview(null)
@@ -351,12 +355,39 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     setUpgradeValuesSeeded(true)
   }, [adjustValues, upgradeValues, upgradeValuesSeeded])
 
-  const handleToggleAdjustValues = () => {
-    if (!adjustValues) {
-      setEditedUpgradeYaml('')
-      setUpgradeValuesSeeded(false)
+  useEffect(() => {
+    if (!adjustValues || upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded) {
+      setUpgradeEditorReady(false)
+      return
     }
-    setAdjustValues(prev => !prev)
+
+    if (typeof window === 'undefined') {
+      setUpgradeEditorReady(true)
+      return
+    }
+
+    let frame2 = 0
+    const frame1 = window.requestAnimationFrame(() => {
+      frame2 = window.requestAnimationFrame(() => setUpgradeEditorReady(true))
+    })
+    return () => {
+      window.cancelAnimationFrame(frame1)
+      if (frame2) window.cancelAnimationFrame(frame2)
+    }
+  }, [adjustValues, upgradeValuesLoading, upgradeValuesError, upgradeValuesSeeded])
+
+  const handleToggleAdjustValues = () => {
+    if (adjustValues) {
+      setAdjustValues(false)
+      return
+    }
+
+    setRenderAdjustValues(true)
+    setUpgradeEditorReady(false)
+    setEditedUpgradeYaml('')
+    setUpgradeValuesSeeded(false)
+    upgradePreviewMutation.reset()
+    setAdjustValues(true)
   }
 
   // Validity is derived from the SAME parser used at submit — not the editor's
@@ -813,6 +844,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         isLoading={isUpgrading}
         confirmDisabled={isPreviewingUpgrade || (adjustValues && (upgradeValuesLoading || !!upgradeValuesError || !upgradeValuesSeeded || !!upgradeYamlError))}
         isClosable
+        className="max-w-2xl"
       >
         {upgradeProgress.length === 0 && availableVersions && availableVersions.length > 1 && (
           <div className="mb-1">
@@ -851,66 +883,97 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         )}
         {upgradeProgress.length === 0 && canHelmWrite && canViewSensitive && (
           <div className="mt-3 border-t border-theme-border pt-3">
-            <button
-              type="button"
-              onClick={handleToggleAdjustValues}
-              disabled={isUpgrading || isPreviewingUpgrade}
-              className="flex items-center gap-1.5 text-sm font-medium text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-50"
+            <Tooltip content="Edit the user-supplied Helm values that Radar will pass to this upgrade.">
+              <button
+                type="button"
+                onClick={handleToggleAdjustValues}
+                disabled={isUpgrading || isPreviewingUpgrade}
+                aria-expanded={adjustValues}
+                aria-controls="helm-upgrade-values-panel"
+                className="flex items-center gap-1.5 text-sm font-medium text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-50"
+              >
+                <ChevronRight className={clsx('w-4 h-4 transition-transform duration-200', adjustValues && 'rotate-90')} />
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                Adjust your values (optional)
+              </button>
+            </Tooltip>
+            <div
+              id="helm-upgrade-values-panel"
+              className={`issue-details-motion ${adjustValues ? 'issue-details-motion-open' : ''}`}
+              onTransitionEnd={(event) => {
+                if (event.target !== event.currentTarget) return
+                if (event.propertyName !== 'grid-template-rows') return
+                if (!adjustValues) {
+                  setRenderAdjustValues(false)
+                  setUpgradeEditorReady(false)
+                }
+              }}
             >
-              {adjustValues ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              Adjust your values (optional)
-            </button>
-            {upgradeValuesError && (
-              <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
-                Couldn’t load current values: {upgradeValuesError instanceof Error ? upgradeValuesError.message : 'Unknown error'}
+              <div className="overflow-hidden">
+                {renderAdjustValues && (
+                  <div className="mt-2">
+                    <p className="mb-2 text-xs text-theme-text-tertiary">
+                      These are your current settings — edit them to carry into {targetVersion}. What you see here is exactly what gets applied.
+                    </p>
+                    {upgradeValuesError && (
+                      <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
+                        Couldn’t load current values: {upgradeValuesError instanceof Error ? upgradeValuesError.message : 'Unknown error'}
+                      </div>
+                    )}
+                    {upgradeValuesLoading && (
+                      <div className="flex items-center gap-2 h-[240px] px-3 text-sm text-theme-text-secondary bg-theme-elevated border border-theme-border rounded">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Loading current values...
+                      </div>
+                    )}
+                    {!upgradeValuesLoading && !upgradeValuesError && (
+                      upgradeEditorReady ? (
+                        <YamlEditor
+                          value={editedUpgradeYaml}
+                          onChange={(value) => {
+                            editedUpgradeYamlRef.current = value
+                            setEditedUpgradeYaml(value)
+                          }}
+                          readOnly={isPreviewingUpgrade || isUpgrading}
+                          height="240px"
+                        />
+                      ) : (
+                        <div className="flex items-center gap-2 h-[240px] px-3 text-sm text-theme-text-secondary bg-theme-elevated border border-theme-border rounded">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Preparing editor...
+                        </div>
+                      )
+                    )}
+                    {upgradeYamlError && (
+                      <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
+                        {upgradeYamlError}
+                      </div>
+                    )}
+                    {upgradePreviewMutation.error && (
+                      <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
+                        Couldn’t preview against {targetVersion}: {upgradePreviewMutation.error.message}. You can still upgrade.
+                      </div>
+                    )}
+                    <div className="mt-2 flex justify-end">
+                      <Tooltip
+                        content="Render this release with the selected chart version and edited values, then show the manifest diff. Nothing is applied until you confirm from the preview."
+                        wrapperClassName="shrink-0"
+                      >
+                        <button
+                          type="button"
+                          onClick={handleUpgradePreview}
+                          disabled={upgradeValuesLoading || !!upgradeValuesError || !upgradeValuesSeeded || !!upgradeYamlError || isPreviewingUpgrade || isUpgrading}
+                          className="flex items-center gap-1 px-2.5 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded border border-theme-border disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {upgradePreviewMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                          Preview what changes
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-            {adjustValues && (
-              <div className="mt-2">
-                <p className="mb-2 text-xs text-theme-text-tertiary">
-                  These are your current settings — edit them to carry into {targetVersion}. What you see here is exactly what gets applied.
-                </p>
-                {upgradeValuesLoading && (
-                  <div className="flex items-center gap-2 h-24 px-3 text-sm text-theme-text-secondary bg-theme-elevated border border-theme-border rounded">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Loading current values...
-                  </div>
-                )}
-                {!upgradeValuesLoading && !upgradeValuesError && (
-                  <YamlEditor
-                    value={editedUpgradeYaml}
-                    onChange={(value) => {
-                      editedUpgradeYamlRef.current = value
-                      setEditedUpgradeYaml(value)
-                    }}
-                    readOnly={isPreviewingUpgrade || isUpgrading}
-                    height="240px"
-                  />
-                )}
-                {upgradeYamlError && (
-                  <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
-                    {upgradeYamlError}
-                  </div>
-                )}
-                {upgradePreviewMutation.error && (
-                  <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
-                    Couldn’t preview against {targetVersion}: {upgradePreviewMutation.error.message}. You can still upgrade.
-                  </div>
-                )}
-                <div className="mt-2 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={handleUpgradePreview}
-                    disabled={upgradeValuesLoading || !!upgradeValuesError || !upgradeValuesSeeded || !!upgradeYamlError || isPreviewingUpgrade || isUpgrading}
-                    className="flex items-center gap-1 px-2.5 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded border border-theme-border disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {upgradePreviewMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
-                    Preview what changes
-                  </button>
-                </div>
-              </div>
-            )}
+            </div>
           </div>
         )}
         {upgradeProgress.length > 0 && <ProgressLog entries={upgradeProgress} />}

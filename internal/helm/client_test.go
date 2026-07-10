@@ -1453,6 +1453,49 @@ func TestResolveUpgradeChartPath_UsesRepositoryHint(t *testing.T) {
 	}
 }
 
+func TestResolveUpgradeChartPath_RepositoryIndexOCIURLIsAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoFile := filepath.Join(dir, "repositories.yaml")
+	if err := os.WriteFile(repoFile, []byte(`apiVersion: v1
+generated: "2026-05-05T00:00:00Z"
+repositories:
+- name: bitnami
+  url: https://charts.bitnami.com/bitnami
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "bitnami-index.yaml"), []byte(`apiVersion: v1
+entries:
+  nginx:
+  - name: nginx
+    version: 25.0.5
+    urls:
+    - oci://registry-1.docker.io/bitnamicharts/nginx
+generated: "2026-05-05T00:00:00Z"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{settings: &cli.EnvSettings{
+		RepositoryConfig: repoFile,
+		RepositoryCache:  cacheDir,
+	}}
+
+	chartPath, repoName, err := client.resolveUpgradeChartPath("nginx", "25.0.5", "bitnami", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repoName != "bitnami" {
+		t.Fatalf("repo = %q, want bitnami", repoName)
+	}
+	if chartPath != "oci://registry-1.docker.io/bitnamicharts/nginx" {
+		t.Fatalf("chart path = %q, want OCI URL unchanged", chartPath)
+	}
+}
+
 func TestResolveUpgradeChartPath_AmbiguousWithoutHintOrAffinity(t *testing.T) {
 	client := testHelmClientWithRepos(t)
 

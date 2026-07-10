@@ -2523,7 +2523,7 @@ func (c *Client) resolveUpgradeChartPathWithOCIResolver(chartName, targetVersion
 					continue
 				}
 				path := entry.URLs[0]
-				if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+				if !isAbsoluteChartURL(path) {
 					path = strings.TrimSuffix(r.URL, "/") + "/" + path
 				}
 				candidates = append(candidates, chartPathCandidate{repoName: r.Name, repoURL: r.URL, chartPath: path})
@@ -2568,6 +2568,10 @@ func (c *Client) resolveUpgradeChartPathWithOCIResolver(chartName, targetVersion
 	}
 
 	return "", "", fmt.Errorf("chart %s version %s not found in configured repositories or registered OCI sources", chartName, targetVersion)
+}
+
+func isAbsoluteChartURL(path string) bool {
+	return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") || registry.IsOCI(path)
 }
 
 // BatchCheckUpgrades checks for upgrades for all releases at once (more efficient)
