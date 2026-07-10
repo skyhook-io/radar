@@ -99,11 +99,18 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Capture the live token→context binding before the candidate SetConfig
+	// re-stamps it for a fresh token. If the probe fails we must restore THIS
+	// binding, not just the URL/token: a fresh-token SetConfig stamps
+	// tokenContext to the current cluster, and a plain re-point rollback would
+	// leave that stamp on the restored (older) token — marking it valid for the
+	// wrong cluster and defeating the auto-discovery cross-cluster guard.
+	prevTokenContext := argocd.TokenContext()
 	argocd.SetConfig(rawURL, token, body.ArgoCDInsecureTLS, suppliesNewToken)
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
 	if err := argocd.Probe(ctx); err != nil {
-		argocd.SetConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, false)
+		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext)
 		// The upstream error can embed the raw response body (proxy headers, a
 		// render error with Secret data). Log it server-side; return only the
 		// mapped guidance so nothing from Argo's body reaches the browser.
@@ -132,8 +139,9 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}); err != nil {
-		// The running client must agree with the on-disk config; roll it back.
-		argocd.SetConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, false)
+		// The running client must agree with the on-disk config; roll it back —
+		// including the token's context binding (see prevTokenContext above).
+		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext)
 		log.Printf("[argocd] Failed to persist Argo CD config: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

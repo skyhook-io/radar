@@ -112,6 +112,43 @@ func TestSetConfigPreservesTokenContext(t *testing.T) {
 	}
 }
 
+// TestRestoreConfigRestoresTokenContextBinding pins the connect-rollback guard:
+// trying a fresh token in a new cluster re-stamps tokenContext to that cluster
+// BEFORE the probe. When the probe fails, the rollback must put the PRIOR binding
+// back onto the restored (older) token — otherwise that token would be left
+// marked valid for the wrong cluster in memory, defeating the cross-cluster guard
+// until restart. A plain SetConfig(fresh=false) rollback would leave the new
+// stamp; RestoreConfig restores the binding explicitly.
+func TestRestoreConfigRestoresTokenContextBinding(t *testing.T) {
+	ctx := "cluster-a"
+	m := newTestManager(config.Config{})
+	m.contextName = func() string { return ctx }
+
+	m.SetConfig("", "token-a", false, true) // fresh auto-discovery token on cluster-a
+	if m.tokenContext != "cluster-a" {
+		t.Fatalf("tokenContext = %q, want cluster-a", m.tokenContext)
+	}
+
+	// Operator switches to cluster-b and tries to connect a fresh token there; the
+	// candidate SetConfig(fresh=true) stamps tokenContext=cluster-b before the probe.
+	ctx = "cluster-b"
+	m.SetConfig("", "token-b", false, true)
+	if m.tokenContext != "cluster-b" {
+		t.Fatalf("candidate tokenContext = %q, want cluster-b", m.tokenContext)
+	}
+
+	// The probe fails, so the handler rolls back to the prior token + binding.
+	m.RestoreConfig("", "token-a", false, "cluster-a")
+	if m.tokenContext != "cluster-a" {
+		t.Fatalf("tokenContext after rollback = %q, want cluster-a restored", m.tokenContext)
+	}
+	// Still in cluster-b: the restored token is bound to cluster-a, so the guard
+	// must fire rather than send token-a to cluster-b's argocd-server.
+	if err := m.Probe(context.Background()); !errors.Is(err, errTokenContextMismatch) {
+		t.Fatalf("Probe after rollback = %v, want errTokenContextMismatch (guard intact)", err)
+	}
+}
+
 // TestIsConfigured pins that IsConfigured reflects whether the integration has
 // connection settings (explicit URL or token), independent of any live probe.
 func TestIsConfigured(t *testing.T) {

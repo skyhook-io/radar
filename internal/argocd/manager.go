@@ -148,6 +148,12 @@ func SetConfig(url, token string, insecureTLS bool, tokenIsFresh bool) {
 	defaultManager.SetConfig(url, token, insecureTLS, tokenIsFresh)
 }
 
+// RestoreConfig rolls the default manager back to a captured state, including
+// the token's context binding.
+func RestoreConfig(url, token string, insecureTLS bool, tokenContext string) {
+	defaultManager.RestoreConfig(url, token, insecureTLS, tokenContext)
+}
+
 // IsConfigured reports whether the default manager has connection settings.
 func IsConfigured() bool { return defaultManager.IsConfigured() }
 
@@ -211,6 +217,28 @@ func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bo
 	if tokenIsFresh {
 		m.tokenContext = m.currentContextName()
 	}
+	m.generation++
+	fwd := m.dropConnectionLocked()
+	m.mu.Unlock()
+	if fwd != nil {
+		fwd.stop()
+	}
+}
+
+// RestoreConfig rolls the manager back to a previously-captured state, INCLUDING
+// the token's context binding. It exists for the connect-rollback path: the
+// candidate SetConfig may have re-stamped tokenContext for a fresh token, and a
+// plain SetConfig(fresh=false) rollback leaves that stamp in place — which would
+// mark the restored (older) token as valid for the wrong cluster and defeat the
+// auto-discovery cross-cluster guard. Restoring tokenContext explicitly keeps the
+// guard intact.
+func (m *Manager) RestoreConfig(url, token string, insecureTLS bool, tokenContext string) {
+	m.mu.Lock()
+	m.seeded = true
+	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
+	m.token = token
+	m.insecureTLS = insecureTLS
+	m.tokenContext = tokenContext
 	m.generation++
 	fwd := m.dropConnectionLocked()
 	m.mu.Unlock()
@@ -366,6 +394,20 @@ func (m *Manager) Probe(ctx context.Context) error {
 		return err
 	}
 	if err := m.verifyAuth(ctx, url, snap); err != nil {
+		// resolve may have installed a fresh port-forward to a reachable
+		// argocd-server; a token failure means we won't use that endpoint, so
+		// tear the tunnel down rather than leave a disconnected manager holding a
+		// live forward. Skip when a config change already superseded this probe —
+		// that SetConfig/Reset owns the cleanup.
+		m.mu.Lock()
+		var fwd *activeForward
+		if !m.staleLocked(snap) {
+			fwd = m.dropConnectionLocked()
+		}
+		m.mu.Unlock()
+		if fwd != nil {
+			fwd.stop()
+		}
 		return err
 	}
 
