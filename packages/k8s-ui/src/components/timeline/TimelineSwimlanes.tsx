@@ -1930,7 +1930,8 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                         // window start would bleed over the Resource column
                         // header. Also cull the tick whose label would collide
                         // with the "Now" label at the live edge.
-                        if (x < 1.5 || x > 100) return null
+                        if (x < (atPastEdge ? 3.5 : 1.5)) return null
+                        if (x > (atFutureEdge ? 96.5 : 100)) return null
                         if (nowVisible && Math.abs(x - nowX) < 4) return null
                         return (
                           <div
@@ -1967,28 +1968,30 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 {/* Extend affordances at the loaded-range edges. Stop propagation so
                     clicking doesn't also start a pan drag on the container. */}
                 {atPastEdge && (
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => { e.stopPropagation(); onExtendRequest?.('past') }}
-                    className="absolute left-0 top-1/2 z-30 flex -translate-y-1/2 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-                    aria-label="Extend the loaded range further into the past"
-                  >
-                    <ChevronLeft className="h-3 w-3" />
-                    Start of loaded range — extend
-                  </button>
+                  <Tooltip content="Start of loaded history — load earlier" position="bottom">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); onExtendRequest?.('past') }}
+                      className="absolute left-0 top-1/2 z-30 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded border border-theme-border bg-theme-elevated text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+                      aria-label="Extend the loaded range further into the past"
+                    >
+                      <ChevronLeft className="h-3 w-3" />
+                    </button>
+                  </Tooltip>
                 )}
                 {atFutureEdge && (
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => { e.stopPropagation(); onExtendRequest?.('future') }}
-                    className="absolute right-0 top-1/2 z-30 flex -translate-y-1/2 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-                    aria-label="Extend the loaded range further toward now"
-                  >
-                    End of loaded range — extend
-                    <ChevronRight className="h-3 w-3" />
-                  </button>
+                  <Tooltip content="End of loaded history — load more recent" position="bottom">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); onExtendRequest?.('future') }}
+                      className="absolute right-0 top-1/2 z-30 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded border border-theme-border bg-theme-elevated text-theme-text-secondary shadow-theme-sm transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+                      aria-label="Extend the loaded range further toward now"
+                    >
+                      <ChevronRight className="h-3 w-3" />
+                    </button>
+                  </Tooltip>
                 )}
               </div>
             </div>
