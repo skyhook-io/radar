@@ -138,3 +138,41 @@ func TestTokenFromCLIConfigMissingFile(t *testing.T) {
 		t.Fatal("expected error for missing config file")
 	}
 }
+
+func TestCLISessionFromConfig(t *testing.T) {
+	t.Run("current-context session", func(t *testing.T) {
+		sess, err := CLISessionFromConfig(writeFixture(t, cliConfigFixture))
+		if err != nil {
+			t.Fatalf("CLISessionFromConfig: %v", err)
+		}
+		if sess == nil {
+			t.Fatal("expected a session, got nil")
+		}
+		// current-context is `local` (server localhost:8080, insecure: true).
+		if sess.Server != "localhost:8080" || sess.User != "local" || !sess.Insecure {
+			t.Errorf("session = %+v, want {localhost:8080 local true}", sess)
+		}
+	})
+
+	t.Run("missing file → nil, no error", func(t *testing.T) {
+		sess, err := CLISessionFromConfig(filepath.Join(t.TempDir(), "nope"))
+		if err != nil || sess != nil {
+			t.Fatalf("missing file: got (%+v, %v), want (nil, nil)", sess, err)
+		}
+	})
+
+	t.Run("no current-context → nil", func(t *testing.T) {
+		sess, err := CLISessionFromConfig(writeFixture(t, "contexts: []\nusers: []\n"))
+		if err != nil || sess != nil {
+			t.Fatalf("no current-context: got (%+v, %v), want (nil, nil)", sess, err)
+		}
+	})
+
+	t.Run("context without a token → nil", func(t *testing.T) {
+		cfg := "contexts:\n- name: prod\n  server: argocd.example.com\n  user: prod\ncurrent-context: prod\nusers:\n- name: prod\n"
+		sess, err := CLISessionFromConfig(writeFixture(t, cfg))
+		if err != nil || sess != nil {
+			t.Fatalf("no token: got (%+v, %v), want (nil, nil)", sess, err)
+		}
+	})
+}

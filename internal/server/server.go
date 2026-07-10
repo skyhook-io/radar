@@ -50,6 +50,7 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/perfstats"
@@ -4177,6 +4178,9 @@ type configResponse struct {
 	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
 	// ArgoCDTokenSet tells the UI a token is configured without exposing it.
 	ArgoCDTokenSet bool `json:"argoCdTokenSet,omitempty"`
+	// ArgoCDCLISession is the detected Argo CD CLI login (server + user, no
+	// token), so the UI can offer "use your CLI session" only when it will work.
+	ArgoCDCLISession *argoapi.CLISession `json:"argoCdCliSession,omitempty"`
 }
 
 // handleGetConfig returns the on-disk config file alongside the effective startup config.
@@ -4197,6 +4201,11 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		IsDesktop:            version.IsDesktop(),
 		PrometheusHeaderKeys: headerKeys,
 		ArgoCDTokenSet:       tokenSet,
+	}
+	// Best-effort: surface a detected Argo CD CLI login so the UI can offer it.
+	// A malformed CLI config just means "no session offered", never a failure.
+	if sess, err := argocd.CLISession(); err == nil {
+		resp.ArgoCDCLISession = sess
 	}
 	if s.effectiveConfig != nil {
 		effective := *s.effectiveConfig

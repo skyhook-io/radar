@@ -186,6 +186,13 @@ func TokenFromCLI(serverURL string) (string, error) {
 	return argoapi.TokenFromCLIConfig("", serverURL)
 }
 
+// CLISession returns the detected Argo CD CLI login (server + user, token-free),
+// or nil when there is none — so the UI can offer "use your CLI session" only
+// when it will actually work. Machine-local; no connection state involved.
+func CLISession() (*argoapi.CLISession, error) {
+	return argoapi.CLISessionFromConfig("")
+}
+
 // SetConfig re-points the manager immediately: connection state and cache are
 // dropped so the next Probe/Get resolves against the new settings. Empty url
 // enables auto-discovery. tokenIsFresh must be true ONLY when the token was

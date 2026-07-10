@@ -45,6 +45,9 @@ interface ConfigResponse {
   // returned — the card shows a "configured" placeholder and omits the token
   // from the PUT unless the user changes or clears it.
   argoCdTokenSet?: boolean
+  // A detected Argo CD CLI login (server + user + TLS mode, no token), so the UI
+  // can offer "use your CLI session" as a one-click when it will actually work.
+  argoCdCliSession?: { server: string; user: string; insecure?: boolean }
 }
 
 interface SettingsDialogProps {
@@ -477,6 +480,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 url={editedConfig.argoCdUrl ?? ''}
                 insecureTls={editedConfig.argoCdInsecureTls ?? false}
                 tokenSet={configData?.argoCdTokenSet ?? false}
+                cliSession={configData?.argoCdCliSession}
                 onChangeUrl={(v) => updateConfigField('argoCdUrl', v || undefined)}
                 onChangeInsecureTls={(v) => updateConfigField('argoCdInsecureTls', v || undefined)}
                 onApplied={({ url, insecureTls, tokenSet }) =>
@@ -1390,6 +1394,7 @@ function ArgoCDConfigField({
   url,
   insecureTls,
   tokenSet,
+  cliSession,
   onChangeUrl,
   onChangeInsecureTls,
   onApplied,
@@ -1397,6 +1402,7 @@ function ArgoCDConfigField({
   url: string
   insecureTls: boolean
   tokenSet: boolean
+  cliSession?: { server: string; user: string; insecure?: boolean }
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
@@ -1472,6 +1478,19 @@ function ArgoCDConfigField({
   }
 
   const handleUseCliToken = () => {
+    // The detected session is for its own server, which may differ from the URL
+    // field — connect to that server with its TLS mode (Argo CD is https; the
+    // insecure flag covers self-signed) and reflect it in the form.
+    if (cliSession) {
+      const sessionUrl = /^https?:\/\//i.test(cliSession.server)
+        ? cliSession.server
+        : `https://${cliSession.server}`
+      const insecure = cliSession.insecure ?? false
+      onChangeUrl(sessionUrl)
+      onChangeInsecureTls(insecure)
+      put({ argoCdUrl: sessionUrl, argoCdInsecureTls: insecure, useCliToken: true }, true)
+      return
+    }
     put({ argoCdUrl: url.trim(), argoCdInsecureTls: insecureTls, useCliToken: true }, true)
   }
 
@@ -1497,11 +1516,44 @@ function ArgoCDConfigField({
         className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
       />
 
-      <label className="block text-sm font-medium text-theme-text-primary mt-3 mb-1">Auth token</label>
+      {cliSession && (
+        <div className="mt-3 rounded-md border border-skyhook-500/30 bg-skyhook-500/[0.07] p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-sm font-medium text-theme-text-primary">
+                <Terminal className="w-3.5 h-3.5 shrink-0 text-skyhook-500" />
+                Argo CD CLI session found
+              </p>
+              <p className="mt-0.5 truncate text-xs text-theme-text-tertiary">
+                {cliSession.user && cliSession.user !== cliSession.server ? (
+                  <><span className="text-theme-text-secondary">{cliSession.user}</span> @ {cliSession.server}</>
+                ) : (
+                  <span className="text-theme-text-secondary">{cliSession.server}</span>
+                )}
+              </p>
+            </div>
+            <button
+              onClick={handleUseCliToken}
+              disabled={connecting}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
+            >
+              {connecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plug className="w-3.5 h-3.5" />}
+              Use this session
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-theme-text-tertiary">
+            Reuses your <code className="inline-code">argocd login</code> token — nothing to generate or paste.
+          </p>
+        </div>
+      )}
+
+      <label className="block text-sm font-medium text-theme-text-primary mt-3 mb-1">
+        {cliSession ? 'Or paste a token' : 'Auth token'}
+      </label>
       <p className="text-xs text-theme-text-tertiary mb-1">
         Lets Radar read your applications. Create one with{' '}
         <code className="inline-code">argocd account generate-token</code>, or in the Argo CD UI under
-        Settings → Accounts. Already signed in with the CLI? Skip this and use “Argo CD CLI session” below.
+        Settings → Accounts.
       </p>
       <div className="flex items-center gap-2">
         <input
@@ -1534,7 +1586,7 @@ function ArgoCDConfigField({
         <span className="text-xs text-theme-text-secondary">Skip TLS verification (self-signed Argo CD server)</span>
       </label>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-3">
         <button
           onClick={handleConnect}
           disabled={connecting}
@@ -1543,16 +1595,6 @@ function ArgoCDConfigField({
           {connecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plug className="w-3.5 h-3.5" />}
           Connect &amp; save
         </button>
-        <Tooltip content="Reuse the token from your `argocd login` session on this machine — nothing to generate or paste">
-          <button
-            onClick={handleUseCliToken}
-            disabled={connecting}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated border border-theme-border rounded-md transition-colors disabled:opacity-50"
-          >
-            <Terminal className="w-3.5 h-3.5" />
-            Use Argo CD CLI session
-          </button>
-        </Tooltip>
       </div>
 
       {state.status === 'connected' ? (
