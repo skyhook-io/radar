@@ -255,22 +255,13 @@ describe('clusterBreakdown (pill hover breakdown)', () => {
   })
 })
 
-describe('chipKindLabel — chip abbreviations with full kind on hover', () => {
-  it('maps common long kinds to k8s-idiomatic short forms', () => {
-    expect(chipKindLabel('Application')).toEqual({ label: 'App', abbreviated: true })
-    expect(chipKindLabel('CustomResourceDefinition')).toEqual({ label: 'CRD', abbreviated: true })
-    expect(chipKindLabel('PodDisruptionBudget')).toEqual({ label: 'PDB', abbreviated: true })
-  })
-  it('truncates unknown long kinds instead of minting a misleading acronym', () => {
-    // Auto-initials produced misleading chips (ClusterSecretStore→CSS); truncate
-    // the real kind (full kind stays in the tooltip via abbreviated:true).
-    expect(chipKindLabel('VerticalPodAutoscalerCheckpoint')).toEqual({ label: 'VerticalPodAu…', abbreviated: true })
-    expect(chipKindLabel('ClusterSecretStore')).toEqual({ label: 'ClusterSecret…', abbreviated: true })
-  })
-  it('leaves short kinds alone and keeps displayKind short forms', () => {
-    expect(chipKindLabel('Pod')).toEqual({ label: 'Pod', abbreviated: false })
+describe('chipKindLabel — the real Kind, verbatim', () => {
+  it('returns the full Kind unchanged — no abbreviation, ALL-CAPS, or truncation', () => {
     expect(chipKindLabel('Deployment')).toEqual({ label: 'Deployment', abbreviated: false })
-    expect(chipKindLabel('HorizontalPodAutoscaler')).toEqual({ label: 'HPA', abbreviated: true })
+    expect(chipKindLabel('PodDisruptionBudget')).toEqual({ label: 'PodDisruptionBudget', abbreviated: false })
+    expect(chipKindLabel('HorizontalPodAutoscaler')).toEqual({ label: 'HorizontalPodAutoscaler', abbreviated: false })
+    expect(chipKindLabel('VerticalPodAutoscalerCheckpoint')).toEqual({ label: 'VerticalPodAutoscalerCheckpoint', abbreviated: false })
+    expect(chipKindLabel('ClusterSecretStore')).toEqual({ label: 'ClusterSecretStore', abbreviated: false })
   })
   it('labels kind-less events as Event', () => {
     expect(chipKindLabel('')).toEqual({ label: 'Event', abbreviated: false })

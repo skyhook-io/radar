@@ -1651,32 +1651,32 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 {lane.isAppGroup ? (
                   <AppGroupLaneLabel lane={lane} memberCount={visibleChildren.length} onToggle={() => toggleLane(lane.id)} onAppClick={onAppClick} />
                 ) : (
-                  /* Two-line owner lane: chip · [ name (bold) · +N · ⚠ / ns ]. The
-                     namespace drops to a quiet subtitle so the name gets the full
-                     first line instead of competing with metadata for the budget.
-                     Only the NAME navigates; the rest is inert. */
-                  <div className="flex-1 min-w-0 flex items-center gap-1.5">
-                    <KindChip kind={lane.kind} title={kindBadgeTitle} />
-                    {showGroupChip && <GroupChip group={lane.group!} />}
-                    <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Tooltip content={lane.name} wrapperClassName="min-w-0 flex-1">
-                          <span
-                            onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
-                            className={clsx('min-w-0 w-full text-sm text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer', compact ? 'font-medium' : 'font-semibold font-mono')}
-                          >
-                            <MiddleEllipsis text={lane.name} className="block" />
-                          </span>
-                        </Tooltip>
-                        {hasVisibleChildren && (
-                          <span className="shrink-0 text-[11.5px] font-semibold text-theme-text-tertiary">
-                            {`+${visibleChildren.length}`}
-                          </span>
-                        )}
-                        <LaneWarnChip events={lane.allEventsSorted || []} />
-                      </div>
+                  /* Two-line owner lane: [ name (bold) · +N · ⚠ ] on row 1, then a
+                     quiet metadata row 2 [ kind · namespace ]. The name owns the
+                     full first line so it stops losing the width fight to the kind
+                     chip + namespace. Only the NAME navigates; the rest is inert. */
+                  <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Tooltip content={lane.name} wrapperClassName="min-w-0 flex-1">
+                        <span
+                          onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
+                          className={clsx('min-w-0 w-full text-sm text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer', compact ? 'font-medium' : 'font-semibold font-mono')}
+                        >
+                          <MiddleEllipsis text={lane.name} className="block" />
+                        </span>
+                      </Tooltip>
+                      {hasVisibleChildren && (
+                        <span className="shrink-0 text-[11.5px] font-semibold text-theme-text-tertiary">
+                          {`+${visibleChildren.length}`}
+                        </span>
+                      )}
+                      <LaneWarnChip events={lane.allEventsSorted || []} />
+                    </div>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <KindChip kind={lane.kind} title={kindBadgeTitle} />
+                      {showGroupChip && <GroupChip group={lane.group!} />}
                       {lane.namespace && !compact && (
-                        <span className="text-[11px] text-theme-text-tertiary truncate">
+                        <span className="min-w-0 truncate text-[11px] text-theme-text-tertiary">
                           {lane.namespace}
                         </span>
                       )}
@@ -1688,7 +1688,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     name text, so the pin sits inert alongside it. */}
                 {renderPinButton(lane)}
               </div>
-              {track(compact ? 'h-9' : 'h-11')}
+              {track('h-11')}
             </div>
           </div>
           {childRows}
@@ -2202,49 +2202,25 @@ function LaneWarnChip({ events }: { events: TimelineEvent[] }) {
 // is derived from it so verticals align under the chevron directly above them.
 const TREE_ROOT_RAIL_PX = 22
 const CHILD_INDENT_STEP_PX = 22
-// Chip-specific short forms layered over displayKind — the chip is a narrow
-// uppercase pill, so long kinds get k8s-idiomatic abbreviations and the full
-// kind rides the tooltip. Only names that stay obvious belong here; everything
-// else falls through to the CamelCase-initials rule below.
-const CHIP_KIND_SHORT: Record<string, string> = {
-  Application: 'App',
-  ApplicationSet: 'AppSet',
-  CustomResourceDefinition: 'CRD',
-  PodDisruptionBudget: 'PDB',
-  ServiceAccount: 'SvcAcct',
-  NetworkPolicy: 'NetPol',
-  CertificateRequest: 'CertReq',
-  VerticalPodAutoscaler: 'VPA',
-}
-
-/** Chip label + whether it abbreviates the raw kind (→ tooltip carries it). */
+/** Chip label — the real Kind, verbatim (matches the list; no abbreviation,
+ *  no ALL-CAPS, no truncation). Kind-less events read as "Event". */
 export function chipKindLabel(kind: string): { label: string; abbreviated: boolean } {
   // Some cluster components emit events whose involvedObject has NO kind (e.g.
   // GKE's resource-tracker "BigQueryUpload" events) — label those as plain events.
   if (!kind) return { label: 'Event', abbreviated: false }
-  const short = CHIP_KIND_SHORT[kind]
-  if (short) return { label: short, abbreviated: true }
-  const display = displayKind(kind)
-  // Unmapped long kinds truncate (full kind stays in the tooltip) rather than
-  // mint an initials acronym: auto-initials produced misleading labels —
-  // ClusterSecretStore→CSS collides with an unrelated term, VPAC reads as noise.
-  if (display.length > 14) {
-    return { label: `${display.slice(0, 13)}…`, abbreviated: true }
-  }
-  return { label: display, abbreviated: display !== kind }
+  return { label: kind, abbreviated: false }
 }
 
-// The kind chip: mono, uppercased via CSS (DOM text stays the label, so text
-// queries keep matching). ALL NEUTRAL (Turn 11 color budget): identity is
-// monochrome — kind is the text, not the hue. Abbreviated labels always carry
-// the full kind in the tooltip.
+// The kind chip: neutral pill on the lane's second row (Turn 11 color budget —
+// identity is monochrome). Shows the real Kind in its normal PascalCase; the
+// name owns the first row so it doesn't lose the width fight to metadata.
 function KindChip({ kind, title }: { kind: string; title?: string }) {
-  const { label, abbreviated } = chipKindLabel(kind)
-  const tip = title ?? (abbreviated ? kind : kind ? undefined : 'Kubernetes event — its source object reports no kind')
+  const { label } = chipKindLabel(kind)
+  const tip = title ?? (kind ? undefined : 'Kubernetes event — its source object reports no kind')
   return (
     <Tooltip content={tip} disabled={!tip} wrapperClassName="shrink-0">
       <span
-        className="rounded border border-theme-border-light bg-theme-elevated px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-theme-text-secondary"
+        className="rounded border border-theme-border-light bg-theme-elevated px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wide text-theme-text-secondary"
         aria-label={tip}
       >
         {label}

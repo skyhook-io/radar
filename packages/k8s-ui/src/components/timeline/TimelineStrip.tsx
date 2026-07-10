@@ -224,8 +224,12 @@ function footerStamp(ms: number): string {
 const MIN = 60_000
 const HR = 60 * MIN
 const DY = 24 * HR
+// Never let the window zoom in below this — a sub-15-min slice strands the user
+// on a near-empty band with no finer signal to gain. Capped to the query span at
+// use, so a shorter custom query can still fill the window.
+const MIN_WINDOW_MS = 15 * MIN
 export const WINDOW_RUNGS_MS = [
-  MIN, 5 * MIN, 15 * MIN, 30 * MIN,
+  MIN_WINDOW_MS, 30 * MIN,
   HR, 2 * HR, 6 * HR, 12 * HR,
   DY, 2 * DY, 7 * DY, 14 * DY, 30 * DY,
 ]
@@ -353,7 +357,9 @@ export function TimelineStrip({
     const onMove = (e: PointerEvent) => {
       const drag = dragRef.current
       if (!drag || !onLensChange) return
-      const minW = LENS_MIN_WIDTH_PX * msPerPx
+      // Floor the drag-resize at the 15-min window minimum (or the query span,
+      // whichever is smaller), not just the pixel-grabbable minimum.
+      const minW = Math.max(LENS_MIN_WIDTH_PX * msPerPx, Math.min(MIN_WINDOW_MS, selSpan))
       if (drag.mode === 'draw') {
         const rect = trackRef.current?.getBoundingClientRect()
         if (!rect || width <= 0) return

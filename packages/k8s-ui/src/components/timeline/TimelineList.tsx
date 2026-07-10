@@ -644,7 +644,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
                     </span>
                   )}
                   {isHistorical && item.message && (
-                    <span className="text-sm text-theme-text-secondary">
+                    <span className="min-w-0 flex-1 break-words text-sm text-theme-text-secondary">
                       {item.message}
                     </span>
                   )}
@@ -654,7 +654,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
                   <span className={clsx('text-sm font-medium', isWarning ? 'text-amber-700 dark:text-amber-300' : 'text-theme-text-secondary')}>
                     {item.reason}
                   </span>
-                  <span className="text-sm text-theme-text-secondary">
+                  <span className="min-w-0 flex-1 break-words text-sm text-theme-text-secondary">
                     {item.message}
                   </span>
                 </>

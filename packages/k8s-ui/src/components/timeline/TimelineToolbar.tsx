@@ -46,7 +46,7 @@ const SORT_OPTIONS: { value: TimelineSort; label: string; tooltip: string }[] = 
 const GROUPING_OPTIONS: { value: TimelineGrouping; label: string; tooltip: string }[] = [
   { value: 'app', label: 'Applications', tooltip: 'Group lanes into the applications defined by the server (workload grouping + evidence).' },
   { value: 'owner', label: 'Owners', tooltip: 'Group only by owner references and topology (Deployment→ReplicaSet→Pod, Service→Deployment).' },
-  { value: 'flat', label: 'Flat', tooltip: 'No grouping — every resource is its own lane (K8s events still attach to their owner).' },
+  { value: 'flat', label: 'Flat', tooltip: 'No grouping — every resource is its own lane (K8s Events still attach to their owner).' },
 ]
 
 export interface TimelineToolbarProps {
@@ -195,21 +195,21 @@ export function TimelineToolbar({
               onClick={() => setSource('all')}
               label="All"
               count={stats.total}
-              tooltip="Everything: resource changes and native K8s Events"
+              tooltip="Everything — resource changes and K8s Events"
             />
             <SourceChip
               active={activitySel.source === 'changes'}
               onClick={() => setSource('changes')}
               label="Changes"
               count={stats.changes}
-              tooltip="Resource mutations Radar watched: creates, updates, deletes"
+              tooltip="Spec & status changes to the resource itself — creates, updates, deletes"
             />
             <SourceChip
               active={activitySel.source === 'k8s_events'}
               onClick={() => setSource('k8s_events')}
               label="K8s Events"
               count={stats.k8sEvents}
-              tooltip="Native Kubernetes Event objects (Normal + Warning)"
+              tooltip="Native Kubernetes Event objects — what the cluster reported: scheduling, image pulls, restarts (Normal + Warning)"
             />
           </div>
           <ProblemsToggle
