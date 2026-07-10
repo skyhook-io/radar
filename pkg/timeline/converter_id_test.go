@@ -3,6 +3,9 @@ package timeline
 import (
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // A relist re-emits the current state; the id must be identical whether the
@@ -61,5 +64,31 @@ func TestHistoricalEventID_ClusterQualified(t *testing.T) {
 	again := NewHistoricalEvent("cluster-a", "Deployment", "apps/v1", "team-a", "web", ts, "created", "", HealthUnknown, nil, nil)
 	if a.ID != again.ID {
 		t.Fatalf("historical id must be deterministic within a cluster: %q vs %q", a.ID, again.ID)
+	}
+}
+
+// The GitOps identity labels must survive the grouping filter — the server's
+// argo:/helm: app matchKeys join deleted members' events by exactly these.
+func TestExtractLabels_KeepsGitOpsIdentityLabels(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "shop-worker",
+			Namespace: "team-a",
+			Labels: map[string]string{
+				"argocd.argoproj.io/instance": "shop",
+				"helm.toolkit.fluxcd.io/name": "shop",
+				"app.kubernetes.io/part-of":   "shop-suite",
+				"pod-template-hash":           "abc123",
+			},
+		},
+	}
+	got := ExtractLabels(pod)
+	for _, key := range []string{"argocd.argoproj.io/instance", "helm.toolkit.fluxcd.io/name", "app.kubernetes.io/part-of"} {
+		if got[key] == "" {
+			t.Errorf("grouping label %s was filtered out", key)
+		}
+	}
+	if _, ok := got["pod-template-hash"]; ok {
+		t.Errorf("non-grouping label leaked through the filter")
 	}
 }

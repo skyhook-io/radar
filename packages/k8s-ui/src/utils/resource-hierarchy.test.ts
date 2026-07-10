@@ -90,6 +90,27 @@ describe('buildResourceHierarchy app-membership cascade (grouping=app)', () => {
     expect(lanes[0].children?.map((c) => c.name).sort()).toEqual(['billing-api', 'billing-worker'])
   })
 
+  it('tier 2: GitOps identity labels join argo:/helm: matchKeys (Argo-/Flux-primary apps)', () => {
+    // An Argo-primary app whose members lack the standard k8s labels: the
+    // deleted member's event carries only the Argo instance label, and a
+    // Flux-HelmRelease member carries only the Flux name label. Both must
+    // re-join through the server's argo:/helm: evidence keys.
+    const argoApp: AppMembership = { appKey: 'team-a/argo/shop', appName: 'shop', evidence: 'argocd.argoproj.io/instance' }
+    const events = [
+      changeEvent('Deployment', 'team-a', 'shop-api'),
+      changeEvent('Deployment', 'team-a', 'shop-worker', { labels: { 'argocd.argoproj.io/instance': 'shop' } }),
+      changeEvent('Deployment', 'team-a', 'shop-cache', { labels: { 'helm.toolkit.fluxcd.io/name': 'shop' } }),
+    ]
+    const appIndex = index(
+      { 'Deployment/team-a/shop-api': argoApp },
+      { 'argo:team-a:shop': argoApp, 'helm:team-a:shop': argoApp },
+    )
+    const lanes = buildResourceHierarchy({ events, grouping: 'app', appIndex })
+    expect(lanes).toHaveLength(1)
+    expect(lanes[0].isAppGroup).toBe(true)
+    expect(lanes[0].children?.map((c) => c.name).sort()).toEqual(['shop-api', 'shop-cache', 'shop-worker'])
+  })
+
   it('namespace isolation: the same label value in another namespace does NOT cross-join', () => {
     // Two apps in two namespaces share the instance label value "shared". The
     // evidence index is scoped per namespace, so a deleted member's event in

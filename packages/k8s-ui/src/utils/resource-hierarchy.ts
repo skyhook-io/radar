@@ -97,12 +97,16 @@ export interface HierarchyOptions {
 }
 
 // Event-label keys scanned for app-membership evidence, in pkg/subject tier
-// order (TierInstance 6 > TierPartOf 7 > TierAppName 8 > TierBareApp 9 —
-// pkg/subject/overlay.go). The prefix matches the server's matchKeys kinds
-// (applications.go signalMatchKind), so an event's label value keys straight
-// into AppMembershipIndex.byEvidence. Events carry labels (not annotations), and
-// these four are all labels, so nothing is lost.
+// order (TierFluxHelmRelease 1 > TierArgoInstance 4 > TierInstance 6 >
+// TierPartOf 7 > TierAppName 8 > TierBareApp 9 — pkg/subject/overlay.go). The
+// prefix matches the server's matchKeys kinds (applications.go
+// signalMatchKind), so an event's label value keys straight into
+// AppMembershipIndex.byEvidence. Events carry labels (not annotations), so a
+// native-Helm 'helm:' matchKey (meta.helm.sh/release-name, an annotation) is
+// matchable only through the Flux HelmRelease label below.
 const EVENT_EVIDENCE_LABELS: readonly (readonly [string, string])[] = [
+  ['helm', 'helm.toolkit.fluxcd.io/name'],
+  ['argo', 'argocd.argoproj.io/instance'],
   ['instance', 'app.kubernetes.io/instance'],
   ['part-of', 'app.kubernetes.io/part-of'],
   ['name', 'app.kubernetes.io/name'],

@@ -174,15 +174,23 @@ func ExtractLabels(obj any) map[string]string {
 		return nil
 	}
 
-	// Only keep labels that are useful for grouping
+	// Only keep labels that are useful for grouping. The GitOps identity
+	// labels must ride along or the app-membership matchKeys the server ships
+	// for Argo/Flux-primary apps (applications.go collectExactMatchKeys) have
+	// nothing to match against on a deleted member's events. Native Helm
+	// identity is an annotation (meta.helm.sh/release-name), which events
+	// deliberately never carry.
 	relevant := make(map[string]string)
 	interestingLabels := []string{
 		"app.kubernetes.io/name",
 		"app.kubernetes.io/instance",
+		"app.kubernetes.io/part-of",
 		"app.kubernetes.io/component",
 		"app",
 		"name",
 		"component",
+		"argocd.argoproj.io/instance",
+		"helm.toolkit.fluxcd.io/name",
 	}
 
 	for _, key := range interestingLabels {
