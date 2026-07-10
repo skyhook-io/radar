@@ -1,5 +1,5 @@
 /**
- * TimelineStrip — the 6a strip. A log-explorer-style time control: ONE query-range
+ * TimelineStrip — a log-explorer-style time control: ONE query-range
  * picker + ONE results histogram whose draggable view-window band pans the lanes.
  * No minimap, no ×8 framing — the histogram spans the query range directly (the
  * host feeds `selection` as the displayed span), so a narrow window is never a
@@ -39,7 +39,7 @@ import {
 import { STALE_AMBER_AFTER_MS, type TimelineLiveState } from './timeline-live'
 
 const TRACK_HEIGHT = 48
-// The window band never renders thinner than this (Turn 7: a "you are here" box
+// The window band never renders thinner than this (a "you are here" box
 // squeezed to a couple pixels is invisible) — a thumb-width minimum, centered on
 // the actual lens so it stays grabbable and clearly marks where you're looking.
 const LENS_MIN_BAND_PX = 40
@@ -58,7 +58,7 @@ export interface TimelineStripProps {
   historyUnavailableBeforeMs?: number
   /** Exact event count for the footer's "N events in query range". Buckets
    *  straddling the query edge spill a few events in/out, so a bucket sum can
-   *  disagree with the toolbar chips (Turn 8: one story for the numbers). */
+   *  disagree with the toolbar chips (one story for the numbers). */
   totalInQueryRange?: number
   /** Query range = the histogram span (the strip shows exactly this). */
   selection: ScrubberRange
@@ -91,9 +91,7 @@ function fieldStamp(ms: number): string {
 const DOW_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 
 // A compact, theme-styled datetime picker: a stamp button opening a month-grid
-// popover with a time field and a "Now" shortcut. Replaces both the OS-native
-// datetime-local widget (jarring against the theme) and the freetext relative
-// inputs (too implicit) that preceded it.
+// popover with a time field and a "Now" shortcut.
 function DateTimeField({ label, valueMs, onChange, nowMs }: {
   label: string
   valueMs: number
@@ -504,9 +502,9 @@ export function TimelineStrip({
       : `${totalEvents.toLocaleString()} events in query range${gapsSuffix}`
 
   return (
-    // ONE row (Turn 12): the range picker + window stepper cap the histogram on
+    // ONE row: the range picker + window stepper cap the histogram on
     // the left, Live docks right, and the edge stamps + state caption sit under
-    // the track. Turn 13 metrics: every control is a fixed 34px whose vertical
+    // the track. Metrics: every control is a fixed 34px whose vertical
     // center sits on the 48px track's midline (labels float in the airspace
     // above) — content-driven heights made true centering impossible. Cap
     // columns: 7px top + 13px label + 4px gap + 34px control → center 41 ≈
@@ -683,8 +681,8 @@ export function TimelineStrip({
                 {/* Out-of-window bars are muted but still legible — the dimmed
                     part of a photo crop, not invisible. */}
                 <div className={clsx('w-full rounded-[1px]', inWindow ? 'bg-accent/60' : 'bg-theme-text-tertiary/45')} style={{ height: h }} />
-                {/* Warning cap is AMBER (Turn 7: red is reserved for "actually
-                    broken"; these buckets count warning events, not failures). */}
+                {/* Warning cap is AMBER: red is reserved for "actually
+                    broken"; these buckets count warning events, not failures. */}
                 {warnH > 0 && <div className={clsx('absolute bottom-0 w-full rounded-[1px]', inWindow ? 'bg-[var(--color-warning)]/80' : 'bg-[var(--color-warning)]/40')} style={{ height: warnH }} />}
               </div>
             )
@@ -770,7 +768,7 @@ export function TimelineStrip({
 
       {/* Edge stamps + state caption under the track: query start left, query
           end (+ "· now" while live) right, and between them either the window's
-          range ("3:41 — 4:11 · 58 of 125 events") or the full-range state line. */}
+          range ("3:41 — 4:11 · 125 in query range") or the full-range state line. */}
       <div className="mt-1 flex items-center justify-between gap-2 text-[10.5px] tabular-nums text-theme-text-tertiary">
         <span className="whitespace-nowrap">{footerStamp(selection.fromMs)}</span>
         <span
@@ -798,9 +796,9 @@ export function TimelineStrip({
 
 // Go-live / frozen chip. Live+latched is inert (already following now); a frozen
 // or unlatched state is a clickable CTA back to the live edge. Both live states
-// render the SAME "Live" text — the unlatched variant's extra copy used to widen
-// the chip and shove the whole histogram over on every latch flip; the jump
-// affordance rides the hollow style, the click, and the tooltip instead.
+// render the SAME "Live" text so the chip width is constant and a latch flip
+// never shoves the histogram over; the jump affordance rides the hollow style,
+// the click, and the tooltip instead.
 function StripLiveChip({ state, onClick }: { state: TimelineLiveState; onClick?: () => void }) {
   if (state.kind === 'live') {
     if (state.latched) {

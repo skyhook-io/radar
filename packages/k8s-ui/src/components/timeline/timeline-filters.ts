@@ -1,7 +1,6 @@
 import type { TimelineEvent } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
 import { pluralize } from '../../utils/pluralize'
-import type { TimelineSort } from './timeline-lane-sort'
 
 // Legacy single-value activity filter. Retained for the home-page deep-link
 // (`initialFilter`) compat path that seeds the multi-select from one preset.
@@ -42,8 +41,7 @@ export function matchesActivityFilter(event: TimelineEvent, selected: readonly A
 // Two-axis view over the activity keys. The toolbar presents the filter as a
 // SOURCE pick (Changes = watched resource mutations vs K8s Events = native
 // Event objects) crossed with a PROBLEMS toggle (the severity slice of the
-// picked source). Four sibling pills hid this structure — "Warnings" sat next
-// to its own superset "K8s Events" and read as an unrelated peer.
+// picked source).
 //
 // The six reachable states are exactly expressible in the existing key
 // vocabulary, so the URL param, the shared predicate, and both views carry
@@ -86,8 +84,8 @@ export function activityKeysToSelection(keys: readonly ActivityFilterKey[]): Act
   return { source: 'all', problemsOnly: false }
 }
 
-// Free-text search predicate. Uses the list view's richer field set (adds the
-// diff summary the swimlane previously ignored) so both views match identically.
+// Free-text search predicate. Matches name, kind, namespace, reason, message,
+// and diff summary. Shared so the list and swimlane views match identically.
 export function matchesTimelineSearch(event: TimelineEvent, term: string): boolean {
   if (!term) return true
   const t = term.toLowerCase()
@@ -154,23 +152,6 @@ export function computeActivityStats(events: TimelineEvent[] | undefined): Activ
     if (e.eventType === 'delete') deleted++
   }
   return { total: events.length, changes, k8sEvents, warnings, unhealthy, deleted }
-}
-
-// Count of non-default choices in the View menu — drives the badge on the "View"
-// button. Deleted-visibility moved to its own toolbar toggle (shows its own
-// state); defaults that count as zero: grouping by app, sort by
-// importance. Kinds is deliberately excluded: it moved to its own toolbar chip
-// with its own badge, so counting it here would double-count. `grouping`/`sort`
-// are optional because the list view has neither; when undefined (or at their
-// default) they never contribute.
-export function countActiveViewOptions(opts: {
-  grouping?: 'app' | 'owner' | 'flat'
-  sort?: TimelineSort
-}): number {
-  let count = 0
-  if (opts.grouping && opts.grouping !== 'app') count++
-  if (opts.sort && opts.sort !== 'importance') count++
-  return count
 }
 
 // Curated seed order for the Kind dropdown; discovered kinds (CRDs) append after.

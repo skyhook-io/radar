@@ -58,17 +58,12 @@ import {
   timeToX as sharedTimeToX,
 } from './shared'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
-import { clampLensToSelection, type ScrubberRange } from './scrubber-math'
+import { clampLensToSelection, formatLensDuration, type ScrubberRange } from './scrubber-math'
 
 // Predefined zoom levels (window widths in hours): 15m, 30m, 1h, 2h, 4h, 8h,
 // 12h, 1d, 2d, 3d, 7d. Hoisted so the controlled-window adapter can size the
 // view from a window width instead of the internal `zoom` state.
 const ZOOM_LEVELS = [0.25, 0.5, 1, 2, 4, 8, 12, 24, 48, 72, 168]
-
-// Same rungs, exported for the retained lens-width chip's preset ladder so the
-// band resizes through exactly the swimlane's zoom steps. Aliased (not `ZOOM_LEVELS`)
-// to avoid colliding with the distinct ladder exported from ./shared.
-export const SWIMLANE_ZOOM_LEVELS = ZOOM_LEVELS
 
 const HOUR_MS = 60 * 60 * 1000
 
@@ -221,7 +216,9 @@ export function zoomWindowWithinBounds(
 }
 
 // Continuous-zoom floor: don't let the wheel shrink the window below a minute.
-// Matches the scrubber's MIN_SELECTION_MS so wheel and drag bottom out together.
+// This matches the scrubber's MIN_SELECTION_MS (60s), but the strip's lens-drag
+// band floors at its own MIN_WINDOW_MS (15min), so wheel-zoom and band-drag do
+// NOT bottom out at the same width.
 const MIN_WINDOW_MS = 60_000
 
 /**
@@ -292,7 +289,7 @@ function eventShape(event: TimelineEvent): MarkerShape {
 function eventColorClass(event: TimelineEvent): string {
   if (isProblematicEvent(event)) return 'text-amber-500 dark:text-amber-400'
   if (isHistoricalEvent(event)) return 'text-theme-text-tertiary'
-  // ONE activity hue (Turn 11 color budget): every change/create/delete/
+  // ONE activity hue (color budget): every change/create/delete/
   // informational dot is info-blue — the SHAPE carries the event class
   // (▲ created / ● modified / ▼ deleted), hue is reserved for status.
   return 'text-blue-600 dark:text-blue-400'
@@ -301,7 +298,7 @@ function eventColorClass(event: TimelineEvent): string {
 // Markers are centered on their time — but a live event's time sits AT the Now
 // line, so a centered glyph/pill crosses it (and can clip the track edge). Near
 // the edge the anchor flips from center to right so the marker's right edge
-// kisses the Now line instead (Turn 8: "dots respect the Now line").
+// kisses the Now line instead — dots respect the Now line.
 // 97.5% ≈ 32px on a ~1300px track — enough clearance for the widest ×N pill
 // (a 99% threshold still let pill halves poke ~4px past the Now line).
 const NOW_EDGE_ANCHOR_PCT = 97.5
@@ -572,11 +569,6 @@ export interface TimelineSwimlanesProps {
   onViewWindowChange?: (w: TimeWindow) => void
   bounds?: TimeWindow
   onExtendRequest?: (dir: 'past' | 'future') => void
-  // "→ Now" hook for the uncontrolled (local) mode, which has no scrubber: when
-  // set, the strip's "→ Now" button calls it instead of resetting the internal
-  // pan. Retained/controlled mode hides the button entirely — the scrubber's
-  // live/paused chip is the single path back to now — so it doesn't thread this.
-  onJumpToNow?: () => void
   // Host-supplied clock for the "Now" line and health-span right edges. The
   // retained host passes its live tick so both advance while watching (and
   // freeze with the window in paused mode); without it they'd pin to mount
@@ -764,7 +756,7 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
   return breakdown
 }
 
-export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange, pinnedOnly: pinnedOnlyProp, onPinnedOnlyChange, viewWindow, onViewWindowChange, bounds, onExtendRequest, onJumpToNow, nowMs, gaps, onAppClick, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, appIndex, grouping: groupingProp, onGroupingChange, sort: sortProp, onSortChange, pinnedLanes, onTogglePin, selectedEventId, onSelectedEventChange, isLive, compact = false }: TimelineSwimlanesProps) {
+export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces, hasLimitedAccess = false, onNavigatePath, showDeleted: showDeletedProp, onShowDeletedChange, pinnedOnly: pinnedOnlyProp, onPinnedOnlyChange, viewWindow, onViewWindowChange, bounds, onExtendRequest, nowMs, gaps, onAppClick, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, appIndex, grouping: groupingProp, onGroupingChange, sort: sortProp, onSortChange, pinnedLanes, onTogglePin, selectedEventId, onSelectedEventChange, isLive, compact = false }: TimelineSwimlanesProps) {
   // Controlled when the host drives the visible window (retained-mode lens).
   const controlled = viewWindow != null
   // Compact gives the label column extra width — no namespace subtitle or nested
@@ -820,7 +812,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   // them. Empty on first render, so the initial view is fully deterministic.
   const [userLaneOverrides, setUserLaneOverrides] = useState<Map<string, boolean>>(new Map())
   const [hasAutoZoomed, setHasAutoZoomed] = useState(false)
-  // Legend is on-demand (6a): the marker/health key is hidden until the user asks
+  // Legend is on-demand: the marker/health key is hidden until the user asks
   // for it via the toolbar's Legend button, rather than always occupying a row.
   const [showLegend, setShowLegend] = useState(false)
   // Grouping mode: 'app' (membership cascade) | 'owner' (owner/topology only) |
@@ -1043,7 +1035,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     setUserLaneOverrides(next)
   }, [lanes])
 
-  // One morphing toggle (10a): when at least half the groups are open the
+  // One morphing toggle: when at least half the groups are open the
   // button offers collapse, otherwise expand — one control, state-aware.
   const expandableIds = useMemo(() => {
     const ids: string[] = []
@@ -1133,25 +1125,16 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     return mergedIds.map((id) => byId.get(id)).filter((l): l is ResourceLane => l != null)
   }, [orderedLanes, isLive, rankResetKey])
 
-  // Window width in hours — drives axis tick density and the window label for
-  // both modes (equals `zoom` exactly in the uncontrolled path).
-  const windowHours = visibleTimeRange.windowMs / HOUR_MS
-  const windowLabel = windowHours < 1
-    ? `${Math.round(windowHours * 60)}m`
-    : windowHours >= 24
-      ? `${Math.round(windowHours / 24)}d`
-      : Number.isInteger(windowHours) ? `${windowHours}h` : `${windowHours.toFixed(1)}h`
+  // Window-width label (the visible span, e.g. "15m" / "8h" / "3d"), rendered
+  // only in local (uncontrolled) mode. Shares the scrubber's lens-width
+  // formatting so the two never drift.
+  const windowLabel = formatLensDuration(visibleTimeRange.windowMs)
 
   // "→ Now" is a local-mode affordance only: controlled/retained mode hides it
   // (the scrubber's live/paused chip owns the path back to now). Uncontrolled it
-  // shows once the view has panned into the past, and calls the host's
-  // `onJumpToNow` when given, else resets the internal pan.
+  // shows once the view has panned into the past, and resets the internal pan.
   const showJumpToNow = !controlled && panOffset > 0
   const handleJumpToNow = () => {
-    if (onJumpToNow) {
-      onJumpToNow()
-      return
-    }
     setPanOffset(0)
   }
 
@@ -1291,6 +1274,9 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   const timeToX = useCallback(
     (timestamp: number): number => {
       const { start, windowMs } = visibleTimeRange
+      // A zero-width window (host bounds with fromMs === toMs) would divide by
+      // zero and emit NaN into `left:` CSS — pin everything to the left edge.
+      if (windowMs <= 0) return 0
       return ((timestamp - start) / windowMs) * 100
     },
     [visibleTimeRange]
@@ -1409,7 +1395,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   }, [drawer, selectedEventId, onSelectedEventChange])
 
   // Zoom handlers - snap to predefined levels. Controlled: emit the would-be
-  // window (center-anchored, clamped to bounds); uncontrolled: mutate `zoom`.
+  // window (end-anchored, clamped to bounds); uncontrolled: mutate `zoom`.
   const handleZoomIn = () => {
     if (controlled) { onViewWindowChange?.(zoomWindowWithinBounds(viewWindow!, 'in', bounds)); return }
     setZoom((z) => {
@@ -1520,7 +1506,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     return () => el.removeEventListener('wheel', h)
   }, [isLoading])
 
-  // Toolbar chip counts tell ONE story with the strip (Turn 8): they count
+  // Toolbar chip counts tell ONE story with the strip: they count
   // within the QUERY range (bounds) so "All" matches "N events in query range"
   // — not the whole loaded ring, whose 3,5xx total came from nowhere the user
   // could see. Unbounded (uncontrolled local mode) keeps counting the ring.
@@ -1562,8 +1548,10 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     // When expanded, a parent renders only children that MOVE in the visible lens
     // — a child whose whole subtree sits outside the window would otherwise paint
     // an empty row. Same rule top-level lanes already follow (visibleLanes above).
-    // Exemptions: a pinned child (its row is its home) and a child the USER opened
-    // (don't yank a row they deliberately expanded). Auto-expanded children are NOT
+    // Exemptions: a pinned child (its row is its home), a child the USER opened
+    // (don't yank a row they deliberately expanded), and a structural app member
+    // (a server-declared workload/Service/Ingress — hiding an app's own Service
+    // makes a matched app read as incomplete). Auto-expanded children are NOT
     // exempt, so a stale auto-open falls away cleanly as the lens moves off it. The
     // chevron + count key off this visible set so "N resources" and "+N" match the
     // rows actually on screen; the collapsed roll-up already paints in-window only.
@@ -1585,7 +1573,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     // Tooltip carries the group only for CRD groups — built-in resources stay
     // visually untouched (the group appears nowhere for them, not even on hover).
     const kindBadgeTitle = !lane.isAppGroup && groupQualifiesLaneId(lane.group) ? `${displayKind(lane.kind)} · ${lane.group}` : undefined
-    // An expanded APP header keeps a dimmed "ghost" aggregate sweep (Turn 5): the
+    // An expanded APP header keeps a dimmed "ghost" aggregate sweep: the
     // rollup stays scannable while the children below carry the detail. Collapsed
     // parents/apps paint the full-strength aggregate. Expanded non-app parents
     // (a DaemonSet over its Pods) show their own events, not a rollup.
@@ -1861,7 +1849,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             )}
           </div>
         )}
-        {/* Legend (1a): an on-demand popover, not a permanent strip. Two labelled
+        {/* Legend: an on-demand popover, not a permanent strip. Two labelled
             sections — point-in-time event markers and lane-health bars — each a
             2-column grid. Toggled by the toolbar's Legend button. */}
         {showLegend && (
@@ -1870,7 +1858,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             <div className="absolute right-4 top-full z-50 mt-1 w-[280px] rounded-xl border border-theme-border bg-theme-surface p-4 shadow-theme-lg">
               <div className="text-[10px] font-bold uppercase leading-none tracking-[0.07em] text-theme-text-tertiary">Events</div>
               <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-theme-text-secondary">
-                {/* One activity hue (Turn 11): shape carries the event class. */}
+                {/* One activity hue: shape carries the event class. */}
                 <MarkerLegendItem shape="triangle-up" colorClass="text-blue-600 dark:text-blue-400" label="created" description="Resource was created" />
                 <MarkerLegendItem shape="circle" colorClass="text-blue-600 dark:text-blue-400" label="modified" description="Resource change or informational Kubernetes event" />
                 <MarkerLegendItem shape="triangle-down" colorClass="text-blue-600 dark:text-blue-400" label="deleted" description="Resource was removed" />
@@ -1880,7 +1868,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
               </div>
               <div className="mt-3.5 text-[10px] font-bold uppercase leading-none tracking-[0.07em] text-theme-text-tertiary">Health</div>
               <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-theme-text-secondary">
-                {/* Exactly three status colors (Turn 11); everything else is gray. */}
+                {/* Exactly three status colors; everything else is gray. */}
                 <HealthLegendItem color={HEALTH_STRIP_COLORS.healthy} label="healthy" description="Resource is fully operational" />
                 <HealthLegendItem color={HEALTH_STRIP_COLORS.degraded} label="degraded" description="Unexpected partial availability" />
                 <HealthLegendItem color={HEALTH_STRIP_COLORS.unhealthy} label="unhealthy" description="Resource is failing or not ready" />
@@ -1907,7 +1895,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             <div className="flex">
               <div className={clsx('shrink-0 border-r border-theme-border px-3 h-8 flex items-center', laneLabelWidthClass)}>
                 <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-theme-text-tertiary">Resource</span>
-                {/* Single morphing toggle (10a): ≥half the groups open → offers
+                {/* Single morphing toggle: ≥half the groups open → offers
                     collapse-all; otherwise expand-all. Tooltip names the action
                     and its shortcut. ml-auto rides the Tooltip's own flex wrapper
                     so the button stays vertically centered (a plain span around it
@@ -2118,7 +2106,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
 }
 
 // Health-strip segment colors (solid, pinned to the lane's bottom edge).
-// Status is EXACTLY three colors (Turn 11): healthy green, degraded amber,
+// Status is EXACTLY three colors: healthy green, degraded amber,
 // unhealthy red. Anything else — rolling, idle, neutral, unknown — is gray
 // ("not a health signal"). No fourth status color, ever.
 const HEALTH_STRIP_COLORS: Record<string, string> = {
@@ -2177,7 +2165,7 @@ function HealthLegendItem({ color, label, description, swatchStyle }: { color?: 
   )
 }
 
-// Amber warning-count chip (⚠ N). Turn 7: red is reserved for "actually broken"
+// Amber warning-count chip (⚠ N). Red is reserved for "actually broken"
 // (that shows on the health bar); the ⚠ summary is a warning tone, so it's amber.
 function LaneWarnChip({ events }: { events: TimelineEvent[] }) {
   const issueCount = events.filter((e) => isCriticalIssue(e)).length
@@ -2211,7 +2199,7 @@ export function chipKindLabel(kind: string): { label: string; abbreviated: boole
   return { label: kind, abbreviated: false }
 }
 
-// The kind chip: neutral pill on the lane's second row (Turn 11 color budget —
+// The kind chip: neutral pill on the lane's second row (color budget —
 // identity is monochrome). Shows the real Kind in its normal PascalCase; the
 // name owns the first row so it doesn't lose the width fight to metadata.
 function KindChip({ kind, title }: { kind: string; title?: string }) {
@@ -2282,7 +2270,7 @@ function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, labelWidt
         </button>
       )}
       {/* Single-line child row: kind chip · name (middle-ellipsis). Colored chips
-          are neutral (Turn 11). Only the NAME links to the resource. */}
+          are neutral. Only the NAME links to the resource. */}
       <KindChip kind={kind} title={kindTitle} />
       {showGroupChip && group && <GroupChip group={group} />}
       <Tooltip content={title ?? name} wrapperClassName="min-w-0 flex-1">
@@ -2467,7 +2455,7 @@ function LaneBackdrop({ gridXs }: { gridXs: number[] }) {
 }
 
 // The 'mixed' segment (members disagree): a green/amber HEALTH weave, not a grey
-// hatch (Turn 7: grey stripes read as "no data", not "busy"). Solid green means
+// hatch (grey stripes read as "no data", not "busy"). Solid green means
 // everyone's fine, solid amber all degraded, and this weave = they disagree — so
 // the texture stays a health signal, distinct from the recording-gap hatch.
 const MIXED_HEALTH_STRIP_STYLE: React.CSSProperties = {
@@ -2514,7 +2502,7 @@ function HealthBarTrack({ events, startTime, windowMs, now, ownResource, aggrega
     ownResource
   )
 
-  // Turn 7: every row gets a health line even with no derived spans (event dots
+  // Every row gets a health line even with no derived spans (event dots
   // floating on nothing read as footnotes with no page). Paint a faint neutral
   // baseline so the row still has its line.
   if (spans.length === 0) {
@@ -2580,7 +2568,7 @@ function AggregateHealthTrack({ lane, startTime, windowMs, now, ghost }: {
     return sweepAggregateHealth(members, startTime, endTime)
   }, [lane, startTime, endTime, now])
 
-  // Turn 7: group headers get their line too — a sweep with no segments still
+  // Group headers get their line too — a sweep with no segments still
   // paints the faint neutral baseline (same as leaf rows) so event pills never
   // float on nothing.
   if (segments.length === 0) {
@@ -2709,7 +2697,7 @@ function ClusterPill({ cluster, selected, onClick, small }: {
           onClick()
         }}
       >
-        {/* Red once per problem (Turn 11): a critical-dominant cluster shows the
+        {/* Red once per problem: a critical-dominant cluster shows the
             error glyph — one ⊘ ×N, not N shouting icons or a generic diamond. */}
         {isCriticalIssue(cluster.dominant)
           ? <Ban className={clsx('text-red-600 dark:text-red-400', small ? 'h-2.5 w-2.5' : 'h-3 w-3')} />
@@ -3040,7 +3028,7 @@ function ClusterEventRow({ event, active, onClick }: { event: TimelineEvent; act
 }
 
 export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onResourceClick, allEvents }: EventDetailPanelProps) {
-  // ONE drawer anatomy (Turn 9): rail left, detail right — for one event or
+  // ONE drawer anatomy: rail left, detail right — for one event or
   // fifty. The shape never changes with count, so muscle memory holds. A single
   // clicked dot renders as a rail of one plus its ±15-min correlated neighbors,
   // so "what else happened around this?" is a click away, not a separate feed.

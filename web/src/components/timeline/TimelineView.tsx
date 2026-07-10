@@ -357,8 +357,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // The concrete selection is DERIVED each render so it drives both the list and
   // swimlane fetches and survives the view toggle.
   const [mode, setMode] = useState<TimelineMode>(() => parseTimeMode(searchParams, isRetained || isLocal, retainedMaxRangeDays))
-  // Freeze time surfaced on the paused chip ("as of HH:MM"); bumped by manual
-  // refresh. Null while live.
+  // Freeze time surfaced on the paused chip ("as of HH:MM"); stamped when the
+  // selection freezes. Null while live.
   const [frozenAsOfMs, setFrozenAsOfMs] = useState<number | null>(null)
 
   // 30s clock, ticked only while live. A live selection reads this; frozen mode
@@ -549,9 +549,10 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
 
   // --- URL <-> state binding -------------------------------------------------
   // Two effects with strictly-scoped deps keep the loop from feeding itself:
-  //   * URL -> state keys ONLY on searchParams, so a user setState (which hasn't
-  //     changed the URL yet) never triggers it and can't be clobbered back to
-  //     the old URL value; it fires on mount and on back/forward.
+  //   * URL -> state derives every field from searchParams; each setter is guarded
+  //     to no-op when the value is unchanged. Non-URL deps (e.g. pinnedLanes) can
+  //     re-run it, but re-deriving from the same URL is idempotent and can't
+  //     clobber user state back to an old value. It fires on mount and back/forward.
   //   * state -> URL keys on the persisted fields (searchParams read via a ref,
   //     off the dep list) so it writes on user changes but the browser-driven
   //     URL change lands as a no-op (target === current). The live tick moves no
@@ -614,8 +615,9 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     setSearchParamsRef.current(target, { replace })
   }, [viewMode, mode, showDeleted, pinnedOnly, search, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, requiresNamespaceFilter])
 
-  // Fetch all activity - zoom controls what's visible in the UI
-  // Only fetch heavy 10k dataset for swimlanes; list view fetches its own 500
+  // Fetch all activity - zoom controls what's visible in the UI. The heavy 10k
+  // ring feeds the swimlanes and the local strip's histogram, so it also runs in
+  // list mode when that strip is shown; the list itself fetches its own 2000.
   const { data: activity, isLoading, isError, refetch } = timelineSource.useEvents({
     namespaces,
     timeRange: 'all',
@@ -704,6 +706,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
           <LocalTimelineScrubber
             events={events}
             loading={isLoading}
+            isError={isError}
             selection={selection}
             onSelectionChange={handleSelectionChange}
             onSelectionClamp={handleSelectionClamp}
@@ -733,9 +736,9 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
           </div>
           <div className="flex-1 flex items-center justify-center">
             <div className="max-w-md w-full mx-4 text-center">
-              <div className="bg-theme-surface border border-theme-border rounded-xl shadow-lg p-6">
+              <div className="bg-theme-surface border border-theme-border rounded-xl shadow-theme-lg p-6">
                 <div className="w-12 h-12 mx-auto mb-4 rounded-full bg-skyhook-500/10 flex items-center justify-center">
-                  <Network className="w-6 h-6 text-blue-400" />
+                  <Network className="w-6 h-6 text-skyhook-400" />
                 </div>
                 <h2 className="text-lg font-semibold text-theme-text-primary mb-2">
                   Large Cluster Detected

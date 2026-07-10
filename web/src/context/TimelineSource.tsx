@@ -7,7 +7,7 @@
 // source-agnostic `useEvents` hook.
 //
 // Default (no provider): the local source, so components work standalone.
-import { createContext, useContext, useMemo } from 'react'
+import { createContext, useContext, useMemo, Fragment } from 'react'
 import type { ReactNode } from 'react'
 import {
   localSource,
@@ -35,7 +35,12 @@ export function TimelineSourceProvider({
   )
   return (
     <TimelineSourceContext.Provider value={source}>
-      {children}
+      {/* Key the subtree on the source mode. `useEvents` is a hook, and the local
+          vs retained sources are different hook functions with different internal
+          hook counts; a host flipping `timelineSource` mode mid-session would
+          otherwise corrupt React's hook order. Remounting on the flip keeps the
+          hook sequence consistent. */}
+      <Fragment key={mode ?? 'local'}>{children}</Fragment>
     </TimelineSourceContext.Provider>
   )
 }

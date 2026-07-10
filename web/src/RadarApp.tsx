@@ -131,6 +131,10 @@ export interface RadarAppProps {
    * `{apiBase}/timeline/overview`; `maxRangeDays` caps how far back the
    * 'all' range reaches. Generic extension point — the backend that answers
    * the retained endpoints is the host's concern.
+   *
+   * Changing `mode` between renders remounts the timeline view (the local and
+   * retained sources expose different `useEvents` hooks; remounting avoids a
+   * React hook-order violation). Set it once at mount when possible.
    */
   timelineSource?: TimelineSourceConfig;
 }

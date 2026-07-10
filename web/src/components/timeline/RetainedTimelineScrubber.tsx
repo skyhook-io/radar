@@ -37,7 +37,7 @@ export function groupBuckets(
 ): ScrubberBucket[] {
   const slots = new Map<number, { total: number; warnings: number }>()
   for (const b of hourBuckets) {
-    const slot = Math.floor(b.hourStartMs / bucketSizeMs) * bucketSizeMs
+    const slot = Math.floor(b.startMs / bucketSizeMs) * bucketSizeMs
     const cur = slots.get(slot) ?? { total: 0, warnings: 0 }
     cur.total += b.summary.total
     cur.warnings += b.summary.warnings
@@ -64,8 +64,7 @@ export function extractRecordingGaps(
 ): ScrubberRange[] {
   const raw: ScrubberRange[] = []
   for (const b of hourBuckets) {
-    const cov = b.coverage
-    const list = Array.isArray(cov) ? cov : cov ? [cov] : []
+    const list = b.coverage ?? []
     for (const item of list) {
       if (!item) continue
       const start = coverageNumber(item.eventTimeStartMs)
@@ -137,7 +136,7 @@ interface RetainedTimelineScrubberProps {
   onGapsChange?: (gaps: ScrubberRange[]) => void
   // Live/paused chip state + click handler (host-computed). The scrubber owns the
   // overview buckets, so it enriches a frozen state with the "new events" count
-  // before handing the chip to the pure TimelineScrubber.
+  // before handing the chip to TimelineStrip.
   liveState?: TimelineLiveState
   onLiveChipClick?: () => void
 }
@@ -189,7 +188,7 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
   const domainWidth = domain.toMs - domain.fromMs
   const maxSelectionMs = Math.min(MAX_SELECTION_MS, domainWidth)
 
-  // 6a model: the histogram spans the QUERY RANGE (selection) directly —
+  // The histogram spans the QUERY RANGE (selection) directly —
   // no ×8 framing, no minimap. The query is the view, so a narrow window is never
   // a sub-pixel sliver; the draggable lens band lives inside this span. Navigating
   // to other times is the query-range picker's job, not a spatial minimap's.
@@ -216,7 +215,7 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
 
   // Enrich a frozen chip with the count of events recorded after the frozen edge,
   // so the "Go live" CTA can pull the user toward the fresh data. Counted over
-  // the FULL domain — the framed display may cut off newer events. Live states
+  // the FULL domain — the displayed span may cut off newer events. Live states
   // pass through unchanged.
   const fullBuckets = useMemo(() => groupBuckets(hourBuckets, HOUR_MS), [hourBuckets])
   const chipState = useMemo<TimelineLiveState | undefined>(() => {

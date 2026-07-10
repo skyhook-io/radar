@@ -1008,7 +1008,7 @@ export function useApplications(namespaces: string[], options?: { enabled?: bool
     queryFn: () => fetchJSON(`/applications${queryString ? `?${queryString}` : ''}`),
     staleTime: 30_000,
     // Only poll while a consumer needs the index; gated off it must not keep the
-    // background refetch alive (the timeline's app grouping is the sole caller).
+    // background refetch alive.
     enabled,
     refetchInterval: enabled ? APPLICATIONS_REFRESH_INTERVAL_MS : false,
   })
@@ -1191,9 +1191,10 @@ async function fetchChangesPage(
     throw new ApiError(errorData.error || `HTTP ${response.status}`, response.status, errorData)
   }
   const events = (await response.json()) as TimelineEvent[]
-  // maxSeq is the server's pre-RBAC-filter frontier for this page — rows the
-  // user can't see still advance the cursor, so a run of unreadable rows
-  // can't pin a delta client in place.
+  // maxSeq is the page's frontier computed before the server's
+  // cluster-scoped-RBAC filter — rows dropped THERE still advance the cursor.
+  // (Rows dropped by content filters inside the store query do not; see the
+  // known limitation on the server's handleChanges.)
   const maxSeq = Number(response.headers.get('X-Radar-Timeline-Max-Seq') ?? '0') || 0
   return { events, epoch: response.headers.get('X-Radar-Timeline-Epoch') ?? '', maxSeq }
 }

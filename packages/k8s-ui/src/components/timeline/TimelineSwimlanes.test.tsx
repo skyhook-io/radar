@@ -268,7 +268,7 @@ describe('chipKindLabel — the real Kind, verbatim', () => {
   })
 })
 
-describe('bulk expand/collapse toggle (10a: single morphing control)', () => {
+describe('bulk expand/collapse toggle (single morphing control)', () => {
   it('renders ONE state-aware toggle in the resource header, tooltip naming action + shortcut', () => {
     const ev = (name: string): TimelineEvent => ({
       id: name, timestamp: new Date().toISOString(), source: 'informer',
@@ -352,13 +352,13 @@ describe('EventDetailPanel cluster mode (a ×N pill exposes every member)', () =
     const html = renderToString(
       <EventDetailPanel events={ordered} selectedId="upd-web" onSelectId={() => {}} onClose={() => {}} />,
     )
-    // The warning message is no longer the detailed body.
+    // With a benign member selected, its detail shows instead of the warning body.
     expect(html).not.toContain('Back-off restarting failed container')
     // Still lists all four members.
     expect((html.match(/<li>/g) ?? []).length).toBe(4)
   })
 
-  it('N=1 renders the SAME rail+detail anatomy — a rail of one, selected (Turn 9)', () => {
+  it('N=1 renders the SAME rail+detail anatomy — a rail of one, selected', () => {
     const single = mk('warn-web', 'Warning', T0, { reason: 'BackOff', message: 'Back-off restarting failed container' })
     const html = renderToString(
       <EventDetailPanel events={[single]} selectedId={single.id} onSelectId={() => {}} onClose={() => {}} />,

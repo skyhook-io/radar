@@ -24,7 +24,9 @@ import type { TimelineEvent, TimeRange } from '../types'
 export type TimelineQuery = UseChangesOptions & {
   // Explicit [from,to] window in epoch-ms. When both are set the retained
   // source loads exactly this window (the scrubber's brush selection) instead
-  // of deriving one from `timeRange`. Ignored by the local source.
+  // of deriving one from `timeRange`. The local source can't express a frozen
+  // past window server-side, so it loads the whole ring and bounds it to
+  // [from,to] client-side.
   fromMs?: number
   toMs?: number
   // LIVE mode: the [from,to] window slides every tick. Quantize the BASE fetch
@@ -36,7 +38,11 @@ export type TimelineQuery = UseChangesOptions & {
 
 export interface TimelineSourceCapabilities {
   mode: 'local' | 'retained'
-  // Only meaningful for 'retained': caps how far back the 'all' range reaches.
+  // Only meaningful for 'retained': the maximum lookback the retained backend
+  // serves. Clamps EVERY derived range (rangeSpanMs, not just 'all'), the
+  // from-edge of an explicit [from,to] window, and the scrubber's selectable
+  // domain — nothing can reach further back than this. Defaults to
+  // DEFAULT_RETAINED_MAX_RANGE_DAYS when unset.
   maxRangeDays?: number
 }
 
@@ -57,24 +63,31 @@ export interface TimelineCoverageRecord {
 }
 
 // A recording-coverage span within an overview bucket. Event-time bounds are
-// owned by the retained (hub) backend; a bucket may carry one span or several.
+// owned by the retained (hub) backend; on the wire a bucket may carry one span
+// or several — fetchRetainedOverview normalizes both to an array so consumers
+// only ever see TimelineCoverageSpan[].
 export interface TimelineCoverageSpan {
   eventTimeStartMs?: number
   eventTimeEndMs?: number
 }
 
 export interface TimelineOverviewBucket {
-  hourStartMs: number
+  // Bucket start in epoch-ms — hourly for the retained rollup, sub-hour when the
+  // local overview rebuckets finer. Named for what it is, not its granularity.
+  startMs: number
   summary: {
     total: number
     adds: number
     updates: number
     deletes: number
     warnings: number
+    // Server-owned health rollup. localOverviewFromEvents only emits
+    // 'healthy'/'unhealthy', but the retained (hub) rollup can carry the full
+    // HealthLevel vocabulary, so this stays an open string.
     worstHealth: string
     namespaces: string[]
   }
-  coverage?: TimelineCoverageSpan | TimelineCoverageSpan[]
+  coverage?: TimelineCoverageSpan[]
 }
 
 // Overview response envelope: the hourly `buckets` plus `availableFromMs` (the
@@ -134,18 +147,21 @@ function useLocalEvents(query: TimelineQuery): TimelineEventsResult {
       ? { ...query, timeRange: 'all', limit: LOCAL_RING_LIMIT, deltaSync: true }
       : { ...query, deltaSync: query.timeRange === 'all' },
   )
-  // Multi-kind selections are the one CLIENT-side filter (a single kind rides
-  // the server query key), so the memo must watch them itself — `data`
-  // identity won't change when only the kind set does.
+  // applyClientFilters runs on BOTH paths: a multi-kind selection is a CLIENT-side
+  // filter (only a single kind rides the /changes server query key), so a 2+ kind
+  // pick is narrowed here whether or not a window is set. A non-windowed query has
+  // null from/to, so the [from,to] bounding inside is a no-op there; the windowed
+  // path additionally bounds the loaded ring. The memo watches kindsKey itself —
+  // `data` identity won't change when only the kind set does.
   const kindsKey = query.kinds?.join(',')
   const events = useMemo(
-    () => (windowed && data ? applyClientFilters(data, query) : data),
+    () => (data ? applyClientFilters(data, query) : data),
     // `data` identity captures every server-side filter change (namespaces,
     // k8s-events, deleted — all in the useChanges query key); the client-only
     // window + cap + kind set are added here. The live tick advances
     // query.toMs, re-filtering to the sliding edge with no refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [windowed, data, query.fromMs, query.toMs, query.limit, kindsKey],
+    [data, query.fromMs, query.toMs, query.limit, kindsKey],
   )
   return { data: events, isLoading, isError, refetch }
 }
@@ -178,8 +194,7 @@ interface LocalHourSlot {
 //
 // `bucketSizeMs` defaults to the retained rollup's hourly granularity; a
 // tightly framed strip passes a sub-hour size to rebucket the same events
-// finer. The bucket start rides the wire shape's `hourStartMs` field
-// regardless of size — it is the bucket start, hourly or not.
+// finer. The bucket's `startMs` is its start regardless of size — hourly or not.
 //
 // No coverage/gap field is emitted. Coverage is a retention concept — the hub
 // records what it missed while not watching. Locally we cannot know what
@@ -207,8 +222,8 @@ export function localOverviewFromEvents(events: TimelineEvent[], bucketSizeMs = 
   }
 
   const buckets: TimelineOverviewBucket[] = [...slots.entries()]
-    .map(([hourStartMs, s]) => ({
-      hourStartMs,
+    .map(([startMs, s]) => ({
+      startMs,
       summary: {
         total: s.total,
         adds: s.adds,
@@ -219,7 +234,7 @@ export function localOverviewFromEvents(events: TimelineEvent[], bucketSizeMs = 
         namespaces: [...s.namespaces],
       },
     }))
-    .sort((a, b) => a.hourStartMs - b.hourStartMs)
+    .sort((a, b) => a.startMs - b.startMs)
 
   return { buckets, availableFromMs: Number.isFinite(oldest) ? oldest : undefined }
 }
@@ -235,8 +250,9 @@ const DAY_MS = 24 * HOUR_MS
 const DEFAULT_RETAINED_MAX_RANGE_DAYS = 7
 
 // Recent window the live poll re-fetches and merges over the loaded range. Wide
-// enough that a missed 10s tick can't open a gap.
-const LIVE_WINDOW_MS = 10 * 60 * 1000
+// enough that a missed 10s tick can't open a gap. Exported so a unit test can pin
+// it against the base-window quantization step (quantization lag < poll window).
+export const LIVE_WINDOW_MS = 10 * 60 * 1000
 const LIVE_REFETCH_MS = 10_000
 
 function rangeSpanMs(range: TimeRange | undefined, maxRangeDays?: number): number {
@@ -289,7 +305,8 @@ function dedupeById(events: TimelineEvent[]): TimelineEvent[] {
   return Array.from(byId.values())
 }
 
-async function fetchRetainedWindow(
+// Exported for unit tests (the NDJSON stream parser); not re-exported publicly.
+export async function fetchRetainedWindow(
   from: number,
   to: number,
   signal?: AbortSignal,
@@ -354,8 +371,9 @@ async function fetchRetainedWindow(
 
 // The retained endpoint scopes only by [from,to] (cluster is implicit in the
 // apiBase path), so the store-side query params the local endpoint honors are
-// applied client-side over the loaded window.
-function applyClientFilters(events: TimelineEvent[], query: TimelineQuery): TimelineEvent[] {
+// applied client-side over the loaded window. Exported for unit tests; not part
+// of the package's public surface.
+export function applyClientFilters(events: TimelineEvent[], query: TimelineQuery): TimelineEvent[] {
   let out = events
   if (query.namespaces && query.namespaces.length > 0) {
     const set = new Set(query.namespaces)
@@ -493,6 +511,23 @@ function createRetainedEventsHook(
   }
 }
 
+// The retained (hub) wire shape: the bucket start ships as `hourStartMs` and
+// coverage may be a single span or an array. fetchRetainedOverview remaps this
+// to the client `TimelineOverviewBucket` (startMs + a normalized coverage array)
+// at this one parse boundary so nothing downstream sees the wire quirks.
+interface RawOverviewBucket {
+  hourStartMs: number
+  summary: TimelineOverviewBucket['summary']
+  coverage?: TimelineCoverageSpan | TimelineCoverageSpan[]
+}
+
+function normalizeCoverage(
+  cov: TimelineCoverageSpan | TimelineCoverageSpan[] | undefined,
+): TimelineCoverageSpan[] | undefined {
+  if (cov == null) return undefined
+  return Array.isArray(cov) ? cov : [cov]
+}
+
 async function fetchRetainedOverview(range: TimelineRange): Promise<TimelineOverviewResult> {
   const res = await apiFetch(apiUrl(`/timeline/overview?from=${Math.round(range.from)}&to=${Math.round(range.to)}`))
   if (!res.ok) {
@@ -500,8 +535,13 @@ async function fetchRetainedOverview(range: TimelineRange): Promise<TimelineOver
     throw new ApiError(errorData.error || `HTTP ${res.status}`, res.status, errorData)
   }
   const body: unknown = await res.json()
-  const env = body as { buckets?: TimelineOverviewBucket[]; availableFromMs?: number }
-  return { buckets: env.buckets ?? [], availableFromMs: env.availableFromMs }
+  const env = body as { buckets?: RawOverviewBucket[]; availableFromMs?: number }
+  const buckets: TimelineOverviewBucket[] = (env.buckets ?? []).map((b) => ({
+    startMs: b.hourStartMs,
+    summary: b.summary,
+    coverage: normalizeCoverage(b.coverage),
+  }))
+  return { buckets, availableFromMs: env.availableFromMs }
 }
 
 export function createRetainedSource(config: TimelineSourceConfig): TimelineSource {

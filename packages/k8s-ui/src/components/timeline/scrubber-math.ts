@@ -54,7 +54,7 @@ function normalize(sel: ScrubberRange): ScrubberRange {
  *   - 'end'    keep the right edge (presets pinned to "now", left-handle drag)
  *   - 'start'  keep the left edge (right-handle drag)
  *   - 'center' keep the midpoint (zoom)
- * Returns `clampedToMax` so the caller can flash the cap hint.
+ * Returns `clampedToMax` for callers that want to surface the cap; none do yet.
  */
 export function clampSelection(
   sel: ScrubberRange,

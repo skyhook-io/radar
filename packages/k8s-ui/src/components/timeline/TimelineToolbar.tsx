@@ -65,7 +65,8 @@ export interface TimelineToolbarProps {
   events?: TimelineEvent[]
   stats?: ActivityStats
 
-  // Deleted toggle — lives inside the View menu's Filters section.
+  // Deleted toggle — renders in the filter row (a scope filter past the
+  // divider), not the View menu.
   showDeleted: boolean
   onShowDeletedChange: (showDeleted: boolean) => void
   // Pinned-only filter — only rendered when there are pinned rows at all.
@@ -98,8 +99,8 @@ export interface TimelineToolbarProps {
   // hosts whose data is a one-shot load can wire it.
   onRefresh?: () => void
 
-  // Swimlane-only view options. Each renders as its OWN dropdown control
-  // ("Sort: …", "Group: …") — one "View" bucket hid both behind an opaque label.
+  // Swimlane-only view options (sort + grouping). Rendered inside the single
+  // "View" menu as labeled Sort and Group sections.
   viewOptions?: TimelineViewOptions
 
   // Legend toggle (swimlane-only). When supplied, a "Legend" button renders in the
@@ -113,7 +114,7 @@ export function TimelineToolbar({
   onSearchChange,
   searchScope = 'timeline',
   searchShortcutId,
-  // Compact static width (12a single-row layout): the row is shared with the
+  // Compact static width (single-row layout): the row is shared with the
   // meta controls, so the search takes a fixed slot; focus and typing can
   // never move the controls to its right.
   searchClassName = 'w-44 shrink-0',
@@ -160,7 +161,7 @@ export function TimelineToolbar({
     : stats.warnings + stats.unhealthy
 
   return (
-    // ONE control row (Turn 12): search + filter chips left, table controls
+    // ONE control row: search + filter chips left, table controls
     // right. The former two-row stack was 90% air on its second row. The left
     // group scrolls within itself when the container is narrower than its
     // intrinsic width (e.g. the ~800px resource-drawer embed).
@@ -226,7 +227,7 @@ export function TimelineToolbar({
             kindOptions={kindOptions}
           />
 
-          {/* Deleted is SCOPE, not a type (Turn 12): it filters which resources
+          {/* Deleted is SCOPE, not a type: it filters which resources
               exist, not which events show — so it sits past a divider, out of
               the type-chip group. */}
           <span className="mx-0.5 h-5 w-px shrink-0 bg-theme-border" aria-hidden />
@@ -259,7 +260,7 @@ export function TimelineToolbar({
         <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
           {counts && (
             <span className="min-w-0 truncate text-xs text-theme-text-tertiary">
-              {/* "In view" (Turn 7): distinguishes these window counts from the
+              {/* "In view": distinguishes these window counts from the
                   strip's "in query range" total, so neither number is unlabeled. */}
               {counts.resources !== undefined && `In view: ${pluralize(counts.resources, 'resource')} · `}
               {counts.resources === undefined && 'In view: '}
@@ -268,8 +269,8 @@ export function TimelineToolbar({
             </span>
           )}
 
-          {/* View menu — Sort + Group as labeled sections behind one trigger
-              (12a): the single control row has no room for two dropdowns that
+          {/* View menu — Sort + Group as labeled sections behind one trigger:
+              the single control row has no room for two dropdowns that
               each restate their value. */}
           {viewOptions && <ViewMenu viewOptions={viewOptions} />}
 
@@ -287,7 +288,7 @@ export function TimelineToolbar({
             </Tooltip>
           )}
 
-          {/* Legend toggle — the marker/health key is on-demand (6a), not a
+          {/* Legend toggle — the marker/health key is on-demand, not a
               permanent toolbar row. Host owns the shown state. */}
           {legend && (
             <button
@@ -343,7 +344,7 @@ export function TimelineToolbar({
 }
 
 // One pill of the single-select SOURCE pick. A zero-count pill dims in place
-// and goes inert (Turn 12): position memory without visual weight — chips that
+// and goes inert: position memory without visual weight — chips that
 // vanish make the row reflow and the user hunt.
 function SourceChip({ active, onClick, label, count, tooltip }: {
   active: boolean
@@ -424,8 +425,8 @@ interface KindsMenuProps {
   kindOptions: string[]
 }
 
-// A joined segmented radiogroup — the shared markup behind both the Sort and
-// Group controls (identical structure; differ only in options/value).
+// The shared markup behind both the Sort and Group controls: a radiogroup of
+// vertical check rows (identical structure; differ only in options/value).
 function SegmentedRadioGroup<T extends string>({
   label,
   options,
@@ -468,7 +469,7 @@ function SegmentedRadioGroup<T extends string>({
 }
 
 /**
- * The "View" button + popover holding the Sort and Group sections (12a: one
+ * The "View" button + popover holding the Sort and Group sections (one
  * trigger — the single control row has no room for two dropdowns that each
  * restate their value; the sections inside are clearly labeled).
  */
@@ -711,7 +712,7 @@ function KindsMenu({ kindFilter, onKindFilterChange, kindOptions }: KindsMenuPro
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        // Dashed pill (7a): reads as "add a filter", distinct from the solid
+        // Dashed pill: reads as "add a filter", distinct from the solid
         // always-on activity pills beside it.
         className={clsx(
           'flex items-center gap-1.5 rounded-full border border-dashed px-2.5 py-1.5 text-sm transition-colors',

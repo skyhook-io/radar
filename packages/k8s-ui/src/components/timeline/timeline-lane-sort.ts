@@ -47,13 +47,19 @@ export function sortTimelineLanes<L extends ResourceLane>(
 ): L[] {
   const copy = [...lanes]
   switch (sort) {
-    case 'recent':
+    case 'recent': {
+      // Precompute recency once per lane (Schwartzian transform): laneRecency
+      // scans every event, so calling it inside the comparator would repeat that
+      // scan O(n log n) times.
+      const recency = new Map<L, number>()
+      for (const lane of copy) recency.set(lane, laneRecency(lane, ctx.windowStart, ctx.windowEnd))
       return copy.sort((a, b) => {
-        const ra = laneRecency(a, ctx.windowStart, ctx.windowEnd)
-        const rb = laneRecency(b, ctx.windowStart, ctx.windowEnd)
+        const ra = recency.get(a)!
+        const rb = recency.get(b)!
         if (ra !== rb) return rb - ra
         return ctx.scoreOf(b) - ctx.scoreOf(a)
       })
+    }
     case 'name':
       return copy.sort((a, b) => {
         const na = laneName(a).toLowerCase()

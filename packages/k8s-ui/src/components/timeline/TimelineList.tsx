@@ -542,9 +542,9 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
   // Only expandable if there's a diff to show
   const hasExpandableContent = isChange && !!item.diff
 
-  // Turn-11 color budget: a change's operation is carried by the icon SHAPE, not
-  // by card/text hue — a routine delete must not read as an alarming red failure
-  // (it looked red here while the swimlane paints it a neutral blue ▼). Color is
+  // Color budget: a change's operation is carried by the icon SHAPE, not
+  // by card/text hue — a routine delete must not read as an alarming red failure;
+  // the swimlane paints it a neutral blue ▼ and the list matches. Color is
   // reserved for status: only a Warning tints the card (amber); the per-event
   // health badge below carries any unhealthy state.
   const getCardStyle = () =>
@@ -712,17 +712,28 @@ interface AggregatedActivityCardProps {
 
 function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle, onResourceClick, compact, selected, onSelect }: AggregatedActivityCardProps) {
   const isWarning = first.eventType === 'Warning'
+  const isUnhealthy = !isWarning && first.healthState === 'unhealthy'
   const firstTime = formatTime(first.timestamp, compact)
   const lastTime = formatTime(last.timestamp, compact)
 
-  // Card styling - warning/unhealthy style for aggregated events
+  // Same color budget as a single ActivityCard: a Warning tints amber and
+  // a genuinely unhealthy aggregate goes red; everything else stays neutral with
+  // the blue activity accent, so a cluster of routine repeats doesn't read as an
+  // alarm.
   const cardStyle = isWarning
     ? 'bg-amber-500/5 border-amber-500/30 hover:border-amber-500/50'
-    : 'bg-red-500/5 border-red-500/30 hover:border-red-500/50'
+    : isUnhealthy
+      ? 'bg-red-500/5 border-red-500/30 hover:border-red-500/50'
+      : 'bg-theme-surface/50 border-theme-border hover:border-theme-border-light'
 
-  // Dot color based on severity
-  const dotColor = isWarning ? 'bg-amber-500' : 'bg-red-500'
-  const textColor = isWarning ? 'text-amber-400' : 'text-red-400'
+  const dotColor = isWarning ? 'bg-amber-500' : isUnhealthy ? 'bg-red-500' : 'bg-blue-500'
+  const lineColor = isWarning ? 'bg-amber-500/40' : isUnhealthy ? 'bg-red-500/40' : 'bg-blue-500/40'
+  const textColor = isWarning ? 'text-amber-400' : isUnhealthy ? 'text-red-400' : 'text-theme-text-secondary'
+  const countBadge = isWarning
+    ? SEVERITY_BADGE.warning
+    : isUnhealthy
+      ? SEVERITY_BADGE.error
+      : 'bg-theme-elevated text-theme-text-secondary'
 
   return (
     <div
@@ -743,7 +754,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
               <div className={clsx('w-2.5 h-2.5 rounded-full', dotColor)} />
             </Tooltip>
             {/* Connecting line */}
-            <div className={clsx('w-0.5 h-4 my-0.5', isWarning ? 'bg-amber-500/40' : 'bg-red-500/40')} />
+            <div className={clsx('w-0.5 h-4 my-0.5', lineColor)} />
             {/* Last occurrence dot */}
             <Tooltip content={`Last: ${lastTime}`}>
               <div className={clsx('w-2.5 h-2.5 rounded-full', dotColor)} />
@@ -774,10 +785,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
               <span className={clsx('text-sm font-medium', textColor)}>
                 {reason}
               </span>
-              <span className={clsx(
-                'badge-sm',
-                isWarning ? SEVERITY_BADGE.warning : SEVERITY_BADGE.error
-              )}>
+              <span className={clsx('badge-sm', countBadge)}>
                 x{count}
               </span>
               <span className="text-xs text-theme-text-tertiary">

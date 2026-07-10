@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import type { TimelineEvent } from '../../types'
 import type { ActivityFilterKey, ActivitySelection } from './timeline-filters'
-import { activityKeysToSelection, countActiveViewOptions, selectionToActivityKeys } from './timeline-filters'
+import { activityKeysToSelection, selectionToActivityKeys } from './timeline-filters'
 import { TimelineToolbar, ViewMenu, DeletedEventsToggle, PinnedOnlyToggle } from './TimelineToolbar'
 
 function ev(partial: Partial<TimelineEvent>): TimelineEvent {
@@ -297,24 +297,6 @@ describe('activity two-axis mapping (source × problems ↔ ActivityFilterKey[])
   it('falls back to All/off for legacy multi-select key sets', () => {
     expect(activityKeysToSelection(['changes', 'warnings'])).toEqual({ source: 'all', problemsOnly: false })
     expect(activityKeysToSelection(['changes', 'k8s_events'])).toEqual({ source: 'all', problemsOnly: false })
-  })
-})
-
-describe('countActiveViewOptions', () => {
-  it('returns 0 for all defaults (deleted shown, grouping on, sort by importance)', () => {
-    expect(countActiveViewOptions({ grouping: 'app', sort: 'importance' })).toBe(0)
-  })
-
-  it('counts each non-default view choice: grouping off + sort off = 2 (deleted + kinds have their own toggles)', () => {
-    expect(countActiveViewOptions({ grouping: 'owner', sort: 'recent' })).toBe(2)
-  })
-
-  it('counts a non-default sort on its own', () => {
-    expect(countActiveViewOptions({ grouping: 'app', sort: 'name' })).toBe(1)
-  })
-
-  it('ignores grouping/sort when undefined (list view has neither)', () => {
-    expect(countActiveViewOptions({})).toBe(0)
   })
 })
 

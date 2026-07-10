@@ -146,7 +146,7 @@ describe('TimelineStrip render', () => {
   })
 })
 
-describe('state caption (Turn 12): full range names the state, band always paints', () => {
+describe('state caption: full range names the state, band always paints', () => {
   const buckets: ScrubberBucket[] = [
     { startMs: 0, endMs: 12 * HOUR, total: 5, warnings: 0 },
     { startMs: 12 * HOUR, endMs: 24 * HOUR, total: 8, warnings: 0 },

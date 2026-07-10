@@ -2,8 +2,7 @@
 //
 // Pure helpers so the host (radar/web TimelineView) can derive the concrete
 // selection each render, quantize the fetch window, and keep a latched lens
-// tracking the live edge — all unit-testable without a DOM (web has no test
-// runner; these are the contract tests).
+// tracking the live edge — all unit-testable without a DOM.
 
 import type { ScrubberRange } from './scrubber-math'
 
@@ -11,7 +10,7 @@ import type { ScrubberRange } from './scrubber-math'
 // the scrubber header. LIVE = the selection tracks now; `latched` is whether the
 // lens still rides the live edge (false once the user drags the lens into the
 // past — the chip then offers a jump-to-now). FROZEN = an explicit range is
-// pinned (`asOfMs` = freeze time, bumped by manual refresh).
+// pinned (`asOfMs` = freeze time, stamped when the selection freezes).
 export type TimelineLiveState =
   | { kind: 'live'; latched: boolean }
   // `newEventCount` (optional) = approximate events recorded after the frozen
@@ -75,9 +74,4 @@ export function isLensLatched(
 export function advanceLatchedLens(lens: ScrubberRange, newSelection: ScrubberRange): ScrubberRange {
   const width = lens.toMs - lens.fromMs
   return { fromMs: newSelection.toMs - width, toMs: newSelection.toMs }
-}
-
-/** Clock-only label for the "as of HH:MM" freeze marker on the paused chip. */
-export function formatAsOfTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }

@@ -23,6 +23,8 @@ export type {
   TimelineSourceConfig,
   TimelineSourceCapabilities,
   TimelineOverviewBucket,
+  TimelineCoverageSpan,
+  TimelineOverviewResult,
 } from './api/timelineSource';
 export type { RenderDiagnoseAction } from './context/DiagnoseCustomization';
 export { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay';

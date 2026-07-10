@@ -39,6 +39,11 @@ interface LocalTimelineScrubberProps {
   onDomainChange?: (info: ScrubberDomainInfo) => void
   liveState?: TimelineLiveState
   onLiveChipClick?: () => void
+  // The host ring fetch failed. The strip has no fetch of its own — it derives
+  // its histogram from `events` — so on failure it would paint a hollow
+  // "0 events" strip beside the host's error pane. Hide it instead; the host owns
+  // the error UI (mirrors RetainedTimelineScrubber, which hides its strip too).
+  isError?: boolean
 }
 
 // The local-mode strip. Same control surface as the retained scrubber, but the
@@ -59,6 +64,7 @@ export function LocalTimelineScrubber({
   onDomainChange,
   liveState,
   onLiveChipClick,
+  isError,
 }: LocalTimelineScrubberProps) {
   const overview = useMemo(() => localOverviewFromEvents(events), [events])
   const hourBuckets = overview.buckets
@@ -98,7 +104,7 @@ export function LocalTimelineScrubber({
   // span the entire domain.
   const maxSelectionMs = domainWidth
 
-  // 6a model: the histogram spans the QUERY RANGE (selection) directly —
+  // The histogram spans the QUERY RANGE (selection) directly —
   // no framing, no minimap. The query is the view, so a narrow window is never a
   // sub-pixel sliver; the draggable lens band lives inside this span.
   const displayDomain = useMemo<ScrubberRange>(
@@ -128,7 +134,7 @@ export function LocalTimelineScrubber({
 
   // Enrich a frozen chip with the count of events after the frozen edge, so the
   // "Go live" CTA can pull the user toward fresh data. Counted over the FULL
-  // domain — the framed display may cut off newer events. Live states pass
+  // domain — the displayed span may cut off newer events. Live states pass
   // through.
   const fullBuckets = useMemo(() => groupBuckets(hourBuckets, HOUR_MS), [hourBuckets])
   const chipState = useMemo<TimelineLiveState | undefined>(() => {
@@ -143,8 +149,8 @@ export function LocalTimelineScrubber({
     const all = buildPresets(30)
     const fit = all.filter((p) => p.ms <= domainWidth)
     const base = fit.length > 0 ? fit : [all[0]]
-    // One-click whole-ring selection. The framed strip caps a single brush at
-    // the frame width, so "everything we hold" needs a first-class control.
+    // One-click whole-ring selection. The strip caps a single brush at the
+    // displayed span, so "everything we hold" needs a first-class control.
     return [...base, { label: 'All', ms: domainWidth }]
   }, [domainWidth])
 
@@ -168,6 +174,10 @@ export function LocalTimelineScrubber({
     // didn't change. Loop-safe — once clamped, the comparison is equal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [domain.fromMs, domain.toMs, maxSelectionMs, selection.fromMs, selection.toMs])
+
+  // A failed ring fetch would render a hollow "0 events" strip next to the host's
+  // error pane. Hide instead — checked after all hooks so hook order is stable.
+  if (isError) return null
 
   return (
     <div className="@container px-4 py-2 border-b border-theme-border bg-theme-surface">
