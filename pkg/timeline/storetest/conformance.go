@@ -1,10 +1,15 @@
-// Package storetest exports the EventStore conformance suite. The Seq/delta
-// contract spans every implementation but each store enforces it with
-// unrelated mechanisms (ring position + mutex counter vs. an atomic seeded
-// from MAX(seq)), and a violation surfaces as silent client-side event loss,
-// not an error — so the properties live once, here, and every implementation
-// runs the same suite: MemoryStore from the pkg module's own tests, SQLiteStore
-// from internal/timeline, and any third store from wherever it lives.
+// Package storetest exports the EventStore arrival-order contract suite: seq
+// assignment, delta paging, duplicate-id collapse, and same-id upsert
+// semantics — the invariants whose violation surfaces as silent client-side
+// event loss, not an error. Each store enforces them with unrelated mechanisms
+// (ring position + mutex counter vs. an atomic seeded from MAX(seq)), so the
+// properties live once, here, and every implementation runs the same suite:
+// MemoryStore from the pkg module's own tests, SQLiteStore from
+// internal/timeline, and any third store from wherever it lives.
+//
+// The suite is deliberately NOT a complete EventStore certification —
+// grouping, statistics, retention, atomicity, and concurrency safety are each
+// implementation's own to test.
 package storetest
 
 import (
@@ -66,12 +71,27 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 
 	t.Run("append assigns strictly increasing seq in arrival order", func(t *testing.T) {
 		store := newStore(t)
-		for i := range 5 {
-			mustAppend(t, store, informer(fmt.Sprintf("ev-%d", i), time.Duration(i)*time.Second))
+		// Mixed arrival paths: a batch (whose rows must each take their own
+		// arrival number) followed by single appends.
+		batch := []timeline.TimelineEvent{
+			informer("ev-0", 0), informer("ev-1", time.Second), informer("ev-2", 2*time.Second),
 		}
+		if err := store.AppendBatch(ctx, batch); err != nil {
+			t.Fatalf("AppendBatch: %v", err)
+		}
+		mustAppend(t, store, informer("ev-3", 3*time.Second))
+		mustAppend(t, store, informer("ev-4", 4*time.Second))
+
 		events := queryAll(t, store, 0, 100)
 		if len(events) != 5 {
 			t.Fatalf("got %d events, want 5", len(events))
+		}
+		// A no-cursor query returns newest event time first — what every list
+		// consumer renders.
+		for i := 1; i < len(events); i++ {
+			if events[i].Timestamp.After(events[i-1].Timestamp) {
+				t.Fatalf("no-cursor query not newest-first: %s after %s", events[i].ID, events[i-1].ID)
+			}
 		}
 		seqs := map[string]int64{}
 		for _, e := range events {
@@ -164,8 +184,15 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		mustAppend(t, store, add)
 		cursor := frontier(t, store)
 		mustAppend(t, store, relist)
-		if rows := queryAll(t, store, 0, 100); len(rows) != 1 {
+		rows := queryAll(t, store, 0, 100)
+		if len(rows) != 1 {
 			t.Fatalf("relist dupe produced %d rows, want 1", len(rows))
+		}
+		// Keep-first: the surviving row is the ORIGINAL observation — same
+		// state, same first-observed identity — not a mutation to the relist's
+		// operation label.
+		if rows[0].EventType != timeline.EventTypeAdd {
+			t.Fatalf("relist mutated the row: event type %q, want %q", rows[0].EventType, timeline.EventTypeAdd)
 		}
 		if delta := queryAll(t, store, cursor, 100); len(delta) != 0 {
 			t.Fatalf("relist dupe re-delivered through delta: %v", delta)
@@ -226,16 +253,27 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		// A bump that lost its enrichment (tombstone expired, object gone from
 		// the live cache) must not erase what the row already knows.
 		mustAppend(t, store, k8sEvent("evt-uid-1", time.Minute, 5))
+		assertEnriched := func(where string, row *timeline.TimelineEvent) {
+			t.Helper()
+			if row.Count != 5 {
+				t.Fatalf("%s: bump lost its count: %d", where, row.Count)
+			}
+			if row.CreatedAt == nil || !row.CreatedAt.Equal(born) || row.Owner == nil || row.Owner.Name != "web" || row.Labels["app"] != "web" {
+				t.Fatalf("%s: bare bump erased enrichment: %+v", where, row)
+			}
+		}
+		// Through Query — the path every timeline consumer reads.
+		rows := queryAll(t, store, 0, 100)
+		if len(rows) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(rows))
+		}
+		assertEnriched("Query", &rows[0])
+		// And the point lookup.
 		row, err := store.GetEvent(ctx, "evt-uid-1")
 		if err != nil || row == nil {
 			t.Fatalf("GetEvent: %v %+v", err, row)
 		}
-		if row.Count != 5 {
-			t.Fatalf("bump lost its count: %d", row.Count)
-		}
-		if row.CreatedAt == nil || !row.CreatedAt.Equal(born) || row.Owner == nil || row.Owner.Name != "web" || row.Labels["app"] != "web" {
-			t.Fatalf("bare bump erased enrichment: %+v", row)
-		}
+		assertEnriched("GetEvent", row)
 
 		// The inverse: a bump that carries enrichment wins as the fresher truth.
 		mustAppend(t, store, k8sEvent("evt-uid-2", 0, 1))
