@@ -2954,6 +2954,15 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	// below: rows the user can't read still advance the delta frontier, or a
 	// run of unreadable rows would pin a delta client's cursor in place while
 	// it re-fetches the same page forever.
+	//
+	// Known limitation: content filters applied INSIDE store.Query (managed
+	// resources, excluded K8s events, preset filters) drop rows before this
+	// point, so maxSeq can't advance past them. A delta client with active
+	// content filters therefore re-scans those filtered rows each poll until a
+	// matching row moves the cursor (the 5-min full resync bounds the lag).
+	// This is a re-scan inefficiency, not data loss — every matching row is
+	// still delivered. A precise fix needs a same-snapshot store max-seq that
+	// ignores content filters; deferred as not worth the concurrency risk here.
 	var maxSeq int64
 	for _, e := range events {
 		if e.Seq > maxSeq {
