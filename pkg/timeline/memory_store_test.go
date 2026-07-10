@@ -223,24 +223,157 @@ func TestMemoryStore_ResourceSeen(t *testing.T) {
 	store := NewMemoryStore(100)
 
 	// Initially not seen
-	if store.IsResourceSeen("Pod", "default", "test-pod") {
+	if store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen initially")
 	}
 
 	// Mark as seen
-	store.MarkResourceSeen("Pod", "default", "test-pod")
+	store.MarkResourceSeen("cluster-a", "Pod", "default", "test-pod")
 
 	// Now should be seen
-	if !store.IsResourceSeen("Pod", "default", "test-pod") {
+	if !store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
 		t.Error("Resource should be seen after marking")
 	}
 
 	// Clear seen
-	store.ClearResourceSeen("Pod", "default", "test-pod")
+	store.ClearResourceSeen("cluster-a", "Pod", "default", "test-pod")
 
 	// Should not be seen again
-	if store.IsResourceSeen("Pod", "default", "test-pod") {
+	if store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen after clearing")
+	}
+}
+
+// A same-named resource in a different cluster must not read as already-seen:
+// the store is shared across kubeconfig context switches, and an unqualified
+// key would drop the add for the second cluster's resource.
+func TestMemoryStore_ResourceSeen_ClusterScoped(t *testing.T) {
+	store := NewMemoryStore(100)
+
+	store.MarkResourceSeen("cluster-a", "Deployment", "team-a", "web")
+
+	if !store.IsResourceSeen("cluster-a", "Deployment", "team-a", "web") {
+		t.Error("cluster-a/web should be seen after marking")
+	}
+	if store.IsResourceSeen("cluster-b", "Deployment", "team-a", "web") {
+		t.Error("cluster-b/web must NOT be suppressed by cluster-a's seen entry")
+	}
+}
+
+// A relist re-emits the same informer id; the ring must collapse it to one
+// row instead of appending a duplicate.
+func TestMemoryStore_DedupesIdenticalInformerID(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	rv := "100"
+	add := NewInformerEvent("Deployment", "apps/v1", "team-a", "web", "uid-1", rv, EventTypeAdd, HealthHealthy, nil, nil, nil, nil)
+	relistUpdate := NewInformerEvent("Deployment", "apps/v1", "team-a", "web", "uid-1", rv, EventTypeUpdate, HealthHealthy, nil, nil, nil, nil)
+	if add.ID != relistUpdate.ID {
+		t.Fatalf("relist add/update must share an id: %q vs %q", add.ID, relistUpdate.ID)
+	}
+
+	_ = store.Append(ctx, add)
+	_ = store.Append(ctx, relistUpdate)
+
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 deduped row, got %d: %+v", len(got), got)
+	}
+
+	del := NewInformerEvent("Deployment", "apps/v1", "team-a", "web", "uid-1", rv, EventTypeDelete, HealthUnknown, nil, nil, nil, nil)
+	if del.ID == add.ID {
+		t.Fatalf("delete must get a distinct id, got %q for both", del.ID)
+	}
+	_ = store.Append(ctx, del)
+	got, _ = store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if len(got) != 2 {
+		t.Fatalf("expected add + delete = 2 rows, got %d", len(got))
+	}
+}
+
+// A K8s Event's count bump reuses the uid-based id; the store must update the
+// existing row in place, not drop the bump or append a duplicate.
+func TestMemoryStore_K8sEventCountBumpUpserts(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	mk := func(count int32) TimelineEvent {
+		return TimelineEvent{
+			ID: "k8s-uid-1", Timestamp: time.Now(), Source: SourceK8sEvent,
+			Kind: "Pod", Namespace: "team-a", Name: "web-abc",
+			EventType: EventTypeWarning, Reason: "BackOff", Count: count,
+		}
+	}
+	_ = store.Append(ctx, mk(1))
+	_ = store.Append(ctx, mk(5))
+
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 upserted row, got %d: %+v", len(got), got)
+	}
+	if got[0].Count != 5 {
+		t.Fatalf("expected refreshed count 5, got %d", got[0].Count)
+	}
+}
+
+// A K8s Event count bump carries a fresh timestamp; queries iterate by ring
+// position, so the bumped event must move to the head of the recency order
+// instead of staying buried at its original insert position.
+func TestMemoryStore_K8sEventBumpMovesToRecency(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+	base := time.Now()
+
+	a := TimelineEvent{
+		ID: "a", Source: SourceK8sEvent, Kind: "Pod", Namespace: "ns", Name: "web-a",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 1, Timestamp: base,
+	}
+	b := TimelineEvent{
+		ID: "b", Source: SourceInformer, Kind: "Deployment", Namespace: "ns", Name: "web-b",
+		EventType: EventTypeUpdate, Timestamp: base.Add(time.Second),
+	}
+	_ = store.Append(ctx, a)
+	_ = store.Append(ctx, b)
+
+	q := func() []TimelineEvent {
+		got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		return got
+	}
+
+	// Before the bump, newest-first order is [b, a].
+	got := q()
+	if len(got) != 2 || got[0].ID != "b" || got[1].ID != "a" {
+		t.Fatalf("pre-bump order = %+v, want [b a]", got)
+	}
+
+	aBump := a
+	aBump.Count = 5
+	aBump.Timestamp = base.Add(2 * time.Second)
+	_ = store.Append(ctx, aBump)
+
+	// After the bump, a is newest → order flips to [a, b], still one row per id.
+	got = q()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rows after bump, got %d: %+v", len(got), got)
+	}
+	if got[0].ID != "a" || got[0].Count != 5 {
+		t.Fatalf("bumped event not at head with refreshed count, got %+v", got)
+	}
+	if got[1].ID != "b" {
+		t.Fatalf("second row = %s, want b", got[1].ID)
+	}
+	if store.Stats().TotalEvents != 2 {
+		t.Fatalf("Stats.TotalEvents = %d, want 2 (vacated slot must not count)", store.Stats().TotalEvents)
 	}
 }
 
@@ -498,5 +631,225 @@ func TestMemoryStore_FilterPreset(t *testing.T) {
 	}
 	if len(result) != 3 {
 		t.Errorf("Expected 3 events with 'all' preset, got %d", len(result))
+	}
+}
+
+// Seq is the delta cursor: strictly increasing per arrival, and SinceSeq must
+// return exactly the events that arrived after the cursor — regardless of
+// their timestamps (a late event with an older timestamp still lands ahead).
+func TestMemoryStore_SeqCursor(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	base := time.Now()
+	mk := func(id string, ts time.Time) TimelineEvent {
+		return TimelineEvent{
+			ID: id, Timestamp: ts, Source: SourceInformer,
+			Kind: "Pod", Namespace: "default", Name: id, EventType: EventTypeUpdate,
+		}
+	}
+	if err := store.AppendBatch(ctx, []TimelineEvent{mk("a", base), mk("b", base.Add(time.Second))}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	all, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(all) != 2 || all[0].Seq <= all[1].Seq || all[1].Seq == 0 {
+		t.Fatalf("expected 2 events with increasing arrival seq (newest first), got %+v", all)
+	}
+	cursor := all[0].Seq // newest arrival
+
+	// A late event: OLDER timestamp than anything stored, but it arrives now.
+	if err := store.Append(ctx, mk("late", base.Add(-time.Hour))); err != nil {
+		t.Fatalf("Append late: %v", err)
+	}
+	delta, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, SinceSeq: cursor})
+	if err != nil {
+		t.Fatalf("Query delta: %v", err)
+	}
+	if len(delta) != 1 || delta[0].ID != "late" {
+		t.Fatalf("expected exactly the late arrival past the cursor, got %+v", delta)
+	}
+	if delta[0].Seq <= cursor {
+		t.Fatalf("late arrival seq %d must exceed cursor %d", delta[0].Seq, cursor)
+	}
+}
+
+// A K8s Event count bump re-appends at head, so its seq must advance past an
+// existing cursor — otherwise a delta reader never sees the bump.
+func TestMemoryStore_K8sEventBumpAdvancesSeq(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	base := time.Now()
+	mk := func(count int32, ts time.Time) TimelineEvent {
+		return TimelineEvent{
+			ID: "k8s-uid-1", Timestamp: ts, Source: SourceK8sEvent,
+			Kind: "Pod", Namespace: "default", Name: "web-abc",
+			EventType: EventTypeWarning, Reason: "BackOff", Count: count,
+		}
+	}
+	if err := store.Append(ctx, mk(1, base)); err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	first, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil || len(first) != 1 {
+		t.Fatalf("Query first: %v %+v", err, first)
+	}
+	cursor := first[0].Seq
+
+	if err := store.Append(ctx, mk(5, base.Add(30*time.Second))); err != nil {
+		t.Fatalf("Append bump: %v", err)
+	}
+	delta, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true, SinceSeq: cursor})
+	if err != nil {
+		t.Fatalf("Query delta: %v", err)
+	}
+	if len(delta) != 1 || delta[0].Count != 5 {
+		t.Fatalf("expected the bumped row past the cursor, got %+v", delta)
+	}
+}
+
+// A bump that lost its enrichment (tombstone expired) must not erase the
+// owner/labels/createdAt the row already knows; a bump that carries fresh
+// enrichment wins.
+func TestMemoryStore_K8sEventBumpPreservesEnrichment(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	base := time.Now()
+	born := base.Add(-time.Hour)
+	enriched := TimelineEvent{
+		ID: "k8s-uid-1", Timestamp: base, Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "web-abc",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 1,
+		CreatedAt: &born,
+		Owner:     &OwnerInfo{Kind: "ReplicaSet", Name: "web"},
+		Labels:    map[string]string{"app": "web"},
+	}
+	if err := store.Append(ctx, enriched); err != nil {
+		t.Fatalf("Append enriched: %v", err)
+	}
+	bare := TimelineEvent{
+		ID: "k8s-uid-1", Timestamp: base.Add(30 * time.Second), Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "web-abc",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 5,
+	}
+	if err := store.Append(ctx, bare); err != nil {
+		t.Fatalf("Append bare bump: %v", err)
+	}
+
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Query: %v %+v", err, got)
+	}
+	if got[0].Count != 5 {
+		t.Fatalf("expected bumped count 5, got %d", got[0].Count)
+	}
+	if got[0].CreatedAt == nil || !got[0].CreatedAt.Equal(born) {
+		t.Fatalf("bare bump erased CreatedAt: %+v", got[0].CreatedAt)
+	}
+	if got[0].Owner == nil || got[0].Owner.Name != "web" {
+		t.Fatalf("bare bump erased Owner: %+v", got[0].Owner)
+	}
+	if got[0].Labels["app"] != "web" {
+		t.Fatalf("bare bump erased Labels: %+v", got[0].Labels)
+	}
+
+	// The inverse: a bump that carries enrichment fills a row that lacked it.
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "k8s-uid-2", Timestamp: base, Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "late-enriched",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 1,
+	}); err != nil {
+		t.Fatalf("Append bare first: %v", err)
+	}
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "k8s-uid-2", Timestamp: base.Add(time.Minute), Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "late-enriched",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 2,
+		Owner: &OwnerInfo{Kind: "Job", Name: "batch"},
+	}); err != nil {
+		t.Fatalf("Append enriched bump: %v", err)
+	}
+	row, err := store.GetEvent(ctx, "k8s-uid-2")
+	if err != nil || row == nil {
+		t.Fatalf("GetEvent: %v %+v", err, row)
+	}
+	if row.Owner == nil || row.Owner.Name != "batch" {
+		t.Fatalf("enriched bump did not fill Owner: %+v", row.Owner)
+	}
+}
+
+// Delta reads must page by ascending arrival order so a burst larger than the
+// page limit isn't skipped. The server advances the client cursor by the max
+// seq in each page, so successive polls must cover every unseen event with no
+// gaps — even though timestamps ascend with arrival (where a newest-first page
+// would return the highest seqs and strand the lower ones).
+func TestMemoryStore_DeltaPagesAscendingUnderLimit(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	base := time.Now()
+	for i := 0; i < 6; i++ {
+		ev := TimelineEvent{
+			ID: string(rune('a' + i)), Timestamp: base.Add(time.Duration(i) * time.Second),
+			Source: SourceInformer, Kind: "Deployment", Namespace: "default",
+			Name: string(rune('a' + i)), EventType: EventTypeUpdate,
+		}
+		if err := store.Append(ctx, ev); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+	// Arrivals now carry seq 1..6, timestamps ascending with seq.
+
+	cursor := int64(1)
+	seen := map[int64]bool{}
+	for polls := 0; polls < 10; polls++ {
+		page, err := store.Query(ctx, QueryOptions{Limit: 2, IncludeManaged: true, SinceSeq: cursor})
+		if err != nil {
+			t.Fatalf("delta query: %v", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		// Ascending within the page.
+		if len(page) == 2 && page[0].Seq >= page[1].Seq {
+			t.Fatalf("delta page not ascending by seq: %+v", []int64{page[0].Seq, page[1].Seq})
+		}
+		var maxSeq int64
+		for _, e := range page {
+			if seen[e.Seq] {
+				t.Fatalf("seq %d returned twice across polls", e.Seq)
+			}
+			seen[e.Seq] = true
+			if e.Seq > maxSeq {
+				maxSeq = e.Seq
+			}
+		}
+		cursor = maxSeq // mirror server cursor advancement
+	}
+
+	// Every seq strictly above the initial cursor (2..6) must have been seen.
+	for want := int64(2); want <= 6; want++ {
+		if !seen[want] {
+			t.Fatalf("delta paging skipped seq %d; seen=%v", want, seen)
+		}
+	}
+}
+
+// A store standing in for a failed persistent backend reports itself degraded
+// through Stats so diagnostics can explain the missing persistence.
+func TestNewDegradedMemoryStore_ReportsDegraded(t *testing.T) {
+	degraded := NewDegradedMemoryStore(100, "SQLite unusable: boom")
+	stats := degraded.Stats()
+	if !stats.Degraded || stats.DegradedReason != "SQLite unusable: boom" {
+		t.Fatalf("expected degraded stats with reason, got %+v", stats)
+	}
+
+	healthy := NewMemoryStore(100)
+	if hs := healthy.Stats(); hs.Degraded || hs.DegradedReason != "" {
+		t.Fatalf("plain memory store must not report degraded, got %+v", hs)
 	}
 }

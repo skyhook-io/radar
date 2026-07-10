@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'vitest'
-import { kindToPlural, pluralToKind, refToSelectedResource, initNavigationMap, resetNavigationMap } from './navigation'
+import { kindToPlural, pluralToKind, refToSelectedResource, initNavigationMap, resetNavigationMap, laneId, laneResourceKey, groupQualifiesLaneId, parseLaneId } from './navigation'
 
 afterEach(() => {
   resetNavigationMap()
@@ -188,5 +188,36 @@ describe('refToSelectedResource', () => {
       namespace: 'default',
       group: 'cert-manager.io',
     })
+  })
+})
+
+describe('lane identity helpers', () => {
+  test('groupQualifiesLaneId: only CRD groups qualify', () => {
+    expect(groupQualifiesLaneId('')).toBe(false)          // core
+    expect(groupQualifiesLaneId(undefined)).toBe(false)
+    expect(groupQualifiesLaneId('apps')).toBe(false)       // built-in
+    expect(groupQualifiesLaneId('batch')).toBe(false)
+    expect(groupQualifiesLaneId('networking.k8s.io')).toBe(false)
+    expect(groupQualifiesLaneId('postgresql.cnpg.io')).toBe(true)
+    expect(groupQualifiesLaneId('cluster.x-k8s.io')).toBe(true)
+  })
+
+  test('laneId: bare for core/built-in, qualified for CRD groups', () => {
+    expect(laneId('Pod', '', 'team-a', 'x')).toBe('Pod/team-a/x')
+    expect(laneId('Deployment', 'apps', 'ns', 'web')).toBe('Deployment/ns/web')
+    expect(laneId('Cluster', 'postgresql.cnpg.io', 'prod', 'main-db')).toBe('Cluster.postgresql.cnpg.io/prod/main-db')
+  })
+
+  test('laneResourceKey is always group-less', () => {
+    expect(laneResourceKey('Cluster', 'prod', 'main-db')).toBe('Cluster/prod/main-db')
+    expect(laneResourceKey('Pod', 'team-a', 'x')).toBe('Pod/team-a/x')
+  })
+
+  test('parseLaneId round-trips both bare and qualified ids', () => {
+    expect(parseLaneId('Pod/team-a/x')).toEqual({ kind: 'Pod', group: '', namespace: 'team-a', name: 'x' })
+    expect(parseLaneId('Cluster.postgresql.cnpg.io/prod/main-db')).toEqual({
+      kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'prod', name: 'main-db',
+    })
+    expect(parseLaneId('bogus')).toBeNull()
   })
 })

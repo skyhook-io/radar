@@ -37,6 +37,8 @@ import { NavCustomizationProvider } from "./context/NavCustomization";
 import { FilterLocationBridge } from "./filter/FilterLocationBridge";
 import type { NavCustomization } from "./context/NavCustomization";
 import type { ClusterLoadState } from "./types/clusterLoadState";
+import { TimelineSourceProvider } from "./context/TimelineSource";
+import type { TimelineSourceConfig } from "./api/timelineSource";
 import { DiagnoseCustomizationProvider } from "./context/DiagnoseCustomization";
 import type { RenderDiagnoseAction } from "./context/DiagnoseCustomization";
 import { defaultDiagnoseAction } from "./components/diagnose/LocalDiagnoseAction";
@@ -121,6 +123,20 @@ export interface RadarAppProps {
    * Radar runs with `navSlots.chrome: 'none'`.
    */
   onClusterLoadStateChange?: (state: ClusterLoadState) => void;
+  /**
+   * Selects the store backing the event timeline. Omit for the local event
+   * store the Radar binary keeps (default, standalone behavior). Set
+   * `{ mode: 'retained' }` when embedding behind a proxy that serves a
+   * longer-horizon history at `{apiBase}/timeline/events` +
+   * `{apiBase}/timeline/overview`; `maxRangeDays` caps how far back the
+   * 'all' range reaches. Generic extension point — the backend that answers
+   * the retained endpoints is the host's concern.
+   *
+   * Changing `mode` between renders remounts the timeline view (the local and
+   * retained sources expose different `useEvents` hooks; remounting avoids a
+   * React hook-order violation). Set it once at mount when possible.
+   */
+  timelineSource?: TimelineSourceConfig;
 }
 
 // Default QueryClient with the same shape Radar's standalone binary uses.
@@ -170,6 +186,7 @@ export function RadarApp({
   renderDiagnoseAction,
   initialPath,
   onClusterLoadStateChange,
+  timelineSource,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
   // before children construct URLs. getApiBase() / getAuthHeaders() /
@@ -193,17 +210,19 @@ export function RadarApp({
         <ToastProvider>
           <NavCustomizationProvider value={navSlots}>
             <FilterLocationBridge>
-              <DiagnoseCustomizationProvider
-                value={renderDiagnoseAction ?? defaultDiagnoseAction}
-              >
-                <DiagnoseProvider>
-                  <App
-                    manageDocumentTitle={manageDocumentTitle}
-                    documentTitleSuffix={documentTitleSuffix}
-                    onClusterLoadStateChange={onClusterLoadStateChange}
-                  />
-                </DiagnoseProvider>
-              </DiagnoseCustomizationProvider>
+              <TimelineSourceProvider config={timelineSource}>
+                <DiagnoseCustomizationProvider
+                  value={renderDiagnoseAction ?? defaultDiagnoseAction}
+                >
+                  <DiagnoseProvider>
+                    <App
+                      manageDocumentTitle={manageDocumentTitle}
+                      documentTitleSuffix={documentTitleSuffix}
+                      onClusterLoadStateChange={onClusterLoadStateChange}
+                    />
+                  </DiagnoseProvider>
+                </DiagnoseCustomizationProvider>
+              </TimelineSourceProvider>
             </FilterLocationBridge>
           </NavCustomizationProvider>
         </ToastProvider>

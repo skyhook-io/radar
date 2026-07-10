@@ -38,22 +38,9 @@ import { neighborhoodFor, seedNodeIds } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { gitOpsRouteForResource } from '../../utils/gitops-route'
-import { isChangeEvent, isHistoricalEvent } from '../../types'
-import { getKindBadgeColor, getHealthBadgeColor } from '../../utils/badge-colors'
 import { buildResourceHierarchy, getAllEventsFromHierarchy, isProblematicEvent, type ResourceLane } from '../../utils/resource-hierarchy'
-import {
-  ZOOM_LEVELS,
-  type ZoomLevel,
-  formatAxisTime,
-  EventMarker,
-  EventDotLegend,
-  HealthSpanLegend,
-  HealthSpan,
-  ZoomControls,
-  buildHealthSpans,
-  timeToX,
-  calculateTimeRange,
-} from '../timeline/shared'
+import { TimelineSwimlanes, type TimeWindow } from '../timeline/TimelineSwimlanes'
+import { TimelineList } from '../timeline/TimelineList'
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
 import { ResourceRendererDispatch, getResourceStatus, diagnoseHealthHint, type DiagnoseHealthHint, type RendererOverrides } from '../shared/ResourceRendererDispatch'
@@ -409,7 +396,6 @@ export function WorkloadView({
   }, [])
 
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
-  const [zoom, setZoom] = useState<ZoomLevel>(1)
   const [selectedPod, setSelectedPod] = useState<string | null>(null)
   const [initialContainer, setInitialContainer] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
@@ -997,14 +983,11 @@ export function WorkloadView({
         {effectiveTab === 'timeline' && (
           <EventsTab
             events={resourceEvents}
-            resourceLanes={resourceLanes}
             isLoading={eventsLoading}
-            zoom={zoom}
-            onZoomChange={setZoom}
-            resourceKind={kind}
-            resourceName={name}
             selectedEventId={selectedEventId}
             onSelectEvent={setSelectedEventId}
+            topology={topology}
+            onResourceClick={onNavigateToResource}
           />
         )}
         {effectiveTab === 'logs' && renderLogsTab && (
@@ -1214,162 +1197,98 @@ function OwnershipHeading({
 
 function EventsTab({
   events,
-  resourceLanes,
   isLoading,
-  zoom,
-  onZoomChange,
-  resourceKind,
-  resourceName,
   selectedEventId,
   onSelectEvent,
+  topology,
+  onResourceClick,
 }: {
   events: TimelineEvent[]
-  resourceLanes: ResourceLane[]
   isLoading: boolean
-  zoom: ZoomLevel
-  onZoomChange: (zoom: ZoomLevel) => void
-  resourceKind: string
-  resourceName: string
   selectedEventId: string | null
   onSelectEvent: (id: string | null) => void
+  topology?: Topology
+  onResourceClick?: NavigateToResource
 }) {
-  const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map())
-  const tableContainerRef = useRef<HTMLDivElement>(null)
-  const [hoveredEventId, setHoveredEventId] = useState<string | null>(null)
-  const [visibleRowRange, setVisibleRowRange] = useState<{ first: number; last: number } | null>(null)
-
-  // Scroll to selected event
+  // A ticking clock so the fitted window's right edge and the swimlane's Now line
+  // track the present, not the mount time — the tab's events refresh (SSE + poll),
+  // so a frozen "now" drifts left of the advancing edge and newer events land "in
+  // the future" to its right.
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    if (selectedEventId) {
-      const eventIndex = events.findIndex(e => e.id === selectedEventId)
-      if (eventIndex >= 0) {
-        const row = rowRefs.current.get(eventIndex)
-        if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      }
-    }
-  }, [selectedEventId, events])
+    const id = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(id)
+  }, [])
 
-  // Track visible rows via IntersectionObserver
-  useEffect(() => {
-    if (!tableContainerRef.current || events.length === 0) return
-    const visibleIndices = new Set<number>()
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const idx = parseInt(entry.target.getAttribute('data-row-index') || '-1', 10)
-          if (idx >= 0) {
-            if (entry.isIntersecting) visibleIndices.add(idx)
-            else visibleIndices.delete(idx)
-          }
-        }
-        if (visibleIndices.size > 0) {
-          const indices = Array.from(visibleIndices)
-          setVisibleRowRange({ first: Math.min(...indices), last: Math.max(...indices) })
-        } else {
-          setVisibleRowRange(null)
-        }
-      },
-      { root: tableContainerRef.current, threshold: 0.1 }
-    )
-    const timeoutId = setTimeout(() => {
-      rowRefs.current.forEach((row) => observer.observe(row))
-    }, 100)
-    return () => { clearTimeout(timeoutId); observer.disconnect() }
+  // Drop untimeable events once, at the source, so the swimlane, the list's date
+  // grouping, and selection all agree. The Go/K8s zero time (0001-01-01) parses to
+  // a valid-but-meaningless Date the swimlane can't place, but the list would
+  // otherwise bucket it under a bogus "1/1/1" header (and selecting it strands the
+  // pan). NaN / future timestamps are stripped for the same reason.
+  const cleanEvents = useMemo(() => {
+    const ceiling = Date.now() + 60_000
+    return events.filter((e) => {
+      const t = new Date(e.timestamp).getTime()
+      return Number.isFinite(t) && t > 0 && t <= ceiling
+    })
   }, [events])
 
-  // Visible time range from visible rows
-  const visibleTimeRangeFromRows = useMemo(() => {
-    if (!visibleRowRange || events.length === 0) return null
-    const visibleEvents = events.slice(visibleRowRange.first, visibleRowRange.last + 1)
-    if (visibleEvents.length === 0) return null
-    const timestamps = visibleEvents.map(e => new Date(e.timestamp).getTime())
-    const start = Math.min(...timestamps)
-    const end = Math.max(...timestamps)
-    const timeSpan = end - start
-    const padding = Math.max(timeSpan * 0.1, 60000)
-    return { start: start - padding, end: end + padding }
-  }, [events, visibleRowRange])
-
-  const now = Date.now()
-  const { start: startTime, windowMs } = calculateTimeRange(zoom, now)
-  const zoomIndex = ZOOM_LEVELS.indexOf(zoom)
-  const canZoomIn = zoomIndex > 0
-  const canZoomOut = zoomIndex < ZOOM_LEVELS.length - 1
-  const handleZoomIn = () => { if (canZoomIn) onZoomChange(ZOOM_LEVELS[zoomIndex - 1]) }
-  const handleZoomOut = () => { if (canZoomOut) onZoomChange(ZOOM_LEVELS[zoomIndex + 1]) }
-  const localTimeToX = (ts: number) => timeToX(ts, startTime, windowMs)
-
-  // Build swimlanes
-  const swimlanes = useMemo(() => {
-    type SwimLane = {
-      id: string; label: string
-      spans: { start: number; end: number; health: string }[]
-      events: TimelineEvent[]
-      createdAt?: number; createdBeforeWindow: boolean
+  // Fit the swimlane's window to this resource's events. Uncontrolled, the
+  // swimlane anchors to now and shows the last hour — but a resource's events can
+  // be days old (a Deployment created last week), so that window is empty. Default
+  // to the events' span; a user pan/zoom (userWindow) then takes over. Deriving the
+  // default (not latching it in state) means it always tracks the current events —
+  // latching once locked onto the pre-scoping event set and left the window wrong.
+  const eventSpan = useMemo<TimeWindow | null>(() => {
+    if (cleanEvents.length === 0) return null
+    let lo = Infinity, hi = -Infinity
+    for (const e of cleanEvents) {
+      const t = new Date(e.timestamp).getTime()
+      if (t < lo) lo = t
+      if (t > hi) hi = t
     }
+    const pad = Math.max((hi - lo) * 0.05, 60_000)
+    // Never extend into the future: the right edge is the newest event or now,
+    // whichever is earlier, so health bars stop at the Now line.
+    return { fromMs: lo - pad, toMs: Math.min(hi + pad, now) }
+  }, [cleanEvents, now])
+  const [userWindow, setUserWindow] = useState<TimeWindow | null>(null)
+  const viewWindow = userWindow ?? eventSpan
 
-    if (resourceLanes.length === 0) {
-      const mainResourceEvents = events.filter(e => e.kind === resourceKind && e.name === resourceName)
-      const healthResult = buildHealthSpans(mainResourceEvents.filter(e => isChangeEvent(e)), startTime, now, mainResourceEvents)
-      return [{ id: 'main', label: `${resourceKind}: ${resourceName}`, spans: healthResult.spans, events: mainResourceEvents, createdAt: healthResult.createdAt, createdBeforeWindow: healthResult.createdBeforeWindow }]
+  // Hard bounds for pan/zoom: the window can never leave [oldest event, now], so
+  // scrolling back can't run off into empty/invalid-date territory and zoom-out
+  // can't exceed the resource's actual lifespan.
+  const bounds = useMemo<TimeWindow | null>(
+    () => (eventSpan ? { fromMs: eventSpan.fromMs, toMs: now } : null),
+    [eventSpan, now],
+  )
+
+  // Selecting an event — from the list OR the swimlane — pans the swimlane window
+  // to include it in the SAME update, THEN sets the shared selection. Panning
+  // atomically is what prevents the flicker: the swimlane resolves selectedEventId
+  // against the window on the same render, so an off-window event never briefly
+  // resolves to null and oscillate against a separate pan effect. Refs read the
+  // current window/events without making this callback churn.
+  const selRefs = useRef({ viewWindow, events: cleanEvents, bounds })
+  selRefs.current = { viewWindow, events: cleanEvents, bounds }
+  const handleSelect = useCallback((id: string | null) => {
+    if (id) {
+      const { viewWindow: vw, events: evs, bounds: bd } = selRefs.current
+      const evt = evs.find((e) => e.id === id)
+      const t = evt ? new Date(evt.timestamp).getTime() : NaN
+      if (vw && Number.isFinite(t) && (t < vw.fromMs || t > vw.toMs)) {
+        const width = vw.toMs - vw.fromMs
+        const now = Date.now()
+        let fromMs = t - width / 2
+        let toMs = t + width / 2
+        if (toMs > now) { toMs = now; fromMs = now - width }
+        const lo = bd?.fromMs
+        if (lo != null && fromMs < lo) { fromMs = lo; toMs = lo + width }
+        setUserWindow({ fromMs, toMs })
+      }
     }
-
-    const rootLane = resourceLanes[0]
-    const lanes: SwimLane[] = []
-
-    const rootHealthResult = buildHealthSpans(rootLane.events.filter(e => isChangeEvent(e)), startTime, now, rootLane.events)
-    lanes.push({
-      id: rootLane.id,
-      label: `${rootLane.kind}: ${rootLane.name.length > 40 ? rootLane.name.slice(0, 20) + '...' + rootLane.name.slice(-17) : rootLane.name}`,
-      spans: rootHealthResult.spans, events: rootLane.events,
-      createdAt: rootHealthResult.createdAt, createdBeforeWindow: rootHealthResult.createdBeforeWindow,
-    })
-
-    const flattenChildren = (lane: ResourceLane): ResourceLane[] => {
-      const children = lane.children || []
-      return children.flatMap(child => [child, ...flattenChildren(child)])
-    }
-    const allChildren = flattenChildren(rootLane)
-
-    const kindPriority: Record<string, number> = {
-      Service: 1, Deployment: 2, Rollout: 2, StatefulSet: 2, DaemonSet: 2,
-      ReplicaSet: 3, ConfigMap: 4, Secret: 4, Gateway: 5, HTTPRoute: 4,
-      GRPCRoute: 4, TCPRoute: 4, TLSRoute: 4, Ingress: 5, Pod: 6,
-    }
-    allChildren.sort((a, b) => {
-      const aPriority = kindPriority[a.kind] || 10
-      const bPriority = kindPriority[b.kind] || 10
-      if (aPriority !== bPriority) return aPriority - bPriority
-      return b.events.length - a.events.length
-    })
-
-    for (const child of allChildren.slice(0, 6)) {
-      const childHealthResult = buildHealthSpans(child.events.filter(e => isChangeEvent(e)), startTime, now, child.events)
-      lanes.push({
-        id: child.id,
-        label: `${child.kind}: ${child.name.length > 40 ? child.name.slice(0, 20) + '...' + child.name.slice(-17) : child.name}`,
-        spans: childHealthResult.spans, events: child.events,
-        createdAt: childHealthResult.createdAt, createdBeforeWindow: childHealthResult.createdBeforeWindow,
-      })
-    }
-
-    return lanes
-  }, [resourceLanes, events, resourceKind, resourceName, startTime, now])
-
-  // Time axis ticks
-  const tickCount = 8
-  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => {
-    const t = startTime + (windowMs * i) / tickCount
-    return { time: t, label: formatAxisTime(new Date(t)) }
-  })
-
-  const formatTimeRangeDisplay = () => {
-    const start = new Date(startTime)
-    const end = new Date(now)
-    return `${start.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} → ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-  }
-
-  const nowX = localTimeToX(now)
+    onSelectEvent(id)
+  }, [onSelectEvent])
 
   if (isLoading) {
     return (
@@ -1382,178 +1301,60 @@ function EventsTab({
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Timeline toolbar */}
-      <div className="shrink-0 px-4 py-2 border-b border-theme-border bg-theme-surface/50 flex items-center justify-between">
-        <span className="text-sm font-medium text-theme-text-secondary">Events ({events.length})</span>
-        <div className="flex items-center gap-3">
-          <ZoomControls zoom={zoom} onZoomIn={handleZoomIn} onZoomOut={handleZoomOut} canZoomIn={canZoomIn} canZoomOut={canZoomOut} />
-          <span className="text-xs text-theme-text-tertiary">{formatTimeRangeDisplay()}</span>
-        </div>
+      {/* Swimlane — the shared TimelineSwimlanes widget (kind chips, top axis with
+          ticks + Now line, event clustering), flat + compact for a single subject.
+          Its drawer is suppressed (compact); the list below is the detail surface. */}
+      <div className="shrink-0 border-b border-theme-border">
+        <TimelineSwimlanes
+          events={cleanEvents}
+          grouping="flat"
+          compact
+          topology={topology}
+          onResourceClick={onResourceClick}
+          viewWindow={viewWindow ?? undefined}
+          bounds={bounds ?? undefined}
+          nowMs={now}
+          isLive={userWindow == null}
+          onViewWindowChange={(w) => {
+            const now = Date.now()
+            const MIN = 15 * 60_000
+            let { fromMs, toMs } = w
+            // Floor zoom-in at ~15 min: a tiny empty sub-window strands the user
+            // (the "move the strip above" hint has no strip here).
+            if (toMs - fromMs < MIN) {
+              const c = (fromMs + toMs) / 2
+              fromMs = c - MIN / 2
+              toMs = c + MIN / 2
+            }
+            // Never pan/zoom past now: shift the window back so its right edge is
+            // at most the present (there's nothing in the future to show).
+            if (toMs > now) {
+              const width = toMs - fromMs
+              toMs = now
+              fromMs = now - width
+            }
+            setUserWindow({ fromMs, toMs })
+          }}
+          selectedEventId={selectedEventId}
+          onSelectedEventChange={handleSelect}
+        />
       </div>
 
-      {/* Legend */}
-      <div className="shrink-0 px-4 py-1.5 border-b border-theme-border bg-theme-surface/30 flex items-center justify-between">
-        <HealthSpanLegend />
-        <EventDotLegend />
-      </div>
-
-      {/* Swimlane Timeline */}
-      <div className="shrink-0 border-b border-theme-border bg-theme-base relative">
-        {/* Scrollable swimlane area — max 4 lanes visible before scrolling */}
-        <div className="max-h-[140px] overflow-y-auto relative">
-          {nowX >= 0 && nowX <= 100 && (
-            <div className="absolute top-0 bottom-0 w-0.5 bg-purple-500/50 z-20 pointer-events-none" style={{ left: `calc(280px + (100% - 280px) * ${nowX / 100})` }}>
-              <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-xs text-purple-500 font-medium whitespace-nowrap">now</span>
-            </div>
-          )}
-
-          {swimlanes.map((lane) => (
-            <div key={lane.id} className="flex border-b border-theme-border/50 last:border-b-0">
-              <div className="w-[280px] shrink-0 px-3 py-1 bg-theme-surface/50 border-r border-theme-border text-xs font-medium text-theme-text-secondary truncate flex items-center">
-                {lane.label}
-              </div>
-              <div className="flex-1 relative h-7 bg-theme-base">
-                {visibleTimeRangeFromRows && (
-                  <div className="absolute top-0 bottom-0 bg-blue-500/10 border-x border-blue-500/30 pointer-events-none" style={{
-                    left: `${Math.max(0, localTimeToX(visibleTimeRangeFromRows.start))}%`,
-                    width: `${Math.max(2, Math.min(100, localTimeToX(visibleTimeRangeFromRows.end)) - Math.max(0, localTimeToX(visibleTimeRangeFromRows.start)))}%`,
-                  }} />
-                )}
-                {lane.spans.map((span, i) => {
-                  const left = Math.max(0, localTimeToX(span.start))
-                  const right = Math.min(100, localTimeToX(span.end))
-                  const width = right - left
-                  const showCreatedBefore = i === 0 && lane.createdBeforeWindow && lane.createdAt
-                  return (
-                    <HealthSpan
-                      key={i}
-                      health={span.health}
-                      left={left}
-                      width={width}
-                      title={`${span.health} (${new Date(span.start).toLocaleTimeString()} - ${new Date(span.end).toLocaleTimeString()})`}
-                      createdBefore={showCreatedBefore ? new Date(lane.createdAt!) : undefined}
-                    />
-                  )
-                })}
-                {lane.events.map((evt, i) => {
-                  const x = localTimeToX(new Date(evt.timestamp).getTime())
-                  if (x < 0 || x > 100) return null
-                  return (
-                    <EventMarker
-                      key={`${evt.id}-${i}`}
-                      event={evt}
-                      x={x}
-                      selected={selectedEventId === evt.id}
-                      onClick={() => onSelectEvent(selectedEventId === evt.id ? null : evt.id)}
-                      small
-                    />
-                  )
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Time axis */}
-        <div className="flex">
-          <div className="w-[280px] shrink-0 bg-theme-surface/50 border-r border-theme-border" />
-          <div className="flex-1 relative h-5 bg-theme-elevated/30">
-            {ticks.map((tick, i) => {
-              const x = localTimeToX(tick.time)
-              return (
-                <div key={i} className="absolute top-0 flex flex-col items-center" style={{ left: `${x}%`, transform: 'translateX(-50%)' }}>
-                  <div className="h-1.5 w-px bg-theme-border" />
-                  <span className="text-[10px] text-theme-text-tertiary">{tick.label}</span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Events table */}
-      <div ref={tableContainerRef} className="flex-1 overflow-auto">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-theme-surface border-b border-theme-border z-10">
-            <tr className="text-left text-xs text-theme-text-tertiary">
-              <th className="px-4 py-2 font-medium w-32">Event Type</th>
-              <th className="px-4 py-2 font-medium">Summary</th>
-              <th className="px-4 py-2 font-medium w-40">Time</th>
-              <th className="px-4 py-2 font-medium w-32">Resource</th>
-              <th className="px-4 py-2 font-medium w-24">Status</th>
-            </tr>
-          </thead>
-          <tbody className="table-divide-subtle">
-            {events.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-theme-text-tertiary">
-                  No events in this time range
-                </td>
-              </tr>
-            ) : (
-              events.map((evt, evtIdx) => {
-                const isSelected = selectedEventId === evt.id
-                const isHovered = hoveredEventId === evt.id
-                const isWarning = isProblematicEvent(evt)
-                return (
-                  <tr
-                    key={`${evt.id}-${evtIdx}`}
-                    ref={(el) => { if (el) rowRefs.current.set(evtIdx, el); else rowRefs.current.delete(evtIdx) }}
-                    data-row-index={evtIdx}
-                    onClick={() => onSelectEvent(isSelected ? null : evt.id)}
-                    onMouseEnter={() => setHoveredEventId(evt.id)}
-                    onMouseLeave={() => setHoveredEventId(null)}
-                    className={clsx(
-                      'cursor-pointer transition-colors',
-                      isSelected ? 'bg-blue-500/10' : isHovered ? 'bg-blue-500/5' : 'hover:bg-theme-surface/50'
-                    )}
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <EventDot event={evt} />
-                        <span className={clsx('font-medium', isWarning ? 'text-amber-500' : 'text-theme-text-primary')}>
-                          {isHistoricalEvent(evt) && evt.reason ? evt.reason : isChangeEvent(evt) ? evt.eventType : evt.reason}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-theme-text-secondary">
-                      {evt.message || evt.diff?.summary || '-'}
-                    </td>
-                    <td className="px-4 py-3 text-theme-text-tertiary">
-                      {new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={clsx('badge-sm', getKindBadgeColor(evt.kind))}>
-                        {evt.kind}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {isWarning ? (
-                        <span className="badge status-degraded">Active</span>
-                      ) : evt.healthState ? (
-                        <span className={clsx('badge', getHealthBadgeColor(evt.healthState))}>{evt.healthState}</span>
-                      ) : null}
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
+      {/* Event list — the shared TimelineList: same event icons/colors as the
+          swimlane, kind badge + resource link, namespace, message, and inline diff,
+          all shown directly. compact drops its toolbar (the swimlane above owns the
+          window). */}
+      <div className="min-h-0 flex-1">
+        <TimelineList
+          compact
+          events={cleanEvents}
+          isLoading={false}
+          onResourceClick={onResourceClick}
+          selectedEventId={selectedEventId}
+          onSelectEvent={handleSelect}
+        />
       </div>
     </div>
-  )
-}
-
-function EventDot({ event }: { event: TimelineEvent }) {
-  const isWarning = isProblematicEvent(event)
-  const isDelete = event.eventType === 'delete'
-  const isAdd = event.eventType === 'add'
-  return (
-    <div className={clsx(
-      'w-3 h-3 rounded-full shrink-0',
-      isWarning ? 'bg-amber-500' : isDelete ? 'bg-red-500' : isAdd ? 'bg-green-500' : 'bg-blue-500'
-    )} />
   )
 }
 

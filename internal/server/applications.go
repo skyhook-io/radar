@@ -108,6 +108,7 @@ type appRow struct {
 	VersionSkew   bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
 	AppVersion    string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
 	Identity      *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
+	MatchKeys     []string          `json:"matchKeys,omitempty"`      // exact grouping-signal evidence keys, namespace-scoped ("instance:ns:x","helm:ns:x",…) + informational "name-stem:x" (unscoped); the client joins timeline events to this app by these, matching on the event's namespace
 	SourceRef     *appSourceRef     `json:"sourceRef,omitempty"`      // exact source system object when known (GitOps / native Helm)
 	Workloads     []appWorkload     `json:"workloads"`
 	Events        []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
@@ -172,7 +173,9 @@ type appHistoryIncident struct {
 type appRelationships struct {
 	Services  []string `json:"services,omitempty"`
 	Ingresses []string `json:"ingresses,omitempty"`
-	Routes    []string `json:"routes,omitempty"`
+	// "Kind/name" (routes are polymorphic); Services/Ingresses carry bare names
+	// since their kind is fixed.
+	Routes []string `json:"routes,omitempty"`
 	Configs   int      `json:"configs,omitempty"`
 	Scalers   int      `json:"scalers,omitempty"`
 	Storage   int      `json:"storage,omitempty"`
@@ -697,7 +700,10 @@ func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
 		out.Ingresses = append(out.Ingresses, i.Name)
 	}
 	for _, r := range rel.Routes {
-		out.Routes = append(out.Routes, r.Name)
+		// Routes are polymorphic (HTTPRoute/GRPCRoute/TCPRoute/TLSRoute), so ship
+		// "Kind/name": the client keys its membership index on the concrete kind
+		// (matching the lane ids), which a bare name can't reconstruct.
+		out.Routes = append(out.Routes, r.Kind+"/"+r.Name)
 	}
 	if len(out.Services) == 0 && len(out.Ingresses) == 0 && len(out.Routes) == 0 &&
 		out.Configs == 0 && out.Scalers == 0 && out.Storage == 0 && out.PDBs == 0 {
@@ -1032,6 +1038,81 @@ func identifyApp(r *appRow, ins []appWorkloadInput) {
 
 	r.Category, r.AddonReason = classifyAppCategory(ins)
 	r.WorkloadClass = classifyAppWorkloads(ins)
+	r.MatchKeys = collectExactMatchKeys(ins)
+}
+
+// signalMatchKind maps an overlay Signal (winner or retained runner-up) to its
+// client-facing evidence kind + the EXACT grouping value the server keyed on —
+// appNameFromKey(sig.Key), never a recomputed display name. Kinds are pinned to
+// the pkg/subject tiers: note that "instance" is app.kubernetes.io/instance
+// (TierInstance) while argocd.argoproj.io/instance (TierArgoInstance) maps to
+// "argo". TierFluxKustomize has no event-matchable label kind, so it is
+// skipped. The caller namespace-scopes the final key (see collectExactMatchKeys).
+func signalMatchKind(sig subject.Signal) (kind, value string, ok bool) {
+	value = appNameFromKey(sig.Key)
+	if value == "" {
+		return "", "", false
+	}
+	switch sig.Tier {
+	// Native Helm (TierHelmRelease) is deliberately absent: its identity is
+	// the meta.helm.sh/release-name ANNOTATION, and timeline events carry only
+	// labels, so a key derived from it can never join. The chart's recommended
+	// labels (instance/name/part-of) surface through their own tiers. Flux
+	// HelmRelease identity is a label (helm.toolkit.fluxcd.io/name) — joinable.
+	// TierArgoTrackingID stays even though the tracking id is an annotation:
+	// its key equals the argocd.argoproj.io/instance label's, so it joins
+	// whenever Argo's tracking mode also applies the label.
+	case subject.TierFluxHelmRelease:
+		return "helm", value, true
+	case subject.TierArgoTrackingID, subject.TierArgoInstance:
+		return "argo", value, true
+	case subject.TierInstance:
+		return "instance", value, true
+	case subject.TierPartOf:
+		return "part-of", value, true
+	case subject.TierAppName:
+		return "name", value, true
+	case subject.TierBareApp:
+		return "app", value, true
+	}
+	return "", "", false
+}
+
+// collectExactMatchKeys gathers the exact grouping-signal evidence keys for an
+// app from EVERY member workload's overlay (winner + retained conflicts), deduped
+// and sorted. These are the kinds a deleted member's timeline event can still
+// carry as labels, so the client can re-join it to this app.
+//
+// Keys are namespace-scoped as "<kind>:<namespace>:<value>" using the workload's
+// OWN namespace: the same label value (e.g. instance=redis) can appear in two
+// namespaces belonging to different apps, and an unscoped "instance:redis" would
+// let a historical lane join the wrong one. An app whose workloads span multiple
+// namespaces therefore emits one scoped key per namespace it lives in. The
+// client looks these up with the matching EVENT's namespace. The informational
+// name-stem key is appended later (resolveAppIdentities), unscoped and excluded
+// from event matching.
+func collectExactMatchKeys(ins []appWorkloadInput) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, in := range ins {
+		if in.overlay == nil {
+			continue
+		}
+		signals := append([]subject.Signal{in.overlay.Winner}, in.overlay.Conflicts...)
+		for _, sig := range signals {
+			kind, value, ok := signalMatchKind(sig)
+			if !ok {
+				continue
+			}
+			key := kind + ":" + in.wl.Namespace + ":" + value
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, key)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // pickRoot prefers a GitOps-manager root over a raw workload root for identity.

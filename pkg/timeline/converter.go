@@ -5,18 +5,37 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// informerEventID derives a deterministic id from the resource's observable
+// state (gvk + namespace + name + uid + resourceVersion), not the operation:
+// a relist re-emits the identical id whether the arrival is labeled add or
+// update, so replays and failovers de-dupe instead of duplicating. A delete is
+// a distinct state and gets its own id via the delete marker. The uid alone
+// makes the id cluster-safe (K8s uids are globally unique), so cluster context
+// is deliberately left out of the hash.
+func informerEventID(apiVersion, kind, namespace, name, uid, resourceVersion string, operation EventType) string {
+	hashInput := apiVersion + "|" + kind + "|" + namespace + "|" + name + "|" + uid + "|" + resourceVersion
+	if operation == EventTypeDelete {
+		hashInput += "|delete"
+	}
+	hash := sha256.Sum256([]byte(hashInput))
+	return fmt.Sprintf("ev-%x", hash[:16])
+}
 
 // NewInformerEvent creates a TimelineEvent from an informer callback
 // createdAt is the resource's metadata.creationTimestamp (when K8s actually created it)
 // apiVersion (e.g. "apps/v1", "cluster.x-k8s.io/v1beta1") disambiguates CRD kind
 // collisions on navigation; pass "" if unknown (older callers).
-func NewInformerEvent(kind, apiVersion, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
+// resourceVersion pins the event id to the resource state; pass "" only when
+// truly unavailable — the stores dedup informer ids keep-first, so with a
+// constant "" every later update of the resource maps to the same id and is
+// DROPPED until the row ages out, not merely collapsed.
+func NewInformerEvent(kind, apiVersion, namespace, name, uid, resourceVersion string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
 	return TimelineEvent{
-		ID:          uuid.New().String(),
+		ID:          informerEventID(apiVersion, kind, namespace, name, uid, resourceVersion, operation),
 		Timestamp:   time.Now(),
 		Source:      SourceInformer,
 		Kind:        kind,
@@ -33,7 +52,13 @@ func NewInformerEvent(kind, apiVersion, namespace, name, uid string, operation E
 	}
 }
 
-// NewK8sEventTimelineEvent creates a TimelineEvent from a corev1.Event
+// NewK8sEventTimelineEvent creates a TimelineEvent from a corev1.Event.
+// The id is the Event uid — one logical row per Event, deliberately NOT one
+// row per count/message revision. The count/lastTimestamp/message mutate in
+// place on the same uid; both local stores upsert a same-uid bump — MemoryStore
+// in appendLocked, SQLiteStore via ON CONFLICT(id) DO UPDATE in AppendBatch — so
+// the row reflects the latest revision instead of dropping the bump, while an
+// identical informer/historical relist dupe stays collapsed to the first row.
 func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEvent {
 	// Use lastTimestamp or firstTimestamp
 	ts := event.LastTimestamp.Time
@@ -69,9 +94,12 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 // The ID is deterministic based on the event content to avoid duplicates on restart
 // apiVersion (e.g. "apps/v1", "cluster.x-k8s.io/v1beta1") disambiguates CRD kind
 // collisions on navigation; pass "" if unknown.
-func NewHistoricalEvent(kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
+// clusterContext is folded into the id: historical ids carry no uid, so two
+// clusters with a same-named resource created at the same instant would collide
+// in one persistent store without it.
+func NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
 	// Create deterministic ID from event attributes to avoid duplicates
-	hashInput := fmt.Sprintf("historical:%s/%s/%s:%d:%s", kind, namespace, name, ts.UnixNano(), reason)
+	hashInput := fmt.Sprintf("historical:%s:%s/%s/%s:%d:%s", clusterContext, kind, namespace, name, ts.UnixNano(), reason)
 	hash := sha256.Sum256([]byte(hashInput))
 	id := fmt.Sprintf("hist-%x", hash[:8]) // Use first 8 bytes for shorter ID
 
@@ -146,15 +174,23 @@ func ExtractLabels(obj any) map[string]string {
 		return nil
 	}
 
-	// Only keep labels that are useful for grouping
+	// Only keep labels that are useful for grouping. The GitOps identity
+	// labels must ride along or the app-membership matchKeys the server ships
+	// for Argo/Flux-primary apps (applications.go collectExactMatchKeys) have
+	// nothing to match against on a deleted member's events. Native Helm
+	// identity is an annotation (meta.helm.sh/release-name), which events
+	// deliberately never carry.
 	relevant := make(map[string]string)
 	interestingLabels := []string{
 		"app.kubernetes.io/name",
 		"app.kubernetes.io/instance",
+		"app.kubernetes.io/part-of",
 		"app.kubernetes.io/component",
 		"app",
 		"name",
 		"component",
+		"argocd.argoproj.io/instance",
+		"helm.toolkit.fluxcd.io/name",
 	}
 
 	for _, key := range interestingLabels {

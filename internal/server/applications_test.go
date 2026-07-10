@@ -394,6 +394,35 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 	}
 }
 
+// relationshipsFor ships routes as "Kind/name" so the client can index them
+// under the concrete (polymorphic) route kind — HTTPRoute/GRPCRoute/… — matching
+// the route lane id. A bare name would collapse to a generic "Route" that never
+// resolves.
+func TestRelationshipsFor_RoutesCarryConcreteKind(t *testing.T) {
+	node := func(id, kind, ns, name string) topology.Node {
+		return topology.Node{ID: id, Kind: topology.NodeKind(kind), Name: name, Data: map[string]any{"namespace": ns}}
+	}
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			node("gateway/prod/gw", "Gateway", "prod", "gw"),
+			node("httproute/prod/web", "HTTPRoute", "prod", "web"),
+		},
+		Edges: []topology.Edge{
+			// A Gateway routes to an HTTPRoute → rel.Routes for the Gateway query.
+			{ID: "gw->web", Source: "gateway/prod/gw", Target: "httproute/prod/web", Type: topology.EdgeRoutesTo},
+		},
+	}
+	g := &appGraph{byID: map[string]topology.Node{}, byKNN: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
+
+	rels := g.relationshipsFor("Gateway", "prod", "gw")
+	if rels == nil {
+		t.Fatal("relationshipsFor returned nil; want Routes populated")
+	}
+	if len(rels.Routes) != 1 || rels.Routes[0] != "HTTPRoute/web" {
+		t.Fatalf("Routes = %v, want [\"HTTPRoute/web\"] (concrete kind, not bare name)", rels.Routes)
+	}
+}
+
 // Add-ons are classified with evidence, never dropped (raw-always). A user
 // workload named "grafana" still appears — tagged, explained, foldable.
 func TestClassifyAddon_ClassifiesNotHides(t *testing.T) {
@@ -538,6 +567,66 @@ func TestGroupApplications_AppVersionUnanimity(t *testing.T) {
 	}
 	if r := rowByName(groupApplications([]appWorkloadInput{mk("a", "v3.2.6"), mk("b", "v2.44.0")}), "argo"); r == nil || r.AppVersion != "" {
 		t.Errorf("disagreeing labels must not set AppVersion, got %+v", r)
+	}
+}
+
+// matchKeys carry the EXACT grouping-signal values the server keyed on, so the
+// client can re-join timeline events (including deleted members) to an app.
+// They collect from every member's overlay winner + retained conflicts, deduped
+// and sorted, and use the tier→kind mapping (part-of/name/instance/app/helm/argo).
+func TestGroupApplications_MatchKeys(t *testing.T) {
+	// A workload whose winner is part-of but which ALSO carries a bare-app
+	// conflict — both surface as match keys.
+	partOf := overlayInput("Deployment", "team-a", "billing-api", "1.0", "healthy", subject.TierPartOf, "team-a/app/checkout", subject.ConfidenceMedium)
+	partOf.overlay.Conflicts = []subject.Signal{{Tier: subject.TierBareApp, Key: "team-a/app/checkout", Confidence: subject.ConfidenceLow}}
+	// A second member keyed identically — dedup must collapse the repeated key.
+	partOfSibling := overlayInput("Deployment", "team-a", "billing-worker", "1.0", "healthy", subject.TierPartOf, "team-a/app/checkout", subject.ConfidenceMedium)
+
+	rows := groupApplications([]appWorkloadInput{partOf, partOfSibling})
+	r := rowByName(rows, "checkout")
+	if r == nil {
+		t.Fatalf("checkout app missing: %+v", rows)
+	}
+	want := []string{"app:team-a:checkout", "part-of:team-a:checkout"} // namespace-scoped, sorted, deduped
+	if len(r.MatchKeys) != len(want) {
+		t.Fatalf("matchKeys = %v, want %v", r.MatchKeys, want)
+	}
+	for i := range want {
+		if r.MatchKeys[i] != want[i] {
+			t.Errorf("matchKeys[%d] = %q, want %q (full: %v)", i, r.MatchKeys[i], want[i], r.MatchKeys)
+		}
+	}
+
+	// Flux HelmRelease winner → "helm:<name>".
+	helm := groupApplications([]appWorkloadInput{
+		overlayInput("Deployment", "demo", "podinfo", "6.13.0", "healthy", subject.TierFluxHelmRelease, "flux-system/HelmRelease/podinfo", subject.ConfidenceHigh),
+	})
+	if r := rowByName(helm, "podinfo"); r == nil || len(r.MatchKeys) != 1 || r.MatchKeys[0] != "helm:demo:podinfo" {
+		t.Errorf("helm matchKeys = %+v, want [helm:demo:podinfo]", r)
+	}
+
+	// Native Helm winner → NO match key: release identity is an annotation
+	// (meta.helm.sh/release-name), which events never carry, so the key could
+	// never join a timeline event to the app.
+	nativeHelm := groupApplications([]appWorkloadInput{
+		overlayInput("Deployment", "prod", "checkout-api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium),
+	})
+	if r := rowByName(nativeHelm, "checkout"); r == nil || len(r.MatchKeys) != 0 {
+		t.Errorf("native helm matchKeys = %+v, want none", r)
+	}
+
+	// Argo tracking-id winner → "argo:<name>".
+	argo := groupApplications([]appWorkloadInput{
+		overlayInput("Deployment", "team-a", "storefront-api", "2.0.0", "healthy", subject.TierArgoTrackingID, "argocd/Application/storefront", subject.ConfidenceHigh),
+	})
+	if r := rowByName(argo, "storefront"); r == nil || len(r.MatchKeys) != 1 || r.MatchKeys[0] != "argo:team-a:storefront" {
+		t.Errorf("argo matchKeys = %+v, want [argo:team-a:storefront]", r)
+	}
+
+	// A raw (no-overlay) singleton has no exact match keys.
+	raw := groupApplications([]appWorkloadInput{rawInput("StatefulSet", "team-a", "lonely-db", "15", "healthy")})
+	if r := rowByName(raw, "lonely-db"); r == nil || len(r.MatchKeys) != 0 {
+		t.Errorf("raw app should have no matchKeys, got %+v", r)
 	}
 }
 

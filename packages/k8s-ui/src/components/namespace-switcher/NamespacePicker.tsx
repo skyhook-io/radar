@@ -1,8 +1,8 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, Globe, Search, AlertTriangle, X } from 'lucide-react'
+import { ChevronDown, Globe, Search, AlertTriangle } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
-import { Input } from '../ui/Input'
+import { MultiSelectPicker } from '../ui/MultiSelectPicker'
 
 /**
  * Backend-reported namespace scope. Mirrors Radar's `/cluster/namespace-scope`
@@ -193,18 +193,6 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
     applySelection(new Set())
   }
 
-  const selectAllVisible = () => {
-    const next = new Set(draft)
-    for (const ns of filteredItems) next.add(ns)
-    setDraft(next)
-  }
-
-  const clearVisible = () => {
-    const next = new Set(draft)
-    for (const ns of filteredItems) next.delete(ns)
-    setDraft(next)
-  }
-
   const activeCount = scopeActives.length
   const triggerLabel =
     activeCount === 0 ? 'All namespaces' : activeCount === 1 ? scopeActives[0] : `${activeCount} namespaces`
@@ -226,11 +214,6 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
         : activeCount === 1
           ? `View is filtered to namespace ${scopeActives[0]}. Click to switch or reset.`
           : `View is filtered to ${activeCount} namespaces. Click to adjust or reset.`
-
-  // Counts used to label the bulk-action buttons; computed against the visible
-  // (filtered) set so the labels match what the action will affect.
-  const visibleSelectedCount = filteredItems.reduce((n, ns) => n + (draft.has(ns) ? 1 : 0), 0)
-  const allVisibleSelected = filteredItems.length > 0 && visibleSelectedCount === filteredItems.length
 
   return (
     <>
@@ -272,100 +255,95 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
             style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: pos.width, zIndex: 100 }}
             className="bg-theme-surface border border-theme-border rounded-md shadow-theme-lg overflow-hidden"
           >
-            {items.length > 6 && (
-              <div className="flex items-center gap-2 px-2 py-1.5 border-b border-theme-border">
-                <Search className="w-3.5 h-3.5 text-theme-text-tertiary" />
-                <Input
-                  autoFocus
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="Filter namespaces"
-                  className="flex-1 bg-transparent text-sm outline-none text-theme-text-primary placeholder:text-theme-text-tertiary"
-                />
-              </div>
-            )}
-
             {scope.cacheScoped ? (
-              <div className="px-3 py-1.5 border-b border-theme-border text-[11px] leading-snug text-theme-text-secondary">
-                Radar is watching one namespace to stay fast on large clusters.
-                {scope.namespaceRescope
-                  ? ' Pick another to re-point it — takes a moment and closes open terminals.'
-                  : ' This instance is locked to its startup namespace.'}
-              </div>
-            ) : (
-              <div className="flex items-center justify-between px-2 py-1.5 border-b border-theme-border text-xs text-theme-text-secondary">
-                <button
-                  onClick={canClearAll ? clearAll : undefined}
-                  disabled={!canClearAll || activeCount === 0}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-theme-hover disabled:opacity-50 disabled:hover:bg-transparent"
-                  aria-label="Clear namespace selection"
-                >
-                  <X className="w-3 h-3" />
-                  Clear all
-                </button>
-                <button
-                  onClick={allVisibleSelected ? clearVisible : selectAllVisible}
-                  disabled={filteredItems.length === 0}
-                  className="px-1.5 py-0.5 rounded hover:bg-theme-hover disabled:opacity-50 disabled:hover:bg-transparent"
-                >
-                  {allVisibleSelected
-                    ? `Clear ${filteredItems.length} visible`
-                    : search.trim()
-                      ? `Select ${filteredItems.length} visible`
-                      : 'Select all'}
-                </button>
-              </div>
-            )}
+              <>
+                {items.length > 6 && (
+                  <div className="flex items-center gap-2 px-2 py-1.5 border-b border-theme-border">
+                    <Search className="w-3.5 h-3.5 text-theme-text-tertiary" />
+                    <input
+                      autoFocus
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      placeholder="Filter namespaces"
+                      className="flex-1 bg-transparent text-sm outline-none text-theme-text-primary placeholder:text-theme-text-tertiary"
+                    />
+                  </div>
+                )}
 
-            <ul className="max-h-80 overflow-y-auto py-1">
-              {filteredItems.length === 0 && (
-                <li className="px-3 py-2 text-xs text-theme-text-tertiary">
-                  {search ? 'No matches.' : 'No namespaces available.'}
-                </li>
-              )}
+                <div className="px-3 py-1.5 border-b border-theme-border text-[11px] leading-snug text-theme-text-secondary">
+                  Radar is watching one namespace to stay fast on large clusters.
+                  {scope.namespaceRescope
+                    ? ' Pick another to re-point it — takes a moment and closes open terminals.'
+                    : ' This instance is locked to its startup namespace.'}
+                </div>
 
-              {filteredItems.map(ns => {
-                const isChecked = draft.has(ns)
-                const isContextDefault = ns === scope.kubeconfigNamespace && ns !== ''
-                return (
-                  <li key={ns}>
-                    <label
-                      className="w-full flex items-center justify-between px-3 py-1.5 text-sm hover:bg-theme-hover text-left text-theme-text-primary cursor-pointer"
-                    >
-                      <span className="flex items-center gap-2 min-w-0">
-                        <input
-                          type={scope.cacheScoped ? 'radio' : 'checkbox'}
-                          name={scope.cacheScoped ? 'namespace-cache-scope' : undefined}
-                          checked={isChecked}
-                          onChange={() => toggle(ns)}
-                          className="shrink-0 accent-current"
-                        />
-                        <span className="truncate">{ns}</span>
-                        {isContextDefault && (
-                          <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary shrink-0">
-                            kubeconfig
+                <ul className="max-h-80 overflow-y-auto py-1">
+                  {filteredItems.length === 0 && (
+                    <li className="px-3 py-2 text-xs text-theme-text-tertiary">
+                      {search ? 'No matches.' : 'No namespaces available.'}
+                    </li>
+                  )}
+
+                  {filteredItems.map(ns => {
+                    const isChecked = draft.has(ns)
+                    const isContextDefault = ns === scope.kubeconfigNamespace && ns !== ''
+                    return (
+                      <li key={ns}>
+                        <label className="w-full flex items-center justify-between px-3 py-1.5 text-sm hover:bg-theme-hover text-left text-theme-text-primary cursor-pointer">
+                          <span className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="radio"
+                              name="namespace-cache-scope"
+                              checked={isChecked}
+                              onChange={() => toggle(ns)}
+                              className="shrink-0 accent-current"
+                            />
+                            <span className="truncate">{ns}</span>
+                            {isContextDefault && (
+                              <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary shrink-0">
+                                kubeconfig
+                              </span>
+                            )}
                           </span>
-                        )}
-                      </span>
-                    </label>
-                  </li>
-                )
-              })}
-            </ul>
+                        </label>
+                      </li>
+                    )
+                  })}
+                </ul>
 
-            <div className="flex items-center justify-between px-3 py-1.5 border-t border-theme-border text-[11px] text-theme-text-tertiary">
-              <span>
-                {scope.cacheScoped
-                  ? (draft.size === 1 ? Array.from(draft)[0] : 'Select a namespace')
-                  : draft.size === 0 ? 'All namespaces' : `${draft.size} selected`}
-              </span>
-              <button
-                onClick={closeAndApply}
-                className="px-2 py-0.5 rounded bg-theme-elevated hover:bg-theme-hover text-theme-text-primary"
-              >
-                Done
-              </button>
-            </div>
+                <div className="flex items-center justify-between px-3 py-1.5 border-t border-theme-border text-[11px] text-theme-text-tertiary">
+                  <span>{draft.size === 1 ? Array.from(draft)[0] : 'Select a namespace'}</span>
+                  <button
+                    onClick={closeAndApply}
+                    className="px-2 py-0.5 rounded bg-theme-elevated hover:bg-theme-hover text-theme-text-primary"
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : (
+              <MultiSelectPicker
+                items={items}
+                selected={draft}
+                onSelectionChange={setDraft}
+                onClearAll={clearAll}
+                onDone={closeAndApply}
+                search={search}
+                onSearchChange={setSearch}
+                searchPlaceholder="Filter namespaces"
+                summaryEmptyLabel="All namespaces"
+                noItemsLabel="No namespaces available."
+                clearAllDisabled={!canClearAll || activeCount === 0}
+                clearAllAriaLabel="Clear namespace selection"
+                renderItemMeta={ns =>
+                  ns === scope.kubeconfigNamespace && ns !== '' ? (
+                    <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary shrink-0">
+                      kubeconfig
+                    </span>
+                  ) : null
+                }
+              />
+            )}
 
             {!scope.authoritative && (
               <div className="px-3 py-2 border-t border-theme-border text-[11px] status-degraded">

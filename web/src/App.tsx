@@ -948,8 +948,22 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
   }>({ updatedKinds: new Set(), timer: null })
+  const timelineInvalidationRef = useRef<{ timer: number | null }>({ timer: null })
 
   const handleK8sEvent = useCallback((event: K8sEvent) => {
+    // The timeline consumes every frame — including the K8s Event kind the
+    // resource tiers skip below (warnings like BackOff are timeline content).
+    // Its own trailing throttle keeps the live view fresh within seconds
+    // while batching bursts into one refetch; the 60s poll on useChanges
+    // remains the no-SSE fallback.
+    const tl = timelineInvalidationRef.current
+    if (tl.timer === null) {
+      tl.timer = window.setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['changes'] })
+        timelineInvalidationRef.current = { timer: null }
+      }, 5000)
+    }
+
     // Skip K8s Event kind — informational, not resource mutations
     if (event.kind === 'Event') return
 
@@ -1010,8 +1024,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   useEffect(() => () => {
     if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
+    if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
     fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
     slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
+    timelineInvalidationRef.current = { timer: null }
   }, [])
 
   // SSE connection for real-time updates — no namespace filter for small/medium clusters (frontend filters).
@@ -1031,8 +1047,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       // Cancel any pending SSE-driven invalidation — old cluster's events are irrelevant
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
       if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
+      if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
       fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
       slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
+      timelineInvalidationRef.current = { timer: null }
 
       // Close any open drawers/overlays — old cluster's resources don't exist on the new one
       // (?full=1 is cleared by the URL reset below).

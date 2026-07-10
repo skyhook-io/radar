@@ -20,10 +20,16 @@ else
   echo "Radar (PID $RADAR_PID) was already stopped."
 fi
 
-# Open screenshot folder
+# Open the screenshot folder only if something was actually captured.
+# start.sh pre-creates the dir, so an unconditional `open` would pop a Finder
+# window on an empty folder for every run that took no screenshots.
 if [[ -d "$SCREENSHOT_DIR" ]]; then
-  echo "Screenshots: $SCREENSHOT_DIR"
-  open "$SCREENSHOT_DIR" 2>/dev/null || true
+  if [[ -n "$(ls -A "$SCREENSHOT_DIR" 2>/dev/null)" ]]; then
+    echo "Screenshots: $SCREENSHOT_DIR"
+    open "$SCREENSHOT_DIR" 2>/dev/null || true
+  else
+    rmdir "$SCREENSHOT_DIR" 2>/dev/null || true
+  fi
 fi
 
 echo "Logs: $RADAR_LOG"

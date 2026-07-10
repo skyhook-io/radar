@@ -36,7 +36,8 @@ When running Radar locally on your machine:
 
 - **Uses your kubeconfig**: Radar authenticates using your existing `~/.kube/config` credentials
 - **Your permissions apply**: All operations are subject to your Kubernetes RBAC permissions
-- **No external communication**: Radar only communicates with the Kubernetes API server specified in your kubeconfig
+- **No cluster telemetry**: Radar does not upload manifests, logs, events, metrics, or resource data to Skyhook
+- **No cloud dependency**: Local mode does not require an account, agent, or cloud backend
 - **No persistent storage**: By default, no data persists between sessions (optional SQLite timeline storage is local-only)
 
 ### In-Cluster Deployment

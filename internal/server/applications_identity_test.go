@@ -174,7 +174,18 @@ func TestIdentities_ClassificationNotIdentity(t *testing.T) {
 	tagged := mk()
 	resolveAppIdentities(tagged, nil, nil, nil, nil)
 	for i := range tagged {
+		// Classification emits two derived outputs: the Identity block and an
+		// informational "name-stem:" match key (excluded from event matching).
+		// Strip both — the contract is that classification only ADDS these derived
+		// fields and never mutates the row's substantive data or exact match keys.
 		tagged[i].Identity = nil
+		kept := tagged[i].MatchKeys[:0]
+		for _, k := range tagged[i].MatchKeys {
+			if !strings.HasPrefix(k, "name-stem:") {
+				kept = append(kept, k)
+			}
+		}
+		tagged[i].MatchKeys = kept
 	}
 	want, _ := json.Marshal(mk())
 	got, _ := json.Marshal(tagged)

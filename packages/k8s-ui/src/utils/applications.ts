@@ -26,6 +26,7 @@ export interface AppWorkload {
 export interface AppRelationships {
   services?: string[]
   ingresses?: string[]
+  /** "Kind/name" — routes are polymorphic (HTTPRoute/GRPCRoute/…). */
   routes?: string[]
   configs?: number
   scalers?: number
@@ -195,6 +196,11 @@ export interface AppRow {
   workloads: AppWorkload[]
   events?: AppEvent[]
   relationships?: AppRelationships
+  /** Exact grouping-signal evidence keys the server grouped by
+   *  ("instance:billing-prod", "part-of:x", "name:x", "app:x", "helm:release",
+   *  "argo:appname") plus informational "name-stem:<stem>". The timeline joins
+   *  events to this app by these keys — see buildAppMembershipIndex. */
+  matchKeys?: string[]
 }
 
 // -----------------------------------------------------------------------------
@@ -437,6 +443,81 @@ export function namespacesOf(app: AppRow): string[] {
 export function namespaceOf(app: AppRow): string {
   const nss = namespacesOf(app)
   return nss.length === 1 ? nss[0] : ''
+}
+
+// -----------------------------------------------------------------------------
+// App membership index — the client-side join between the server's application
+// grouping (GET /api/applications) and the timeline's per-resource lanes. The
+// server is the single grouping authority (union-find + 9-tier evidence); this
+// index lets the timeline attribute a lane (or a DELETED resource's events) to
+// the same app without re-deriving anything. See plan-timeline-app-grouping.md.
+// -----------------------------------------------------------------------------
+
+/** One app a timeline lane can belong to. `appKey` is stable per AppRow (the
+ *  server row key), so two env-instances that share identity.key stay distinct
+ *  header lanes (each with its own env chip). */
+export interface AppMembership {
+  appKey: string
+  appName: string
+  env?: string
+  evidence?: string
+}
+
+export interface AppMembershipIndex {
+  /** 'Kind/namespace/name' → app. Built from row.workloads + satellite arrays. */
+  byResource: Map<string, AppMembership>
+  /** 'kind:namespace:value' (instance/part-of/name/app/helm/argo) → app. Built
+   *  from row.matchKeys EXCLUDING name-stem (v1 matches exact kinds only). Keys
+   *  are namespace-scoped so a shared label value across namespaces can't
+   *  cross-join; lookups use the event's namespace. Catches events from
+   *  resources deleted before the current snapshot. */
+  byEvidence: Map<string, AppMembership>
+}
+
+// Collision policy: FIRST row wins (deterministic — rows arrive in the server's
+// sorted order). A satellite/evidence shared by two apps attributes to the first.
+function setFirst<V>(map: Map<string, V>, key: string, value: V): void {
+  if (!map.has(key)) map.set(key, value)
+}
+
+/** Build the resource + evidence membership index from the applications rows.
+ *  Pure; no fetching. `byResource` keys workloads by their own kind/ns/name and
+ *  satellites (Services/Ingresses/Routes) by the app's single namespace — a
+ *  multi-namespace app can't place its satellites unambiguously, so those are
+ *  skipped (workloads still index fine). `byEvidence` drops name-stem keys: the
+ *  server ships them for display, but v1 only joins events on exact label kinds. */
+export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
+  const byResource = new Map<string, AppMembership>()
+  const byEvidence = new Map<string, AppMembership>()
+  for (const row of rows) {
+    const membership: AppMembership = {
+      appKey: row.key,
+      appName: row.name,
+      env: row.identity?.env || undefined,
+      evidence: row.identity?.evidence || undefined,
+    }
+    for (const w of row.workloads || []) {
+      if (w.kind && w.name) setFirst(byResource, `${w.kind}/${w.namespace}/${w.name}`, membership)
+    }
+    const ns = namespaceOf(row)
+    if (ns && row.relationships) {
+      for (const s of row.relationships.services || []) setFirst(byResource, `Service/${ns}/${s}`, membership)
+      for (const i of row.relationships.ingresses || []) setFirst(byResource, `Ingress/${ns}/${i}`, membership)
+      // Routes ship as "Kind/name" (HTTPRoute/GRPCRoute/…); index under the
+      // concrete kind so the key matches the route lane's id, not a generic "Route".
+      for (const r of row.relationships.routes || []) {
+        const slash = r.indexOf('/')
+        const routeKind = slash > 0 ? r.slice(0, slash) : 'Route'
+        const routeName = slash > 0 ? r.slice(slash + 1) : r
+        setFirst(byResource, `${routeKind}/${ns}/${routeName}`, membership)
+      }
+    }
+    for (const mk of row.matchKeys || []) {
+      if (mk.startsWith('name-stem:')) continue
+      setFirst(byEvidence, mk, membership)
+    }
+  }
+  return { byResource, byEvidence }
 }
 
 // -----------------------------------------------------------------------------
@@ -709,8 +790,8 @@ export function healthOf(value: string | undefined): AppHealth {
 // healthy (a node-lost workload is worse than a running one); `neutral`
 // (intentional/idle) is the most-benign tier, so an all-idle app rolls up to
 // "Idle" while a mixed healthy+idle app still reads Healthy (healthy out-ranks
-// neutral in the max). NOTE: the previous map inverted this — it ranked
-// `unknown: 0` below `healthy`, disagreeing with the backend rollup.
+// neutral in the max). `unknown` must outrank `healthy` here to agree with the
+// backend rollup — a node-lost workload can't read as healthy.
 export const HEALTH_ORDER: AppHealth[] = ['unhealthy', 'degraded', 'unknown', 'healthy', 'neutral']
 export const HEALTH_RANK: Record<string, number> = { unhealthy: 4, degraded: 3, unknown: 2, healthy: 1, neutral: 0 }
 

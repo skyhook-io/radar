@@ -2,12 +2,12 @@
 
 <a href="https://www.producthunt.com/products/radar-7?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1130618&theme=neutral&period=daily" alt="Radar - The missing open-source Kubernetes UI | Product Hunt" width="250" height="54" /></a>
 
-**Modern Kubernetes visibility.**
-<br>Local-first. No account. No cloud dependency. Blazing Fast.
+**The missing open-source Kubernetes UI.**
+<br>Single binary. No account required. Free forever.
 
 🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Releases](https://github.com/skyhook-io/radar/releases)
 
-Topology, event timeline, and service traffic — plus resource browsing, Helm management, and GitOps support for FluxCD and ArgoCD.
+Topology, resources, Helm, GitOps, traffic, audit, and MCP context for AI agents — from your laptop or in-cluster.
 
 [![CI](https://github.com/skyhook-io/radar/actions/workflows/ci.yml/badge.svg)](https://github.com/skyhook-io/radar/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/skyhook-io/radar?logo=github)](https://github.com/skyhook-io/radar/releases/latest)
@@ -16,7 +16,19 @@ Topology, event timeline, and service traffic — plus resource browsing, Helm m
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
-Visualize your cluster topology, browse resources, stream logs, exec into pods, inspect container image filesystems, manage Helm releases, monitor GitOps workflows (FluxCD & ArgoCD), and forward ports - all from a single binary with zero cluster-side installation.
+<details>
+<summary><b>Table of contents</b></summary>
+
+- [Why Radar?](#why-radar)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Views](#views) — Topology · Resources · Image Filesystem · Timeline · Helm · Compare · TLS · GitOps · Traffic · Cost · Audit · RBAC · MCP · Auth
+- [Supported Resources](#supported-resources)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Security](#security)
+- [Development](#development) · [Contributing](#contributing)
+
+</details>
 
 <p align="center">
   <img src="docs/screenshot.png" alt="Radar Screenshot" width="800">
@@ -32,12 +44,15 @@ curl -fsSL https://get.radarhq.io | sh && kubectl radar
 
 - **Zero install on your cluster** — runs on your laptop, talks to the K8s API directly
 - **Single binary** — no dependencies, no agents, no CRDs
-- **Blazing fast** - smart caching, progressive loading, parallelization and other optimizations
-- **Airgapped-ready** — no external network calls, works in isolated environments
+- **Fast on big clusters** — tested on tens of thousands of pods, with responsive views and live updates under real cluster churn
+- **Private by design** — your cluster data stays on your machine. No account, no agents, no cloud sync, no cluster telemetry
+- **Airgapped-friendly** — runs as a single binary against the Kubernetes API and works in locked-down environments with outbound egress blocked
 - **Real-time** — watches your cluster via informers, pushes updates to the browser via SSE
 - **Works everywhere** — GKE, EKS, AKS, minikube, kind, k3s, or any conformant cluster
-- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI assistants query your cluster through Radar
+- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI agents query your cluster through Radar
 - **In-cluster option** — deploy with Helm for shared team access with RBAC-scoped permissions
+
+> "Have Radar deployed at work. As far as Kubernetes dashboards go, this is one of the best." — u/TheRealNetroxen
 
 ---
 
@@ -53,7 +68,7 @@ curl -fsSL https://get.radarhq.io | sh
 brew install skyhook-io/tap/radar
 ```
 
-Then run: `kubectl radar` (or simply `radar`)
+Then run: `kubectl radar`. Quick install, PowerShell, Homebrew, and Scoop also set up the `radar` shorthand. Krew and direct downloads use `kubectl radar` unless you add your own `radar` symlink.
 
 <details>
 <summary><b>More install options</b> — Desktop App (macOS/Linux/Windows), Krew, Scoop, In-Cluster Helm</summary>
@@ -87,12 +102,12 @@ Native desktop app — no terminal needed.
 brew install --cask skyhook-io/tap/radar-desktop
 ```
 
-**Debian/Ubuntu:**
+**Debian/Ubuntu** — download the `.deb` from [GitHub Releases](https://github.com/skyhook-io/radar/releases), then:
 ```bash
 sudo apt install ./radar-desktop_*.deb
 ```
 
-**Fedora/RHEL:**
+**Fedora/RHEL** — download the `.rpm` from [GitHub Releases](https://github.com/skyhook-io/radar/releases), then:
 ```bash
 sudo rpm -i radar-desktop_*.rpm
 ```
@@ -126,7 +141,7 @@ See the [In-Cluster Deployment Guide](docs/in-cluster.md) for ingress, authentic
 # Opens browser automatically
 kubectl radar
 
-# Or simply
+# Quick install, PowerShell, Homebrew, and Scoop also set up the bare command
 radar
 ```
 
@@ -374,13 +389,13 @@ Inspect what any ServiceAccount can actually do — without three `kubectl descr
 - **Role / ClusterRole detail**: who is bound to this role, with subject summaries inline
 - **RoleBinding detail**: inline preview of the rules the binding grants + warnings when subjects include wide groups (`system:authenticated`, `system:unauthenticated`, `system:masters`)
 - **"My Permissions" panel**: namespace-scoped live `SelfSubjectRulesReview` for the current user — for fast "why can't I do X" debugging
-- **MCP**: `get_subject_permissions` tool exposes the same data to AI assistants for "is this SA over-privileged?" / "blast radius if compromised?" queries
+- **MCP**: `get_subject_permissions` tool exposes the same data to AI agents for "is this SA over-privileged?" / "blast radius if compromised?" queries
 
-Considered for follow-ups, deliberately not in this pass — RBAC audit checks (wildcard / cluster-admin / orphan-binding / unused-role detection, Kubescape-aligned), a verb × resource matrix view on the SA page (rakkess-style), a "Subject Explorer" top-level page for browsing Users / Groups without a detail page today, a graph topology view of Subject → Binding → Role → Rule (`rbac-tool viz` style), in-UI binding edits, and a "can-i" free-form query UI. Read-only visibility ships first; we'll come back once we see how operators use the reverse-lookup.
+Read-only visibility ships first; the considered follow-ups (RBAC audit checks, verb × resource matrix, subject explorer, graph view, in-UI edits, "can-i" queries) are tracked in [#1090](https://github.com/skyhook-io/radar/issues/1090).
 
 ### AI Integration (MCP)
 
-Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants — Claude, Cursor, Copilot, and others — query your cluster through Radar.
+Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI agents — Claude, Cursor, Copilot, and others — query your cluster through Radar.
 
 Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. Read tools are strictly read-only; write tools (restart, scale, sync, and the like) carry explicit destructive-action hints and run under your cluster's RBAC, so the apiserver enforces what each identity is allowed to do.
 
@@ -467,6 +482,12 @@ Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integ
 
 ---
 
+## Security
+
+Radar reads your cluster through your own credentials and keeps cluster data local. It does not upload manifests, logs, events, metrics, or resource data to Skyhook, and it does not require an account, agent, or cloud backend. Found a vulnerability? Please report it privately to **security@skyhook.io** — see [SECURITY.md](SECURITY.md) for the process and response timelines.
+
+---
+
 ## Development
 
 See the **[Development Guide](DEVELOPMENT.md)** for building from source, architecture details, API reference, and contributing.
@@ -489,6 +510,8 @@ make watch-backend
 ## Contributing
 
 Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on the development workflow, pull request process, and coding standards.
+
+Questions or ideas? [GitHub Discussions](https://github.com/skyhook-io/radar/discussions) is the place — or come say hi at [radarhq.io/community](https://radarhq.io/community).
 
 ---
 
