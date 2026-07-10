@@ -132,17 +132,17 @@ describe('TimelineStrip render', () => {
       />,
     )
     // The stepper reflects the 4h window (its label rides the tooltip now).
-    expect(html).toContain('aria-label="Narrow visible window"')
+    expect(html).toContain('aria-label="Zoom in"')
     expect(html).toContain('4h')
     expect(html).toContain('strip-histogram')
     expect(html).toContain('strip-lens')
   })
 
-  it('hides the Window control when there is no window (lens)', () => {
+  it('hides the Zoom control when there is no window (lens)', () => {
     const html = renderToString(
       <TimelineStrip buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}} />,
     )
-    expect(html).not.toContain('Widen visible window')
+    expect(html).not.toContain('aria-label="Zoom out"')
   })
 })
 
@@ -173,10 +173,10 @@ describe('state caption: full range names the state, band always paints', () => 
       />,
     )
     expect(html).toContain('strip-lens')
-    // The caption shows the window's time range + the exact query total (13); the
+    // The caption shows the window's time range + the exact loaded total (13); the
     // per-window count is NOT rendered here — from hourly buckets it can only be
-    // approximate, and the toolbar already owns the exact in-view count.
-    expect(html).toContain('13 in query range')
+    // approximate, and the toolbar already owns the exact "Showing" count.
+    expect(html).toContain('13 events ·')
     // The in-window bucket (0–12h midpoint 6h is inside 4–8h) highlights accent;
     // the other stays neutral.
     expect(html).toContain('bg-accent/60')

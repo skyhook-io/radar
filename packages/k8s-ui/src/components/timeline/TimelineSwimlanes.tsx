@@ -1501,7 +1501,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   }, [isLoading])
 
   // Toolbar chip counts tell ONE story with the strip: they count
-  // within the QUERY range (bounds) so "All" matches "N events in query range"
+  // within the LOADED range (bounds) so "All" matches the strip's loaded total
   // — not the whole loaded ring, whose 3,5xx total came from nowhere the user
   // could see. Unbounded (uncontrolled local mode) keeps counting the ring.
   // MUST sit above the isLoading early return — hooks after it violate the
@@ -1723,7 +1723,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
         <>
           {/* View window fully inside a recording gap: empty ≠ quiet. */}
           <p className="text-lg">Nothing was recorded here — the connector was offline</p>
-          <p className="text-sm mt-1">Pan or zoom out — or drag the window on the strip above — to a recorded period</p>
+          <p className="text-sm mt-1">Pan or zoom out — or drag the blue band on the strip above — to a recorded period</p>
         </>
       ) : hasFilteredEvents ? (
         <>
@@ -1746,7 +1746,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           {/* Controlled window over loaded data: quiet ≠ waiting-for-live. Name
               the exact count sitting outside the window — the strip's bars show
               where, so point there instead of guessing at "a busier period". */}
-          <p className="text-lg">Nothing changed in this window</p>
+          <p className="text-lg">Nothing changed in this view</p>
           <p className="text-sm mt-1">Only resources with activity are shown</p>
           <p className="text-sm mt-1">
             {pluralize(events.length, 'event')} elsewhere in the query range — move the window on the strip above to see them
@@ -2075,7 +2075,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                         as the empty states. */}
                     <div className="flex items-center justify-center gap-2 py-6 text-sm text-theme-text-tertiary">
                       <Clock className="h-4 w-4 opacity-50" />
-                      <span>{compact ? 'Only resources with activity in this time span are shown' : 'The timeline shows only resources with activity in this query range'}</span>
+                      <span>{compact ? 'Only resources with activity in this time span are shown' : 'The timeline shows only resources with activity in the loaded range'}</span>
                     </div>
                   </>
                 )}
@@ -2288,8 +2288,8 @@ function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, labelWidt
 // navigate-on-click. Filled + always visible when pinned; hover-reveal otherwise.
 function PinButton({ pinned, onToggle, alwaysVisible, isAppGroup }: { pinned: boolean; onToggle: () => void; alwaysVisible?: boolean; isAppGroup?: boolean }) {
   const title = isAppGroup
-    ? (pinned ? 'Unpin app' : 'Pin app — keep all its rows visible while you move the window')
-    : (pinned ? 'Unpin' : 'Pin — keep this row visible while you move the window')
+    ? (pinned ? 'Unpin app' : 'Pin app — keep all its rows visible while you pan and zoom')
+    : (pinned ? 'Unpin' : 'Pin — keep this row visible while you pan and zoom')
   return (
     <Tooltip content={title} wrapperClassName="shrink-0">
       <button

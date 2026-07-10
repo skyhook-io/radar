@@ -44,9 +44,9 @@ const SORT_OPTIONS: { value: TimelineSort; label: string; tooltip: string }[] = 
 
 // The 3-way grouping choices, in escalating-detail order (most grouped → flat).
 const GROUPING_OPTIONS: { value: TimelineGrouping; label: string; tooltip: string }[] = [
-  { value: 'app', label: 'Applications', tooltip: 'Group lanes into the applications defined by the server (workload grouping + evidence).' },
-  { value: 'owner', label: 'Owners', tooltip: 'Group only by owner references and topology (Deployment→ReplicaSet→Pod, Service→Deployment).' },
-  { value: 'flat', label: 'Flat', tooltip: 'No grouping — every resource is its own lane (K8s Events still attach to their owner).' },
+  { value: 'app', label: 'Application', tooltip: 'Group lanes into the applications defined by the server (workload grouping + evidence).' },
+  { value: 'owner', label: 'Workload', tooltip: 'Group by owning workload (Deployment→ReplicaSet→Pod, Service→Deployment).' },
+  { value: 'flat', label: 'None', tooltip: 'No grouping — every resource is its own lane (K8s Events still attach to their owner).' },
 ]
 
 export interface TimelineToolbarProps {
@@ -255,15 +255,15 @@ export function TimelineToolbar({
           )}
         </div>
 
-        {/* META group — right-aligned: In view · View (sort + group) · Legend ·
+        {/* META group — right-aligned: Showing · View (sort + group) · Legend ·
             view toggle. Its position is width-driven, never interaction. */}
         <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
           {counts && (
             <span className="min-w-0 truncate text-xs text-theme-text-tertiary">
-              {/* "In view": distinguishes these window counts from the
-                  strip's "in query range" total, so neither number is unlabeled. */}
-              {counts.resources !== undefined && `In view: ${pluralize(counts.resources, 'resource')} · `}
-              {counts.resources === undefined && 'In view: '}
+              {/* "Showing": the visible-slice count, worded apart from the
+                  strip's loaded total so the two numbers don't read as one. */}
+              {counts.resources !== undefined && `Showing ${pluralize(counts.resources, 'resource')} · `}
+              {counts.resources === undefined && 'Showing '}
               {pluralize(counts.events, 'event')}
               {countsFiltered && ' (filtered)'}
             </span>
@@ -511,7 +511,7 @@ export function ViewMenu({ viewOptions }: { viewOptions: TimelineViewOptions }) 
             onChange={(v) => { viewOptions.sort.onChange(v); setOpen(false) }}
           />
           <span aria-hidden className="my-2 block h-px bg-theme-border" />
-          <span className="block px-2 pb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-theme-text-tertiary">Group</span>
+          <span className="block px-2 pb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-theme-text-tertiary">Group by</span>
           <SegmentedRadioGroup
             label="Lane grouping"
             options={GROUPING_OPTIONS}

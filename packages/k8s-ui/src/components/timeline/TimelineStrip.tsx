@@ -57,11 +57,11 @@ export interface TimelineStripProps {
    *  that region — "you can't scroll here because nothing was recorded yet",
    *  not "this period was quiet". */
   historyUnavailableBeforeMs?: number
-  /** Exact event count for the footer's "N events in query range". Buckets
+  /** Exact loaded-event count for the footer caption. Buckets
    *  straddling the query edge spill a few events in/out, so a bucket sum can
    *  disagree with the toolbar chips (one story for the numbers). */
   totalInQueryRange?: number
-  /** Query range = the histogram span (the strip shows exactly this). */
+  /** Loaded range = the histogram span (the strip shows exactly this). */
   selection: ScrubberRange
   onSelectionChange: (sel: ScrubberRange) => void
   maxSelectionMs?: number
@@ -487,16 +487,17 @@ export function TimelineStrip({
 
   const totalEvents = totalInQueryRange ?? buckets.reduce((sum, b) => sum + b.total, 0)
   const gapsSuffix = gaps && gaps.length > 0 ? ` · ${gaps.length} gap${gaps.length > 1 ? 's' : ''}` : ''
-  // Windowed: show the window's time range + the exact query total. The per-window
-  // count is deliberately NOT shown here — from hourly buckets it can only be
-  // approximate (reads "0 of N" on a sub-hour window over a busy hour), and the
-  // toolbar already renders the exact in-view count. Two numbers for one thing,
-  // one of them wrong, erodes trust; the strip owns the range, the toolbar the count.
+  // Windowed: show the zoomed span's time range + the loaded total ("events ·
+  // Last 7d"). The per-window count is deliberately NOT shown here — from hourly
+  // buckets it can only be approximate (reads "0 of N" on a sub-hour window over
+  // a busy hour), and the toolbar already renders the exact "Showing" count. Two
+  // numbers for one thing, one of them wrong, erodes trust; the strip owns the
+  // loaded total, the toolbar the visible count.
   const centerCaption = lens && !fullRange
-    ? `${bandTime(lens.fromMs)} — ${bandTime(lens.toMs)} · ${totalEvents.toLocaleString()} in query range${gapsSuffix}`
+    ? `${bandTime(lens.fromMs)} — ${bandTime(lens.toMs)} · ${totalEvents.toLocaleString()} events · ${queryPillLabel}${gapsSuffix}`
     : lens && lensResizable && onLensChange
       ? `${totalEvents.toLocaleString()} events · viewing full range — drag a handle to narrow${gapsSuffix}`
-      : `${totalEvents.toLocaleString()} events in query range${gapsSuffix}`
+      : `${totalEvents.toLocaleString()} events · ${queryPillLabel}${gapsSuffix}`
 
   return (
     // ONE row: the range picker + window stepper cap the histogram on
@@ -508,7 +509,10 @@ export function TimelineStrip({
     // the track's 16px offset + 24.
     <div ref={containerRef} className={clsx('relative flex items-start gap-3', className)}>
       <div ref={pickerRef} className="relative mt-[7px] shrink-0">
-          <span className="mb-1 block text-center text-[10.5px] font-bold uppercase leading-[13px] tracking-[0.08em] text-theme-text-tertiary">Query range</span>
+          {/* No label — the pill's value ("Last 1h") names itself. The empty
+              line keeps the 13px label airspace so this control stays level
+              with the Zoom stepper and the track midline. */}
+          <span aria-hidden className="mb-1 block text-[10.5px] leading-[13px]">&nbsp;</span>
           <Tooltip content={absoluteRange} position="bottom" disabled={pickerOpen}>
             <button
               type="button"
@@ -528,9 +532,9 @@ export function TimelineStrip({
             // NO overflow-hidden: the DateTimeField calendars pop past the
             // dialog's bottom edge and were getting clipped to a header sliver.
             // The footer rounds its own bottom corners instead.
-            <div className="absolute left-0 top-full z-50 mt-2 w-[460px] max-w-[92vw] rounded-xl border border-theme-border bg-theme-surface shadow-theme-lg" role="dialog" aria-label="Query range picker">
+            <div className="absolute left-0 top-full z-50 mt-2 w-[460px] max-w-[92vw] rounded-xl border border-theme-border bg-theme-surface shadow-theme-lg" role="dialog" aria-label="Time range picker">
               <p className="border-b border-theme-border/60 px-4 py-2.5 text-[11px] leading-relaxed text-theme-text-secondary">
-                How much history to load. The blue window narrows what's shown.
+                How much history to load. The blue band zooms into a slice of it.
               </p>
               {presets && presets.length > 0 && (
                 <div className="flex flex-col gap-2 border-b border-theme-border/60 px-4 py-3">
@@ -585,7 +589,7 @@ export function TimelineStrip({
               </div>
               <div className="flex items-center justify-between gap-2 rounded-b-xl bg-theme-elevated px-4 py-1.5 text-[10.5px] text-theme-text-tertiary">
                 <span>Browser time · {Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
-                <span>Retained since {formatScrubberPill(domain.fromMs)}</span>
+                <span>History since {formatScrubberPill(domain.fromMs)}</span>
               </div>
             </div>
           )}
@@ -593,14 +597,14 @@ export function TimelineStrip({
 
       {windowMs != null && lensResizable && (
         <div className="mt-[7px] shrink-0">
-          <span className="mb-1 block text-center text-[10.5px] font-bold uppercase leading-[13px] tracking-[0.08em] text-theme-text-tertiary">Window</span>
-          <Tooltip content="The slice shown in the lanes below — always within the query range" position="bottom" wrapperClassName="shrink-0">
+          <span className="mb-1 block text-center text-[10.5px] font-bold uppercase leading-[13px] tracking-[0.08em] text-theme-text-tertiary">Zoom</span>
+          <Tooltip content="The slice shown in the lanes below — always within the loaded range" position="bottom" wrapperClassName="shrink-0">
             <div className="inline-flex h-[34px] items-center overflow-hidden rounded-md border border-theme-border bg-theme-elevated">
-              <button type="button" aria-label="Narrow visible window" onClick={() => stepWindow(-1)} className="flex h-full w-[30px] items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
+              <button type="button" aria-label="Zoom in" onClick={() => stepWindow(-1)} className="flex h-full w-[30px] items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
                 <Minus className="h-3 w-3" />
               </button>
               <span className="flex h-full items-center border-x border-theme-border-light px-2 text-[11.5px] font-semibold tabular-nums text-theme-text-primary">{formatLensDuration(windowMs)}</span>
-              <button type="button" aria-label="Widen visible window" onClick={() => stepWindow(1)} className="flex h-full w-[30px] items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
+              <button type="button" aria-label="Zoom out" onClick={() => stepWindow(1)} className="flex h-full w-[30px] items-center justify-center text-theme-text-secondary hover:bg-theme-hover">
                 <Plus className="h-3 w-3" />
               </button>
             </div>
@@ -765,7 +769,7 @@ export function TimelineStrip({
 
       {/* Edge stamps + state caption under the track: query start left, query
           end (+ "· now" while live) right, and between them either the window's
-          range ("3:41 — 4:11 · 125 in query range") or the full-range state line. */}
+          range ("3:41 — 4:11 · 125 events · Last 7d") or the full-range state line. */}
       <div className="mt-1 flex items-center justify-between gap-2 text-[10.5px] tabular-nums text-theme-text-tertiary">
         <span className="whitespace-nowrap">{footerStamp(selection.fromMs)}</span>
         <span
