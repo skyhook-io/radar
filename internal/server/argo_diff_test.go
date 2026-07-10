@@ -508,6 +508,9 @@ func TestEnrichArgoRepoHealth_FailedRepo(t *testing.T) {
 	if !strings.Contains(iss.Message, "github.com/org/broken") {
 		t.Errorf("message = %q", iss.Message)
 	}
+	if iss.RawMessage != "authentication required" {
+		t.Errorf("rawMessage = %q, want the Argo connection error", iss.RawMessage)
+	}
 }
 
 func TestEnrichArgoRepoHealth_HealthyRepoNoIssue(t *testing.T) {

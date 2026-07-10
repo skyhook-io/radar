@@ -372,9 +372,9 @@ func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name strin
 // to a repository this Application sources from — a common, otherwise-invisible
 // cause of stuck syncs. Non-blocking: RepositoriesCached never hits the network
 // on the insights hot path. An unmatched repo is treated as unknown (not
-// asserted healthy) so we only ever surface a failure Argo actually reports; the
-// raw Argo error is deliberately not exposed (it can carry internal infra
-// detail) — the operator gets the raw cause in Argo itself.
+// asserted healthy) so we only ever surface a failure Argo actually reports.
+// Argo's raw connection error is carried in RawMessage for diagnosis (same
+// audience already sees the repo URL + repo errors on the Application itself).
 func (s *Server) enrichArgoRepoHealth(root *unstructured.Unstructured, insight *gitopsinsights.Insight) {
 	urls := appRepoURLs(root)
 	if len(urls) == 0 {
@@ -400,11 +400,12 @@ func (s *Server) enrichArgoRepoHealth(root *unstructured.Unstructured, insight *
 			continue
 		}
 		insight.Issues = append(insight.Issues, gitopsinsights.Issue{
-			Severity: gitopsinsights.SeverityWarning,
-			Scope:    gitopsinsights.ScopeCondition,
-			Reason:   "RepoUnreachable",
-			Message:  fmt.Sprintf("Argo CD can't reach the source repository %s", u),
-			Action:   "Check the repository's credentials and network access in Argo CD (Settings → Repositories).",
+			Severity:   gitopsinsights.SeverityWarning,
+			Scope:      gitopsinsights.ScopeCondition,
+			Reason:     "RepoUnreachable",
+			Message:    fmt.Sprintf("Argo CD can't reach the source repository %s", u),
+			RawMessage: rp.ConnectionState.Message,
+			Action:     "Check the repository's credentials and network access in Argo CD (Settings → Repositories).",
 		})
 	}
 }
