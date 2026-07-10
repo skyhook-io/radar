@@ -231,16 +231,15 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     setAiSaved(true)
   }, [diag, aiDraft])
 
-  const resetConfig = useCallback(() => {
-    // Clears STARTUP fields only — integration inputs (which apply live) are
-    // preserved so Reset doesn't blank a URL the user is looking at.
-    setEditedConfig((prev) => ({
-      prometheusUrl: prev.prometheusUrl,
-      argoCdUrl: prev.argoCdUrl,
-      argoCdInsecureTls: prev.argoCdInsecureTls,
-    }))
-    setSaveMessage('All startup fields cleared. Press Save to apply.')
-  }, [])
+  const discardChanges = useCallback(() => {
+    // Revert unsaved startup edits back to the last-saved values (non-
+    // destructive). configData.file holds the committed config, including the
+    // live integration fields, so restoring it drops drafts without touching
+    // what's saved.
+    if (!configData) return
+    setEditedConfig(configData.file)
+    setSaveMessage(null)
+  }, [configData])
 
   const handleSaveAndClose = useCallback(async () => {
     const ok = await saveConfig()
@@ -571,8 +570,13 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         {/* Footer — owner-gated. Startup config only: AI self-saves, integrations
             apply live. Shown whenever a startup edit is pending (any section),
             while confirming a close, or briefly after a save. */}
-        {showFooter && (
-          <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-theme-border shrink-0">
+        <div
+          className={clsx(
+            'shrink-0 overflow-hidden transition-all duration-200 ease-out',
+            showFooter ? 'max-h-24 opacity-100 border-t border-theme-border' : 'max-h-0 opacity-0 pointer-events-none'
+          )}
+        >
+          <div className="flex items-center justify-between gap-3 px-4 py-2.5">
             {confirmingClose ? (
               <>
                 <span className="text-xs text-theme-text-secondary">Unsaved changes.</span>
@@ -604,14 +608,14 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             ) : (
               <>
                 <div className="flex items-center gap-2">
-                  <Tooltip content="Clear all startup fields — reverts to defaults when saved">
+                  <Tooltip content="Discard unsaved changes and revert to the last saved values">
                     <button
-                      onClick={resetConfig}
-                      disabled={saving}
+                      onClick={discardChanges}
+                      disabled={saving || !startupDirty}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
-                      Reset
+                      Discard changes
                     </button>
                   </Tooltip>
                   {saveMessage && (
@@ -620,24 +624,18 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
-                    <RotateCw className="w-3 h-3" />
-                    Restart Radar to apply
-                  </span>
-                  <button
-                    onClick={saveConfig}
-                    disabled={saving || !startupDirty}
-                    className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
-                  >
-                    {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Save
-                  </button>
-                </div>
+                <button
+                  onClick={saveConfig}
+                  disabled={saving || !startupDirty}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                >
+                  {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  Save
+                </button>
               </>
             )}
           </div>
-        )}
+        </div>
       </div>
     </div>,
     document.body
@@ -1007,12 +1005,13 @@ function ServerSection({
         <>
           <ConfigToggle
             label="Open browser on start"
+            description="Automatically open the Radar UI in your browser when Radar starts — turn off to run headless and open the URL yourself."
             value={!(config.noBrowser ?? false)}
             onChange={(v) => onChange('noBrowser', !v ? true : undefined)}
           />
           <ConfigField
             label="Browser"
-            help="Browser for automatic launch; macOS app names are supported"
+            help="Browser to open the UI in — a macOS app name (Google Chrome, Safari) or a Linux/Windows command (google-chrome). Leave blank for your system default."
             value={config.browser ?? ''}
             effectiveValue={effectiveConfig?.browser}
             placeholder="System default"
@@ -1700,22 +1699,29 @@ function ConfigNumberField({
 
 function ConfigToggle({
   label,
+  description,
   value,
   onChange,
 }: {
   label: string
+  description?: string
   value: boolean
   onChange: (value: boolean) => void
 }) {
   return (
-    <label className="flex items-center justify-between py-1 cursor-pointer group">
-      <span className="text-sm text-theme-text-primary group-hover:text-theme-text-primary">{label}</span>
+    <label className="flex items-start justify-between gap-3 py-1 cursor-pointer">
+      <span className="min-w-0">
+        <span className="block text-sm text-theme-text-primary">{label}</span>
+        {description && (
+          <span className="mt-0.5 block text-xs text-theme-text-tertiary">{description}</span>
+        )}
+      </span>
       <button
         role="switch"
         aria-checked={value}
         onClick={() => onChange(!value)}
         className={clsx(
-          'relative w-9 h-5 rounded-full transition-colors',
+          'relative w-9 h-5 shrink-0 rounded-full transition-colors',
           value ? 'bg-skyhook-600' : 'bg-theme-elevated border border-theme-border'
         )}
       >
