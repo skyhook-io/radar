@@ -120,6 +120,17 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		c.ArgoCDURL = rawURL
 		c.ArgoCDToken = token
 		c.ArgoCDInsecureTLS = body.ArgoCDInsecureTLS
+		// Persist the token's context binding only when a new token was supplied
+		// (SetConfig just re-stamped it); a preserved token keeps the on-disk
+		// binding. An empty token has no binding. Without this the binding is
+		// lost on restart and an auto-discovery token can never reconnect.
+		if suppliesNewToken {
+			if token == "" {
+				c.ArgoCDTokenContext = ""
+			} else {
+				c.ArgoCDTokenContext = argocd.TokenContext()
+			}
+		}
 	}); err != nil {
 		// The running client must agree with the on-disk config; roll it back.
 		argocd.SetConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, false)

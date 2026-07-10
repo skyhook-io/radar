@@ -4228,15 +4228,16 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// never disturb a live integration — even if it races an in-flight
 		// Apply/Connect or echoes back the redacted token as empty.
 		preserved := struct {
-			promHeaders    map[string]string
-			promHeadersEnv map[string]string
-			promURL        string
-			argoURL        string
-			argoToken      string
-			argoInsecure   bool
+			promHeaders      map[string]string
+			promHeadersEnv   map[string]string
+			promURL          string
+			argoURL          string
+			argoToken        string
+			argoInsecure     bool
+			argoTokenContext string
 		}{
 			c.PrometheusHeaders, c.PrometheusHeadersFromEnv, c.PrometheusURL,
-			c.ArgoCDURL, c.ArgoCDToken, c.ArgoCDInsecureTLS,
+			c.ArgoCDURL, c.ArgoCDToken, c.ArgoCDInsecureTLS, c.ArgoCDTokenContext,
 		}
 		*c = updated
 		c.PrometheusHeaders = preserved.promHeaders
@@ -4245,6 +4246,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.ArgoCDURL = preserved.argoURL
 		c.ArgoCDToken = preserved.argoToken
 		c.ArgoCDInsecureTLS = preserved.argoInsecure
+		c.ArgoCDTokenContext = preserved.argoTokenContext
 	})
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)

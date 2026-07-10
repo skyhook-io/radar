@@ -151,6 +151,9 @@ func SetConfig(url, token string, insecureTLS bool, tokenIsFresh bool) {
 // IsConfigured reports whether the default manager has connection settings.
 func IsConfigured() bool { return defaultManager.IsConfigured() }
 
+// TokenContext returns the context the current token is bound to.
+func TokenContext() string { return defaultManager.TokenContext() }
+
 // Reset clears the default manager's connection state (used on context switch).
 func Reset() { defaultManager.Reset() }
 
@@ -678,6 +681,17 @@ func (m *Manager) ensureSeededLocked() {
 	m.manualURL = strings.TrimRight(strings.TrimSpace(c.ArgoCDURL), "/")
 	m.token = c.ArgoCDToken
 	m.insecureTLS = c.ArgoCDInsecureTLS
+	m.tokenContext = c.ArgoCDTokenContext
+}
+
+// TokenContext returns the kubeconfig context the current token is bound to
+// (empty for explicit-URL tokens). The server persists this so the binding
+// survives restarts.
+func (m *Manager) TokenContext() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSeededLocked()
+	return m.tokenContext
 }
 
 // redactToken masks the bearer token if it appears verbatim in a string

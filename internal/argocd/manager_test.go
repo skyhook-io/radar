@@ -358,3 +358,30 @@ func TestDiscoverCandidates(t *testing.T) {
 		t.Errorf("second candidate = %+v, want http:80 fallback", second)
 	}
 }
+
+// TestSeedRestoresTokenContext pins the fix for "auto-discovery token never
+// reconnects": a persisted auto-discovery token's context binding is restored on
+// seed, so a same-context restart reconnects instead of failing the context
+// guard — while a different context still correctly refuses.
+func TestSeedRestoresTokenContext(t *testing.T) {
+	ctx := "cluster-a"
+	m := newTestManager(config.Config{
+		ArgoCDToken:        "secret-token",
+		ArgoCDTokenContext: "cluster-a",
+	})
+	m.contextName = func() string { return ctx }
+
+	// Same context as the persisted binding: the context guard must pass (the
+	// probe then fails later on discovery with no k8s client, but NOT as a
+	// context mismatch).
+	if err := m.Probe(context.Background()); errors.Is(err, errTokenContextMismatch) {
+		t.Fatal("seed must restore tokenContext so a same-context restart doesn't mismatch")
+	}
+
+	// Different context: the cross-cluster guard must still refuse.
+	ctx = "cluster-b"
+	m.Reset()
+	if err := m.Probe(context.Background()); !errors.Is(err, errTokenContextMismatch) {
+		t.Fatalf("different context must still mismatch, got %v", err)
+	}
+}
