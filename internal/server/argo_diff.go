@@ -59,7 +59,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	if !s.requireConnected(w) {
 		return
 	}
-	appNamespace := chi.URLParam(r, "namespace")
+	appNamespace := normalizeNamespaceParam(chi.URLParam(r, "namespace"))
 	appName := chi.URLParam(r, "name")
 
 	group := r.URL.Query().Get("group")
@@ -493,7 +493,7 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 	if !s.requireConnected(w) {
 		return
 	}
-	appNamespace := chi.URLParam(r, "namespace")
+	appNamespace := normalizeNamespaceParam(chi.URLParam(r, "namespace"))
 	appName := chi.URLParam(r, "name")
 	revision := r.URL.Query().Get("revision")
 	if appNamespace == "" {

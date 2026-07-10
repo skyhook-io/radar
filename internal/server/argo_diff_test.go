@@ -559,3 +559,15 @@ func TestEnrichArgoRepoHealth_NotConnectedNoIssue(t *testing.T) {
 		t.Fatalf("disconnected Argo must not add an issue (best-effort): %+v", insight.Issues)
 	}
 }
+
+func TestArgoRevisionMetadata_UnderscoreNamespaceRejected(t *testing.T) {
+	// The web client sends "_" for an empty namespace segment; it must normalize
+	// to "" and be rejected (an Argo Application always has a namespace), not
+	// treated as a literal "_" namespace for RBAC / the upstream lookup.
+	req := newRevMetaRequest("_", "guestbook", "revision=abc")
+	w := httptest.NewRecorder()
+	(&Server{}).handleArgoRevisionMetadata(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+}

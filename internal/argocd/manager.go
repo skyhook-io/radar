@@ -427,9 +427,10 @@ var errStaleProbe = errors.New("argocd: probe superseded by a config change")
 // errTokenContextMismatch means the configured token is bound to a different
 // kubeconfig context than the current one (auto-discovery mode), so the probe
 // refused to connect rather than send the token to another cluster or connect
-// unauthenticated. Not surfaced to users — callers treat it as "not connected";
-// the user re-confirms the token for this cluster in Settings.
-var errTokenContextMismatch = errors.New("argocd: token not valid for the current cluster context")
+// unauthenticated. It wraps ErrTokenInvalid: to every downstream error mapper
+// this is effectively "the token isn't valid for this cluster", so it surfaces
+// as a re-authenticate prompt instead of a misleading 502/"unreachable".
+var errTokenContextMismatch = fmt.Errorf("argocd: token not valid for the current cluster context: %w", ErrTokenInvalid)
 
 // ManagedResourcesCached returns the app's managed-resource diffs, serving
 // from a 15s TTL cache keyed by (appNamespace, appName). Queries carrying

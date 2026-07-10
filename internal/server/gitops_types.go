@@ -8,6 +8,16 @@ import "strings"
 // deployments. Other characters pass through so legitimate names log readably.
 // Uses strings.ReplaceAll on the line-terminator runes specifically so static
 // analysis recognizes it as a log-injection barrier.
+// normalizeNamespaceParam converts the "_" placeholder the web client uses for
+// an empty namespace path segment back to "", so RBAC checks and upstream
+// lookups don't treat "_" as a real namespace.
+func normalizeNamespaceParam(ns string) string {
+	if ns == "_" {
+		return ""
+	}
+	return ns
+}
+
 func sanitizeForLog(s string) string {
 	if s == "" {
 		return s
