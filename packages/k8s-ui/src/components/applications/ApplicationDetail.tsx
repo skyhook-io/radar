@@ -782,23 +782,34 @@ function ApplicationRelatedNameGroup({
 }) {
   if (!names || names.length === 0) return null
 
-  const canNavigate = Boolean(onNavigateToResource && namespace && namespaces.length <= 1 && kind !== 'Route')
-  const refs: ResourceRef[] = names.map((name) => ({ kind, namespace, name }))
-  const visible = names.slice(0, 12)
-  const overflow = Math.max(0, names.length - visible.length)
+  // Routes are polymorphic — the backend ships "Kind/name" (e.g. HTTPRoute/web).
+  // Split so the real kind drives the chip label and navigation, not the literal
+  // "Route" (which rendered "Route/HTTPRoute/web" and never resolved).
+  const refs: ResourceRef[] = names.map((name) => {
+    if (kind === 'Route') {
+      const slash = name.indexOf('/')
+      if (slash > 0) return { kind: name.slice(0, slash), namespace, name: name.slice(slash + 1) }
+    }
+    return { kind, namespace, name }
+  })
+  const baseNav = Boolean(onNavigateToResource && namespace && namespaces.length <= 1)
+  const visible = refs.slice(0, 12)
+  const overflow = Math.max(0, refs.length - visible.length)
   return (
     <div>
-      <div className="mb-1 text-xs font-medium text-theme-text-tertiary">{label}{names.length > 1 ? ` (${names.length})` : ''}</div>
+      <div className="mb-1 text-xs font-medium text-theme-text-tertiary">{label}{refs.length > 1 ? ` (${refs.length})` : ''}</div>
       <div className="flex flex-wrap gap-1.5">
-        {canNavigate
-          ? refs.slice(0, 12).map((ref) => (
-              <ResourceRefBadge
-                key={`${ref.kind}/${ref.namespace}/${ref.name}`}
-                resourceRef={ref}
-                onClick={(clicked) => onNavigateToResource?.(refToSelectedResource(clicked))}
-              />
-            ))
-          : visible.map((name) => <ApplicationRelatedChip key={`${kind}/${name}`} kind={kind} name={name} />)}
+        {visible.map((ref) =>
+          baseNav && ref.kind !== 'Route' ? (
+            <ResourceRefBadge
+              key={`${ref.kind}/${ref.namespace}/${ref.name}`}
+              resourceRef={ref}
+              onClick={(clicked) => onNavigateToResource?.(refToSelectedResource(clicked))}
+            />
+          ) : (
+            <ApplicationRelatedChip key={`${ref.kind}/${ref.name}`} kind={ref.kind} name={ref.name} />
+          ),
+        )}
         {overflow > 0 && <span className={`${CHIP} ${CHIP_TONE.muted}`}>+{overflow} more</span>}
       </div>
     </div>
