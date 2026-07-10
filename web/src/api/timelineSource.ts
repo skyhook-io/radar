@@ -158,10 +158,12 @@ function useLocalEvents(query: TimelineQuery): TimelineEventsResult {
     () => (data ? applyClientFilters(data, query) : data),
     // `data` identity captures every server-side filter change (namespaces,
     // k8s-events, deleted — all in the useChanges query key); the client-only
-    // window + cap + kind set are added here. The live tick advances
-    // query.toMs, re-filtering to the sliding edge with no refetch.
+    // window + cap + kind set are added here, plus includeManaged, which is
+    // client-enforced and must not depend on staying in the server key. The
+    // live tick advances query.toMs, re-filtering to the sliding edge with no
+    // refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data, query.fromMs, query.toMs, query.limit, kindsKey],
+    [data, query.fromMs, query.toMs, query.limit, kindsKey, query.includeManaged],
   )
   return { data: events, isLoading, isError, refetch }
 }
@@ -506,6 +508,7 @@ function createRetainedEventsHook(
       kindsKey,
       query.includeK8sEvents,
       query.includeDeleted,
+      query.includeManaged,
       query.limit,
       query.fromMs,
       query.toMs,
