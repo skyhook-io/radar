@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	opencostpkg "github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/settings"
@@ -31,35 +32,37 @@ var clusterConnectionProbe = k8s.TestClusterConnection
 
 // AppConfig holds all parsed configuration for the Radar application.
 type AppConfig struct {
-	Kubeconfig               string
-	KubeconfigDirs           []string
-	Namespace                string
-	Port                     int
-	NoBrowser                bool
-	Browser                  string
-	DevMode                  bool
-	HistoryLimit             int
-	DebugEvents              bool
-	FakeInCluster            bool
-	DisableHelmWrite         bool
-	DisableExec              bool
-	DisableLocalTerminal     bool
-	PodShellDefault          string
-	DebugImage               string
-	ListPageSize             int64
-	NamespaceScope           bool
-	TimelineStorage          string
-	TimelineDBPath           string
-	TimelineRetention        time.Duration
-	TimelineMaxSizeBytes     int64
-	PrometheusURL            string
-	PrometheusHeaders        map[string]string
-	PrometheusHeadersFromEnv map[string]string
-	Version                  string
-	MCPEnabled               bool
-	AIHistory                bool   // persist AI investigations across restarts
-	AIHistoryDBPath          string // "" = ~/.radar/ai-runs.db
-	AuthConfig               auth.Config
+	Kubeconfig                   string
+	KubeconfigDirs               []string
+	Namespace                    string
+	Port                         int
+	NoBrowser                    bool
+	Browser                      string
+	DevMode                      bool
+	HistoryLimit                 int
+	DebugEvents                  bool
+	FakeInCluster                bool
+	DisableHelmWrite             bool
+	DisableExec                  bool
+	DisableLocalTerminal         bool
+	PodShellDefault              string
+	DebugImage                   string
+	ListPageSize                 int64
+	NamespaceScope               bool
+	TimelineStorage              string
+	TimelineDBPath               string
+	TimelineRetention            time.Duration
+	TimelineMaxSizeBytes         int64
+	PrometheusURL                string
+	PrometheusHeaders            map[string]string
+	PrometheusHeadersFromEnv     map[string]string
+	OpenCostExcludedNamespaces   []string
+	OpenCostDisableNodeCostFloor bool
+	Version                      string
+	MCPEnabled                   bool
+	AIHistory                    bool   // persist AI investigations across restarts
+	AIHistoryDBPath              string // "" = ~/.radar/ai-runs.db
+	AuthConfig                   auth.Config
 }
 
 // SetGlobals applies debug/test flags to global state.
@@ -229,6 +232,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
+	opencostpkg.Configure(cfg.OpenCostExcludedNamespaces, cfg.OpenCostDisableNodeCostFloor)
+
 	effectiveCfg := &config.Config{
 		Kubeconfig:               cfg.Kubeconfig,
 		KubeconfigDirs:           cfg.KubeconfigDirs,

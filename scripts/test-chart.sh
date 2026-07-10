@@ -54,6 +54,16 @@ assert_not_contains '^kind: RoleBinding$'           "no namespaced RoleBinding"
 assert_not_contains 'MY_POD_NAMESPACE'              "no downward-API env var"
 assert_not_contains 'MY_DEPLOYMENT_NAME'            "no deployment-name env var"
 assert_not_contains 'self-upgrade'                  "no self-upgrade references anywhere"
+assert_not_contains 'opencost-excluded-namespaces'     "no OpenCost namespace exclusions"
+assert_not_contains 'opencost-disable-node-cost-floor' "node cost floor stays enabled"
+echo
+
+render "OpenCost billable namespace forecast" \
+  --set 'opencost.excludedNamespaces[0]=kube-system' \
+  --set 'opencost.excludedNamespaces[1]=gke-gmp-system' \
+  --set opencost.disableNodeCostFloor=true
+assert_contains '"--opencost-excluded-namespaces=kube-system,gke-gmp-system"' "excluded namespaces rendered"
+assert_contains '--opencost-disable-node-cost-floor' "node cost floor disablement rendered"
 echo
 
 render "prometheusHeadersFromEnv — flag and secret env stay separate" \

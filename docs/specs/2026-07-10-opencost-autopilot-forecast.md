@@ -91,7 +91,7 @@ queries and node cost responses continue to work.
 Run:
 
 ```sh
-go test ./pkg/opencost ./internal/opencost
+go test ./opencost
 make test-chart
 go test ./...
 go vet ./...
@@ -120,10 +120,10 @@ upstream release is delayed.
 
 ## Task Breakdown
 
-- [ ] Commit this approved plan and open the Draft PR.
-- [ ] Add pure OpenCost exclusion and node-floor options with tests.
-- [ ] Wire CLI flags and immutable handler configuration.
-- [ ] Add Helm values, rendered arguments, and chart coverage.
-- [ ] Update operator documentation.
+- [x] Commit this approved plan and open the Draft PR.
+- [x] Add pure OpenCost exclusion and node-floor options with tests.
+- [x] Wire CLI flags and immutable handler configuration.
+- [x] Add Helm values, rendered arguments, and chart coverage.
+- [x] Update operator documentation.
 - [ ] Run focused and full validation.
 - [ ] Push implementation and mark the upstream PR ready.

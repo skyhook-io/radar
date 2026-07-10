@@ -15,6 +15,16 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
+var (
+	excludedNamespaces   []string
+	disableNodeCostFloor bool
+)
+
+func Configure(namespaces []string, disableFloor bool) {
+	excludedNamespaces = append([]string(nil), namespaces...)
+	disableNodeCostFloor = disableFloor
+}
+
 // RegisterRoutes registers OpenCost routes on the given router.
 func RegisterRoutes(r chi.Router) {
 	r.Get("/opencost/summary", handleSummary)
@@ -36,7 +46,10 @@ func handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, pkgopencost.ComputeCostSummaryFromProm(
-		r.Context(), client.Prom(), pkgopencost.SummaryOptions{}))
+		r.Context(), client.Prom(), pkgopencost.SummaryOptions{
+			ExcludedNamespaces:   excludedNamespaces,
+			DisableNodeCostFloor: disableNodeCostFloor,
+		}))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -128,7 +141,10 @@ func handleTrend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, pkgopencost.ComputeCostTrendFromProm(
-		r.Context(), client.Prom(), pkgopencost.TrendPromOptions{Range: r.URL.Query().Get("range")}))
+		r.Context(), client.Prom(), pkgopencost.TrendPromOptions{
+			Range:              r.URL.Query().Get("range"),
+			ExcludedNamespaces: excludedNamespaces,
+		}))
 }
 
 // handleNodes returns per-node cost breakdown.

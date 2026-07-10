@@ -367,6 +367,13 @@ mcp:
   # Set to false to disable the MCP server (useful when deployed behind authentication)
   enabled: true
 
+# OpenCost forecast configuration
+opencost:
+  # Exact namespace names excluded from cost summaries, totals, and trends.
+  excludedNamespaces: []
+  # Disable the node-capacity floor when nodes are not the provider billing unit.
+  disableNodeCostFloor: false
+
 # Traffic source configuration
 traffic:
   # Manual Prometheus/VictoriaMetrics URL (bypasses auto-discovery)

@@ -157,6 +157,8 @@ radar
 | `--prometheus-url` | (auto-discover) | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. |
 | `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). |
+| `--opencost-excluded-namespaces` | | Comma-separated namespaces omitted from OpenCost summaries, totals, and trends. |
+| `--opencost-disable-node-cost-floor` | `false` | Keep OpenCost totals based on namespace allocations instead of promoting node capacity cost. |
 | `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](docs/authentication.md)) |
 | `--no-mcp` | `false` | Disable MCP server for AI tool integration |
 | `--mcp-catalog-stdio` | `false` | Start only the MCP catalog over stdio for registry introspection |

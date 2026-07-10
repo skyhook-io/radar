@@ -89,6 +89,8 @@ func main() {
 	flag.Var(promHeaders, "prometheus-header", "HTTP header to send with Prometheus requests, e.g. 'Authorization=Bearer <token>' (repeatable). Required for auth-protected backends.")
 	promHeadersFromEnv := newHeaderFromEnvFlag(fileCfg.PrometheusHeadersFromEnv)
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
+	opencostExcludedNamespaces := flag.String("opencost-excluded-namespaces", "", "Comma-separated namespaces to exclude from OpenCost summaries and trends")
+	opencostDisableNodeCostFloor := flag.Bool("opencost-disable-node-cost-floor", false, "Do not promote node capacity cost above OpenCost namespace allocations")
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
@@ -208,34 +210,36 @@ func main() {
 	}
 
 	cfg := app.AppConfig{
-		Kubeconfig:               *kubeconfig,
-		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
-		Namespace:                *namespace,
-		Port:                     *port,
-		NoBrowser:                *noBrowser,
-		Browser:                  *browser,
-		DevMode:                  *devMode,
-		HistoryLimit:             *historyLimit,
-		DebugEvents:              *debugEvents,
-		FakeInCluster:            *fakeInCluster,
-		DisableHelmWrite:         *disableHelmWrite,
-		DisableExec:              *disableExec,
-		DisableLocalTerminal:     *disableLocalTerminal,
-		PodShellDefault:          *podShellDefault,
-		DebugImage:               *debugImage,
-		ListPageSize:             *listPageSize,
-		NamespaceScope:           *namespaceScope,
-		TimelineStorage:          *timelineStorage,
-		TimelineDBPath:           *timelineDBPath,
-		TimelineRetention:        *timelineRetention,
-		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
-		PrometheusURL:            *prometheusURL,
-		PrometheusHeaders:        resolvedPrometheusHeaders,
-		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
-		MCPEnabled:               mcpEnabled,
-		AIHistory:                *aiHistory,
-		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
-		Version:                  version,
+		Kubeconfig:                   *kubeconfig,
+		KubeconfigDirs:               app.ParseKubeconfigDirs(*kubeconfigDir),
+		Namespace:                    *namespace,
+		Port:                         *port,
+		NoBrowser:                    *noBrowser,
+		Browser:                      *browser,
+		DevMode:                      *devMode,
+		HistoryLimit:                 *historyLimit,
+		DebugEvents:                  *debugEvents,
+		FakeInCluster:                *fakeInCluster,
+		DisableHelmWrite:             *disableHelmWrite,
+		DisableExec:                  *disableExec,
+		DisableLocalTerminal:         *disableLocalTerminal,
+		PodShellDefault:              *podShellDefault,
+		DebugImage:                   *debugImage,
+		ListPageSize:                 *listPageSize,
+		NamespaceScope:               *namespaceScope,
+		TimelineStorage:              *timelineStorage,
+		TimelineDBPath:               *timelineDBPath,
+		TimelineRetention:            *timelineRetention,
+		TimelineMaxSizeBytes:         timelineMaxSizeBytes,
+		PrometheusURL:                *prometheusURL,
+		PrometheusHeaders:            resolvedPrometheusHeaders,
+		PrometheusHeadersFromEnv:     promHeadersFromEnv.value(),
+		OpenCostExcludedNamespaces:   parseCSV(*opencostExcludedNamespaces),
+		OpenCostDisableNodeCostFloor: *opencostDisableNodeCostFloor,
+		MCPEnabled:                   mcpEnabled,
+		AIHistory:                    *aiHistory,
+		AIHistoryDBPath:              fileCfg.AIHistoryDBPath,
+		Version:                      version,
 		AuthConfig: auth.Config{
 			Mode:                      *authMode,
 			Secret:                    *authSecret,

@@ -68,6 +68,12 @@ spec:
             {{- range $k, $v := .Values.traffic.prometheusHeadersFromEnv }}
             - {{ printf "--prometheus-header-from-env=%s=%s" $k $v | quote }}
             {{- end }}
+            {{- if .Values.opencost.excludedNamespaces }}
+            - {{ printf "--opencost-excluded-namespaces=%s" (join "," .Values.opencost.excludedNamespaces) | quote }}
+            {{- end }}
+            {{- if .Values.opencost.disableNodeCostFloor }}
+            - --opencost-disable-node-cost-floor
+            {{- end }}
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
             {{- end }}
