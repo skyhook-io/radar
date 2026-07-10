@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
@@ -9,7 +9,6 @@ import yaml from 'yaml'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { useHelmRelease, useHelmManifest, useHelmValues, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress, useHelmPreviewValues } from '../../api/client'
-import { YamlEditor } from '../ui/YamlEditor'
 import { ValuesDiffPreview } from './ValuesDiffPreview'
 import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -45,6 +44,11 @@ interface UpgradePreviewRequest {
   repositoryName?: string
 }
 
+interface ParsedUpgradeValues {
+  values: Record<string, unknown> | null
+  error: string | null
+}
+
 type UpgradeSourceIssue = NonNullable<UpgradeInfo['sourceIssue']>
 type ActionableUpgradeSourceIssue = Exclude<UpgradeSourceIssue, 'ambiguous_repository'>
 
@@ -77,6 +81,19 @@ function getUpgradeSourceIssueTooltip(issue: UpgradeSourceIssue, error: string |
   }
 }
 
+function parseUpgradeValuesYaml(raw: string): ParsedUpgradeValues {
+  try {
+    const parsed = yaml.parse(raw)
+    if (parsed === null || parsed === undefined) return { values: {}, error: null }
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { values: null, error: 'Values must be a YAML mapping (key: value), not a list or single value' }
+    }
+    return { values: parsed as Record<string, unknown>, error: null }
+  } catch (err) {
+    return { values: null, error: err instanceof Error ? err.message : 'Invalid YAML' }
+  }
+}
+
 export function isUpgradeSourceIssueActionable(issue: UpgradeInfo['sourceIssue']): issue is ActionableUpgradeSourceIssue {
   return Boolean(issue && issue !== 'ambiguous_repository')
 }
@@ -101,8 +118,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
   const [adjustValues, setAdjustValues] = useState(false)
   const [renderAdjustValues, setRenderAdjustValues] = useState(false)
-  const [upgradeEditorReady, setUpgradeEditorReady] = useState(false)
   const [editedUpgradeYaml, setEditedUpgradeYaml] = useState('')
+  const [upgradeYamlError, setUpgradeYamlError] = useState<string | null>(null)
   const [upgradeValuesSeeded, setUpgradeValuesSeeded] = useState(false)
   const [upgradePreview, setUpgradePreview] = useState<ValuesPreviewResponse | null>(null)
   const [upgradePreviewRequest, setUpgradePreviewRequest] = useState<UpgradePreviewRequest | null>(null)
@@ -163,8 +180,13 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
   // Available versions for the upgrade dialog's picker — only fetched while the
   // confirm dialog is open. Default the selection to latest when it opens.
-  const { data: availableVersions } = useHelmReleaseVersions(helmNamespace, release.name, showUpgradeConfirm)
+  const {
+    data: availableVersions,
+    isLoading: availableVersionsLoading,
+    error: availableVersionsError,
+  } = useHelmReleaseVersions(helmNamespace, release.name, showUpgradeConfirm)
   const targetVersion = selectedVersion ?? upgradeInfo?.latestVersion ?? ''
+  const selectableVersions = availableVersions && availableVersions.length > 1 ? availableVersions : null
   // Semver compare, not list-position: the installed version may be older than
   // the newest-N versions the picker shows, so it isn't always in the list.
   const isDowngrade = Boolean(
@@ -185,10 +207,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   useEffect(() => {
     targetVersionRef.current = targetVersion
   }, [targetVersion])
-
-  useEffect(() => {
-    editedUpgradeYamlRef.current = editedUpgradeYaml
-  }, [editedUpgradeYaml])
 
   // ESC key handler
   useEffect(() => {
@@ -340,8 +358,9 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     setSelectedVersion(null)
     setAdjustValues(false)
     setRenderAdjustValues(false)
-    setUpgradeEditorReady(false)
     setEditedUpgradeYaml('')
+    editedUpgradeYamlRef.current = ''
+    setUpgradeYamlError(null)
     setUpgradeValuesSeeded(false)
     setUpgradePreview(null)
     setUpgradePreviewRequest(null)
@@ -351,30 +370,12 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
   useEffect(() => {
     if (!adjustValues || !upgradeValues || upgradeValuesSeeded) return
-    setEditedUpgradeYaml(userSuppliedToYaml(upgradeValues.userSupplied))
+    const nextYaml = userSuppliedToYaml(upgradeValues.userSupplied)
+    editedUpgradeYamlRef.current = nextYaml
+    setEditedUpgradeYaml(nextYaml)
+    setUpgradeYamlError(null)
     setUpgradeValuesSeeded(true)
   }, [adjustValues, upgradeValues, upgradeValuesSeeded])
-
-  useEffect(() => {
-    if (!adjustValues || upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded) {
-      setUpgradeEditorReady(false)
-      return
-    }
-
-    if (typeof window === 'undefined') {
-      setUpgradeEditorReady(true)
-      return
-    }
-
-    let frame2 = 0
-    const frame1 = window.requestAnimationFrame(() => {
-      frame2 = window.requestAnimationFrame(() => setUpgradeEditorReady(true))
-    })
-    return () => {
-      window.cancelAnimationFrame(frame1)
-      if (frame2) window.cancelAnimationFrame(frame2)
-    }
-  }, [adjustValues, upgradeValuesLoading, upgradeValuesError, upgradeValuesSeeded])
 
   const handleToggleAdjustValues = () => {
     if (adjustValues) {
@@ -383,39 +384,29 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     }
 
     setRenderAdjustValues(true)
-    setUpgradeEditorReady(false)
     setEditedUpgradeYaml('')
+    editedUpgradeYamlRef.current = ''
+    setUpgradeYamlError(null)
     setUpgradeValuesSeeded(false)
     upgradePreviewMutation.reset()
     setAdjustValues(true)
   }
 
-  // Validity is derived from the SAME parser used at submit — not the editor's
-  // (more lenient) inline diagnostics — so an invalid doc always blocks the button
-  // rather than silently no-op'ing on click. Empty editor means "no overrides" ({}).
-  const { parsedUpgradeValues, upgradeYamlError } = useMemo<{
-    parsedUpgradeValues: Record<string, unknown> | null
-    upgradeYamlError: string | null
-  }>(() => {
-    if (!adjustValues) return { parsedUpgradeValues: {}, upgradeYamlError: null }
-    try {
-      const parsed = yaml.parse(editedUpgradeYaml)
-      if (parsed === null || parsed === undefined) return { parsedUpgradeValues: {}, upgradeYamlError: null }
-      if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return { parsedUpgradeValues: null, upgradeYamlError: 'Values must be a YAML mapping (key: value), not a list or single value' }
-      }
-      return { parsedUpgradeValues: parsed as Record<string, unknown>, upgradeYamlError: null }
-    } catch (err) {
-      return { parsedUpgradeValues: null, upgradeYamlError: err instanceof Error ? err.message : 'Invalid YAML' }
-    }
-  }, [adjustValues, editedUpgradeYaml])
+  const getEditedUpgradeValues = () => {
+    if (!adjustValues) return {}
+    const parsed = parseUpgradeValuesYaml(editedUpgradeYamlRef.current)
+    setUpgradeYamlError(parsed.error)
+    return parsed.values
+  }
 
   const handleUpgradePreview = async () => {
-    if (!targetVersion || upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded || upgradeYamlError || !parsedUpgradeValues) return
-    const previewYaml = editedUpgradeYaml
+    if (!targetVersion || upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded) return
+    const editedValues = getEditedUpgradeValues()
+    if (!editedValues) return
+    const previewYaml = editedUpgradeYamlRef.current
     const previewRequest: UpgradePreviewRequest = {
       targetVersion,
-      values: parsedUpgradeValues,
+      values: editedValues,
       repositoryName: upgradeInfo?.repositoryName,
     }
     try {
@@ -440,8 +431,9 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
     let editedValues = editedValuesOverride
     if (editedValues === undefined && adjustValues) {
-      if (upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded || upgradeYamlError || !parsedUpgradeValues) return
-      editedValues = parsedUpgradeValues
+      if (upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded) return
+      editedValues = getEditedUpgradeValues() ?? undefined
+      if (!editedValues) return
     }
 
     setShowUpgradePreview(false)
@@ -846,37 +838,64 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         isClosable
         className="max-w-2xl"
       >
-        {upgradeProgress.length === 0 && availableVersions && availableVersions.length > 1 && (
+        {upgradeProgress.length === 0 && (
           <div className="mb-1">
-            <label htmlFor="upgrade-version" className="block text-sm font-medium text-theme-text-secondary mb-1.5">
+            <label
+              id="upgrade-version-label"
+              htmlFor={selectableVersions ? 'upgrade-version' : undefined}
+              className="block text-sm font-medium text-theme-text-secondary mb-1.5"
+            >
               Target version
             </label>
-            <select
-              id="upgrade-version"
-              value={targetVersion}
-              onChange={(e) => {
-                targetVersionRef.current = e.target.value
-                setSelectedVersion(e.target.value)
-              }}
-              disabled={isUpgrading || isPreviewingUpgrade}
-              className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
-            >
-              {availableVersions.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                  {v === upgradeInfo?.latestVersion ? ' (latest)' : ''}
-                  {v === upgradeInfo?.currentVersion ? ' (current)' : ''}
-                </option>
-              ))}
-            </select>
+            {availableVersionsLoading ? (
+              <div
+                aria-labelledby="upgrade-version-label"
+                aria-live="polite"
+                className="flex h-10 items-center gap-2 rounded-lg border border-theme-border-light bg-theme-elevated px-3 text-sm text-theme-text-secondary"
+              >
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading available versions...
+              </div>
+            ) : selectableVersions ? (
+              <select
+                id="upgrade-version"
+                value={targetVersion}
+                onChange={(e) => {
+                  targetVersionRef.current = e.target.value
+                  setSelectedVersion(e.target.value)
+                }}
+                disabled={isUpgrading || isPreviewingUpgrade}
+                className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+              >
+                {selectableVersions.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                    {v === upgradeInfo?.latestVersion ? ' (latest)' : ''}
+                    {v === upgradeInfo?.currentVersion ? ' (current)' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div
+                aria-labelledby="upgrade-version-label"
+                className="flex h-10 items-center rounded-lg border border-theme-border-light bg-theme-elevated px-3 text-sm text-theme-text-primary"
+              >
+                {targetVersion}
+              </div>
+            )}
             {isDowngrade && (
               <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
                 This is a downgrade from {upgradeInfo?.currentVersion}.
               </p>
             )}
-            {availableVersions.length >= 50 && (
+            {availableVersionsError && (
               <p className="mt-1 text-xs text-theme-text-tertiary">
-                Showing the 50 newest versions. Type to filter.
+                Version list unavailable; using the detected target version.
+              </p>
+            )}
+            {availableVersions && availableVersions.length >= 50 && (
+              <p className="mt-1 text-xs text-theme-text-tertiary">
+                Showing the 50 newest versions.
               </p>
             )}
           </div>
@@ -905,7 +924,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 if (event.propertyName !== 'grid-template-rows') return
                 if (!adjustValues) {
                   setRenderAdjustValues(false)
-                  setUpgradeEditorReady(false)
                 }
               }}
             >
@@ -920,29 +938,28 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                         Couldn’t load current values: {upgradeValuesError instanceof Error ? upgradeValuesError.message : 'Unknown error'}
                       </div>
                     )}
-                    {upgradeValuesLoading && (
-                      <div className="flex items-center gap-2 h-[240px] px-3 text-sm text-theme-text-secondary bg-theme-elevated border border-theme-border rounded">
+                    {(upgradeValuesLoading || !upgradeValuesSeeded) && (
+                      <div className="flex min-h-[180px] items-center gap-2 rounded border border-theme-border bg-theme-elevated px-3 text-sm text-theme-text-secondary">
                         <Loader2 className="w-4 h-4 animate-spin" />
                         Loading current values...
                       </div>
                     )}
-                    {!upgradeValuesLoading && !upgradeValuesError && (
-                      upgradeEditorReady ? (
-                        <YamlEditor
-                          value={editedUpgradeYaml}
-                          onChange={(value) => {
-                            editedUpgradeYamlRef.current = value
-                            setEditedUpgradeYaml(value)
-                          }}
-                          readOnly={isPreviewingUpgrade || isUpgrading}
-                          height="240px"
-                        />
-                      ) : (
-                        <div className="flex items-center gap-2 h-[240px] px-3 text-sm text-theme-text-secondary bg-theme-elevated border border-theme-border rounded">
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Preparing editor...
-                        </div>
-                      )
+                    {!upgradeValuesLoading && !upgradeValuesError && upgradeValuesSeeded && (
+                      <textarea
+                        defaultValue={editedUpgradeYaml}
+                        onChange={(event) => {
+                          editedUpgradeYamlRef.current = event.target.value
+                          if (upgradeYamlError) setUpgradeYamlError(null)
+                        }}
+                        onBlur={() => setUpgradeYamlError(parseUpgradeValuesYaml(editedUpgradeYamlRef.current).error)}
+                        aria-label="Edited Helm values YAML"
+                        readOnly={isPreviewingUpgrade || isUpgrading}
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        rows={9}
+                        className="max-h-[360px] min-h-[180px] w-full resize-y rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 font-mono text-xs leading-5 text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 read-only:opacity-70"
+                      />
                     )}
                     {upgradeYamlError && (
                       <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">

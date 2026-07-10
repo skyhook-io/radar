@@ -93,20 +93,6 @@ export function YamlEditor({
   const decorationsRef = useRef<string[]>([])
   const monacoRef = useRef<Monaco | null>(null)
 
-  useEffect(() => {
-    const editor = editorRef.current
-    const model = editor?.getModel()
-    if (!editor || !model || model.getValue() === value) return
-
-    const selection = editor.getSelection()
-    const scrollTop = editor.getScrollTop()
-    const scrollLeft = editor.getScrollLeft()
-    model.setValue(value)
-    if (selection) editor.setSelection(selection)
-    editor.setScrollTop(scrollTop)
-    editor.setScrollLeft(scrollLeft)
-  }, [value])
-
   // Apply decorations for editable fields
   const applyDecorations = useCallback(() => {
     const editor = editorRef.current
@@ -237,7 +223,7 @@ export function YamlEditor({
     <div className="rounded-lg overflow-hidden border border-theme-border" style={{ height }}>
       <Editor
         defaultLanguage="yaml"
-        defaultValue={value}
+        value={value}
         onChange={handleChange}
         onMount={handleEditorMount}
         theme="vs-dark"
