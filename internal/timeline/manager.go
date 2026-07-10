@@ -168,10 +168,10 @@ func InitStore(cfg StoreConfig) error {
 				}
 				reason := fmt.Sprintf("SQLite store at %s unusable: %v", cfg.Path, err)
 				log.Printf("[timeline] %s; degrading to in-memory for this session", reason)
-				globalStore = NewDegradedMemoryStore(maxSize, reason)
+				setGlobalStore(NewDegradedMemoryStore(maxSize, reason))
 				break
 			}
-			globalStore = store
+			setGlobalStore(store)
 			if cfg.RetentionAge > 0 || cfg.MaxStorageBytes > 0 {
 				store.StartCleanupLoop(cfg.RetentionAge, time.Hour, cfg.MaxStorageBytes)
 				log.Printf("Initialized SQLite event store at %s (retention: %s, max size: %d bytes)", cfg.Path, cfg.RetentionAge, cfg.MaxStorageBytes)
@@ -186,7 +186,7 @@ func InitStore(cfg StoreConfig) error {
 			if maxSize <= 0 {
 				maxSize = 1000
 			}
-			globalStore = NewMemoryStore(maxSize)
+			setGlobalStore(NewMemoryStore(maxSize))
 			log.Printf("Initialized in-memory event store (max %d events)", maxSize)
 		}
 		observationStartNanos.Store(time.Now().UnixNano())
@@ -280,9 +280,20 @@ func SetObservationStartForTest(t time.Time) {
 	observationStartNanos.Store(t.UnixNano())
 }
 
-// GetStore returns the global event store instance
+// GetStore returns the global event store instance.
 func GetStore() EventStore {
+	globalStoreMu.Lock()
+	defer globalStoreMu.Unlock()
 	return globalStore
+}
+
+// setGlobalStore assigns the global store under the same lock GetStore/ResetStore
+// use. The InitStore write and concurrent GetStore reads (informer callbacks on
+// other goroutines) would otherwise race on the bare global.
+func setGlobalStore(s EventStore) {
+	globalStoreMu.Lock()
+	globalStore = s
+	globalStoreMu.Unlock()
 }
 
 // ResetStore stops and clears the event store.
