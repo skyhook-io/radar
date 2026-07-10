@@ -369,6 +369,13 @@ export async function fetchRetainedWindow(
   return { events: dedupeById(events), coverage }
 }
 
+// Mirrors the Go store's TimelineEvent.IsManaged (pkg/timeline/types.go):
+// a resource managed by another — owned, or one of the churn kinds. Keep the
+// two predicates in lockstep.
+function isManagedTimelineEvent(e: TimelineEvent): boolean {
+  return e.owner != null || e.kind === 'ReplicaSet' || e.kind === 'Pod' || e.kind === 'Event'
+}
+
 // The retained endpoint scopes only by [from,to] (cluster is implicit in the
 // apiBase path), so the store-side query params the local endpoint honors are
 // applied client-side over the loaded window. Exported for unit tests; not part
@@ -388,6 +395,14 @@ export function applyClientFilters(events: TimelineEvent[], query: TimelineQuery
   }
   if (query.includeDeleted === false) {
     out = out.filter((e) => e.eventType !== 'delete')
+  }
+  // Enforced here — not only server-side — so both sources honor it
+  // identically: the retained endpoint has no include_managed param, and the
+  // local path's filter presets can override the server-side flag (the 'all'
+  // preset re-includes managed). Only an explicit false filters; the default
+  // keeps machinery rows, which the swimlane's pod/RS child lanes require.
+  if (query.includeManaged === false) {
+    out = out.filter((e) => !isManagedTimelineEvent(e))
   }
   // An explicit brush window bounds the result by event time so the live poll's
   // recent-window merge can't leak events past the selected [from,to].
