@@ -231,3 +231,39 @@ func TestTombstoneCache_UIDKeying(t *testing.T) {
 		t.Fatal("composite lookup must not match uid-keyed entries")
 	}
 }
+
+// Get hands entries to enrichment code that stitches them into TimelineEvents;
+// a shared map or Owner pointer would let one event's mutation corrupt the
+// cache and every sibling event retroactively.
+func TestTombstoneCache_GetReturnsClone(t *testing.T) {
+	c := NewTombstoneCache(15*time.Minute, 10)
+	ct := time.Now().Add(-time.Hour)
+	c.Put("", "v1", "Pod", "shop", "web", TombstoneEntry{
+		Owner:     &OwnerInfo{Kind: "ReplicaSet", Name: "web-rs"},
+		Labels:    map[string]string{"app": "web"},
+		CreatedAt: &ct,
+	})
+
+	first, ok := c.Get("", "v1", "Pod", "shop", "web")
+	if !ok {
+		t.Fatal("expected hit")
+	}
+	first.Labels["app"] = "corrupted"
+	first.Labels["extra"] = "x"
+	first.Owner.Name = "corrupted-rs"
+	*first.CreatedAt = time.Time{}
+
+	second, ok := c.Get("", "v1", "Pod", "shop", "web")
+	if !ok {
+		t.Fatal("expected hit on second read")
+	}
+	if second.Labels["app"] != "web" || len(second.Labels) != 1 {
+		t.Fatalf("cached labels mutated through Get's return: %+v", second.Labels)
+	}
+	if second.Owner.Name != "web-rs" {
+		t.Fatalf("cached owner mutated through Get's return: %+v", second.Owner)
+	}
+	if second.CreatedAt == nil || !second.CreatedAt.Equal(ct) {
+		t.Fatalf("cached createdAt mutated through Get's return: %v", second.CreatedAt)
+	}
+}

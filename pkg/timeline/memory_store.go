@@ -72,8 +72,9 @@ func (m *MemoryStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 
 // appendLocked writes one event, collapsing duplicate ids so a relist/replay
 // never produces two visible rows. An existing id from a mutable K8s Event
-// (same uid, bumped count) upserts in place; an identical informer/historical
-// id keeps the original row (same state, same first-observed timestamp).
+// (same uid, bumped count) vacates its old slot and re-appends at the head;
+// an identical informer/historical id keeps the original row (same state,
+// same first-observed timestamp).
 func (m *MemoryStore) appendLocked(event TimelineEvent) {
 	if event.ID != "" {
 		if idx, ok := m.index[event.ID]; ok && m.records[idx].ID == event.ID {

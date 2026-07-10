@@ -70,6 +70,10 @@ type QueryOptions struct {
 	// SinceSeq returns only events whose arrival number (Seq) is greater
 	// than this; 0 means no cursor. This is the delta-read cursor: arrival
 	// order, not event time, so late-arriving events can't be skipped.
+	// Delta reads page oldest-first (ascending seq) so a burst larger than
+	// Limit resumes from the lowest unseen seq. Do not combine with Offset or
+	// GroupBy — both are defined for the newest-first shape only and their
+	// delta-mode behavior is unspecified.
 	SinceSeq int64
 
 	// Filter preset (overrides individual filters if set)

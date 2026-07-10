@@ -152,3 +152,31 @@ func TestK8sEvent_TombstoneFedOnAdd(t *testing.T) {
 		t.Fatalf("createdAt not stamped: %v", got.CreatedAt)
 	}
 }
+
+// A callback whose object can't be unwrapped (extract failure) must not feed
+// the tombstone — an empty entry would clobber the enrichment a prior good
+// entry was preserving.
+func TestK8sEvent_FailedExtractDoesNotClobberTombstone(t *testing.T) {
+	initMemoryTimeline(t)
+
+	created := time.Now().Add(-45 * time.Minute)
+	pod := tombstoneTestPod("web-abc", created)
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
+
+	// Same resource identity, but a payload ExtractTombstoneEntry can't
+	// unwrap (not a metav1.Object, not a DeletedFinalStateUnknown).
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, "not-an-object", nil, false)
+
+	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
+
+	got := k8sEventFromStore(t)
+	if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "web-rs" {
+		t.Fatalf("prior good tombstone entry was clobbered: owner = %+v", got.Owner)
+	}
+	if got.Labels == nil || got.Labels["app.kubernetes.io/name"] != "web" {
+		t.Fatalf("prior good tombstone entry was clobbered: labels = %+v", got.Labels)
+	}
+	if got.CreatedAt == nil || !got.CreatedAt.Equal(created) {
+		t.Fatalf("prior good tombstone entry was clobbered: createdAt = %v", got.CreatedAt)
+	}
+}

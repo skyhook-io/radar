@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"container/list"
+	"maps"
 	"sync"
 	"time"
 
@@ -27,11 +28,12 @@ type tombstoneNode struct {
 }
 
 // TombstoneCache is a bounded, TTL-scoped, LRU-evicting cache of resource
-// enrichment data keyed by kind/namespace/name. It is fed from informer
-// add/update/delete callbacks and consulted during event enrichment, so it is
-// safe for concurrent use. Misses (never-seen, expired, or LRU-evicted) return
-// ok=false and enrichment silently falls back to other sources — the same
-// null-carrying behavior as before the cache existed.
+// enrichment data keyed UID-first, with an apiVersion-qualified
+// kind/namespace/name fallback for UID-less callers (see tombstoneKey). It is
+// fed from informer add/update/delete callbacks and consulted during event
+// enrichment, so it is safe for concurrent use. Misses (never-seen, expired,
+// or LRU-evicted) return ok=false; as the last enrichment source, a miss means
+// the event ships with null owner/labels/createdAt.
 type TombstoneCache struct {
 	mu       sync.Mutex
 	ttl      time.Duration
@@ -119,7 +121,25 @@ func (c *TombstoneCache) Get(uid, apiVersion, kind, namespace, name string) (Tom
 		return TombstoneEntry{}, false
 	}
 	c.ll.MoveToFront(el)
-	return node.entry, true
+	return node.entry.clone(), true
+}
+
+// clone deep-copies the mutable fields so callers can't corrupt the cached
+// entry (or sibling events sharing it) through the returned maps/pointers.
+func (e TombstoneEntry) clone() TombstoneEntry {
+	out := e
+	if e.Labels != nil {
+		out.Labels = maps.Clone(e.Labels)
+	}
+	if e.Owner != nil {
+		owner := *e.Owner
+		out.Owner = &owner
+	}
+	if e.CreatedAt != nil {
+		t := *e.CreatedAt
+		out.CreatedAt = &t
+	}
+	return out
 }
 
 // Len reports the number of retained entries, including any not yet lazily

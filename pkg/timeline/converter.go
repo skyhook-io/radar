@@ -29,8 +29,10 @@ func informerEventID(apiVersion, kind, namespace, name, uid, resourceVersion str
 // createdAt is the resource's metadata.creationTimestamp (when K8s actually created it)
 // apiVersion (e.g. "apps/v1", "cluster.x-k8s.io/v1beta1") disambiguates CRD kind
 // collisions on navigation; pass "" if unknown (older callers).
-// resourceVersion pins the event id to the resource state; pass "" if unavailable
-// (the id stays deterministic but two versions collapse to one).
+// resourceVersion pins the event id to the resource state; pass "" only when
+// truly unavailable — the stores dedup informer ids keep-first, so with a
+// constant "" every later update of the resource maps to the same id and is
+// DROPPED until the row ages out, not merely collapsed.
 func NewInformerEvent(kind, apiVersion, namespace, name, uid, resourceVersion string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
 	return TimelineEvent{
 		ID:          informerEventID(apiVersion, kind, namespace, name, uid, resourceVersion, operation),

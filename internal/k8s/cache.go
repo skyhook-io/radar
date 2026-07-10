@@ -123,9 +123,10 @@ var (
 // for a short window after objects leave the informer cache, so delete-time and
 // late K8s events (the "Killing" class, processed after the involved object is
 // already gone from cache) carry owner/labels/createdAt as fact instead of
-// shipping anonymous. Fed on every informer add/update/delete; consulted after
-// the live cache during event enrichment. Bounded + TTL'd so it cannot grow
-// without limit; misses are silent (null enrichment, same as before the cache).
+// shipping anonymous. Fed from informer add/update/delete callbacks (an
+// already-seen relist add returns before recording, so it skips the feed);
+// consulted after the live cache during event enrichment. Bounded + TTL'd so
+// it cannot grow without limit; misses are silent (null enrichment).
 var tombstones = timeline.NewTombstoneCache(15*time.Minute, 4000)
 
 // InitResourceCache initializes the resource cache with timeline-wired callbacks.
@@ -360,8 +361,6 @@ func controllerOwner(refs []metav1.OwnerReference) *timeline.OwnerInfo {
 	return nil
 }
 
-// creationPtr returns a pointer to the object's creation timestamp, or nil when
-// it is unset.
 func creationPtr(obj metav1.Object) *time.Time {
 	ct := obj.GetCreationTimestamp().Time
 	if ct.IsZero() {
@@ -450,15 +449,14 @@ func getGeneration(obj any) int64 {
 	return m.GetGeneration()
 }
 
-// recordToTimelineStore records a resource change to the timeline. When the
-// caller has already computed the update diff (the cache layer does, before
-// firing OnChange), it passes it via precomputedDiff + diffPrecomputed=true so
-// we don't recompute the identical diff on the hottest per-update path. Callers
-// without a precomputed diff (tests, non-cache paths) pass nil + false and the
-// diff is computed here as before.
-// recordToTimelineStore records a resource change. clusterContext is the
-// wiring-time capture (see InitResourceCache), not the live active context —
-// a late callback must stamp the cluster it came from.
+// recordToTimelineStore records a resource change to the timeline.
+// clusterContext is the wiring-time capture (see InitResourceCache), not the
+// live active context — a late callback must stamp the cluster it came from.
+// When the caller has already computed the update diff (the cache layer does,
+// before firing OnChange), it passes it via precomputedDiff +
+// diffPrecomputed=true so we don't recompute the identical diff on the hottest
+// per-update path; callers without one (tests, non-cache paths) pass nil +
+// false and the diff is computed here.
 func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
 	store := timeline.GetStore()
 	if store == nil {
