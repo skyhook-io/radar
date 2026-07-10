@@ -28,12 +28,13 @@ const issue: Issue = {
 }
 
 describe('ResourceIssuesSection', () => {
-  it('keeps drawer context facts but omits the role badge', () => {
+  it('uses the Issues row treatment and defaults collapsed', () => {
     const html = renderToString(<ResourceIssuesSection issues={[issue]} />)
 
-    expect(html).toContain('Context')
-    expect(html).toContain('Blocked pods')
-    expect(html).toContain('high<!-- --> confidence')
-    expect(html).not.toContain('Possible cause')
+    expect(html).toContain('Operational issues')
+    expect(html).toContain('StorageClassMissing')
+    expect(html).not.toContain('What&#x27;s wrong')
+    expect(html).not.toContain('Context')
+    expect(html).not.toContain('Blocked pods')
   })
 })

@@ -16,7 +16,6 @@ export {
   getCredentialsMode,
 } from './api/config';
 export type { NavCustomization, FleetTakeoverTarget } from './context/NavCustomization';
-
 // Timeline data-source selection — lets an embedder back the timeline with a
 // retained-history endpoint instead of Radar's local event store. Additive;
 // absent = local (standalone behavior).
@@ -25,6 +24,7 @@ export type {
   TimelineSourceCapabilities,
   TimelineOverviewBucket,
 } from './api/timelineSource';
+export type { RenderDiagnoseAction } from './context/DiagnoseCustomization';
 export { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay';
 
 // Shared cluster-switcher primitive — re-exported from @skyhook-io/k8s-ui so

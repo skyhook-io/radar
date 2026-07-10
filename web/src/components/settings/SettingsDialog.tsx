@@ -9,6 +9,9 @@ import { useCloudRole, useVersionCheck } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Tooltip } from '../ui/Tooltip'
 import type { DeploymentMode } from '../../types'
+import { Input } from '@skyhook-io/k8s-ui'
+import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
+import { useDiagnose } from '../diagnose/DiagnoseContext'
 
 interface Config {
   kubeconfig?: string
@@ -56,12 +59,35 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
   const [configDirty, setConfigDirty] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
 
+  // AI Diagnosis prefs are client-side (localStorage) but, like the rest of this
+  // dialog, are STAGED and committed on Save — not on every change. The draft
+  // mirrors the committed values (from DiagnoseContext) and is snapshotted on open.
+  const diag = useDiagnose()
+  const [aiDraft, setAiDraft] = useState<AIDraft>({
+    agent: diag.selectedAgent,
+    isolated: diag.isolated,
+    model: diag.model,
+    effort: diag.effort,
+  })
+  const aiDirty =
+    aiDraft.agent !== diag.selectedAgent ||
+    aiDraft.isolated !== diag.isolated ||
+    aiDraft.model !== diag.model ||
+    aiDraft.effort !== diag.effort
+
   // Load config on open
   useEffect(() => {
     if (!open) return
     setSaveMessage(null)
     setConfigDirty(false)
     setLoadError(null)
+    // Snapshot the committed AI prefs into the draft so edits stage cleanly.
+    setAiDraft({
+      agent: diag.selectedAgent,
+      isolated: diag.isolated,
+      model: diag.model,
+      effort: diag.effort,
+    })
 
     fetch(apiUrl('/config'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => {
@@ -76,6 +102,8 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
         console.warn('[settings] Failed to load config:', err)
         setLoadError('Failed to load configuration.')
       })
+    // Snapshot-on-open only; we don't want late diag updates to wipe staged edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   // ESC key
@@ -107,32 +135,52 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
   const saveConfig = useCallback(async () => {
     setSaving(true)
     setSaveMessage(null)
+    // AI prefs are client-side (localStorage) — commit the staged draft now.
+    // setSelectedAgent clears model/effort (they're agent-specific), so set the
+    // agent first, then restore the draft's model/effort.
+    if (aiDirty) {
+      diag.setSelectedAgent(aiDraft.agent)
+      diag.setIsolated(aiDraft.isolated)
+      diag.setModel(aiDraft.model)
+      diag.setEffort(aiDraft.effort)
+    }
     try {
-      const res = await fetch(apiUrl('/config'), {
-        method: 'PUT',
-        credentials: getCredentialsMode(),
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify(editedConfig),
-      })
-      if (!res.ok) {
-        const data = await res.json().catch(() => null)
-        setSaveMessage(`Error: ${data?.error || res.statusText}`)
-      } else {
+      if (configDirty) {
+        const res = await fetch(apiUrl('/config'), {
+          method: 'PUT',
+          credentials: getCredentialsMode(),
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify(editedConfig),
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => null)
+          setSaveMessage(`Error: ${data?.error || res.statusText}`)
+          return
+        }
         setConfigDirty(false)
-        setSaveMessage('Saved. Changes take effect on next launch.')
+        setSaveMessage('Saved. Configuration changes take effect on next launch.')
+      } else {
+        setSaveMessage('Saved.')
       }
     } catch (err) {
       setSaveMessage(`Error: ${err}`)
     } finally {
       setSaving(false)
     }
-  }, [editedConfig])
+  }, [editedConfig, configDirty, aiDirty, aiDraft, diag])
 
   const resetConfig = useCallback(() => {
     setEditedConfig({})
     setConfigDirty(true)
+    // Revert staged AI edits back to the committed prefs.
+    setAiDraft({
+      agent: diag.selectedAgent,
+      isolated: diag.isolated,
+      model: diag.model,
+      effort: diag.effort,
+    })
     setSaveMessage('All fields cleared. Press Save to apply.')
-  }, [])
+  }, [diag])
 
   if (!shouldRender) return null
 
@@ -213,6 +261,17 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
             </div>
           )}
 
+          <AISettingsSection
+            available={diag.available}
+            agents={diag.agents}
+            draft={aiDraft}
+            onChange={(patch) => {
+              setAiDraft((d) => ({ ...d, ...patch }))
+              setSaveMessage(null)
+            }}
+            onHistoryCleared={diag.refreshRuns}
+          />
+
           <SectionLabel>Radar configuration</SectionLabel>
           {canEditConfig ? (
             <StartupConfigTab
@@ -266,11 +325,13 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
             <div className="flex items-center gap-3">
               <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
                 <RotateCw className="w-3 h-3" />
-                Applies on next launch
+                {aiDirty && !configDirty
+                  ? 'Applies to new investigations'
+                  : 'Applies on next launch'}
               </span>
               <button
                 onClick={saveConfig}
-                disabled={saving || !configDirty}
+                disabled={saving || (!configDirty && !aiDirty)}
                 className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
               >
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -630,8 +691,7 @@ function PrometheusConfigField({
         Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)
       </p>
       <div className="flex items-center gap-2">
-        <input
-          type="text"
+        <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="http://prometheus-server.monitoring:9090"
@@ -689,8 +749,7 @@ function PrometheusConfigField({
           <div className="rounded-md border border-theme-border bg-theme-elevated/40 p-2.5 space-y-2">
             {headerRows.map((row, i) => (
               <div key={i} className="flex items-center gap-2">
-                <input
-                  type="text"
+                <Input
                   value={row.key}
                   onChange={(e) => {
                     setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, key: e.target.value } : r))
@@ -768,8 +827,7 @@ function ConfigField({
         {label}
       </label>
       {help && <p className="text-xs text-theme-text-tertiary mb-1">{help}</p>}
-      <input
-        type="text"
+      <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -820,8 +878,7 @@ function ConfigArrayField({
         {label}
       </label>
       {help && <p className="text-xs text-theme-text-tertiary mb-1">{help}</p>}
-      <input
-        type="text"
+      <Input
         value={text}
         onFocus={() => { focusedRef.current = true }}
         onBlur={() => {

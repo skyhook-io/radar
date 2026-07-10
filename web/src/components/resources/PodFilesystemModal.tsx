@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { X, File, Link2, ChevronRight, AlertTriangle, Loader2, Search, Download, FolderOpen } from 'lucide-react'
-import { PaneLoader } from '@skyhook-io/k8s-ui'
+import { PaneLoader, Input } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import type { FileNode } from '../../types'
 import { formatBytes } from '../../utils/format'
@@ -192,8 +192,7 @@ export function PodFilesystemModal({
           {showFilesystem && (
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-              <input
-                type="text"
+              <Input
                 placeholder="Filter files..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}

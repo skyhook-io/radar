@@ -1,4 +1,4 @@
-import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowUpDown, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, Trash2 } from 'lucide-react'
 import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -7,7 +7,27 @@ import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
-import { compactSource, entryTone, gitopsToSeverity, messageToPhase, normalizeHealthStatus, normalizeSyncStatus } from './insights-helpers'
+import { SearchBox } from '../../ui/SearchBox'
+import { FilterPill, type FilterPillTone } from '../../ui/FilterPill'
+import { Collapse, CollapseChevron } from '../../ui/Collapse'
+import type { SortDir } from '../../ui/SortableTh'
+import {
+  changeHealth,
+  changeMatchesFacets,
+  changeMatchesSearch,
+  changeSync,
+  compactSource,
+  entryTone,
+  gitopsToSeverity,
+  healthStatusRank,
+  messageToPhase,
+  normalizeHealthStatus,
+  normalizeSyncStatus,
+  resourceStatusCounts,
+  syncStatusRank,
+  type ResourceSortKey,
+  type ResourceStatusFacet,
+} from './insights-helpers'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -247,7 +267,7 @@ function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsigh
           {showHistorical ? '− Hide pre-deletion metadata' : '+ Show pre-deletion metadata'}
         </button>
       </div>
-      {showHistorical && (
+      <Collapse open={showHistorical}>
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-theme-border/40 pt-2 text-[11px] text-theme-text-tertiary">
           {summary.source && <MetaFact label="Source" value={summary.source} />}
           {(summary.lastRevision || summary.targetRevision) && (
@@ -256,7 +276,7 @@ function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsigh
           {summary.lastReconcile && <MetaFact label="Last reconcile" value={formatRelative(summary.lastReconcile)} />}
           {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
         </div>
-      )}
+      </Collapse>
     </div>
   )
 }
@@ -386,7 +406,7 @@ function GitOpsHistoricalIssuesDisclosure({
         aria-expanded={expanded}
       >
         <div className="flex items-center gap-2">
-          {expanded ? <ChevronDown className="h-3.5 w-3.5 text-theme-text-tertiary" /> : <ChevronRight className="h-3.5 w-3.5 text-theme-text-tertiary" />}
+          <CollapseChevron open={expanded} className="h-3.5 w-3.5" />
           <span className="text-[12px] font-medium text-theme-text-secondary">
             Pre-deletion issues ({total})
           </span>
@@ -395,12 +415,12 @@ function GitOpsHistoricalIssuesDisclosure({
           </span>
         </div>
       </button>
-      {expanded && (
+      <Collapse open={expanded}>
         <div className="border-t border-theme-border">
           {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} onRemediate={onRemediate} remediationPending={remediationPending} />}
           {others.length > 0 && <GitOpsCompactIssueStack issues={others} onSelectIssue={onSelectIssue} />}
         </div>
-      )}
+      </Collapse>
     </div>
   )
 }
@@ -488,15 +508,15 @@ function GitOpsFailureCard({
               onClick={() => setShowRaw((v) => !v)}
               className="inline-flex items-center gap-1 text-[11px] text-theme-text-tertiary transition-colors hover:text-theme-text-secondary"
             >
-              {showRaw ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              <CollapseChevron open={showRaw} className="h-3 w-3" />
               {showRaw ? `Hide ${rawControllerLabel}` : `Show ${rawControllerLabel}`}
             </button>
           </div>
-          {showRaw && (
+          <Collapse open={showRaw}>
             <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-theme-border bg-theme-base px-3 py-2 font-mono text-[11px] text-theme-text-secondary">
               {rawControllerMessage}
             </pre>
-          )}
+          </Collapse>
         </div>
       </div>
     </div>
@@ -600,13 +620,10 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
             Open {refText(headlineRef)} →
           </span>
         )}
-        {canExpand && (
-          expanded
-            ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
-            : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
-        )}
+        {canExpand && <CollapseChevron open={expanded} className="h-3.5 w-3.5" />}
       </button>
-      {expanded && canExpand && (
+      {canExpand && (
+        <Collapse open={expanded}>
         <div className="divide-y divide-theme-border border-t border-theme-border bg-theme-base/40">
           {issues.slice(1).map((issue: GitOpsIssue, index: number) => {
             const t = severityTone(issue.severity)
@@ -644,6 +661,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
             )
           })}
         </div>
+        </Collapse>
       )}
     </div>
   )
@@ -698,6 +716,14 @@ interface GitOpsChangesViewProps {
   tree?: GitOpsResourceTree | null
 }
 
+// Status facets for the Resources list. OutOfSync is a sync-status concern
+// (amber/warn); Degraded + Missing are health failures (red/danger).
+const STATUS_FACETS: { key: ResourceStatusFacet; label: string; tone: FilterPillTone }[] = [
+  { key: 'outOfSync', label: 'Out of sync', tone: 'warn' },
+  { key: 'degraded', label: 'Degraded', tone: 'danger' },
+  { key: 'missing', label: 'Missing', tone: 'danger' },
+]
+
 export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tree }: GitOpsChangesViewProps) {
   // "All resources" toggle: when on, render generated descendants alongside
   // the controller's declared inventory. Argo's UI defaults to "all" — we
@@ -705,6 +731,15 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
   // on declared resources only and the triage flow stays cleaner without
   // 30+ Pod rows in the way. Operators who want the full picture flip it.
   const [showAll, setShowAll] = useState(false)
+  // Resources list controls: free-text search (name/kind/namespace), status
+  // facets (the three states worth isolating on a drifted app — they replaced
+  // the per-resource OutOfSync "issues" that used to restate the whole table),
+  // and column sort. Default sort is 'order' — the controller's apply sequence
+  // — because it's the only sort under which the wave grouping headers read
+  // correctly.
+  const [search, setSearch] = useState('')
+  const [statusFilters, setStatusFilters] = useState<Set<ResourceStatusFacet>>(new Set())
+  const [sort, setSort] = useState<{ key: ResourceSortKey; dir: SortDir }>({ key: 'order', dir: 'asc' })
   const changes = insight?.changes ?? []
   const plan = insight?.plan ?? []
   // Synthesize Change rows for generated tree nodes that aren't already in
@@ -718,13 +753,32 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
   // map persists across renders so the effect can find the node even when
   // changes re-render (e.g. polling).
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  // A deep-link (an issue's "View →") is an explicit "take me to this resource"
+  // intent. Clear any active search/facet filters so the target can't be
+  // filtered out of the list before we scroll to it. Functional updates keep
+  // this a no-op when no filter is active.
   useEffect(() => {
     if (!focusKey) return
+    setSearch((s) => (s ? '' : s))
+    setStatusFilters((f) => (f.size ? new Set<ResourceStatusFacet>() : f))
+  }, [focusKey])
+  // Scroll to the focused row once it has mounted. Re-runs when the filter
+  // state changes so that after the reset above remounts a previously
+  // filtered-out row, the scroll fires; the ref guard keeps it to one scroll
+  // per focusKey instead of re-scrolling on every poll re-render.
+  const scrolledFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!focusKey) {
+      scrolledFor.current = null
+      return
+    }
+    if (scrolledFor.current === focusKey) return
     const node = rowRefs.current.get(focusKey)
     if (node) {
       node.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      scrolledFor.current = focusKey
     }
-  }, [focusKey])
+  }, [focusKey, search, statusFilters])
   // Distinguish "still loading" from "fetch failed" so a backend 5xx
   // doesn't render as a stuck "Loading…".
   if (error && !insight) {
@@ -734,22 +788,20 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
     return <PaneLoader label="Loading GitOps resources…" className="h-full" />
   }
   // Build plan metadata maps keyed by ref so each Change row can advertise
-  // its sync step, hook phase, and wave assignment. The plan and changes
-  // lists are the same resources from different angles — we render one
-  // unified list ordered by plan step, with plan metadata folded onto each
-  // change row.
+  // its hook phase and wave assignment. The plan and changes lists are the
+  // same resources from different angles — we fold the plan metadata onto
+  // each change row and order the list by the plan's apply sequence.
   const planByRef = new Map<string, GitOpsPlanItem>()
   for (const item of plan) {
     const key = refKey(item.ref)
     if (!planByRef.has(key)) planByRef.set(key, item)
   }
-  // Sort changes by plan order (step) so the list reads top-to-bottom in
-  // the order the controller will reconcile them. Changes without a plan
-  // entry land at the end in name order — they're managed resources the
-  // controller saw but didn't sequence (rare but possible for hook resources
-  // already completed, or status-only entries). Extras-from-tree land
-  // after all declared rows.
-  const sortedChanges = [...changes, ...extraFromTree].sort((a, b) => {
+  // Apply-order baseline: the list in the sequence the controller reconciles.
+  // Changes without a plan entry land at the end in name order — managed
+  // resources the controller saw but didn't sequence (completed hooks,
+  // status-only entries). Extras-from-tree land after all declared rows.
+  // The column-sort/search/facet controls derive off this ordered baseline.
+  const applyOrdered = [...changes, ...extraFromTree].sort((a, b) => {
     const ap = planByRef.get(refKey(a.ref))?.order
     const bp = planByRef.get(refKey(b.ref))?.order
     if (ap == null && bp == null) return refKey(a.ref).localeCompare(refKey(b.ref))
@@ -757,15 +809,31 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
     if (bp == null) return -1
     return ap - bp
   })
-  // Wave grouping: when at least one plan entry declares a wave, we render
-  // wave headers between rows so multi-wave apps read as the operator
-  // wrote them. Skip the headers entirely for single-wave / no-wave apps —
-  // an "always wave 0" label is noise.
-  const hasAnyWave = plan.some((i) => i.waveSet)
+  const totalCount = applyOrdered.length
+  const counts = resourceStatusCounts(applyOrdered)
+  const filtered = applyOrdered.filter((c) => changeMatchesSearch(c, search) && changeMatchesFacets(c, statusFilters))
+  const displayChanges = sortChanges(filtered, sort)
+  const filtersActive = search.trim() !== '' || statusFilters.size > 0
+  // Wave grouping only reads correctly in apply order (ascending). Any column
+  // sort or a descending flip breaks the sequence, so drop the headers and
+  // render a flat list. Also skip them for single-wave / no-wave apps — an
+  // "always wave 0" label is noise.
+  const groupByWave = sort.key === 'order' && sort.dir === 'asc' && plan.some((i) => i.waveSet)
   // Source URL for Missing rows. We can't show their live state (resource
   // doesn't exist), but we CAN point at where they're declared in Git —
   // which is the most useful thing to do when there's no drawer to open.
   const sourceTreeURL = gitTreeURL(insight.summary.source, insight.summary.lastRevision || insight.summary.targetRevision || '')
+  const toggleFacet = (facet: ResourceStatusFacet) => {
+    setStatusFilters((prev) => {
+      const next = new Set(prev)
+      if (next.has(facet)) next.delete(facet)
+      else next.add(facet)
+      return next
+    })
+  }
+  const onSort = (key: ResourceSortKey) => {
+    setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
+  }
   return (
     <div className="h-full overflow-auto bg-theme-base p-4">
       <section className="rounded-md border border-theme-border bg-theme-surface">
@@ -781,7 +849,9 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
               </Tooltip>
             )}
             <span className="text-[11px] tabular-nums text-theme-text-tertiary">
-              {sortedChanges.length} {sortedChanges.length === 1 ? 'resource' : 'resources'}
+              {filtersActive && displayChanges.length !== totalCount
+                ? `${displayChanges.length} of ${totalCount}`
+                : `${totalCount} ${totalCount === 1 ? 'resource' : 'resources'}`}
             </span>
           </div>
           {tree && (
@@ -817,11 +887,52 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
             </div>
           )}
         </div>
+        {/* Filter/sort toolbar. The status facets are the primary way to
+            answer "which resources are the problem?" now that the issues band
+            no longer restates every OutOfSync resource above. */}
+        {totalCount > 0 && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-theme-border px-4 py-2">
+            <SearchBox
+              value={search}
+              onChange={setSearch}
+              scope="gitops"
+              shortcutId="gitops-resources-search"
+              placeholder="Filter resources… (press /)"
+              className="w-full min-w-[180px] sm:w-64"
+            />
+            {/* Status facets appear only when the app actually has that state
+                (or the operator has it toggled on) — a healthy app shouldn't
+                render three "(0)" pills. */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {STATUS_FACETS.map(({ key, label, tone }) =>
+                counts[key] > 0 || statusFilters.has(key) ? (
+                  <FilterPill
+                    key={key}
+                    label={label}
+                    tone={tone}
+                    active={statusFilters.has(key)}
+                    count={counts[key]}
+                    onClick={() => toggleFacet(key)}
+                  />
+                ) : null,
+              )}
+            </div>
+            {sort.key !== 'order' && (
+              <button
+                type="button"
+                onClick={() => setSort({ key: 'order', dir: 'asc' })}
+                className="ml-auto inline-flex items-center gap-1 text-[11px] text-theme-text-tertiary transition-colors hover:text-theme-text-secondary"
+              >
+                <ArrowUpDown className="h-3 w-3" /> Apply order
+              </button>
+            )}
+          </div>
+        )}
         {/* Honest disclaimer about diff scope. Neither Argo nor Flux exposes
             per-resource desired-vs-live diffs on the CRD — they're computed
             on demand by their respective servers/CLIs, which Radar doesn't
             call. */}
-        {sortedChanges.length > 0 && (
+        {totalCount > 0 && (
           <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
             Radar reads each resource's drift status from the controller. For a line-by-line diff, {insight.summary.tool === 'fluxcd' ? (
               insight.summary.kind === 'HelmRelease' ? (
@@ -834,63 +945,134 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
             )}
           </div>
         )}
-        {sortedChanges.length === 0 ? (
+        {totalCount === 0 ? (
           <div className="p-4 text-sm text-theme-text-secondary">No managed resources reported by the GitOps controller.</div>
-        ) : (
-          <div className="divide-y divide-theme-border">
-            {sortedChanges.map((change, idx) => {
-              const planItem = planByRef.get(refKey(change.ref))
-              const step = planItem?.order
-              const hook = planItem?.hook
-              const wave = planItem?.wave
-              const waveSet = !!planItem?.waveSet
-              const rowKey = refKey(change.ref)
-              const focused = focusKey === rowKey
-              const explanation = !change.syncError && !change.message
-                ? explainChangeStatus(change.sync, change.health, insight.summary)
-                : ''
-              const hasInlineDetail = !!(
-                (change.drift && change.drift.entries.length > 0) ||
-                (change.recentEvents && change.recentEvents.length > 0)
-              )
-              // Render a wave separator above this row when the wave value
-              // changed from the previous one. waveSet=false rows under a
-              // hasAnyWave plan get a "Default wave" header — matches
-              // how Argo's UI separates explicitly-waved from default.
-              const prevPlan = idx > 0 ? planByRef.get(refKey(sortedChanges[idx - 1]!.ref)) : undefined
-              const showWaveHeader = hasAnyWave && (idx === 0 || prevPlan?.wave !== wave || prevPlan?.waveSet !== waveSet)
-              return (
-                <Fragment key={`${change.ref.group}/${change.ref.kind}/${change.ref.namespace}/${change.ref.name}`}>
-                  {showWaveHeader && (
-                    <div className="bg-theme-base/50 px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-                      {waveSet ? `Wave ${wave}` : 'Default wave'}
-                    </div>
-                  )}
-                  <ChangeRow
-                    change={change}
-                    step={step}
-                    hook={hook}
-                    explanation={explanation}
-                    focused={focused}
-                    autoExpand={focused}
-                    hasInlineDetail={hasInlineDetail}
-                    onOpenResource={onOpenResource}
-                    sourceTreeURL={sourceTreeURL}
-                    registerRef={(el) => {
-                      if (el) {
-                        rowRefs.current.set(rowKey, el)
-                      } else {
-                        rowRefs.current.delete(rowKey)
-                      }
-                    }}
-                  />
-                </Fragment>
-              )
-            })}
+        ) : displayChanges.length === 0 ? (
+          <div className="flex flex-col items-start gap-2 p-4 text-sm text-theme-text-secondary">
+            <span>No resources match the current filters.</span>
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('')
+                setStatusFilters(new Set())
+              }}
+              className="text-[12px] font-medium text-skyhook-500 hover:underline"
+            >
+              Clear filters
+            </button>
           </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 px-4 py-2">
+              <ResSortHeader label="Resource" sortKey="name" sort={sort} onSort={onSort} />
+              <ResSortHeader label="Sync" sortKey="sync" sort={sort} onSort={onSort} />
+              <ResSortHeader label="Health" sortKey="health" sort={sort} onSort={onSort} />
+              <div />
+            </div>
+            <div className="divide-y divide-theme-border">
+              {displayChanges.map((change, idx) => {
+                const planItem = planByRef.get(refKey(change.ref))
+                const hook = planItem?.hook
+                const wave = planItem?.wave
+                const waveSet = !!planItem?.waveSet
+                const rowKey = refKey(change.ref)
+                const focused = focusKey === rowKey
+                const explanation = !change.syncError && !change.message
+                  ? explainChangeStatus(change.sync, change.health, insight.summary)
+                  : ''
+                const hasInlineDetail = !!(
+                  (change.drift && change.drift.entries.length > 0) ||
+                  (change.recentEvents && change.recentEvents.length > 0)
+                )
+                // Render a wave separator above this row when the wave value
+                // changed from the previous one. waveSet=false rows under a
+                // waved plan get a "Default wave" header — matches how Argo's
+                // UI separates explicitly-waved from default. Only in apply
+                // order (groupByWave); a column sort renders a flat list.
+                const prevPlan = idx > 0 ? planByRef.get(refKey(displayChanges[idx - 1]!.ref)) : undefined
+                const showWaveHeader = groupByWave && (idx === 0 || prevPlan?.wave !== wave || prevPlan?.waveSet !== waveSet)
+                return (
+                  <Fragment key={`${change.ref.group}/${change.ref.kind}/${change.ref.namespace}/${change.ref.name}`}>
+                    {showWaveHeader && (
+                      <div className="bg-theme-base/50 px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                        {waveSet ? `Wave ${wave}` : 'Default wave'}
+                      </div>
+                    )}
+                    <ChangeRow
+                      change={change}
+                      hook={hook}
+                      explanation={explanation}
+                      focused={focused}
+                      autoExpand={focused}
+                      hasInlineDetail={hasInlineDetail}
+                      onOpenResource={onOpenResource}
+                      sourceTreeURL={sourceTreeURL}
+                      registerRef={(el) => {
+                        if (el) {
+                          rowRefs.current.set(rowKey, el)
+                        } else {
+                          rowRefs.current.delete(rowKey)
+                        }
+                      }}
+                    />
+                  </Fragment>
+                )
+              })}
+            </div>
+          </>
         )}
       </section>
     </div>
+  )
+}
+
+// sortChanges applies the active column sort to the already apply-ordered
+// list. 'order' is the identity ordering (the list arrives in apply sequence),
+// so ascending returns it untouched and descending reverses. Column sorts
+// tie-break on kind/name so equal-status rows stay stable and readable.
+function sortChanges(list: GitOpsChange[], sort: { key: ResourceSortKey; dir: SortDir }): GitOpsChange[] {
+  if (sort.key === 'order') return sort.dir === 'asc' ? list : [...list].reverse()
+  const dir = sort.dir === 'asc' ? 1 : -1
+  const nameKey = (c: GitOpsChange) => `${c.ref.kind}/${c.ref.name}`
+  return [...list].sort((a, b) => {
+    let cmp = 0
+    if (sort.key === 'name') cmp = nameKey(a).localeCompare(nameKey(b))
+    else if (sort.key === 'sync') cmp = syncStatusRank(changeSync(a)) - syncStatusRank(changeSync(b))
+    else if (sort.key === 'health') cmp = healthStatusRank(changeHealth(a)) - healthStatusRank(changeHealth(b))
+    if (cmp === 0) cmp = nameKey(a).localeCompare(nameKey(b))
+    return cmp * dir
+  })
+}
+
+// ResSortHeader is the div-grid equivalent of ui/SortableTh (which renders a
+// <th>): the Resources list is a grid of expandable rows, not a <table>, so it
+// can't use the table header cell. Same chevron affordance for consistency.
+function ResSortHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  label: string
+  sortKey: ResourceSortKey
+  sort: { key: ResourceSortKey; dir: SortDir }
+  onSort: (key: ResourceSortKey) => void
+}) {
+  const active = sort.key === sortKey
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      aria-label={`Sort by ${label}`}
+      className="inline-flex items-center gap-1 select-none text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary transition-colors hover:text-theme-text-secondary focus-visible:text-theme-text-secondary focus-visible:outline-none"
+    >
+      {label}
+      {active ? (
+        sort.dir === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+      ) : (
+        <ArrowUpDown className="h-3 w-3 opacity-40" />
+      )}
+    </button>
   )
 }
 
@@ -990,7 +1172,6 @@ function explainChangeStatus(
 //     "what's the underlying cluster reason?"
 function ChangeRow({
   change,
-  step,
   hook,
   explanation,
   focused,
@@ -1001,7 +1182,6 @@ function ChangeRow({
   registerRef,
 }: {
   change: GitOpsChange
-  step: number | undefined
   // Hook phase from the plan item (the controller-declared annotation).
   // Falls back to change.hookPhase (the executed phase) for visibility on
   // resources that already ran their hook.
@@ -1068,18 +1248,9 @@ function ChangeRow({
         >
           <div className="flex items-baseline gap-2">
             {hasInlineDetail ? (
-              expanded
-                ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
-                : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
+              <CollapseChevron open={expanded} className="h-3.5 w-3.5 self-center" />
             ) : (
               <span aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-            )}
-            {step !== undefined && (
-              <Tooltip content={`Sync plan step ${step}`} delay={200} wrapperClassName="shrink-0">
-                <span className="rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 font-mono text-[10px] text-theme-text-tertiary">
-                  step {step}
-                </span>
-              </Tooltip>
             )}
             <div className="min-w-0 truncate font-medium text-theme-text-primary">{change.ref.kind} / {change.ref.name}</div>
             {hookLabel && (
@@ -1167,11 +1338,13 @@ function ChangeRow({
           )}
         </div>
       </div>
-      {expanded && hasInlineDetail && (
-        <div className="border-t border-theme-border bg-theme-base/40 px-4 py-3">
-          {driftEntries.length > 0 && <DriftPanel drift={change.drift!} />}
-          {events.length > 0 && <RecentEventsPanel events={events} />}
-        </div>
+      {hasInlineDetail && (
+        <Collapse open={expanded} mountLazily>
+          <div className="border-t border-theme-border bg-theme-base/40 px-4 py-3">
+            {driftEntries.length > 0 && <DriftPanel drift={change.drift!} />}
+            {events.length > 0 && <RecentEventsPanel events={events} />}
+          </div>
+        </Collapse>
       )}
     </div>
   )

@@ -423,6 +423,18 @@ initContainers: []
 #    image: busybox:1.36
 #    command: ['sh', '-c', 'echo init']
 
+# Additional volumes to add to the pod
+extraVolumes: []
+#  - name: my-config
+#    configMap:
+#      name: my-configmap
+
+# Additional volume mounts for the main container
+extraVolumeMounts: []
+#  - name: my-config
+#    mountPath: /etc/my-config
+#    readOnly: true
+
 # Liveness and readiness probes
 probes:
   liveness:

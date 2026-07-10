@@ -163,23 +163,23 @@ interface ZoomControlsProps {
 export function ZoomControls({ zoom, onZoomIn, onZoomOut, canZoomIn, canZoomOut }: ZoomControlsProps) {
   return (
     <div className="flex items-center gap-1 text-theme-text-tertiary">
-      <Tooltip content="Zoom out (show more time)">
+      <Tooltip content="Zoom out (show more time)" delay={150}>
         <button
           onClick={onZoomOut}
           disabled={!canZoomOut}
-          aria-label="Zoom out"
           className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
+          aria-label="Zoom out"
         >
           <ZoomOut className="w-4 h-4" />
         </button>
       </Tooltip>
       <span className="text-xs min-w-[3ch] text-center">{formatZoomLevel(zoom)}</span>
-      <Tooltip content="Zoom in (show less time)">
+      <Tooltip content="Zoom in (show less time)" delay={150}>
         <button
           onClick={onZoomIn}
           disabled={!canZoomIn}
-          aria-label="Zoom in"
           className="p-1.5 hover:bg-theme-elevated rounded disabled:opacity-30"
+          aria-label="Zoom in"
         >
           <ZoomIn className="w-4 h-4" />
         </button>

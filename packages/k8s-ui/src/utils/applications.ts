@@ -30,6 +30,7 @@ export interface AppRelationships {
   routes?: string[]
   configs?: number
   scalers?: number
+  storage?: number
   pdbs?: number
 }
 
@@ -39,7 +40,54 @@ export interface AppEvent {
   message?: string
   count: number
   object: string
+  firstSeen?: string
   lastSeen?: string
+}
+
+export interface AppSourceRef {
+  type: 'gitops' | 'helm'
+  tool?: 'argocd' | 'fluxcd' | 'helm' | string
+  group?: string
+  kind: string
+  namespace: string
+  name: string
+}
+
+export interface AppHistorySummary {
+  state: 'change' | 'incident' | 'none'
+  title: string
+  detail?: string
+  timestamp?: string
+}
+
+export interface AppHistoryAnchor {
+  type: 'gitops' | 'helm' | string
+  title: string
+  status?: string
+  revision?: string
+  message?: string
+  source?: string
+  initiatedBy?: string
+  timestamp?: string
+}
+
+export interface AppHistoryIncident {
+  severity: 'warning' | 'error' | 'info' | string
+  title: string
+  object: string
+  message?: string
+  count?: number
+  firstSeen?: string
+  lastSeen?: string
+}
+
+export interface AppHistory {
+  appKey: string
+  sourceRef?: AppSourceRef
+  summary?: AppHistorySummary
+  anchors?: AppHistoryAnchor[]
+  incidents?: AppHistoryIncident[]
+  partialSources?: string[]
 }
 
 export interface AppIdentity {
@@ -142,6 +190,9 @@ export interface AppRow {
   /** Single upstream version (app.kubernetes.io/version) when all workloads
    *  agree — the app's "main version". Empty for multi-chart umbrellas. */
   appVersion?: string
+  /** Exact source-system object when the grouping signal names one. Label/name
+   *  inferred apps intentionally omit this instead of guessing. */
+  sourceRef?: AppSourceRef
   workloads: AppWorkload[]
   events?: AppEvent[]
   relationships?: AppRelationships

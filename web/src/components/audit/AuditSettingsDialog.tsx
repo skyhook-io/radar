@@ -5,6 +5,7 @@ import { useAuditSettings, useUpdateAuditSettings, useAudit, useCloudRole } from
 import type { CheckMeta } from '@skyhook-io/k8s-ui'
 import { validateRFC1123Label, type ValidationResult } from '@skyhook-io/k8s-ui/utils/validators'
 import { Tooltip } from '../ui/Tooltip'
+import { Input } from '@skyhook-io/k8s-ui'
 
 interface AuditSettingsDialogProps {
   namespaces: string[]
@@ -118,8 +119,7 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
             </div>
 
             <div className="flex gap-2">
-              <input
-                type="text"
+              <Input
                 value={newNs}
                 onChange={e => setNewNs(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addNamespace() }}

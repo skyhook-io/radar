@@ -125,17 +125,13 @@ func TestBuildIssuesArgoRunningOperationProducesInfo(t *testing.T) {
 }
 
 func TestBuildIssuesArgoSortsCriticalBeforeWarning(t *testing.T) {
-	// Resource list with a Degraded (critical) and an OutOfSync (warning).
-	// The Degraded resource is listed second to verify sort order, not input order.
+	// A Degraded resource (critical, resource scope) plus an app-level
+	// ManualDrift warning (OutOfSync with auto-sync off). The detector chain
+	// appends the warning first; the severity-stable sort must hoist the
+	// critical resource issue above it.
 	root := argoApp(map[string]any{
+		"sync": map[string]any{"status": "OutOfSync"},
 		"resources": []any{
-			map[string]any{
-				"kind":   "Service",
-				"name":   "auth",
-				"sync":   map[string]any{"status": "OutOfSync"},
-				"health": map[string]any{"status": "Healthy"},
-				"status": "OutOfSync",
-			},
 			map[string]any{
 				"kind":   "Deployment",
 				"name":   "auth",
@@ -146,7 +142,7 @@ func TestBuildIssuesArgoSortsCriticalBeforeWarning(t *testing.T) {
 	})
 	issues := buildIssues(root, nil, "argocd", nil)
 	if len(issues) != 2 {
-		t.Fatalf("expected 2 issues, got %d", len(issues))
+		t.Fatalf("expected 2 issues, got %d (%+v)", len(issues), issues)
 	}
 	if issues[0].Severity != "critical" {
 		t.Fatalf("expected critical first, got %q (%+v)", issues[0].Severity, issues[0])
@@ -372,7 +368,7 @@ func TestNewCreateNamespaceRemediation_NilOnEmpty(t *testing.T) {
 
 func TestBuildIssuesSuppressesResourceIssueDuplicatedByOperationFailure(t *testing.T) {
 	// When the operation message names CRD scaledjobs.keda.sh AND the
-	// resources[] list also flags the same CRD as OutOfSync, we want only
+	// resources[] list also flags the same CRD as Missing, we want only
 	// the operation issue. The resource issue is the same root cause from
 	// a different angle and adds noise.
 	root := argoApp(map[string]any{
@@ -384,14 +380,15 @@ func TestBuildIssuesSuppressesResourceIssueDuplicatedByOperationFailure(t *testi
 			"kind":   "CustomResourceDefinition",
 			"name":   "scaledjobs.keda.sh",
 			"status": "OutOfSync",
+			"health": map[string]any{"status": "Missing"},
 		}},
 	})
 	issues := buildIssues(root, nil, "argocd", nil)
 	for _, iss := range issues {
-		if iss.Scope == "resource" && iss.Reason == "OutOfSync" {
+		if iss.Scope == ScopeResource {
 			for _, ref := range iss.Refs {
 				if ref.Kind == "CustomResourceDefinition" && ref.Name == "scaledjobs.keda.sh" {
-					t.Fatalf("expected the resource OutOfSync issue for the same CRD to be suppressed when the operation failure already names it; issues=%v", issues)
+					t.Fatalf("expected the resource issue for the same CRD to be suppressed when the operation failure already names it; issues=%v", issues)
 				}
 			}
 		}
@@ -415,14 +412,15 @@ func TestBuildIssuesSuppressesResourceIssueForNamespacedKind(t *testing.T) {
 			"name":      "guestbook-ui",
 			"namespace": "demo-healthy",
 			"status":    "OutOfSync",
+			"health":    map[string]any{"status": "Missing"},
 		}},
 	})
 	issues := buildIssues(root, nil, "argocd", nil)
 	for _, iss := range issues {
-		if iss.Scope == ScopeResource && iss.Reason == "OutOfSync" {
+		if iss.Scope == ScopeResource {
 			for _, ref := range iss.Refs {
 				if ref.Kind == "Deployment" && ref.Name == "guestbook-ui" && ref.Namespace == "demo-healthy" {
-					t.Fatalf("expected namespaced Deployment OutOfSync issue to be suppressed by the operation failure that already names it; issues=%v", issues)
+					t.Fatalf("expected namespaced Deployment issue to be suppressed by the operation failure that already names it; issues=%v", issues)
 				}
 			}
 		}
@@ -557,6 +555,15 @@ func TestDetectStuckDriftLoop_DoesNotFireForVariousReasons(t *testing.T) {
 				unstructured.RemoveNestedField(u.Object, "status", "reconciledAt")
 			},
 		},
+		{
+			// Auto-sync configured but self-heal off: persistent post-sync drift
+			// is expected (Argo won't re-correct it), so this is not a loop —
+			// detectAutoDriftSelfHealOff owns it.
+			name: "auto-sync on but self-heal off",
+			mut: func(u *unstructured.Unstructured) {
+				_ = unstructured.SetNestedField(u.Object, false, "spec", "syncPolicy", "automated", "selfHeal")
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -565,6 +572,76 @@ func TestDetectStuckDriftLoop_DoesNotFireForVariousReasons(t *testing.T) {
 				t.Errorf("expected no issue, got %+v", got)
 			}
 		})
+	}
+}
+
+func TestDetectAutoDriftSelfHealOff(t *testing.T) {
+	cases := []struct {
+		name     string
+		mut      func(*unstructured.Unstructured)
+		wantFire bool
+	}{
+		{
+			name: "OutOfSync + auto-sync + self-heal off → fires",
+			mut: func(u *unstructured.Unstructured) {
+				_ = unstructured.SetNestedField(u.Object, false, "spec", "syncPolicy", "automated", "selfHeal")
+			},
+			wantFire: true,
+		},
+		{
+			// stuckLoopApp defaults to selfHeal: true.
+			name:     "OutOfSync + auto-sync + self-heal on → no fire (StuckDriftLoop owns it)",
+			mut:      func(u *unstructured.Unstructured) {},
+			wantFire: false,
+		},
+		{
+			name: "OutOfSync + manual → no fire (ManualDrift owns it)",
+			mut: func(u *unstructured.Unstructured) {
+				unstructured.RemoveNestedField(u.Object, "spec", "syncPolicy", "automated")
+			},
+			wantFire: false,
+		},
+		{
+			name: "Synced + auto-sync + self-heal off → no fire",
+			mut: func(u *unstructured.Unstructured) {
+				_ = unstructured.SetNestedField(u.Object, false, "spec", "syncPolicy", "automated", "selfHeal")
+				_ = unstructured.SetNestedField(u.Object, "Synced", "status", "sync", "status")
+			},
+			wantFire: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := detectAutoDriftSelfHealOff(stuckLoopApp(t, tc.mut))
+			if (got != nil) != tc.wantFire {
+				t.Errorf("fire = %v, want %v; issue=%+v", got != nil, tc.wantFire, got)
+			}
+			if got != nil && got.Reason != "SelfHealDisabled" {
+				t.Errorf("Reason = %q, want SelfHealDisabled", got.Reason)
+			}
+		})
+	}
+}
+
+// The gap that dropping per-resource OutOfSync issues could otherwise open:
+// auto-sync configured but self-heal off + an OutOfSync app. No per-resource
+// issue is emitted for plain drift, so the app-level SelfHealDisabled warning
+// must be the band signal that nothing will reconcile this.
+func TestBuildIssuesArgoAutoSyncSelfHealOffSurfacesDrift(t *testing.T) {
+	root := argoApp(map[string]any{
+		"sync":           map[string]any{"status": "OutOfSync"},
+		"operationState": map[string]any{"phase": "Succeeded"},
+	})
+	_ = unstructured.SetNestedMap(root.Object, map[string]any{"prune": true}, "spec", "syncPolicy", "automated")
+	issues := buildIssues(root, nil, "argocd", nil)
+	var found bool
+	for _, iss := range issues {
+		if iss.Reason == "SelfHealDisabled" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a SelfHealDisabled issue for auto-sync-without-self-heal drift; got %+v", issues)
 	}
 }
 

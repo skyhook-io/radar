@@ -30,6 +30,8 @@ var clusterOnlyKinds = map[string]ClusterOnlyKindInfo{
 	"storageclasses":                  {"storage.k8s.io", "storageclasses"},
 	"storageclass":                    {"storage.k8s.io", "storageclasses"},
 	"sc":                              {"storage.k8s.io", "storageclasses"},
+	"volumeattachments":               {"storage.k8s.io", "volumeattachments"},
+	"volumeattachment":                {"storage.k8s.io", "volumeattachments"},
 	"ingressclasses":                  {"networking.k8s.io", "ingressclasses"},
 	"ingressclass":                    {"networking.k8s.io", "ingressclasses"},
 	"clusterroles":                    {"rbac.authorization.k8s.io", "clusterroles"},

@@ -12,7 +12,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
-import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HookDiagnostic, HookLogEvidence } from '../../types'
+import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HookDiagnostic, HookLogEvidence, UpgradeInfo } from '../../types'
 import { apiVersionToGroup, kindToPlural, type NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor, getKindBadgeColor, getResourceStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
@@ -30,15 +30,53 @@ interface HelmReleaseDrawerProps {
   onNavigateToResource?: NavigateToResource
   /** Controls slide-in/out animation (driven by useAnimatedUnmount) */
   isOpen?: boolean
+  /** Right inset in px so the drawer sits beside a docked side panel (AI), not under it. */
+  rightInset?: number
 }
 
 type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks'
+
+type UpgradeSourceIssue = NonNullable<UpgradeInfo['sourceIssue']>
+type ActionableUpgradeSourceIssue = Exclude<UpgradeSourceIssue, 'ambiguous_repository'>
+
+function getUpgradeSourceIssue(upgradeInfo: UpgradeInfo): UpgradeSourceIssue | undefined {
+  return upgradeInfo.sourceIssue
+}
+
+function getUpgradeSourceIssueLabel(issue: UpgradeSourceIssue) {
+  switch (issue) {
+    case 'repo_index_error':
+      return 'upgrade source blocked'
+    case 'ambiguous_repository':
+      return 'upgrade source ambiguous'
+    case 'untracked':
+      return 'upgrade source not tracked'
+  }
+}
+
+function getUpgradeSourceIssueTooltip(issue: UpgradeSourceIssue, error: string | undefined, canHelmWrite: boolean, disabledReason: string | undefined) {
+  if (!canHelmWrite) {
+    return disabledReason ?? error ?? 'Helm actions are disabled.'
+  }
+  switch (issue) {
+    case 'repo_index_error':
+      return 'A configured Helm repo index failed. Fix or refresh that repo, or register an OCI prefix if this chart came from OCI.'
+    case 'ambiguous_repository':
+      return 'Multiple configured Helm repos match this chart. Fix the repo list or source metadata so Radar can identify one source.'
+    case 'untracked':
+      return "Radar can't tell where this chart was installed from. Register an OCI chart source to track upgrades."
+  }
+}
+
+export function isUpgradeSourceIssueActionable(issue: UpgradeInfo['sourceIssue']): issue is ActionableUpgradeSourceIssue {
+  return Boolean(issue && issue !== 'ambiguous_repository')
+}
 
 const MIN_WIDTH = 500
 const MAX_WIDTH_PERCENT = 0.8
 const DEFAULT_WIDTH = 1000
 
-export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true }: HelmReleaseDrawerProps) {
+export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true, rightInset = 0 }: HelmReleaseDrawerProps) {
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [copied, setCopied] = useState<string | null>(null)
@@ -92,6 +130,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     release.name
   )
   const upgradeErrorMessage = upgradeError instanceof Error ? upgradeError.message : 'Upgrade check failed'
+  const upgradeSourceIssue = upgradeInfo ? getUpgradeSourceIssue(upgradeInfo) : undefined
 
   // Available versions for the upgrade dialog's picker — only fetched while the
   // confirm dialog is open. Default the selection to latest when it opens.
@@ -325,7 +364,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         TRANSITION_DRAWER,
         isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
       )}
-      style={{ width: renderedDrawerWidth, top: headerHeight, height: `calc(100vh - ${headerHeight}px - ${dockInset}px)` }}
+      style={{ width: renderedDrawerWidth, top: headerHeight, right: rightInset, height: `calc(100vh - ${headerHeight}px - ${dockInset}px)` }}
     >
       {/* Resize handle */}
       <div
@@ -401,10 +440,15 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   source via GitOps
                 </span>
                 </Tooltip>
-              ) : upgradeInfo.untracked ? (
-                // Helm doesn't record the install source. Offer to register one so
-                // Radar can track upgrades for the user's own (e.g. OCI) charts.
-                <Tooltip content={canHelmWrite ? "Radar can't tell where this chart was installed from. Register your chart source to track upgrades." : upgradeInfo.error}>
+              ) : upgradeSourceIssue && !isUpgradeSourceIssueActionable(upgradeSourceIssue) ? (
+                <Tooltip content={getUpgradeSourceIssueTooltip(upgradeSourceIssue, upgradeInfo.error, canHelmWrite, helmActReason)}>
+                <span className="badge bg-theme-hover/50 text-theme-text-secondary">
+                  <Link2 className="w-3 h-3" />
+                  {getUpgradeSourceIssueLabel(upgradeSourceIssue)}
+                </span>
+                </Tooltip>
+              ) : isUpgradeSourceIssueActionable(upgradeSourceIssue) ? (
+                <Tooltip content={getUpgradeSourceIssueTooltip(upgradeSourceIssue, upgradeInfo.error, canHelmWrite, helmActReason)}>
                 <button
                   onClick={() => canHelmWrite && setShowTrackSource(true)}
                   disabled={!canHelmWrite}
@@ -414,12 +458,10 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   )}
                 >
                   <Link2 className="w-3 h-3" />
-                  upgrade source not tracked
+                  {getUpgradeSourceIssueLabel(upgradeSourceIssue)}
                 </button>
                 </Tooltip>
               ) : (
-                // Repo-side error (stale/broken index, classic ambiguity) — not an
-                // OCI tracking issue, so surface it without steering to registration.
                 <Tooltip content={upgradeInfo.error}>
                 <span className="badge bg-theme-hover/50 text-theme-text-secondary">
                   upgrade source unresolved
@@ -685,6 +727,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         open={showTrackSource}
         onClose={() => setShowTrackSource(false)}
         chartName={releaseDetail?.chart}
+        sourceIssue={upgradeSourceIssue}
+        sourceError={upgradeInfo?.error}
       />
     </div>
   )

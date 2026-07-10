@@ -2,10 +2,15 @@ package k8s
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
+	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // ConnectionState represents the current connection status to the cluster
@@ -23,7 +28,7 @@ type ConnectionStatus struct {
 	Context     string          `json:"context"`
 	ClusterName string          `json:"clusterName,omitempty"`
 	Error       string          `json:"error,omitempty"`
-	ErrorType   string          `json:"errorType,omitempty"` // auth, rbac, network, timeout, unknown
+	ErrorType   string          `json:"errorType,omitempty"` // config, auth, rbac, network, timeout, tls, unknown
 	ProgressMsg string          `json:"progressMessage,omitempty"`
 }
 
@@ -153,15 +158,18 @@ func isHelmKubernetesOperationError(lower string) bool {
 }
 
 func isTransportConnectivityError(lower string) bool {
+	return isTransportNetworkMessage(lower) || isTransportTimeoutMessage(lower)
+}
+
+func isTransportNetworkMessage(lower string) bool {
 	transportMarkers := []string{
 		"connection refused",
 		"no such host",
 		"dial tcp",
-		"i/o timeout",
-		"context deadline exceeded",
+		"dial udp",
 		"no route to host",
 		"connection reset by peer",
-		"tls handshake timeout",
+		"network is unreachable",
 	}
 	for _, marker := range transportMarkers {
 		if strings.Contains(lower, marker) {
@@ -169,6 +177,87 @@ func isTransportConnectivityError(lower string) bool {
 		}
 	}
 	return false
+}
+
+func isTransportTimeoutMessage(lower string) bool {
+	timeoutMarkers := []string{
+		"i/o timeout",
+		"context deadline exceeded",
+		"tls handshake timeout",
+		"timed out",
+		"timeout",
+	}
+	for _, marker := range timeoutMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAuthErrorMessage(lower string) bool {
+	authMarkers := []string{
+		"unauthorized",
+		"authentication required",
+		"token has expired",
+		"expired token",
+		"sso session",
+		"sso token",
+		"ssoproviderinvalidtoken",
+		"aws sso login",
+		"getting credentials",
+		"provide credentials",
+		"credentials expired",
+		"credential plugin",
+		"exec credential",
+		"exec plugin",
+		"gke-gcloud-auth-plugin",
+	}
+	for _, marker := range authMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return strings.Contains(lower, "unable to connect to the server") && strings.Contains(lower, "oauth2")
+}
+
+func isRBACErrorMessage(lower string) bool {
+	return strings.Contains(lower, " is forbidden") ||
+		strings.Contains(lower, "forbidden:") ||
+		strings.Contains(lower, "cannot list resource") ||
+		strings.Contains(lower, "cannot get resource")
+}
+
+func isConfigErrorMessage(lower string) bool {
+	configMarkers := []string{
+		"no context configured",
+		"no current context",
+		"current-context is not set",
+		"context was not found for specified context",
+		"no configuration has been provided",
+		"failed to build kubeconfig",
+		"no valid kubeconfig files found",
+		"no usable context found",
+		"no contexts found",
+		"k8s config not initialized",
+		"kubernetes client is not initialized",
+		"kubernetes discovery client is not initialized",
+	}
+	for _, marker := range configMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTLSCertificateMessage(lower string) bool {
+	return strings.Contains(lower, "x509:") ||
+		strings.Contains(lower, "certificate signed by unknown authority") ||
+		strings.Contains(lower, "certificate is valid for") ||
+		strings.Contains(lower, "cannot validate certificate") ||
+		strings.Contains(lower, "certificate has expired") ||
+		strings.Contains(lower, "certificate is not yet valid")
 }
 
 // UpdateConnectionProgress updates the progress message while connecting
@@ -197,59 +286,98 @@ func OnConnectionChange(callback ConnectionChangeCallback) {
 	connectionCallbacks = append(connectionCallbacks, callback)
 }
 
-// ClassifyError analyzes an error and returns its type (auth, rbac, network, timeout, unknown).
-// Uses the kubeconfig AuthInfo to improve classification — timeouts when an
-// exec credential plugin is configured are classified as "auth" since the
-// plugin hangs when tokens expire.
+// ClassifyError analyzes a cluster connection error and returns its type.
 func ClassifyError(err error) string {
 	if err == nil {
 		return ""
 	}
 
+	if apierrors.IsForbidden(err) {
+		return "rbac"
+	}
+	if apierrors.IsUnauthorized(err) {
+		return "auth"
+	}
+	if apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+
 	errStr := err.Error()
 	errLower := strings.ToLower(errStr)
 
-	// RBAC errors (403 Forbidden - authenticated but insufficient permissions)
-	if strings.Contains(errLower, "forbidden") {
+	// RBAC/auth markers may be carried inside generic transport wrappers such as
+	// url.Error when client-go exec credential plugins fail before a request is sent.
+	if isConfigErrorMessage(errLower) {
+		return "config"
+	}
+	if isRBACErrorMessage(errLower) {
 		return "rbac"
 	}
-
-	// Authentication errors (401 Unauthorized - bad credentials)
-	if strings.Contains(errLower, "unauthorized") ||
-		strings.Contains(errLower, "authentication required") ||
-		strings.Contains(errLower, "token has expired") ||
-		strings.Contains(errLower, "credentials") ||
-		strings.Contains(errLower, "exec plugin") ||
-		strings.Contains(errLower, "gke-gcloud-auth-plugin") ||
-		strings.Contains(errLower, "unable to connect to the server") && strings.Contains(errLower, "oauth2") {
+	if isAuthErrorMessage(errLower) {
 		return "auth"
 	}
 
-	// Network errors
-	if strings.Contains(errLower, "connection refused") ||
-		strings.Contains(errLower, "no such host") ||
-		strings.Contains(errLower, "dial tcp") ||
-		strings.Contains(errLower, "tls handshake timeout") ||
-		strings.Contains(errLower, "network is unreachable") ||
-		strings.Contains(errLower, "no route to host") {
+	if isTLSCertificateError(err) || isTLSCertificateMessage(errLower) {
+		return "tls"
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "network"
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return "network"
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
 		return "network"
 	}
 
-	// Timeout errors — but when an exec credential plugin is configured,
-	// timeouts almost always mean expired credentials (the plugin hangs
-	// trying to refresh), not actual network timeouts.
-	// Exception: "cluster unreachable" means the connectivity test ran
-	// (exec plugin didn't block), so the cluster itself is down/offline.
-	if strings.Contains(errLower, "i/o timeout") ||
-		strings.Contains(errLower, "context deadline exceeded") ||
-		strings.Contains(errLower, "timeout") {
-		if UsesExecAuth() && !strings.Contains(errLower, "cluster unreachable") {
-			return "auth"
-		}
+	// Network errors
+	if isTransportNetworkMessage(errLower) {
+		return "network"
+	}
+
+	// Bare deadlines lack enough evidence to distinguish a hung exec plugin from
+	// an unreachable API endpoint, so keep them in the timeout bucket.
+	if isTransportTimeoutMessage(errLower) {
 		return "timeout"
 	}
 
 	return "unknown"
+}
+
+func isTLSCertificateError(err error) bool {
+	var unknownAuthority x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthority) {
+		return true
+	}
+	var unknownAuthorityPtr *x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthorityPtr) {
+		return true
+	}
+	var hostnameErr x509.HostnameError
+	if errors.As(err, &hostnameErr) {
+		return true
+	}
+	var hostnameErrPtr *x509.HostnameError
+	if errors.As(err, &hostnameErrPtr) {
+		return true
+	}
+	var certInvalid x509.CertificateInvalidError
+	if errors.As(err, &certInvalid) {
+		return true
+	}
+	var certInvalidPtr *x509.CertificateInvalidError
+	if errors.As(err, &certInvalidPtr) {
+		return true
+	}
+	return false
 }
 
 // IsConnected returns true if currently connected to a cluster

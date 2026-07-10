@@ -57,6 +57,16 @@ export function resourcePath(resource: SelectedResource): string {
   return `/resources/${kindToPlural(resource.kind)}${query ? `?${query}` : ''}`
 }
 
+const FULLSCREEN_RESOURCE_KINDS = new Set(['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'nodes'])
+
+export function relatedResourcePath(resource: SelectedResource): string {
+  const apiKind = kindToPlural(resource.kind).toLowerCase()
+  if (FULLSCREEN_RESOURCE_KINDS.has(apiKind)) {
+    return buildWorkloadPath({ ...resource, kind: apiKind })
+  }
+  return resourcePath(resource)
+}
+
 // radar-specific: open URL in system browser (desktop app support)
 export function openExternal(url: string): void {
   fetch(apiUrl('/desktop/open-url'), {

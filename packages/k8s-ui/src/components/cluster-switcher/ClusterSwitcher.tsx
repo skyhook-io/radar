@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { ChevronDown, Check, FolderOpen, Loader2, Search, Server, X } from 'lucide-react'
 import { ClusterName } from '../ui/ClusterName'
+import { Input } from '../ui/Input'
 import { MiddleEllipsis } from '../ui/MiddleEllipsis'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
 
@@ -269,9 +270,8 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
             <div className="p-2 border-b border-theme-border">
               <div className="relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary" />
-                <input
+                <Input
                   ref={searchInputRef}
-                  type="text"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   onKeyDown={onSearchKeyDown}

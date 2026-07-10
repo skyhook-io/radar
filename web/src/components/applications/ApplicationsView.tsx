@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ApplicationsList,
   ApplicationDetail,
@@ -12,16 +12,26 @@ import {
   workloadKey,
   healthOf,
   compareVersions,
+  gitOpsRouteForKind,
   type AppRow,
   type AppIdentityInstance,
+  type ApplicationView,
+  type AppSourceRef,
   type SelectedAppWorkload,
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
 import { Boxes } from 'lucide-react'
-import { useApplications, useTopology } from '../../api/client'
+import { useApplicationHistory, useApplications, useTopology } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
-import { kindToPlural } from '../../utils/navigation'
+import { buildWorkloadPath, kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
+
+const APPLICATION_VIEWS: ReadonlySet<ApplicationView> = new Set<ApplicationView>(['overview', 'topology', 'history'])
+
+function parseApplicationView(value: string | null): ApplicationView {
+  if (!value || !APPLICATION_VIEWS.has(value as ApplicationView)) return 'overview'
+  return value as ApplicationView
+}
 
 interface ApplicationsViewProps {
   namespaces: string[]
@@ -44,7 +54,7 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
 
   // Which app is open lives in the URL (?app=<key>) so the detail view is
   // deep-linkable and the browser back button returns to the list. Opening or
-  // closing an app also clears the per-app params (workload, tab).
+  // closing an app also clears the per-app params (view, workload, tab).
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedKey = searchParams.get('app')
   const selected = useMemo(() => apps.find((a) => a.key === selectedKey) ?? null, [apps, selectedKey])
@@ -54,6 +64,7 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
       const params = new URLSearchParams(searchParams)
       if (key) params.set('app', key)
       else params.delete('app')
+      params.delete('view')
       params.delete('workload')
       params.delete('tab')
       setSearchParams(params)
@@ -68,6 +79,7 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
     if (selectedKey && !selected && query.isSuccess) {
       const params = new URLSearchParams(searchParams)
       params.delete('app')
+      params.delete('view')
       params.delete('workload')
       params.delete('tab')
       setSearchParams(params, { replace: true })
@@ -113,32 +125,110 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
 }
 
 // AppDetailRoute wires the OSS data hooks the shared ApplicationDetail can't:
-// the resources-view topology over the app's namespaces (for the app graph)
-// and the per-workload WorkloadView (which fetches its own topology for the
-// Topology tab). Split out so useTopology runs unconditionally (Rules of Hooks).
+// the resources-view topology over the app's namespaces and the per-workload
+// WorkloadView. Split out so useTopology runs unconditionally (Rules of Hooks).
 function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; apps: AppRow[]; onBack: () => void; onOpenResource: (resource: SelectedResource) => void }) {
+  const navigate = useNavigate()
   const appNamespaces = useMemo(
     () => Array.from(new Set((app.workloads ?? []).map((w) => w.namespace).filter(Boolean))).sort(),
     [app.workloads],
   )
+  const appHistoryNamespaces = useMemo(() => {
+    const namespaces = new Set(appNamespaces)
+    if (app.sourceRef?.namespace) namespaces.add(app.sourceRef.namespace)
+    return Array.from(namespaces).sort()
+  }, [app.sourceRef?.namespace, appNamespaces])
   const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', { enabled: appNamespaces.length > 0 })
 
-  // The selected workload (?workload=<key>) lives in the URL too: deep-linkable,
-  // and back returns from a workload's runtime to the app graph. Clearing it
-  // also drops the workload's tab param.
+  // The selected workload (?workload=<key>) is the scope switch and wins over
+  // ?view= when both are present. With neither param, use the product default:
+  // multi-workload apps open on app overview, single-workload apps open on the
+  // workload. A single-workload app does not expose app scope.
   const [searchParams, setSearchParams] = useSearchParams()
-  const selectedWorkloadKey = searchParams.get('workload')
+  const viewParam = searchParams.get('view')
+  const selectedView = parseApplicationView(viewParam)
+  const selectedWorkloadParam = searchParams.get('workload')
+  const appWorkloads = app.workloads ?? []
+  const singleWorkloadKey = appWorkloads.length === 1 ? workloadKey(appWorkloads[0]) : null
+  const selectedWorkloadKey = singleWorkloadKey ?? selectedWorkloadParam
+  const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, { enabled: !selectedWorkloadKey })
+  useEffect(() => {
+    if (!singleWorkloadKey) return
+    if (selectedWorkloadParam === singleWorkloadKey && !viewParam) return
+    const params = new URLSearchParams(searchParams)
+    params.delete('view')
+    params.set('workload', singleWorkloadKey)
+    setSearchParams(params, { replace: true })
+  }, [searchParams, selectedWorkloadParam, setSearchParams, singleWorkloadKey, viewParam])
+  const selectView = useCallback(
+    (view: ApplicationView) => {
+      const params = new URLSearchParams(searchParams)
+      params.delete('tab')
+      if (singleWorkloadKey) {
+        params.delete('view')
+        params.set('workload', singleWorkloadKey)
+      } else if (view === 'overview') {
+        params.delete('view')
+        params.delete('workload')
+      } else {
+        params.set('view', view)
+        params.delete('workload')
+      }
+      setSearchParams(params)
+    },
+    [searchParams, setSearchParams, singleWorkloadKey],
+  )
   const selectWorkload = useCallback(
     (key: string | null) => {
       const params = new URLSearchParams(searchParams)
-      // Always drop the workload's tab: a fresh workload opens on its overview,
-      // and clearing back to the graph leaves no stale tab on the route.
-      params.delete('tab')
-      if (key) params.set('workload', key)
-      else params.delete('workload')
+      if (key) {
+        const wasInWorkloadScope = !!selectedWorkloadKey
+        params.delete('view')
+        params.set('workload', key)
+        if (!wasInWorkloadScope) params.delete('tab')
+      } else if (singleWorkloadKey) {
+        params.delete('view')
+        params.set('workload', singleWorkloadKey)
+      } else {
+        params.delete('workload')
+        params.delete('tab')
+        params.delete('view')
+      }
       setSearchParams(params)
     },
-    [searchParams, setSearchParams],
+    [searchParams, selectedWorkloadKey, setSearchParams, singleWorkloadKey],
+  )
+  const openWorkloadResource = useCallback(
+    (resource: SelectedResource) => {
+      if (kindToPlural(resource.kind).toLowerCase() !== 'pods') {
+        onOpenResource(resource)
+        return
+      }
+
+      const [pathname, rawSearch = ''] = buildWorkloadPath({ ...resource, kind: kindToPlural(resource.kind) }).split('?')
+      const params = new URLSearchParams(rawSearch)
+      const activeNamespaces = searchParams.get('namespaces')
+      if (activeNamespaces) params.set('namespaces', activeNamespaces)
+      navigate({ pathname, search: params.toString() })
+    },
+    [navigate, onOpenResource, searchParams],
+  )
+  const openSource = useCallback(
+    (source: AppSourceRef) => {
+      if (source.type === 'gitops') {
+        const path = gitOpsRouteForKind(source.kind, source.namespace, source.name)
+        if (path) navigate(path)
+        return
+      }
+      if (source.type === 'helm') {
+        const params = new URLSearchParams()
+        const activeNamespaces = searchParams.get('namespaces')
+        if (activeNamespaces) params.set('namespaces', activeNamespaces)
+        params.set('release', `${source.namespace}/${source.name}`)
+        navigate({ pathname: '/helm', search: params.toString() })
+      }
+    },
+    [navigate, searchParams],
   )
 
   // App identity switcher data: this instance's siblings (ladder-ordered
@@ -189,12 +279,19 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
       }
       if (!matched && wk) {
         // A workload WAS selected but has no counterpart — land on the target
-        // instance's overview and say so. (With no workload selected the tab
-        // rides along: it applies to the lone workload either side.)
+        // instance's default scope and say so. Single-workload instances default
+        // to their workload; composed apps default to app overview.
         params.delete('workload');
         params.delete('tab');
+        const soleTargetWorkload = target?.workloads?.length === 1 ? target.workloads[0] : null;
+        if (soleTargetWorkload) {
+          params.delete('view');
+          params.set('workload', workloadKey(soleTargetWorkload));
+        } else {
+          params.delete('view');
+        }
         if (target) {
-          showToast(`No matching workload in ${target.identity?.env ?? target.name}`, { detail: 'Showing the instance overview instead.', type: 'info' });
+          showToast(`No matching workload in ${target.identity?.env ?? target.name}`, { detail: soleTargetWorkload ? 'Showing the instance workload instead.' : 'Showing the instance overview instead.', type: 'info' });
         }
       }
       setSearchParams(params);
@@ -208,7 +305,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   );
 
   return (
-    <div className="flex-1 overflow-auto">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <ApplicationDetail
         app={app}
         onBack={onBack}
@@ -218,8 +315,13 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         onSwitchInstance={switchInstance}
         discoveredEnvs={discoveredEnvs}
         onNavigateToResource={onOpenResource}
+        history={historyQuery.data}
+        historyLoading={historyQuery.isLoading}
+        onOpenSource={openSource}
         selectedWorkloadKey={selectedWorkloadKey}
         onSelectWorkload={selectWorkload}
+        selectedView={selectedView}
+        onSelectView={selectView}
         renderWorkload={(workload: SelectedAppWorkload) => (
           <div className="h-full overflow-hidden">
             <WorkloadView
@@ -227,11 +329,10 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
               namespace={workload.namespace}
               name={workload.name}
               onBack={() => selectWorkload(null)}
-              // "Back" returns to the app graph — meaningless for a
-              // single-workload app, which has no graph to return to.
-              hideBackButton={(app.workloads?.length ?? 0) <= 1}
+              hideBackButton
               compactHeader
-              onNavigateToResource={onOpenResource}
+              pushTabHistory
+              onNavigateToResource={openWorkloadResource}
             />
           </div>
         )}

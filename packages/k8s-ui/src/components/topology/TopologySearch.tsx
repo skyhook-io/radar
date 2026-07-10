@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { Search, X, ChevronRight } from 'lucide-react'
+import { Input } from '../ui/Input'
 import { getTopologyIcon } from '../../utils/resource-icons'
 import { clsx } from 'clsx'
 import type { TopologyNode } from '../../types'
@@ -225,9 +226,8 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, vi
             {/* Search input */}
             <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border">
               <Search className="w-5 h-5 text-theme-text-secondary" />
-              <input
+              <Input
                 ref={inputRef}
-                type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleInputKeyDown}

@@ -29,6 +29,7 @@ type ResourcePermissions struct {
 	StatefulSets             bool `json:"statefulSets"`
 	ReplicaSets              bool `json:"replicaSets"`
 	Ingresses                bool `json:"ingresses"`
+	IngressClasses           bool `json:"ingressClasses"`
 	ConfigMaps               bool `json:"configMaps"`
 	Secrets                  bool `json:"secrets"`
 	Events                   bool `json:"events"`
@@ -717,6 +718,7 @@ func resourceProbeTargets(perms *ResourcePermissions) []resourceProbe {
 		{key: k8score.StatefulSets, gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, field: &perms.StatefulSets},
 		{key: k8score.ReplicaSets, gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"}, field: &perms.ReplicaSets},
 		{key: k8score.Ingresses, gvr: schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}, field: &perms.Ingresses},
+		{key: k8score.IngressClasses, gvr: schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingressclasses"}, clusterOnly: true, field: &perms.IngressClasses},
 		{key: k8score.NetworkPolicies, gvr: schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, field: &perms.NetworkPolicies},
 		{key: k8score.Jobs, gvr: schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}, field: &perms.Jobs},
 		{key: k8score.CronJobs, gvr: schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}, field: &perms.CronJobs},

@@ -2,6 +2,7 @@ import { useState, useEffect, type ComponentType } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 
 import { DialogPortal } from '../ui/DialogPortal'
+import { Input } from '../ui/Input'
 
 // =============================================================================
 // SyncOptionsDialog — Argo CD Sync drawer, shared between per-cluster
@@ -83,8 +84,7 @@ export function SyncOptionsDialog({ open, appLabel, pending, onCancel, onConfirm
       <div className="space-y-4 px-4 py-4 text-sm">
         <label className="block">
           <span className="text-xs font-medium text-theme-text-secondary">Revision (optional)</span>
-          <input
-            type="text"
+          <Input
             value={revision}
             onChange={(e) => setRevision(e.target.value)}
             placeholder="HEAD"

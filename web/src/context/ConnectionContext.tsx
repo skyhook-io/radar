@@ -11,7 +11,7 @@ export interface ConnectionState {
   context: string
   clusterName?: string
   error?: string
-  errorType?: string // auth, network, timeout, unknown
+  errorType?: string // config, auth, rbac, network, timeout, tls, unknown
   progressMessage?: string
 }
 
@@ -27,7 +27,23 @@ interface ConnectionContextValue {
   updateFromSSE: (status: ConnectionState) => void
 }
 
+class ConnectionRetryError extends Error {
+  errorType?: string
+
+  constructor(message: string, errorType?: string) {
+    super(message)
+    this.name = 'ConnectionRetryError'
+    this.errorType = errorType
+  }
+}
+
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
+const AUTO_RETRY_INITIAL_DELAY_MS = 10000
+const AUTO_RETRY_MAX_DELAY_MS = 60000
+
+export function shouldAutoRetryConnection(errorType?: string): boolean {
+  return errorType !== 'config' && errorType !== 'rbac'
+}
 
 async function fetchConnectionStatus(): Promise<ConnectionStatusResponse> {
   // apiFetch handles a 401 globally (re-auth redirect). These endpoints are
@@ -46,8 +62,8 @@ async function retryConnection(): Promise<ConnectionState> {
     method: 'POST',
   })
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-    throw new Error(error.error || `HTTP ${response.status}`)
+    const error = await response.json().catch(() => ({ error: 'Unknown error' })) as { error?: string; errorType?: string }
+    throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, error.errorType)
   }
   return response.json()
 }
@@ -59,6 +75,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     context: '',
   })
   const [contexts, setContexts] = useState<ContextInfo[]>([])
+  const [isAutoRetrying, setIsAutoRetrying] = useState(false)
   // Track if SSE has started delivering connection_state events
   // Once SSE is active, it becomes the authoritative source for connection state
   const sseActiveRef = useRef(false)
@@ -66,6 +83,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // initial connect (bootstrap queries already fetched while 'connecting') from
   // a reconnect after a drop (cache may be stale across the gap).
   const hasConnectedRef = useRef(false)
+  const autoRetryInFlightRef = useRef(false)
+  const autoRetryDelayRef = useRef(AUTO_RETRY_INITIAL_DELAY_MS)
+  const manualRetryPendingRef = useRef(false)
   // Whether the QueryClient already held data when this provider mounted. A host
   // can share one client across cluster-scoped RadarApp mounts (see RadarApp's
   // `queryClient` prop); that client may carry another cluster's data under
@@ -113,6 +133,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const retryMutation = useMutation({
     mutationFn: retryConnection,
     onMutate: () => {
+      manualRetryPendingRef.current = true
       // Reset SSE active flag - polling can provide state until SSE reconnects
       sseActiveRef.current = false
       // Set connecting state while retrying
@@ -120,7 +141,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         ...prev,
         state: 'connecting',
         error: undefined,
-        errorType: undefined,
         progressMessage: 'Connecting to cluster...',
       }))
     },
@@ -131,16 +151,94 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       queryClient.invalidateQueries()
     },
     onError: (error: Error) => {
-      setConnection(prev => ({
-        ...prev,
-        state: 'disconnected',
-        error: error.message,
-        progressMessage: undefined,
-      }))
+      const retryError = error as ConnectionRetryError
+      setConnection(prev => {
+        if (sseActiveRef.current && prev.state === 'connected') return prev
+        return {
+          ...prev,
+          state: 'disconnected',
+          error: error.message,
+          errorType: retryError.errorType || prev.errorType,
+          progressMessage: undefined,
+        }
+      })
+    },
+    onSettled: () => {
+      manualRetryPendingRef.current = false
     },
   })
+  useEffect(() => {
+    manualRetryPendingRef.current = retryMutation.isPending
+  }, [retryMutation.isPending])
+
+  useEffect(() => {
+    if (connection.state !== 'disconnected' || !shouldAutoRetryConnection(connection.errorType)) {
+      autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
+      return
+    }
+    let stopped = false
+    let retryTimeout: number | undefined
+
+    const scheduleRetry = () => {
+      retryTimeout = window.setTimeout(() => {
+        if (stopped) return
+        if (manualRetryPendingRef.current || autoRetryInFlightRef.current) {
+          scheduleRetry()
+          return
+        }
+
+        autoRetryInFlightRef.current = true
+        setIsAutoRetrying(true)
+        let recovered = false
+        retryConnection()
+          .then((result) => {
+            if (stopped) return
+            recovered = true
+            autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
+            sseActiveRef.current = false
+            setConnection(result)
+            queryClient.removeQueries()
+            queryClient.invalidateQueries()
+          })
+          .catch((error: Error) => {
+            if (stopped) return
+            const retryError = error as ConnectionRetryError
+            setConnection(prev => {
+              if (sseActiveRef.current && prev.state === 'connected') return prev
+              return {
+                ...prev,
+                state: 'disconnected',
+                error: error.message || prev.error,
+                errorType: retryError.errorType || prev.errorType,
+                progressMessage: undefined,
+              }
+            })
+            autoRetryDelayRef.current = Math.min(autoRetryDelayRef.current * 2, AUTO_RETRY_MAX_DELAY_MS)
+            // Keep the visible disconnected state until a retry succeeds.
+          })
+          .finally(() => {
+            autoRetryInFlightRef.current = false
+            setIsAutoRetrying(false)
+            if (!stopped && !recovered) {
+              scheduleRetry()
+            }
+          })
+      }, autoRetryDelayRef.current)
+    }
+
+    scheduleRetry()
+
+    return () => {
+      stopped = true
+      if (retryTimeout !== undefined) {
+        window.clearTimeout(retryTimeout)
+      }
+    }
+  }, [connection.errorType, connection.state, queryClient])
 
   const retry = useCallback(() => {
+    if (retryMutation.isPending || autoRetryInFlightRef.current) return
+    manualRetryPendingRef.current = true
     retryMutation.mutate()
   }, [retryMutation])
 
@@ -180,7 +278,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     connection,
     contexts,
     retry,
-    isRetrying: retryMutation.isPending,
+    isRetrying: retryMutation.isPending || isAutoRetrying,
     updateFromSSE,
   }
 

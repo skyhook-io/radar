@@ -417,8 +417,8 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		out = append(out, *pd)
 	}
 	// suppressedRefs tracks resources whose own Issue is causally derivative of
-	// a parent operation failure (e.g. an OutOfSync resource issue is just
-	// the per-resource view of an apply that already failed at the operation
+	// a parent operation failure (e.g. a Missing resource issue is just the
+	// per-resource view of an apply that already failed at the operation
 	// level). Hiding these prevents the user from seeing the same root cause
 	// rendered in three different forms.
 	suppressedRefs := map[string]bool{}
@@ -426,7 +426,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	// operationFailed gates two downstream suppressions when the parent op
 	// has parked in Failed/Error: (1) Argo's SyncError condition is a
 	// parallel encoding of the same operationState.message we already render
-	// in the failure card, and (2) per-resource Missing/OutOfSync issues
+	// in the failure card, and (2) per-resource Missing/Degraded issues
 	// for resources that can't exist because the parent failure is upstream
 	// (e.g. missing namespace) are just downstream symptoms. The user has
 	// already seen the root cause in the failure card; surfacing the
@@ -486,6 +486,12 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			// happening?" Answer: nothing is *supposed* to happen
 			// automatically.
 			out = append(out, *drift)
+		} else if drift := detectAutoDriftSelfHealOff(root); drift != nil {
+			// Auto-sync on but self-heal off: Argo deploys new Git revisions
+			// yet won't correct live drift, so an OutOfSync app sits drifted
+			// with nothing to reconcile it. Same "why isn't this fixing
+			// itself?" confusion as manual mode, different cause.
+			out = append(out, *drift)
 		}
 		// Argo Application status.conditions are how the controller signals
 		// app-level problems that aren't tied to a specific operation
@@ -528,9 +534,15 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 					}
 				}
 				out = append(out, iss)
-			} else if change.Sync == "OutOfSync" {
-				out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeResource, Reason: "OutOfSync", Message: fmt.Sprintf("%s %s is out of sync", change.Ref.Kind, change.Ref.Name), Refs: []Ref{change.Ref}, Action: "Review Changes or run sync."})
 			}
+			// A resource that is merely OutOfSync (healthy, just drifted) gets
+			// no Issue. One issue per drifted resource restates the Resources
+			// table one-for-one, and on a broadly-drifted app (fresh deploy,
+			// bumped chart) it buries the genuinely diagnostic issues under
+			// dozens of identical "X is out of sync / run sync" rows. The
+			// app-level sync badge + count own "how much has drifted", the
+			// table owns "which", and the ManualDrift / StuckDriftLoop
+			// detectors own the actionable "why isn't this reconciling" cases.
 		}
 	} else {
 		for _, c := range conditions(root) {
@@ -1530,7 +1542,11 @@ func detectStuckDriftLoop(root *unstructured.Unstructured) *Issue {
 	if phase != "Succeeded" {
 		return nil
 	}
-	if describeArgoAutoSync(root) == "Manual" {
+	// Self-heal must be ON for this to be a *loop*: the premise is that Argo
+	// keeps applying and the resource keeps reverting. With self-heal off, a
+	// persistent post-sync drift is expected (Argo won't re-correct it) —
+	// that's detectAutoDriftSelfHealOff's case, not a webhook fighting Argo.
+	if _, selfHeal := argoAutoSync(root); !selfHeal {
 		return nil
 	}
 	reconciledAt, _, _ := unstructured.NestedString(root.Object, "status", "reconciledAt")
@@ -1572,10 +1588,9 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured) *Issue {
 	if sync != "OutOfSync" {
 		return nil
 	}
-	// Only fire when auto-sync is genuinely off. "Auto" with selfHeal off
-	// is a separate (more nuanced) case — Argo would still apply on a
-	// new Git revision, just not on manual drift; we leave that for a
-	// future refinement rather than risk a false-positive banner here.
+	// Only fire when auto-sync is genuinely off. "Auto" with self-heal off is
+	// the adjacent case — Argo applies on a new Git revision but won't correct
+	// live drift — and is owned by detectAutoDriftSelfHealOff.
 	if describeArgoAutoSync(root) != "Manual" {
 		return nil
 	}
@@ -1585,6 +1600,46 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured) *Issue {
 		Reason:   "ManualDrift",
 		Message:  "Application is OutOfSync and auto-sync is disabled — nothing will reconcile until you click Sync.",
 		Action:   "Open Changes to review the per-resource diff, then click Sync to apply. Enable auto-sync if you want this to fix itself going forward.",
+	}
+}
+
+// argoAutoSync reports whether spec.syncPolicy.automated is present and, if so,
+// whether selfHeal is enabled within it. The two booleans distinguish the three
+// drift-reconciliation postures: manual (!automated), auto-deploy-only
+// (automated && !selfHeal), and auto-heal (automated && selfHeal).
+func argoAutoSync(root *unstructured.Unstructured) (automated, selfHeal bool) {
+	m, found, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
+	if !found {
+		return false, false
+	}
+	v, _ := m["selfHeal"].(bool)
+	return true, v
+}
+
+// detectAutoDriftSelfHealOff emits a warning when an Argo Application is
+// OutOfSync with auto-sync configured but self-heal disabled. In that posture
+// Argo deploys new Git revisions but never corrects drift in the live cluster,
+// so the app sits OutOfSync indefinitely with nothing to reconcile it. Without
+// this the operator sees drift under "auto-sync" and reasonably assumes it will
+// self-correct — it won't. Manual mode is owned by detectManualDriftWithoutAutoSync;
+// self-heal on is owned by detectStuckDriftLoop (or reconciles on its own).
+//
+// Returns nil when conditions don't match — caller appends only on hit.
+func detectAutoDriftSelfHealOff(root *unstructured.Unstructured) *Issue {
+	sync, _, _ := unstructured.NestedString(root.Object, "status", "sync", "status")
+	if sync != "OutOfSync" {
+		return nil
+	}
+	automated, selfHeal := argoAutoSync(root)
+	if !automated || selfHeal {
+		return nil
+	}
+	return &Issue{
+		Severity: SeverityWarning,
+		Scope:    ScopeOperation,
+		Reason:   "SelfHealDisabled",
+		Message:  "Application is OutOfSync and self-heal is disabled — auto-sync deploys new Git revisions but won't correct drift in the live cluster, so it will stay OutOfSync until you sync.",
+		Action:   "Open Changes to review the per-resource diff, then click Sync. Enable self-heal on the sync policy if you want Argo to auto-correct drift going forward.",
 	}
 }
 

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { Search } from 'lucide-react'
+import { Input } from '@skyhook-io/k8s-ui'
 
 export function LargeClusterNamespacePicker({ namespaces, onSelect }: {
   namespaces: { name: string }[] | undefined
@@ -27,9 +28,8 @@ export function LargeClusterNamespacePicker({ namespaces, onSelect }: {
     <div className="text-left">
       <div className="relative mb-2">
         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-        <input
+        <Input
           ref={inputRef}
-          type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search namespaces..."
