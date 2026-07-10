@@ -58,7 +58,7 @@ import {
   timeToX as sharedTimeToX,
 } from './shared'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
-import { clampLensToSelection, formatLensDuration, type ScrubberRange } from './scrubber-math'
+import { clampLensToSelection, formatLensDuration, MIN_WINDOW_MS, type ScrubberRange } from './scrubber-math'
 
 // Predefined zoom levels (window widths in hours): 15m, 30m, 1h, 2h, 4h, 8h,
 // 12h, 1d, 2d, 3d, 7d. Hoisted so the controlled-window adapter can size the
@@ -214,12 +214,6 @@ export function zoomWindowWithinBounds(
   const next = { fromMs: win.toMs - nextWidthMs, toMs: win.toMs }
   return bounds ? clampWindowToBounds(next, bounds) : next
 }
-
-// Continuous-zoom floor: don't let the wheel shrink the window below a minute.
-// This matches the scrubber's MIN_SELECTION_MS (60s), but the strip's lens-drag
-// band floors at its own MIN_WINDOW_MS (15min), so wheel-zoom and band-drag do
-// NOT bottom out at the same width.
-const MIN_WINDOW_MS = 60_000
 
 /**
  * Continuous analog of {@link zoomWindowWithinBounds} for smooth wheel/pinch
@@ -1610,9 +1604,13 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
 
     if (depth === 0) {
       return (
-        <div key={keyPrefix + lane.id}>
+        // An app group is a block, not a row: full-strength top/bottom borders
+        // set the app boundary apart from the hairline dividers between the
+        // resource rows inside it (an expanded group's last child suppresses
+        // its own border, so the block edge is the only closing line).
+        <div key={keyPrefix + lane.id} className={clsx(lane.isAppGroup && 'border-y border-theme-border')}>
           {/* Parent lane */}
-          <div className="border-b-subtle">
+          <div className={lane.isAppGroup && !(isExpanded && hasVisibleChildren) ? undefined : 'border-b-subtle'}>
             <div className="flex items-center">
               {/* Lane label */}
               <div className={clsx('relative shrink-0 border-r border-theme-border px-3 flex items-center gap-1 group/pin', laneLabelWidthClass, compact ? 'py-1' : 'py-2')}>

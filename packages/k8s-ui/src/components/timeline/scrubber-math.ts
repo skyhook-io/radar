@@ -34,6 +34,12 @@ export interface ScrubberPreset {
 // too narrow to be useful and handles overlap.
 const MIN_SELECTION_MS = 60_000
 
+// Smallest view window any zoom control may produce. Shared by the strip's
+// band resize, the swimlane zoom ladder (whose lowest rung is 0.25h), and the
+// wheel/pinch zoom, so every way of narrowing the window bottoms out at the
+// same width.
+export const MIN_WINDOW_MS = 15 * 60_000
+
 const MINUTE_MS = 60_000
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS

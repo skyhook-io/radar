@@ -32,6 +32,7 @@ import {
   clampSelection,
   formatLensDuration,
   formatScrubberPill,
+  MIN_WINDOW_MS,
   type ScrubberBucket,
   type ScrubberRange,
   type ScrubberPreset,
@@ -222,10 +223,6 @@ function footerStamp(ms: number): string {
 const MIN = 60_000
 const HR = 60 * MIN
 const DY = 24 * HR
-// Never let the window zoom in below this — a sub-15-min slice strands the user
-// on a near-empty band with no finer signal to gain. Capped to the query span at
-// use, so a shorter custom query can still fill the window.
-const MIN_WINDOW_MS = 15 * MIN
 export const WINDOW_RUNGS_MS = [
   MIN_WINDOW_MS, 30 * MIN,
   HR, 2 * HR, 6 * HR, 12 * HR,

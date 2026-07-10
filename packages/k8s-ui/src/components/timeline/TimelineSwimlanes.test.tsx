@@ -150,10 +150,10 @@ describe('zoomWindowContinuous (smooth window scaling, end-anchored)', () => {
     expect(next).toEqual({ fromMs: BOUNDS.fromMs, toMs: BOUNDS.toMs })
   })
 
-  it('floors zoom-in at one minute', () => {
-    const win: TimeWindow = { fromMs: NOW - 2 * 60_000, toMs: NOW } // 2min
-    const next = zoomWindowContinuous(win, 0.01, BOUNDS) // would be ~1.2s
-    expect(next.toMs - next.fromMs).toBe(60_000)
+  it('floors zoom-in at the shared 15-minute window floor', () => {
+    const win: TimeWindow = { fromMs: NOW - 30 * 60_000, toMs: NOW } // 30min
+    const next = zoomWindowContinuous(win, 0.01, BOUNDS) // would be 18s
+    expect(next.toMs - next.fromMs).toBe(15 * 60_000)
     expect(next.toMs).toBe(win.toMs)
   })
 })
