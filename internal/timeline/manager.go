@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -199,10 +200,40 @@ func InitStore(cfg StoreConfig) error {
 // busy_timeout; this is the corrupt-file case, where the file must be moved
 // aside to make progress. Returns the recreate error if that also fails, so the
 // caller can degrade to an in-memory store.
+// isCorruptedSQLiteError reports whether an open/schema failure signals actual
+// on-disk corruption — the only case where quarantining and recreating the file
+// is right. A transient or environmental failure (locked, permission denied,
+// disk full) must NOT quarantine, or a healthy database gets moved aside and its
+// history is lost. modernc.org/sqlite surfaces the SQLite result text, so match
+// the corruption markers.
+func isCorruptedSQLiteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"malformed",         // SQLITE_CORRUPT: "database disk image is malformed"
+		"not a database",    // SQLITE_NOTADB: "file is not a database"
+		"file is encrypted", // SQLITE_NOTADB variant
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func openSQLiteWithRecovery(path string) (*SQLiteStore, error) {
 	store, err := NewSQLiteStore(path)
 	if err == nil {
 		return store, nil
+	}
+	// Only a corrupt file earns a quarantine. A transient/environmental failure
+	// (locked, permission, full disk) surfaces as-is so the caller degrades to
+	// memory for this session; the file stays put and is retried untouched next
+	// start rather than being moved aside and its history lost.
+	if !isCorruptedSQLiteError(err) {
+		return nil, err
 	}
 
 	quarantine := path + ".corrupt"

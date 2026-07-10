@@ -1667,6 +1667,35 @@ func TestSQLiteStore_SeqSurvivesEmptyTable(t *testing.T) {
 
 // A corrupt on-disk store must be quarantined and recreated rather than killing
 // the timeline for the whole process.
+func TestIsCorruptedSQLiteError(t *testing.T) {
+	// Corruption → safe to quarantine and recreate.
+	for _, msg := range []string{
+		"database disk image is malformed",
+		"file is not a database",
+		"file is encrypted or is not a database",
+		"failed to init schema: database disk image is malformed", // wrapped
+	} {
+		if !isCorruptedSQLiteError(fmt.Errorf("%s", msg)) {
+			t.Errorf("expected %q classified as corruption", msg)
+		}
+	}
+	// Transient / environmental → must NOT quarantine, or a healthy db is lost.
+	for _, msg := range []string{
+		"database is locked",
+		"permission denied",
+		"disk I/O error",
+		"no space left on device",
+		"unable to open database file",
+	} {
+		if isCorruptedSQLiteError(fmt.Errorf("%s", msg)) {
+			t.Errorf("expected %q NOT classified as corruption (would move a healthy db aside)", msg)
+		}
+	}
+	if isCorruptedSQLiteError(nil) {
+		t.Error("nil must not classify as corruption")
+	}
+}
+
 func TestOpenSQLiteWithRecovery_QuarantinesCorruptFile(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "timeline-corrupt-*")
 	if err != nil {
