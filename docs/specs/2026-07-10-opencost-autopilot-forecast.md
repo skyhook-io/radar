@@ -148,4 +148,4 @@ files changed, so visual browser validation was not required.
 - [x] Add Helm values, rendered arguments, and chart coverage.
 - [x] Update operator documentation.
 - [x] Run focused and full validation.
-- [ ] Push implementation and mark the upstream PR ready.
+- [x] Push implementation and mark the upstream PR ready.
