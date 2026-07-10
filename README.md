@@ -45,7 +45,8 @@ curl -fsSL https://get.radarhq.io | sh && kubectl radar
 - **Zero install on your cluster** — runs on your laptop, talks to the K8s API directly
 - **Single binary** — no dependencies, no agents, no CRDs
 - **Fast on big clusters** — relationship-index caching, progressive loading, and SSE delta streaming keep the UI responsive at thousands of pods
-- **Airgapped-ready** — your cluster data never leaves. The one outbound call is an anonymous version check on start (version + OS/arch); block egress to `releases.skyhook.io` and Radar runs fully offline
+- **Private by design** — your cluster data stays on your machine. No account, no agents, no cloud sync, no cluster telemetry
+- **Airgapped-friendly** — runs as a single binary against the Kubernetes API and works in locked-down environments with outbound egress blocked
 - **Real-time** — watches your cluster via informers, pushes updates to the browser via SSE
 - **Works everywhere** — GKE, EKS, AKS, minikube, kind, k3s, or any conformant cluster
 - **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI assistants query your cluster through Radar
@@ -483,7 +484,7 @@ Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integ
 
 ## Security
 
-Radar reads your cluster through your own credentials and keeps all cluster data local — the only outbound call is the anonymous version check described above. Found a vulnerability? Please report it privately to **security@skyhook.io** — see [SECURITY.md](SECURITY.md) for the process and response timelines.
+Radar reads your cluster through your own credentials and keeps cluster data local. It does not upload manifests, logs, events, metrics, or resource data to Skyhook, and it does not require an account, agent, or cloud backend. Found a vulnerability? Please report it privately to **security@skyhook.io** — see [SECURITY.md](SECURITY.md) for the process and response timelines.
 
 ---
 
