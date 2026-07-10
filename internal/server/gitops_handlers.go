@@ -22,6 +22,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/argoapi"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -180,18 +181,32 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	insight := gitopsinsights.Build(root, tree, resolver)
 	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
 	insight = s.filterGitOpsInsightForUser(r, req, insight)
-	// The resource-diff endpoint pulls desired-vs-live manifests from the Argo
-	// CD API server, so it's only offered for Argo roots when that integration
-	// is configured. Gate on IsConfigured, not a live client: after a restart
-	// the background reconnect may not have landed yet, and gating on Get()
-	// would flap the capability off (show "Connect Argo CD") until a probe
-	// completes + insights refetches. The diff endpoint connects on demand.
-	if insight.Summary.Tool == "argocd" && argocd.IsConfigured() {
-		insight.Capabilities.ArgoDiffAvailable = true
-		insight.Capabilities.RevisionMetadataAvailable = true
-		// Best-effort: surface a broken Git repo connection (a top hidden cause
-		// of stuck syncs) as an Issue. Never fails insights if the Argo call errors.
-		s.enrichArgoRepoHealth(root, &insight)
+	// The resource-diff / revision-metadata affordances pull manifests from the
+	// Argo CD API server. Offer them only for Argo roots where a diff can
+	// actually be served — gate on the app's managed-resources call (the diff's
+	// own data source, 15s-cached and shared with the diff endpoint), NOT just
+	// IsConfigured() or the userinfo probe. A configured-but-rejected token, or a
+	// scope-limited token that authenticates yet 403s on managed-resources, would
+	// otherwise advertise per-row diffs that all fail — one integration problem
+	// rendered as N dead-ends. ArgoConfigured is surfaced separately so the UI can
+	// offer Connect vs. check Settings. Cost: one managed-resources round-trip per
+	// viewed app per 15s cache window, whose result the per-row diffs then reuse.
+	if insight.Summary.Tool == "argocd" {
+		insight.Capabilities.ArgoConfigured = argocd.IsConfigured()
+		if _, connected := argocd.Get(); connected {
+			if _, err := argocd.ManagedResourcesCached(r.Context(), argoapi.ManagedResourcesQuery{
+				AppNamespace: req.Namespace,
+				AppName:      req.Name,
+			}); err == nil {
+				insight.Capabilities.ArgoDiffAvailable = true
+				insight.Capabilities.RevisionMetadataAvailable = true
+			}
+		}
+		if insight.Capabilities.ArgoConfigured {
+			// Best-effort: surface a broken Git repo connection (a top hidden cause
+			// of stuck syncs) as an Issue. Never fails insights if the Argo call errors.
+			s.enrichArgoRepoHealth(root, &insight)
+		}
 	}
 	s.writeJSON(w, insight)
 }

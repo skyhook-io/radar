@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowUpDown, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Clock3, GitBranch, GitCommit, GitCompare, Info, Loader2, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowUpDown, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, Trash2 } from 'lucide-react'
 import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -988,14 +988,21 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
         )}
         {totalCount > 0 && isArgoRoot && !insight.capabilities?.argoDiffAvailable && onOpenSettings && (
           <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="font-medium text-accent-text hover:underline"
-            >
-              Connect Argo CD
-            </button>{' '}
-            for the full Git-rendered diff.
+            {insight.capabilities?.argoConfigured ? (
+              <>
+                Argo CD's full Git-rendered diff isn't available for this app (connection down or token not authorized).{' '}
+                <button type="button" onClick={onOpenSettings} className="font-medium text-accent-text hover:underline">
+                  Check Argo CD in Settings
+                </button>.
+              </>
+            ) : (
+              <>
+                <button type="button" onClick={onOpenSettings} className="font-medium text-accent-text hover:underline">
+                  Connect Argo CD
+                </button>{' '}
+                for the full Git-rendered diff.
+              </>
+            )}
           </div>
         )}
         {ignoredDiffs && ignoredDiffs.ruleCount > 0 && (
@@ -1306,7 +1313,6 @@ function ChangeRow({
   // full Argo CD diff — both live in the same disclosure panel.
   const expandable = hasInlineDetail || canFullDiff
   const [expanded, setExpanded] = useState(autoExpand && expandable)
-  const [showFullDiff, setShowFullDiff] = useState(false)
   // Auto-expand when an issue alert deep-links to this row — the user just
   // clicked the issue, so they want to see the detail immediately.
   useEffect(() => {
@@ -1459,17 +1465,13 @@ function ChangeRow({
           <div className="border-t border-theme-border bg-theme-base/40 px-4 py-3">
             {driftEntries.length > 0 && <DriftPanel drift={change.drift!} />}
             {events.length > 0 && <RecentEventsPanel events={events} />}
+            {/* Expanding a row IS the request to see its diff — render it inline
+                rather than behind a second "Full diff" click. The capability is
+                already gated on a live Argo connection, so this only mounts (and
+                fetches) when the diff can actually be served. */}
             {canFullDiff && (
               <div className={clsx((driftEntries.length > 0 || events.length > 0) && 'mt-3')}>
-                <button
-                  type="button"
-                  onClick={() => setShowFullDiff((v) => !v)}
-                  className="flex items-center gap-1.5 rounded border border-theme-border bg-theme-base px-2 py-0.5 text-[11px] font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-                >
-                  <GitCompare className="h-3 w-3" />
-                  {showFullDiff ? 'Hide full diff' : 'Full diff'}
-                </button>
-                {showFullDiff && <div className="mt-2">{renderResourceDiff?.(change.ref)}</div>}
+                {renderResourceDiff?.(change.ref)}
               </div>
             )}
           </div>

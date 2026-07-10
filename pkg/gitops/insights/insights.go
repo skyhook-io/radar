@@ -265,6 +265,13 @@ type Capabilities struct {
 	// it. Set by the insights HTTP handler, not by Build (which has no view of
 	// integration connectivity).
 	ArgoDiffAvailable bool `json:"argoDiffAvailable,omitempty"`
+	// ArgoConfigured reports that the Argo CD integration has settings saved
+	// (URL/token) even if a live connection isn't established — distinct from
+	// ArgoDiffAvailable, which requires a working connection. The frontend uses
+	// the pair to distinguish "not set up yet" (offer Connect) from "set up but
+	// the connection is down / token rejected" (offer Reconnect), instead of
+	// showing per-resource diff buttons that would fail.
+	ArgoConfigured bool `json:"argoConfigured,omitempty"`
 	// RevisionMetadataAvailable reports that the Argo CD revision-metadata
 	// endpoint can resolve Git commit details (author, message, signature) for
 	// this Application's deployed revisions. Same gating as ArgoDiffAvailable:

@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import { createTwoFilesPatch } from 'diff'
 import { GitCompare, Maximize2, ShieldOff, X } from 'lucide-react'
 import { clsx } from 'clsx'
-import { PaneLoader } from '../../ui/PaneLoader'
 import type { GitOpsResourceDiff } from '../../../types'
 
 interface ArgoResourceDiffProps {
@@ -22,7 +21,22 @@ export function ArgoResourceDiff({ diff, loading, error }: ArgoResourceDiffProps
   const [maximized, setMaximized] = useState(false)
 
   if (loading) {
-    return <PaneLoader label="Loading diff…" className="h-24" />
+    // An inline row expansion, not a full pane — a quiet skeleton of the diff's
+    // own shape reads as "content arriving here" without the page-level radar
+    // loader shouting for attention.
+    return (
+      <div className="rounded-md border border-theme-border bg-theme-base/50 p-3" aria-busy="true" aria-label="Loading diff">
+        <div className="mb-2 flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
+          <GitCompare className="h-3.5 w-3.5 shrink-0" />
+          <span>Loading diff…</span>
+        </div>
+        <div className="space-y-1.5">
+          {[92, 68, 81, 55, 74].map((w, i) => (
+            <div key={i} className="h-2.5 animate-pulse rounded bg-theme-hover" style={{ width: `${w}%` }} />
+          ))}
+        </div>
+      </div>
+    )
   }
   if (error) {
     return (

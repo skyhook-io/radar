@@ -219,6 +219,11 @@ export interface GitOpsCapabilities {
   // app's managed resources. Absent/false → offer only the last-applied field
   // diff and (for disconnected Argo apps) the "connect Argo CD" hint.
   argoDiffAvailable?: boolean
+  // True when the Argo CD integration has settings saved, even if the live
+  // connection is down / the token is rejected. Paired with argoDiffAvailable to
+  // tell "not set up" (offer Connect) from "set up but disconnected" (offer
+  // Reconnect) — instead of advertising a diff that would fail.
+  argoConfigured?: boolean
   // True on an Argo CD Application detail when the integration is connected,
   // meaning the revision-metadata endpoint can resolve Git commit details
   // (author, message, signature) for this app's deployed revisions.
