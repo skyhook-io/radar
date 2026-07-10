@@ -65,7 +65,8 @@ export type TimelineViewMode = 'list' | 'swimlane'
 export type { ActivityTypeFilter } from './TimelineList'
 
 // Retained-mode selection model: a relative live window, or a pinned absolute one.
-type TimelineMode =
+// Exported (with the URL helpers below) as a test seam for the deep-link contract.
+export type TimelineMode =
   // `all` marks a live window meant to cover the WHOLE data span: its width is
   // re-derived from the scrubber domain each tick, so a growing local ring
   // (toMs = now advances) never slides the left edge off the oldest data the
@@ -105,7 +106,7 @@ const SORTS: readonly TimelineSort[] = ['importance', 'recent', 'name']
 // flood the back stack.
 const HIGH_FREQ_KEYS = new Set(['q', 'from', 'to', 'window', 'event'])
 
-interface PersistedTimelineState {
+export interface PersistedTimelineState {
   viewMode: TimelineViewMode
   mode: TimelineMode
   showDeleted: boolean
@@ -146,7 +147,7 @@ function parseEnum<T extends string>(value: string | null, allowed: readonly T[]
 // pristine default live window. Only meaningful in retained mode. `maxRangeDays`
 // caps a hand-entered ?from&to to the same horizon the preset/fetch path
 // enforces (retained only; local loads the whole ring and passes it undefined).
-function parseTimeMode(sp: URLSearchParams, isRetained: boolean, maxRangeDays?: number): TimelineMode {
+export function parseTimeMode(sp: URLSearchParams, isRetained: boolean, maxRangeDays?: number): TimelineMode {
   if (isRetained) {
     const from = sp.get('from')
     const to = sp.get('to')
@@ -172,7 +173,7 @@ function parseTimeMode(sp: URLSearchParams, isRetained: boolean, maxRangeDays?: 
   return { kind: 'live', widthMs: DEFAULT_LIVE_WIDTH_MS }
 }
 
-function timeModeEqual(a: TimelineMode, b: TimelineMode): boolean {
+export function timeModeEqual(a: TimelineMode, b: TimelineMode): boolean {
   if (a.kind === 'live' && b.kind === 'live') return a.widthMs === b.widthMs && (a.all ?? false) === (b.all ?? false)
   if (a.kind === 'frozen' && b.kind === 'frozen') return a.fromMs === b.fromMs && a.toMs === b.toMs
   return false
@@ -185,7 +186,7 @@ function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
 // Rebuild the query string from state, preserving any foreign keys already on
 // the URL and stripping the legacy home-page `filter` seed (superseded by
 // `activity`). Every param is omitted at its default.
-function writeTimelineParams(
+export function writeTimelineParams(
   base: URLSearchParams,
   s: PersistedTimelineState,
   opts: { isRetained: boolean; requiresNamespaceFilter: boolean | undefined },
@@ -233,7 +234,7 @@ function writeTimelineParams(
 // A diff is "replace-worthy" when every changed key is high-frequency; a
 // discrete toggle changing pushes a history entry so back/forward step through
 // control states.
-function onlyHighFreqDiffer(a: string, b: string): boolean {
+export function onlyHighFreqDiffer(a: string, b: string): boolean {
   const pa = new URLSearchParams(a)
   const pb = new URLSearchParams(b)
   const keys = new Set<string>([...pa.keys(), ...pb.keys()])

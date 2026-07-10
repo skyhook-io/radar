@@ -1228,6 +1228,39 @@ export function mergeDeltaEvents(
   return merged.length > cap ? merged.slice(0, cap) : merged
 }
 
+// Delta-sync orchestration for useChanges, extracted so the
+// full-fetch → delta-poll → epoch-mismatch-resync contract is exercisable
+// without a React render. State is passed in explicitly — the cached page and
+// the shared meta store — rather than closed over from module scope, so a
+// caller (and a test) drives it with fresh state each invocation.
+export async function runDeltaSyncFetch(deps: {
+  path: string
+  queryString: string
+  limit: number
+  metaKey: string
+  cached: TimelineEvent[] | undefined
+  metaStore: Map<string, ChangesDeltaMeta>
+  now: number
+  signal?: AbortSignal
+}): Promise<TimelineEvent[]> {
+  const { path, queryString, limit, metaKey, cached, metaStore, now, signal } = deps
+  const meta = metaStore.get(metaKey)
+  const cursor = deltaFetchCursor(meta, cached, now)
+  if (cursor > 0) {
+    const delta = await fetchChangesPage(`${path}${queryString ? '&' : '?'}since_seq=${cursor}`, signal)
+    if (delta.epoch && delta.epoch === meta!.epoch) {
+      meta!.highWaterSeq = Math.max(meta!.highWaterSeq, delta.maxSeq, maxEventSeq(delta.events))
+      // Returning the cached reference on an empty delta skips re-renders.
+      return delta.events.length ? mergeDeltaEvents(cached!, delta.events, limit) : cached!
+    }
+    // Epoch changed — the store restarted and seq numbering reset, so the
+    // cursor is meaningless. Fall through to a full resync.
+  }
+  const full = await fetchChangesPage(path, signal)
+  metaStore.set(metaKey, { epoch: full.epoch, lastFullMs: now, highWaterSeq: Math.max(full.maxSeq, maxEventSeq(full.events)) })
+  return full.events
+}
+
 function getTimeRangeDate(range: TimeRange): Date | null {
   if (range === 'all') return null
   const now = new Date()
@@ -1284,21 +1317,7 @@ export function useChanges(options: UseChangesOptions = {}) {
 
       const metaKey = JSON.stringify(queryKey)
       const cached = queryClient.getQueryData<TimelineEvent[]>(queryKey)
-      const meta = changesDeltaMeta.get(metaKey)
-      const cursor = deltaFetchCursor(meta, cached, Date.now())
-      if (cursor > 0) {
-        const delta = await fetchChangesPage(`${path}${queryString ? '&' : '?'}since_seq=${cursor}`, signal)
-        if (delta.epoch && delta.epoch === meta!.epoch) {
-          meta!.highWaterSeq = Math.max(meta!.highWaterSeq, delta.maxSeq, maxEventSeq(delta.events))
-          // Returning the cached reference on an empty delta skips re-renders.
-          return delta.events.length ? mergeDeltaEvents(cached!, delta.events, limit) : cached!
-        }
-        // Epoch changed — the store restarted and seq numbering reset, so the
-        // cursor is meaningless. Fall through to a full resync.
-      }
-      const full = await fetchChangesPage(path, signal)
-      changesDeltaMeta.set(metaKey, { epoch: full.epoch, lastFullMs: Date.now(), highWaterSeq: Math.max(full.maxSeq, maxEventSeq(full.events)) })
-      return full.events
+      return runDeltaSyncFetch({ path, queryString, limit, metaKey, cached, metaStore: changesDeltaMeta, now: Date.now(), signal })
     },
     staleTime: 5000, // Consider data stale after 5 seconds to ensure fresh data on navigation
     refetchInterval: CHANGES_REFRESH_INTERVAL_MS, // SSE-driven invalidation handles real-time updates; this is the no-SSE fallback
