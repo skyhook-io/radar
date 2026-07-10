@@ -845,6 +845,15 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
   // Full-diff affordance is offered only when the backend reports the Argo CD
   // integration is connected for this app AND the host wired the loader.
   const argoDiffAvailable = isArgoRoot && !!insight.capabilities?.argoDiffAvailable && !!renderResourceDiff
+  // When Argo can't build the desired state (ComparisonError — unreachable repo,
+  // missing revision, broken spec), it can't compare live-vs-Git for ANY
+  // resource, so every row's sync arrives Unknown. Those per-row Unknowns are
+  // all shadows of the one app-level failure already surfaced in the issues
+  // band above; rendering them as N alarming pills makes one problem look like
+  // many. When the app-level sync is Unknown, quiet the derivative per-row sync
+  // to a muted placeholder and explain the cause once. Health stays — it's a
+  // live signal that's still knowable and still worth reading.
+  const syncUnavailable = isArgoRoot && (insight.summary.sync ?? '').toLowerCase() === 'unknown'
   const toggleFacet = (facet: ResourceStatusFacet) => {
     setStatusFilters((prev) => {
       const next = new Set(prev)
@@ -909,6 +918,16 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
             </div>
           )}
         </div>
+        {syncUnavailable && totalCount > 0 && (
+          <div className="flex items-start gap-2 border-b border-theme-border bg-theme-base/40 px-4 py-2 text-xs text-theme-text-secondary">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
+            <span>
+              Argo CD couldn't compare against Git (see the error above), so
+              per-resource <span className="font-medium text-theme-text-primary">sync</span> status is unavailable.
+              Resolve the repository error to restore it — <span className="font-medium text-theme-text-primary">health</span> below is still live.
+            </span>
+          </div>
+        )}
         {/* Filter/sort toolbar. The status facets are the primary way to
             answer "which resources are the problem?" now that the issues band
             no longer restates every OutOfSync resource above. */}
@@ -1074,6 +1093,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
                       change={change}
                       hook={hook}
                       explanation={explanation}
+                      syncUnavailable={syncUnavailable}
                       focused={focused}
                       autoExpand={focused}
                       hasInlineDetail={hasInlineDetail}
@@ -1248,6 +1268,7 @@ function ChangeRow({
   change,
   hook,
   explanation,
+  syncUnavailable,
   focused,
   autoExpand,
   hasInlineDetail,
@@ -1263,6 +1284,9 @@ function ChangeRow({
   // resources that already ran their hook.
   hook: string | undefined
   explanation: string
+  // True when the parent app can't compare against Git at all (ComparisonError):
+  // this row's Unknown sync is derivative, so render it muted instead of loud.
+  syncUnavailable: boolean
   focused: boolean
   autoExpand: boolean
   hasInlineDetail: boolean
@@ -1381,7 +1405,15 @@ function ChangeRow({
             <div className="ml-[18px] mt-1 text-xs text-theme-text-tertiary">{explanation}</div>
           )}
         </button>
-        <div className="self-center"><SyncStatusBadge sync={normalizeSyncStatus(change.sync ?? change.category)} /></div>
+        <div className="self-center">
+          {syncUnavailable && normalizeSyncStatus(change.sync ?? change.category) === 'Unknown' ? (
+            <Tooltip content="Sync unavailable — Argo CD couldn't load the desired state from Git (see the error above)." delay={200} wrapperClassName="inline-flex">
+              <span className="cursor-help select-none px-1 text-theme-text-tertiary" aria-label="Sync status unavailable">—</span>
+            </Tooltip>
+          ) : (
+            <SyncStatusBadge sync={normalizeSyncStatus(change.sync ?? change.category)} />
+          )}
+        </div>
         <div className="self-center"><HealthStatusBadge health={normalizeHealthStatus(change.health)} /></div>
         <div className="self-center">
           {/* Three affordance states:

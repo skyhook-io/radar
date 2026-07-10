@@ -513,6 +513,37 @@ func TestEnrichArgoRepoHealth_FailedRepo(t *testing.T) {
 	}
 }
 
+func TestEnrichArgoRepoHealth_MergesIntoComparisonError(t *testing.T) {
+	srv, _ := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(managedResourcesJSON(t)) })
+	connectArgo(t, srv.URL)
+	waitRepoCache(t)
+
+	// The app already carries the ComparisonError symptom (Argo couldn't load
+	// the desired state). The failed repo connection is its cause — it must
+	// fold into that one critical issue, not stack a second warning beside it.
+	insight := &gitopsinsights.Insight{Issues: []gitopsinsights.Issue{{
+		Severity: gitopsinsights.SeverityCritical,
+		Scope:    gitopsinsights.ScopeCondition,
+		Reason:   "ComparisonError",
+		Message:  "Failed to load target state: failed to generate manifest for source 1 of 1",
+	}}}
+	(&Server{}).enrichArgoRepoHealth(argoAppRoot("https://github.com/org/broken"), insight)
+
+	if len(insight.Issues) != 1 {
+		t.Fatalf("issues = %d, want 1 (merged, not stacked): %+v", len(insight.Issues), insight.Issues)
+	}
+	iss := insight.Issues[0]
+	if iss.Reason != "ComparisonError" || iss.Severity != gitopsinsights.SeverityCritical {
+		t.Errorf("merged issue must stay the critical ComparisonError: %+v", iss)
+	}
+	if !strings.Contains(iss.Message, "github.com/org/broken") {
+		t.Errorf("merged message must name the repo: %q", iss.Message)
+	}
+	if iss.Action == "" {
+		t.Errorf("merged issue must carry the repo fix action")
+	}
+}
+
 func TestEnrichArgoRepoHealth_HealthyRepoNoIssue(t *testing.T) {
 	srv, _ := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(managedResourcesJSON(t)) })
 	connectArgo(t, srv.URL)

@@ -399,6 +399,17 @@ func (s *Server) enrichArgoRepoHealth(root *unstructured.Unstructured, insight *
 		if rp == nil || !strings.EqualFold(rp.ConnectionState.Status, "Failed") {
 			continue
 		}
+		// A failed repo connection is the CAUSE of any ComparisonError Argo
+		// raised for this app: it couldn't load the desired state because it
+		// couldn't read the repo. Rather than stack a second, lower-severity
+		// "RepoUnreachable" alert beside that ComparisonError — one root cause
+		// rendered as two problems — fold the repo diagnosis into the existing
+		// issue so the page points at the one thing that matters. Only when
+		// there is no ComparisonError (repo degraded but the app is still
+		// Synced from Argo's cache) do we surface a standalone warning.
+		if enrichComparisonErrorWithRepo(insight, u, rp.ConnectionState.Message) {
+			continue
+		}
 		insight.Issues = append(insight.Issues, gitopsinsights.Issue{
 			Severity:   gitopsinsights.SeverityWarning,
 			Scope:      gitopsinsights.ScopeCondition,
@@ -408,6 +419,28 @@ func (s *Server) enrichArgoRepoHealth(root *unstructured.Unstructured, insight *
 			Action:     "Check the repository's credentials and network access in Argo CD (Settings → Repositories).",
 		})
 	}
+}
+
+// enrichComparisonErrorWithRepo folds a failed repo-connection diagnosis into
+// an existing ComparisonError issue — the symptom Argo raised when it couldn't
+// load the desired state — naming the specific repo and giving the fix action
+// while keeping the issue's critical severity. Returns true when it found and
+// enriched one, so the caller skips adding a duplicate standalone
+// RepoUnreachable. The Argo condition's own full text stays in RawMessage; the
+// repo connection error only fills it when the condition didn't carry detail.
+func enrichComparisonErrorWithRepo(insight *gitopsinsights.Insight, repoURL, connErr string) bool {
+	for i := range insight.Issues {
+		if insight.Issues[i].Reason != "ComparisonError" {
+			continue
+		}
+		insight.Issues[i].Message = fmt.Sprintf("Argo CD can't reach the source repository %s, so it can't compare against Git — sync status is unavailable for all resources.", repoURL)
+		insight.Issues[i].Action = "Check the repository's credentials and network access in Argo CD (Settings → Repositories)."
+		if insight.Issues[i].RawMessage == "" {
+			insight.Issues[i].RawMessage = connErr
+		}
+		return true
+	}
+	return false
 }
 
 // matchRepo finds the repository entry for a normalized URL, preferring an entry
