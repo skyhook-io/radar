@@ -496,7 +496,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	// One extraction of owner/labels/createdAt, reused for both the event and
 	// the tombstone. ExtractTombstoneEntry unwraps DeletedFinalStateUnknown, so
 	// a delete whose payload is that wrapper still yields the final object.
-	entry, _ := timeline.ExtractTombstoneEntry(obj)
+	entry, extracted := timeline.ExtractTombstoneEntry(obj)
 	owner := entry.Owner
 	labels := entry.Labels
 	createdAt := entry.CreatedAt
@@ -506,7 +506,10 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	// Feed the tombstone on every add/update/delete. While the object is live
 	// this mirrors its enrichment; once it is gone (delete, or a late K8s event
 	// after eviction) the retained copy is the only source of owner/labels.
-	if name != "" {
+	// Only when the object actually unwrapped — an extract failure yields an
+	// empty entry, and storing it would clobber the enrichment a prior good
+	// entry was preserving.
+	if name != "" && extracted {
 		tombstones.Put(uid, apiVersion, kind, namespace, name, entry)
 	}
 
