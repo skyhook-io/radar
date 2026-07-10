@@ -313,7 +313,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     if (older.length > 0) groups.push({ label: 'Older', items: aggregateEvents(older) })
 
     return groups
-  }, [filteredActivity])
+  }, [filteredActivity, compact])
 
   // Visible-window reporting: rows carry their time span in data attributes;
   // on scroll (rAF-throttled) and whenever the row set changes, the span of
@@ -580,7 +580,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
         getCardStyle(),
         selected && 'ring-2 ring-skyhook-500/60 ring-offset-1 ring-offset-theme-base',
       )}
-      onClick={() => { onSelect?.(); if (hasExpandableContent) onToggle() }}
+      onClick={() => { if (onSelect) { onSelect() } else if (hasExpandableContent) { onToggle() } }}
     >
       <div className="p-3">
         {/* Header row */}
@@ -670,11 +670,17 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
             )}
           </div>
 
-          {/* Expand indicator - only show if there's content to expand */}
+          {/* Expand toggle — its own control so a select-click on the card body
+              doesn't also flip the diff open/closed. */}
           {hasExpandableContent && (
-            <ChevronRight
-              className={clsx('w-4 h-4 text-theme-text-disabled transition-transform shrink-0', expanded && 'rotate-90')}
-            />
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onToggle() }}
+              aria-label={expanded ? 'Collapse changes' : 'Expand changes'}
+              className="shrink-0 rounded p-0.5 text-theme-text-disabled hover:bg-theme-elevated hover:text-theme-text-secondary"
+            >
+              <ChevronRight className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-90')} />
+            </button>
           )}
         </div>
 
@@ -725,7 +731,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
         cardStyle,
         selected && 'ring-2 ring-skyhook-500/60 ring-offset-1 ring-offset-theme-base',
       )}
-      onClick={() => { onSelect?.(); onToggle() }}
+      onClick={() => { if (onSelect) { onSelect() } else { onToggle() } }}
     >
       <div className="p-3">
         {/* Header row */}
@@ -780,10 +786,15 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
             </div>
           </div>
 
-          {/* Expand indicator */}
-          <ChevronRight
-            className={clsx('w-4 h-4 text-theme-text-disabled transition-transform shrink-0', expanded && 'rotate-90')}
-          />
+          {/* Expand toggle — its own control, separate from the card select-click. */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onToggle() }}
+            aria-label={expanded ? 'Collapse occurrences' : 'Expand occurrences'}
+            className="shrink-0 rounded p-0.5 text-theme-text-disabled hover:bg-theme-elevated hover:text-theme-text-secondary"
+          >
+            <ChevronRight className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-90')} />
+          </button>
         </div>
 
         {/* Expanded details */}
