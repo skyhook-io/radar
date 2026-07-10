@@ -781,3 +781,75 @@ func TestMemoryStore_K8sEventBumpPreservesEnrichment(t *testing.T) {
 		t.Fatalf("enriched bump did not fill Owner: %+v", row.Owner)
 	}
 }
+
+// Delta reads must page by ascending arrival order so a burst larger than the
+// page limit isn't skipped. The server advances the client cursor by the max
+// seq in each page, so successive polls must cover every unseen event with no
+// gaps — even though timestamps ascend with arrival (where a newest-first page
+// would return the highest seqs and strand the lower ones).
+func TestMemoryStore_DeltaPagesAscendingUnderLimit(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	base := time.Now()
+	for i := 0; i < 6; i++ {
+		ev := TimelineEvent{
+			ID: string(rune('a' + i)), Timestamp: base.Add(time.Duration(i) * time.Second),
+			Source: SourceInformer, Kind: "Deployment", Namespace: "default",
+			Name: string(rune('a' + i)), EventType: EventTypeUpdate,
+		}
+		if err := store.Append(ctx, ev); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+	// Arrivals now carry seq 1..6, timestamps ascending with seq.
+
+	cursor := int64(1)
+	seen := map[int64]bool{}
+	for polls := 0; polls < 10; polls++ {
+		page, err := store.Query(ctx, QueryOptions{Limit: 2, IncludeManaged: true, SinceSeq: cursor})
+		if err != nil {
+			t.Fatalf("delta query: %v", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		// Ascending within the page.
+		if len(page) == 2 && page[0].Seq >= page[1].Seq {
+			t.Fatalf("delta page not ascending by seq: %+v", []int64{page[0].Seq, page[1].Seq})
+		}
+		var maxSeq int64
+		for _, e := range page {
+			if seen[e.Seq] {
+				t.Fatalf("seq %d returned twice across polls", e.Seq)
+			}
+			seen[e.Seq] = true
+			if e.Seq > maxSeq {
+				maxSeq = e.Seq
+			}
+		}
+		cursor = maxSeq // mirror server cursor advancement
+	}
+
+	// Every seq strictly above the initial cursor (2..6) must have been seen.
+	for want := int64(2); want <= 6; want++ {
+		if !seen[want] {
+			t.Fatalf("delta paging skipped seq %d; seen=%v", want, seen)
+		}
+	}
+}
+
+// A store standing in for a failed persistent backend reports itself degraded
+// through Stats so diagnostics can explain the missing persistence.
+func TestNewDegradedMemoryStore_ReportsDegraded(t *testing.T) {
+	degraded := NewDegradedMemoryStore(100, "SQLite unusable: boom")
+	stats := degraded.Stats()
+	if !stats.Degraded || stats.DegradedReason != "SQLite unusable: boom" {
+		t.Fatalf("expected degraded stats with reason, got %+v", stats)
+	}
+
+	healthy := NewMemoryStore(100)
+	if hs := healthy.Stats(); hs.Degraded || hs.DegradedReason != "" {
+		t.Fatalf("plain memory store must not report degraded, got %+v", hs)
+	}
+}

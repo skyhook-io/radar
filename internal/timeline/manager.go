@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -122,6 +123,9 @@ func ToLegacyDiffInfo(d *DiffInfo) *DiffInfo    { return pkgtimeline.ToLegacyDif
 
 // Store constructors.
 func NewMemoryStore(maxSize int) *pkgtimeline.MemoryStore { return pkgtimeline.NewMemoryStore(maxSize) }
+func NewDegradedMemoryStore(maxSize int, reason string) *pkgtimeline.MemoryStore {
+	return pkgtimeline.NewDegradedMemoryStore(maxSize, reason)
+}
 
 // ---------------------------------------------------------------------------
 // Global store singleton
@@ -150,10 +154,21 @@ func InitStore(cfg StoreConfig) error {
 				initErr = fmt.Errorf("SQLite store requires a path")
 				return
 			}
-			store, err := NewSQLiteStore(cfg.Path)
+			store, err := openSQLiteWithRecovery(cfg.Path)
 			if err != nil {
-				initErr = fmt.Errorf("failed to create SQLite store: %w", err)
-				return
+				// SQLite is unusable even after quarantining and recreating the
+				// file. Degrade to an in-memory store so the timeline stays alive
+				// (without persistence) for this session instead of the whole
+				// subsystem going dark. initErr stays nil: the caller must not
+				// treat this as a fatal init failure.
+				maxSize := cfg.MaxSize
+				if maxSize <= 0 {
+					maxSize = 1000
+				}
+				reason := fmt.Sprintf("SQLite store at %s unusable: %v", cfg.Path, err)
+				log.Printf("[timeline] %s; degrading to in-memory for this session", reason)
+				globalStore = NewDegradedMemoryStore(maxSize, reason)
+				break
 			}
 			globalStore = store
 			if cfg.RetentionAge > 0 || cfg.MaxStorageBytes > 0 {
@@ -176,6 +191,33 @@ func InitStore(cfg StoreConfig) error {
 		observationStartNanos.Store(time.Now().UnixNano())
 	})
 	return initErr
+}
+
+// openSQLiteWithRecovery opens the SQLite store, and on a failed open (a
+// corrupt or otherwise unreadable file) quarantines the file to a fixed
+// ".corrupt" name and recreates it once. Transient locks are already handled by
+// busy_timeout; this is the corrupt-file case, where the file must be moved
+// aside to make progress. Returns the recreate error if that also fails, so the
+// caller can degrade to an in-memory store.
+func openSQLiteWithRecovery(path string) (*SQLiteStore, error) {
+	store, err := NewSQLiteStore(path)
+	if err == nil {
+		return store, nil
+	}
+
+	quarantine := path + ".corrupt"
+	if renameErr := os.Rename(path, quarantine); renameErr != nil {
+		// Nothing to move aside (or the move failed) — can't recreate cleanly.
+		return nil, err
+	}
+	// Move the WAL/SHM sidecars aside too; a stale WAL left next to a fresh main
+	// file would be replayed into it and could re-corrupt it. Best-effort — they
+	// may not exist.
+	_ = os.Rename(path+"-wal", quarantine+"-wal")
+	_ = os.Rename(path+"-shm", quarantine+"-shm")
+	log.Printf("[timeline] quarantined unreadable SQLite store %s -> %s (open error: %v)", path, quarantine, err)
+
+	return NewSQLiteStore(path)
 }
 
 // observationStartNanos (unix nanos; 0 = no store) is when THIS process began

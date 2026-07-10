@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
@@ -37,6 +38,13 @@ type SQLiteStore struct {
 	lastCleanupAt time.Time
 	lastCleanupN  int64
 	lastCleanupEr string
+
+	// nextSeq is a process-lifetime monotonic arrival counter, seeded from
+	// MAX(seq) at open. It survives retention emptying the table, so a new
+	// insert's seq always exceeds any previously issued seq while the store
+	// lives — an in-flight delta cursor can't be silently overtaken by a
+	// rewound seq.
+	nextSeq atomic.Int64
 }
 
 // NewSQLiteStore creates a new SQLite-backed event store.
@@ -92,7 +100,23 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	// behave like a fresh store, not a fatal error.
 	store.hydrateSeenResources()
 
+	// Seed the monotonic seq counter from the persisted high-water mark so
+	// arrival numbers continue above the last issued value across restarts.
+	store.seedSeq()
+
 	return store, nil
+}
+
+// seedSeq initializes nextSeq to the current MAX(seq). Best-effort: a query
+// failure leaves it at 0, which only risks reusing arrival numbers on a store
+// that couldn't be read anyway. Safe to call only from the constructor.
+func (s *SQLiteStore) seedSeq() {
+	var maxSeq int64
+	if err := s.db.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&maxSeq); err != nil {
+		log.Printf("[timeline] failed to seed seq counter from %s: %v", s.path, err)
+		return
+	}
+	s.nextSeq.Store(maxSeq)
 }
 
 // initSchema creates the database tables if they don't exist
@@ -240,17 +264,18 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 	// Enrichment (owner/labels/createdAt) upserts asymmetrically: a bump that
 	// carries it wins (fresher truth), a bump that lost it (tombstone expired,
 	// object gone from the live cache) keeps what the row already knows.
-	// seq is the arrival number: MAX(seq)+1 computed per insert (single-writer
-	// store, statements serialize inside the tx). The upsert takes excluded.seq
-	// — the freshly computed value — so a count bump re-arrives at the cursor
-	// frontier instead of staying buried at its original arrival position,
+	// seq is the arrival number, taken from the process-lifetime nextSeq counter
+	// rather than MAX(seq)+1 per insert: retention emptying the table can't then
+	// rewind seq and strand a live client's delta cursor. The upsert takes
+	// excluded.seq — the freshly issued value — so a count bump re-arrives at the
+	// cursor frontier instead of staying buried at its original arrival position,
 	// mirroring MemoryStore's vacate-and-re-append-at-head.
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO events (
 			id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 			reason, message, diff_json, health_state, owner_kind, owner_name,
 			labels_json, count, correlation_id, cluster_context, resource_created_at, seq
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM events))
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			timestamp = excluded.timestamp,
 			event_type = excluded.event_type,
@@ -299,12 +324,15 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 		}
 		var resourceCreatedAt any
 		if event.CreatedAt != nil {
-			resourceCreatedAt = event.CreatedAt.Format(time.RFC3339Nano)
+			resourceCreatedAt = event.CreatedAt.UTC().Format(time.RFC3339Nano)
 		}
 
+		// Timestamps hit a TEXT column compared lexically by ORDER BY / range
+		// filters. Informer events carry the host's local zone while K8s events
+		// are UTC; normalize to UTC ('Z') so lexical order matches chronological.
 		_, err = stmt.ExecContext(ctx,
 			event.ID,
-			event.Timestamp.Format(time.RFC3339Nano),
+			event.Timestamp.UTC().Format(time.RFC3339Nano),
 			string(event.Source),
 			event.Kind,
 			event.APIVersion,
@@ -323,6 +351,7 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 			event.CorrelationID,
 			event.ClusterContext,
 			resourceCreatedAt,
+			s.nextSeq.Add(1),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert event: %w", err)
@@ -381,12 +410,12 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 
 	if !opts.Since.IsZero() {
 		query.WriteString(" AND timestamp >= ?")
-		args = append(args, opts.Since.Format(time.RFC3339Nano))
+		args = append(args, opts.Since.UTC().Format(time.RFC3339Nano))
 	}
 
 	if !opts.Until.IsZero() {
 		query.WriteString(" AND timestamp <= ?")
-		args = append(args, opts.Until.Format(time.RFC3339Nano))
+		args = append(args, opts.Until.UTC().Format(time.RFC3339Nano))
 	}
 
 	if len(opts.Sources) > 0 {
@@ -430,8 +459,16 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		args = append(args, opts.SinceSeq)
 	}
 
-	// Order by timestamp descending
-	query.WriteString(" ORDER BY timestamp DESC")
+	// Delta reads (SinceSeq>0) page by ascending arrival order: the server
+	// advances the client cursor by the max seq in the page, so a burst larger
+	// than the limit must resume from the lowest unseen seq — timestamp DESC
+	// would return the newest matches and silently drop the mid-seq ones. The
+	// client merges by id, so ascending is fine. Non-delta reads page newest-first.
+	if opts.SinceSeq > 0 {
+		query.WriteString(" ORDER BY seq ASC")
+	} else {
+		query.WriteString(" ORDER BY timestamp DESC")
+	}
 
 	// Apply limit
 	limit := opts.Limit
@@ -581,7 +618,7 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 
 	if !since.IsZero() {
 		query += " AND timestamp >= ?"
-		args = append(args, since.Format(time.RFC3339Nano))
+		args = append(args, since.UTC().Format(time.RFC3339Nano))
 	}
 
 	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT %d", limit)
@@ -687,7 +724,7 @@ func (s *SQLiteStore) Close() error {
 
 // Cleanup removes events older than the given duration
 func (s *SQLiteStore) Cleanup(ctx context.Context, maxAge time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339Nano)
+	cutoff := time.Now().Add(-maxAge).UTC().Format(time.RFC3339Nano)
 	result, err := s.db.ExecContext(ctx, "DELETE FROM events WHERE timestamp < ?", cutoff)
 	if err != nil {
 		return 0, err

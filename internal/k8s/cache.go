@@ -253,10 +253,11 @@ func ResetResourceCache() {
 	cacheOnce = new(sync.Once)
 	initialSyncComplete = false
 	resetRecreateStash()
-	// Tombstone keys are kind/ns/name (no cluster context), so a leftover entry
-	// could mis-enrich a same-named resource on the next cluster. Drop them all
-	// in place (not a var reassignment) so concurrent informer readers of the
-	// stable pointer don't race with the reset.
+	// Tombstone keys are UID-first, falling back to an apiVersion|kind|ns|name
+	// composite (no cluster context) when a source lacks a UID; a leftover
+	// UID-less entry could mis-enrich a same-named resource on the next cluster.
+	// Drop them all in place (not a var reassignment) so concurrent informer
+	// readers of the stable pointer don't race with the reset.
 	tombstones.Clear()
 }
 

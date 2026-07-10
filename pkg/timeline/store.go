@@ -107,6 +107,13 @@ type StoreStats struct {
 	StorageBytes  int64     `json:"storageBytes,omitempty"`
 	SeenResources int       `json:"seenResources"`
 
+	// Degraded is set when the configured persistent backend could not be
+	// opened and the store fell back to in-memory for this session — surfaced
+	// so diagnostics show why persistence is missing instead of the timeline
+	// looking healthy. DegradedReason carries the original open error.
+	Degraded       bool   `json:"degraded,omitempty"`
+	DegradedReason string `json:"degradedReason,omitempty"`
+
 	// SQLite-only retention/cleanup state. Zero values for memory store.
 	RetentionAge           time.Duration `json:"retentionAge,omitempty"`
 	MaxStorageBytes        int64         `json:"maxStorageBytes,omitempty"`

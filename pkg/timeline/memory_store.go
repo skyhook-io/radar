@@ -20,6 +20,11 @@ type MemoryStore struct {
 	seenResources map[string]bool
 	seenMu        sync.RWMutex
 	filterCache   map[string]*CompiledFilter
+
+	// degradedReason, when non-empty, marks this store as a fallback for a
+	// persistent backend that could not be opened. Set once at construction
+	// before the store is published, so it needs no lock. Reported via Stats.
+	degradedReason string
 }
 
 // NewMemoryStore creates a new in-memory event store
@@ -34,6 +39,16 @@ func NewMemoryStore(maxSize int) *MemoryStore {
 		seenResources: make(map[string]bool),
 		filterCache:   make(map[string]*CompiledFilter),
 	}
+}
+
+// NewDegradedMemoryStore returns an in-memory store that reports itself as a
+// degraded fallback via Stats. Used when the configured persistent backend
+// could not be opened, so the timeline stays alive (without persistence) for
+// the session instead of the whole subsystem going dark.
+func NewDegradedMemoryStore(maxSize int, reason string) *MemoryStore {
+	m := NewMemoryStore(maxSize)
+	m.degradedReason = reason
+	return m
 }
 
 // Append adds a single event to the store
@@ -144,9 +159,21 @@ func (m *MemoryStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	results := make([]TimelineEvent, 0, limit)
 	skipped := 0
 
-	// Iterate backwards from most recent
+	// Delta reads (SinceSeq>0) page by ascending arrival order so a burst larger
+	// than the limit isn't skipped: the server advances the client cursor by the
+	// max seq in the page, so the next poll must resume from the lowest unseen
+	// seq. Ring position tracks arrival order (each writeAtHead takes the next
+	// seq), so oldest-first iteration yields ascending seq. Non-delta reads page
+	// newest-first.
+	deltaAscending := opts.SinceSeq > 0
+
 	for i := 0; i < m.count && len(results) < limit; i++ {
-		idx := (m.head - 1 - i + m.maxSize) % m.maxSize
+		var idx int
+		if deltaAscending {
+			idx = (m.head - m.count + i + m.maxSize) % m.maxSize
+		} else {
+			idx = (m.head - 1 - i + m.maxSize) % m.maxSize
+		}
 		event := m.records[idx]
 
 		// Skip empty records
@@ -327,10 +354,12 @@ func (m *MemoryStore) Stats() StoreStats {
 	}
 
 	return StoreStats{
-		TotalEvents:   total,
-		OldestEvent:   oldest,
-		NewestEvent:   newest,
-		SeenResources: len(m.seenResources),
+		TotalEvents:    total,
+		OldestEvent:    oldest,
+		NewestEvent:    newest,
+		SeenResources:  len(m.seenResources),
+		Degraded:       m.degradedReason != "",
+		DegradedReason: m.degradedReason,
 	}
 }
 

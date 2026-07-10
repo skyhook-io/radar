@@ -1521,3 +1521,191 @@ func TestSQLiteStore_K8sEventBumpPreservesEnrichment(t *testing.T) {
 		t.Fatalf("enriched bump did not fill Owner: %+v", row.Owner)
 	}
 }
+
+// Timestamps are stored as TEXT and ordered lexically; informer events carry
+// the host's local zone while K8s events are UTC. Without UTC normalization on
+// write, a local-zone wall clock sorts ahead of an earlier-instant UTC string.
+// Normalized, lexical order matches chronological order.
+func TestSQLiteStore_UTCTimestampOrdering(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	east := time.FixedZone("east", 5*3600)
+	// A: 12:00 +05:00 == 07:00Z — the EARLIER instant, but a later wall clock.
+	a := TimelineEvent{
+		ID: "a", Timestamp: time.Date(2026, 1, 1, 12, 0, 0, 0, east),
+		Source: SourceInformer, Kind: "Deployment", Namespace: "default", Name: "a", EventType: EventTypeUpdate,
+	}
+	// B: 09:00Z — the LATER instant.
+	b := TimelineEvent{
+		ID: "b", Timestamp: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC),
+		Source: SourceInformer, Kind: "Deployment", Namespace: "default", Name: "b", EventType: EventTypeUpdate,
+	}
+	if err := store.AppendBatch(ctx, []TimelineEvent{a, b}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	events, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	// Query is newest-instant-first: B (09:00Z) then A (07:00Z).
+	if events[0].ID != "b" || events[1].ID != "a" {
+		t.Fatalf("expected chronological order [b, a], got [%s, %s]", events[0].ID, events[1].ID)
+	}
+}
+
+// Delta reads must page by ascending arrival order so a burst larger than the
+// page limit isn't skipped as the server advances the cursor by each page's max
+// seq. Successive polls must cover every unseen event with no gaps.
+func TestSQLiteStore_DeltaPagesAscendingUnderLimit(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	base := time.Now()
+	for i := 0; i < 6; i++ {
+		ev := TimelineEvent{
+			ID: fmt.Sprintf("e%d", i), Timestamp: base.Add(time.Duration(i) * time.Second),
+			Source: SourceInformer, Kind: "Deployment", Namespace: "default",
+			Name: fmt.Sprintf("e%d", i), EventType: EventTypeUpdate,
+		}
+		if err := store.Append(ctx, ev); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+
+	cursor := int64(1)
+	seen := map[int64]bool{}
+	for polls := 0; polls < 10; polls++ {
+		page, err := store.Query(ctx, QueryOptions{Limit: 2, IncludeManaged: true, SinceSeq: cursor})
+		if err != nil {
+			t.Fatalf("delta query: %v", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		if len(page) == 2 && page[0].Seq >= page[1].Seq {
+			t.Fatalf("delta page not ascending by seq: %d,%d", page[0].Seq, page[1].Seq)
+		}
+		var maxSeq int64
+		for _, e := range page {
+			if seen[e.Seq] {
+				t.Fatalf("seq %d returned twice across polls", e.Seq)
+			}
+			seen[e.Seq] = true
+			if e.Seq > maxSeq {
+				maxSeq = e.Seq
+			}
+		}
+		cursor = maxSeq
+	}
+	for want := int64(2); want <= 6; want++ {
+		if !seen[want] {
+			t.Fatalf("delta paging skipped seq %d; seen=%v", want, seen)
+		}
+	}
+}
+
+// seq must not rewind when retention empties the table: a live client's cursor
+// (seq>N) would otherwise go dead with no forced resync while the store lives.
+func TestSQLiteStore_SeqSurvivesEmptyTable(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	past := time.Now().Add(-time.Hour)
+	for i := 0; i < 3; i++ {
+		if err := store.Append(ctx, TimelineEvent{
+			ID: fmt.Sprintf("old%d", i), Timestamp: past, Source: SourceInformer,
+			Kind: "Deployment", Namespace: "default", Name: fmt.Sprintf("old%d", i), EventType: EventTypeUpdate,
+		}); err != nil {
+			t.Fatalf("Append old %d: %v", i, err)
+		}
+	}
+	before, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query before: %v", err)
+	}
+	var maxBefore int64
+	for _, e := range before {
+		if e.Seq > maxBefore {
+			maxBefore = e.Seq
+		}
+	}
+	if maxBefore == 0 {
+		t.Fatalf("expected non-zero seq before cleanup")
+	}
+
+	// Retention deletes everything (rows are an hour old).
+	deleted, err := store.Cleanup(ctx, time.Minute)
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if deleted != 3 {
+		t.Fatalf("expected all 3 rows deleted, got %d", deleted)
+	}
+
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "fresh", Timestamp: time.Now(), Source: SourceInformer,
+		Kind: "Deployment", Namespace: "default", Name: "fresh", EventType: EventTypeUpdate,
+	}); err != nil {
+		t.Fatalf("Append fresh: %v", err)
+	}
+	fresh, err := store.GetEvent(ctx, "fresh")
+	if err != nil || fresh == nil {
+		t.Fatalf("GetEvent fresh: %v %+v", err, fresh)
+	}
+	if fresh.Seq <= maxBefore {
+		t.Fatalf("seq rewound after empty table: fresh seq %d must exceed prior max %d", fresh.Seq, maxBefore)
+	}
+}
+
+// A corrupt on-disk store must be quarantined and recreated rather than killing
+// the timeline for the whole process.
+func TestOpenSQLiteWithRecovery_QuarantinesCorruptFile(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "timeline-corrupt-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	// A non-SQLite file: initSchema's CREATE TABLE fails with "file is not a database".
+	if err := os.WriteFile(dbPath, []byte("this is not a sqlite database"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := NewSQLiteStore(dbPath); err == nil {
+		t.Fatalf("expected NewSQLiteStore to error on a malformed file")
+	}
+
+	store, err := openSQLiteWithRecovery(dbPath)
+	if err != nil {
+		t.Fatalf("openSQLiteWithRecovery: %v", err)
+	}
+	defer store.Close()
+
+	if _, statErr := os.Stat(dbPath + ".corrupt"); statErr != nil {
+		t.Fatalf("expected quarantined file at %s.corrupt: %v", dbPath, statErr)
+	}
+
+	ctx := context.Background()
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "post-recovery", Timestamp: time.Now(), Source: SourceInformer,
+		Kind: "Deployment", Namespace: "default", Name: "post-recovery", EventType: EventTypeUpdate,
+	}); err != nil {
+		t.Fatalf("Append after recovery: %v", err)
+	}
+	events, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query after recovery: %v", err)
+	}
+	if len(events) != 1 || events[0].ID != "post-recovery" {
+		t.Fatalf("recovered store not usable, got %+v", events)
+	}
+}
