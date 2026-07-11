@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { Bell, Search, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection } from '../../ui/drawer-components'
+import { Input } from '../../ui/Input'
 import { BADGE_SEVERITY_COLORS } from '../../ui/Badge'
 import {
   getPrometheusRuleGroups,
@@ -190,8 +191,7 @@ export function PrometheusRuleRenderer({ data }: PrometheusRuleRendererProps) {
           {totalRules > 5 && (
             <div className="relative mb-3">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary" />
-              <input
-                type="text"
+              <Input
                 placeholder="Filter rules by name or expression..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}

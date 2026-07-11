@@ -16,23 +16,39 @@
 // Both are applied before any children render so downstream code that
 // reads config synchronously (e.g. URL construction inside fetchJSON)
 // sees the host's values.
-import React from 'react';
-import { BrowserRouter, MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider, MutationCache, QueryCache } from '@tanstack/react-query';
+import React from "react";
+import { BrowserRouter, MemoryRouter } from "react-router-dom";
+import {
+  QueryClient,
+  QueryClientProvider,
+  MutationCache,
+  QueryCache,
+} from "@tanstack/react-query";
 
-import App from './App';
-import { ThemeProvider } from './context/ThemeContext';
-import { ToastProvider, showApiError, showApiSuccess } from './components/ui/Toast';
-import { setApiBase, setBasename } from './api/config';
-import { NavCustomizationProvider } from './context/NavCustomization';
-import { FilterLocationBridge } from './filter/FilterLocationBridge';
-import type { NavCustomization } from './context/NavCustomization';
+import App from "./App";
+import { ThemeProvider } from "./context/ThemeContext";
+import {
+  ToastProvider,
+  showApiError,
+  showApiSuccess,
+} from "./components/ui/Toast";
+import { setApiBase, setBasename } from "./api/config";
+import { NavCustomizationProvider } from "./context/NavCustomization";
+import { FilterLocationBridge } from "./filter/FilterLocationBridge";
+import type { NavCustomization } from "./context/NavCustomization";
+import type { ClusterLoadState } from "./types/clusterLoadState";
+import { TimelineSourceProvider } from "./context/TimelineSource";
+import type { TimelineSourceConfig } from "./api/timelineSource";
+import { DiagnoseCustomizationProvider } from "./context/DiagnoseCustomization";
+import type { RenderDiagnoseAction } from "./context/DiagnoseCustomization";
+import { defaultDiagnoseAction } from "./components/diagnose/LocalDiagnoseAction";
+import { DiagnoseProvider } from "./components/diagnose/DiagnoseContext";
 
 // Declare the shape of mutation meta here — inlined rather than in a
 // separate side-effect-only module so consumers that tree-shake aggressively
 // (package.json sets sideEffects: ["*.css"]) can't drop the augmentation.
 // Any consumer that imports RadarApp will pull in this declaration.
-declare module '@tanstack/react-query' {
+declare module "@tanstack/react-query" {
   interface Register {
     mutationMeta: {
       errorMessage?: string;
@@ -57,7 +73,7 @@ export interface RadarAppProps {
    *     Escape hatch for tests and for host apps that can't restructure
    *     around a single top-level BrowserRouter.
    */
-  router?: 'browser' | 'memory';
+  router?: "browser" | "memory";
   /**
    * Optional QueryClient override. When consuming Radar inside another app
    * that already has a QueryClientProvider higher in the tree, you may
@@ -87,12 +103,40 @@ export interface RadarAppProps {
    */
   documentTitleSuffix?: string;
   /**
+   * Injects a resource-level "Diagnose" action (e.g. a "Diagnose with AI"
+   * button) into every resource detail action bar's right-aligned universal
+   * actions. The host returns the node to render given the resource context.
+   * Standalone Radar omits this and renders no Diagnose button — OSS stays
+   * agent-free. See ./context/DiagnoseCustomization for the render-prop shape.
+   */
+  renderDiagnoseAction?: RenderDiagnoseAction;
+  /**
    * Initial route for `router: 'memory'` (ignored for 'browser'). Lets a host
    * deep-link a specific view (e.g. '/topology') without owning the URL bar —
    * used with `navSlots.chrome: 'none'` to render a single per-cluster view
    * chromeless under the host's own chrome (Radar Hub's per-cluster destinations).
    */
   initialPath?: string;
+  /**
+   * Reports cluster-data warmup after the main connection is usable. Embedders
+   * with their own chrome (Radar Hub) can render this in their topbar while
+   * Radar runs with `navSlots.chrome: 'none'`.
+   */
+  onClusterLoadStateChange?: (state: ClusterLoadState) => void;
+  /**
+   * Selects the store backing the event timeline. Omit for the local event
+   * store the Radar binary keeps (default, standalone behavior). Set
+   * `{ mode: 'retained' }` when embedding behind a proxy that serves a
+   * longer-horizon history at `{apiBase}/timeline/events` +
+   * `{apiBase}/timeline/overview`; `maxRangeDays` caps how far back the
+   * 'all' range reaches. Generic extension point — the backend that answers
+   * the retained endpoints is the host's concern.
+   *
+   * Changing `mode` between renders remounts the timeline view (the local and
+   * retained sources expose different `useEvents` hooks; remounting avoids a
+   * React hook-order violation). Set it once at mount when possible.
+   */
+  timelineSource?: TimelineSourceConfig;
 }
 
 // Default QueryClient with the same shape Radar's standalone binary uses.
@@ -113,13 +157,18 @@ function makeDefaultQueryClient(): QueryClient {
       },
       onSuccess: (_data, _variables, _context, mutation) => {
         const message = mutation.options.meta?.successMessage;
-        if (message) showApiSuccess(message, mutation.options.meta?.successDetail);
+        if (message)
+          showApiSuccess(message, mutation.options.meta?.successDetail);
       },
     }),
     queryCache: new QueryCache({
       onError: (error, query) => {
         if (query.state.data !== undefined) {
-          console.warn('[Background sync failed]', query.queryKey, (error as Error).message);
+          console.warn(
+            "[Background sync failed]",
+            query.queryKey,
+            (error as Error).message,
+          );
         }
       },
     }),
@@ -129,12 +178,15 @@ function makeDefaultQueryClient(): QueryClient {
 export function RadarApp({
   apiBase,
   basename,
-  router = 'browser',
+  router = "browser",
   queryClient,
   navSlots,
   manageDocumentTitle = false,
   documentTitleSuffix,
+  renderDiagnoseAction,
   initialPath,
+  onClusterLoadStateChange,
+  timelineSource,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
   // before children construct URLs. getApiBase() / getAuthHeaders() /
@@ -147,7 +199,10 @@ export function RadarApp({
 
   // Memo so we don't recreate the QueryClient on every render when the
   // consumer didn't pass one.
-  const client = React.useMemo(() => queryClient ?? makeDefaultQueryClient(), [queryClient]);
+  const client = React.useMemo(
+    () => queryClient ?? makeDefaultQueryClient(),
+    [queryClient],
+  );
 
   const inner = (
     <ThemeProvider>
@@ -155,7 +210,19 @@ export function RadarApp({
         <ToastProvider>
           <NavCustomizationProvider value={navSlots}>
             <FilterLocationBridge>
-              <App manageDocumentTitle={manageDocumentTitle} documentTitleSuffix={documentTitleSuffix} />
+              <TimelineSourceProvider config={timelineSource}>
+                <DiagnoseCustomizationProvider
+                  value={renderDiagnoseAction ?? defaultDiagnoseAction}
+                >
+                  <DiagnoseProvider>
+                    <App
+                      manageDocumentTitle={manageDocumentTitle}
+                      documentTitleSuffix={documentTitleSuffix}
+                      onClusterLoadStateChange={onClusterLoadStateChange}
+                    />
+                  </DiagnoseProvider>
+                </DiagnoseCustomizationProvider>
+              </TimelineSourceProvider>
             </FilterLocationBridge>
           </NavCustomizationProvider>
         </ToastProvider>
@@ -163,11 +230,15 @@ export function RadarApp({
     </ThemeProvider>
   );
 
-  if (router === 'memory') {
-    return <MemoryRouter initialEntries={[initialPath || '/']}>{inner}</MemoryRouter>;
+  if (router === "memory") {
+    return (
+      <MemoryRouter initialEntries={[initialPath || "/"]}>{inner}</MemoryRouter>
+    );
   }
 
-  return <BrowserRouter basename={basename || undefined}>{inner}</BrowserRouter>;
+  return (
+    <BrowserRouter basename={basename || undefined}>{inner}</BrowserRouter>
+  );
 }
 
 export default RadarApp;

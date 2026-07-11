@@ -1,7 +1,13 @@
 {
   "private": true,
-  "workspaces": ["web", "packages/*"],
+  "workspaces": [
+    "web",
+    "packages/*"
+  ],
   "overrides": {
     "dompurify": "3.4.0"
+  },
+  "devDependencies": {
+    "typescript-7": "npm:typescript@^7.0.2"
   }
 }

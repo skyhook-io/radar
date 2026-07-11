@@ -223,24 +223,94 @@ func TestMemoryStore_ResourceSeen(t *testing.T) {
 	store := NewMemoryStore(100)
 
 	// Initially not seen
-	if store.IsResourceSeen("Pod", "default", "test-pod") {
+	if store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen initially")
 	}
 
 	// Mark as seen
-	store.MarkResourceSeen("Pod", "default", "test-pod")
+	store.MarkResourceSeen("cluster-a", "Pod", "default", "test-pod")
 
 	// Now should be seen
-	if !store.IsResourceSeen("Pod", "default", "test-pod") {
+	if !store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
 		t.Error("Resource should be seen after marking")
 	}
 
 	// Clear seen
-	store.ClearResourceSeen("Pod", "default", "test-pod")
+	store.ClearResourceSeen("cluster-a", "Pod", "default", "test-pod")
 
 	// Should not be seen again
-	if store.IsResourceSeen("Pod", "default", "test-pod") {
+	if store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen after clearing")
+	}
+}
+
+// A same-named resource in a different cluster must not read as already-seen:
+// the store is shared across kubeconfig context switches, and an unqualified
+// key would drop the add for the second cluster's resource.
+func TestMemoryStore_ResourceSeen_ClusterScoped(t *testing.T) {
+	store := NewMemoryStore(100)
+
+	store.MarkResourceSeen("cluster-a", "Deployment", "team-a", "web")
+
+	if !store.IsResourceSeen("cluster-a", "Deployment", "team-a", "web") {
+		t.Error("cluster-a/web should be seen after marking")
+	}
+	if store.IsResourceSeen("cluster-b", "Deployment", "team-a", "web") {
+		t.Error("cluster-b/web must NOT be suppressed by cluster-a's seen entry")
+	}
+}
+
+// A K8s Event count bump carries a fresh timestamp; queries iterate by ring
+// position, so the bumped event must move to the head of the recency order
+// instead of staying buried at its original insert position.
+func TestMemoryStore_K8sEventBumpMovesToRecency(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+	base := time.Now()
+
+	a := TimelineEvent{
+		ID: "a", Source: SourceK8sEvent, Kind: "Pod", Namespace: "ns", Name: "web-a",
+		EventType: EventTypeWarning, Reason: "BackOff", Count: 1, Timestamp: base,
+	}
+	b := TimelineEvent{
+		ID: "b", Source: SourceInformer, Kind: "Deployment", Namespace: "ns", Name: "web-b",
+		EventType: EventTypeUpdate, Timestamp: base.Add(time.Second),
+	}
+	_ = store.Append(ctx, a)
+	_ = store.Append(ctx, b)
+
+	q := func() []TimelineEvent {
+		got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		return got
+	}
+
+	// Before the bump, newest-first order is [b, a].
+	got := q()
+	if len(got) != 2 || got[0].ID != "b" || got[1].ID != "a" {
+		t.Fatalf("pre-bump order = %+v, want [b a]", got)
+	}
+
+	aBump := a
+	aBump.Count = 5
+	aBump.Timestamp = base.Add(2 * time.Second)
+	_ = store.Append(ctx, aBump)
+
+	// After the bump, a is newest → order flips to [a, b], still one row per id.
+	got = q()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rows after bump, got %d: %+v", len(got), got)
+	}
+	if got[0].ID != "a" || got[0].Count != 5 {
+		t.Fatalf("bumped event not at head with refreshed count, got %+v", got)
+	}
+	if got[1].ID != "b" {
+		t.Fatalf("second row = %s, want b", got[1].ID)
+	}
+	if store.Stats().TotalEvents != 2 {
+		t.Fatalf("Stats.TotalEvents = %d, want 2 (vacated slot must not count)", store.Stats().TotalEvents)
 	}
 }
 
@@ -498,5 +568,20 @@ func TestMemoryStore_FilterPreset(t *testing.T) {
 	}
 	if len(result) != 3 {
 		t.Errorf("Expected 3 events with 'all' preset, got %d", len(result))
+	}
+}
+
+// A store standing in for a failed persistent backend reports itself degraded
+// through Stats so diagnostics can explain the missing persistence.
+func TestNewDegradedMemoryStore_ReportsDegraded(t *testing.T) {
+	degraded := NewDegradedMemoryStore(100, "SQLite unusable: boom")
+	stats := degraded.Stats()
+	if !stats.Degraded || stats.DegradedReason != "SQLite unusable: boom" {
+		t.Fatalf("expected degraded stats with reason, got %+v", stats)
+	}
+
+	healthy := NewMemoryStore(100)
+	if hs := healthy.Stats(); hs.Degraded || hs.DegradedReason != "" {
+		t.Fatalf("plain memory store must not report degraded, got %+v", hs)
 	}
 }

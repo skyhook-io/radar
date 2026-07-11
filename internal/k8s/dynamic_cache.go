@@ -65,6 +65,10 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			sharedDiscovery = discovery.ResourceDiscovery
 		}
 
+		// Wiring-time capture — same rationale as InitResourceCache: a late
+		// callback after a context switch must stamp its own cluster.
+		recordClusterContext := ActiveClusterContext()
+
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
 			DynamicClient:     client,
 			Discovery:         sharedDiscovery,
@@ -82,6 +86,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 					return
 				}
 				recordToTimelineStore(
+					recordClusterContext,
 					change.Kind,
 					change.Namespace,
 					change.Name,

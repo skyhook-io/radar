@@ -225,6 +225,9 @@ spec:
             - name: data
               mountPath: /data
             {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -234,6 +237,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "radar.fullname" . }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

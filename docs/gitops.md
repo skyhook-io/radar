@@ -127,12 +127,12 @@ The GitOps tab isn't the only place Argo/Flux ownership matters. Surfaces across
 
 ## MCP integration
 
-`manage_gitops` MCP tool exposes the same actions to AI assistants with per-action input validation:
+`manage_gitops` MCP tool exposes the same actions to AI agents with per-action input validation:
 
 - Argo: `sync`, `suspend`, `resume`
 - Flux: `reconcile`, `suspend`, `resume`
 
-`get_resource` Summary carries lifecycle signal (`terminating`, `finalizers`) so AI assistants can distinguish a zombie from a live resource and won't suggest `Sync` on something pending deletion.
+`get_resource` Summary carries lifecycle signal (`terminating`, `finalizers`) so AI agents can distinguish a zombie from a live resource and won't suggest `Sync` on something pending deletion.
 
 See [MCP server](mcp.md) for the full tool list and security model.
 
@@ -163,6 +163,6 @@ Radar shows GitOps connections only when the controller and managed resources li
 
 ## See also
 
-- [MCP server](mcp.md) — how AI assistants drive GitOps operations and read lifecycle signal
+- [MCP server](mcp.md) — how AI agents drive GitOps operations and read lifecycle signal
 - [Integrations & CRDs](integrations.md) — full CRD support matrix for Argo CD, Flux, and everything else
 - [Configuration](configuration.md) — cluster connection, multi-context kubeconfig handling

@@ -78,6 +78,96 @@ func TestResourceCountsCountsWatchedCRDsAndMarksUnwatchedUnavailable(t *testing.
 	}
 }
 
+func TestResourceCountsLeavesDiscoveredBuiltinsWithoutTypedListersUnprobed(t *testing.T) {
+	priorityClassGVR := schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1", Resource: "priorityclasses"}
+	leaseGVR := schema.GroupVersionResource{Group: "coordination.k8s.io", Version: "v1", Resource: "leases"}
+	endpointsGVR := schema.GroupVersionResource{Version: "v1", Resource: "endpoints"}
+	endpointSliceGVR := schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			priorityClassGVR: "PriorityClassList",
+			leaseGVR:         "LeaseList",
+			endpointsGVR:     "EndpointsList",
+			endpointSliceGVR: "EndpointSliceList",
+		},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "scheduling.k8s.io/v1",
+			"kind":       "PriorityClass",
+			"metadata":   map[string]any{"name": "high"},
+		}},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "scheduling.k8s.io/v1",
+			"kind":       "PriorityClass",
+			"metadata":   map[string]any{"name": "low"},
+		}},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "coordination.k8s.io/v1",
+			"kind":       "Lease",
+			"metadata":   map[string]any{"name": "default-lease", "namespace": "default"},
+		}},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "coordination.k8s.io/v1",
+			"kind":       "Lease",
+			"metadata":   map[string]any{"name": "other-lease", "namespace": "other"},
+		}},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Endpoints",
+			"metadata":   map[string]any{"name": "api", "namespace": "default"},
+		}},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Endpoints",
+			"metadata":   map[string]any{"name": "api", "namespace": "other"},
+		}},
+	)
+	listProbes := map[string]int{}
+	for _, resource := range []string{"priorityclasses", "leases", "endpoints"} {
+		resource := resource
+		dyn.PrependReactor("list", resource, func(action k8stesting.Action) (bool, runtime.Object, error) {
+			listProbes[resource]++
+			return true, &unstructured.UnstructuredList{}, nil
+		})
+	}
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: "scheduling.k8s.io", Version: "v1", Kind: "PriorityClass", Name: "priorityclasses", Namespaced: false, IsCRD: false, Verbs: []string{"get", "list", "watch"}},
+		{Group: "coordination.k8s.io", Version: "v1", Kind: "Lease", Name: "leases", Namespaced: true, IsCRD: false, Verbs: []string{"get", "list", "watch"}},
+		{Group: "", Version: "v1", Kind: "Endpoints", Name: "endpoints", Namespaced: true, IsCRD: false, Verbs: []string{"get", "list", "watch"}},
+		{Group: "discovery.k8s.io", Version: "v1", Kind: "EndpointSlice", Name: "endpointslices", Namespaced: true, IsCRD: false, Verbs: []string{"get", "list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
+	rec := httptest.NewRecorder()
+	testServerSrv.handleResourceCounts(rec, httptest.NewRequest(http.MethodGet, "/api/resource-counts?namespace=default", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var body ResourceCountsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := body.Counts[endpointSliceCountKey]; got != 0 {
+		t.Fatalf("EndpointSlice count = %d, want 0", got)
+	}
+	for _, key := range []string{"scheduling.k8s.io/PriorityClass", "coordination.k8s.io/Lease", "Endpoints"} {
+		if _, ok := body.Counts[key]; ok {
+			t.Fatalf("%s unexpectedly had a count: %v", key, body.Counts[key])
+		}
+		if containsString(body.Unavailable, key) {
+			t.Fatalf("%s should be omitted rather than marked unavailable: %v", key, body.Unavailable)
+		}
+		if containsString(body.Forbidden, key) {
+			t.Fatalf("%s should be omitted rather than marked forbidden: %v", key, body.Forbidden)
+		}
+	}
+	if len(listProbes) > 0 {
+		t.Fatalf("unexpected direct probes for low-value built-ins: %v", listProbes)
+	}
+}
+
 func TestResourceCountsOmitsClusterScopedCRDWhenCanReadDenies(t *testing.T) {
 	nodePoolGVR := schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
 	endpointSliceGVR := schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}

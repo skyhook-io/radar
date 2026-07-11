@@ -30,14 +30,18 @@ type EventStore interface {
 	// store, so current-cluster callers must pass it.
 	GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error)
 
-	// MarkResourceSeen records that a resource has been seen (for dedup on restart)
-	MarkResourceSeen(kind, namespace, name string)
+	// MarkResourceSeen records that a resource has been seen (for dedup on
+	// restart). clusterContext scopes the key — the store outlives kubeconfig
+	// context switches, so a same-named resource in another cluster must not
+	// read as already-seen.
+	MarkResourceSeen(clusterContext, kind, namespace, name string)
 
-	// IsResourceSeen checks if a resource has been seen before
-	IsResourceSeen(kind, namespace, name string) bool
+	// IsResourceSeen checks if a resource has been seen before in the given
+	// cluster context.
+	IsResourceSeen(clusterContext, kind, namespace, name string) bool
 
 	// ClearResourceSeen removes a resource from the seen set (on delete)
-	ClearResourceSeen(kind, namespace, name string)
+	ClearResourceSeen(clusterContext, kind, namespace, name string)
 
 	// Stats returns storage statistics
 	Stats() StoreStats
@@ -62,6 +66,15 @@ type QueryOptions struct {
 	// column existed carry "" (unknowable provenance), which a non-empty
 	// filter deliberately excludes.
 	ClusterContext string
+
+	// SinceSeq returns only events whose arrival number (Seq) is greater
+	// than this; 0 means no cursor. This is the delta-read cursor: arrival
+	// order, not event time, so late-arriving events can't be skipped.
+	// Delta reads page oldest-first (ascending seq) so a burst larger than
+	// Limit resumes from the lowest unseen seq. Do not combine with Offset or
+	// GroupBy — both are defined for the newest-first shape only and their
+	// delta-mode behavior is unspecified.
+	SinceSeq int64
 
 	// Filter preset (overrides individual filters if set)
 	FilterPreset string
@@ -97,6 +110,13 @@ type StoreStats struct {
 	NewestEvent   time.Time `json:"newestEvent"`
 	StorageBytes  int64     `json:"storageBytes,omitempty"`
 	SeenResources int       `json:"seenResources"`
+
+	// Degraded is set when the configured persistent backend could not be
+	// opened and the store fell back to in-memory for this session — surfaced
+	// so diagnostics show why persistence is missing instead of the timeline
+	// looking healthy. DegradedReason carries the original open error.
+	Degraded       bool   `json:"degraded,omitempty"`
+	DegradedReason string `json:"degradedReason,omitempty"`
 
 	// SQLite-only retention/cleanup state. Zero values for memory store.
 	RetentionAge           time.Duration `json:"retentionAge,omitempty"`
@@ -200,4 +220,14 @@ func (cf *CompiledFilter) Matches(event *TimelineEvent) bool {
 // ResourceKey generates a unique key for a resource
 func ResourceKey(kind, namespace, name string) string {
 	return kind + "/" + namespace + "/" + name
+}
+
+// SeenResourceKey qualifies the seen-tracking key with the cluster context.
+// The NUL separator can't appear in a kubeconfig context name, so it can't
+// collide with the resource portion. Rows written before this qualification
+// (bare kind/namespace/name) simply never match, which is correct: their
+// cluster is unknowable, so the resource is re-extracted once per cluster
+// after upgrade rather than being wrongly suppressed.
+func SeenResourceKey(clusterContext, kind, namespace, name string) string {
+	return clusterContext + "\x00" + ResourceKey(kind, namespace, name)
 }

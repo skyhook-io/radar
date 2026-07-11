@@ -55,6 +55,9 @@ func TestRunChecks_Nil(t *testing.T) {
 
 func TestSecurityChecks(t *testing.T) {
 	input := &CheckInput{
+		// non-nil = authoritative inventory (nil now means RBAC-denied and
+		// skips the SA-dependent automount check)
+		ServiceAccounts: []*corev1.ServiceAccount{},
 		Deployments: []*appsv1.Deployment{{
 			ObjectMeta: metav1.ObjectMeta{Name: "insecure-app", Namespace: "default"},
 			Spec: appsv1.DeploymentSpec{
@@ -525,6 +528,7 @@ func TestSecurityChecks_AutomountDefaultServiceAccount(t *testing.T) {
 
 func TestReliabilityChecks(t *testing.T) {
 	input := &CheckInput{
+		HorizontalPodAutoscalers: []*autoscalingv2.HorizontalPodAutoscaler{},
 		Deployments: []*appsv1.Deployment{{
 			ObjectMeta: metav1.ObjectMeta{Name: "single-replica", Namespace: "default"},
 			Spec: appsv1.DeploymentSpec{
@@ -597,6 +601,7 @@ func TestSingleReplica_SkippedWithHPA(t *testing.T) {
 
 func TestEfficiencyChecks(t *testing.T) {
 	input := &CheckInput{
+		LimitRanges: []*corev1.LimitRange{},
 		Deployments: []*appsv1.Deployment{{
 			ObjectMeta: metav1.ObjectMeta{Name: "no-resources", Namespace: "default"},
 			Spec: appsv1.DeploymentSpec{
@@ -1227,6 +1232,7 @@ func TestPodHARisk_Distributed(t *testing.T) {
 
 func TestOrphanConfigMapSecret(t *testing.T) {
 	input := &CheckInput{
+		Ingresses: []*networkingv1.Ingress{},
 		Pods: []*corev1.Pod{{
 			ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
 			Spec: corev1.PodSpec{
@@ -1915,9 +1921,18 @@ func TestDeprecatedAPIVersion(t *testing.T) {
 			deprecated++
 		}
 	}
-	// batch/v1beta1 has CronJob, policy/v1beta1 has PDB + PSP = at least 3 entries
-	if deprecated < 3 {
-		t.Errorf("expected at least 3 deprecatedAPIVersion findings, got %d", deprecated)
+	// Findings merge per served group/version now (evaluated unit == failure
+	// unit): batch/v1beta1 + policy/v1beta1 = 2 merged findings; policy's
+	// message carries both PDB and PSP deprecations.
+	if deprecated != 2 {
+		t.Errorf("expected 2 merged deprecatedAPIVersion findings, got %d", deprecated)
+	}
+	for _, f := range results.Findings {
+		if f.CheckID == "deprecatedAPIVersion" && f.Name == "policy/v1beta1" {
+			if !strings.Contains(f.Message, "PodDisruptionBudget") || !strings.Contains(f.Message, "PodSecurityPolicy") {
+				t.Errorf("policy/v1beta1 merged message missing a kind: %q", f.Message)
+			}
+		}
 	}
 }
 
@@ -1930,48 +1945,6 @@ func TestDeprecatedAPIVersion_NoServedAPIs(t *testing.T) {
 	for _, f := range results.Findings {
 		if f.CheckID == "deprecatedAPIVersion" {
 			t.Error("deprecatedAPIVersion should not fire when ServedAPIs is empty")
-		}
-	}
-}
-
-func TestResourceUtilization(t *testing.T) {
-	input := &CheckInput{
-		PodMetrics: []PodMetricsInput{
-			{Namespace: "default", Name: "waste-pod", CPUUsage: 5, CPURequest: 1000, MemoryUsage: 10 * 1024 * 1024, MemoryRequest: 512 * 1024 * 1024},     // 0.5% CPU, 2% memory — waste
-			{Namespace: "default", Name: "hot-pod", CPUUsage: 950, CPURequest: 1000, MemoryUsage: 480 * 1024 * 1024, MemoryRequest: 512 * 1024 * 1024},    // 95% CPU, 94% memory — risk
-			{Namespace: "default", Name: "normal-pod", CPUUsage: 500, CPURequest: 1000, MemoryUsage: 256 * 1024 * 1024, MemoryRequest: 512 * 1024 * 1024}, // 50% — fine
-			{Namespace: "default", Name: "no-request-pod", CPUUsage: 100, CPURequest: 0, MemoryUsage: 128 * 1024 * 1024, MemoryRequest: 0},                // no requests — skip
-		},
-	}
-
-	results := RunChecks(input)
-	pods := map[string]int{} // pod name → finding count
-	for _, f := range results.Findings {
-		if f.CheckID == "resourceUtilization" {
-			pods[f.Name]++
-		}
-	}
-
-	if pods["waste-pod"] < 1 {
-		t.Error("expected utilization finding for waste-pod (under-utilized)")
-	}
-	if pods["hot-pod"] < 1 {
-		t.Error("expected utilization finding for hot-pod (over-utilized)")
-	}
-	if pods["normal-pod"] > 0 {
-		t.Error("normal-pod at 50% utilization should not be flagged")
-	}
-	if pods["no-request-pod"] > 0 {
-		t.Error("pod with no requests should not be flagged")
-	}
-}
-
-func TestResourceUtilization_Empty(t *testing.T) {
-	input := &CheckInput{}
-	results := RunChecks(input)
-	for _, f := range results.Findings {
-		if f.CheckID == "resourceUtilization" {
-			t.Error("resourceUtilization should not fire when no metrics provided")
 		}
 	}
 }
@@ -2285,7 +2258,7 @@ func TestCheckStuckTerminating_AllKinds(t *testing.T) {
 	// (Selector, container specs) than this test cares about. The audit
 	// dispatch is itself covered by RunChecks tests; this one targets
 	// only the stuckTerminating loop completeness.
-	findings := checkStuckTerminating(input)
+	findings := checkStuckTerminating(newEvalTracker(), input)
 	byKindAndName := map[string]string{} // "Kind/name" → severity
 	for _, f := range findings {
 		if f.CheckID != "stuckTerminating" {

@@ -11,6 +11,7 @@ export interface ResourcePermissions {
   statefulSets: boolean
   replicaSets: boolean
   ingresses: boolean
+  ingressClasses: boolean
   configMaps: boolean
   secrets: boolean
   events: boolean
@@ -94,7 +95,6 @@ export interface Deployment {
 // When adding a new kind here, also update:
 // - ALL_NODE_KINDS in App.tsx
 // - TopologyFilterSidebar.tsx RESOURCE_KINDS array
-// - index.css .topology-icon-* class
 // - K8sResourceNode.tsx NODE_DIMENSIONS
 // - resource-icons.ts KIND_ICON_MAP
 // - kindToPlural in navigation.ts (if irregular plural)
@@ -275,6 +275,10 @@ export interface TimelineEvent {
   id: string
   timestamp: string // ISO date string
   source: EventSource // Where event originated: 'informer', 'k8s_event', 'historical'
+  // Store-assigned arrival number (monotonic per store instance). The delta
+  // cursor keys on it — arrival order, not event time, so late-arriving
+  // events can't slip behind a client's cursor.
+  seq?: number
 
   // Resource identity
   kind: string
@@ -339,6 +343,20 @@ export function isWorkloadKind(kind: string): boolean {
   ].includes(kind)
 }
 
+export function isDeploymentLikeWorkloadKind(kind: string, group = ''): boolean {
+  switch (kind) {
+    case 'Deployment':
+    case 'ReplicaSet':
+    case 'StatefulSet':
+    case 'DaemonSet':
+      return group === '' || group === 'apps'
+    case 'Rollout':
+      return group === '' || group === 'argoproj.io'
+    default:
+      return false
+  }
+}
+
 // Check if a resource kind is typically managed by another
 export function isManagedKind(kind: string): boolean {
   return ['ReplicaSet', 'Pod', 'Event'].includes(kind)
@@ -353,7 +371,7 @@ export interface TimelineFilters {
   timeRange: TimeRange
 }
 
-export type TimeRange = '5m' | '30m' | '1h' | '6h' | '24h' | 'all'
+export type TimeRange = '5m' | '30m' | '1h' | '6h' | '24h' | '7d' | '30d' | 'all'
 
 // Cluster info
 export interface ClusterInfo {
@@ -445,6 +463,7 @@ export interface Relationships {
   configRefs?: ResourceRef[]
   consumers?: ResourceRef[]
   scalers?: ResourceRef[]
+  storageRefs?: ResourceRef[]
   scaleTarget?: ResourceRef
   pdbs?: ResourceRef[]              // PodDisruptionBudgets protecting this workload
   networkPolicies?: ResourceRef[]   // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy variants selecting this workload
@@ -822,9 +841,11 @@ export interface UpgradeInfo {
   // oci:// chart reference an OCI-sourced upgrade lives at (display only).
   chartRef?: string
   error?: string
+  // Machine-readable source-resolution failure, used to make the Helm drawer
+  // explain whether tracking an OCI source can help.
+  sourceIssue?: 'untracked' | 'repo_index_error' | 'ambiguous_repository'
   // True only when the error is a genuinely untracked source (registering a
-  // chart source could fix it) — NOT for repo-side errors like a stale index or
-  // classic ambiguity. Gates the "track source" affordance.
+  // chart source could fix it). Kept for compatibility; prefer sourceIssue.
   untracked?: boolean
 }
 
@@ -836,6 +857,8 @@ export interface BatchUpgradeInfo {
 // Request body for applying new values to a release
 export interface ApplyValuesRequest {
   values: Record<string, unknown>
+  version?: string
+  repository?: string
 }
 
 // Response for previewing values changes
@@ -1234,10 +1257,25 @@ export interface ImageMetadata {
 // ============================================================================
 
 // Pod info returned from workload pods endpoint
+export interface WorkloadPodContainerInfo {
+  name: string
+  init?: boolean
+  ready: boolean
+  restartCount: number
+}
+
 export interface WorkloadPodInfo {
   name: string
   containers: string[]
   ready: boolean
+  phase?: string
+  healthLevel?: HealthStatus
+  reason?: string
+  message?: string
+  restartCount?: number
+  lastTerminationReason?: string
+  createdAt?: string
+  containerStatuses?: WorkloadPodContainerInfo[]
 }
 
 // SSE event types for workload log streaming

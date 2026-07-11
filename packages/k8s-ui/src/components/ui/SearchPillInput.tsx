@@ -2,6 +2,7 @@ import { useRef, useState, useMemo, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { clsx } from 'clsx'
+import { Input } from './Input'
 
 // A structured search input: free-text plus removable `key:value` modifier
 // PILLS (ns:, kind:, label:, …). Typing a complete modifier token and pressing
@@ -236,9 +237,8 @@ export function SearchPillInput({
           less
         </button>
       )}
-      <input
+      <Input
         ref={inputRef}
-        type="text"
         value={text}
         onChange={(e) => { setDismissed(false); onChange({ text: e.target.value, pills }) }}
         onKeyDown={handleKeyDown}

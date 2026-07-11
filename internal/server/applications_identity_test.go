@@ -174,7 +174,18 @@ func TestIdentities_ClassificationNotIdentity(t *testing.T) {
 	tagged := mk()
 	resolveAppIdentities(tagged, nil, nil, nil, nil)
 	for i := range tagged {
+		// Classification emits two derived outputs: the Identity block and an
+		// informational "name-stem:" match key (excluded from event matching).
+		// Strip both — the contract is that classification only ADDS these derived
+		// fields and never mutates the row's substantive data or exact match keys.
 		tagged[i].Identity = nil
+		kept := tagged[i].MatchKeys[:0]
+		for _, k := range tagged[i].MatchKeys {
+			if !strings.HasPrefix(k, "name-stem:") {
+				kept = append(kept, k)
+			}
+		}
+		tagged[i].MatchKeys = kept
 	}
 	want, _ := json.Marshal(mk())
 	got, _ := json.Marshal(tagged)
@@ -915,5 +926,24 @@ func TestFluxKustomizationFacts(t *testing.T) {
 	}
 	if _, ok := got["flux-system/infra"]; ok {
 		t.Fatalf("env-less path should be skipped: %v", got)
+	}
+}
+
+func TestAddFluxKustomizationManagedSourceRefsParsesInventoryIDFromRight(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "flux-system", "name": "platform"},
+		"status": map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "team_api_worker_apps_Deployment"},
+		}}},
+	}}
+	got := map[string][]appSourceRef{}
+	addFluxKustomizationManagedSourceRefs(context.Background(), &stubLister{items: []*unstructured.Unstructured{ks}}, got)
+
+	refs := got[managedWorkloadKey("Deployment", "team", "api_worker")]
+	if len(refs) != 1 {
+		t.Fatalf("managed source refs = %#v, want one ref keyed by full workload name", got)
+	}
+	if refs[0].Name != "platform" || refs[0].Namespace != "flux-system" || refs[0].Tool != "fluxcd" {
+		t.Fatalf("source ref = %+v, want flux-system/platform flux ref", refs[0])
 	}
 }

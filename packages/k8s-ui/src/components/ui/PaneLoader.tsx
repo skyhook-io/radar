@@ -1,5 +1,6 @@
 import { assetUrl } from '../../utils/asset-url'
 import radarLoadingIconAsset from '../../assets/radar/radar-icon-loading.svg'
+import type { ReactNode } from 'react'
 
 // assetUrl normalizes the bundler-specific asset-import type (string under Vite,
 // StaticImageData under webpack/Next) to a URL string usable in `<img src>`.
@@ -18,9 +19,11 @@ const radarLoadingIcon = assetUrl(radarLoadingIconAsset)
 export function PaneLoader({
   label = 'Loading…',
   className = '',
+  children,
 }: {
   label?: string
   className?: string
+  children?: ReactNode
 }) {
   // No `relative` on the root: the label anchors to the inner `relative` span
   // below, and callers may pass a positioning class (e.g. `absolute inset-0`,
@@ -35,8 +38,13 @@ export function PaneLoader({
             primary) so the whole loading family — boot splash, connect splash,
             PaneLoader — reads as one continuous state, not a font change at the
             hand-off. */}
-        <span className="absolute left-1/2 top-full mt-3 -translate-x-1/2 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
-          {label}
+        <span className="absolute left-1/2 top-full mt-3 w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 text-center text-[17px] font-semibold tracking-tight text-theme-text-primary">
+          <span className="block whitespace-nowrap">{label}</span>
+          {children && (
+            <span className="block whitespace-normal">
+              {children}
+            </span>
+          )}
         </span>
       </span>
     </div>

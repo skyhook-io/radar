@@ -229,6 +229,14 @@ func TestDefaultFilterPreset(t *testing.T) {
 	if !allPreset.IncludeManaged {
 		t.Error("all preset should have IncludeManaged=true")
 	}
+
+	workloadPreset, ok := presets["workloads"]
+	if !ok {
+		t.Fatal("workloads preset should exist")
+	}
+	if !slices.Contains(workloadPreset.IncludeKinds, "Rollout") {
+		t.Error("workloads preset should include Rollout")
+	}
 }
 
 func TestCompileFilter_InvalidRegex(t *testing.T) {

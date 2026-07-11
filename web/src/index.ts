@@ -4,6 +4,7 @@
 // bundler that transpiles TSX and resolves workspace-style peer deps. The
 // same source is consumed by Radar's binary via main.tsx.
 export { RadarApp, type RadarAppProps } from './RadarApp';
+export type { ClusterLoadState } from './types/clusterLoadState';
 export {
   setApiBase,
   setBasename,
@@ -15,6 +16,17 @@ export {
   getCredentialsMode,
 } from './api/config';
 export type { NavCustomization, FleetTakeoverTarget } from './context/NavCustomization';
+// Timeline data-source selection — lets an embedder back the timeline with a
+// retained-history endpoint instead of Radar's local event store. Additive;
+// absent = local (standalone behavior).
+export type {
+  TimelineSourceConfig,
+  TimelineSourceCapabilities,
+  TimelineOverviewBucket,
+  TimelineCoverageSpan,
+  TimelineOverviewResult,
+} from './api/timelineSource';
+export type { RenderDiagnoseAction } from './context/DiagnoseCustomization';
 export { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay';
 
 // Shared cluster-switcher primitive — re-exported from @skyhook-io/k8s-ui so

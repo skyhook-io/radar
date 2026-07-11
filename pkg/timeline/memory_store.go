@@ -12,12 +12,19 @@ import (
 type MemoryStore struct {
 	records       []TimelineEvent
 	maxSize       int
-	head          int // next write position
+	head          int   // next write position
 	count         int
+	lastSeq       int64 // arrival counter; every head write (incl. upsert re-append) takes the next value
+	index         map[string]int // event id -> ring slot, for dedup + upsert
 	mu            sync.RWMutex
 	seenResources map[string]bool
 	seenMu        sync.RWMutex
 	filterCache   map[string]*CompiledFilter
+
+	// degradedReason, when non-empty, marks this store as a fallback for a
+	// persistent backend that could not be opened. Set once at construction
+	// before the store is published, so it needs no lock. Reported via Stats.
+	degradedReason string
 }
 
 // NewMemoryStore creates a new in-memory event store
@@ -28,21 +35,27 @@ func NewMemoryStore(maxSize int) *MemoryStore {
 	return &MemoryStore{
 		records:       make([]TimelineEvent, maxSize),
 		maxSize:       maxSize,
+		index:         make(map[string]int),
 		seenResources: make(map[string]bool),
 		filterCache:   make(map[string]*CompiledFilter),
 	}
+}
+
+// NewDegradedMemoryStore returns an in-memory store that reports itself as a
+// degraded fallback via Stats. Used when the configured persistent backend
+// could not be opened, so the timeline stays alive (without persistence) for
+// the session instead of the whole subsystem going dark.
+func NewDegradedMemoryStore(maxSize int, reason string) *MemoryStore {
+	m := NewMemoryStore(maxSize)
+	m.degradedReason = reason
+	return m
 }
 
 // Append adds a single event to the store
 func (m *MemoryStore) Append(ctx context.Context, event TimelineEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	m.records[m.head] = event
-	m.head = (m.head + 1) % m.maxSize
-	if m.count < m.maxSize {
-		m.count++
-	}
+	m.appendLocked(event)
 	return nil
 }
 
@@ -52,13 +65,72 @@ func (m *MemoryStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 	defer m.mu.Unlock()
 
 	for _, event := range events {
-		m.records[m.head] = event
-		m.head = (m.head + 1) % m.maxSize
-		if m.count < m.maxSize {
-			m.count++
-		}
+		m.appendLocked(event)
 	}
 	return nil
+}
+
+// appendLocked writes one event, collapsing duplicate ids so a relist/replay
+// never produces two visible rows. An existing id from a mutable K8s Event
+// (same uid, bumped count) vacates its old slot and re-appends at the head;
+// an identical informer/historical id keeps the original row (same state,
+// same first-observed timestamp).
+func (m *MemoryStore) appendLocked(event TimelineEvent) {
+	if event.ID != "" {
+		if idx, ok := m.index[event.ID]; ok && m.records[idx].ID == event.ID {
+			// K8s Events bump count/message on the same uid, but an out-of-order
+			// older revision must not clobber a newer one.
+			if event.Source == SourceK8sEvent && !event.Timestamp.Before(m.records[idx].Timestamp) {
+				// A bump that lost its enrichment (tombstone expired, object gone
+				// from the live cache) must not erase what the row already knows;
+				// a bump that carries enrichment wins as the fresher truth.
+				old := m.records[idx]
+				if event.CreatedAt == nil {
+					event.CreatedAt = old.CreatedAt
+				}
+				if event.Owner == nil {
+					event.Owner = old.Owner
+				}
+				if event.Labels == nil {
+					event.Labels = old.Labels
+				}
+				// Vacate the old slot and re-append at head. Queries iterate by
+				// ring position (newest insert first), so updating in place would
+				// leave a count-bump buried at its stale recency; moving it to
+				// head reflects the fresh timestamp. Keeps one live row per id.
+				m.records[idx] = TimelineEvent{}
+				delete(m.index, event.ID)
+				m.writeAtHead(event)
+			}
+			return
+		}
+	}
+
+	m.writeAtHead(event)
+}
+
+// writeAtHead writes event at the head slot, advancing the ring. count tracks
+// the window span behind head (holes left by upsert vacating are counted here
+// and skipped on read), so the oldest live row is never scanned past.
+func (m *MemoryStore) writeAtHead(event TimelineEvent) {
+	// Drop the slot's current occupant from the index before overwriting it,
+	// so a wrapped-over id can't leave a dangling mapping.
+	if evicted := m.records[m.head]; evicted.ID != "" {
+		if idx, ok := m.index[evicted.ID]; ok && idx == m.head {
+			delete(m.index, evicted.ID)
+		}
+	}
+
+	m.lastSeq++
+	event.Seq = m.lastSeq
+	m.records[m.head] = event
+	if event.ID != "" {
+		m.index[event.ID] = m.head
+	}
+	m.head = (m.head + 1) % m.maxSize
+	if m.count < m.maxSize {
+		m.count++
+	}
 }
 
 // Query retrieves events matching the given options
@@ -88,9 +160,21 @@ func (m *MemoryStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	results := make([]TimelineEvent, 0, limit)
 	skipped := 0
 
-	// Iterate backwards from most recent
+	// Delta reads (SinceSeq>0) page by ascending arrival order so a burst larger
+	// than the limit isn't skipped: the server advances the client cursor by the
+	// max seq in the page, so the next poll must resume from the lowest unseen
+	// seq. Ring position tracks arrival order (each writeAtHead takes the next
+	// seq), so oldest-first iteration yields ascending seq. Non-delta reads page
+	// newest-first.
+	deltaAscending := opts.SinceSeq > 0
+
 	for i := 0; i < m.count && len(results) < limit; i++ {
-		idx := (m.head - 1 - i + m.maxSize) % m.maxSize
+		var idx int
+		if deltaAscending {
+			idx = (m.head - m.count + i + m.maxSize) % m.maxSize
+		} else {
+			idx = (m.head - 1 - i + m.maxSize) % m.maxSize
+		}
 		event := m.records[idx]
 
 		// Skip empty records
@@ -224,24 +308,24 @@ func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 }
 
 // MarkResourceSeen records that a resource has been seen
-func (m *MemoryStore) MarkResourceSeen(kind, namespace, name string) {
+func (m *MemoryStore) MarkResourceSeen(clusterContext, kind, namespace, name string) {
 	m.seenMu.Lock()
 	defer m.seenMu.Unlock()
-	m.seenResources[ResourceKey(kind, namespace, name)] = true
+	m.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)] = true
 }
 
 // IsResourceSeen checks if a resource has been seen before
-func (m *MemoryStore) IsResourceSeen(kind, namespace, name string) bool {
+func (m *MemoryStore) IsResourceSeen(clusterContext, kind, namespace, name string) bool {
 	m.seenMu.RLock()
 	defer m.seenMu.RUnlock()
-	return m.seenResources[ResourceKey(kind, namespace, name)]
+	return m.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)]
 }
 
 // ClearResourceSeen removes a resource from the seen set
-func (m *MemoryStore) ClearResourceSeen(kind, namespace, name string) {
+func (m *MemoryStore) ClearResourceSeen(clusterContext, kind, namespace, name string) {
 	m.seenMu.Lock()
 	defer m.seenMu.Unlock()
-	delete(m.seenResources, ResourceKey(kind, namespace, name))
+	delete(m.seenResources, SeenResourceKey(clusterContext, kind, namespace, name))
 }
 
 // Stats returns storage statistics
@@ -252,11 +336,15 @@ func (m *MemoryStore) Stats() StoreStats {
 	defer m.seenMu.RUnlock()
 
 	var oldest, newest time.Time
+	// count is the ring window span, which can include holes left by upsert
+	// vacating a slot — count live records instead of reporting the span.
+	var total int64
 	for i := 0; i < m.count; i++ {
 		idx := (m.head - 1 - i + m.maxSize) % m.maxSize
 		if m.records[idx].ID == "" {
 			continue
 		}
+		total++
 		ts := m.records[idx].Timestamp
 		if newest.IsZero() || ts.After(newest) {
 			newest = ts
@@ -267,10 +355,12 @@ func (m *MemoryStore) Stats() StoreStats {
 	}
 
 	return StoreStats{
-		TotalEvents:   int64(m.count),
-		OldestEvent:   oldest,
-		NewestEvent:   newest,
-		SeenResources: len(m.seenResources),
+		TotalEvents:    total,
+		OldestEvent:    oldest,
+		NewestEvent:    newest,
+		SeenResources:  len(m.seenResources),
+		Degraded:       m.degradedReason != "",
+		DegradedReason: m.degradedReason,
 	}
 }
 
@@ -288,6 +378,10 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 
 	// Apply individual filters (these override preset if both specified)
 	if opts.ClusterContext != "" && event.ClusterContext != opts.ClusterContext {
+		return false
+	}
+
+	if opts.SinceSeq > 0 && event.Seq <= opts.SinceSeq {
 		return false
 	}
 

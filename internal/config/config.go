@@ -36,6 +36,53 @@ type Config struct {
 	// pods. Empty falls back to busybox:latest; set it to a reachable mirror for
 	// air-gapped / private-registry clusters.
 	DebugImage string `json:"debugImage,omitempty"`
+	// AIHistory persists AI investigations (transcripts + verdicts) to a local
+	// SQLite file so they survive restarts. nil = default (true), false = off.
+	AIHistory *bool `json:"aiHistory,omitempty"`
+	// AIHistoryDBPath overrides the history DB location (default ~/.radar/ai-runs.db).
+	AIHistoryDBPath string `json:"aiHistoryDbPath,omitempty"`
+	// AIConsent records the acknowledged AI-diagnosis disclosure version per
+	// surface ("standard", "cursor"). Machine-scoped on purpose: consent gates a
+	// machine-scoped action (spawn this machine's agent CLI, persist transcripts
+	// to this machine's disk), so one acknowledgment covers the web panel and
+	// the `radar diagnose` CLI alike.
+	AIConsent map[string]string `json:"aiConsent,omitempty"`
+}
+
+// AI-diagnosis consent disclosure versions, per surface. THE single source of
+// truth for the server endpoint and the CLI's standalone path alike — bump when
+// the consent copy's claims change materially, and prior acknowledgments stop
+// counting everywhere at once. (standard v3: transcripts persist to local
+// history; cursor v2: same disclosure on Cursor's distinct trust model.)
+var aiConsentVersions = map[string]string{
+	"standard": "v3",
+	"cursor":   "v2",
+}
+
+// AIConsentVersion returns the current disclosure version for a surface
+// ("" for an unknown surface).
+func AIConsentVersion(surface string) string { return aiConsentVersions[surface] }
+
+// AIConsentGiven reports whether the CURRENT disclosure version for the surface
+// has been acknowledged on this machine.
+func AIConsentGiven(surface string) bool {
+	v := aiConsentVersions[surface]
+	return v != "" && Load().AIConsent[surface] == v
+}
+
+// RecordAIConsent acknowledges the current disclosure version for a surface.
+func RecordAIConsent(surface string) error {
+	v := aiConsentVersions[surface]
+	if v == "" {
+		return os.ErrInvalid
+	}
+	_, err := Update(func(c *Config) {
+		if c.AIConsent == nil {
+			c.AIConsent = map[string]string{}
+		}
+		c.AIConsent[surface] = v
+	})
+	return err
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent writes
@@ -127,6 +174,14 @@ func (c Config) HistoryLimitOr(def int) int {
 func (c Config) MCPEnabledOr(def bool) bool {
 	if c.MCP != nil {
 		return *c.MCP
+	}
+	return def
+}
+
+// AIHistoryOr returns *c.AIHistory if non-nil, otherwise the provided default.
+func (c Config) AIHistoryOr(def bool) bool {
+	if c.AIHistory != nil {
+		return *c.AIHistory
 	}
 	return def
 }

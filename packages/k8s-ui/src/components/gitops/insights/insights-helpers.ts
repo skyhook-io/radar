@@ -2,7 +2,7 @@
 // GitOpsInsightViews.tsx so they can be unit-tested without importing JSX.
 
 import { SEVERITY_DOT, type Severity } from '../../../utils/badge-colors'
-import type { GitOpsHistoryItem } from '../../../types'
+import type { GitOpsChange, GitOpsHistoryItem } from '../../../types'
 import type { SyncStatus, GitOpsHealthStatus } from '../../../types/gitops'
 
 const SYNC_STATUS_SET = new Set<SyncStatus>(['Synced', 'OutOfSync', 'Reconciling', 'Unknown'])
@@ -21,6 +21,74 @@ export function normalizeSyncStatus(value: string | undefined | null): SyncStatu
 export function normalizeHealthStatus(value: string | undefined | null): GitOpsHealthStatus {
   if (value && (HEALTH_STATUS_SET as Set<string>).has(value)) return value as GitOpsHealthStatus
   return 'Unknown'
+}
+
+// --- Resources table: filtering + sorting -------------------------------
+// Pure predicates + rank functions backing the Resources list's search box,
+// status facets, and sortable columns. Kept here (not inline in the view) so
+// the sort/filter behavior is unit-testable without rendering.
+
+// The status facets an operator filters the Resources list by — the three
+// states worth isolating on a broadly-drifted app. (These replaced the
+// per-resource OutOfSync "issues" that used to restate the whole table.)
+export type ResourceStatusFacet = 'outOfSync' | 'degraded' | 'missing'
+
+export type ResourceSortKey = 'order' | 'name' | 'sync' | 'health'
+
+// changeSync/changeHealth normalize a change's raw backend strings onto the
+// badge unions. `sync` falls back to `category` to match how ChangeRow and
+// the sync badge resolve it.
+export function changeSync(change: GitOpsChange): SyncStatus {
+  return normalizeSyncStatus(change.sync ?? change.category)
+}
+
+export function changeHealth(change: GitOpsChange): GitOpsHealthStatus {
+  return normalizeHealthStatus(change.health)
+}
+
+// Rank sync/health so an ascending sort surfaces the states an operator cares
+// about first (drift, then failures). Mirrors the GitOps application table's
+// syncRank/healthRank so the two tables order status the same way.
+export function syncStatusRank(sync: SyncStatus): number {
+  return ({ OutOfSync: 0, Reconciling: 1, Unknown: 2, Synced: 3 } as Record<SyncStatus, number>)[sync]
+}
+
+export function healthStatusRank(health: GitOpsHealthStatus): number {
+  return ({ Missing: 0, Degraded: 1, Progressing: 2, Unknown: 3, Suspended: 4, Healthy: 5 } as Record<GitOpsHealthStatus, number>)[health]
+}
+
+export function changeMatchesSearch(change: GitOpsChange, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  const { kind, name, namespace, group } = change.ref
+  return [kind, name, namespace, group].some((s) => s?.toLowerCase().includes(q))
+}
+
+// Union match: a change passes when it satisfies ANY active facet (empty set
+// = no filter). OutOfSync keys off sync status; Degraded/Missing off health.
+export function changeMatchesFacets(change: GitOpsChange, facets: Set<ResourceStatusFacet>): boolean {
+  if (facets.size === 0) return true
+  if (facets.has('outOfSync') && changeSync(change) === 'OutOfSync') return true
+  if (facets.has('degraded') && changeHealth(change) === 'Degraded') return true
+  if (facets.has('missing') && changeHealth(change) === 'Missing') return true
+  return false
+}
+
+export interface ResourceStatusCounts {
+  outOfSync: number
+  degraded: number
+  missing: number
+}
+
+export function resourceStatusCounts(changes: GitOpsChange[]): ResourceStatusCounts {
+  const counts: ResourceStatusCounts = { outOfSync: 0, degraded: 0, missing: 0 }
+  for (const c of changes) {
+    if (changeSync(c) === 'OutOfSync') counts.outOfSync++
+    const health = changeHealth(c)
+    if (health === 'Degraded') counts.degraded++
+    if (health === 'Missing') counts.missing++
+  }
+  return counts
 }
 
 // Map GitOps-flavored vocabulary (Argo/Flux phase strings, insight Issue

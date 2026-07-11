@@ -3,6 +3,7 @@ package tree
 import (
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/topology"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -52,5 +53,22 @@ func TestClassifyGitOpsKind(t *testing.T) {
 				t.Fatalf("got (%q, %q), want (%q, %q)", tool, kind, tt.wantTool, tt.wantKind)
 			}
 		})
+	}
+}
+
+func TestRolloutTopologyInfoAndPriority(t *testing.T) {
+	info := infoFromTopology(topology.Node{
+		Kind: topology.KindRollout,
+		Data: map[string]any{
+			"readyReplicas": int64(2),
+			"totalReplicas": int64(3),
+		},
+	})
+	if len(info) != 1 || info[0].Name != "Ready" || info[0].Value != "2/3" {
+		t.Fatalf("rollout info = %#v, want Ready 2/3", info)
+	}
+
+	if got, want := kindPriority("Rollout"), kindPriority("Deployment"); got != want {
+		t.Fatalf("rollout priority = %d, want deployment priority %d", got, want)
 	}
 }

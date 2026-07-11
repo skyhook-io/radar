@@ -92,7 +92,7 @@ func (s Subject) Key() string {
 // for unrecognized kinds. Exported so checks can reuse it.
 func ScopeForKind(kind string) Scope {
 	switch kind {
-	case "Pod", "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob":
+	case "Pod", "Deployment", "Rollout", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob":
 		return ScopeWorkload
 	case "Service":
 		return ScopeService

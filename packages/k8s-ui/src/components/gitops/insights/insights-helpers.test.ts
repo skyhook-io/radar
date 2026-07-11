@@ -1,6 +1,22 @@
 import { describe, it, expect } from 'vitest'
 import { SEVERITY_DOT } from '../../../utils/badge-colors'
-import { compactSource, entryTone, gitopsToSeverity, messageToPhase, phaseToTone } from './insights-helpers'
+import type { GitOpsChange } from '../../../types'
+import {
+  changeMatchesFacets,
+  changeMatchesSearch,
+  compactSource,
+  entryTone,
+  gitopsToSeverity,
+  healthStatusRank,
+  messageToPhase,
+  phaseToTone,
+  resourceStatusCounts,
+  syncStatusRank,
+} from './insights-helpers'
+
+function change(partial: Partial<GitOpsChange> & { ref: GitOpsChange['ref'] }): GitOpsChange {
+  return { category: 'Unknown', hasDesired: true, hasLive: true, partial: false, ...partial }
+}
 
 describe('gitopsToSeverity', () => {
   it.each([
@@ -94,5 +110,74 @@ describe('compactSource', () => {
   it('returns empty string for missing input', () => {
     expect(compactSource(undefined)).toBe('')
     expect(compactSource('')).toBe('')
+  })
+})
+
+describe('changeMatchesSearch', () => {
+  const c = change({ ref: { kind: 'Deployment', name: 'guestbook-ui', namespace: 'demo', group: 'apps' } })
+  it('matches on kind, name, namespace, and group (case-insensitive)', () => {
+    expect(changeMatchesSearch(c, 'deploy')).toBe(true)
+    expect(changeMatchesSearch(c, 'GUESTBOOK')).toBe(true)
+    expect(changeMatchesSearch(c, 'demo')).toBe(true)
+    expect(changeMatchesSearch(c, 'apps')).toBe(true)
+  })
+  it('empty/whitespace query matches everything', () => {
+    expect(changeMatchesSearch(c, '')).toBe(true)
+    expect(changeMatchesSearch(c, '   ')).toBe(true)
+  })
+  it('non-matching query is filtered out', () => {
+    expect(changeMatchesSearch(c, 'nomatch')).toBe(false)
+  })
+})
+
+describe('changeMatchesFacets', () => {
+  const outOfSync = change({ ref: { kind: 'Service', name: 'a' }, sync: 'OutOfSync', health: 'Healthy' })
+  const degraded = change({ ref: { kind: 'Deployment', name: 'b' }, sync: 'Synced', health: 'Degraded' })
+  const missing = change({ ref: { kind: 'Secret', name: 'c' }, sync: 'OutOfSync', health: 'Missing' })
+  const healthy = change({ ref: { kind: 'ConfigMap', name: 'd' }, sync: 'Synced', health: 'Healthy' })
+
+  it('empty facet set matches everything', () => {
+    const none = new Set<never>()
+    expect(changeMatchesFacets(outOfSync, none)).toBe(true)
+    expect(changeMatchesFacets(healthy, none)).toBe(true)
+  })
+  it('outOfSync keys off sync status', () => {
+    const f = new Set(['outOfSync'] as const)
+    expect(changeMatchesFacets(outOfSync, f)).toBe(true)
+    expect(changeMatchesFacets(degraded, f)).toBe(false)
+  })
+  it('degraded/missing key off health status', () => {
+    expect(changeMatchesFacets(degraded, new Set(['degraded'] as const))).toBe(true)
+    expect(changeMatchesFacets(missing, new Set(['missing'] as const))).toBe(true)
+    expect(changeMatchesFacets(healthy, new Set(['degraded'] as const))).toBe(false)
+  })
+  it('multiple facets union (OR)', () => {
+    const f = new Set(['degraded', 'missing'] as const)
+    expect(changeMatchesFacets(degraded, f)).toBe(true)
+    expect(changeMatchesFacets(missing, f)).toBe(true)
+    expect(changeMatchesFacets(outOfSync, f)).toBe(false)
+  })
+})
+
+describe('resourceStatusCounts', () => {
+  it('counts each facet independently (a resource can be both OutOfSync and Missing)', () => {
+    const counts = resourceStatusCounts([
+      change({ ref: { kind: 'Service', name: 'a' }, sync: 'OutOfSync', health: 'Healthy' }),
+      change({ ref: { kind: 'Secret', name: 'c' }, sync: 'OutOfSync', health: 'Missing' }),
+      change({ ref: { kind: 'Deployment', name: 'b' }, sync: 'Synced', health: 'Degraded' }),
+      change({ ref: { kind: 'ConfigMap', name: 'd' }, sync: 'Synced', health: 'Healthy' }),
+    ])
+    expect(counts).toEqual({ outOfSync: 2, degraded: 1, missing: 1 })
+  })
+})
+
+describe('syncStatusRank / healthStatusRank', () => {
+  it('ascending sync rank surfaces OutOfSync before Synced', () => {
+    expect(syncStatusRank('OutOfSync')).toBeLessThan(syncStatusRank('Synced'))
+    expect(syncStatusRank('OutOfSync')).toBeLessThan(syncStatusRank('Unknown'))
+  })
+  it('ascending health rank surfaces Missing/Degraded before Healthy', () => {
+    expect(healthStatusRank('Missing')).toBeLessThan(healthStatusRank('Degraded'))
+    expect(healthStatusRank('Degraded')).toBeLessThan(healthStatusRank('Healthy'))
   })
 })

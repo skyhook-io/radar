@@ -27,7 +27,7 @@ import (
 // Scope is still deliberately partial: nested TraefikService weighted/mirror
 // sub-services, ServersTransport refs, and TLS-secret refs can also dangle and
 // are not yet covered.
-func checkTraefikDanglingRefs(input *CheckInput) []Finding {
+func checkTraefikDanglingRefs(tr *evalTracker, input *CheckInput) []Finding {
 	if len(input.IngressRoutes) == 0 && len(input.MiddlewareSubjects) == 0 {
 		return nil
 	}
@@ -131,7 +131,41 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 			mwKind = "MiddlewareTCP"
 		}
 
+		// A subject counts as evaluated only when (a) the ref inventory it
+		// would be checked against is authoritative AND (b) it actually
+		// carries at least one ref of that type — a route with no
+		// middlewares isn't "passing" the dangling-middleware check, it's
+		// out of scope.
+		hasCoreSvcRef, hasTraefikSvcRef, hasMiddlewareRef := false, false, false
 		routes, _, _ := unstructured.NestedSlice(route.Object, "spec", "routes")
+		for _, r := range routes {
+			rm, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, svc := range nestedMaps(rm, "services") {
+				if kind, _ := svc["kind"].(string); kind == "TraefikService" {
+					hasTraefikSvcRef = true
+				} else {
+					hasCoreSvcRef = true
+				}
+			}
+			if len(nestedMaps(rm, "middlewares")) > 0 {
+				hasMiddlewareRef = true
+			}
+		}
+		// Evaluated only when EVERY present ref kind is checkable — with a
+		// core-Service ref but only the TraefikService inventory listed, the
+		// core ref goes unchecked and "passed" would be a lie.
+		svcRefsCheckable := (hasCoreSvcRef || hasTraefikSvcRef) &&
+			(!hasCoreSvcRef || servicesListed) &&
+			(!hasTraefikSvcRef || authoritative[group+"\x00TraefikService"])
+		if svcRefsCheckable {
+			tr.record("traefikRouteMissingService", routeNs)
+		}
+		if hasMiddlewareRef && authoritative[group+"\x00"+mwKind] {
+			tr.record("traefikRouteMissingMiddleware", routeNs)
+		}
 		for _, r := range routes {
 			rm, ok := r.(map[string]any)
 			if !ok {
@@ -157,6 +191,25 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 		mwNs := mw.GetNamespace()
 
 		chain, _, _ := unstructured.NestedSlice(mw.Object, "spec", "chain", "middlewares")
+		errSvc, hasErrSvc, _ := unstructured.NestedMap(mw.Object, "spec", "errors", "service")
+		// Only HTTP Middlewares can carry chain/errors — and a Middleware
+		// counts as evaluated only for the check whose ref it actually
+		// carries (a middleware without spec.errors.service isn't "passing"
+		// the errors check, it's out of scope).
+		if mwKind == "Middleware" {
+			if len(chain) > 0 && authoritative[group+"\x00"+mwKind] {
+				tr.record("traefikChainMissingMiddleware", mwNs)
+			}
+			if hasErrSvc {
+				errIsTraefik, _ := errSvc["kind"].(string)
+				checkable := (errIsTraefik == "TraefikService" && authoritative[group+"\x00TraefikService"]) ||
+					(errIsTraefik != "TraefikService" && servicesListed)
+				if checkable {
+					tr.record("traefikErrorsMissingService", mwNs)
+				}
+			}
+		}
+
 		for _, c := range chain {
 			cm, ok := c.(map[string]any)
 			if !ok {
@@ -165,8 +218,8 @@ func checkTraefikDanglingRefs(input *CheckInput) []Finding {
 			checkMiddlewareRef(mw, group, mwKind, mwNs, mwKind+" chain", "traefikChainMissingMiddleware", cm)
 		}
 
-		if svc, ok, _ := unstructured.NestedMap(mw.Object, "spec", "errors", "service"); ok {
-			checkServiceRef(mw, group, mwNs, mwKind+" errors", "traefikErrorsMissingService", svc)
+		if hasErrSvc {
+			checkServiceRef(mw, group, mwNs, mwKind+" errors", "traefikErrorsMissingService", errSvc)
 		}
 	}
 	return findings

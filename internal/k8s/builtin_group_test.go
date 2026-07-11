@@ -42,6 +42,13 @@ func TestTypedKindOwnsGroup(t *testing.T) {
 		// Built-in, but intentionally served through the dynamic cache
 		// rather than a baseline typed informer.
 		{"endpointslices", "discovery.k8s.io", false},
+		{"endpoints", "", false},
+		{"leases", "coordination.k8s.io", false},
+		{"priorityclasses", "scheduling.k8s.io", false},
+		{"runtimeclasses", "node.k8s.io", false},
+		{"mutatingwebhookconfigurations", "admissionregistration.k8s.io", false},
+		{"validatingwebhookconfigurations", "admissionregistration.k8s.io", false},
+		{"volumeattachments", "storage.k8s.io", false},
 
 		// Core kinds: own group is "" — typed, with or without an explicit "".
 		{"pods", "", true},
@@ -91,11 +98,19 @@ func TestBuiltinGVR(t *testing.T) {
 		{"pods", "", schema.GroupVersionResource{Version: "v1", Resource: "pods"}, true},
 		{"svc", "", schema.GroupVersionResource{Version: "v1", Resource: "services"}, true},
 		{"cm", "", schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}, true},
+		{"endpoints", "", schema.GroupVersionResource{Version: "v1", Resource: "endpoints"}, true},
+		{"ep", "", schema.GroupVersionResource{Version: "v1", Resource: "endpoints"}, true},
 		{"ns", "", schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, true},
 		{"no", "", schema.GroupVersionResource{Version: "v1", Resource: "nodes"}, true},
 		{"sa", "", schema.GroupVersionResource{Version: "v1", Resource: "serviceaccounts"}, true},
 		{"netpols", "networking.k8s.io", schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, true},
 		{"endpointslice", "discovery.k8s.io", schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}, true},
+		{"lease", "coordination.k8s.io", schema.GroupVersionResource{Group: "coordination.k8s.io", Version: "v1", Resource: "leases"}, true},
+		{"priorityclass", "scheduling.k8s.io", schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1", Resource: "priorityclasses"}, true},
+		{"runtimeclass", "node.k8s.io", schema.GroupVersionResource{Group: "node.k8s.io", Version: "v1", Resource: "runtimeclasses"}, true},
+		{"mutatingwebhookconfigurations", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}, true},
+		{"validatingwebhookconfiguration", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}, true},
+		{"volumeattachments", "storage.k8s.io", schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "volumeattachments"}, true},
 		{"services", "serving.knative.dev", schema.GroupVersionResource{}, false}, // CRD collision
 		{"widgets", "example.com", schema.GroupVersionResource{}, false},          // genuine CRD
 	}
@@ -114,6 +129,7 @@ func TestCanonicalBuiltinKind(t *testing.T) {
 		"deploy":   "deployments",
 		"deploys":  "deployments",
 		"cm":       "configmaps",
+		"ep":       "endpoints",
 		"ns":       "namespaces",
 		"no":       "nodes",
 		"sts":      "statefulsets",
@@ -139,6 +155,7 @@ func TestBuiltinGVRAnyGroup(t *testing.T) {
 		{"deploy", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, true},
 		{"sts", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, true},
 		{"svc", schema.GroupVersionResource{Version: "v1", Resource: "services"}, true},
+		{"pc", schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1", Resource: "priorityclasses"}, true},
 		{"widgets", schema.GroupVersionResource{}, false},
 	}
 	for _, tc := range cases {

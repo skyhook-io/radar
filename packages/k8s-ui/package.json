@@ -1,6 +1,6 @@
 {
   "name": "@skyhook-io/k8s-ui",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/skyhook-io/radar",
@@ -61,14 +61,15 @@
     "./assets/radar/radar-icon-loading.svg": "./src/assets/radar/radar-icon-loading.svg"
   },
   "scripts": {
-    "tsc": "tsc --noEmit",
+    "tsc": "node ../../node_modules/typescript-7/bin/tsc --noEmit",
+    "tsc:ts6": "tsc --noEmit",
     "test": "vitest run",
     "format": "prettier --write \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "html-to-image": "^1.11.0",
-    "react-virtuoso": "^4.18.7",
+    "react-virtuoso": "^4.18.10",
     "shiki": "^4.2.0"
   },
   "peerDependencies": {
@@ -95,7 +96,7 @@
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
     "elkjs": "^0.11.1",
-    "lucide-react": "^1.22.0",
+    "lucide-react": "^1.23.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^6.0.2",

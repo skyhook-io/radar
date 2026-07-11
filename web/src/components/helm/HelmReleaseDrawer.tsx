@@ -4,15 +4,17 @@ import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink } from 'lucide-react'
+import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, ChevronRight, SlidersHorizontal, Eye, Loader2 } from 'lucide-react'
+import yaml from 'yaml'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { useHelmRelease, useHelmManifest, useHelmValues, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress } from '../../api/client'
+import { useHelmRelease, useHelmManifest, useHelmValues, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress, useHelmPreviewValues } from '../../api/client'
+import { ValuesDiffPreview } from './ValuesDiffPreview'
 import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
-import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HookDiagnostic, HookLogEvidence } from '../../types'
+import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HookDiagnostic, HookLogEvidence, UpgradeInfo, ValuesPreviewResponse } from '../../types'
 import { apiVersionToGroup, kindToPlural, type NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor, getKindBadgeColor, getResourceStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
@@ -30,15 +32,77 @@ interface HelmReleaseDrawerProps {
   onNavigateToResource?: NavigateToResource
   /** Controls slide-in/out animation (driven by useAnimatedUnmount) */
   isOpen?: boolean
+  /** Right inset in px so the drawer sits beside a docked side panel (AI), not under it. */
+  rightInset?: number
 }
 
 type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks'
+
+interface UpgradePreviewRequest {
+  targetVersion: string
+  values: Record<string, unknown>
+  repositoryName?: string
+}
+
+interface ParsedUpgradeValues {
+  values: Record<string, unknown> | null
+  error: string | null
+}
+
+type UpgradeSourceIssue = NonNullable<UpgradeInfo['sourceIssue']>
+type ActionableUpgradeSourceIssue = Exclude<UpgradeSourceIssue, 'ambiguous_repository'>
+
+function getUpgradeSourceIssue(upgradeInfo: UpgradeInfo): UpgradeSourceIssue | undefined {
+  return upgradeInfo.sourceIssue
+}
+
+function getUpgradeSourceIssueLabel(issue: UpgradeSourceIssue) {
+  switch (issue) {
+    case 'repo_index_error':
+      return 'upgrade source blocked'
+    case 'ambiguous_repository':
+      return 'upgrade source ambiguous'
+    case 'untracked':
+      return 'upgrade source not tracked'
+  }
+}
+
+function getUpgradeSourceIssueTooltip(issue: UpgradeSourceIssue, error: string | undefined, canHelmWrite: boolean, disabledReason: string | undefined) {
+  if (!canHelmWrite) {
+    return disabledReason ?? error ?? 'Helm actions are disabled.'
+  }
+  switch (issue) {
+    case 'repo_index_error':
+      return 'A configured Helm repo index failed. Fix or refresh that repo, or register an OCI prefix if this chart came from OCI.'
+    case 'ambiguous_repository':
+      return 'Multiple configured Helm repos match this chart. Fix the repo list or source metadata so Radar can identify one source.'
+    case 'untracked':
+      return "Radar can't tell where this chart was installed from. Register an OCI chart source to track upgrades."
+  }
+}
+
+function parseUpgradeValuesYaml(raw: string): ParsedUpgradeValues {
+  try {
+    const parsed = yaml.parse(raw)
+    if (parsed === null || parsed === undefined) return { values: {}, error: null }
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { values: null, error: 'Values must be a YAML mapping (key: value), not a list or single value' }
+    }
+    return { values: parsed as Record<string, unknown>, error: null }
+  } catch (err) {
+    return { values: null, error: err instanceof Error ? err.message : 'Invalid YAML' }
+  }
+}
+
+export function isUpgradeSourceIssueActionable(issue: UpgradeInfo['sourceIssue']): issue is ActionableUpgradeSourceIssue {
+  return Boolean(issue && issue !== 'ambiguous_repository')
+}
 
 const MIN_WIDTH = 500
 const MAX_WIDTH_PERCENT = 0.8
 const DEFAULT_WIDTH = 1000
 
-export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true }: HelmReleaseDrawerProps) {
+export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true, rightInset = 0 }: HelmReleaseDrawerProps) {
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [copied, setCopied] = useState<string | null>(null)
@@ -52,8 +116,18 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false)
   const [showTrackSource, setShowTrackSource] = useState(false)
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
+  const [adjustValues, setAdjustValues] = useState(false)
+  const [renderAdjustValues, setRenderAdjustValues] = useState(false)
+  const [editedUpgradeYaml, setEditedUpgradeYaml] = useState('')
+  const [upgradeYamlError, setUpgradeYamlError] = useState<string | null>(null)
+  const [upgradeValuesSeeded, setUpgradeValuesSeeded] = useState(false)
+  const [upgradePreview, setUpgradePreview] = useState<ValuesPreviewResponse | null>(null)
+  const [upgradePreviewRequest, setUpgradePreviewRequest] = useState<UpgradePreviewRequest | null>(null)
+  const [showUpgradePreview, setShowUpgradePreview] = useState(false)
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(DEFAULT_WIDTH)
+  const targetVersionRef = useRef('')
+  const editedUpgradeYamlRef = useRef('')
   const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
   // Cloud viewers can't view release manifests / values / diffs
   // (backend gate at requireCloudRole('member')). Skip the queries
@@ -85,6 +159,16 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     canViewSensitive,
     selectedRevision,
   )
+  const {
+    data: upgradeValues,
+    isLoading: upgradeValuesLoading,
+    error: upgradeValuesError,
+  } = useHelmValues(
+    helmNamespace,
+    release.name,
+    false,
+    canViewSensitive && showUpgradeConfirm && adjustValues,
+  )
 
   // Lazy check for upgrade availability
   const { data: upgradeInfo, isLoading: upgradeLoading, error: upgradeError } = useHelmUpgradeInfo(
@@ -92,11 +176,17 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     release.name
   )
   const upgradeErrorMessage = upgradeError instanceof Error ? upgradeError.message : 'Upgrade check failed'
+  const upgradeSourceIssue = upgradeInfo ? getUpgradeSourceIssue(upgradeInfo) : undefined
 
   // Available versions for the upgrade dialog's picker — only fetched while the
   // confirm dialog is open. Default the selection to latest when it opens.
-  const { data: availableVersions } = useHelmReleaseVersions(helmNamespace, release.name, showUpgradeConfirm)
+  const {
+    data: availableVersions,
+    isLoading: availableVersionsLoading,
+    error: availableVersionsError,
+  } = useHelmReleaseVersions(helmNamespace, release.name, showUpgradeConfirm)
   const targetVersion = selectedVersion ?? upgradeInfo?.latestVersion ?? ''
+  const selectableVersions = availableVersions && availableVersions.length > 1 ? availableVersions : null
   // Semver compare, not list-position: the installed version may be older than
   // the newest-N versions the picker shows, so it isn't always in the list.
   const isDowngrade = Boolean(
@@ -106,11 +196,17 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
   // Mutations for actions
   const uninstallMutation = useHelmUninstall()
+  const upgradePreviewMutation = useHelmPreviewValues()
+  const isPreviewingUpgrade = upgradePreviewMutation.isPending
   const queryClient = useQueryClient()
   const [upgradeProgress, setUpgradeProgress] = useState<{ phase: string; message: string }[]>([])
   const [isUpgrading, setIsUpgrading] = useState(false)
   const [rollbackProgress, setRollbackProgress] = useState<{ phase: string; message: string }[]>([])
   const [isRollingBack, setIsRollingBack] = useState(false)
+
+  useEffect(() => {
+    targetVersionRef.current = targetVersion
+  }, [targetVersion])
 
   // ESC key handler
   useEffect(() => {
@@ -257,8 +353,90 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     )
   }
 
-  const handleUpgradeConfirm = async () => {
-    if (!targetVersion) return
+  const resetUpgradeDialog = () => {
+    setUpgradeProgress([])
+    setSelectedVersion(null)
+    setAdjustValues(false)
+    setRenderAdjustValues(false)
+    setEditedUpgradeYaml('')
+    editedUpgradeYamlRef.current = ''
+    setUpgradeYamlError(null)
+    setUpgradeValuesSeeded(false)
+    setUpgradePreview(null)
+    setUpgradePreviewRequest(null)
+    setShowUpgradePreview(false)
+    upgradePreviewMutation.reset()
+  }
+
+  useEffect(() => {
+    if (!adjustValues || !upgradeValues || upgradeValuesSeeded) return
+    const nextYaml = userSuppliedToYaml(upgradeValues.userSupplied)
+    editedUpgradeYamlRef.current = nextYaml
+    setEditedUpgradeYaml(nextYaml)
+    setUpgradeYamlError(null)
+    setUpgradeValuesSeeded(true)
+  }, [adjustValues, upgradeValues, upgradeValuesSeeded])
+
+  const handleToggleAdjustValues = () => {
+    if (adjustValues) {
+      setAdjustValues(false)
+      return
+    }
+
+    setRenderAdjustValues(true)
+    setEditedUpgradeYaml('')
+    editedUpgradeYamlRef.current = ''
+    setUpgradeYamlError(null)
+    setUpgradeValuesSeeded(false)
+    upgradePreviewMutation.reset()
+    setAdjustValues(true)
+  }
+
+  const getEditedUpgradeValues = () => {
+    if (!adjustValues) return {}
+    const parsed = parseUpgradeValuesYaml(editedUpgradeYamlRef.current)
+    setUpgradeYamlError(parsed.error)
+    return parsed.values
+  }
+
+  const handleUpgradePreview = async () => {
+    if (!targetVersion || upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded) return
+    const editedValues = getEditedUpgradeValues()
+    if (!editedValues) return
+    const previewYaml = editedUpgradeYamlRef.current
+    const previewRequest: UpgradePreviewRequest = {
+      targetVersion,
+      values: editedValues,
+      repositoryName: upgradeInfo?.repositoryName,
+    }
+    try {
+      const result = await upgradePreviewMutation.mutateAsync({
+        namespace: helmNamespace,
+        name: release.name,
+        values: previewRequest.values,
+        version: previewRequest.targetVersion,
+        repository: previewRequest.repositoryName,
+      })
+      if (targetVersionRef.current !== previewRequest.targetVersion || editedUpgradeYamlRef.current !== previewYaml) return
+      setUpgradePreview(result)
+      setUpgradePreviewRequest(previewRequest)
+      setShowUpgradePreview(true)
+    } catch {
+      return
+    }
+  }
+
+  const runUpgrade = async (versionToApply: string, editedValuesOverride: Record<string, unknown> | undefined, repositoryName: string | undefined) => {
+    if (!versionToApply) return
+
+    let editedValues = editedValuesOverride
+    if (editedValues === undefined && adjustValues) {
+      if (upgradeValuesLoading || upgradeValuesError || !upgradeValuesSeeded) return
+      editedValues = getEditedUpgradeValues() ?? undefined
+      if (!editedValues) return
+    }
+
+    setShowUpgradePreview(false)
     setIsUpgrading(true)
     setUpgradeProgress([])
 
@@ -266,8 +444,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       await upgradeWithProgress(
         helmNamespace,
         release.name,
-        targetVersion,
-        upgradeInfo?.repositoryName,
+        versionToApply,
+        repositoryName,
         (event) => {
           if (event.type === 'progress' && event.message) {
             setUpgradeProgress(prev => [...prev, {
@@ -275,24 +453,25 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               message: event.message || '',
             }])
           }
-        }
+        },
+        editedValues
       )
 
       setUpgradeProgress(prev => [...prev, {
         phase: 'complete',
-        message: `Successfully upgraded to ${targetVersion}`,
+        message: `Successfully upgraded to ${versionToApply}`,
       }])
 
       // Invalidate queries
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
       queryClient.invalidateQueries({ queryKey: ['helm-release', helmNamespace, release.name] })
       queryClient.invalidateQueries({ queryKey: ['helm-upgrade-info', helmNamespace, release.name] })
+      queryClient.invalidateQueries({ queryKey: ['helm-values', helmNamespace, release.name] })
       queryClient.invalidateQueries({ queryKey: ['helm-batch-upgrade-info'] })
 
       setTimeout(() => {
         setShowUpgradeConfirm(false)
-        setUpgradeProgress([])
-        setSelectedVersion(null)
+        resetUpgradeDialog()
         refetch()
         switchTab('resources')
       }, 1500)
@@ -304,6 +483,15 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     } finally {
       setIsUpgrading(false)
     }
+  }
+
+  const handleUpgradeConfirm = () => {
+    void runUpgrade(targetVersion, undefined, upgradeInfo?.repositoryName)
+  }
+
+  const handleApplyUpgradePreview = () => {
+    if (!upgradePreviewRequest) return
+    void runUpgrade(upgradePreviewRequest.targetVersion, upgradePreviewRequest.values, upgradePreviewRequest.repositoryName)
   }
 
   const headerHeight = 49
@@ -325,7 +513,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         TRANSITION_DRAWER,
         isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
       )}
-      style={{ width: renderedDrawerWidth, top: headerHeight, height: `calc(100vh - ${headerHeight}px - ${dockInset}px)` }}
+      style={{ width: renderedDrawerWidth, top: headerHeight, right: rightInset, height: `calc(100vh - ${headerHeight}px - ${dockInset}px)` }}
     >
       {/* Resize handle */}
       <div
@@ -401,10 +589,15 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   source via GitOps
                 </span>
                 </Tooltip>
-              ) : upgradeInfo.untracked ? (
-                // Helm doesn't record the install source. Offer to register one so
-                // Radar can track upgrades for the user's own (e.g. OCI) charts.
-                <Tooltip content={canHelmWrite ? "Radar can't tell where this chart was installed from. Register your chart source to track upgrades." : upgradeInfo.error}>
+              ) : upgradeSourceIssue && !isUpgradeSourceIssueActionable(upgradeSourceIssue) ? (
+                <Tooltip content={getUpgradeSourceIssueTooltip(upgradeSourceIssue, upgradeInfo.error, canHelmWrite, helmActReason)}>
+                <span className="badge bg-theme-hover/50 text-theme-text-secondary">
+                  <Link2 className="w-3 h-3" />
+                  {getUpgradeSourceIssueLabel(upgradeSourceIssue)}
+                </span>
+                </Tooltip>
+              ) : isUpgradeSourceIssueActionable(upgradeSourceIssue) ? (
+                <Tooltip content={getUpgradeSourceIssueTooltip(upgradeSourceIssue, upgradeInfo.error, canHelmWrite, helmActReason)}>
                 <button
                   onClick={() => canHelmWrite && setShowTrackSource(true)}
                   disabled={!canHelmWrite}
@@ -414,12 +607,10 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   )}
                 >
                   <Link2 className="w-3 h-3" />
-                  upgrade source not tracked
+                  {getUpgradeSourceIssueLabel(upgradeSourceIssue)}
                 </button>
                 </Tooltip>
               ) : (
-                // Repo-side error (stale/broken index, classic ambiguity) — not an
-                // OCI tracking issue, so surface it without steering to registration.
                 <Tooltip content={upgradeInfo.error}>
                 <span className="badge bg-theme-hover/50 text-theme-text-secondary">
                   upgrade source unresolved
@@ -626,8 +817,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         open={showUpgradeConfirm}
         onClose={() => {
           setShowUpgradeConfirm(false)
-          setUpgradeProgress([])
-          setSelectedVersion(null)
+          resetUpgradeDialog()
           if (isUpgrading) {
             // Upgrade continues server-side — switch to resources tab to monitor
             setIsUpgrading(false)
@@ -638,56 +828,199 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         title="Upgrade Release"
         message={`Upgrade "${release.name}" to version ${targetVersion}?`}
         details={upgradeProgress.length === 0
-          ? `The chart will move from version ${upgradeInfo?.currentVersion} to ${targetVersion}. Your existing values will be preserved. The change is applied to your cluster immediately.`
+          ? `The chart will move from version ${upgradeInfo?.currentVersion} to ${targetVersion}. ${adjustValues ? 'Your edited values will be applied.' : 'Your existing values will be preserved.'} The change is applied to your cluster immediately.`
           : undefined
         }
         confirmLabel={isDowngrade ? 'Downgrade' : 'Upgrade'}
         variant="warning"
         isLoading={isUpgrading}
+        confirmDisabled={isPreviewingUpgrade || (adjustValues && (upgradeValuesLoading || !!upgradeValuesError || !upgradeValuesSeeded || !!upgradeYamlError))}
         isClosable
+        className="max-w-2xl"
       >
-        {upgradeProgress.length === 0 && availableVersions && availableVersions.length > 1 && (
+        {upgradeProgress.length === 0 && (
           <div className="mb-1">
-            <label htmlFor="upgrade-version" className="block text-sm font-medium text-theme-text-secondary mb-1.5">
+            <label
+              id="upgrade-version-label"
+              htmlFor={selectableVersions ? 'upgrade-version' : undefined}
+              className="block text-sm font-medium text-theme-text-secondary mb-1.5"
+            >
               Target version
             </label>
-            <select
-              id="upgrade-version"
-              value={targetVersion}
-              onChange={(e) => setSelectedVersion(e.target.value)}
-              disabled={isUpgrading}
-              className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
-            >
-              {availableVersions.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                  {v === upgradeInfo?.latestVersion ? ' (latest)' : ''}
-                  {v === upgradeInfo?.currentVersion ? ' (current)' : ''}
-                </option>
-              ))}
-            </select>
+            {availableVersionsLoading ? (
+              <div
+                aria-labelledby="upgrade-version-label"
+                aria-live="polite"
+                className="flex h-10 items-center gap-2 rounded-lg border border-theme-border-light bg-theme-elevated px-3 text-sm text-theme-text-secondary"
+              >
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading available versions...
+              </div>
+            ) : selectableVersions ? (
+              <select
+                id="upgrade-version"
+                value={targetVersion}
+                onChange={(e) => {
+                  targetVersionRef.current = e.target.value
+                  setSelectedVersion(e.target.value)
+                }}
+                disabled={isUpgrading || isPreviewingUpgrade}
+                className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+              >
+                {selectableVersions.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                    {v === upgradeInfo?.latestVersion ? ' (latest)' : ''}
+                    {v === upgradeInfo?.currentVersion ? ' (current)' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div
+                aria-labelledby="upgrade-version-label"
+                className="flex h-10 items-center rounded-lg border border-theme-border-light bg-theme-elevated px-3 text-sm text-theme-text-primary"
+              >
+                {targetVersion}
+              </div>
+            )}
             {isDowngrade && (
               <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
                 This is a downgrade from {upgradeInfo?.currentVersion}.
               </p>
             )}
-            {availableVersions.length >= 50 && (
+            {availableVersionsError && (
               <p className="mt-1 text-xs text-theme-text-tertiary">
-                Showing the 50 newest versions. Type to filter.
+                Version list unavailable; using the detected target version.
               </p>
             )}
+            {availableVersions && availableVersions.length >= 50 && (
+              <p className="mt-1 text-xs text-theme-text-tertiary">
+                Showing the 50 newest versions.
+              </p>
+            )}
+          </div>
+        )}
+        {upgradeProgress.length === 0 && canHelmWrite && canViewSensitive && (
+          <div className="mt-3 border-t border-theme-border pt-3">
+            <Tooltip content="Edit the user-supplied Helm values that Radar will pass to this upgrade.">
+              <button
+                type="button"
+                onClick={handleToggleAdjustValues}
+                disabled={isUpgrading || isPreviewingUpgrade}
+                aria-expanded={adjustValues}
+                aria-controls="helm-upgrade-values-panel"
+                className="flex items-center gap-1.5 text-sm font-medium text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-50"
+              >
+                <ChevronRight className={clsx('w-4 h-4 transition-transform duration-200', adjustValues && 'rotate-90')} />
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                Adjust your values (optional)
+              </button>
+            </Tooltip>
+            <div
+              id="helm-upgrade-values-panel"
+              className={`issue-details-motion ${adjustValues ? 'issue-details-motion-open' : ''}`}
+              onTransitionEnd={(event) => {
+                if (event.target !== event.currentTarget) return
+                if (event.propertyName !== 'grid-template-rows') return
+                if (!adjustValues) {
+                  setRenderAdjustValues(false)
+                }
+              }}
+            >
+              <div className="overflow-hidden">
+                {renderAdjustValues && (
+                  <div className="mt-2">
+                    <p className="mb-2 text-xs text-theme-text-tertiary">
+                      These are your current settings — edit them to carry into {targetVersion}. What you see here is exactly what gets applied.
+                    </p>
+                    {upgradeValuesError && (
+                      <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
+                        Couldn’t load current values: {upgradeValuesError instanceof Error ? upgradeValuesError.message : 'Unknown error'}
+                      </div>
+                    )}
+                    {(upgradeValuesLoading || !upgradeValuesSeeded) && (
+                      <div className="flex min-h-[180px] items-center gap-2 rounded border border-theme-border bg-theme-elevated px-3 text-sm text-theme-text-secondary">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Loading current values...
+                      </div>
+                    )}
+                    {!upgradeValuesLoading && !upgradeValuesError && upgradeValuesSeeded && (
+                      <textarea
+                        defaultValue={editedUpgradeYaml}
+                        onChange={(event) => {
+                          editedUpgradeYamlRef.current = event.target.value
+                          if (upgradeYamlError) setUpgradeYamlError(null)
+                        }}
+                        onBlur={() => setUpgradeYamlError(parseUpgradeValuesYaml(editedUpgradeYamlRef.current).error)}
+                        aria-label="Edited Helm values YAML"
+                        readOnly={isPreviewingUpgrade || isUpgrading}
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        rows={9}
+                        className="max-h-[360px] min-h-[180px] w-full resize-y rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 font-mono text-xs leading-5 text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 read-only:opacity-70"
+                      />
+                    )}
+                    {upgradeYamlError && (
+                      <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
+                        {upgradeYamlError}
+                      </div>
+                    )}
+                    {upgradePreviewMutation.error && (
+                      <div className="mt-2 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded">
+                        Couldn’t preview against {targetVersion}: {upgradePreviewMutation.error.message}. You can still upgrade.
+                      </div>
+                    )}
+                    <div className="mt-2 flex justify-end">
+                      <Tooltip
+                        content="Render this release with the selected chart version and edited values, then show the manifest diff. Nothing is applied until you confirm from the preview."
+                        wrapperClassName="shrink-0"
+                      >
+                        <button
+                          type="button"
+                          onClick={handleUpgradePreview}
+                          disabled={upgradeValuesLoading || !!upgradeValuesError || !upgradeValuesSeeded || !!upgradeYamlError || isPreviewingUpgrade || isUpgrading}
+                          className="flex items-center gap-1 px-2.5 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded border border-theme-border disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {upgradePreviewMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                          Preview what changes
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
         {upgradeProgress.length > 0 && <ProgressLog entries={upgradeProgress} />}
       </ConfirmDialog>
 
+      {showUpgradePreview && upgradePreview && upgradePreviewRequest && (
+        <ValuesDiffPreview
+          previewData={upgradePreview}
+          onClose={() => setShowUpgradePreview(false)}
+          onApply={handleApplyUpgradePreview}
+          isApplying={isUpgrading}
+          title={`Preview upgrade to ${upgradePreviewRequest.targetVersion}`}
+          applyLabel={upgradeInfo?.currentVersion && compareVersions(upgradePreviewRequest.targetVersion, upgradeInfo.currentVersion) === -1 ? 'Downgrade' : 'Upgrade'}
+        />
+      )}
+
       <TrackChartSourceDialog
         open={showTrackSource}
         onClose={() => setShowTrackSource(false)}
         chartName={releaseDetail?.chart}
+        sourceIssue={upgradeSourceIssue}
+        sourceError={upgradeInfo?.error}
       />
     </div>
   )
+}
+
+function userSuppliedToYaml(userSupplied: Record<string, unknown> | undefined): string {
+  if (!userSupplied || Object.keys(userSupplied).length === 0) return ''
+  return yaml.stringify(userSupplied, { lineWidth: 0 })
 }
 
 // Shared progress log for streaming Helm operations

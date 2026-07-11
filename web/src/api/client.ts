@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { AppRow } from '@skyhook-io/k8s-ui'
+import type { AppHistory, AppRow } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
@@ -371,11 +371,12 @@ export interface DashboardCRDsResponse {
   topCRDs: DashboardCRDCount[]
 }
 
-export function useDashboard(namespaces: string[] = []) {
+export function useDashboard(namespaces: string[] = [], options?: { enabled?: boolean }) {
   const params = namespaces.length > 0 ? `?namespaces=${namespaces.join(',')}` : ''
   return useQuery<DashboardResponse>({
     queryKey: ['dashboard', namespaces],
     queryFn: () => fetchJSON(`/dashboard${params}`),
+    enabled: options?.enabled ?? true,
     staleTime: 15000, // 15 seconds
     refetchInterval: DASHBOARD_REFRESH_INTERVAL_MS,
   })
@@ -996,15 +997,34 @@ export function useTopology(namespaces: string[], viewMode: string = 'resources'
   })
 }
 
-export function useApplications(namespaces: string[]) {
+export function useApplications(namespaces: string[], options?: { enabled?: boolean }) {
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
   const queryString = params.toString()
 
+  const enabled = options?.enabled !== false
   return useQuery<{ applications: AppRow[] }>({
     queryKey: ['applications', namespaces],
     queryFn: () => fetchJSON(`/applications${queryString ? `?${queryString}` : ''}`),
     staleTime: 30_000,
+    // Only poll while a consumer needs the index; gated off it must not keep the
+    // background refetch alive.
+    enabled,
+    refetchInterval: enabled ? APPLICATIONS_REFRESH_INTERVAL_MS : false,
+  })
+}
+
+export function useApplicationHistory(appKey: string | undefined, namespaces: string[], options?: { enabled?: boolean }) {
+  const params = new URLSearchParams()
+  if (appKey) params.set('app', appKey)
+  if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
+  const queryString = params.toString()
+
+  return useQuery<AppHistory>({
+    queryKey: ['application-history', appKey, namespaces],
+    queryFn: appKey ? () => fetchJSON(`/applications/history?${queryString}`) : skipToken,
+    enabled: Boolean(appKey) && (options?.enabled ?? true),
+    staleTime: 15_000,
     refetchInterval: APPLICATIONS_REFRESH_INTERVAL_MS,
   })
 }
@@ -1112,7 +1132,10 @@ export function useResources<T>(
 // Timeline changes (unified view of changes + K8s events)
 export interface UseChangesOptions {
   namespaces?: string[]
-  kind?: string
+  // Kind filter. The server narrows to a single kind (tighter result caps), so
+  // exactly one selected kind is pushed server-side; a multi-kind selection
+  // fetches unfiltered and is narrowed client-side by the caller.
+  kinds?: string[]
   timeRange?: TimeRange
   filter?: string // Filter preset name ('default', 'all', 'warnings-only', 'workloads')
   includeK8sEvents?: boolean
@@ -1120,6 +1143,122 @@ export interface UseChangesOptions {
   includeDeleted?: boolean
   limit?: number
   enabled?: boolean
+  // Cursor-aware refetches: after the first full load, refetches ask the
+  // server only for events that arrived after the highest seq already cached
+  // and merge them in, instead of re-pulling the whole ring. Intended for the
+  // timeline's full-ring (10k) query, where every SSE nudge would otherwise
+  // re-transfer megabytes for a handful of new events.
+  deltaSync?: boolean
+}
+
+// The store epoch guards delta cursors: a restarted store restarts seq
+// numbering, so an epoch change forces a full resync. A periodic full resync
+// also runs as anti-entropy for anything a dropped SSE connection or a
+// server-side eviction could leave behind in the cached copy.
+const FULL_RESYNC_MS = 5 * 60_000
+
+export interface ChangesDeltaMeta {
+  epoch: string
+  lastFullMs: number
+  // Highest seq observed in ANY response for this query — not just what
+  // survived the cap. A delta event older than everything cached gets capped
+  // out of the merge; deriving the cursor from cached rows alone would then
+  // re-request that same event on every refetch until the next full resync.
+  highWaterSeq: number
+}
+const changesDeltaMeta = new Map<string, ChangesDeltaMeta>()
+
+// The since_seq cursor for the next refetch, or 0 for a full fetch. Delta
+// requires an epoch-stamped prior full load, a cached page to merge into, and
+// the anti-entropy full resync not being due.
+export function deltaFetchCursor(
+  meta: ChangesDeltaMeta | undefined,
+  cached: TimelineEvent[] | undefined,
+  nowMs: number,
+): number {
+  if (!meta?.epoch || !cached) return 0
+  if (nowMs - meta.lastFullMs > FULL_RESYNC_MS) return 0
+  return Math.max(meta.highWaterSeq, maxEventSeq(cached))
+}
+
+async function fetchChangesPage(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ events: TimelineEvent[]; epoch: string; maxSeq: number }> {
+  const response = await apiFetch(`${getApiBase()}${path}`, signal ? { signal } : undefined)
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+    throw new ApiError(errorData.error || `HTTP ${response.status}`, response.status, errorData)
+  }
+  const events = (await response.json()) as TimelineEvent[]
+  // maxSeq is the page's frontier computed before the server's
+  // cluster-scoped-RBAC filter — rows dropped THERE still advance the cursor.
+  // (Rows dropped by content filters inside the store query do not; see the
+  // known limitation on the server's handleChanges.)
+  const maxSeq = Number(response.headers.get('X-Radar-Timeline-Max-Seq') ?? '0') || 0
+  return { events, epoch: response.headers.get('X-Radar-Timeline-Epoch') ?? '', maxSeq }
+}
+
+// Highest store-assigned arrival number in the cached page — the delta cursor.
+export function maxEventSeq(events: TimelineEvent[]): number {
+  let max = 0
+  for (const event of events) {
+    if (event.seq && event.seq > max) max = event.seq
+  }
+  return max
+}
+
+// Merge a delta page into the cached page: a delta row replaces its cached id
+// (a K8s Event count bump re-arrives under the same id), new ids are added,
+// order stays newest-first (arrival number breaks timestamp ties), and the
+// result is capped to the query's limit by dropping the oldest.
+export function mergeDeltaEvents(
+  prev: TimelineEvent[],
+  delta: TimelineEvent[],
+  cap: number,
+): TimelineEvent[] {
+  if (delta.length === 0) return prev
+  const replaced = new Set(delta.map((event) => event.id))
+  const merged = [...delta, ...prev.filter((event) => !replaced.has(event.id))]
+  merged.sort((a, b) => {
+    const byTime = new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    if (byTime !== 0) return byTime
+    return (b.seq ?? 0) - (a.seq ?? 0)
+  })
+  return merged.length > cap ? merged.slice(0, cap) : merged
+}
+
+// Delta-sync orchestration for useChanges, extracted so the
+// full-fetch → delta-poll → epoch-mismatch-resync contract is exercisable
+// without a React render. State is passed in explicitly — the cached page and
+// the shared meta store — rather than closed over from module scope, so a
+// caller (and a test) drives it with fresh state each invocation.
+export async function runDeltaSyncFetch(deps: {
+  path: string
+  queryString: string
+  limit: number
+  metaKey: string
+  cached: TimelineEvent[] | undefined
+  metaStore: Map<string, ChangesDeltaMeta>
+  now: number
+  signal?: AbortSignal
+}): Promise<TimelineEvent[]> {
+  const { path, queryString, limit, metaKey, cached, metaStore, now, signal } = deps
+  const meta = metaStore.get(metaKey)
+  const cursor = deltaFetchCursor(meta, cached, now)
+  if (cursor > 0) {
+    const delta = await fetchChangesPage(`${path}${queryString ? '&' : '?'}since_seq=${cursor}`, signal)
+    if (delta.epoch && delta.epoch === meta!.epoch) {
+      meta!.highWaterSeq = Math.max(meta!.highWaterSeq, delta.maxSeq, maxEventSeq(delta.events))
+      // Returning the cached reference on an empty delta skips re-renders.
+      return delta.events.length ? mergeDeltaEvents(cached!, delta.events, limit) : cached!
+    }
+    // Epoch changed — the store restarted and seq numbering reset, so the
+    // cursor is meaningless. Fall through to a full resync.
+  }
+  const full = await fetchChangesPage(path, signal)
+  metaStore.set(metaKey, { epoch: full.epoch, lastFullMs: now, highWaterSeq: Math.max(full.maxSeq, maxEventSeq(full.events)) })
+  return full.events
 }
 
 function getTimeRangeDate(range: TimeRange): Date | null {
@@ -1136,17 +1275,26 @@ function getTimeRangeDate(range: TimeRange): Date | null {
       return new Date(now.getTime() - 6 * 60 * 60 * 1000)
     case '24h':
       return new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    case '7d':
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    case '30d':
+      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
     default:
       return null
   }
 }
 
 export function useChanges(options: UseChangesOptions = {}) {
-  const { namespaces = [], kind, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, includeDeleted = true, limit = 200, enabled = true } = options
+  const { namespaces = [], kinds, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, includeDeleted = true, limit = 200, enabled = true, deltaSync = false } = options
+  const queryClient = useQueryClient()
+
+  // Only a single-kind selection narrows the server query; a multi-kind
+  // selection is filtered client-side so the server cap isn't spent on one kind.
+  const serverKind = kinds && kinds.length === 1 ? kinds[0] : undefined
 
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
-  if (kind) params.set('kind', kind)
+  if (serverKind) params.set('kind', serverKind)
   if (filter) params.set('filter', filter)
   if (!includeK8sEvents) params.set('include_k8s_events', 'false')
   if (includeManaged) params.set('include_managed', 'true')
@@ -1159,12 +1307,20 @@ export function useChanges(options: UseChangesOptions = {}) {
   }
 
   const queryString = params.toString()
+  const path = `/changes${queryString ? `?${queryString}` : ''}`
+  const queryKey = ['changes', namespaces, serverKind, timeRange, filter, includeK8sEvents, includeManaged, includeDeleted, limit]
 
   return useQuery<TimelineEvent[]>({
-    queryKey: ['changes', namespaces, kind, timeRange, filter, includeK8sEvents, includeManaged, includeDeleted, limit],
-    queryFn: () => fetchJSON(`/changes${queryString ? `?${queryString}` : ''}`),
+    queryKey,
+    queryFn: async ({ signal }) => {
+      if (!deltaSync) return fetchJSON(path, signal)
+
+      const metaKey = JSON.stringify(queryKey)
+      const cached = queryClient.getQueryData<TimelineEvent[]>(queryKey)
+      return runDeltaSyncFetch({ path, queryString, limit, metaKey, cached, metaStore: changesDeltaMeta, now: Date.now(), signal })
+    },
     staleTime: 5000, // Consider data stale after 5 seconds to ensure fresh data on navigation
-    refetchInterval: CHANGES_REFRESH_INTERVAL_MS, // SSE handles real-time updates; this is a fallback
+    refetchInterval: CHANGES_REFRESH_INTERVAL_MS, // SSE-driven invalidation handles real-time updates; this is the no-SSE fallback
     enabled,
   })
 }
@@ -2753,19 +2909,24 @@ function streamHelmProgress(
   })
 }
 
-// Upgrade a release with progress streaming via SSE
+// When `values` is provided, the upgrade applies exactly those edited values
+// instead of carrying the release's prior values over blindly.
 export function upgradeWithProgress(
   namespace: string,
   name: string,
   version: string,
   repositoryName: string | undefined,
-  onProgress: (event: InstallProgressEvent) => void
+  onProgress: (event: InstallProgressEvent) => void,
+  values?: Record<string, unknown>
 ): Promise<void> {
   const params = new URLSearchParams({ version })
   if (repositoryName) params.set('repository', repositoryName)
+  const options: RequestInit = values
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values }) }
+    : { method: 'POST' }
   return streamHelmProgress(
     `${getApiBase()}/helm/releases/${namespace}/${name}/upgrade-stream?${params.toString()}`,
-    { method: 'POST' },
+    options,
     onProgress,
     'Upgrade failed',
   ).then(() => {})
@@ -2786,14 +2947,15 @@ export function rollbackWithProgress(
   ).then(() => {})
 }
 
-// Preview values change (dry-run upgrade)
+// When `version` is supplied, preview renders against that target chart version
+// instead of the release's current chart.
 export function useHelmPreviewValues() {
-  return useMutation<ValuesPreviewResponse, Error, { namespace: string; name: string; values: Record<string, unknown> }>({
-    mutationFn: async ({ namespace, name, values }) => {
+  return useMutation<ValuesPreviewResponse, Error, { namespace: string; name: string; values: Record<string, unknown>; version?: string; repository?: string }>({
+    mutationFn: async ({ namespace, name, values, version, repository }) => {
       const response = await apiFetch(`${getApiBase()}/helm/releases/${namespace}/${name}/values/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values }),
+        body: JSON.stringify({ values, version, repository }),
       })
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))

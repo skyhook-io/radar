@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 
 	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/registry"
@@ -1863,34 +1864,16 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 	}
 
 	if len(candidates) == 0 {
-		// A failed classic index could be hiding the release's real (classic)
-		// source, so surface that before OCI — matching resolveUpgradeChartPath —
-		// rather than mislabel a classic-repo release as OCI-tracked.
-		if indexLoadFailed {
-			info.Error = "failed to load one or more configured repository indexes"
-			return info, nil
-		}
-		// Genuine absence → registered OCI sources are the fallback for the user's
-		// own OCI-published charts. Only here, never on classic ambiguity below —
-		// falling back on ambiguity could advertise an OCI source for a release
-		// that actually came from a classic repo.
-		if c.applyOCIUpgrade(info, chartName, currentVersion, nil, nil) {
-			return info, nil
-		}
-		// Genuine untracked source — registering a chart source could fix it.
-		info.Untracked = true
-		if noClassicRepos && len(ListOCISources()) == 0 {
-			info.Error = "no chart sources configured"
-		} else {
-			info.Error = "chart not found in configured repositories or registered OCI sources"
-		}
+		applyNoClassicCandidateUpgrade(info, noClassicRepos, indexLoadFailed, len(ListOCISources()) > 0, func() bool {
+			return c.applyOCIUpgrade(info, chartName, currentVersion, nil, nil)
+		})
 		return info, nil
 	}
 
 	sourceHosts := chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources)
 	latestVersion, repoName := findBestUpgradeVersion(candidates, sourceHosts)
 	if latestVersion == "" {
-		info.Error = "could not identify upstream chart repository"
+		markUpgradeSourceIssue(info, UpgradeSourceIssueAmbiguousRepository, "could not identify upstream chart repository")
 		return info, nil
 	}
 
@@ -1900,6 +1883,27 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 	info.UpdateAvailable = compareVersions(latestVersion, currentVersion) > 0
 
 	return info, nil
+}
+
+func markUpgradeSourceIssue(info *UpgradeInfo, issue UpgradeSourceIssue, message string) {
+	info.Error = message
+	info.SourceIssue = issue
+	info.Untracked = issue == UpgradeSourceIssueUntracked
+}
+
+func applyNoClassicCandidateUpgrade(info *UpgradeInfo, noClassicRepos, indexLoadFailed, hasRegisteredOCISources bool, ociFallback func() bool) {
+	if ociFallback != nil && ociFallback() {
+		return
+	}
+	if indexLoadFailed {
+		markUpgradeSourceIssue(info, UpgradeSourceIssueRepoIndexError, "failed to load one or more configured repository indexes")
+		return
+	}
+	if noClassicRepos && !hasRegisteredOCISources {
+		markUpgradeSourceIssue(info, UpgradeSourceIssueUntracked, "no chart sources configured")
+		return
+	}
+	markUpgradeSourceIssue(info, UpgradeSourceIssueUntracked, "chart not found in configured repositories or registered OCI sources")
 }
 
 // applyOCIUpgrade probes registered OCI sources for chartName and, if one
@@ -2343,6 +2347,32 @@ func (c *Client) UpgradeAsUser(namespace, name, targetVersion, repositoryName st
 	return c.upgradeWith(actionConfig, name, targetVersion, repositoryName, noop)
 }
 
+// UpgradeWithValuesProgress upgrades a release to a target version applying the
+// supplied user values (WYSIWYG), reporting progress via a channel.
+func (c *Client) UpgradeWithValuesProgress(namespace, name, targetVersion, repositoryName string, newValues map[string]any, progressCh chan<- InstallProgress) error {
+	sendProgress := progressSender(progressCh)
+	sendProgress("preparing", fmt.Sprintf("Getting current release %s...", name), "")
+
+	actionConfig, err := c.getActionConfig(namespace)
+	if err != nil {
+		return err
+	}
+	return c.upgradeWithValues(actionConfig, name, targetVersion, repositoryName, newValues, sendProgress)
+}
+
+// UpgradeWithValuesProgressAsUser upgrades a release to a target version applying
+// the supplied user values with K8s impersonation and progress reporting.
+func (c *Client) UpgradeWithValuesProgressAsUser(namespace, name, targetVersion, repositoryName string, newValues map[string]any, username string, groups []string, progressCh chan<- InstallProgress) error {
+	sendProgress := progressSender(progressCh)
+	sendProgress("preparing", fmt.Sprintf("Getting current release %s...", name), "")
+
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	return c.upgradeWithValues(actionConfig, name, targetVersion, repositoryName, newValues, sendProgress)
+}
+
 func progressSender(progressCh chan<- InstallProgress) func(phase, message, detail string) {
 	return func(phase, message, detail string) {
 		if progressCh == nil {
@@ -2363,15 +2393,10 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 		return fmt.Errorf("failed to get current release: %w", err)
 	}
 
-	chartName := rel.Chart.Metadata.Name
-	sendProgress("resolving", fmt.Sprintf("Finding %s version %s in repositories...", chartName, targetVersion), "")
-
-	chartPath, resolvedRepo, err := c.resolveUpgradeChartPath(chartName, targetVersion, repositoryName, chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources))
+	targetChart, err := c.chartForUpgradeTarget(actionConfig, rel, targetVersion, repositoryName, sendProgress)
 	if err != nil {
 		return err
 	}
-
-	sendProgress("downloading", fmt.Sprintf("Downloading %s-%s from %s...", chartName, targetVersion, resolvedRepo), chartPath)
 
 	// Create upgrade action — don't use Wait=true because Radar already
 	// shows real-time resource status via SSE. Waiting blocks the dialog
@@ -2385,49 +2410,105 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 	// for keys a newer chart added (a cross-version upgrade footgun).
 	upgradeAction.ResetThenReuseValues = true
 
-	// Use ChartPathOptions to locate/download the chart
-	client := action.NewInstall(actionConfig)
-	client.Version = targetVersion
-
-	// OCI pulls need a registry client on the action; Radar's action config
-	// doesn't carry one by default. Wire it from the user's helm registry login.
-	if registry.IsOCI(chartPath) {
-		rc, err := c.newRegistryClientConcrete()
-		if err != nil {
-			return fmt.Errorf("failed to build OCI registry client: %w", err)
-		}
-		client.SetRegistryClient(rc)
-	}
-
-	cp, err := client.ChartPathOptions.LocateChart(chartPath, c.settings)
-	if err != nil {
-		return fmt.Errorf("failed to locate chart: %w", err)
-	}
-
-	sendProgress("loading", "Loading chart...", cp)
-
-	chart, err := loader.Load(cp)
-	if err != nil {
-		return fmt.Errorf("failed to load chart: %w", err)
-	}
-
-	// Refuse a silent chart-swap: the resolved source must publish the SAME chart
-	// the release runs, not merely a chart at the same version. Matters most for
-	// OCI prefix probing, where "<prefix>/<chartName>" is derived, not asserted.
-	if chart.Metadata != nil && chart.Metadata.Name != chartName {
-		return fmt.Errorf("resolved chart is %q but release %q runs chart %q — refusing to swap charts", chart.Metadata.Name, name, chartName)
-	}
-
-	sendProgress("upgrading", fmt.Sprintf("Applying %s %s...", chartName, targetVersion), "")
+	sendProgress("upgrading", fmt.Sprintf("Applying %s %s...", rel.Chart.Metadata.Name, targetVersion), "")
 
 	// Run the upgrade
-	_, err = upgradeAction.Run(name, chart, rel.Config)
+	_, err = upgradeAction.Run(name, targetChart, rel.Config)
 	if err != nil {
 		return fmt.Errorf("upgrade failed: %w", err)
 	}
 
 	sendProgress("complete", fmt.Sprintf("Successfully upgraded %s to %s", name, targetVersion), "")
 	return nil
+}
+
+// upgradeWithValues upgrades a release to a target chart version applying exactly
+// the supplied user values (WYSIWYG — ResetValues, no merge with prior overrides).
+// The plain upgradeWith path keeps ResetThenReuseValues for the blind carry-over case.
+func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, sendProgress func(phase, message, detail string)) error {
+	getAction := action.NewGet(actionConfig)
+	rel, err := getAction.Run(name)
+	if err != nil {
+		return fmt.Errorf("failed to get current release: %w", err)
+	}
+
+	targetChart, err := c.chartForUpgradeTarget(actionConfig, rel, targetVersion, repositoryName, sendProgress)
+	if err != nil {
+		return err
+	}
+
+	upgradeAction := action.NewUpgrade(actionConfig)
+	upgradeAction.Namespace = rel.Namespace
+	upgradeAction.Timeout = 120 * time.Second
+	upgradeAction.ResetValues = true // WYSIWYG: apply only the edited values
+
+	sendProgress("upgrading", fmt.Sprintf("Applying %s %s...", rel.Chart.Metadata.Name, targetVersion), "")
+
+	_, err = upgradeAction.Run(name, targetChart, newValues)
+	if err != nil {
+		return fmt.Errorf("upgrade failed: %w", err)
+	}
+
+	sendProgress("complete", fmt.Sprintf("Successfully upgraded %s to %s", name, targetVersion), "")
+	return nil
+}
+
+func (c *Client) chartForUpgradeTarget(actionConfig *action.Configuration, rel *release.Release, targetVersion, repositoryName string, sendProgress func(phase, message, detail string)) (*chart.Chart, error) {
+	if targetVersion == "" || targetVersion == rel.Chart.Metadata.Version {
+		return rel.Chart, nil
+	}
+	return c.loadTargetChart(actionConfig, rel, targetVersion, repositoryName, sendProgress)
+}
+
+// loadTargetChart resolves, downloads and loads the chart for a target upgrade
+// version, refusing a silent chart-swap (the resolved source must publish the
+// same chart the release runs). Shared by the upgrade and preview paths so they
+// resolve the target version identically.
+func (c *Client) loadTargetChart(actionConfig *action.Configuration, rel *release.Release, targetVersion, repositoryName string, sendProgress func(phase, message, detail string)) (*chart.Chart, error) {
+	chartName := rel.Chart.Metadata.Name
+	sendProgress("resolving", fmt.Sprintf("Finding %s version %s in repositories...", chartName, targetVersion), "")
+
+	chartPath, resolvedRepo, err := c.resolveUpgradeChartPath(chartName, targetVersion, repositoryName, chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources))
+	if err != nil {
+		return nil, err
+	}
+
+	sendProgress("downloading", fmt.Sprintf("Downloading %s-%s from %s...", chartName, targetVersion, resolvedRepo), chartPath)
+
+	// Use ChartPathOptions to locate/download the chart
+	locate := action.NewInstall(actionConfig)
+	locate.Version = targetVersion
+
+	// OCI pulls need a registry client on the action; Radar's action config
+	// doesn't carry one by default. Wire it from the user's helm registry login.
+	if registry.IsOCI(chartPath) {
+		rc, err := c.newRegistryClientConcrete()
+		if err != nil {
+			return nil, fmt.Errorf("failed to build OCI registry client: %w", err)
+		}
+		locate.SetRegistryClient(rc)
+	}
+
+	cp, err := locate.ChartPathOptions.LocateChart(chartPath, c.settings)
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate chart: %w", err)
+	}
+
+	sendProgress("loading", "Loading chart...", cp)
+
+	targetChart, err := loader.Load(cp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load chart: %w", err)
+	}
+
+	// Refuse a silent chart-swap: the resolved source must publish the SAME chart
+	// the release runs, not merely a chart at the same version. Matters most for
+	// OCI prefix probing, where "<prefix>/<chartName>" is derived, not asserted.
+	if targetChart.Metadata != nil && targetChart.Metadata.Name != chartName {
+		return nil, fmt.Errorf("resolved chart is %q but release %q runs chart %q — refusing to swap charts", targetChart.Metadata.Name, rel.Name, chartName)
+	}
+
+	return targetChart, nil
 }
 
 type chartPathCandidate struct {
@@ -2437,6 +2518,10 @@ type chartPathCandidate struct {
 }
 
 func (c *Client) resolveUpgradeChartPath(chartName, targetVersion, repositoryName string, sourceHosts []string) (chartPath, resolvedRepo string, err error) {
+	return c.resolveUpgradeChartPathWithOCIResolver(chartName, targetVersion, repositoryName, sourceHosts, c.resolveOCIUpgradeURL)
+}
+
+func (c *Client) resolveUpgradeChartPathWithOCIResolver(chartName, targetVersion, repositoryName string, sourceHosts []string, resolveOCIUpgradeURL func(string, string) (string, bool)) (chartPath, resolvedRepo string, err error) {
 	// A missing/unreadable repo config is not fatal: a pure-OCI user has no
 	// repositories.yaml, and discovery may have advertised an OCI upgrade. Proceed
 	// with an empty classic set so the OCI fallback below can still resolve.
@@ -2469,7 +2554,7 @@ func (c *Client) resolveUpgradeChartPath(chartName, targetVersion, repositoryNam
 					continue
 				}
 				path := entry.URLs[0]
-				if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+				if !isAbsoluteChartURL(path) {
 					path = strings.TrimSuffix(r.URL, "/") + "/" + path
 				}
 				candidates = append(candidates, chartPathCandidate{repoName: r.Name, repoURL: r.URL, chartPath: path})
@@ -2501,21 +2586,23 @@ func (c *Client) resolveUpgradeChartPath(chartName, targetVersion, repositoryNam
 		return "", "", fmt.Errorf("chart %s version %s not found in repository %s", chartName, targetVersion, repositoryName)
 	}
 
-	// Surface classic-repo index failures before the OCI fallback: a stale/missing
-	// index is a "fix your repo" condition the user should see, not something to
-	// silently paper over by pulling the same version from an OCI source.
-	if len(indexErrors) > 0 {
-		return "", "", fmt.Errorf("chart %s version %s not found in configured repositories; failed to load indexes: %s", chartName, targetVersion, strings.Join(indexErrors, "; "))
-	}
-
-	// No classic-repo match and indexes loaded cleanly. Fall back to registered OCI
-	// sources — the server re-derives the oci:// ref from a configured prefix (never
-	// a client-supplied ref), keeping the upgrade path configured-only.
-	if url, ok := c.resolveOCIUpgradeURL(chartName, targetVersion); ok {
+	// No classic-repo match. Fall back to registered OCI sources before reporting
+	// unrelated index failures; the server re-derives the oci:// ref from a
+	// configured prefix (never a client-supplied ref), keeping the upgrade path
+	// configured-only.
+	if url, ok := resolveOCIUpgradeURL(chartName, targetVersion); ok {
 		return url, "oci", nil
 	}
 
+	if len(indexErrors) > 0 {
+		return "", "", fmt.Errorf("chart %s version %s not found in configured repositories or registered OCI sources; failed to load indexes: %s", chartName, targetVersion, strings.Join(indexErrors, "; "))
+	}
+
 	return "", "", fmt.Errorf("chart %s version %s not found in configured repositories or registered OCI sources", chartName, targetVersion)
+}
+
+func isAbsoluteChartURL(path string) bool {
+	return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") || registry.IsOCI(path)
 }
 
 // BatchCheckUpgrades checks for upgrades for all releases at once (more efficient)
@@ -2608,11 +2695,15 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 	// the per-release OCI fallback run rather than failing every release here.
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
+	noClassicRepos := false
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("[helm] failed to load repository config %s (treating as no classic repos): %v", repoFile, err)
 		}
 		f = &repo.File{}
+	}
+	if len(f.Repositories) == 0 {
+		noClassicRepos = true
 	}
 
 	// Split into two maps: latest-per-repo drives ranking; per-repo full
@@ -2685,15 +2776,9 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 
 		baseCandidates, ok := chartRepoVersions[chartName]
 		if !ok {
-			// A failed classic index could be hiding this release's real source —
-			// surface that before OCI rather than mislabel it as OCI-tracked.
-			if indexLoadFailed {
-				info.Error = "failed to load one or more configured repository indexes"
-			} else if !ociFallback(info, chartName, currentVersion) {
-				// Genuine absence → OCI fallback for the user's own OCI charts.
-				info.Untracked = true
-				info.Error = "chart not found in configured repositories or registered OCI sources"
-			}
+			applyNoClassicCandidateUpgrade(info, noClassicRepos, indexLoadFailed, len(ListOCISources()) > 0, func() bool {
+				return ociFallback(info, chartName, currentVersion)
+			})
 			result.Releases[key] = info
 			continue
 		}
@@ -2704,7 +2789,7 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 		if latestVersion == "" {
 			// Classic candidates exist but are ambiguous — don't let OCI override
 			// a release that came from a classic repo.
-			info.Error = "could not identify upstream chart repository"
+			markUpgradeSourceIssue(info, UpgradeSourceIssueAmbiguousRepository, "could not identify upstream chart repository")
 		} else {
 			info.LatestVersion = latestVersion
 			info.RepositoryName = repoName
@@ -2717,13 +2802,26 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 	return result, nil
 }
 
-// PreviewValuesChange previews the effect of new values on a release via dry-run
-func (c *Client) PreviewValuesChange(namespace, name string, newValues map[string]any) (*ValuesPreviewResponse, error) {
+// PreviewValuesChange previews the effect of new values on a release via dry-run.
+// When targetVersion is non-empty and differs from the running chart version, the
+// dry-run renders against that target chart instead of the current chart.
+func (c *Client) PreviewValuesChange(namespace, name string, newValues map[string]any, targetVersion, repositoryName string) (*ValuesPreviewResponse, error) {
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
+	return c.previewValuesChangeWith(actionConfig, name, newValues, targetVersion, repositoryName)
+}
 
+func (c *Client) PreviewValuesChangeAsUser(namespace, name string, newValues map[string]any, targetVersion, repositoryName string, username string, groups []string) (*ValuesPreviewResponse, error) {
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return nil, err
+	}
+	return c.previewValuesChangeWith(actionConfig, name, newValues, targetVersion, repositoryName)
+}
+
+func (c *Client) previewValuesChangeWith(actionConfig *action.Configuration, name string, newValues map[string]any, targetVersion, repositoryName string) (*ValuesPreviewResponse, error) {
 	// Get the current release
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -2741,6 +2839,12 @@ func (c *Client) PreviewValuesChange(namespace, name string, newValues map[strin
 	// Get current manifest
 	currentManifest := rel.Manifest
 
+	noop := func(phase, message, detail string) {}
+	previewChart, err := c.chartForUpgradeTarget(actionConfig, rel, targetVersion, repositoryName, noop)
+	if err != nil {
+		return nil, err
+	}
+
 	// Perform a dry-run upgrade with the new values
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
@@ -2749,7 +2853,7 @@ func (c *Client) PreviewValuesChange(namespace, name string, newValues map[strin
 	upgradeAction.ResetValues = true // Use only the provided values, don't merge
 
 	// Run the dry-run upgrade
-	newRel, err := upgradeAction.Run(name, rel.Chart, newValues)
+	newRel, err := upgradeAction.Run(name, previewChart, newValues)
 	if err != nil {
 		return nil, fmt.Errorf("failed to preview values change: %w", err)
 	}

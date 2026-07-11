@@ -406,6 +406,8 @@ interface ResourceRendererDispatchProps {
   eventsHint?: React.ReactNode
   /** When provided, sidebar sections (related resources, events, labels, annotations, metadata) are passed to this render prop instead of being rendered inline */
   renderSidebar?: (sections: React.ReactNode) => React.ReactNode
+  /** Additional overview content that belongs in the main content column after the resource renderer sections. */
+  mainFooter?: React.ReactNode
   /** K8s events for the focused resource — always shown (no toggle hides them)
    *  so resource history can't go missing. */
   events?: TimelineEvent[]
@@ -440,6 +442,7 @@ export function ResourceRendererDispatch({
   onOpenLogs,
   eventsHint,
   renderSidebar,
+  mainFooter,
   events,
   eventsLoading,
   updates,
@@ -712,6 +715,7 @@ export function ResourceRendererDispatch({
             {!renderSidebar && sidebarContent}
           </>
         )}
+        {mainFooter}
       </div>
       {renderSidebar && sidebarContent && renderSidebar(sidebarContent)}
     </div>
@@ -721,6 +725,27 @@ export function ResourceRendererDispatch({
 // ============================================================================
 // RESOURCE STATUS HELPER
 // ============================================================================
+
+// Coarse health hint for the per-resource Diagnose entry point: should the action
+// read as an urgent "Diagnose" (resource has a live problem) or a quiet "ask AI"?
+// Derived from the same status the detail badge shows, so the button matches what
+// the user sees. We key off the StatusBadge `level` (the workload/pod status fns
+// return it) — NOT the color string, which varies by helper. 'unknown' for kinds
+// without a level (we don't assert "Diagnose" when we can't tell → quiet variant).
+export type DiagnoseHealthHint = 'problem' | 'healthy' | 'unknown'
+export function diagnoseHealthHint(kind: string, data: any): DiagnoseHealthHint {
+  const st = getResourceStatus(kind, data) as { level?: string } | null
+  switch (st?.level) {
+    case 'unhealthy':
+    case 'degraded':
+    case 'alert':
+      return 'problem'
+    case 'healthy':
+      return 'healthy'
+    default:
+      return 'unknown'
+  }
+}
 
 export function getResourceStatus(kind: string, data: any): { text: string; color: string } | null {
   if (!data) return null

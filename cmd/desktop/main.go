@@ -117,6 +117,8 @@ func main() {
 		PrometheusHeadersFromEnv: fileCfg.PrometheusHeadersFromEnv,
 		Version:                  version,
 		MCPEnabled:               fileCfg.MCPEnabledOr(true),
+		AIHistory:                fileCfg.AIHistoryOr(true),
+		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
 	}
 
 	app.SetGlobals(cfg)

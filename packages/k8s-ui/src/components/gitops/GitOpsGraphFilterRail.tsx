@@ -1,6 +1,7 @@
 import { CheckCircle2, CircleDot, GitBranch, HeartPulse, LayoutGrid, List, Search } from 'lucide-react'
 
 import { GitOpsFacetButton, GitOpsFilterSection } from './GitOpsTableView'
+import { Input } from '../ui/Input'
 import type { GitOpsResourceTree } from '../../types/gitops-tree'
 import type { GitOpsTreePreset } from './tree'
 
@@ -79,7 +80,7 @@ export function GitOpsGraphFilterRail({
       <div className="border-b border-theme-border px-3 py-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-text-tertiary" />
-          <input
+          <Input
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             placeholder="Filter resources..."

@@ -9,6 +9,7 @@ import { formatBytes } from '../../utils/format'
 import { downloadBlob, filterTree } from './file-browser-utils'
 import { Tooltip } from '../ui/Tooltip'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { Input } from '@skyhook-io/k8s-ui'
 
 // Manual fetch function for filesystem (not a hook - gives us full control)
 async function fetchImageFilesystem(
@@ -166,8 +167,7 @@ export function ImageFilesystemModal({
           <div className="p-3 border-b border-theme-border shrink-0">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-              <input
-                type="text"
+              <Input
                 placeholder="Search files..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}

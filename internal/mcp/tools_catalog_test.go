@@ -113,11 +113,50 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 	}
 }
 
+// writeToolNames is the mutating tool set the read-only mount must exclude.
+var writeToolNames = []string{
+	"manage_workload", "manage_cronjob", "manage_gitops",
+	"apply_resource", "patch_resource", "manage_node",
+}
+
+// TestReadOnlyServerExcludesWriteTools is the load-bearing guarantee of the
+// read-only MCP mount: an investigation pointed at it can't even discover a
+// mutating tool. If a tool is reclassified, this fails until the lists agree.
+func TestReadOnlyServerExcludesWriteTools(t *testing.T) {
+	ro := map[string]bool{}
+	for _, tool := range listRegisteredToolsWith(t, false) {
+		ro[tool.Name] = true
+	}
+	for _, w := range writeToolNames {
+		if ro[w] {
+			t.Errorf("read-only server exposes write tool %q", w)
+		}
+	}
+	// Sanity: read tools are still present.
+	if !ro["get_resource"] || !ro["diagnose"] {
+		t.Error("read-only server is missing expected read tools")
+	}
+
+	full := map[string]bool{}
+	for _, tool := range listRegisteredToolsWith(t, true) {
+		full[tool.Name] = true
+	}
+	for _, w := range writeToolNames {
+		if !full[w] {
+			t.Errorf("full server is missing write tool %q", w)
+		}
+	}
+}
+
 func listRegisteredTools(t *testing.T) []*mcpsdk.Tool {
+	return listRegisteredToolsWith(t, true)
+}
+
+func listRegisteredToolsWith(t *testing.T, includeWrites bool) []*mcpsdk.Tool {
 	t.Helper()
 
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar-test", Version: "test"}, nil)
-	registerTools(server)
+	registerTools(server, includeWrites)
 
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "radar-test-client", Version: "test"}, nil)
 	ctx := context.Background()

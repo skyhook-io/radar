@@ -2,7 +2,7 @@ apiVersion: v2
 name: radar
 description: Modern Kubernetes visibility - topology, traffic, Helm and GitOps management
 type: application
-version: 1.6.0
+version: 1.7.0
 appVersion: "1.7.6"
 icon: https://radarhq.io/radar/icon-512.png
 keywords:

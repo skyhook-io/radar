@@ -501,12 +501,20 @@ func (s *Server) topologyForContext(namespace string) (*topology.Topology, topol
 //
 // Returns nil when no issues match — Build then omits the IssueSummary field.
 func computeIssueSummaryForResource(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.IssueSummary {
+	sum, _ := computeIssueSummaryAndRows(cache, group, kind, namespace, name)
+	return sum
+}
+
+// computeIssueSummaryAndRows additionally returns the matched rows sorted by
+// (severity desc, reason asc) — the diagnose health frame shows the actual
+// lines, not just the rollup.
+func computeIssueSummaryAndRows(cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.IssueSummary, []issues.Issue) {
 	if cache == nil {
-		return nil
+		return nil, nil
 	}
 	provider := issues.NewCacheProvider()
 	if provider == nil {
-		return nil
+		return nil, nil
 	}
 	var namespaces []string
 	if namespace != "" {
@@ -518,7 +526,7 @@ func computeIssueSummaryForResource(cache *k8s.ResourceCache, group, kind, names
 	// both (a Deployment matched no Kind=Pod evidence rows → empty summary).
 	matched := issues.RelatedIssues(provider, namespaces, group, kind, namespace, name)
 	if len(matched) == 0 {
-		return nil
+		return nil, nil
 	}
 	bySource := make(map[string]int, len(matched))
 	for _, row := range matched {
@@ -542,7 +550,7 @@ func computeIssueSummaryForResource(cache *k8s.ResourceCache, group, kind, names
 		HighestSeverity: string(topSeverity),
 		TopReason:       topReason,
 		BySource:        bySource,
-	}
+	}, matched
 }
 
 // computeAuditSummaryForResource looks up audit findings for the subject
@@ -558,8 +566,13 @@ func computeIssueSummaryForResource(cache *k8s.ResourceCache, group, kind, names
 // influence the choice — agents pinning regression tests on
 // resourceContext output rely on stable field values across runs.
 func computeAuditSummaryForResource(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
+	sum, _ := computeAuditSummaryAndRows(cache, group, kind, namespace, name)
+	return sum
+}
+
+func computeAuditSummaryAndRows(cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
 	if cache == nil || kind == "" {
-		return nil
+		return nil, nil
 	}
 	// Match computeIssueSummaryForResource's guard: passing []string{""} to
 	// RunFromCache would filter to literally namespace="" resources instead
@@ -572,12 +585,12 @@ func computeAuditSummaryForResource(cache *k8s.ResourceCache, group, kind, names
 	}
 	results := audit.RunFromCache(cache, namespaces, nil)
 	if results == nil || len(results.Findings) == 0 {
-		return nil
+		return nil, nil
 	}
 	idx := bpaudit.IndexByResource(results.Findings)
 	match := idx[bpaudit.ResourceKey(group, kind, namespace, name)]
 	if len(match) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Sort by (severity desc, CheckID asc) so TopFinding is deterministic
@@ -594,7 +607,7 @@ func computeAuditSummaryForResource(cache *k8s.ResourceCache, group, kind, names
 		Count:           len(match),
 		HighestSeverity: normalizeAuditSeverity(match[0].Severity),
 		TopFinding:      topFinding,
-	}
+	}, match
 }
 
 // normalizeAuditSeverity maps the audit suite's emission vocabulary

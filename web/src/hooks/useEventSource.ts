@@ -7,6 +7,7 @@ interface UseEventSourceReturn {
   topology: Topology | null
   events: K8sEvent[]
   connected: boolean
+  connecting: boolean
   reconnect: () => void
 }
 
@@ -43,6 +44,7 @@ export function useEventSource(
   const [topology, setTopology] = useState<Topology | null>(null)
   const [events, setEvents] = useState<K8sEvent[]>([])
   const [connected, setConnected] = useState(false)
+  const [connecting, setConnecting] = useState(true)
   const eventSourceRef = useRef<EventSource | null>(null)
   const reconnectTimeoutRef = useRef<number | null>(null)
   const waitingForTopologyAfterSwitch = useRef(false)
@@ -66,6 +68,7 @@ export function useEventSource(
   optionsRef.current = options
 
   const connect = useCallback(() => {
+    setConnecting(true)
     // Clean up existing connection
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
@@ -99,6 +102,7 @@ export function useEventSource(
     es.onopen = () => {
       console.log('SSE connected')
       setConnected(true)
+      setConnecting(false)
       // Reset backoff on successful connection
       reconnectDelayRef.current = INITIAL_RECONNECT_DELAY_MS
     }
@@ -106,6 +110,7 @@ export function useEventSource(
     es.onerror = (error) => {
       console.error('SSE error:', error)
       setConnected(false)
+      setConnecting(false)
       es.close()
 
       // Reconnect with exponential backoff
@@ -257,6 +262,7 @@ export function useEventSource(
     topology,
     events,
     connected,
+    connecting,
     reconnect,
   }
 }

@@ -29,9 +29,6 @@ export function RightsizingStrip({ kind, namespace, name }: {
   const { data, error, isLoading } = usePrometheusRightsizing(kind, namespace, name, isConnected && supported)
 
   if (!supported || !isConnected || isLoading) return null
-  // Stay consistent with WorkloadHealthBadge — when the rightsizing query
-  // fails, surface a small inline note so the absence of recommendations
-  // doesn't read as "everything is fine."
   if (error && !data) {
     const msg = error instanceof Error ? error.message : String(error)
     return (

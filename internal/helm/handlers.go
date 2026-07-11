@@ -2,6 +2,7 @@ package helm
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -30,6 +31,20 @@ func userCreds(r *http.Request) (string, []string) {
 		return user.Username, user.Groups
 	}
 	return "", nil
+}
+
+func decodeOptionalApplyValuesRequest(body io.Reader) (map[string]any, error) {
+	if body == nil {
+		return nil, nil
+	}
+	var req ApplyValuesRequest
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		if err == io.EOF {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return req.Values, nil
 }
 
 // Handlers provides HTTP handlers for Helm endpoints
@@ -717,6 +732,12 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 	}
 	repositoryName := r.URL.Query().Get("repository")
 
+	editedValues, err := decodeOptionalApplyValuesRequest(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
 	// Set up SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -732,9 +753,21 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 	progressCh := make(chan InstallProgress, 10)
 	defer close(progressCh)
 
+	auth.AuditLog(r, namespace, name)
 	resultCh := make(chan error, 1)
 	go func() {
-		if user := auth.UserFromContext(r.Context()); user != nil {
+		user := auth.UserFromContext(r.Context())
+		// Use != nil, not len > 0: an explicit empty map ({}) means
+		// "clear all my overrides" and must NOT fall back to carry-over.
+		if editedValues != nil {
+			if user != nil {
+				resultCh <- client.UpgradeWithValuesProgressAsUser(namespace, name, version, repositoryName, editedValues, user.Username, user.Groups, progressCh)
+				return
+			}
+			resultCh <- client.UpgradeWithValuesProgress(namespace, name, version, repositoryName, editedValues, progressCh)
+			return
+		}
+		if user != nil {
 			resultCh <- client.UpgradeWithProgressAsUser(namespace, name, version, repositoryName, user.Username, user.Groups, progressCh)
 			return
 		}
@@ -806,7 +839,8 @@ func (h *Handlers) handlePreviewValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	preview, err := client.PreviewValuesChange(namespace, name, req.Values)
+	username, groups := userCreds(r)
+	preview, err := client.PreviewValuesChangeAsUser(namespace, name, req.Values, req.Version, req.Repository, username, groups)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

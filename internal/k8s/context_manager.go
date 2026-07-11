@@ -18,9 +18,11 @@ import (
 // so operators can override it via flag/env without recompiling. The default
 // value (30 * time.Second) is preserved for backwards compatibility.
 
-// ConnectionTestTimeout is the maximum time allowed for initial connection test
-// This is a short timeout for quick fail detection
+// ConnectionTestTimeout is the maximum time allowed for non-exec-auth
+// connection tests. This is a short timeout for quick fail detection.
 const ConnectionTestTimeout = 5 * time.Second
+const execAuthConnectionProbeHTTPTimeout = 10 * time.Second
+const connectionProbeTimeoutHeadroom = time.Second
 
 // ContextSwitchCallback is called when the context is switched
 type ContextSwitchCallback func(newContext string)
@@ -59,6 +61,7 @@ type PrometheusResetFunc func()
 type PrometheusReinitFunc func() error
 
 var (
+	beforeContextSwitchCallbacks   []ContextSwitchCallback
 	contextSwitchCallbacks         []ContextSwitchCallback
 	namespaceRescopeCallbacks      []NamespaceRescopeCallback
 	contextSwitchProgressCallbacks []ContextSwitchProgressCallback
@@ -160,6 +163,16 @@ func stopActiveSessions() {
 	}
 }
 
+// OnBeforeContextSwitch registers a callback fired at the very start of
+// PerformContextSwitch, BEFORE the client is repointed at the new cluster — for
+// teardown that must happen against the old context (e.g. cancelling in-flight
+// AI investigations so their agent can't touch the new cluster).
+func OnBeforeContextSwitch(callback ContextSwitchCallback) {
+	contextSwitchMu.Lock()
+	defer contextSwitchMu.Unlock()
+	beforeContextSwitchCallbacks = append(beforeContextSwitchCallbacks, callback)
+}
+
 // OnContextSwitch registers a callback to be called when the context is switched
 func OnContextSwitch(callback ContextSwitchCallback) {
 	contextSwitchMu.Lock()
@@ -180,6 +193,17 @@ func OnContextSwitchProgress(callback ContextSwitchProgressCallback) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()
 	contextSwitchProgressCallbacks = append(contextSwitchProgressCallbacks, callback)
+}
+
+// notifyBeforeContextSwitch fires before-switch callbacks (old context still active).
+func notifyBeforeContextSwitch(newContext string) {
+	contextSwitchMu.RLock()
+	callbacks := make([]ContextSwitchCallback, len(beforeContextSwitchCallbacks))
+	copy(callbacks, beforeContextSwitchCallbacks)
+	contextSwitchMu.RUnlock()
+	for _, callback := range callbacks {
+		callback(newContext)
+	}
 }
 
 // reportProgress notifies all registered progress callbacks
@@ -245,7 +269,7 @@ func TestClusterConnection(ctx context.Context) error {
 	// Create a copy of the config with a short timeout
 	// rest.CopyConfig properly copies all fields including TLS settings
 	testConfig := rest.CopyConfig(config)
-	testConfig.Timeout = ConnectionTestTimeout
+	testConfig.Timeout = connectionProbeHTTPTimeout(ctx)
 
 	// Create a temporary client with the short-timeout config
 	testClient, err := kubernetes.NewForConfig(testConfig)
@@ -269,8 +293,34 @@ func TestClusterConnection(ctx context.Context) error {
 		}
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("cluster unreachable: %w", ctx.Err())
+		if !UsesExecAuth() {
+			return fmt.Errorf("cluster unreachable: %w", ctx.Err())
+		}
+		return fmt.Errorf("auth plugin timeout: %w", ctx.Err())
 	}
+}
+
+func connectionTestOperationTimeout() time.Duration {
+	if UsesExecAuth() {
+		return execAuthConnectionProbeHTTPTimeout + connectionProbeTimeoutHeadroom
+	}
+	return ConnectionTestTimeout
+}
+
+func connectionProbeHTTPTimeout(ctx context.Context) time.Duration {
+	timeout := ConnectionTestTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > connectionProbeTimeoutHeadroom {
+			timeout = remaining - connectionProbeTimeoutHeadroom
+		} else if remaining > 0 {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		return ConnectionTestTimeout
+	}
+	return timeout
 }
 
 // PerformContextSwitch orchestrates a full context switch:
@@ -303,6 +353,12 @@ func PerformContextSwitch(newContext string) error {
 	if ForceNamespaceScope && ProspectiveNamespaceScopeTarget(newContext) == "" {
 		return fmt.Errorf("%w: --namespace-scope requires --namespace, a namespace on context %q, or a saved namespace pick", ErrContextSwitchPreflight, newContext)
 	}
+
+	// Fire before-switch callbacks while the OLD context is still active, so
+	// teardown (e.g. cancelling in-flight AI investigations) can't leak onto the
+	// cluster we're about to connect to. After the preflight above — a failed
+	// preflight leaves the current connection (and its runs) intact.
+	notifyBeforeContextSwitch(newContext)
 
 	// Cancel any in-flight API calls from the previous context (RBAC checks,
 	// capability probes, etc.) so they don't serialize through the old exec
@@ -347,7 +403,7 @@ func PerformContextSwitch(newContext string) error {
 	reportProgress("Testing cluster connectivity...")
 	t = time.Now()
 	log.Println("Testing cluster connectivity...")
-	connCtx, connCancel := NewOperationContext(ConnectionTestTimeout)
+	connCtx, connCancel := NewOperationContext(connectionTestOperationTimeout())
 	defer connCancel()
 	if err := TestClusterConnection(connCtx); err != nil {
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
@@ -422,7 +478,7 @@ func PerformNamespaceRescope(namespace string) error {
 	myGen := currentOperationGen()
 	reportProgress("Testing cluster connectivity...")
 	t := time.Now()
-	connCtx, connCancel := NewOperationContext(ConnectionTestTimeout)
+	connCtx, connCancel := NewOperationContext(connectionTestOperationTimeout())
 	defer connCancel()
 	if err := TestClusterConnection(connCtx); err != nil {
 		elapsed := time.Since(rescopeStart).Truncate(time.Millisecond)

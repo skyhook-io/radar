@@ -274,14 +274,6 @@ var CheckRegistry = map[string]CheckMeta{
 		Frameworks:  []string{FrameworkCIS},
 		References:  []Reference{refResources},
 	},
-	"resourceUtilization": {
-		ID:          "resourceUtilization",
-		Title:       "Resource utilization mismatch",
-		Category:    CategoryEfficiency,
-		Description: "Pod resource usage is significantly different from its requests — either wasting resources (<10% used) or at risk of throttling/OOM (>90% used).",
-		Remediation: "Adjust resources.requests to match actual usage. Use metrics or VPA recommendations to right-size.",
-		References:  []Reference{refResources},
-	},
 	"orphanConfigMapSecret": {
 		ID:          "orphanConfigMapSecret",
 		Title:       "Unused ConfigMap or Secret",

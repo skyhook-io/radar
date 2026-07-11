@@ -18,6 +18,24 @@ SSDIR=".playwright-mcp/visual-test/$TIMESTAMP"
 LOGFILE="/tmp/radar-visual-test-$PORT.log"
 STATEFILE=".playwright-mcp/visual-test-state.env"
 
+active_screenshot_dir=""
+if [[ -f "$STATEFILE" ]]; then
+  source "$STATEFILE"
+  if [[ -n "${RADAR_PID:-}" && -n "${SCREENSHOT_DIR:-}" ]] && kill -0 "$RADAR_PID" 2>/dev/null; then
+    active_screenshot_dir="$SCREENSHOT_DIR"
+  fi
+fi
+
+# Prune empty screenshot dirs left by prior runs that captured nothing.
+if [[ -d .playwright-mcp/visual-test ]]; then
+  while IFS= read -r -d '' dir; do
+    if [[ -n "$active_screenshot_dir" && "$dir" == "$active_screenshot_dir" ]]; then
+      continue
+    fi
+    rmdir "$dir" 2>/dev/null || true
+  done < <(find .playwright-mcp/visual-test -mindepth 1 -maxdepth 1 -type d -empty -print0 2>/dev/null)
+fi
+
 mkdir -p "$SSDIR"
 
 # Build unless skipped

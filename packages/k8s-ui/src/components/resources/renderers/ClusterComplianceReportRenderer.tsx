@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { ShieldCheck, ChevronDown, ChevronRight, CheckCircle2, XCircle, Search } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-components'
+import { Input } from '../../ui/Input'
 import { formatAge } from '../resource-utils'
 import { SEVERITY_BADGE_COLORS, SEVERITY_ORDER } from './trivy-shared'
 import { pluralize } from '../../../utils/pluralize'
@@ -138,8 +139,7 @@ export function ClusterComplianceReportRenderer({ data }: ClusterComplianceRepor
             <div className="flex items-center gap-2 mb-2">
               <div className="relative flex-1">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary" />
-                <input
-                  type="text"
+                <Input
                   placeholder="Filter by control name or ID..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}

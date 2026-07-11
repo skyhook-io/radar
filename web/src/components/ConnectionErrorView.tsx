@@ -1,5 +1,5 @@
-import { XCircle, RefreshCw, Loader2, Copy, Check, TerminalSquare } from 'lucide-react'
-import { useState } from 'react'
+import { ServerOff, RefreshCw, Loader2, Copy, Check, TerminalSquare, ChevronRight } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
 import { parseContextName } from '../utils/context-name'
@@ -29,8 +29,8 @@ function getAuthHints(context: string): AuthHints {
     case 'GKE': {
       const result: AuthHints = {
         title: 'GKE Authentication Failed',
-        hints: ['Your Google Cloud credentials have expired.'],
-        authCommand: { label: 'Re-authenticate with Google Cloud:', command: 'gcloud auth login' },
+        hints: ['Radar could not get Google Cloud credentials for this context.'],
+        authCommand: { label: 'Refresh Google Cloud credentials:', command: 'gcloud auth login' },
       }
       if (parsed.region && parsed.account) {
         const isZone = /^[a-z]+-[a-z]+\d+-[a-z]$/.test(parsed.region)
@@ -45,8 +45,11 @@ function getAuthHints(context: string): AuthHints {
     case 'EKS': {
       const result: AuthHints = {
         title: 'EKS Authentication Failed',
-        hints: ['Your AWS credentials have expired.'],
-        authCommand: { label: 'Re-authenticate with AWS:', command: 'aws sso login' },
+        hints: [
+          'Radar could not get AWS credentials for this context.',
+          'For AWS SSO contexts, the SSO session may need login.',
+        ],
+        authCommand: { label: 'If this context uses AWS SSO, refresh credentials:', command: 'aws sso login' },
       }
       if (parsed.region) {
         result.fallbackCommand = {
@@ -59,18 +62,68 @@ function getAuthHints(context: string): AuthHints {
     case 'AKS':
       return {
         title: 'AKS Authentication Failed',
-        hints: ['Your Azure credentials have expired.'],
-        authCommand: { label: 'Re-authenticate with Azure:', command: 'az login' },
+        hints: ['Radar could not get Azure credentials for this context.'],
+        authCommand: { label: 'Refresh Azure credentials:', command: 'az login' },
         fallbackCommand: { label: 'If that doesn\'t work, refresh cluster credentials:', command: 'az aks get-credentials --name <cluster> --resource-group <rg>' },
       }
     default:
       return {
         title: 'Authentication Failed',
         hints: [
-          'Your credentials may have expired',
+          'Radar could not get Kubernetes credentials for this context',
           'Re-authenticate with your cloud provider and try again',
         ],
       }
+  }
+}
+
+function getTimeoutHints(context: string): AuthHints | null {
+  const parsed = parseContextName(context)
+  const baseHints = [
+    'The Kubernetes API did not respond before the deadline.',
+    'Check VPN, firewall rules, and whether the cluster endpoint is reachable.',
+  ]
+
+  switch (parsed.provider) {
+    case 'GKE': {
+      const result: AuthHints = {
+        title: 'Connection Timed Out',
+        hints: [...baseHints, 'If the endpoint is reachable, Google Cloud credentials may need refresh.'],
+        authCommand: { label: 'If network access looks healthy, refresh Google Cloud credentials:', command: 'gcloud auth login' },
+      }
+      if (parsed.region && parsed.account) {
+        const isZone = /^[a-z]+-[a-z]+\d+-[a-z]$/.test(parsed.region)
+        const flag = isZone ? '--zone' : '--region'
+        result.fallbackCommand = {
+          label: 'If that does not work, refresh cluster credentials:',
+          command: `gcloud container clusters get-credentials ${parsed.clusterName} ${flag} ${parsed.region} --project ${parsed.account}`,
+        }
+      }
+      return result
+    }
+    case 'EKS': {
+      const result: AuthHints = {
+        title: 'Connection Timed Out',
+        hints: [...baseHints, 'If the endpoint is reachable, AWS credentials or SSO may need refresh.'],
+        authCommand: { label: 'If this context uses AWS SSO and network access looks healthy, refresh credentials:', command: 'aws sso login' },
+      }
+      if (parsed.region) {
+        result.fallbackCommand = {
+          label: 'If that does not work, refresh cluster credentials:',
+          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}`,
+        }
+      }
+      return result
+    }
+    case 'AKS':
+      return {
+        title: 'Connection Timed Out',
+        hints: [...baseHints, 'If the endpoint is reachable, Azure credentials may need refresh.'],
+        authCommand: { label: 'If network access looks healthy, refresh Azure credentials:', command: 'az login' },
+        fallbackCommand: { label: 'If that does not work, refresh cluster credentials:', command: 'az aks get-credentials --name <cluster> --resource-group <rg>' },
+      }
+    default:
+      return null
   }
 }
 
@@ -101,6 +154,14 @@ const errorHints: Record<string, { title: string; hints: string[] }> = {
       'Confirm the cluster is running',
     ],
   },
+  tls: {
+    title: 'Certificate Error',
+    hints: [
+      'Radar reached the Kubernetes API, but could not verify its TLS certificate',
+      'Check the kubeconfig cluster server hostname and certificate-authority settings',
+      'If this cluster intentionally uses a private CA, refresh the kubeconfig for this context',
+    ],
+  },
   timeout: {
     title: 'Connection Timed Out',
     hints: [
@@ -122,6 +183,7 @@ const errorHints: Record<string, { title: string; hints: string[] }> = {
 
 function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunInTerminal?: (command: string) => void }) {
   const [copied, setCopied] = useState(false)
+  const commandParts = command.split(/(\s+)/)
 
   const handleCopy = () => {
     navigator.clipboard.writeText(command).then(() => {
@@ -134,30 +196,36 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
 
   return (
     <div className="mt-2 flex items-center gap-2 bg-theme-elevated border border-theme-border rounded-md px-3 py-2 group">
-      <code className="text-xs font-mono text-theme-text-primary flex-1 select-all break-all">
-        {command}
+      <code className="text-xs font-mono text-theme-text-primary flex-1 min-w-0 select-all whitespace-pre-wrap break-normal">
+        {commandParts.map((part, index) => (
+          /\s+/.test(part) ? part : <span key={index} className="inline-block whitespace-nowrap">{part}</span>
+        ))}
       </code>
       {onRunInTerminal && (
         <Tooltip content="Run in terminal" wrapperClassName="shrink-0">
-        <button
-          onClick={() => onRunInTerminal(command)}
-          className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-        >
-          <TerminalSquare className="w-3.5 h-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={() => onRunInTerminal(command)}
+            aria-label="Run command in terminal"
+            className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+          >
+            <TerminalSquare className="w-3.5 h-3.5" />
+          </button>
         </Tooltip>
       )}
       <Tooltip content="Copy to clipboard" wrapperClassName="shrink-0">
-      <button
-        onClick={handleCopy}
-        className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-      >
-        {copied ? (
-          <Check className="w-3.5 h-3.5 text-green-400" />
-        ) : (
-          <Copy className="w-3.5 h-3.5" />
-        )}
-      </button>
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label="Copy command to clipboard"
+          className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+        >
+          {copied ? (
+            <Check className="w-3.5 h-3.5 text-green-400" />
+          ) : (
+            <Copy className="w-3.5 h-3.5" />
+          )}
+        </button>
       </Tooltip>
     </div>
   )
@@ -166,10 +234,21 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
 export function ConnectionErrorView({ connection, onRetry, isRetrying }: ConnectionErrorViewProps) {
   // For auth errors, generate context-aware hints with a specific re-auth command
   const isAuth = connection.errorType === 'auth'
-  const authInfo = isAuth ? getAuthHints(connection.context || '') : null
-  const errorInfo = authInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
+  const isTimeout = connection.errorType === 'timeout'
+  const commandInfo = isAuth
+    ? getAuthHints(connection.context || '')
+    : isTimeout
+      ? getTimeoutHints(connection.context || '')
+      : null
+  const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
+  const rawErrorDefaultOpen = !connection.errorType || connection.errorType === 'unknown'
+  const [showRawError, setShowRawError] = useState(rawErrorDefaultOpen)
+
+  useEffect(() => {
+    setShowRawError(rawErrorDefaultOpen)
+  }, [connection.error, rawErrorDefaultOpen])
 
   // Auto-retry after successful auth. The terminal shell runs on the server
   // host, so the auth command itself fixes the server's credentials in every
@@ -179,10 +258,10 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const retryCmd = `curl -s -X POST http://${window.location.host}/api/connection/retry > /dev/null`
 
   const handleAuthInTerminal = () => {
-    if (!authInfo?.authCommand) return
+    if (!commandInfo?.authCommand) return
     const cmd = authMe?.authEnabled === false
-      ? `${authInfo.authCommand.command} && ${retryCmd}`
-      : authInfo.authCommand.command
+      ? `${commandInfo.authCommand.command} && ${retryCmd}`
+      : commandInfo.authCommand.command
     openLocalTerminal({
       initialCommand: cmd,
       title: 'Auth',
@@ -194,32 +273,34 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   }
 
   return (
-    <div className="flex-1 flex items-start justify-center pt-16 px-8">
-      <div className="max-w-lg w-full">
+    <div className="flex-1 flex items-start justify-center pt-12 px-8">
+      <div className="max-w-xl w-full">
         <div className="flex flex-col items-center text-center">
-          <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mb-6">
-            <XCircle className="w-10 h-10 text-red-400" />
+          <div className="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center mb-5">
+            <ServerOff className="w-8 h-8 text-red-400" />
           </div>
 
           <h2 className="text-xl font-semibold text-theme-text-primary mb-2">
             {connection.errorType === 'config' ? 'No Cluster Configuration' : 'Cannot Connect to Cluster'}
           </h2>
 
-          <p className="text-sm text-theme-text-secondary mb-1 inline-flex items-center gap-1.5">
-            Context: {connection.context ? (
-              <ClusterName name={connection.context} />
-            ) : (
-              <span className="inline-code">(none)</span>
-            )}
-          </p>
-
-          {connection.clusterName && (
-            <p className="text-sm text-theme-text-secondary mb-4">
-              Cluster: <span className="inline-code">{connection.clusterName}</span>
+          <div className="mb-6 space-y-1">
+            <p className="text-sm text-theme-text-secondary inline-flex items-center gap-1.5">
+              Context: {connection.context ? (
+                <ClusterName name={connection.context} />
+              ) : (
+                <span className="inline-code">(none)</span>
+              )}
             </p>
-          )}
 
-          <div className="w-full bg-theme-surface border border-theme-border rounded-lg p-4 mb-6 text-left">
+            {connection.clusterName && (
+              <p className="text-sm text-theme-text-secondary">
+                Cluster: <span className="inline-code">{connection.clusterName}</span>
+              </p>
+            )}
+          </div>
+
+          <div className="w-full bg-theme-surface border border-theme-border rounded-lg p-4 mb-5 text-left">
             <h3 className="text-sm font-medium text-theme-text-primary mb-2">
               {errorInfo.title}
             </h3>
@@ -231,34 +312,51 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
                 </li>
               ))}
             </ul>
-            {authInfo?.authCommand && (
+            {commandInfo?.authCommand && (
               <div className="mt-3">
-                <p className="text-xs text-theme-text-tertiary">{authInfo.authCommand.label}</p>
-                <CopyableCommand command={authInfo.authCommand.command} onRunInTerminal={handleRunInTerminal} />
-                <button
-                  onClick={handleAuthInTerminal}
-                  className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium btn-brand rounded-md"
-                >
-                  <TerminalSquare className="w-3.5 h-3.5" />
-                  Authenticate in terminal
-                </button>
+                <p className="text-xs text-theme-text-tertiary">{commandInfo.authCommand.label}</p>
+                <CopyableCommand command={commandInfo.authCommand.command} onRunInTerminal={handleRunInTerminal} />
+                {isAuth && (
+                  <button
+                    onClick={handleAuthInTerminal}
+                    className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium btn-brand rounded-md"
+                  >
+                    <TerminalSquare className="w-3.5 h-3.5" />
+                    Authenticate in terminal
+                  </button>
+                )}
               </div>
             )}
-            {authInfo?.fallbackCommand && (
+            {commandInfo?.fallbackCommand && (
               <div className="mt-4 pt-3 border-t border-theme-border/50">
-                <p className="text-xs text-theme-text-tertiary">{authInfo.fallbackCommand.label}</p>
-                <CopyableCommand command={authInfo.fallbackCommand.command} onRunInTerminal={handleRunInTerminal} />
+                <p className="text-xs text-theme-text-tertiary">{commandInfo.fallbackCommand.label}</p>
+                <CopyableCommand command={commandInfo.fallbackCommand.command} onRunInTerminal={handleRunInTerminal} />
+              </div>
+            )}
+            {connection.error && (
+              <div className="mt-4 pt-3 border-t border-theme-border/50">
+                <button
+                  type="button"
+                  aria-expanded={showRawError}
+                  aria-controls="connection-raw-error"
+                  onClick={() => setShowRawError((open) => !open)}
+                  className="flex items-center gap-1 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+                >
+                  <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-200 ${showRawError ? 'rotate-90' : ''}`} />
+                  Raw error
+                </button>
+                <div className={`issue-details-motion ${showRawError ? 'issue-details-motion-open' : ''}`}>
+                  <div className="overflow-hidden">
+                    <div id="connection-raw-error" className="mt-2 bg-theme-elevated border border-theme-border rounded-md p-3 overflow-auto max-h-32">
+                      <code className="text-xs text-theme-text-tertiary font-mono whitespace-pre-wrap break-words">
+                        {connection.error}
+                      </code>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>
-
-          {connection.error && (
-            <div className="w-full bg-theme-elevated border border-theme-border rounded-lg p-3 mb-6 overflow-auto max-h-32">
-              <code className="text-xs text-red-400 font-mono whitespace-pre-wrap break-words">
-                {connection.error}
-              </code>
-            </div>
-          )}
 
           <div className="flex items-center gap-5">
             <button
@@ -279,8 +377,14 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
               )}
             </button>
 
-            {connection.errorType !== 'config' && <ContextSwitcher />}
+            {connection.errorType !== 'config' && <ContextSwitcher triggerName="Switch context" />}
           </div>
+
+          {isAuth && (
+            <p className="mt-4 text-xs text-theme-text-tertiary">
+              Radar will keep retrying after credentials are refreshed.
+            </p>
+          )}
         </div>
       </div>
     </div>

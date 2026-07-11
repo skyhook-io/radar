@@ -277,7 +277,7 @@ func affectedOf(refs []Ref) Affected {
 		switch r.Kind {
 		case "Pod":
 			a.Pods++
-		case "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob":
+		case "Deployment", "Rollout", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob":
 			a.Workloads++
 		case "Service":
 			a.Services++

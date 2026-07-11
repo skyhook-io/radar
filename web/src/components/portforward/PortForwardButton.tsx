@@ -7,6 +7,7 @@ import { useStartPortForward } from './PortForwardManager'
 import { useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
 import { validatePort } from '@skyhook-io/k8s-ui/utils/validators'
 import { Tooltip } from '../ui/Tooltip'
+import { Input } from '@skyhook-io/k8s-ui'
 
 interface PortForwardButtonProps {
   type: 'pod' | 'service'
@@ -123,9 +124,8 @@ function KubectlCommandDialog({
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2 text-sm text-theme-text-secondary">
               <label htmlFor="local-port">Local port:</label>
-              <input
+              <Input
                 id="local-port"
-                type="text"
                 inputMode="numeric"
                 value={portInput}
                 onChange={(e) => setPortInput(e.target.value)}

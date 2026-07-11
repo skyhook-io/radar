@@ -123,6 +123,8 @@ func (s *Server) finalizePostContextSwitch() {
 	clearApplicationsCache()
 	s.vitalsMetrics.clear()
 	s.clearAllNamespacePreferences()
+	// AI investigations are cancelled + staled by the BEFORE-switch hook (see
+	// OnBeforeContextSwitch in New) so they can't touch the new cluster.
 }
 
 // loadSavedNamespacePreference seeds the per-user map from settings.json on

@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Package, ExternalLink } from 'lucide-react'
+import { Package, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { ManagedResource, GitOpsHealthStatus } from '../../types/gitops'
 import { groupManagedResourcesByKind } from '../../types/gitops'
 import { pluralize } from '../../utils/pluralize'
+import { Collapse, CollapseChevron } from '../ui/Collapse'
 
 interface ManagedResourcesListProps {
   resources: ManagedResource[]
@@ -45,18 +46,14 @@ export function ManagedResourcesList({
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 w-full text-left mb-2 hover:text-theme-text-primary transition-colors"
       >
-        {expanded ? (
-          <ChevronDown className="w-4 h-4 text-theme-text-tertiary" />
-        ) : (
-          <ChevronRight className="w-4 h-4 text-theme-text-tertiary" />
-        )}
+        <CollapseChevron open={expanded} className="w-4 h-4" />
         <Package className="w-4 h-4 text-theme-text-secondary" />
         <span className="text-sm font-medium text-theme-text-secondary">
           {title} ({resources.length})
         </span>
       </button>
 
-      {expanded && (
+      <Collapse open={expanded} mountLazily>
         <div className="pl-6 space-y-3">
           {sortedGroups.map(([kind, kindResources]) => (
             <ResourceKindGroup
@@ -77,7 +74,7 @@ export function ManagedResourcesList({
             </button>
           )}
         </div>
-      )}
+      </Collapse>
     </div>
   )
 }
@@ -98,12 +95,12 @@ function ResourceKindGroup({ kind, resources, onResourceClick, showHealth }: Res
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-1.5 text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors mb-1"
       >
-        {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        <CollapseChevron open={expanded} className="w-3 h-3" />
         <span className="font-medium">{kind}</span>
         <span className="text-theme-text-tertiary">({resources.length})</span>
       </button>
 
-      {expanded && (
+      <Collapse open={expanded} mountLazily>
         <div className="ml-4 space-y-0.5">
           {resources.map((resource, idx) => (
             <ResourceItem
@@ -114,7 +111,7 @@ function ResourceKindGroup({ kind, resources, onResourceClick, showHealth }: Res
             />
           ))}
         </div>
-      )}
+      </Collapse>
     </div>
   )
 }

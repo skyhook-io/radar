@@ -1,10 +1,26 @@
 package main
 
 import (
+	goruntime "runtime"
+
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// reloadAccelerator picks the Reload shortcut per platform. Off macOS,
+// CmdOrCtrl+R resolves to Ctrl+R — the terminal's reverse-i-search binding — and
+// a native menu accelerator fires regardless of webview focus, so it would
+// hijack Ctrl+R inside a pod/local shell. Ctrl+Shift+R keeps a reload hotkey
+// without shadowing a key terminals actually send (plain function keys like F5
+// are consumed by TUIs and cmd.exe history). macOS keeps Cmd+R, which doesn't
+// collide (terminals use Ctrl, not Cmd).
+func reloadAccelerator(goos string) *keys.Accelerator {
+	if goos == "darwin" {
+		return keys.CmdOrCtrl("r")
+	}
+	return keys.Combo("r", keys.ControlKey, keys.ShiftKey)
+}
 
 func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 	appMenu := menu.NewMenu()
@@ -70,7 +86,7 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 		runtime.WindowExecJS(desktopApp.ctx, "window.history.forward()")
 	})
 	viewMenu.AddSeparator()
-	viewMenu.AddText("Reload", keys.CmdOrCtrl("r"), func(_ *menu.CallbackData) {
+	viewMenu.AddText("Reload", reloadAccelerator(goruntime.GOOS), func(_ *menu.CallbackData) {
 		runtime.WindowReloadApp(desktopApp.ctx)
 	})
 	viewMenu.AddSeparator()

@@ -204,7 +204,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 underline underline-offset-2">
                 Model Context Protocol
               </a>{' '}
-              (MCP) server that lets AI assistants query your cluster through Radar.
+              (MCP) server that lets AI agents query your cluster through Radar.
               Unlike raw kubectl access, Radar gives your AI pre-processed, enriched data —
               topology graphs, health assessments, deduplicated events, filtered logs — so it
               can understand your cluster state quickly without burning through context on

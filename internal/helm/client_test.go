@@ -155,6 +155,93 @@ func TestFindBestUpgradeVersion(t *testing.T) {
 	}
 }
 
+func TestApplyNoClassicCandidateUpgrade_SourceIssueMapping(t *testing.T) {
+	tests := []struct {
+		name                    string
+		noClassicRepos          bool
+		indexLoadFailed         bool
+		hasRegisteredOCISources bool
+		ociFallback             bool
+		wantIssue               UpgradeSourceIssue
+		wantUntracked           bool
+		wantSourceType          string
+		wantErrorContains       string
+	}{
+		{
+			name:                    "registered OCI source wins before repo index error",
+			indexLoadFailed:         true,
+			hasRegisteredOCISources: true,
+			ociFallback:             true,
+			wantSourceType:          "oci",
+		},
+		{
+			name:                    "repo index error when OCI does not resolve",
+			indexLoadFailed:         true,
+			hasRegisteredOCISources: true,
+			wantIssue:               UpgradeSourceIssueRepoIndexError,
+			wantErrorContains:       "failed to load one or more configured repository indexes",
+		},
+		{
+			name:              "no configured chart sources",
+			noClassicRepos:    true,
+			wantIssue:         UpgradeSourceIssueUntracked,
+			wantUntracked:     true,
+			wantErrorContains: "no chart sources configured",
+		},
+		{
+			name:                    "chart absent from configured sources",
+			hasRegisteredOCISources: true,
+			wantIssue:               UpgradeSourceIssueUntracked,
+			wantUntracked:           true,
+			wantErrorContains:       "chart not found in configured repositories or registered OCI sources",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &UpgradeInfo{}
+			applyNoClassicCandidateUpgrade(info, tt.noClassicRepos, tt.indexLoadFailed, tt.hasRegisteredOCISources, func() bool {
+				if !tt.ociFallback {
+					return false
+				}
+				info.SourceType = "oci"
+				info.ChartRef = "oci://reg/charts/app"
+				info.LatestVersion = "1.2.0"
+				return true
+			})
+
+			if info.SourceIssue != tt.wantIssue {
+				t.Fatalf("SourceIssue = %q, want %q (info=%+v)", info.SourceIssue, tt.wantIssue, info)
+			}
+			if info.Untracked != tt.wantUntracked {
+				t.Fatalf("Untracked = %v, want %v (info=%+v)", info.Untracked, tt.wantUntracked, info)
+			}
+			if info.SourceType != tt.wantSourceType {
+				t.Fatalf("SourceType = %q, want %q (info=%+v)", info.SourceType, tt.wantSourceType, info)
+			}
+			if tt.wantErrorContains != "" && !strings.Contains(info.Error, tt.wantErrorContains) {
+				t.Fatalf("Error = %q, want to contain %q", info.Error, tt.wantErrorContains)
+			}
+			if tt.wantErrorContains == "" && info.Error != "" {
+				t.Fatalf("Error = %q, want empty", info.Error)
+			}
+		})
+	}
+}
+
+func TestMarkUpgradeSourceIssue_AmbiguousRepositoryIsNotUntracked(t *testing.T) {
+	info := &UpgradeInfo{}
+
+	markUpgradeSourceIssue(info, UpgradeSourceIssueAmbiguousRepository, "could not identify upstream chart repository")
+
+	if info.SourceIssue != UpgradeSourceIssueAmbiguousRepository {
+		t.Fatalf("SourceIssue = %q, want %q", info.SourceIssue, UpgradeSourceIssueAmbiguousRepository)
+	}
+	if info.Untracked {
+		t.Fatal("ambiguous classic repository should not be marked untracked")
+	}
+}
+
 func TestChartSourceHosts(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -547,6 +634,22 @@ func TestGetValuesWithAllValuesKeepsComputedWhenUserValuesReadFails(t *testing.T
 	}
 	if len(values.UserSupplied) != 0 {
 		t.Fatalf("UserSupplied = %#v, want empty when secondary read fails", values.UserSupplied)
+	}
+}
+
+func TestChartForUpgradeTargetReusesReleaseChartForSameVersion(t *testing.T) {
+	client := testHelmClientWithRepoConfigOnly(t)
+	rel := helmTestRelease("argo-cd", "demo", 1, release.StatusDeployed, "deployed")
+	rel.Chart.Metadata.Version = "9.5.11"
+
+	got, err := client.chartForUpgradeTarget(nil, rel, "9.5.11", "missing-repo", func(phase, message, detail string) {
+		t.Fatalf("same-version chart selection should not resolve/download chart, got progress %q %q %q", phase, message, detail)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != rel.Chart {
+		t.Fatal("chartForUpgradeTarget returned a different chart, want current release chart")
 	}
 }
 
@@ -1350,6 +1453,49 @@ func TestResolveUpgradeChartPath_UsesRepositoryHint(t *testing.T) {
 	}
 }
 
+func TestResolveUpgradeChartPath_RepositoryIndexOCIURLIsAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoFile := filepath.Join(dir, "repositories.yaml")
+	if err := os.WriteFile(repoFile, []byte(`apiVersion: v1
+generated: "2026-05-05T00:00:00Z"
+repositories:
+- name: bitnami
+  url: https://charts.bitnami.com/bitnami
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "bitnami-index.yaml"), []byte(`apiVersion: v1
+entries:
+  nginx:
+  - name: nginx
+    version: 25.0.5
+    urls:
+    - oci://registry-1.docker.io/bitnamicharts/nginx
+generated: "2026-05-05T00:00:00Z"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{settings: &cli.EnvSettings{
+		RepositoryConfig: repoFile,
+		RepositoryCache:  cacheDir,
+	}}
+
+	chartPath, repoName, err := client.resolveUpgradeChartPath("nginx", "25.0.5", "bitnami", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repoName != "bitnami" {
+		t.Fatalf("repo = %q, want bitnami", repoName)
+	}
+	if chartPath != "oci://registry-1.docker.io/bitnamicharts/nginx" {
+		t.Fatalf("chart path = %q, want OCI URL unchanged", chartPath)
+	}
+}
+
 func TestResolveUpgradeChartPath_AmbiguousWithoutHintOrAffinity(t *testing.T) {
 	client := testHelmClientWithRepos(t)
 
@@ -1389,6 +1535,48 @@ func TestResolveUpgradeChartPath_RepositoryHintDoesNotFallback(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "chart argo-cd version 9.5.11 not found in repository argo") {
 		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestResolveUpgradeChartPath_ReportsIndexErrorAfterOCIFallbackFails(t *testing.T) {
+	withOCISources(t, nil)
+	client := testHelmClientWithRepoConfigOnly(t)
+
+	_, _, err := client.resolveUpgradeChartPath("postgres", "0.19.6", "", nil)
+	if err == nil {
+		t.Fatal("expected index error after OCI fallback miss")
+	}
+	if !strings.Contains(err.Error(), "not found in configured repositories or registered OCI sources") {
+		t.Fatalf("error = %q", err)
+	}
+	if !strings.Contains(err.Error(), "failed to load indexes") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestResolveUpgradeChartPath_UsesOCIBeforeUnrelatedIndexError(t *testing.T) {
+	client := testHelmClientWithRepoConfigOnly(t)
+
+	chartPath, repoName, err := client.resolveUpgradeChartPathWithOCIResolver(
+		"postgres",
+		"0.19.6",
+		"",
+		nil,
+		func(chartName, targetVersion string) (string, bool) {
+			if chartName != "postgres" || targetVersion != "0.19.6" {
+				return "", false
+			}
+			return "oci://registry-1.docker.io/cloudpirates/postgres", true
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repoName != "oci" {
+		t.Fatalf("repoName = %q, want oci", repoName)
+	}
+	if chartPath != "oci://registry-1.docker.io/cloudpirates/postgres" {
+		t.Fatalf("chartPath = %q, want OCI chart path", chartPath)
 	}
 }
 
@@ -1440,6 +1628,29 @@ entries:
 	}
 	for name, versions := range versionsByRepo {
 		writeIndex(name, versions)
+	}
+
+	return &Client{settings: &cli.EnvSettings{
+		RepositoryConfig: repoFile,
+		RepositoryCache:  cacheDir,
+	}}
+}
+
+func testHelmClientWithRepoConfigOnly(t *testing.T) *Client {
+	t.Helper()
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoFile := filepath.Join(dir, "repositories.yaml")
+	if err := os.WriteFile(repoFile, []byte(`apiVersion: v1
+generated: "2026-05-05T00:00:00Z"
+repositories:
+- name: broken
+  url: https://charts.example.invalid
+`), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	return &Client{settings: &cli.EnvSettings{

@@ -19,6 +19,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/diagnosecli"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	"github.com/skyhook-io/radar/internal/server"
@@ -32,6 +33,14 @@ var (
 )
 
 func main() {
+	// Subcommand dispatch (before flag parsing — subcommands own their flags).
+	// `radar diagnose <kind>/<name>` is a thin client for a RUNNING instance.
+	if len(os.Args) > 1 && os.Args[1] == "diagnose" {
+		os.Exit(diagnosecli.Run(os.Args[2:], func(url string) {
+			app.OpenBrowser(url, "")
+		}))
+	}
+
 	startupStart := time.Now()
 
 	// Propagate the build-time version to the cloud dialer so the agent
@@ -76,6 +85,8 @@ func main() {
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
+	// AI history (Diagnose investigations)
+	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + verdicts) to ~/.radar/ai-runs.db so they survive restarts")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	// --prometheus-header Key=Value, repeatable. Defaults populated from
@@ -126,9 +137,10 @@ func main() {
 	maxScopeCandidates := flag.Int("max-scope-candidates", k8s.EnvIntOr("RADAR_MAX_SCOPE_CANDIDATES", 20), "Cap on the namespace-fallback probe fanout for users who can list namespaces cluster-wide but not list a specific kind cluster-wide (default: 20). Raise for clusters with more than 20 namespaces to avoid silently marking kinds as denied in dropped namespaces. Env: RADAR_MAX_SCOPE_CANDIDATES")
 	flag.Parse()
 
-	// Cloud-mode: Radar runs inside a customer cluster and fronts Radar
-	// Cloud. Under cloud-mode the tunnel is the only path to this listener
-	// and it delivers Cloud-authenticated identity headers on every request.
+	// Cloud-mode: Radar runs inside a customer cluster and fronts Radar Cloud.
+	// The ordinary TCP listener is health-only; the full handler is served over
+	// the authenticated tunnel, which marks requests in-process before proxy
+	// identity headers are accepted.
 	// Force --auth-mode=proxy so Radar impersonates the Cloud user against
 	// the K8s API instead of falling back to the ServiceAccount (which would
 	// give every Cloud user full SA permissions).
@@ -229,6 +241,8 @@ func main() {
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
 		MCPEnabled:               mcpEnabled,
+		AIHistory:                *aiHistory,
+		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
 		Version:                  version,
 		AuthConfig: auth.Config{
 			Mode:                      *authMode,

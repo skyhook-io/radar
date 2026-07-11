@@ -1,10 +1,10 @@
 # AI Integration (MCP)
 
-Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants query your Kubernetes cluster.
+Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI agents query your Kubernetes cluster.
 
 ## Why MCP instead of raw kubectl?
 
-Giving an AI assistant raw `kubectl` access has problems:
+Giving an AI agent raw `kubectl` access has problems:
 
 - **Token waste** — `kubectl get pod -o yaml` returns verbose YAML full of managed fields, status conditions, and metadata noise that burns through LLM context windows
 - **No enrichment** — raw output lacks topology relationships, health assessments, or cross-resource correlation

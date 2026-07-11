@@ -135,7 +135,7 @@ func TestResolveSubject_UnknownOperatorDegradesToWorkload(t *testing.T) {
 
 func TestScopeForKind(t *testing.T) {
 	cases := map[string]Scope{
-		"Pod": ScopeWorkload, "Deployment": ScopeWorkload, "CronJob": ScopeWorkload,
+		"Pod": ScopeWorkload, "Deployment": ScopeWorkload, "Rollout": ScopeWorkload, "CronJob": ScopeWorkload,
 		"Service": ScopeService, "Ingress": ScopeIngress, "PersistentVolumeClaim": ScopePVC,
 		"Node": ScopeNode, "Frobnicator": ScopeUnknown,
 	}
