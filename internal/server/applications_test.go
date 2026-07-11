@@ -134,7 +134,7 @@ func TestWorkflowTemplateBatchSummariesGroupGeneratedWorkflows(t *testing.T) {
 		workflowRun("dev", "migration-b", "migration-template", "Succeeded", "2026-01-03T00:00:00Z"),
 	}
 
-	summaries := workflowTemplateBatchSummaries(workflows)
+	summaries := workflowTemplateBatchSummaries(workflows, nil)
 	batch := summaries["WorkflowTemplate/dev/migration-template"]
 	if batch == nil {
 		t.Fatalf("missing WorkflowTemplate batch summary: %#v", summaries)
@@ -153,7 +153,7 @@ func TestWorkflowTemplateBatchSummariesGroupClusterWorkflowTemplates(t *testing.
 		clusterWorkflowRun("prod", "global-b", "cluster-migration", "Running", "2026-01-04T00:00:00Z"),
 	}
 
-	summaries := workflowTemplateBatchSummaries(workflows)
+	summaries := workflowTemplateBatchSummaries(workflows, nil)
 	batch := summaries["ClusterWorkflowTemplate//cluster-migration"]
 	if batch == nil {
 		t.Fatalf("missing ClusterWorkflowTemplate batch summary: %#v", summaries)
@@ -163,6 +163,26 @@ func TestWorkflowTemplateBatchSummariesGroupClusterWorkflowTemplates(t *testing.
 	}
 	if batch.LatestRunName != "global-b" || batch.LatestRunPhase != "Running" {
 		t.Fatalf("latest run = %s/%s, want global-b/Running", batch.LatestRunName, batch.LatestRunPhase)
+	}
+}
+
+func TestWorkflowTemplateBatchSummariesKeepsStaleCronLabel(t *testing.T) {
+	wf := workflowRun("dev", "migration-a", "migration-template", "Succeeded", "2026-01-03T00:00:00Z")
+	wf.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "deleted-parent"})
+
+	summaries := workflowTemplateBatchSummaries([]*unstructured.Unstructured{wf}, map[string]bool{})
+	if batch := summaries["WorkflowTemplate/dev/migration-template"]; batch == nil || batch.RetainedRuns != 1 {
+		t.Fatalf("stale CronWorkflow label dropped template run: %#v", summaries)
+	}
+}
+
+func TestWorkflowTemplateBatchSummariesExcludesExistingCronOwner(t *testing.T) {
+	wf := workflowRun("dev", "migration-a", "migration-template", "Succeeded", "2026-01-03T00:00:00Z")
+	wf.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "nightly"})
+
+	summaries := workflowTemplateBatchSummaries([]*unstructured.Unstructured{wf}, map[string]bool{"dev/nightly": true})
+	if len(summaries) != 0 {
+		t.Fatalf("existing CronWorkflow run also appeared in template summary: %#v", summaries)
 	}
 }
 

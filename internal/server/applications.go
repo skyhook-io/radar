@@ -1011,7 +1011,7 @@ func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 		cronWorkflowKeys[cwf.GetNamespace()+"/"+cwf.GetName()] = true
 	}
 	templateInfos := argoWorkflowTemplateInfos(ctx, cache, namespaces)
-	templateBatches := workflowTemplateBatchSummaries(workflows)
+	templateBatches := workflowTemplateBatchSummaries(workflows, cronWorkflowKeys)
 
 	for _, wf := range workflows {
 		if owner := cronWorkflowOwnerName(wf); owner != "" && cronWorkflowKeys[wf.GetNamespace()+"/"+owner] {
@@ -1107,10 +1107,10 @@ func argoWorkflowTemplateInfos(ctx context.Context, cache *k8s.ResourceCache, na
 	return out
 }
 
-func workflowTemplateBatchSummaries(workflows []*unstructured.Unstructured) map[string]*appBatchSummary {
+func workflowTemplateBatchSummaries(workflows []*unstructured.Unstructured, cronWorkflowKeys map[string]bool) map[string]*appBatchSummary {
 	out := map[string]*appBatchSummary{}
 	for _, wf := range workflows {
-		if cronWorkflowOwnerName(wf) != "" {
+		if owner := cronWorkflowOwnerName(wf); owner != "" && cronWorkflowKeys[wf.GetNamespace()+"/"+owner] {
 			continue
 		}
 		ref, ok := argoWorkflowTemplateRef(wf)

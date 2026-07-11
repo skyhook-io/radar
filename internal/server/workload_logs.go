@@ -242,12 +242,8 @@ func (s *Server) readableRunNamespaces(r *http.Request, group, resource string, 
 		allowed := s.filterNamespacesByCanRead(r, group, resource, "list", s.allNamespaceNames())
 		return allowed, len(allowed) > 0
 	}
-	for _, ns := range namespaces {
-		if !s.canRead(r, group, resource, ns, "list") {
-			return nil, false
-		}
-	}
-	return namespaces, true
+	allowed := s.filterNamespacesByCanRead(r, group, resource, "list", namespaces)
+	return allowed, len(allowed) > 0
 }
 
 // handleWorkloadLogs fetches and merges logs from all pods (non-streaming)

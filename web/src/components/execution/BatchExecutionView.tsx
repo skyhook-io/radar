@@ -6,6 +6,7 @@ import { buildWorkflowExecutionModel, type WorkflowExecutionActivity, type Workf
 import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
 import { useResource, useWorkloadRuns, type WorkloadRun } from '../../api/client'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
+import { Tooltip } from '../ui/Tooltip'
 
 const EMPTY_RUNS: WorkloadRun[] = []
 const SCHEDULED_KINDS = new Set(['CronJob', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob'])
@@ -714,8 +715,10 @@ function RunRailButton({ run, selected, showNamespace, onClick }: { run: Workloa
       )}
     >
       <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-medium text-theme-text-primary" title={run.name}>{showNamespace ? `${run.namespace}/` : ''}{midTruncate(run.name, 34)}</span>
-          <span className="mt-0.5 block truncate text-[10px] text-theme-text-tertiary">{formatRunTime(run) || 'time unknown'}{formatRunDuration(run) ? ` · ${formatRunDuration(run)}` : ''} · {workCount(run)}</span>
+        <Tooltip content={run.name} delay={300} wrapperClassName="block min-w-0">
+          <span className="block truncate text-xs font-medium text-theme-text-primary">{showNamespace ? `${run.namespace}/` : ''}{midTruncate(run.name, 34)}</span>
+        </Tooltip>
+        <span className="mt-0.5 block truncate text-[10px] text-theme-text-tertiary">{formatRunTime(run) || 'time unknown'}{formatRunDuration(run) ? ` · ${formatRunDuration(run)}` : ''} · {workCount(run)}</span>
       </span>
       <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{shortPhase(run.phase)}</span>
     </button>
