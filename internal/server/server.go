@@ -631,7 +631,26 @@ func (s *Server) StartWithReady(ready chan<- struct{}) error {
 		close(ready)
 	}
 
-	return http.Serve(ln, s.router)
+	return http.Serve(ln, localTCPHandler(s.router))
+}
+
+// localTCPHandler is the handler exposed on Radar's ordinary pod/host listener.
+// In Cloud mode the full application is served only over the authenticated
+// yamux session; this listener exists solely for kubelet health probes. Without
+// this split, any pod that could reach the ClusterIP Service could spoof the
+// Hub's forwarded identity headers and use Radar as a Kubernetes impersonation
+// deputy.
+func localTCPHandler(next http.Handler) http.Handler {
+	if !cloud.Mode() {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/health" {
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ActualPort returns the port the server is listening on.
@@ -662,7 +681,9 @@ func (s *Server) SetSaveFileFunc(fn func(defaultFilename string, data []byte) (s
 	s.saveFileFunc = fn
 }
 
-// Handler returns the server's HTTP handler for use with httptest.
+// Handler returns the full application handler for the authenticated Cloud
+// tunnel and httptest. In Cloud mode, Start exposes only the health-only wrapper
+// on the ordinary TCP listener.
 func (s *Server) Handler() http.Handler {
 	return s.router
 }

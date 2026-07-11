@@ -4,23 +4,22 @@ package main
 // otherwise flat-flag CLI. Dispatched from main() before flag.Parse (see the
 // os.Args[1]=="cloud" check there).
 //
-//	radar cloud connect     device-flow connect this cluster to Radar Cloud
-//	radar cloud status      show the current context's cloud connection
-//	radar cloud disconnect  forget the current context's cloud connection
+//	radar cloud install     install an in-cluster agent connected to Cloud
 //
-// `connect` performs the browser device flow, persists the minted token to
-// ~/.radar/credentials.json (0600), then rewrites os.Args so the normal main()
-// flow brings up the server + cloud dialer with the obtained token. status and
-// disconnect are terminal (they exit).
+// Local-process preview connections are not available yet. The reserved
+// `connect` command exits before contacting the hub and points users to the
+// supported in-cluster paths.
 
 import (
 	"context"
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"io"
+	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -29,7 +28,10 @@ import (
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/contextname"
 	"github.com/skyhook-io/radar/internal/helm"
+	"helm.sh/helm/v3/pkg/chartutil"
+	k8svalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -41,10 +43,13 @@ func signalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
-const defaultHubBase = "https://api.radarhq.io"
+const (
+	defaultHubBase                 = "https://api.radarhq.io"
+	cloudTunnelConfirmationTimeout = 5 * time.Minute
+	cloudKubernetesRequestTimeout  = 30 * time.Second
+)
 
-// runCloudSubcommand handles `radar cloud …`. For `connect` it returns after
-// rewriting os.Args so main() proceeds; status/disconnect/help exit directly.
+// runCloudSubcommand handles `radar cloud …` before the flat flag set is parsed.
 func runCloudSubcommand() {
 	if len(os.Args) < 3 {
 		cloudUsage(os.Stderr)
@@ -54,15 +59,9 @@ func runCloudSubcommand() {
 	rest := os.Args[3:]
 	switch sub {
 	case "connect":
-		cloudConnect(rest)
+		os.Exit(cloudConnect(rest, os.Stderr))
 	case "install":
 		cloudInstall(rest)
-		os.Exit(0)
-	case "status":
-		cloudStatus()
-		os.Exit(0)
-	case "disconnect":
-		cloudDisconnect(rest)
 		os.Exit(0)
 	case "-h", "--help", "help":
 		cloudUsage(os.Stdout)
@@ -75,116 +74,72 @@ func runCloudSubcommand() {
 }
 
 func cloudUsage(w *os.File) {
-	fmt.Fprint(w, `Connect this cluster to Radar Cloud.
+	fmt.Fprint(w, `Connect this cluster to Radar Cloud with an in-cluster agent.
 
 Usage:
-  radar cloud install [--namespace NS] [--hub-url URL] [--name NAME] [--dry-run]
-  radar cloud connect [--hub-url URL] [--name NAME] [--no-browser]
-  radar cloud status
-  radar cloud disconnect
+  radar cloud install [--namespace NS] [--release NAME] [--hub-url URL] [--name NAME] [--dry-run]
 
 install  Install Radar INTO the current-context cluster, connected to Cloud
          (uses your kubeconfig; the in-cluster agent serves with full per-user
-         RBAC). This is the recommended way to connect a cluster.
-connect  Tunnel THIS local Radar process to Cloud (preview; does not install).
+         RBAC).
 
 Flags (install):
   --namespace NS   Namespace to install into (default: radar)
+  --release NAME   Helm release name (default: radar)
   --hub-url URL    Radar Cloud hub API (default `+defaultHubBase+`; set for self-hosted)
   --name NAME      Cluster name shown in Cloud (default: current kubecontext)
   --chart-version  Chart version to install (default: latest published)
   --dry-run        Run the permission preflight + print the plan; install nothing
   --no-browser     Print the approval URL instead of opening a browser
-
-Flags (connect):
-  --hub-url URL   Radar Cloud hub API (default `+defaultHubBase+`; set for self-hosted)
-  --name NAME     Cluster name shown in Cloud (default: current kubecontext)
-  --no-browser    Print the approval URL instead of opening a browser
+  --browser NAME   Browser to use for approval (default: Radar config / OS default)
 `)
 }
 
-func cloudConnect(args []string) {
-	fs := flag.NewFlagSet("cloud connect", flag.ExitOnError)
+func cloudConnect(args []string, w io.Writer) int {
+	fs := flag.NewFlagSet("cloud connect", flag.ContinueOnError)
+	fs.SetOutput(w)
 	hubURL := fs.String("hub-url", defaultHubBase, "Radar Cloud hub API origin")
 	name := fs.String("name", "", "Cluster name shown in Cloud (default: current kubecontext)")
-	noBrowser := fs.Bool("no-browser", false, "Print the approval URL instead of opening a browser")
-	browserPref := fs.String("browser", "", "Browser to open the approval URL with")
-	_ = fs.Parse(args)
-
-	// Honor a config.json kubeconfig so the metadata + saved ServerURL describe
-	// the SAME cluster main() will serve (not the default context).
-	fileCfg := config.Load()
-	if len(fileCfg.KubeconfigDirs) > 0 {
-		fmt.Fprintln(os.Stderr, "`radar cloud connect` doesn't support a kubeconfigDirs (multi-cluster) config — it can't pick one cluster.")
-		fmt.Fprintln(os.Stderr, "Point it at a single kubeconfig instead — set KUBECONFIG or config.json's `kubeconfig`.")
-		os.Exit(1)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(w, "\nLocal-process preview mode is not available yet; use `radar cloud install` for the supported in-cluster path.")
+			return 0
+		}
+		fmt.Fprintln(w, "\nLocal-process preview mode is not available yet; use `radar cloud install` for the supported in-cluster path.")
+		return 2
 	}
-	kubeconfig := fileCfg.Kubeconfig
-	ctxName := currentKubeContextName(kubeconfig)
-	clusterName := *name
-	if clusterName == "" {
-		clusterName = ctxName
+	if fs.NArg() != 0 {
+		fmt.Fprintf(w, "cloud connect: unexpected argument %q\n", fs.Arg(0))
+		return 2
 	}
-	if clusterName == "" {
-		clusterName = "my-cluster"
-	}
-
-	meta := gatherConnectMetadata(clusterName, kubeconfig)
-
-	ctx, cancel := signalContext()
-	defer cancel()
-
-	client := cloud.NewConnectClient(*hubURL)
-	var open func(string)
-	if !*noBrowser {
-		open = func(u string) { go app.OpenBrowser(u, *browserPref) }
-	}
-
-	fmt.Printf("Connecting %q to Radar Cloud (%s)…\n", clusterName, *hubURL)
-	res, err := client.RunFlow(ctx, meta, os.Stdout, open)
+	normalizedHubURL, err := normalizeHubOrigin(*hubURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\nconnect failed: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(w, "cloud connect: %v\n", err)
+		return 2
 	}
+	*hubURL = normalizedHubURL
+	*name = strings.TrimSpace(*name)
 
-	// Persist the token (0600) keyed by kubecontext so status/disconnect and a
-	// later resume can find it.
-	keyCtx := ctxName
-	if keyCtx == "" {
-		keyCtx = res.ClusterID
+	installCommand := "radar cloud install"
+	if *hubURL != defaultHubBase {
+		installCommand += fmt.Sprintf(" --hub-url=%q", *hubURL)
 	}
-	if err := cloud.SaveClusterCredential(keyCtx, cloud.ClusterCredential{
-		HubBase:     *hubURL,
-		ClusterID:   res.ClusterID,
-		ClusterName: clusterName,
-		Token:       res.Token,
-		WSSURL:      res.WSSURL,
-		ServerURL:   currentClusterServerURL(kubeconfig),
-	}); err != nil {
-		// Non-fatal: we can still serve this session; the user just won't get
-		// auto-resume next time. Warn and continue.
-		fmt.Fprintf(os.Stderr, "warning: couldn't save credentials: %v\n", err)
+	if *name != "" {
+		installCommand += fmt.Sprintf(" --name=%q", *name)
 	}
-
-	fmt.Printf("\n  ✓ Connected. Starting Radar and serving to Cloud — Ctrl-C to stop.\n\n")
-
-	// Rewrite os.Args so the normal main() flow starts the server + dialer with
-	// the obtained connection. --no-browser suppresses the LOCAL UI tab (the
-	// user already has the Cloud page open).
-	os.Args = []string{
-		os.Args[0],
-		"--cloud-url=" + res.WSSURL,
-		"--cloud-token=" + res.Token,
-		"--cluster-name=" + res.ClusterID,
-		"--no-browser",
-	}
+	fmt.Fprintln(w, "`radar cloud connect` local preview mode is not available yet.")
+	fmt.Fprintln(w, "Radar Cloud currently accepts in-cluster agents only; no request was sent to the hub.")
+	fmt.Fprintln(w, "\nInstall the supported agent into your current kubeconfig cluster:")
+	fmt.Fprintf(w, "  %s\n", installCommand)
+	fmt.Fprintln(w, "\nIf Radar is already installed, open your Hub's installation wizard, choose \"Existing installation\", and run the generated Helm upgrade.")
+	return 1
 }
 
-// cloudInstall implements `radar cloud install` (#2): install Radar INTO the
+// cloudInstall implements `radar cloud install`: install Radar INTO the
 // current-context cluster with Cloud mode enabled, using the operator's own
 // kubeconfig — the only identity that can provision the impersonation RBAC.
-// Unlike `connect`, it does NOT start a local dialer: the in-cluster agent it
-// installs is what dials the tunnel. Terminal (exits after installing).
+// It does not start a local dialer: the in-cluster agent it installs is what
+// dials the tunnel. Terminal (exits after installing).
 func cloudInstall(args []string) {
 	fs := flag.NewFlagSet("cloud install", flag.ExitOnError)
 	hubURL := fs.String("hub-url", defaultHubBase, "Radar Cloud hub API origin")
@@ -196,24 +151,40 @@ func cloudInstall(args []string) {
 	browserPref := fs.String("browser", "", "Browser to open the approval URL with")
 	dryRun := fs.Bool("dry-run", false, "Preflight + print the plan; install nothing")
 	_ = fs.Parse(args)
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "cloud install: unexpected argument %q\n", fs.Arg(0))
+		os.Exit(2)
+	}
+	*chartVersion = strings.TrimSpace(*chartVersion)
+
+	normalizedNamespace, normalizedRelease, err := normalizeCloudInstallNames(*namespace, *release)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud install: %v\n", err)
+		os.Exit(2)
+	}
+	*namespace = normalizedNamespace
+	*release = normalizedRelease
+	normalizedHubURL, err := normalizeHubOrigin(*hubURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud install: %v\n", err)
+		os.Exit(2)
+	}
+	*hubURL = normalizedHubURL
 
 	// Honor a config.json kubeconfig so we install into (and describe) the SAME
 	// cluster the operator's config points at, not the default context.
 	fileCfg := config.Load()
+	if *browserPref == "" {
+		*browserPref = fileCfg.Browser
+	}
 	if len(fileCfg.KubeconfigDirs) > 0 {
-		fmt.Fprintln(os.Stderr, "`radar cloud install` doesn't support a kubeconfigDirs (multi-cluster) config — it can't pick one cluster.")
-		fmt.Fprintln(os.Stderr, "Point it at a single kubeconfig instead — set KUBECONFIG or config.json's `kubeconfig`.")
+		fmt.Fprintln(os.Stderr, "`radar cloud install` cannot choose one cluster while config.json's `kubeconfigDirs` setting is enabled.")
+		fmt.Fprintln(os.Stderr, "Clear `kubeconfigDirs` in Radar Settings (or ~/.radar/config.json), then select one current context with KUBECONFIG or config.json's `kubeconfig`.")
 		os.Exit(1)
 	}
 	kubeconfig := fileCfg.Kubeconfig
 	ctxName := currentKubeContextName(kubeconfig)
-	clusterName := *name
-	if clusterName == "" {
-		clusterName = ctxName
-	}
-	if clusterName == "" {
-		clusterName = "my-cluster"
-	}
+	clusterName := resolveCloudInstallClusterName(*name, ctxName)
 
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -226,7 +197,7 @@ func cloudInstall(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Installing Radar into cluster %q (namespace %q)…\n\n", clusterName, *namespace)
+	fmt.Printf("Preparing a Radar Cloud installation for cluster %q (namespace %q)…\n\n", clusterName, *namespace)
 
 	// 1. Preflight BEFORE minting a token — a permission failure after approval
 	//    would orphan a Cloud cluster + a live token.
@@ -242,43 +213,42 @@ func cloudInstall(args []string) {
 			fmt.Fprintf(os.Stderr, "  • %s\n", d)
 		}
 		fmt.Fprintln(os.Stderr, "\nEnabling Cloud mode provisions per-user RBAC (impersonation), which needs a cluster admin.")
-		fmt.Fprintln(os.Stderr, "Ask your platform team to run `radar cloud install`, or share the approval link with them.")
+		fmt.Fprintln(os.Stderr, "Ask your platform team to run `radar cloud install` against this kubecontext with the same `--hub-url`, `--namespace`, and `--name` options.")
 		os.Exit(1)
 	}
 	if len(pf.Advisory) > 0 {
-		fmt.Println("Note: couldn't confirm these up front (the install will fail cleanly if they're truly missing):")
+		fmt.Println("Note: couldn't confirm these up front (the server dry-run or install will report a denial if they're truly missing):")
 		for _, d := range pf.Advisory {
 			fmt.Printf("  • %s\n", d)
 		}
 		fmt.Println()
 	}
 
-	// 2. Existing-release gate — BEFORE the token mint. A fresh install can't
-	//    replace a deployed release (upgrading an existing Radar to Cloud mode
-	//    from the CLI isn't supported yet), and minting past this point would
-	//    leave a live token + Secret in-cluster with no connected agent.
-	if blocked, berr := hc.ReleaseInstallBlocked(*namespace, *release); berr != nil {
-		fmt.Fprintf(os.Stderr, "couldn't inspect the existing Radar release: %v\n", berr)
-		os.Exit(1)
-	} else if blocked {
-		fmt.Fprintf(os.Stderr, "Radar is already installed in namespace %q (release %q).\n", *namespace, *release)
-		fmt.Fprintln(os.Stderr, "Upgrading an existing install to Cloud mode from `radar cloud install` isn't supported yet —")
-		fmt.Fprintf(os.Stderr, "uninstall it first (helm uninstall %s -n %s) and re-run.\n", *release, *namespace)
+	// 2. Resolve and server-dry-run one exact chart after checking that both the
+	//    release name and fixed token Secret are unused. No Hub request exists yet.
+	prepared, err := cloudinstall.Prepare(ctx, hc, kc, cloudinstall.PrepareConfig{
+		Namespace: *namespace, ReleaseName: *release, ChartVersion: *chartVersion,
+	})
+	if err != nil {
+		if !printFreshInstallConflict(os.Stderr, err) && !printTokenSecretConflict(os.Stderr, err) {
+			fmt.Fprintf(os.Stderr, "installation preflight failed: %v\n", err)
+		}
+		fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
 		os.Exit(1)
 	}
 
 	// 3. Dry-run stops here — before any token mint or browser.
 	if *dryRun {
-		fmt.Printf("Dry run — would install chart skyhook/radar (version %s) as release %q in namespace %q with cloud.enabled=true.\n",
-			chartVersionOrLatest(*chartVersion), *release, *namespace)
-		fmt.Println("Permission preflight passed. Re-run without --dry-run to install.")
+		deployment := prepared.Deployment()
+		fmt.Printf("Dry run — chart skyhook/radar version %s rendered against the target API server without conflicts as release %q in namespace %q (Deployment %q).\n",
+			prepared.ChartVersion(), prepared.ReleaseName(), prepared.Namespace(), deployment.Name)
+		fmt.Println("Blocking permission checks and installation preflight passed. Re-run without --dry-run to install.")
 		return
 	}
 
 	// 4. Device flow → approve → cluster token (deployment_mode=in-cluster, so the
 	//    hub tags the cluster source=connect_incluster).
 	meta := gatherConnectMetadata(clusterName, kubeconfig)
-	meta.DeploymentMode = "in-cluster"
 	client := cloud.NewConnectClient(*hubURL)
 	cr, err := client.Create(ctx, meta)
 	if err != nil {
@@ -296,36 +266,168 @@ func cloudInstall(args []string) {
 		fmt.Fprintf(os.Stderr, "\nconnect failed: %v\n", err)
 		os.Exit(1)
 	}
-	cloudURL := pr.WSSURL
-	if cloudURL == "" { // approved poll may omit it; fall back to create-time wss
-		cloudURL = cr.WSSURL
+	if ctx.Err() != nil {
+		fmt.Fprintf(os.Stderr, "\nThe Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", pr.ClusterID)
+		fmt.Fprintln(os.Stderr, "No token Secret was written, so this attempt cannot be resumed by rerunning the installer. Inspect and delete that Hub cluster before starting a fresh flow.")
+		os.Exit(1)
 	}
 
-	// 4. Provision — install the chart with the token; the in-cluster agent dials.
+	// 5. Provision the exact prepared chart with the approved runtime values.
 	fmt.Printf("\n  Approved. Installing Radar into %q…\n", *namespace)
-	perr := cloudinstall.Provision(ctx, hc, kc, cloudinstall.ProvisionConfig{
+	perr := cloudinstall.ProvisionPrepared(ctx, kc, prepared, cloudinstall.ProvisionConfig{
 		Namespace:    *namespace,
 		ReleaseName:  *release,
-		ChartVersion: *chartVersion,
-		CloudURL:     cloudURL,
+		ChartVersion: prepared.ChartVersion(),
+		CloudURL:     pr.WSSURL,
 		ClusterID:    pr.ClusterID,
 		Token:        pr.Token,
 	})
-	if errors.Is(perr, cloudinstall.ErrReleaseExists) {
-		// Rare: a release appeared after the pre-mint gate. If it landed before
-		// Provision's block-check nothing was written; in the narrow window
-		// between that check and helm install, the token Secret may have been.
-		fmt.Fprintf(os.Stderr, "\nRadar was installed into namespace %q concurrently, so this install stopped.\n", *namespace)
-		fmt.Fprintf(os.Stderr, "Reconcile the existing install (or `helm uninstall %s -n %s`); a %q Secret may have been written — verify it before re-running.\n", *release, *namespace, cloudinstall.CloudTokenSecretName)
-		os.Exit(1)
-	}
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "\ninstall failed: %v\n", perr)
+		printPostApprovalRecoveryGuidance(os.Stderr, pr.ClusterID, prepared.ReleaseName(), prepared.Namespace(), prepared.Deployment())
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n  ✓ Installed. Radar is starting in your cluster and will connect to Cloud shortly.\n")
-	fmt.Printf("    Track it: kubectl -n %s rollout status deploy/%s\n\n", *namespace, *release)
+	fmt.Printf("\n  Installed. Waiting up to %s for the in-cluster agent to connect…\n", cloudTunnelConfirmationTimeout)
+	if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationTimeout); err != nil {
+		printTunnelConfirmationFailure(os.Stderr, err, pr.ClusterID, pr.WSSURL, prepared.Deployment())
+		os.Exit(1)
+	}
+
+	printInstallSuccess(os.Stdout, prepared.Deployment())
+}
+
+func normalizeCloudInstallNames(namespace, release string) (string, string, error) {
+	namespace = strings.TrimSpace(namespace)
+	release = strings.TrimSpace(release)
+	if errs := k8svalidation.ValidateNamespaceName(namespace, false); len(errs) > 0 {
+		return "", "", fmt.Errorf("invalid --namespace %q: %s", namespace, strings.Join(errs, "; "))
+	}
+	if err := chartutil.ValidateReleaseName(release); err != nil {
+		return "", "", fmt.Errorf("invalid --release %q: %w", release, err)
+	}
+	return namespace, release, nil
+}
+
+func normalizeHubOrigin(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid --hub-url %q: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("invalid --hub-url %q: must use http or https", raw)
+	}
+	if u.Host == "" || u.Hostname() == "" || strings.HasSuffix(u.Host, ":") {
+		return "", fmt.Errorf("invalid --hub-url %q: must include a host", raw)
+	}
+	if u.User != nil {
+		return "", fmt.Errorf("invalid --hub-url %q: credentials are not allowed", raw)
+	}
+	if path := u.EscapedPath(); path != "" && path != "/" {
+		return "", fmt.Errorf("invalid --hub-url %q: must be an origin without a path", raw)
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") {
+		return "", fmt.Errorf("invalid --hub-url %q: query strings and fragments are not allowed", raw)
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", fmt.Errorf("invalid --hub-url %q: invalid port", raw)
+		}
+	}
+	u.Path = ""
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func resolveCloudInstallClusterName(explicit, contextName string) string {
+	if name := strings.TrimSpace(explicit); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(contextname.ShortName(contextName)); name != "" {
+		return name
+	}
+	return "my-cluster"
+}
+
+func printInstallSuccess(w io.Writer, deployment helm.DeploymentRef) {
+	fmt.Fprintln(w, "\n  ✓ Installed and connected to Radar Cloud.")
+	fmt.Fprintf(w, "    Track it: kubectl -n %s rollout status deployment/%s\n\n", deployment.Namespace, deployment.Name)
+}
+
+func printFreshInstallConflict(w io.Writer, err error) bool {
+	var exists *helm.ReleaseExistsError
+	if errors.As(err, &exists) {
+		fmt.Fprintf(w, "Radar is already deployed as Helm release %q in namespace %q (revision %d).\n", exists.Name, exists.Namespace, exists.Revision)
+		fmt.Fprintln(w, "`radar cloud install` only creates fresh installations. In the Hub installation wizard, choose \"Existing installation\" and apply its generated Helm upgrade instead.")
+		return true
+	}
+
+	var pending *helm.ReleasePendingError
+	if errors.As(err, &pending) {
+		fmt.Fprintf(w, "Helm release %q in namespace %q is in status %q (revision %d).\n", pending.Name, pending.Namespace, pending.Status, pending.Revision)
+		if strings.HasPrefix(pending.Status, "pending-") || pending.Status == "uninstalling" {
+			fmt.Fprintln(w, "Wait for the current Helm operation to finish. If it is stale, inspect it with:")
+		} else {
+			fmt.Fprintln(w, "Radar cannot safely determine how to continue this Helm release. Inspect its state with:")
+		}
+		fmt.Fprintf(w, "  helm status %s -n %s\n", pending.Name, pending.Namespace)
+		fmt.Fprintln(w, "Resolve that release before retrying; Cloud installation will not overwrite it.")
+		return true
+	}
+
+	var history *helm.ReleaseHistoryError
+	if errors.As(err, &history) {
+		fmt.Fprintf(w, "Helm release %q in namespace %q has retained %q history (revision %d).\n", history.Name, history.Namespace, history.Status, history.Revision)
+		fmt.Fprintln(w, "Cloud installation will not adopt or replace prior Helm history. Inspect it with:")
+		fmt.Fprintf(w, "  helm history %s -n %s\n", history.Name, history.Namespace)
+		fmt.Fprintln(w, "Then choose a new --release name, or deliberately remove the old release history before retrying.")
+		return true
+	}
+
+	return false
+}
+
+func printTokenSecretConflict(w io.Writer, err error) bool {
+	var secret *cloudinstall.TokenSecretExistsError
+	if !errors.As(err, &secret) {
+		return false
+	}
+	fmt.Fprintf(w, "Cloud token Secret %q already exists in namespace %q; Radar will not overwrite it.\n", secret.Name, secret.Namespace)
+	fmt.Fprintln(w, "Inspect the existing Helm release and Secret, and recover that installation if it belongs to an earlier approval.")
+	fmt.Fprintln(w, "If it was abandoned, clean up its Helm release and Secret and delete the corresponding Hub cluster before starting a fresh flow.")
+	return true
+}
+
+func printPostApprovalRecoveryGuidance(w io.Writer, clusterID, releaseName, namespace string, deployment helm.DeploymentRef) {
+	fmt.Fprintf(w, "Hub cluster %q already exists. Do not rerun the installer or delete it by default; first inspect the existing attempt.\n", clusterID)
+	fmt.Fprintln(w, "Inspect:")
+	fmt.Fprintf(w, "  helm status %s -n %s\n", releaseName, namespace)
+	fmt.Fprintf(w, "  kubectl -n %s get secret/%s\n", namespace, cloudinstall.CloudTokenSecretName)
+	fmt.Fprintf(w, "  kubectl -n %s get deployment/%s\n", deployment.Namespace, deployment.Name)
+	fmt.Fprintln(w, "The installer removes only the unchanged token Secret it created when a Helm failure can be cleaned up safely; verify the actual release and Secret state.")
+	fmt.Fprintln(w, "If the token Secret remains, recover the partial install with this Hub cluster. If the Secret was cleaned up, the token is no longer recoverable: clean up any partial Helm release, then delete this Hub cluster before starting a fresh flow.")
+}
+
+func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL string, deployment helm.DeploymentRef) {
+	reason := err.Error()
+	switch {
+	case errors.Is(err, cloud.ErrConnectConsumptionTimeout):
+		reason = "the five-minute confirmation window elapsed"
+	case errors.Is(err, cloud.ErrConnectPickupExpired):
+		reason = "the Hub stopped reporting the approved request before the agent connected"
+	case errors.Is(err, context.Canceled):
+		reason = "confirmation was canceled"
+	}
+
+	fmt.Fprintf(w, "\nRadar was installed and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.\n", clusterID, reason)
+	fmt.Fprintln(w, "Do not rerun the installer or delete the cluster by default; the existing agent can still connect after you resolve its startup or egress issue.")
+	fmt.Fprintln(w, "Inspect:")
+	fmt.Fprintf(w, "  kubectl -n %s rollout status deployment/%s\n", deployment.Namespace, deployment.Name)
+	fmt.Fprintf(w, "  kubectl -n %s logs deployment/%s --all-containers=true --tail=200\n", deployment.Namespace, deployment.Name)
+	fmt.Fprintf(w, "Verify cluster DNS and outbound WSS/HTTPS access to %s.\n", cloudURL)
+	fmt.Fprintln(w, "Keep using this Hub cluster and token Secret for recovery. Only if you deliberately abandon the installation should you clean up Helm and the Secret, then delete the Hub cluster before starting a fresh flow.")
 }
 
 // buildLocalInstallClients resolves a kube clientset + Helm client from the
@@ -336,6 +438,12 @@ func buildLocalInstallClients(kubeconfig string) (kubernetes.Interface, *helm.Cl
 	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig()
 	if err != nil {
 		return nil, nil, fmt.Errorf("no reachable kubeconfig context: %w", err)
+	}
+	// Helm's non-cancelable mutation avoids returning while its background apply
+	// is still running. Bound each Kubernetes request so that critical section
+	// cannot hang forever on a dead apiserver connection.
+	if restCfg.Timeout <= 0 || restCfg.Timeout > cloudKubernetesRequestTimeout {
+		restCfg.Timeout = cloudKubernetesRequestTimeout
 	}
 	kc, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
@@ -350,138 +458,11 @@ func buildLocalInstallClients(kubeconfig string) (kubernetes.Interface, *helm.Cl
 	return kc, helm.GetClient(), nil
 }
 
-func chartVersionOrLatest(v string) string {
-	if v == "" {
-		return "latest"
-	}
-	return v
-}
-
-func cloudStatus() {
-	ctxName := currentKubeContextName(config.Load().Kubeconfig)
-	creds := cloud.LoadCredentials()
-	if len(creds.Clusters) == 0 {
-		fmt.Println("No clusters connected to Radar Cloud.")
-		fmt.Println("Run `radar cloud connect` to connect this cluster.")
-		return
-	}
-	fmt.Printf("Radar Cloud connections (%s):\n\n", cloud.CredentialsPath())
-	for ctx, c := range creds.Clusters {
-		marker := "  "
-		if ctx == ctxName {
-			marker = "* " // current kubecontext
-		}
-		fmt.Printf("%s%s\n      cluster: %s (%s)\n      hub:     %s\n",
-			marker, ctx, c.ClusterName, c.ClusterID, c.HubBase)
-	}
-	if ctxName != "" {
-		fmt.Printf("\n(* = current kubecontext)\n")
-	}
-}
-
-func cloudDisconnect(args []string) {
-	fs := flag.NewFlagSet("cloud disconnect", flag.ExitOnError)
-	ctxFlag := fs.String("context", "", "Kubecontext to disconnect (default: current)")
-	_ = fs.Parse(args)
-	ctxName := *ctxFlag
-	if ctxName == "" {
-		ctxName = currentKubeContextName(config.Load().Kubeconfig)
-	}
-	if ctxName == "" {
-		fmt.Fprintln(os.Stderr, "no current kubecontext; pass --context NAME")
-		os.Exit(1)
-	}
-	removed, err := cloud.RemoveClusterCredential(ctxName)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "disconnect failed: %v\n", err)
-		os.Exit(1)
-	}
-	if !removed {
-		fmt.Printf("No Radar Cloud connection stored for context %q.\n", ctxName)
-		return
-	}
-	fmt.Printf("Disconnected %q from Radar Cloud (credentials removed).\n", ctxName)
-	fmt.Println("The cluster still exists in Cloud until you remove it there.")
-}
-
-// maybeResumeCloud auto-injects cloud flags when a plain `radar` runs on a
-// kubecontext that has a saved Cloud connection, so `radar cloud connect` once
-// makes future `radar` runs resume the tunnel. Explicit cloud config (a
-// --cloud-url flag or RADAR_CLOUD_URL env — the in-cluster/Helm path) always
-// wins and short-circuits this. `radar cloud disconnect` removes the saved
-// credential, turning resume off.
-func maybeResumeCloud(fileCfg config.Config) {
-	if os.Getenv("RADAR_CLOUD_URL") != "" {
-		return
-	}
-	for _, a := range os.Args[1:] {
-		if a == "--cloud-url" || strings.HasPrefix(a, "--cloud-url=") {
-			return
-		}
-	}
-	// Multi-cluster mode (config.json kubeconfigDirs) serves an ambiguous set of
-	// contexts, not one — the credential's single context name can't identify
-	// which cluster is being served, so require an explicit `radar cloud connect`.
-	if len(fileCfg.KubeconfigDirs) > 0 {
-		return
-	}
-	// A CLI --kubeconfig / --kubeconfig-dir override selects a kubeconfig we can't
-	// cheaply resolve here (flags aren't parsed yet), and the saved cred wasn't
-	// keyed to it — decline. A single-file config.json `kubeconfig` is fine: main
-	// serves that same file (the --kubeconfig flag defaults to it) and connect
-	// keyed the cred + server_url against it via currentKubeContextName/
-	// currentClusterServerURL below, so the server-URL guard makes resume safe.
-	for _, a := range os.Args[1:] {
-		if isKubeconfigOverrideArg(a) {
-			return
-		}
-	}
-	ctxName := currentKubeContextName(fileCfg.Kubeconfig)
-	if ctxName == "" {
-		return
-	}
-	cred, ok := cloud.GetClusterCredential(ctxName)
-	if !ok || cred.Token == "" || cred.WSSURL == "" {
-		return
-	}
-	// Bind the credential to the cluster: if the saved server URL differs from
-	// the current context's, this is a same-named context in a different
-	// kubeconfig pointing at a different cluster — don't resume (would serve
-	// the wrong cluster under this cred's Cloud identity). Empty saved URL
-	// (legacy cred) falls back to name-only matching.
-	if cred.ServerURL != "" {
-		if cur := currentClusterServerURL(fileCfg.Kubeconfig); cur != "" && cur != cred.ServerURL {
-			log.Printf("[cloud] not resuming context %q: kubeconfig now points at a different cluster than the saved connection", ctxName)
-			return
-		}
-	}
-	log.Printf("[cloud] resuming saved Radar Cloud connection for context %q (cluster %s) — `radar cloud disconnect` to stop", ctxName, cred.ClusterID)
-	os.Args = append(os.Args,
-		"--cloud-url="+cred.WSSURL,
-		"--cloud-token="+cred.Token,
-		"--cluster-name="+cred.ClusterID,
-	)
-}
-
-// isKubeconfigOverrideArg reports whether an arg selects a non-default
-// kubeconfig, which would make the default-context resume unsafe.
-func isKubeconfigOverrideArg(a string) bool {
-	for _, p := range []string{"--kubeconfig", "-kubeconfig", "--kubeconfig-dir", "-kubeconfig-dir"} {
-		if a == p || strings.HasPrefix(a, p+"=") {
-			return true
-		}
-	}
-	return false
-}
-
 // connectLoadingRules builds kubeconfig loading rules that honor a config.json
 // `kubeconfig` override. NewDefaultClientConfigLoadingRules reads the KUBECONFIG
 // env + ~/.kube/config (which main() also honors), but NOT ~/.radar/config.json's
-// `kubeconfig` — without this the connect flow would resolve the DEFAULT context
-// while main() serves the config.json one, registering/serving mismatched
-// clusters under the minted token. (KubeconfigDirs multi-cluster mode is left to
-// default resolution: the resume guard already declines there, and single-cluster
-// connect metadata is inherently best-effort across many clusters.)
+// `kubeconfig` — without this the install flow would resolve the default context
+// while targeting the config.json-selected one.
 func connectLoadingRules(kubeconfig string) *clientcmd.ClientConfigLoadingRules {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
@@ -502,28 +483,13 @@ func currentKubeContextName(kubeconfig string) string {
 	return cfg.CurrentContext
 }
 
-// currentClusterServerURL returns the kube-apiserver endpoint of the current
-// context, resolved locally (no network). Empty on any failure. Used to bind a
-// saved credential to its cluster so a same-named context in a different
-// kubeconfig can't resume it.
-func currentClusterServerURL(kubeconfig string) string {
-	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		connectLoadingRules(kubeconfig),
-		&clientcmd.ConfigOverrides{},
-	).ClientConfig()
-	if err != nil {
-		return ""
-	}
-	return restCfg.Host
-}
-
 // gatherConnectMetadata assembles best-effort display context for the consent
 // page. k8s version + node count are looked up under a short timeout and simply
 // omitted on any failure (RBAC, unreachable) — the consent page renders what's
 // present. kubeconfig is the config.json override (or "").
 func gatherConnectMetadata(clusterName, kubeconfig string) cloud.ConnectMetadata {
 	meta := cloud.ConnectMetadata{
-		DeploymentMode: "local",
+		DeploymentMode: "in-cluster",
 		ClusterName:    clusterName,
 		RadarVersion:   version,
 		Scope:          "cluster",
@@ -536,7 +502,7 @@ func gatherConnectMetadata(clusterName, kubeconfig string) cloud.ConnectMetadata
 	if err != nil {
 		return meta
 	}
-	// Bound the whole best-effort probe so `radar cloud connect` never hangs on
+	// Bound the whole best-effort probe so `radar cloud install` never hangs on
 	// an unreachable cluster — ServerVersion() has no context and would
 	// otherwise inherit the rest config's (zero = infinite) timeout.
 	restCfg.Timeout = 5 * time.Second

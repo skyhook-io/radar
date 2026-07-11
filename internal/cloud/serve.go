@@ -9,6 +9,31 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
+// authenticatedTunnelRequestKey is deliberately private. A browser or pod can
+// copy every HTTP header the Hub sends, but it cannot manufacture this
+// in-process context value. Only the handler attached to the cluster-token-
+// authenticated yamux session marks requests with it.
+type authenticatedTunnelRequestKey struct{}
+
+// IsAuthenticatedTunnelRequest reports whether r arrived over the authenticated
+// Hub yamux session. Cloud proxy auth uses this in addition to the forwarded
+// identity headers so a pod that reaches Radar's ordinary TCP listener cannot
+// turn spoofed headers into Kubernetes impersonation credentials.
+func IsAuthenticatedTunnelRequest(ctx context.Context) bool {
+	marked, _ := ctx.Value(authenticatedTunnelRequestKey{}).(bool)
+	return marked
+}
+
+// AuthenticatedTunnelHandler marks requests as originating from the
+// cluster-token-authenticated Hub tunnel. Only the tunnel transport should wrap
+// a handler with it; serve applies it to every accepted yamux stream.
+func AuthenticatedTunnelHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), authenticatedTunnelRequestKey{}, true)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // serve accepts yamux streams and hands them to http.Serve using Radar's
 // existing HTTP handler. Each accepted stream is a net.Conn; http.Serve
 // reads one HTTP request (or WebSocket upgrade) per connection. Long-lived
@@ -20,8 +45,10 @@ func serve(ctx context.Context, sess *yamux.Session, handler http.Handler) error
 	listener := &yamuxListener{sess: sess}
 
 	// Use http.Server rather than http.Serve so we can cleanly shut down on
-	// ctx cancellation.
-	srv := &http.Server{Handler: handler}
+	// ctx cancellation. Marking happens here, at the transport boundary: the
+	// same Radar router is also attached to a local TCP listener, so marking it
+	// inside the router would let direct in-cluster callers spoof Cloud identity.
+	srv := &http.Server{Handler: AuthenticatedTunnelHandler(handler)}
 
 	// The watcher exits either on ctx cancel (which triggers shutdown) or
 	// when Serve returns on its own — the `done` channel prevents the

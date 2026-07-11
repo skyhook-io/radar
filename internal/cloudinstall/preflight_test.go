@@ -2,12 +2,15 @@ package cloudinstall
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -69,7 +72,7 @@ func TestInstallPreflight_CanCreateButCannotEscalate(t *testing.T) {
 	// escalate/bind. Not blocked (the install attempt is the authoritative gate);
 	// the missing escalate/bind surface as advisory.
 	cs := fakeWithSSAR(func(a authv1.ResourceAttributes) bool {
-		return a.Verb == "create"
+		return a.Verb == "create" || a.Verb == "update"
 	})
 	res, err := InstallPreflight(context.Background(), cs, "radar")
 	if err != nil {
@@ -78,8 +81,21 @@ func TestInstallPreflight_CanCreateButCannotEscalate(t *testing.T) {
 	if !res.OK() {
 		t.Fatalf("create-capable caller must not be blocked, got Blocking=%v", res.Blocking)
 	}
-	if len(res.Advisory) != 5 { // escalate + 3 binds + update-secrets advisory
-		t.Errorf("expected 4 advisory (escalate + 3 binds), got %v", res.Advisory)
+	if len(res.Advisory) != 7 { // 2 escalate + generated ClusterRole/Role + 3 tier binds
+		t.Errorf("expected 7 advisory escalation/bind checks, got %v", res.Advisory)
+	}
+}
+
+func TestInstallPreflight_SecretUpdateIsBlocking(t *testing.T) {
+	cs := fakeWithSSAR(func(a authv1.ResourceAttributes) bool {
+		return a.Verb == "create" || (a.Verb == "update" && a.Resource != "secrets")
+	})
+	res, err := InstallPreflight(context.Background(), cs, "radar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OK() || !containsSubstr(res.Blocking, "update Secrets (for Helm release metadata)") {
+		t.Fatalf("update Secrets must block before token mint, got %+v", res)
 	}
 }
 
@@ -114,6 +130,30 @@ func TestInstallPreflight_NamespaceCreateSuppressedWhenExists(t *testing.T) {
 func TestInstallPreflight_NilClient(t *testing.T) {
 	if _, err := InstallPreflight(context.Background(), nil, "radar"); err == nil {
 		t.Fatal("expected error on nil client")
+	}
+}
+
+func TestInstallPreflight_NamespaceGetErrorIsFatal(t *testing.T) {
+	cs := fakeWithSSAR(func(authv1.ResourceAttributes) bool { return true })
+	want := errors.New("temporary apiserver failure")
+	cs.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, want
+	})
+
+	_, err := InstallPreflight(context.Background(), cs, "radar")
+	if !errors.Is(err, want) {
+		t.Fatalf("expected namespace error to propagate, got %v", err)
+	}
+}
+
+func TestInstallPreflight_NamespaceForbiddenIsFatal(t *testing.T) {
+	cs := fakeWithSSAR(func(authv1.ResourceAttributes) bool { return true })
+	cs.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "namespaces"}, "radar", errors.New("denied"))
+	})
+
+	if _, err := InstallPreflight(context.Background(), cs, "radar"); err == nil {
+		t.Fatal("expected forbidden namespace inspection to fail preflight")
 	}
 }
 

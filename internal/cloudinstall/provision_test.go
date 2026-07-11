@@ -2,11 +2,16 @@ package cloudinstall
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestCloudInstallValues(t *testing.T) {
@@ -33,12 +38,32 @@ func TestCloudInstallValues(t *testing.T) {
 	}
 }
 
-func TestUpsertTokenSecret_CreateThenUpdate(t *testing.T) {
+func fakeWithSecretCreateMetadata() *fake.Clientset {
 	kc := fake.NewSimpleClientset()
+	kc.PrependReactor("create", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		create := action.(k8stesting.CreateAction)
+		secret := create.GetObject().(*corev1.Secret).DeepCopy()
+		secret.UID = types.UID("uid-created")
+		secret.ResourceVersion = "1"
+		gvr := schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
+		if err := kc.Tracker().Create(gvr, secret, create.GetNamespace()); err != nil {
+			return true, nil, err
+		}
+		return true, secret, nil
+	})
+	return kc
+}
+
+func TestTokenSecret_CreateOnlyRejectsExisting(t *testing.T) {
+	kc := fakeWithSecretCreateMetadata()
 	ctx := context.Background()
 
-	if err := upsertTokenSecret(ctx, kc, "radar", "rhc_first"); err != nil {
+	created, err := createTokenSecret(ctx, kc, "radar", "rhc_first")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if created.UID != "uid-created" || created.ResourceVersion != "1" {
+		t.Fatalf("unexpected identity: %+v", created)
 	}
 	got, err := kc.CoreV1().Secrets("radar").Get(ctx, CloudTokenSecretName, metav1.GetOptions{})
 	if err != nil {
@@ -48,13 +73,70 @@ func TestUpsertTokenSecret_CreateThenUpdate(t *testing.T) {
 		t.Errorf("first token = %q", got.StringData[cloudTokenSecretKey])
 	}
 
-	// Re-run with a rotated token — must update in place, not error.
-	if err := upsertTokenSecret(ctx, kc, "radar", "rhc_second"); err != nil {
-		t.Fatalf("upsert on existing secret must not fail: %v", err)
+	_, err = createTokenSecret(ctx, kc, "radar", "rhc_second")
+	var exists *TokenSecretExistsError
+	if !errors.As(err, &exists) {
+		t.Fatalf("expected TokenSecretExistsError, got %T: %v", err, err)
 	}
 	got, _ = kc.CoreV1().Secrets("radar").Get(ctx, CloudTokenSecretName, metav1.GetOptions{})
-	if got.StringData[cloudTokenSecretKey] != "rhc_second" {
-		t.Errorf("rotated token not applied, got %q", got.StringData[cloudTokenSecretKey])
+	if got.StringData[cloudTokenSecretKey] != "rhc_first" {
+		t.Errorf("existing token was overwritten, got %q", got.StringData[cloudTokenSecretKey])
+	}
+}
+
+func TestCheckTokenSecretAvailable_TypedAndReadErrors(t *testing.T) {
+	ctx := context.Background()
+	if err := CheckTokenSecretAvailable(ctx, fake.NewSimpleClientset(), "radar"); err != nil {
+		t.Fatalf("missing Secret should pass: %v", err)
+	}
+	kc := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: CloudTokenSecretName, Namespace: "radar", UID: "existing", ResourceVersion: "9",
+	}})
+	err := CheckTokenSecretAvailable(ctx, kc, "radar")
+	var exists *TokenSecretExistsError
+	if !errors.As(err, &exists) || exists.UID != "existing" || exists.ResourceVersion != "9" {
+		t.Fatalf("expected typed Secret metadata, got %T: %+v", err, exists)
+	}
+
+	want := errors.New("apiserver unavailable")
+	broken := fake.NewSimpleClientset()
+	broken.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, want
+	})
+	if err := CheckTokenSecretAvailable(ctx, broken, "radar"); !errors.Is(err, want) {
+		t.Fatalf("expected read error to propagate, got %v", err)
+	}
+}
+
+func TestDeleteTokenSecretIfUnchanged_GuardsIdentity(t *testing.T) {
+	ctx := context.Background()
+	kc := fakeWithSecretCreateMetadata()
+	created, err := createTokenSecret(ctx, kc, "radar", "rhc_token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteTokenSecretIfUnchanged(ctx, kc, *created); err != nil {
+		t.Fatalf("delete unchanged Secret: %v", err)
+	}
+	if _, err := kc.CoreV1().Secrets("radar").Get(ctx, CloudTokenSecretName, metav1.GetOptions{}); err == nil {
+		t.Fatal("unchanged Secret was not deleted")
+	}
+
+	kc = fakeWithSecretCreateMetadata()
+	created, err = createTokenSecret(ctx, kc, "radar", "rhc_token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := kc.CoreV1().Secrets("radar").Get(ctx, CloudTokenSecretName, metav1.GetOptions{})
+	current.ResourceVersion = "2"
+	if _, err := kc.CoreV1().Secrets("radar").Update(ctx, current, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteTokenSecretIfUnchanged(ctx, kc, *created); err == nil {
+		t.Fatal("changed Secret must not be deleted")
+	}
+	if _, err := kc.CoreV1().Secrets("radar").Get(ctx, CloudTokenSecretName, metav1.GetOptions{}); err != nil {
+		t.Fatalf("changed Secret should remain: %v", err)
 	}
 }
 
@@ -75,10 +157,12 @@ func TestEnsureNamespace(t *testing.T) {
 	}
 }
 
-func TestProvision_RequiresFields(t *testing.T) {
+func TestProvisionPrepared_RequiresPlanAndFields(t *testing.T) {
 	kc := fake.NewSimpleClientset()
-	// nil helm client but valid fields → still errors on nil helm.
-	if err := Provision(context.Background(), nil, kc, ProvisionConfig{Token: "t", CloudURL: "u", ClusterID: "c"}); err == nil {
-		t.Error("expected error on nil helm client")
+	if err := ProvisionPrepared(context.Background(), kc, nil, ProvisionConfig{}); err == nil {
+		t.Error("expected error on nil plan")
+	}
+	if err := validateProvisionConfig(ProvisionConfig{Token: "t", CloudURL: "https://not-websocket.example", ClusterID: "c"}); err == nil {
+		t.Error("expected non-WebSocket cloud URL to fail")
 	}
 }

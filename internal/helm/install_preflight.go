@@ -12,6 +12,7 @@ import (
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // ReleasePendingError is returned when a prior install/upgrade left the release
@@ -44,6 +45,23 @@ func (e *ReleaseExistsError) Error() string {
 		e.Name, e.Namespace, e.Revision)
 }
 
+// ReleaseHistoryError is returned by fresh-install-only callers when Helm has
+// retained a completed but non-deployed revision. Generic chart installs may
+// recover these states with upgrade/replace, but Cloud enrollment deliberately
+// refuses them so it cannot adopt or overwrite an installation it did not
+// create.
+type ReleaseHistoryError struct {
+	Name      string
+	Namespace string
+	Status    string
+	Revision  int
+}
+
+func (e *ReleaseHistoryError) Error() string {
+	return fmt.Sprintf("release %q in namespace %q has retained %s history (revision %d)",
+		e.Name, e.Namespace, e.Status, e.Revision)
+}
+
 // installMode is what preInstallCheck tells the caller about how to dispatch
 // the install. Three modes because Helm's SDK splits recovery semantics by
 // prior release status: only Failed/Superseded recover via action.Upgrade
@@ -59,6 +77,56 @@ const (
 	installUpgrade                    // prior record is Failed or Superseded
 )
 
+type storedReleaseKind int
+
+const (
+	storedReleaseNone storedReleaseKind = iota
+	storedReleaseDeployed
+	storedReleasePending
+	storedReleaseUpgradeRecovery
+	storedReleaseReplaceRecovery
+)
+
+type storedReleaseState struct {
+	kind     storedReleaseKind
+	status   string
+	revision int
+}
+
+// inspectStoredRelease is the single classifier for Helm history state. Both
+// Radar's general Helm install recovery and Cloud's strict fresh-only flow map
+// this result onto their own behavior without duplicating the status switch.
+func inspectStoredRelease(actionConfig *action.Configuration, name string) (storedReleaseState, error) {
+	last, err := actionConfig.Releases.Last(name)
+	// Helm's Kubernetes Secrets driver can surface the namespace's 404 directly
+	// when the target namespace does not exist. That is equivalent to no release
+	// history and must remain side-effect-free during preflight.
+	if errors.Is(err, driver.ErrReleaseNotFound) || apierrors.IsNotFound(err) {
+		return storedReleaseState{kind: storedReleaseNone}, nil
+	}
+	if err != nil {
+		return storedReleaseState{}, fmt.Errorf("failed to inspect existing release: %w", err)
+	}
+	if last.Info == nil {
+		return storedReleaseState{kind: storedReleasePending, status: "unknown", revision: last.Version}, nil
+	}
+	state := storedReleaseState{status: last.Info.Status.String(), revision: last.Version}
+	switch last.Info.Status {
+	case release.StatusDeployed:
+		state.kind = storedReleaseDeployed
+	case release.StatusPendingInstall, release.StatusPendingUpgrade, release.StatusPendingRollback, release.StatusUninstalling, release.StatusUnknown:
+		state.kind = storedReleasePending
+	case release.StatusFailed, release.StatusSuperseded:
+		state.kind = storedReleaseUpgradeRecovery
+	case release.StatusUninstalled:
+		state.kind = storedReleaseReplaceRecovery
+	default:
+		state.kind = storedReleasePending
+		log.Printf("[helm] release %q has unrecognized status %q; refusing to overwrite", name, last.Info.Status)
+	}
+	return state, nil
+}
+
 // preInstallCheck inspects existing Helm storage for the release name and
 // returns:
 //   - (installFresh, nil): no record
@@ -71,38 +139,53 @@ const (
 // Uses Releases.Last because action.History.Run returns the storage driver's
 // raw Query output (unsorted, ignores Max), so its hist[0] is non-deterministic.
 func preInstallCheck(actionConfig *action.Configuration, name, namespace string) (installMode, error) {
-	last, lErr := actionConfig.Releases.Last(name)
-	if errors.Is(lErr, driver.ErrReleaseNotFound) {
+	state, err := inspectStoredRelease(actionConfig, name)
+	if err != nil {
+		return installFresh, err
+	}
+	switch state.kind {
+	case storedReleaseNone:
 		return installFresh, nil
-	}
-	if lErr != nil {
-		return installFresh, fmt.Errorf("failed to inspect existing release: %w", lErr)
-	}
-	switch last.Info.Status {
-	case release.StatusPendingInstall, release.StatusPendingUpgrade, release.StatusPendingRollback, release.StatusUninstalling:
+	case storedReleasePending:
 		return installFresh, &ReleasePendingError{
-			Name: name, Namespace: namespace,
-			Status: last.Info.Status.String(), Revision: last.Version,
+			Name: name, Namespace: namespace, Status: state.status, Revision: state.revision,
 		}
-	case release.StatusDeployed:
+	case storedReleaseDeployed:
 		return installFresh, &ReleaseExistsError{
-			Name: name, Namespace: namespace, Revision: last.Version,
+			Name: name, Namespace: namespace, Revision: state.revision,
 		}
-	case release.StatusFailed, release.StatusSuperseded:
+	case storedReleaseUpgradeRecovery:
 		return installUpgrade, nil
-	case release.StatusUninstalled:
+	case storedReleaseReplaceRecovery:
 		return installReplace, nil
 	default:
-		// StatusUnknown or any future helm tier: fail-closed. Neither
-		// action.Upgrade nor Install.Replace accepts arbitrary statuses
-		// (install.go:549 only allows Uninstalled+Failed for Replace;
-		// upgrade.go:232 only allows Failed+Superseded for fallback), so
-		// silently routing here would yield a confusing helm error.
-		log.Printf("[helm] preInstallCheck: unrecognized release status %q for %q/%q, refusing to overwrite", last.Info.Status, namespace, name)
-		return installFresh, &ReleasePendingError{
-			Name: name, Namespace: namespace,
-			Status: last.Info.Status.String(), Revision: last.Version,
+		return installFresh, fmt.Errorf("unrecognized release classification for %q/%q", namespace, name)
+	}
+}
+
+// freshInstallCheck rejects every Helm history state. It is intentionally
+// stricter than preInstallCheck, whose recovery modes are useful to Radar's
+// general Helm UI but unsafe for a first-time Cloud enrollment.
+func freshInstallCheck(actionConfig *action.Configuration, name, namespace string) error {
+	state, err := inspectStoredRelease(actionConfig, name)
+	if err != nil {
+		return err
+	}
+	switch state.kind {
+	case storedReleaseNone:
+		return nil
+	case storedReleaseDeployed:
+		return &ReleaseExistsError{Name: name, Namespace: namespace, Revision: state.revision}
+	case storedReleasePending:
+		return &ReleasePendingError{
+			Name: name, Namespace: namespace, Status: state.status, Revision: state.revision,
 		}
+	case storedReleaseUpgradeRecovery, storedReleaseReplaceRecovery:
+		return &ReleaseHistoryError{
+			Name: name, Namespace: namespace, Status: state.status, Revision: state.revision,
+		}
+	default:
+		return fmt.Errorf("unrecognized release classification for %q/%q", namespace, name)
 	}
 }
 

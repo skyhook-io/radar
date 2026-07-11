@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -3085,27 +3084,6 @@ func (c *Client) Install(req *InstallRequest) (*HelmRelease, error) {
 	return c.installWith(actionConfig, req)
 }
 
-// ReleaseInstallBlocked reports whether a release named name already exists in
-// namespace in a state a fresh Install would reject (currently-deployed or
-// stuck-pending). Lets a caller gate side effects (token mint, Secret write)
-// BEFORE attempting the install, rather than discovering the conflict after.
-func (c *Client) ReleaseInstallBlocked(namespace, name string) (bool, error) {
-	actionConfig, err := c.getActionConfig(namespace)
-	if err != nil {
-		return false, err
-	}
-	_, perr := preInstallCheck(actionConfig, name, namespace)
-	var exists *ReleaseExistsError
-	var pending *ReleasePendingError
-	if errors.As(perr, &exists) || errors.As(perr, &pending) {
-		return true, nil
-	}
-	if perr != nil {
-		return false, perr
-	}
-	return false, nil
-}
-
 // InstallAsUser installs a new Helm release with K8s impersonation.
 func (c *Client) InstallAsUser(req *InstallRequest, username string, groups []string) (*HelmRelease, error) {
 	actionConfig, err := c.getActionConfigForUser(req.Namespace, username, groups)
@@ -3267,16 +3245,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		return nil, fmt.Errorf("install failed: %w", err)
 	}
 
-	return &HelmRelease{
-		Name:         rel.Name,
-		Namespace:    rel.Namespace,
-		Chart:        rel.Chart.Metadata.Name,
-		ChartVersion: rel.Chart.Metadata.Version,
-		AppVersion:   rel.Chart.Metadata.AppVersion,
-		Status:       rel.Info.Status.String(),
-		Revision:     rel.Version,
-		Updated:      rel.Info.LastDeployed.Time,
-	}, nil
+	return installedHelmRelease(rel), nil
 }
 
 // InstallWithProgress installs a new Helm release and streams progress updates
@@ -3489,16 +3458,19 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 
 	sendProgress("complete", fmt.Sprintf("Successfully installed %s", req.ReleaseName), "")
 
+	return installedHelmRelease(rel), nil
+}
+
+// installedHelmRelease converts the immediate result of an install action.
+// Unlike toHelmRelease (the list/detail path), it deliberately does not query
+// Radar's informer cache for post-install resource health.
+func installedHelmRelease(rel *release.Release) *HelmRelease {
 	return &HelmRelease{
-		Name:         rel.Name,
-		Namespace:    rel.Namespace,
-		Chart:        rel.Chart.Metadata.Name,
-		ChartVersion: rel.Chart.Metadata.Version,
-		AppVersion:   rel.Chart.Metadata.AppVersion,
-		Status:       rel.Info.Status.String(),
-		Revision:     rel.Version,
-		Updated:      rel.Info.LastDeployed.Time,
-	}, nil
+		Name: rel.Name, Namespace: rel.Namespace,
+		Chart: rel.Chart.Metadata.Name, ChartVersion: rel.Chart.Metadata.Version,
+		AppVersion: rel.Chart.Metadata.AppVersion, Status: rel.Info.Status.String(),
+		Revision: rel.Version, Updated: rel.Info.LastDeployed.Time,
+	}
 }
 
 // Helper function to convert chart version to ChartInfo

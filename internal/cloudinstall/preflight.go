@@ -55,10 +55,10 @@ func installPreflightChecks(namespace string, nsExists bool) []preflightCheck {
 		{"create ServiceAccounts", true, authv1.ResourceAttributes{Namespace: namespace, Resource: "serviceaccounts", Verb: "create"}},
 		{"create Services", true, authv1.ResourceAttributes{Namespace: namespace, Resource: "services", Verb: "create"}},
 		{"create Secrets", true, authv1.ResourceAttributes{Namespace: namespace, Resource: "secrets", Verb: "create"}},
-		// upsertTokenSecret does get+update only when the token Secret already
-		// exists (a re-run after an uninstalled-but-not-purged release) — advisory
-		// so a fresh install (the common case, create-only) isn't false-blocked.
-		{"update Secrets (only if a prior token Secret exists)", false, authv1.ResourceAttributes{Namespace: namespace, Resource: "secrets", Verb: "update"}},
+		// Helm stores release revisions in Secrets and updates their metadata as
+		// the install progresses. This is required even though the Cloud token
+		// Secret itself is create-only.
+		{"update Secrets (for Helm release metadata)", true, authv1.ResourceAttributes{Namespace: namespace, Resource: "secrets", Verb: "update"}},
 		{"create ClusterRoles", true, authv1.ResourceAttributes{Group: rbacGroup, Resource: "clusterroles", Verb: "create"}},
 		{"create ClusterRoleBindings", true, authv1.ResourceAttributes{Group: rbacGroup, Resource: "clusterrolebindings", Verb: "create"}},
 		// rbac.selfUpgrade=true (which the driver sets) renders a namespaced
@@ -66,9 +66,14 @@ func installPreflightChecks(namespace string, nsExists bool) []preflightCheck {
 		{"create Roles", true, authv1.ResourceAttributes{Namespace: namespace, Group: rbacGroup, Resource: "roles", Verb: "create"}},
 		{"create RoleBindings", true, authv1.ResourceAttributes{Namespace: namespace, Group: rbacGroup, Resource: "rolebindings", Verb: "create"}},
 		// Privilege-escalation gates (advisory — see file header): the chart's
-		// ClusterRole carries `impersonate`, and the cloud bindings reference
-		// admin/edit/view, so a non-admin caller needs escalate + bind.
+		// ClusterRoles carry impersonation/Helm privileges, its self-upgrade Role
+		// can mutate Helm releases, and the bindings reference both generated roles
+		// and admin/edit/view. A caller that does not already hold every rendered
+		// permission needs the corresponding escalate + bind grants.
 		{"escalate ClusterRoles (for the impersonation role)", false, authv1.ResourceAttributes{Group: rbacGroup, Resource: "clusterroles", Verb: "escalate"}},
+		{"escalate Roles (for self-upgrade)", false, authv1.ResourceAttributes{Namespace: namespace, Group: rbacGroup, Resource: "roles", Verb: "escalate"}},
+		{"bind generated Radar ClusterRoles", false, authv1.ResourceAttributes{Group: rbacGroup, Resource: "clusterroles", Verb: "bind"}},
+		{"bind the generated self-upgrade Role", false, authv1.ResourceAttributes{Namespace: namespace, Group: rbacGroup, Resource: "roles", Verb: "bind"}},
 		{"bind the admin ClusterRole", false, authv1.ResourceAttributes{Group: rbacGroup, Resource: "clusterroles", Name: "admin", Verb: "bind"}},
 		{"bind the edit ClusterRole", false, authv1.ResourceAttributes{Group: rbacGroup, Resource: "clusterroles", Name: "edit", Verb: "bind"}},
 		{"bind the view ClusterRole", false, authv1.ResourceAttributes{Group: rbacGroup, Resource: "clusterroles", Name: "view", Verb: "bind"}},
@@ -88,11 +93,13 @@ func InstallPreflight(ctx context.Context, client kubernetes.Interface, namespac
 	}
 	// Skip the namespace-create check if it already exists — the caller may be
 	// allowed to create objects inside it without holding create-namespaces.
-	// A get error other than NotFound is ignored (treated as "exists"): we don't
-	// want a transient read blip to demand a create permission the user may lack.
 	nsExists := true
-	if _, err := client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{}); err != nil && apierrors.IsNotFound(err) {
-		nsExists = false
+	if _, err := client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			nsExists = false
+		} else {
+			return PreflightResult{}, fmt.Errorf("preflight: inspect target namespace %q: %w", namespace, err)
+		}
 	}
 	var res PreflightResult
 	for _, c := range installPreflightChecks(namespace, nsExists) {

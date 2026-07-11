@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/internal/cloud"
 )
 
 // echoUser is a handler that returns the authenticated user as JSON, or 204 if no user.
@@ -41,17 +43,17 @@ func TestMiddleware_ExemptPaths(t *testing.T) {
 		path string
 		want int
 	}{
-		{"/api/health", http.StatusNoContent},      // exempt
+		{"/api/health", http.StatusNoContent},              // exempt
 		{"/api/connection", http.StatusUnauthorized},       // requires auth
 		{"/api/connection/retry", http.StatusUnauthorized}, // requires auth — state-changing
-		{"/auth/login", http.StatusNoContent},       // exempt
-		{"/auth/callback", http.StatusNoContent},    // exempt
-		{"/", http.StatusNoContent},                 // static asset — exempt
-		{"/index.html", http.StatusNoContent},       // static asset — exempt
-		{"/assets/main.js", http.StatusNoContent},   // static asset — exempt
-		{"/api/resources/pods", http.StatusUnauthorized}, // requires auth
-		{"/api/topology", http.StatusUnauthorized},       // requires auth
-		{"/mcp", http.StatusUnauthorized},                // requires auth
+		{"/auth/login", http.StatusNoContent},              // exempt
+		{"/auth/callback", http.StatusNoContent},           // exempt
+		{"/", http.StatusNoContent},                        // static asset — exempt
+		{"/index.html", http.StatusNoContent},              // static asset — exempt
+		{"/assets/main.js", http.StatusNoContent},          // static asset — exempt
+		{"/api/resources/pods", http.StatusUnauthorized},   // requires auth
+		{"/api/topology", http.StatusUnauthorized},         // requires auth
+		{"/mcp", http.StatusUnauthorized},                  // requires auth
 	}
 
 	for _, tt := range tests {
@@ -172,6 +174,81 @@ func TestMiddleware_SessionCookie_TakesPrecedence(t *testing.T) {
 	json.NewDecoder(rec.Body).Decode(&parsed)
 	if parsed.Username != "bob" {
 		t.Errorf("cookie should take precedence: got %q, want %q", parsed.Username, "bob")
+	}
+}
+
+func TestMiddleware_CloudProxyHeadersOverrideSessionWithoutSettingCookie(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
+	cfg := proxyConfig()
+	handler := cloud.AuthenticatedTunnelHandler(Authenticate(cfg)(http.HandlerFunc(echoUser)))
+
+	cookie := CreateSessionCookie(
+		&User{Username: "stale-user", Groups: []string{"cloud:owner"}},
+		NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false,
+	)[0]
+	req := httptest.NewRequest(http.MethodGet, "/api/topology", nil)
+	req.AddCookie(cookie)
+	req.Header.Set(cfg.UserHeader, "current-user")
+	req.Header.Set(cfg.GroupsHeader, "cloud:viewer, cloud:org:org-1")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got User
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Username != "current-user" {
+		t.Fatalf("username = %q, want current Hub header identity", got.Username)
+	}
+	if len(got.Groups) != 2 || got.Groups[0] != "cloud:viewer" || got.Groups[1] != "cloud:org:org-1" {
+		t.Fatalf("groups = %v, want current Hub header groups", got.Groups)
+	}
+	if values := rec.Header().Values("Set-Cookie"); len(values) != 0 {
+		t.Fatalf("cloud proxy auth emitted Set-Cookie: %v", values)
+	}
+}
+
+func TestMiddleware_CloudProxyRequiresHeadersEvenWithSessionCookie(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
+	cfg := proxyConfig()
+	handler := cloud.AuthenticatedTunnelHandler(Authenticate(cfg)(http.HandlerFunc(echoUser)))
+
+	cookie := CreateSessionCookie(&User{Username: "stale-user"}, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false)[0]
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 without Hub proxy headers", rec.Code)
+	}
+	if values := rec.Header().Values("Set-Cookie"); len(values) != 0 {
+		t.Fatalf("cloud proxy auth emitted Set-Cookie: %v", values)
+	}
+}
+
+func TestMiddleware_CloudProxyRejectsSpoofedHeadersOutsideTunnel(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
+	cfg := proxyConfig()
+	handler := Authenticate(cfg)(http.HandlerFunc(echoUser))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/topology", nil)
+	req.Header.Set(cfg.UserHeader, "attacker")
+	req.Header.Set(cfg.GroupsHeader, "cloud:owner")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 for unmarked forwarded identity", rec.Code)
+	}
+	if values := rec.Header().Values("Set-Cookie"); len(values) != 0 {
+		t.Fatalf("rejected direct request emitted Set-Cookie: %v", values)
 	}
 }
 
@@ -312,12 +389,9 @@ func TestIsExemptPath(t *testing.T) {
 	}
 }
 
-// TestIsExemptPath_CloudMode verifies that cloud-mode narrows the exempt
-// set to /api/health + /auth/*. The cloud-mode-specific narrowing is that
-// static assets must also require auth — a regression that silently re-added
-// them would let an unauthenticated request through the Cloud tunnel reach
-// those paths. (/api/connection and /debug/pprof/* require auth in both
-// modes; see TestIsExemptPath.)
+// TestIsExemptPath_CloudMode verifies that cloud-mode narrows the exempt set to
+// the exact kubelet health path. Cloud owns authentication, so Radar's local
+// /auth/* endpoints and static assets must not bypass the tunnel identity.
 func TestIsExemptPath_CloudMode(t *testing.T) {
 	t.Setenv("RADAR_CLOUD_MODE", "true")
 
@@ -326,8 +400,9 @@ func TestIsExemptPath_CloudMode(t *testing.T) {
 		want bool
 	}{
 		{"/api/health", true},
-		{"/auth/login", true},
-		{"/auth/callback", true},
+		{"/api/health/detailed", false},
+		{"/auth/login", false},
+		{"/auth/callback", false},
 		{"/api/connection", false},
 		{"/api/connection/retry", false},
 		// Under non-cloud mode static assets would be exempt. Under
