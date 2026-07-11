@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/helm"
 )
 
@@ -225,9 +225,8 @@ func validateProvisionConfig(cfg ProvisionConfig) error {
 	if strings.TrimSpace(cfg.Token) == "" || strings.TrimSpace(cfg.CloudURL) == "" || strings.TrimSpace(cfg.ClusterID) == "" {
 		return fmt.Errorf("provision: token, cloud URL, and cluster id are required")
 	}
-	parsed, err := url.Parse(cfg.CloudURL)
-	if err != nil || (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" {
-		return fmt.Errorf("provision: cloud URL must be an absolute ws:// or wss:// URL")
+	if err := cloud.ValidateWebSocketURL(cfg.CloudURL); err != nil {
+		return fmt.Errorf("provision: %w", err)
 	}
 	return nil
 }

@@ -14,9 +14,9 @@ package cloud
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -64,8 +64,8 @@ func (c Config) validate() error {
 	if c.URL == "" {
 		return errors.New("cloud: URL is required")
 	}
-	if !strings.HasPrefix(c.URL, "ws://") && !strings.HasPrefix(c.URL, "wss://") {
-		return errors.New("cloud: URL must start with ws:// or wss://")
+	if err := ValidateWebSocketURL(c.URL); err != nil {
+		return fmt.Errorf("cloud: %w", err)
 	}
 	if c.Token == "" {
 		return errors.New("cloud: Token is required")

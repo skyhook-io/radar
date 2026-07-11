@@ -103,6 +103,8 @@ func TestNormalizeHubOrigin(t *testing.T) {
 	}{
 		{raw: "  https://hub.example/  ", want: "https://hub.example"},
 		{raw: "http://localhost:9091", want: "http://localhost:9091"},
+		{raw: "http://127.0.0.2:9091", want: "http://127.0.0.2:9091"},
+		{raw: "http://[::1]:9091", want: "http://[::1]:9091"},
 		{raw: "https://[::1]:8443/", want: "https://[::1]:8443"},
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
@@ -119,6 +121,7 @@ func TestNormalizeHubOriginRejectsNonOrigins(t *testing.T) {
 		"", "hub.example", "ftp://hub.example", "https://", "https://hub.example/api",
 		"https://hub.example?org=acme", "https://hub.example#fragment",
 		"https://user:password@hub.example", "https://hub.example:0", "https://hub.example:65536",
+		"http://hub.example", "http://10.0.0.1", "http://localhost.example",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			if got, err := normalizeHubOrigin(raw); err == nil {

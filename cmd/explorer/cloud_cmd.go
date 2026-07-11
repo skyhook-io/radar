@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -311,31 +310,10 @@ func normalizeCloudInstallNames(namespace, release string) (string, string, erro
 
 func normalizeHubOrigin(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
-	u, err := url.Parse(raw)
-	if err != nil {
+	if err := cloud.ValidateHubOrigin(raw); err != nil {
 		return "", fmt.Errorf("invalid --hub-url %q: %w", raw, err)
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("invalid --hub-url %q: must use http or https", raw)
-	}
-	if u.Host == "" || u.Hostname() == "" || strings.HasSuffix(u.Host, ":") {
-		return "", fmt.Errorf("invalid --hub-url %q: must include a host", raw)
-	}
-	if u.User != nil {
-		return "", fmt.Errorf("invalid --hub-url %q: credentials are not allowed", raw)
-	}
-	if path := u.EscapedPath(); path != "" && path != "/" {
-		return "", fmt.Errorf("invalid --hub-url %q: must be an origin without a path", raw)
-	}
-	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") {
-		return "", fmt.Errorf("invalid --hub-url %q: query strings and fragments are not allowed", raw)
-	}
-	if port := u.Port(); port != "" {
-		n, err := strconv.Atoi(port)
-		if err != nil || n < 1 || n > 65535 {
-			return "", fmt.Errorf("invalid --hub-url %q: invalid port", raw)
-		}
-	}
+	u, _ := url.Parse(raw) // ValidateHubOrigin already parsed and validated it.
 	u.Path = ""
 	u.RawPath = ""
 	return u.String(), nil

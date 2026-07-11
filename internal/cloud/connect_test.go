@@ -61,6 +61,72 @@ func TestConnectClient_CreateRequiresAgentURL(t *testing.T) {
 	}
 }
 
+func TestConnectClient_CreateRejectsPlaintextRemoteAgentURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(CreateResponse{
+			RequestID: "req1", DeviceSecret: "sec", ConnectURL: "https://app/connect/req1",
+			ExpiresIn: 900, TokenPickupExpiresIn: 1800, PollInterval: 5,
+			WSSURL: "ws://api.example/agent",
+		})
+	}))
+	defer srv.Close()
+
+	_, err := NewConnectClient(srv.URL).Create(context.Background(), ConnectMetadata{DeploymentMode: "in-cluster"})
+	if err == nil || !strings.Contains(err.Error(), "must use wss://") {
+		t.Fatalf("plaintext remote wss_url must fail create, got %v", err)
+	}
+}
+
+func TestConnectClientRejectsPlaintextRemoteHubBeforeRequest(t *testing.T) {
+	for _, operation := range []string{"create", "poll"} {
+		t.Run(operation, func(t *testing.T) {
+			requests := 0
+			c := NewConnectClient("http://api.example")
+			c.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				requests++
+				return nil, errors.New("request must not be sent")
+			})}
+
+			var err error
+			if operation == "create" {
+				_, err = c.Create(context.Background(), ConnectMetadata{DeploymentMode: "in-cluster"})
+			} else {
+				_, err = c.Poll(context.Background(), "req1", "device-secret")
+			}
+			if err == nil || !strings.Contains(err.Error(), "must use https://") {
+				t.Fatalf("%s error = %v, want TLS policy error", operation, err)
+			}
+			if requests != 0 {
+				t.Fatalf("%s sent %d requests, want 0", operation, requests)
+			}
+		})
+	}
+}
+
+func TestConnectClientRejectsHTTPSDowngradeRedirect(t *testing.T) {
+	redirectedRequests := 0
+	plaintext := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirectedRequests++
+	}))
+	defer plaintext.Close()
+
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plaintext.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer secure.Close()
+
+	c := NewConnectClient(secure.URL)
+	c.HTTP = secure.Client()
+	_, err := c.Poll(context.Background(), "req1", "device-secret")
+	if err == nil || !strings.Contains(err.Error(), "redirects are not allowed") {
+		t.Fatalf("downgrade redirect error = %v, want redirect policy error", err)
+	}
+	if redirectedRequests != 0 {
+		t.Fatalf("plaintext redirect target received %d requests, want 0", redirectedRequests)
+	}
+}
+
 func TestConnectClient_CreateRequiresTokenPickupExpiry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -330,6 +396,31 @@ func TestPollUntilApproved_IncompleteApprovalIsTerminalAndActionable(t *testing.
 				t.Fatalf("polls = %d, want 1 terminal poll", polls)
 			}
 		})
+	}
+}
+
+func TestPollUntilApproved_InvalidAgentURLIsTerminalAndActionable(t *testing.T) {
+	polls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		polls++
+		_ = json.NewEncoder(w).Encode(PollResponse{
+			Status: "approved", ClusterID: "clus1", Token: "rhc_tok", WSSURL: "ws://api.example/agent",
+		})
+	}))
+	defer srv.Close()
+
+	cr := &CreateResponse{RequestID: "req1", DeviceSecret: "sec", ExpiresIn: 10, TokenPickupExpiresIn: 10, PollInterval: 1}
+	_, err := NewConnectClient(srv.URL).PollUntilApproved(context.Background(), cr)
+	if err == nil {
+		t.Fatal("invalid approved wss_url must be terminal")
+	}
+	for _, want := range []string{"invalid wss_url", "cluster \"clus1\"", "inspect", "before starting a new install", "must use wss://"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+	if polls != 1 {
+		t.Fatalf("polls = %d, want 1", polls)
 	}
 }
 

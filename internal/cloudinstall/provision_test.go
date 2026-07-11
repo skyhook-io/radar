@@ -166,3 +166,20 @@ func TestProvisionPrepared_RequiresPlanAndFields(t *testing.T) {
 		t.Error("expected non-WebSocket cloud URL to fail")
 	}
 }
+
+func TestValidateProvisionConfigCloudURLTransportPolicy(t *testing.T) {
+	for _, raw := range []string{"wss://api.radarhq.io/agent", "ws://localhost:9091/agent", "ws://127.0.0.1:9091/agent", "ws://[::1]:9091/agent"} {
+		t.Run("valid_"+raw, func(t *testing.T) {
+			if err := validateProvisionConfig(ProvisionConfig{Token: "t", CloudURL: raw, ClusterID: "c"}); err != nil {
+				t.Fatalf("validateProvisionConfig(%q): %v", raw, err)
+			}
+		})
+	}
+	for _, raw := range []string{"ws://api.radarhq.io/agent", "ws://10.0.0.1/agent", "ws://localhost.example/agent"} {
+		t.Run("invalid_"+raw, func(t *testing.T) {
+			if err := validateProvisionConfig(ProvisionConfig{Token: "t", CloudURL: raw, ClusterID: "c"}); err == nil {
+				t.Fatalf("validateProvisionConfig(%q) unexpectedly succeeded", raw)
+			}
+		})
+	}
+}

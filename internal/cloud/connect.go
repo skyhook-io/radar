@@ -101,6 +101,28 @@ func NewConnectClient(hubBase string) *ConnectClient {
 	}
 }
 
+func (c *ConnectClient) validateHubOrigin() error {
+	if err := ValidateHubOrigin(c.HubBase); err != nil {
+		return fmt.Errorf("invalid Hub API origin: %w", err)
+	}
+	return nil
+}
+
+// do rejects every redirect. These endpoints have fixed paths, and following a
+// redirect could carry the device-secret Authorization header from HTTPS to a
+// plaintext destination. Copying the client preserves injected transports and
+// test clients while making the policy non-optional at the request boundary.
+func (c *ConnectClient) do(req *http.Request) (*http.Response, error) {
+	if c.HTTP == nil {
+		return nil, errors.New("Hub HTTP client is required")
+	}
+	client := *c.HTTP
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("Hub API redirects are not allowed")
+	}
+	return client.Do(req)
+}
+
 // Create initiates a connect request. The returned device_secret is the
 // credential Radar uses to poll; it is never sent in a URL.
 func (c *ConnectClient) Create(ctx context.Context, meta ConnectMetadata) (*CreateResponse, error) {
@@ -109,6 +131,9 @@ func (c *ConnectClient) Create(ctx context.Context, meta ConnectMetadata) (*Crea
 	}
 	if utf8.RuneCountInString(strings.TrimSpace(meta.ClusterName)) > 80 {
 		return nil, errors.New("cluster name must be at most 80 characters; choose a shorter value with --name")
+	}
+	if err := c.validateHubOrigin(); err != nil {
+		return nil, err
 	}
 	body, err := json.Marshal(meta)
 	if err != nil {
@@ -119,7 +144,7 @@ func (c *ConnectClient) Create(ctx context.Context, meta ConnectMetadata) (*Crea
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("reaching %s: %w", c.HubBase, err)
 	}
@@ -134,6 +159,9 @@ func (c *ConnectClient) Create(ctx context.Context, meta ConnectMetadata) (*Crea
 	if out.RequestID == "" || out.DeviceSecret == "" || out.ConnectURL == "" || out.WSSURL == "" || out.ExpiresIn <= 0 || out.TokenPickupExpiresIn <= 0 || out.PollInterval <= 0 {
 		return nil, errors.New("hub response missing required fields")
 	}
+	if err := ValidateWebSocketURL(out.WSSURL); err != nil {
+		return nil, fmt.Errorf("hub response contains invalid wss_url: %w", err)
+	}
 	recoveryWindow, err := connectRecoveryWindow(&out)
 	if err != nil {
 		return nil, err
@@ -146,12 +174,15 @@ func (c *ConnectClient) Create(ctx context.Context, meta ConnectMetadata) (*Crea
 // device_secret. It preserves bounded error bodies and retry metadata so the
 // shared poll loop can distinguish transient responses from terminal 4xxs.
 func (c *ConnectClient) Poll(ctx context.Context, requestID, deviceSecret string) (*PollResponse, error) {
+	if err := c.validateHubOrigin(); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.HubBase+"/api/connect/requests/"+requestID, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+deviceSecret)
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, &pollTransportError{err: err}
 	}
@@ -180,6 +211,9 @@ func (c *ConnectClient) Poll(ctx context.Context, requestID, deviceSecret string
 				cluster = fmt.Sprintf("cluster %q", out.ClusterID)
 			}
 			return nil, fmt.Errorf("hub approved the connection but returned incomplete details (missing %s); %s may already exist in the Hub, so inspect it before starting a new install", strings.Join(missing, ", "), cluster)
+		}
+		if err := ValidateWebSocketURL(out.WSSURL); err != nil {
+			return nil, fmt.Errorf("hub approved the connection but returned an invalid wss_url; cluster %q may already exist in the Hub, so inspect it before starting a new install: %w", out.ClusterID, err)
 		}
 	}
 	return &out, nil
