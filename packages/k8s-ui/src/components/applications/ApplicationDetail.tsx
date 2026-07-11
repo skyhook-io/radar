@@ -31,6 +31,8 @@ import {
   classCompositionOf,
   batchSignalForApp,
   batchActivityForApp,
+  batchRuntimeForApp,
+  servingReadiness,
   worstHealth,
   appGroupLagMessage,
   compareVersions,
@@ -176,15 +178,16 @@ export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewI
       ),
     [app.workloads],
   )
-  const overall = worstHealth([app.health, ...workloads.map((w) => w.health)])
-  const verdictTone = HEALTH_META[overall].pill
-  const verdictLabel = HEALTH_META[overall].label
   const workloadClass = workloadClassOf(app.workload_class)
+  const batchRuntime = batchRuntimeForApp(app)
+  const servingWorkloads = workloads.filter((workload) => !workload.batch)
+  const overall = workloadClass === 'job' ? batchRuntime.health : servingWorkloads.length > 0 ? worstHealth(servingWorkloads.map((workload) => workload.health)) : healthOf(app.health)
+  const verdictTone = HEALTH_META[overall].pill
+  const verdictLabel = workloadClass === 'job' ? batchRuntime.label : HEALTH_META[overall].label
   const versions = useMemo(() => Array.from(new Set((app.versions || []).filter(Boolean))), [app.versions])
-  const ready = workloads.reduce((n, w) => n + (w.ready ?? 0), 0)
-  const desired = workloads.reduce((n, w) => n + (w.desired ?? 0), 0)
+  const { ready, desired } = servingReadiness(workloads)
   const restartSignal = restartWarning(workloads)
-  const batchSignal = batchSignalForApp(app)
+  const batchSignal = workloadClass === 'job' ? null : batchSignalForApp(app)
   // Resolve namespace the same way the list does (the workloads' shared
   // namespace) so env/namespace match across list and detail. Multi-namespace
   // apps get the count, never an arbitrary pick.
@@ -365,9 +368,11 @@ export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewI
             </Tooltip>
           </ContextFact>
         ) : null}
-        <ContextFact label="Ready">
-          <ReadyBar ready={ready} desired={desired} width="w-16" />
-        </ContextFact>
+        {workloadClass === 'job' ? (
+          <ContextFact label="Runtime">{batchRuntime.label}</ContextFact>
+        ) : desired > 0 ? (
+          <ContextFact label="Ready"><ReadyBar ready={ready} desired={desired} width="w-16" /></ContextFact>
+        ) : null}
         {(app.appVersion || versions.length > 0) && (
           <ContextFact label="Version">
             <VersionInfo app={app} variant="fact" />
@@ -593,6 +598,8 @@ function ApplicationOverview({
     .join(' / ')
   const workloadComposition = workloadKindComposition(workloads)
   const batchActivity = useMemo(() => batchActivityForApp(app), [app])
+  const batchStats = batchOverviewStats(batchActivity)
+  const pureBatch = workloadClassOf(app.workload_class) === 'job'
   const renderedOverviewIssues = renderOverviewIssues?.()
 
   return (
@@ -603,9 +610,19 @@ function ApplicationOverview({
           <ApplicationLatestHistory history={history} sourceRef={app.sourceRef} onSelectHistory={onSelectHistory} onOpenSource={onOpenSource} />
           <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
             <ApplicationFact label="State" value={verdictLabel} />
-            <ApplicationFact label="Workloads" value={String(workloads.length)} detail={workloadComposition || 'No workloads'} />
-            <ApplicationFact label="Ready" value={`${ready}/${desired}`} detail={desired === 0 ? 'No desired replicas' : undefined} />
-            <ApplicationFact label="Version" value={app.appVersion || (versions.length === 1 ? versions[0] : versions.length > 1 ? `${versions.length} versions` : 'Unknown')} />
+            {pureBatch ? (
+              <>
+                <ApplicationFact label="Batch resources" value={String(workloads.length)} detail={workloadComposition || 'No workloads'} />
+                <ApplicationFact label="Active runs" value={batchStats.activeValue} detail={batchStats.activeDetail} />
+                <ApplicationFact label="Retained runs" value={batchStats.retainedValue} detail="Kubernetes-retained history" />
+              </>
+            ) : (
+              <>
+                <ApplicationFact label="Workloads" value={String(workloads.length)} detail={workloadComposition || 'No workloads'} />
+                <ApplicationFact label="Ready" value={`${ready}/${desired}`} detail={desired === 0 ? 'No serving replicas' : undefined} />
+                <ApplicationFact label="Version" value={app.appVersion || (versions.length === 1 ? versions[0] : versions.length > 1 ? `${versions.length} versions` : 'Unknown')} />
+              </>
+            )}
           </div>
           {hasEntrypoints && (
             <ApplicationEntrypoints
@@ -618,7 +635,7 @@ function ApplicationOverview({
           <ApplicationPanel title="Workloads">
             <WorkloadsMatrix workloads={workloads} onSelectWorkload={onSelectWorkload} />
           </ApplicationPanel>
-          <ApplicationBatchOverview activity={batchActivity} onSelectWorkload={onSelectWorkload} />
+          {!pureBatch && <ApplicationBatchOverview activity={batchActivity} />}
         </div>
         <aside className="min-w-0 space-y-4">
           <ApplicationSourceProvenance app={app} namespace={namespace} namespaces={namespaces} composition={classComposition} onOpenSource={onOpenSource} />
@@ -657,7 +674,7 @@ function ApplicationSourceProvenance({
   const source = app.identity?.source ? appSourceLabel(app.identity.source) : app.tier ? overlayProvenance(app.tier) : 'raw workload'
   const confidence = app.confidence || (app.tier ? 'low' : 'raw')
   return (
-    <ApplicationPanel title="Source & provenance">
+    <ApplicationPanel title="Application identity">
       <div className="grid gap-3">
         <ApplicationFact variant="row" label="Grouped by" value={source} detail={app.identity?.evidence ?? app.key} monoDetail />
         <ApplicationFact variant="row" label="App key" value={app.name} detail={app.key} monoDetail />
@@ -844,17 +861,10 @@ function ApplicationRelatedChip({ kind, name }: { kind: string; name: string }) 
   )
 }
 
-function ApplicationBatchOverview({
-  activity,
-  onSelectWorkload,
-}: {
-  activity: AppBatchActivity[]
-  onSelectWorkload: (workload: AppWorkload) => void
-}) {
+function ApplicationBatchOverview({ activity }: { activity: AppBatchActivity[] }) {
   if (activity.length === 0) return null
 
   const stats = batchOverviewStats(activity)
-  const latestRuns = latestBatchRuns(activity).slice(0, 5)
 
   return (
     <ApplicationPanel title="Batch activity">
@@ -864,32 +874,6 @@ function ApplicationBatchOverview({
           <ApplicationFact variant="bare" label="Retained runs" value={stats.retainedValue} detail="Kubernetes-retained history" />
           <ApplicationFact variant="bare" label="Active work" value={stats.activeValue} detail={stats.activeDetail} />
           <ApplicationFact variant="bare" label="Schedules" value={stats.scheduleValue} detail={stats.scheduleDetail} monoValue={stats.scheduleMono} />
-        </div>
-        <div className="divide-y divide-theme-border border-t border-theme-border">
-          {latestRuns.map((item) => {
-            const timestamp = latestRunTimestamp(item)
-            return (
-              <button
-                key={`${item.workload.kind}/${item.workload.namespace}/${item.workload.name}`}
-                type="button"
-                onClick={() => onSelectWorkload(item.workload)}
-                className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3 text-left hover:bg-theme-hover/60"
-              >
-                <span className="min-w-0">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <StatusDot tone={mapHealthToTone(batchActivityHealth(item))} />
-                    <span className="truncate text-sm font-medium text-theme-text-primary">{item.latestRunName || item.workload.name}</span>
-                  </span>
-                  <span className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-theme-text-tertiary">
-                    <span>{item.workload.kind}/{item.workload.name}</span>
-                    {timestamp && <span>{relativeTime(timestamp)}</span>}
-                    {item.schedule && <span className="font-mono">{item.schedule}</span>}
-                  </span>
-                </span>
-                <span className={`${CHIP} ${CHIP_TONE[item.tone]}`}>{item.latestRunPhase || item.label}</span>
-              </button>
-            )
-          })}
         </div>
       </div>
     </ApplicationPanel>
@@ -909,14 +893,6 @@ function latestRunTime(item: AppBatchActivity): number {
   if (!value) return 0
   const t = Date.parse(value)
   return Number.isNaN(t) ? 0 : t
-}
-
-function batchActivityHealth(item: AppBatchActivity): AppHealth {
-  if (item.latestRunPhase === 'Failed' || item.latestRunPhase === 'Error') return 'unhealthy'
-  if (item.activeRuns > 0 || item.latestRunPhase === 'Running') return 'healthy'
-  if (item.latestRunPhase === 'Succeeded') return 'healthy'
-  if (item.tone === 'sky') return 'neutral'
-  return 'unknown'
 }
 
 function batchOverviewStats(activity: AppBatchActivity[]) {
@@ -1014,14 +990,14 @@ function WorkloadsMatrix({ workloads, onSelectWorkload }: { workloads: AppWorklo
             <th className="w-[34%] px-2 py-2 font-semibold">Workload</th>
             <th className="w-[13%] px-2 py-2 font-semibold">Kind</th>
             <th className="w-[12%] px-2 py-2 font-semibold">Class</th>
-            <th className="w-[14%] px-2 py-2 font-semibold">Health</th>
-            <th className="w-[11%] px-2 py-2 font-semibold">Ready</th>
+            <th className="w-[14%] px-2 py-2 font-semibold">Status</th>
+            <th className="w-[18%] px-2 py-2 font-semibold">Runtime</th>
             <th className="w-[16%] px-2 py-2 font-semibold">Version</th>
           </tr>
         </thead>
         <tbody>
           {workloads.map((w) => {
-            const tone = healthOf(w.health)
+            const status = workloadRuntimeStatus(w)
             return (
               <tr key={workloadKey(w)} className="border-b border-theme-border last:border-b-0 hover:bg-theme-hover">
                 <td className="truncate px-2 py-2">
@@ -1038,11 +1014,11 @@ function WorkloadsMatrix({ workloads, onSelectWorkload }: { workloads: AppWorklo
                 <td className="px-2 py-2 text-theme-text-secondary">{workloadClassOf(w.workload_class)}</td>
                 <td className="px-2 py-2">
                   <span className="inline-flex items-center gap-1.5 text-theme-text-secondary">
-                    <StatusDot tone={mapHealthToTone(tone)} />
-                    {HEALTH_META[tone].label}
+                    <StatusDot tone={mapHealthToTone(status.health)} />
+                    {status.label}
                   </span>
                 </td>
-                <td className="px-2 py-2 font-mono text-xs text-theme-text-secondary">{w.ready}/{w.desired}</td>
+                <td className="px-2 py-2 text-xs text-theme-text-secondary">{workloadRuntimeDetail(w)}</td>
                 <td className="truncate px-2 py-2 font-mono text-xs text-theme-text-secondary">{w.version || w.appVersion || '-'}</td>
               </tr>
             )
@@ -1051,6 +1027,29 @@ function WorkloadsMatrix({ workloads, onSelectWorkload }: { workloads: AppWorklo
       </table>
     </div>
   )
+}
+
+function workloadRuntimeStatus(workload: AppWorkload): { label: string; health: AppHealth } {
+  const batch = workload.batch
+  if (!batch) {
+    const health = healthOf(workload.health)
+    return { label: HEALTH_META[health].label, health }
+  }
+  if ((batch.activeRuns ?? 0) > 0 || batch.latestRunPhase === 'Running') return { label: 'Running', health: 'neutral' }
+  if (batch.latestRunPhase === 'Failed' || batch.latestRunPhase === 'Error') return { label: 'Failed', health: 'unhealthy' }
+  if (batch.latestRunPhase === 'Succeeded') return { label: 'Succeeded', health: 'healthy' }
+  if (batch.suspended) return { label: 'Suspended', health: 'neutral' }
+  return { label: 'Idle', health: 'neutral' }
+}
+
+function workloadRuntimeDetail(workload: AppWorkload): string {
+  const batch = workload.batch
+  if (!batch) return `${workload.ready}/${workload.desired} ready`
+  if ((batch.activeRuns ?? 0) > 0) return pluralize(batch.activeRuns ?? 0, 'active run')
+  const at = batch.latestStartedAt || batch.latestFinishedAt || batch.lastScheduledAt
+  if (batch.latestRunName) return `${midTruncate(batch.latestRunName, 28)}${at ? ` · ${relativeTime(at)}` : ''}`
+  if (batch.schedule) return `Schedule ${batch.schedule}`
+  return 'No retained runs'
 }
 
 function ApplicationTopology({

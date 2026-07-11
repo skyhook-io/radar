@@ -95,9 +95,34 @@ function nodeRunTime(node: TopologyNode): number {
 }
 
 function compareRunsNewestFirst(a: TopologyNode, b: TopologyNode): number {
-  const byTime = nodeRunTime(b) - nodeRunTime(a)
-  if (byTime !== 0) return byTime
+  const aTime = nodeRunTime(a)
+  const bTime = nodeRunTime(b)
+  if (bTime !== aTime) return bTime - aTime
   return b.name.localeCompare(a.name)
+}
+
+function runDisposition(node: TopologyNode): 'active' | 'failed' | 'succeeded' | 'other' {
+  const data = node.data ?? {}
+  const phase = typeof data.phase === 'string' ? data.phase : ''
+  if (phase === 'Running' || phase === 'Pending' || Number(data.active ?? 0) > 0) return 'active'
+  if (phase === 'Failed' || phase === 'Error' || node.status === 'unhealthy') return 'failed'
+  if (phase === 'Succeeded' || node.status === 'healthy' || Number(data.succeeded ?? 0) > 0) return 'succeeded'
+  if (node.kind === 'Job' && !data.completionTime) return 'active'
+  return 'other'
+}
+
+function representativeRuns(targets: TopologyNode[]): TopologyNode[] {
+  const sorted = [...targets].sort(compareRunsNewestFirst)
+  const active = sorted.filter((node) => runDisposition(node) === 'active')
+  const selected: TopologyNode[] = active.length > BATCH_RUN_FANOUT_LIMIT ? active.slice(-BATCH_RUN_FANOUT_LIMIT) : active
+  const addLatest = (disposition: 'failed' | 'succeeded') => {
+    const node = sorted.find((candidate) => runDisposition(candidate) === disposition)
+    if (node && !selected.some((candidate) => candidate.id === node.id)) selected.push(node)
+  }
+  addLatest('failed')
+  addLatest('succeeded')
+  if (selected.length === 0 && sorted[0]) selected.push(sorted[0])
+  return selected
 }
 
 function batchFanoutLimit(edge: TopologyEdge, nodeById: Map<string, TopologyNode>): number | null {
@@ -148,7 +173,7 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
     }
   }
 
-  const limitedFanouts = new Map<string, { allowed: Set<string>; total: number; kind: string }>()
+  const limitedFanouts = new Map<string, { allowed: Set<string>; total: number; kind: string; activeTotal: number; activeShown: number }>()
   for (const [sourceId, edges] of adjacency) {
     const runEdges = edges.filter((edge) => edge.source === sourceId && batchFanoutLimit(edge, nodeById) !== null)
     if (runEdges.length <= BATCH_RUN_FANOUT_LIMIT) continue
@@ -156,10 +181,13 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
       .map((edge) => nodeById.get(edge.target))
       .filter((node): node is TopologyNode => !!node)
       .sort(compareRunsNewestFirst)
+    const representatives = representativeRuns(targets)
     limitedFanouts.set(sourceId, {
-      allowed: new Set(targets.slice(0, BATCH_RUN_FANOUT_LIMIT).map((node) => node.id)),
+      allowed: new Set(representatives.map((node) => node.id)),
       total: targets.length,
       kind: targets[0]?.kind === 'Job' ? 'Job' : 'Workflow',
+      activeTotal: targets.filter((node) => runDisposition(node) === 'active').length,
+      activeShown: representatives.filter((node) => runDisposition(node) === 'active').length,
     })
   }
 
@@ -215,7 +243,8 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
       ...Array.from(cappedSources).map((sourceId) => {
         const source = nodeById.get(sourceId)
         const fanout = limitedFanouts.get(sourceId)
-        return `Topology view: showing latest ${BATCH_RUN_FANOUT_LIMIT} of ${fanout?.total ?? BATCH_RUN_FANOUT_LIMIT} retained ${fanout?.kind ?? 'batch'} runs for ${source?.kind ?? 'workload'}/${source?.name ?? sourceId}. Use the run list for the full retained history.`
+        const activeNote = fanout && fanout.activeTotal > fanout.activeShown ? ` showing the ${fanout.activeShown} oldest of ${fanout.activeTotal} active runs plus representative completed runs` : ' showing active and representative completed runs'
+        return `Topology view:${activeNote} from ${fanout?.total ?? BATCH_RUN_FANOUT_LIMIT} retained ${fanout?.kind ?? 'batch'} runs for ${source?.kind ?? 'workload'}/${source?.name ?? sourceId}. Use Run history for the full retained set.`
       }),
     ],
   }

@@ -176,11 +176,11 @@ type appRelationships struct {
 	Ingresses []string `json:"ingresses,omitempty"`
 	// "Kind/name" (routes are polymorphic); Services/Ingresses carry bare names
 	// since their kind is fixed.
-	Routes []string `json:"routes,omitempty"`
-	Configs   int      `json:"configs,omitempty"`
-	Scalers   int      `json:"scalers,omitempty"`
-	Storage   int      `json:"storage,omitempty"`
-	PDBs      int      `json:"pdbs,omitempty"`
+	Routes  []string `json:"routes,omitempty"`
+	Configs int      `json:"configs,omitempty"`
+	Scalers int      `json:"scalers,omitempty"`
+	Storage int      `json:"storage,omitempty"`
+	PDBs    int      `json:"pdbs,omitempty"`
 
 	configRefs  map[string]struct{}
 	scalerRefs  map[string]struct{}
@@ -760,9 +760,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 	podsByNS := indexPodsByNamespace(cache, namespaces)
 	eventsByObj := indexWarningEventsByObject(cache, namespaces)
 	cronJobBatches := cronJobBatchSummaries(cache, namespaces)
-	cronJobKeys := cronJobParentKeys(cache, namespaces)
 	scaledJobBatches := scaledJobBatchSummaries(cache, namespaces)
-	scaledJobKeys := scaledJobParentKeys(ctx, cache, namespaces)
 	cronWorkflowBatches := cronWorkflowBatchSummaries(ctx, cache, namespaces)
 
 	add := func(kind, ns, name string, lbls, anns map[string]string, image string, health packages.Health, ready, desired int, selector *metav1.LabelSelector, batch *appBatchSummary) {
@@ -871,16 +869,16 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				items, _ = jobLister.Jobs(ns).List(labels.Everything())
 			}
 			for _, j := range items {
-				if owner := controllerOwnerName(j.OwnerReferences, "CronJob"); owner != "" && cronJobKeys[j.Namespace+"/"+owner] {
+				if controllerOwnerName(j.OwnerReferences, "CronJob") != "" {
 					continue
 				}
-				if owner := controllerOwnerName(j.OwnerReferences, "ScaledJob"); owner != "" && scaledJobKeys[j.Namespace+"/"+owner] {
+				if controllerOwnerName(j.OwnerReferences, "ScaledJob") != "" {
 					continue
 				}
 				add("Job", j.Namespace, j.Name, j.Labels, j.Annotations,
 					primaryImage(j.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(j, time.Now()).Level),
-					int(j.Status.Succeeded), jobDesired(j), j.Spec.Selector, jobBatchSummary(j))
+					0, 0, j.Spec.Selector, jobBatchSummary(j))
 			}
 		})
 	}
@@ -946,34 +944,6 @@ func cronJobBatchSummaries(cache *k8s.ResourceCache, namespaces []string) map[st
 			applyRunToBatch(out[key], jobRunInfo(job))
 		}
 	})
-	return out
-}
-
-func cronJobParentKeys(cache *k8s.ResourceCache, namespaces []string) map[string]bool {
-	out := map[string]bool{}
-	lister := cache.CronJobs()
-	if lister == nil {
-		return out
-	}
-	forEachWorkloadNamespace(namespaces, func(ns string) {
-		var items []*batchv1.CronJob
-		if ns == "" {
-			items, _ = lister.List(labels.Everything())
-		} else {
-			items, _ = lister.CronJobs(ns).List(labels.Everything())
-		}
-		for _, item := range items {
-			out[item.Namespace+"/"+item.Name] = true
-		}
-	})
-	return out
-}
-
-func scaledJobParentKeys(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) map[string]bool {
-	out := map[string]bool{}
-	for _, sj := range listDynamicByNamespacesGroup(ctx, cache, namespaces, "ScaledJob", "keda.sh") {
-		out[sj.GetNamespace()+"/"+sj.GetName()] = true
-	}
 	return out
 }
 
@@ -1056,7 +1026,7 @@ func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 		batch := &appBatchSummary{}
 		applyRunToBatch(batch, run)
 		add("Workflow", wf.GetNamespace(), wf.GetName(), wf.GetLabels(), wf.GetAnnotations(),
-			workflowPrimaryImage(wf), workflowHealth(run.Phase), run.StepSucceeded, maxInt(run.StepTotal, run.PodTotal), nil, batch)
+			workflowPrimaryImage(wf), workflowHealth(run.Phase), 0, 0, nil, batch)
 	}
 
 	templateKeys := make([]string, 0, len(templateInfos))
@@ -1350,7 +1320,10 @@ func scaledJobHealth(sj *unstructured.Unstructured) packages.Health {
 }
 
 func workflowPrimaryImage(wf *unstructured.Unstructured) string {
-	return templateImage(wf.Object, "spec", "templates")
+	if image := templateImage(wf.Object, "spec", "templates"); image != "" {
+		return image
+	}
+	return templateImage(wf.Object, "status", "storedWorkflowTemplateSpec", "templates")
 }
 
 func cronWorkflowPrimaryImage(cwf *unstructured.Unstructured) string {
@@ -1395,13 +1368,6 @@ func forEachWorkloadNamespace(namespaces []string, fn func(ns string)) {
 	for _, ns := range namespaces {
 		fn(ns)
 	}
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // --- grouping ------------------------------------------------------------
@@ -2257,17 +2223,6 @@ func imageRepo(image string) string {
 		return image[:colon]
 	}
 	return image
-}
-
-func ownedByCronJob(j *batchv1.Job) bool {
-	return controllerOwnerName(j.OwnerReferences, "CronJob") != ""
-}
-
-func jobDesired(j *batchv1.Job) int {
-	if j.Spec.Completions != nil && *j.Spec.Completions > 0 {
-		return int(*j.Spec.Completions)
-	}
-	return 1
 }
 
 // levelToPackagesHealth projects a canonical health.Level onto the package wire

@@ -151,10 +151,11 @@ describe('neighborhoodFor', () => {
     expect(new Set(out.nodes.map((n) => n.id))).toEqual(new Set(['wt', 'wf', 'pod']))
   })
 
-  it('caps batch run fan-out to the newest retained runs', () => {
+  it('keeps active plus representative failed and successful retained runs', () => {
     const runs = Array.from({ length: 18 }, (_, i) => ({
       ...crdNode(`wf${i}`, 'Workflow', 'app', `migration-${i}`, 'argoproj.io/v1alpha1'),
-      data: { namespace: 'app', apiVersion: 'argoproj.io/v1alpha1', startedAt: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z` },
+      status: i === 4 ? 'unhealthy' as const : i === 17 ? 'neutral' as const : 'healthy' as const,
+      data: { namespace: 'app', apiVersion: 'argoproj.io/v1alpha1', phase: i === 4 ? 'Failed' : i === 17 ? 'Running' : 'Succeeded', startedAt: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z` },
     }))
     const topo: Topology = {
       nodes: [crdNode('wt', 'WorkflowTemplate', 'app', 'migration', 'argoproj.io/v1alpha1'), ...runs],
@@ -164,10 +165,45 @@ describe('neighborhoodFor', () => {
     const ids = new Set(out.nodes.map((n) => n.id))
     expect(ids.has('wt')).toBe(true)
     expect(ids.has('wf0')).toBe(false)
-    expect(ids.has('wf9')).toBe(false)
-    expect(ids.has('wf10')).toBe(true)
+    expect(ids.has('wf4')).toBe(true)
+    expect(ids.has('wf16')).toBe(true)
     expect(ids.has('wf17')).toBe(true)
-    expect(out.warnings?.some((w) => w.includes('showing latest 8 of 18 retained Workflow runs'))).toBe(true)
+    expect(out.warnings?.some((w) => w.includes('active and representative completed runs from 18 retained Workflow runs'))).toBe(true)
+  })
+
+  it('keeps the oldest active runs and discloses active-run truncation', () => {
+    const active = Array.from({ length: 12 }, (_, i) => ({
+      ...crdNode(`active${i}`, 'Workflow', 'app', `migration-active-${i}`, 'argoproj.io/v1alpha1'),
+      data: { namespace: 'app', apiVersion: 'argoproj.io/v1alpha1', phase: 'Running', startedAt: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z` },
+    }))
+    const failed = { ...crdNode('failed', 'Workflow', 'app', 'migration-failed', 'argoproj.io/v1alpha1'), status: 'unhealthy' as const, data: { namespace: 'app', phase: 'Failed', startedAt: '2026-02-01T00:00:00Z' } }
+    const succeeded = { ...crdNode('succeeded', 'Workflow', 'app', 'migration-succeeded', 'argoproj.io/v1alpha1'), status: 'healthy' as const, data: { namespace: 'app', phase: 'Succeeded', startedAt: '2026-02-02T00:00:00Z' } }
+    const runs = [...active, failed, succeeded]
+    const topo: Topology = {
+      nodes: [crdNode('wt', 'WorkflowTemplate', 'app', 'migration', 'argoproj.io/v1alpha1'), ...runs],
+      edges: runs.map((run) => edge('wt', run.id, 'configures')),
+    }
+    const out = neighborhoodFor(topo, [{ kind: 'WorkflowTemplate', group: 'argoproj.io', namespace: 'app', name: 'migration' }])
+    const ids = new Set(out.nodes.map((node) => node.id))
+    for (let i = 0; i < 8; i++) expect(ids.has(`active${i}`)).toBe(true)
+    for (let i = 8; i < 12; i++) expect(ids.has(`active${i}`)).toBe(false)
+    expect(ids.has('failed')).toBe(true)
+    expect(ids.has('succeeded')).toBe(true)
+    expect(out.warnings?.some((warning) => warning.includes('8 oldest of 12 active runs'))).toBe(true)
+  })
+
+  it('uses the name tiebreak for runs without timestamps', () => {
+    const runs = Array.from({ length: 10 }, (_, i) => ({
+      ...crdNode(`wf${i}`, 'Workflow', 'app', `migration-${i}`, 'argoproj.io/v1alpha1'),
+      status: 'healthy' as const,
+      data: { namespace: 'app', phase: 'Succeeded' },
+    }))
+    const topo: Topology = {
+      nodes: [crdNode('wt', 'WorkflowTemplate', 'app', 'migration', 'argoproj.io/v1alpha1'), ...runs],
+      edges: runs.map((run) => edge('wt', run.id, 'configures')),
+    }
+    const out = neighborhoodFor(topo, [{ kind: 'WorkflowTemplate', group: 'argoproj.io', namespace: 'app', name: 'migration' }])
+    expect(out.nodes.some((node) => node.id === 'wf9')).toBe(true)
   })
 })
 

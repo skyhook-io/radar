@@ -327,7 +327,8 @@ func applyMCPTerminalJobEmptyState(metadata *mcpWorkloadLogEmptyMetadata, job *b
 		}
 	}
 	metadata.Reason = "pods-gone"
-	metadata.Message = "This Job has finished, but its pods are no longer present in Kubernetes. If logs were retained externally, use your logging system or try kubectl logs job/" + name + " -n " + namespace + "."
+	metadata.Message = "This Job has finished, but its pods are no longer present in Kubernetes. If logs were retained externally, use your logging system; otherwise inspect the Job conditions and events."
+	metadata.Command = "kubectl describe job/" + name + " -n " + namespace
 }
 
 func mcpJobCondition(job *batchv1.Job, conditionType batchv1.JobConditionType) (batchv1.JobCondition, bool) {

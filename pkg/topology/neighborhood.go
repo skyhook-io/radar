@@ -378,11 +378,14 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 		KindReplicaSet, KindRollout, KindJob, KindCronJob, KindWorkflow, KindCronWorkflow,
 		KindKnativeService, KindKnativeRevision, KindKnativeConfiguration:
 		return map[EdgeType]bool{
-			EdgeManages:  true,
-			EdgeRoutesTo: true,
-			EdgeExposes:  true,
-			EdgeProtects: true,
+			EdgeManages:    true,
+			EdgeRoutesTo:   true,
+			EdgeExposes:    true,
+			EdgeProtects:   true,
+			EdgeConfigures: rootKind == KindWorkflow || rootKind == KindCronWorkflow,
 		}
+	case KindWorkflowTemplate, KindClusterWorkflowTemplate:
+		return map[EdgeType]bool{EdgeConfigures: true, EdgeManages: true}
 	// GitOps controllers: just the management chain (what they own).
 	case KindApplication, KindKustomization, KindHelmRelease, KindGitRepository:
 		return managementEdgeTypes()

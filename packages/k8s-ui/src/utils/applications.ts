@@ -839,7 +839,7 @@ export const CHIP_TONE = {
 } as const
 
 export const HEALTH_META: Record<AppHealth, HealthMeta> = {
-  unhealthy: { label: 'Down', bar: 'bg-rose-500', text: 'text-rose-600 dark:text-rose-400', pill: CHIP_TONE.rose },
+  unhealthy: { label: 'Unhealthy', bar: 'bg-rose-500', text: 'text-rose-600 dark:text-rose-400', pill: CHIP_TONE.rose },
   degraded: { label: 'Degraded', bar: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400', pill: CHIP_TONE.amber },
   healthy: { label: 'Healthy', bar: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400', pill: CHIP_TONE.emerald },
   // neutral = intentionally idle/off (every workload suspended or scaled to 0).
@@ -935,14 +935,6 @@ export function batchSignalForWorkload(workload: AppWorkload): BatchSignal | nul
       workload,
     }
   }
-  if ((batch.failedRuns ?? 0) > 1) {
-    return {
-      tone: 'amber',
-      label: `${batch.failedRuns} failed runs`,
-      detail: `${name} has ${batch.failedRuns} retained failed runs.`,
-      workload,
-    }
-  }
   if (batch.suspended) {
     return {
       tone: 'sky',
@@ -960,6 +952,59 @@ export function batchSignalForWorkload(workload: AppWorkload): BatchSignal | nul
     }
   }
   return null
+}
+
+export interface AppBatchRuntime {
+  label: string
+  health: AppHealth
+  detail: string
+}
+
+export function batchRuntimeForApp(app: AppRow): AppBatchRuntime {
+  const activity = batchActivityForApp(app)
+  if (activity.some((item) => item.activeRuns > 0 || item.latestRunPhase === 'Running')) {
+    const active = activity.reduce((sum, item) => sum + item.activeRuns, 0)
+    return { label: active > 0 ? `${active} running` : 'Running', health: 'neutral', detail: 'Batch work is executing now.' }
+  }
+  const latest = [...activity].sort((a, b) => batchActivityTimestamp(b) - batchActivityTimestamp(a))[0]
+  if (latest?.latestRunPhase === 'Failed' || latest?.latestRunPhase === 'Error') {
+    return { label: 'Failed', health: 'unhealthy', detail: latest.latestRunName ? `Latest retained run: ${latest.latestRunName}` : 'The latest retained run failed.' }
+  }
+  if (latest?.latestRunPhase === 'Succeeded') {
+    return { label: 'Succeeded', health: 'healthy', detail: latest.latestRunName ? `Latest retained run: ${latest.latestRunName}` : 'The latest retained run succeeded.' }
+  }
+  if (activity.length > 0 && activity.every((item) => item.workload.batch?.suspended)) {
+    return { label: 'Suspended', health: 'neutral', detail: 'All batch launchers are suspended.' }
+  }
+  if (activity.some((item) => item.retainedRuns > 0)) {
+    return { label: latest?.latestRunPhase || 'Idle', health: 'neutral', detail: 'No batch work is currently active.' }
+  }
+  return { label: 'Idle', health: 'neutral', detail: 'No retained runs are present in Kubernetes.' }
+}
+
+function batchActivityTimestamp(item: AppBatchActivity): number {
+  const raw = item.latestStartedAt || item.latestFinishedAt || item.lastScheduledAt || item.lastSuccessfulAt
+  if (!raw) return 0
+  const parsed = Date.parse(raw)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+export function applicationRuntimeHealth(app: AppRow): AppHealth {
+  if (workloadClassOf(app.workload_class) === 'job') return batchRuntimeForApp(app).health
+  const serving = (app.workloads || []).filter((workload) => !workload.batch)
+  return serving.length > 0 ? worstHealth(serving.map((workload) => workload.health)) : healthOf(app.health)
+}
+
+export function servingReadiness(workloads: AppWorkload[]): { ready: number; desired: number } {
+  let ready = 0
+  let desired = 0
+  for (const workload of workloads) {
+    const cls = workloadClassOf(workload.workload_class)
+    if (cls === 'job' || workload.batch) continue
+    ready += workload.ready ?? 0
+    desired += workload.desired ?? 0
+  }
+  return { ready, desired }
 }
 
 function batchActivityForWorkload(workload: AppWorkload): AppBatchActivity | null {
@@ -1183,8 +1228,10 @@ export function buildSingleAppEntry(row: AppRow, discoveredEnvs?: ReadonlySet<st
   let desired = 0
   for (const wl of row.workloads || []) {
     kinds[wl.kind] = (kinds[wl.kind] ?? 0) + 1
-    ready += wl.ready ?? 0
-    desired += wl.desired ?? 0
+    if (workloadClassOf(wl.workload_class) !== 'job' && !wl.batch) {
+      ready += wl.ready ?? 0
+      desired += wl.desired ?? 0
+    }
   }
   const namespace = namespaceOf(row)
   // The server's identity classification carries the authoritative env (label/
@@ -1196,7 +1243,7 @@ export function buildSingleAppEntry(row: AppRow, discoveredEnvs?: ReadonlySet<st
   return {
     variant: 'single',
     row,
-    health: healthOf(row.health),
+    health: applicationRuntimeHealth(row),
     versions: Array.from(new Set((row.versions || []).filter(Boolean))),
     namespace,
     namespaces: namespacesOf(row),

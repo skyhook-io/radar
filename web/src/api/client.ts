@@ -3712,16 +3712,17 @@ export interface WorkloadRun {
   parallelism?: number
   progress?: string
   template?: string
+  launcher?: {
+    kind: string
+    namespace?: string
+    name: string
+    group?: string
+  }
   podTotal?: number
   podSucceeded?: number
   podFailed?: number
   podRunning?: number
   podPending?: number
-  stepTotal?: number
-  stepSucceeded?: number
-  stepFailed?: number
-  stepRunning?: number
-  stepSkipped?: number
 }
 
 export interface WorkloadRunsResponse {
@@ -3751,7 +3752,7 @@ export function useWorkloadRuns(kind: string, namespace: string, name: string, e
     enabled: enabled && Boolean(kind && name && (namespace || clusterScoped)),
     staleTime: 10000,
     refetchInterval: options?.refetchActive
-      ? (query) => query.state.data?.runs?.some((run) => run.active) ? 5000 : false
+      ? (query) => query.state.data?.runs?.some((run) => run.active) ? 5000 : 30000
       : false,
   })
 }

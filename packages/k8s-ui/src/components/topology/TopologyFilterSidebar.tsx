@@ -56,6 +56,7 @@ const RESOURCE_KINDS: {
 
   // Scaling
   { kind: 'HorizontalPodAutoscaler', label: 'HPA', icon: getTopologyIcon('HorizontalPodAutoscaler'), color: 'text-pink-400', category: 'scaling' },
+  { kind: 'ScaledJob', label: 'ScaledJob', icon: getTopologyIcon('ScaledJob'), color: 'text-pink-300', category: 'scaling' },
 
   // Knative
   { kind: 'KnativeService', label: 'Knative Service', icon: getTopologyIcon('KnativeService'), color: 'text-fuchsia-400', category: 'custom' },

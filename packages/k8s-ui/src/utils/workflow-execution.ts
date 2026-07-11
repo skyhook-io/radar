@@ -10,6 +10,7 @@ export interface WorkflowExecutionNode {
   templateScope?: string
   boundaryId?: string
   podName?: string
+  templateRef?: WorkflowTemplateReference
   message?: string
   startedAt?: string
   finishedAt?: string
@@ -28,11 +29,11 @@ export interface WorkflowExecutionCounts {
   podFailed: number
   podRunning: number
   podPending: number
-  stepTotal: number
-  stepSucceeded: number
-  stepFailed: number
-  stepRunning: number
-  stepSkipped: number
+  nodeTotal: number
+  nodeSucceeded: number
+  nodeFailed: number
+  nodeRunning: number
+  nodeSkipped: number
 }
 
 export interface WorkflowExecutionPath {
@@ -85,6 +86,7 @@ export function buildWorkflowExecutionModel(workflow: any): WorkflowExecutionMod
   for (const [id, raw] of Object.entries(rawNodes)) {
     const node = asRecord(raw)
     const displayName = asString(node.displayName) || asString(node.name) || id
+    const templateRef = templateReferenceFromObject(node.templateRef, asString(workflow?.metadata?.namespace), 'task', asString(node.templateName), displayName)
     nodeById.set(id, {
       id,
       name: asString(node.name) || displayName,
@@ -95,6 +97,7 @@ export function buildWorkflowExecutionModel(workflow: any): WorkflowExecutionMod
       templateScope: asString(node.templateScope),
       boundaryId: asString(node.boundaryID),
       podName: asString(node.podName),
+      templateRef: templateRef ?? undefined,
       message: asString(node.message),
       startedAt: asString(node.startedAt),
       finishedAt: asString(node.finishedAt),
@@ -153,7 +156,8 @@ export function collectWorkflowTemplateRefs(workflow: any): WorkflowTemplateRefe
   const workflowRef = templateReferenceFromObject(workflow?.spec?.workflowTemplateRef, namespace, 'workflow')
   if (workflowRef) refs.push(workflowRef)
 
-  for (const template of asArray(workflow?.spec?.templates)) {
+  const effectiveSpec = effectiveWorkflowSpec(workflow)
+  for (const template of asArray(effectiveSpec?.templates)) {
     const templateMap = asRecord(template)
     const templateName = asString(templateMap.name)
     for (const task of taskLikeObjects(templateMap)) {
@@ -163,7 +167,18 @@ export function collectWorkflowTemplateRefs(workflow: any): WorkflowTemplateRefe
     }
   }
 
+  for (const raw of Object.values(asRecord(workflow?.status?.nodes))) {
+    const node = asRecord(raw)
+    const ref = templateReferenceFromObject(node.templateRef, namespace, 'task', asString(node.templateName), asString(node.displayName) || asString(node.name))
+    if (ref) refs.push(ref)
+  }
+
   return dedupeTemplateRefs(refs)
+}
+
+function effectiveWorkflowSpec(workflow: any): Record<string, any> {
+  const stored = asRecord(workflow?.status?.storedWorkflowTemplateSpec)
+  return Object.keys(stored).length > 0 ? stored : asRecord(workflow?.spec)
 }
 
 export function phaseTone(phase: string): WorkflowExecutionTone {
@@ -206,11 +221,11 @@ function countWorkflowExecution(nodes: WorkflowExecutionNode[]): WorkflowExecuti
     podFailed: 0,
     podRunning: 0,
     podPending: 0,
-    stepTotal: 0,
-    stepSucceeded: 0,
-    stepFailed: 0,
-    stepRunning: 0,
-    stepSkipped: 0,
+    nodeTotal: 0,
+    nodeSucceeded: 0,
+    nodeFailed: 0,
+    nodeRunning: 0,
+    nodeSkipped: 0,
   }
   for (const node of nodes) {
     if (node.type === 'Pod') {
@@ -221,11 +236,11 @@ function countWorkflowExecution(nodes: WorkflowExecutionNode[]): WorkflowExecuti
       else if (node.phase === 'Pending') counts.podPending++
     }
     if (STEP_NODE_TYPES.has(node.type)) {
-      counts.stepTotal++
-      if (node.phase === 'Succeeded') counts.stepSucceeded++
-      else if (isWorkflowProblemPhase(node.phase)) counts.stepFailed++
-      else if (node.phase === 'Running') counts.stepRunning++
-      else if (node.phase === 'Skipped' || node.phase === 'Omitted') counts.stepSkipped++
+      counts.nodeTotal++
+      if (node.phase === 'Succeeded') counts.nodeSucceeded++
+      else if (isWorkflowProblemPhase(node.phase)) counts.nodeFailed++
+      else if (node.phase === 'Running') counts.nodeRunning++
+      else if (node.phase === 'Skipped' || node.phase === 'Omitted') counts.nodeSkipped++
     }
   }
   return counts

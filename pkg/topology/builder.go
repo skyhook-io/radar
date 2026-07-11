@@ -280,7 +280,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	workflowTemplateIDs := make(map[string]string)
 	clusterWorkflowTemplateIDs := make(map[string]string)
 	workflowTemplateNodes := make(map[string]Node)
-	referencedWorkflowTemplateIDs := make(map[string]bool)
 
 	// Track ConfigMap/Secret/PVC references from workloads
 	// Maps workloadID -> set of resource names
@@ -2659,7 +2658,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion":        cwf.GetAPIVersion(),
 				},
 			})
-			edges = addArgoWorkflowTemplateEdges(edges, cwfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(cwf.Object, "spec", "workflowSpec"), workflowTemplateIDs, clusterWorkflowTemplateIDs, referencedWorkflowTemplateIDs)
+			edges = addArgoWorkflowTemplateEdges(edges, cwfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(cwf.Object, "spec", "workflowSpec"), workflowTemplateIDs, clusterWorkflowTemplateIDs)
 		}
 	}
 	if hasWorkflows && dynamicCache != nil {
@@ -2697,7 +2696,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion": wf.GetAPIVersion(),
 				},
 			})
-			edges = addArgoWorkflowTemplateEdges(edges, wfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(wf.Object, "spec"), workflowTemplateIDs, clusterWorkflowTemplateIDs, referencedWorkflowTemplateIDs)
+			edges = addArgoWorkflowTemplateEdges(edges, wfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(wf.Object, "spec"), workflowTemplateIDs, clusterWorkflowTemplateIDs)
 			if owner := argoWorkflowCronOwnerName(wf); owner != "" {
 				if cwfID, ok := cronWorkflowIDs[ns+"/"+owner]; ok {
 					edges = append(edges, Edge{
@@ -7341,7 +7340,7 @@ func argoTemplateTasks(template map[string]any) []any {
 	return tasks
 }
 
-func addArgoWorkflowTemplateEdges(edges []Edge, sourceID, sourceNamespace string, refs []argoWorkflowTemplateRef, workflowTemplateIDs, clusterWorkflowTemplateIDs map[string]string, referencedTemplateIDs map[string]bool) []Edge {
+func addArgoWorkflowTemplateEdges(edges []Edge, sourceID, sourceNamespace string, refs []argoWorkflowTemplateRef, workflowTemplateIDs, clusterWorkflowTemplateIDs map[string]string) []Edge {
 	for _, ref := range refs {
 		targetID := ""
 		if ref.clusterScope {
@@ -7352,7 +7351,6 @@ func addArgoWorkflowTemplateEdges(edges []Edge, sourceID, sourceNamespace string
 		if targetID == "" {
 			continue
 		}
-		referencedTemplateIDs[targetID] = true
 		edges = append(edges, Edge{
 			ID:     fmt.Sprintf("%s-to-%s", targetID, sourceID),
 			Source: targetID,

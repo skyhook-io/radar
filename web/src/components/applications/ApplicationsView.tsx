@@ -169,6 +169,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     if (selectedWorkloadParam === singleWorkloadKey && !viewParam) return
     const params = new URLSearchParams(searchParams)
     params.delete('view')
+    params.delete('run')
     params.set('workload', singleWorkloadKey)
     setSearchParams(params, { replace: true })
   }, [searchParams, selectedWorkloadParam, setSearchParams, singleWorkloadKey, viewParam])
@@ -176,6 +177,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     (view: ApplicationView) => {
       const params = new URLSearchParams(searchParams)
       params.delete('tab')
+      params.delete('run')
       if (singleWorkloadKey) {
         params.delete('view')
         params.set('workload', singleWorkloadKey)
@@ -193,6 +195,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   const selectWorkload = useCallback(
     (key: string | null) => {
       const params = new URLSearchParams(searchParams)
+      params.delete('run')
       if (key) {
         const wasInWorkloadScope = !!selectedWorkloadKey
         params.delete('view')

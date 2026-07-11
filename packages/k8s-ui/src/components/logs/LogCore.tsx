@@ -38,6 +38,7 @@ interface LogCoreProps {
   toolbarExtra?: ToolbarExtraRenderer
   showPodName?: boolean
   emptyMessage?: string
+  emptyCommand?: string | null
   errorMessage?: string | null
   /**
    * Hard override for the viewer palette. When set, the viewer stays pinned to
@@ -127,6 +128,7 @@ export function LogCore({
   toolbarExtra,
   showPodName = false,
   emptyMessage = 'No logs available',
+  emptyCommand,
   errorMessage,
   forceDark,
 }: LogCoreProps) {
@@ -810,6 +812,12 @@ export function LogCore({
         <div className={`${EMPTY_STATE_CLASS} ${palette.textTertiary}`}>
           <Terminal className="w-8 h-8" />
           <span>{emptyMessage}</span>
+          {emptyCommand && (
+            <button type="button" onClick={() => navigator.clipboard.writeText(emptyCommand).catch(() => {})} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
+              <code className="truncate">{emptyCommand}</code>
+              <Copy className="h-3.5 w-3.5 shrink-0" />
+            </button>
+          )}
         </div>
       ) : (
         <div className="flex-1 relative">

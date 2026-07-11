@@ -160,7 +160,6 @@ func TestArgoWorkflowTemplateRefsFromWorkflowSpec(t *testing.T) {
 }
 
 func TestAddArgoWorkflowTemplateEdges(t *testing.T) {
-	referenced := make(map[string]bool)
 	edges := addArgoWorkflowTemplateEdges(nil, "workflow/demo/run", "demo", []argoWorkflowTemplateRef{
 		{name: "local"},
 		{name: "global", clusterScope: true},
@@ -169,7 +168,7 @@ func TestAddArgoWorkflowTemplateEdges(t *testing.T) {
 		"demo/local": "workflowtemplate/demo/local",
 	}, map[string]string{
 		"global": "clusterworkflowtemplate//global",
-	}, referenced)
+	})
 
 	if len(edges) != 2 {
 		t.Fatalf("expected 2 edges, got %#v", edges)
@@ -179,9 +178,6 @@ func TestAddArgoWorkflowTemplateEdges(t *testing.T) {
 	}
 	if edges[1].Source != "clusterworkflowtemplate//global" || edges[1].Target != "workflow/demo/run" || edges[1].Type != EdgeConfigures {
 		t.Fatalf("cluster edge = %#v", edges[1])
-	}
-	if !referenced["workflowtemplate/demo/local"] || !referenced["clusterworkflowtemplate//global"] || referenced["missing"] {
-		t.Fatalf("referenced template IDs = %#v", referenced)
 	}
 }
 

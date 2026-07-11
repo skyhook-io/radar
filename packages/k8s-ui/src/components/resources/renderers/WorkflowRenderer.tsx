@@ -143,7 +143,7 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
           {duration && <Property label="Duration" value={duration} />}
           {status.startedAt && <Property label="Started" value={formatAge(status.startedAt)} />}
           <Property label="Finished" value={status.finishedAt ? formatAge(status.finishedAt) : 'Running...'} />
-          {workflowTemplateRef && <Property label="Template" value={<TemplateRefLink refInfo={workflowTemplateRef} onNavigate={onNavigate} />} />}
+          {workflowTemplateRef && <Property label="Definition" value={<TemplateRefLink refInfo={workflowTemplateRef} onNavigate={onNavigate} />} />}
           {status.progress && (
             <Property label="Progress" value={status.progress} />
           )}
@@ -191,25 +191,14 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
                   {isFailed && step.message && (
                     <div className="text-xs text-red-400 mt-1 ml-6 break-all">{step.message}</div>
                   )}
+                  {step.templateRef && (
+                    <div className="mt-1 ml-6 text-xs text-theme-text-tertiary">
+                      Uses <TemplateRefLink refInfo={step.templateRef} onNavigate={onNavigate} />
+                    </div>
+                  )}
                 </div>
               )
             })}
-          </div>
-        </Section>
-      )}
-
-      {execution.templateRefs.length > 1 && (
-        <Section title={`Template References (${execution.templateRefs.length})`} defaultExpanded={false}>
-          <div className="space-y-1.5">
-            {execution.templateRefs.map((ref) => (
-              <div key={`${ref.resourceKind}/${ref.namespace}/${ref.name}/${ref.source}/${ref.template || ''}/${ref.taskName || ''}`} className="flex items-center justify-between gap-3 text-sm card-inner px-3 py-2">
-                <div className="min-w-0">
-                  <TemplateRefLink refInfo={ref} onNavigate={onNavigate} />
-                  {ref.template && <span className="ml-2 text-xs text-theme-text-tertiary">template {ref.template}</span>}
-                </div>
-                <span className="text-xs text-theme-text-tertiary">{ref.source === 'workflow' ? 'workflow' : ref.taskName || 'task'}</span>
-              </div>
-            ))}
           </div>
         </Section>
       )}

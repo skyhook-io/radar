@@ -31,10 +31,10 @@ func TestApplyMCPTerminalJobEmptyState(t *testing.T) {
 	if metadata.Reason != "pods-gone" {
 		t.Fatalf("Reason = %q, want pods-gone", metadata.Reason)
 	}
-	if !strings.Contains(metadata.Message, "finished") || !strings.Contains(metadata.Message, "kubectl logs job/nightly -n ci") {
-		t.Fatalf("Message = %q, want terminal kubectl guidance", metadata.Message)
+	if !strings.Contains(metadata.Message, "finished") || !strings.Contains(metadata.Message, "conditions and events") {
+		t.Fatalf("Message = %q, want terminal inspection guidance", metadata.Message)
 	}
-	if metadata.Command != "kubectl logs job/nightly -n ci" {
+	if metadata.Command != "kubectl describe job/nightly -n ci" {
 		t.Fatalf("Command = %q", metadata.Command)
 	}
 }

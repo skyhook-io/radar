@@ -1548,7 +1548,15 @@ const POD_VISIBLE_LIMIT = 5
 const EVENT_VISIBLE_LIMIT = 5
 const RELATIONSHIP_GROUP_LIMIT = 5
 const RELATIONSHIP_REF_LIMIT = 5
-const LOGS_TAB_WITHOUT_PODS_KINDS = new Set(['jobs', 'cronjobs', 'workflows', 'cronworkflows'])
+const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
+  'jobs',
+  'cronjobs',
+  'workflows',
+  'cronworkflows',
+  'workflowtemplates',
+  'clusterworkflowtemplates',
+  'scaledjobs',
+])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
 type RuntimeOverviewShape = 'replicated' | 'job' | 'cronjob'
 

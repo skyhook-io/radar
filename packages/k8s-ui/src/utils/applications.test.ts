@@ -1,5 +1,25 @@
 import { describe, it, expect } from 'vitest'
-import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, batchActivityForApp, type AppGroupFoldEntry, type AppRow, type AppWorkload } from './applications'
+import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, batchActivityForApp, batchRuntimeForApp, servingReadiness, type AppGroupFoldEntry, type AppRow, type AppWorkload } from './applications'
+
+describe('batch application runtime', () => {
+  it('uses the latest retained outcome instead of historical failure count', () => {
+    const app: AppRow = {
+      key: 'batch', name: 'batch', health: 'unhealthy', workload_class: 'job',
+      workloads: [{
+        kind: 'CronJob', namespace: 'demo', name: 'nightly', workload_class: 'job', health: 'unhealthy', ready: 0, desired: 0, restarts: 0,
+        batch: { retainedRuns: 4, failedRuns: 1, succeededRuns: 3, latestRunName: 'nightly-new', latestRunPhase: 'Succeeded', latestFinishedAt: '2026-07-10T00:00:00Z' },
+      }],
+    }
+    expect(batchRuntimeForApp(app)).toMatchObject({ label: 'Succeeded', health: 'healthy' })
+  })
+
+  it('excludes batch workloads from serving readiness', () => {
+    expect(servingReadiness([
+      { kind: 'Deployment', namespace: 'demo', name: 'api', workload_class: 'service', health: 'healthy', ready: 2, desired: 3, restarts: 0 },
+      { kind: 'Job', namespace: 'demo', name: 'run', workload_class: 'job', health: 'healthy', ready: 1, desired: 1, restarts: 0, batch: { retainedRuns: 1 } },
+    ])).toEqual({ ready: 2, desired: 3 })
+  })
+})
 
 describe('compareVersions', () => {
   it('orders semver', () => {

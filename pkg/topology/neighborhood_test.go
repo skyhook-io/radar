@@ -141,6 +141,14 @@ func TestBuildNeighborhood_AutoForPod(t *testing.T) {
 	}
 }
 
+func TestEdgeTypesForAutoIncludesWorkflowDefinitionEdges(t *testing.T) {
+	for _, kind := range []NodeKind{KindWorkflow, KindCronWorkflow, KindWorkflowTemplate, KindClusterWorkflowTemplate} {
+		if !edgeTypesForAuto(kind)[EdgeConfigures] {
+			t.Fatalf("auto profile for %s must include definition edges", kind)
+		}
+	}
+}
+
 func TestBuildNeighborhood_AutoForApplication(t *testing.T) {
 	// Application → Deployment via EdgeManages.
 	app := makeNode(KindApplication, "argocd", "cart")

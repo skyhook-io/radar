@@ -164,6 +164,17 @@ func TestApplyTerminalJobEmptyStateIgnoresRetryCounters(t *testing.T) {
 	}
 }
 
+func TestApplyTerminalJobEmptyStateUsesDescribeCommand(t *testing.T) {
+	metadata := workloadLogMetadata{EmptyReason: "no-pods", Command: "kubectl logs job/nightly -n ci"}
+	job := &batchv1.Job{Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}}}
+
+	applyTerminalJobEmptyState(&metadata, job, "ci", "nightly")
+
+	if metadata.EmptyReason != "pods-gone" || metadata.Command != "kubectl describe job/nightly -n ci" {
+		t.Fatalf("unexpected terminal metadata: %#v", metadata)
+	}
+}
+
 func TestJobRunInfoUsesTerminalConditions(t *testing.T) {
 	startedAt := metav1.NewTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
 	finishedAt := metav1.NewTime(time.Date(2026, 1, 2, 3, 5, 5, 0, time.UTC))
@@ -226,6 +237,49 @@ func TestJobRunInfoTreatsPendingAsActive(t *testing.T) {
 
 	if run.Phase != "Pending" || !run.Active {
 		t.Fatalf("unexpected phase/active: %#v", run)
+	}
+}
+
+func TestJobRunInfoSuspendedAndLauncher(t *testing.T) {
+	suspended := true
+	controller := true
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "queue-worker-abc",
+			Namespace:       "ci",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "ScaledJob", Name: "queue-worker", Controller: &controller}},
+		},
+		Spec: batchv1.JobSpec{Suspend: &suspended},
+	}
+
+	run := jobRunInfo(job)
+	if run.Phase != "Suspended" || run.Active {
+		t.Fatalf("unexpected suspended phase/active: %#v", run)
+	}
+	if run.Trigger != "event" || run.Launcher == nil || run.Launcher.Kind != "ScaledJob" || run.Launcher.Name != "queue-worker" || run.Launcher.Group != "keda.sh" {
+		t.Fatalf("unexpected launcher: %#v", run)
+	}
+}
+
+func TestWorkflowRunInfoIncludesCronWorkflowLauncher(t *testing.T) {
+	controller := true
+	workflow := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name":      "nightly-abc",
+			"namespace": "ci",
+			"ownerReferences": []any{map[string]any{
+				"apiVersion": "argoproj.io/v1alpha1",
+				"kind":       "CronWorkflow",
+				"name":       "nightly",
+				"uid":        "abc",
+				"controller": controller,
+			}},
+		},
+	}}
+
+	run := workflowRunInfo(workflow)
+	if run.Launcher == nil || run.Launcher.Kind != "CronWorkflow" || run.Launcher.Namespace != "ci" || run.Launcher.Name != "nightly" {
+		t.Fatalf("unexpected launcher: %#v", run)
 	}
 }
 
@@ -316,12 +370,12 @@ func TestShouldWaitForPodsInLogStream(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "deployment waits across rollouts",
+			name: "deployment ends without pods",
 			kind: "deployments",
 			metadata: workloadLogMetadata{
 				EmptyReason: "no-pods",
 			},
-			want: true,
+			want: false,
 		},
 	}
 

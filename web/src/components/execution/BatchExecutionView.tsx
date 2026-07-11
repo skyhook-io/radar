@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
-import { Activity, GitBranch, Layers3, Loader2 } from 'lucide-react'
+import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
+import { Activity, ChevronRight, GitBranch } from 'lucide-react'
 import { clsx } from 'clsx'
 import { EmptyState, FetchResult, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
 import { buildWorkflowExecutionModel, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
+import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
 import { useResource, useWorkloadRuns, type WorkloadRun } from '../../api/client'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
 
@@ -13,75 +14,59 @@ const RUN_KIND_LABEL: Record<string, string> = {
   workflows: 'Workflow',
 }
 
+export function workloadRunKey(run: Pick<WorkloadRun, 'kind' | 'namespace' | 'name'>): string {
+  return `${run.kind}/${run.namespace}/${run.name}`
+}
+
+function isTemplateKind(kind: string): boolean {
+  return kind === 'WorkflowTemplate' || kind === 'ClusterWorkflowTemplate'
+}
+
+function configurationTitle(kind: string): string {
+  if (kind === 'CronJob' || kind === 'CronWorkflow') return 'Schedule'
+  if (kind === 'ScaledJob') return 'Trigger configuration'
+  if (isTemplateKind(kind)) return 'Definition'
+  if (kind === 'Job') return 'Job configuration'
+  return 'Workflow configuration'
+}
+
 interface BatchExecutionProps {
   kind: string
   apiKind: string
   namespace: string
   name: string
   resource: any
+  selectedRunKey?: string
+  onSelectRun?: (runKey: string) => void
   onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
-export function BatchDrawerExecutionSummary({ kind, apiKind, namespace, name, resource }: BatchExecutionProps) {
-  const clusterScoped = kind === 'ClusterWorkflowTemplate'
-  const runsQuery = useWorkloadRuns(apiKind, namespace, name, SCHEDULED_KINDS.has(kind), { refetchActive: true, clusterScoped })
-  const runs = scheduledRunsFor(kind, runsQuery.data?.runs, resource, apiKind, namespace, name)
-  const current = pickLatestRun(runs)
-  const source = sourceFacts(kind, resource, runs)
-
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2">
-        <FactTile label={SCHEDULED_KINDS.has(kind) ? 'Retained runs' : 'Run'} value={runs.length || 'none'} />
-        <FactTile label="State" value={current ? current.phase : source.state} tone={current ? phaseTone(current.phase) : source.stateTone} />
-        {source.schedule && <FactTile label="Schedule" value={source.schedule} mono />}
-        {source.concurrency && <FactTile label="Concurrency" value={source.concurrency} />}
-        {current?.progress && <FactTile label="Progress" value={current.progress} />}
-        {current && <FactTile label="Duration" value={formatRunDuration(current) || '-'} />}
-      </div>
-      {runsQuery.isLoading ? (
-        <div className="flex items-center gap-2 rounded-md border border-theme-border bg-theme-elevated/40 px-3 py-2 text-xs text-theme-text-tertiary">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Loading retained runs
-        </div>
-      ) : SCHEDULED_KINDS.has(kind) && runs.length === 0 ? (
-        <div className="rounded-md border border-theme-border bg-theme-elevated/40 px-3 py-2 text-xs text-theme-text-tertiary">
-          No retained runs are present in Kubernetes. History may not exist yet, or old Jobs/Workflows may have been removed by retention or TTL cleanup.
-        </div>
-      ) : current ? (
-        <RunDigest run={current} compact />
-      ) : null}
-    </div>
-  )
-}
-
-export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resource, onNavigateToResource }: BatchExecutionProps) {
+export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resource, selectedRunKey = '', onSelectRun, onNavigateToResource }: BatchExecutionProps) {
   const scheduled = SCHEDULED_KINDS.has(kind)
   const clusterScoped = kind === 'ClusterWorkflowTemplate'
-  const runsQuery = useWorkloadRuns(apiKind, namespace, name, scheduled, { refetchActive: true, clusterScoped })
-  const runs = scheduledRunsFor(kind, runsQuery.data?.runs, resource, apiKind, namespace, name)
+  const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped })
+  const runs = runsQuery.data?.runs ?? EMPTY_RUNS
   const defaultRun = useMemo(() => pickDefaultRun(runs), [runs])
-  const [selectedRunName, setSelectedRunName] = useState('')
-  const userSelectedRunRef = useRef(false)
+  const [runFilter, setRunFilter] = useState<'all' | 'active' | 'failed'>('all')
+  const [runSearch, setRunSearch] = useState('')
 
   useEffect(() => {
+    if (!runsQuery.data) return
     if (runs.length === 0) {
-      userSelectedRunRef.current = false
-      setSelectedRunName('')
+      if (selectedRunKey) onSelectRun?.('')
       return
     }
-    const nextDefaultRunName = defaultRun?.name ?? runs[0].name
-    if (!runs.some((run) => run.name === selectedRunName)) {
-      userSelectedRunRef.current = false
-      setSelectedRunName(nextDefaultRunName)
-      return
+    if (!runs.some((run) => workloadRunKey(run) === selectedRunKey)) {
+      onSelectRun?.(workloadRunKey(defaultRun ?? runs[0]))
     }
-    if (!userSelectedRunRef.current && selectedRunName !== nextDefaultRunName) {
-      setSelectedRunName(nextDefaultRunName)
-    }
-  }, [runs, selectedRunName, defaultRun])
+  }, [runsQuery.data, runs, selectedRunKey, defaultRun, onSelectRun])
 
-  const selectedRun = runs.find((run) => run.name === selectedRunName) ?? defaultRun
+  const selectedRun = runs.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
+  const visibleRuns = useMemo(() => runs.filter((run) => {
+    if (runFilter === 'active' && !run.active) return false
+    if (runFilter === 'failed' && run.phase !== 'Failed' && run.phase !== 'Error') return false
+    return !runSearch || run.name.toLowerCase().includes(runSearch.toLowerCase())
+  }), [runs, runFilter, runSearch])
   const source = sourceFacts(kind, resource, runs)
   const phaseCounts = countPhases(runs)
   const fetchTarget = selectedRun && scheduled ? resourceTargetForRun(selectedRun) : null
@@ -93,10 +78,21 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
     { enabled: Boolean(fetchTarget), refetchInterval: selectedRun?.active ? 5000 : false },
   )
   const selectedResource = scheduled ? selectedResourceQuery.data : resource
-  const workflowExecution = selectedResource && selectedRun?.kind === 'workflows' ? buildWorkflowExecutionModel(selectedResource) : null
+  const workflowExecution = useMemo(
+    () => selectedResource && selectedRun?.kind === 'workflows' ? buildWorkflowExecutionModel(selectedResource) : null,
+    [selectedResource, selectedRun?.kind],
+  )
 
-  if (runsQuery.isLoading && scheduled) {
+  if (runsQuery.isLoading) {
     return <FetchResult loading className="h-full" />
+  }
+
+  if (runsQuery.error) {
+    return (
+      <div className="p-4">
+        <EmptyState tone="neutral" variant="card" headline="Run history unavailable" body={runsQuery.error instanceof Error ? runsQuery.error.message : 'Radar could not load retained runs.'} />
+      </div>
+    )
   }
 
   return (
@@ -106,16 +102,26 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
           <div className="border-b border-theme-border px-3 py-3">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <div className="text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">Runs</div>
+                <div className="text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">{isTemplateKind(kind) ? 'Workflows using this definition' : 'Run history'}</div>
                 <div className="mt-1 text-sm font-semibold text-theme-text-primary">{pluralizeRuns(runs.length)}</div>
               </div>
-              <span className={clsx('badge-sm', phaseBadgeClass(selectedRun?.phase ?? source.state))}>{selectedRun?.phase ?? source.state}</span>
             </div>
             <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-theme-text-tertiary">
               {phaseCounts.running > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.running} running</span>}
               {phaseCounts.failed > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.failed} failed</span>}
               {phaseCounts.succeeded > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.succeeded} succeeded</span>}
             </div>
+            <p className="mt-2 text-[10px] leading-4 text-theme-text-tertiary">Retained Kubernetes objects, not all-time history.</p>
+            {(runs.length > 8 || phaseCounts.failed > 0) && (
+              <div className="mt-3 space-y-2">
+                <div className="flex gap-1">
+                  {(['all', 'active', 'failed'] as const).map((filter) => (
+                    <button key={filter} type="button" onClick={() => setRunFilter(filter)} className={clsx('rounded px-2 py-1 text-[10px] font-medium capitalize', runFilter === filter ? 'selection' : 'text-theme-text-tertiary hover:bg-theme-hover')}>{filter}</button>
+                  ))}
+                </div>
+                {runs.length > 20 && <input value={runSearch} onChange={(event) => setRunSearch(event.target.value)} placeholder="Filter run names" className="w-full rounded-md border border-theme-border bg-theme-elevated px-2 py-1.5 text-xs text-theme-text-primary placeholder:text-theme-text-tertiary" />}
+              </div>
+            )}
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
@@ -124,21 +130,21 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                 <EmptyState
                   tone="neutral"
                   variant="card"
-                  headline="No retained runs"
-                  body={`Kubernetes does not currently have retained ${runKindPluralForSchedule(kind)} for this source.`}
+                  headline={emptyRunsCopy(kind, resource).headline}
+                  body={emptyRunsCopy(kind, resource).body}
                 />
               </div>
+            ) : visibleRuns.length === 0 ? (
+              <EmptyState tone="filtered" variant="card" headline="No runs match these filters" body="Change the status filter or run-name search." />
             ) : (
               <div className="space-y-1">
-                {runs.map((run) => (
+                {visibleRuns.map((run) => (
                   <RunRailButton
                     key={`${run.kind}/${run.namespace}/${run.name}`}
                     run={run}
-                    selected={selectedRun?.name === run.name}
-                    onClick={() => {
-                      userSelectedRunRef.current = true
-                      setSelectedRunName(run.name)
-                    }}
+                    showNamespace={clusterScoped}
+                    selected={workloadRunKey(selectedRun ?? run) === workloadRunKey(run)}
+                    onClick={() => onSelectRun?.(workloadRunKey(run))}
                   />
                 ))}
               </div>
@@ -149,40 +155,42 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
 
       <main className="min-w-0 flex-1 overflow-auto">
         <div className="space-y-4 p-4">
+          {scheduled && selectedResourceQuery.error && (
+            <EmptyState tone="neutral" variant="card" headline="Selected run unavailable" body={selectedResourceQuery.error instanceof Error ? selectedResourceQuery.error.message : 'Radar could not load this retained run.'} />
+          )}
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]">
             <section className="space-y-3">
-              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-                <FactTile label="State" value={selectedRun?.phase ?? source.state} tone={selectedRun ? phaseTone(selectedRun.phase) : source.stateTone} />
-                <FactTile label="Progress" value={selectedRun?.progress || source.progress || '-'} />
-                <FactTile label="Duration" value={selectedRun ? formatRunDuration(selectedRun) || '-' : source.duration || '-'} />
-                <FactTile label={selectedRun?.stepTotal ? 'Steps' : 'Pods'} value={selectedRun ? workCount(selectedRun) : source.work || '-'} />
-              </div>
-
               {selectedRun ? (
                 <section className="rounded-lg border border-theme-border bg-theme-surface">
                   <div className="flex items-start justify-between gap-3 border-b border-theme-border px-4 py-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <StatusDot tone={mapHealthToTone(phaseHealth(selectedRun.phase))} />
-                        <h3 className="truncate text-base font-semibold text-theme-text-primary">{selectedRun.name}</h3>
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">Selected run</div>
+                          {onNavigateToResource ? (
+                            <button type="button" className="block max-w-full truncate text-base font-semibold text-accent-text hover:underline" onClick={() => onNavigateToResource(resourceTargetForRun(selectedRun))}>{selectedRun.name}</button>
+                          ) : <h3 className="truncate text-base font-semibold text-theme-text-primary">{selectedRun.name}</h3>}
+                        </div>
                       </div>
                       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
                         <span>{RUN_KIND_LABEL[selectedRun.kind] ?? selectedRun.kind}</span>
                         {selectedRun.startedAt && <span>started {formatAge(selectedRun.startedAt)}</span>}
                         {selectedRun.trigger === 'manual' && <span>manual trigger</span>}
-                        {selectedRun.scheduledAt && <span>cron scheduled {formatAge(selectedRun.scheduledAt)}</span>}
-                        {selectedRun.template && <span>template {selectedRun.template}</span>}
+                        {selectedRun.trigger === 'event' && <span>event triggered</span>}
+                        {selectedRun.scheduledAt && <span>scheduled {formatAge(selectedRun.scheduledAt)}</span>}
                         {selectedResourceQuery.isFetching && <span>refreshing</span>}
                       </div>
                     </div>
                     <span className={clsx('badge', phaseBadgeClass(selectedRun.phase))}>{selectedRun.phase}</span>
                   </div>
-                  <div className="grid gap-0 lg:grid-cols-2">
+                  <div className="grid gap-0 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.7fr)]">
                     <RunDetailList run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} scheduledParent={scheduled} />
-                    <div className="border-t border-theme-border p-4 lg:border-l lg:border-t-0">
-                      <RunMetrics run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} retainedRuns={runs} scheduledParent={scheduled} />
+                    <div className="border-t border-theme-border p-4 xl:border-l xl:border-t-0">
+                      <RunContext run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} onNavigateToResource={onNavigateToResource} />
                     </div>
                   </div>
+                  {selectedRun.message && <RunMessageDetails run={selectedRun} />}
                 </section>
               ) : (
                 <EmptyState
@@ -194,10 +202,9 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               )}
             </section>
 
-            <section className="rounded-lg border border-theme-border bg-theme-surface">
+            <section className="self-start rounded-lg border border-theme-border bg-theme-surface">
               <div className="border-b border-theme-border px-4 py-3">
-                <h3 className="text-sm font-semibold text-theme-text-primary">Source</h3>
-                <p className="mt-0.5 text-xs text-theme-text-tertiary">{kind} · {namespace || 'cluster'}/{name}</p>
+                <h3 className="text-sm font-semibold text-theme-text-primary">{configurationTitle(kind)}</h3>
               </div>
               <div className="space-y-3 p-4">
                 <SourceFacts source={source} />
@@ -206,77 +213,18 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
           </div>
 
           {selectedRun && selectedRun.kind === 'workflows' ? (
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
-              <RunExecutionPanel run={selectedRun} workflowExecution={workflowExecution} loading={selectedResourceQuery.isLoading} />
+            <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
+              <RunExecutionPanel run={selectedRun} workflowExecution={workflowExecution} loading={selectedResourceQuery.isLoading} onNavigateToResource={onNavigateToResource} />
               <RunActivityPanel run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} />
             </div>
           ) : selectedRun ? (
             <RunActivityPanel run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} />
           ) : null}
 
-          {workflowExecution && workflowExecution.templateRefs.length > 0 && (
-            <TemplateReferencePanel refs={workflowExecution.templateRefs} onNavigateToResource={onNavigateToResource} />
-          )}
-
         </div>
       </main>
     </div>
   )
-}
-
-function scheduledRunsFor(kind: string, runs: WorkloadRun[] | undefined, resource: any, apiKind: string, namespace: string, name: string): WorkloadRun[] {
-  if (SCHEDULED_KINDS.has(kind)) return runs ?? EMPTY_RUNS
-  const run = runFromResource(kind, resource, apiKind, namespace, name)
-  return run ? [run] : EMPTY_RUNS
-}
-
-function runFromResource(kind: string, resource: any, apiKind: string, namespace: string, name: string): WorkloadRun | null {
-  if (!resource) return null
-  if (kind === 'Job') {
-    const status = resource.status ?? {}
-    const spec = resource.spec ?? {}
-    const phase = jobPhase(resource)
-    const desired = Number(spec.completions ?? 1)
-    return {
-      kind: apiKind,
-      namespace,
-      name,
-      phase,
-      active: phase === 'Running' || phase === 'Pending',
-      startedAt: status.startTime,
-      finishedAt: status.completionTime,
-      message: conditionMessage(status.conditions),
-      succeeded: Number(status.succeeded ?? 0),
-      failed: Number(status.failed ?? 0),
-      running: Number(status.active ?? 0),
-      desired,
-      parallelism: Number(spec.parallelism ?? 1),
-      progress: `${Number(status.succeeded ?? 0)}/${desired}`,
-      podSucceeded: Number(status.succeeded ?? 0),
-      podFailed: Number(status.failed ?? 0),
-      podRunning: Number(status.active ?? 0),
-      podTotal: Number(status.succeeded ?? 0) + Number(status.failed ?? 0) + Number(status.active ?? 0),
-    }
-  }
-  if (kind === 'Workflow') {
-    const status = resource.status ?? {}
-    const execution = buildWorkflowExecutionModel(resource)
-    const run: WorkloadRun = {
-      kind: apiKind,
-      namespace,
-      name,
-      phase: status.phase || 'Pending',
-      active: status.phase === 'Running' || status.phase === 'Pending',
-      startedAt: status.startedAt,
-      finishedAt: status.finishedAt,
-      message: status.message,
-      progress: status.progress,
-      template: resource.spec?.workflowTemplateRef?.name,
-      ...execution.counts,
-    }
-    return run
-  }
-  return null
 }
 
 export function pickDefaultRun(runs: WorkloadRun[]): WorkloadRun | undefined {
@@ -328,6 +276,7 @@ function runTime(run: WorkloadRun): number {
 function jobPhase(job: any): string {
   if (!job) return 'Pending'
   const conditions = job.status?.conditions ?? []
+  if (job.spec?.suspend === true || conditions.some((c: any) => c.type === 'Suspended' && c.status === 'True')) return 'Suspended'
   if ((job.status?.active ?? 0) > 0) return 'Running'
   if (conditions.some((c: any) => c.type === 'Complete' && c.status === 'True')) return 'Succeeded'
   if (conditions.some((c: any) => c.type === 'Failed' && c.status === 'True')) return 'Failed'
@@ -352,19 +301,14 @@ function scaledJobTone(resource: any): 'info' | 'warning' | 'success' | 'error' 
   }
 }
 
-function conditionMessage(conditions: any[] | undefined): string | undefined {
-  const c = conditions?.find((cond) => (cond.type === 'Failed' || cond.type === 'Complete') && cond.status === 'True')
-  return c?.message || c?.reason
-}
-
 function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
   const spec = resource?.spec ?? {}
   const status = resource?.status ?? {}
   const latest = pickLatestRun(runs)
   if (kind === 'CronJob') {
     return {
-      state: spec.suspend ? 'Suspended' : latest?.phase ?? 'Idle',
-      stateTone: spec.suspend ? 'warning' : latest ? phaseTone(latest.phase) : 'info',
+      state: spec.suspend ? 'Suspended' : (status.active?.length ?? 0) > 0 ? 'Active' : 'Scheduled',
+      stateTone: spec.suspend ? 'warning' : 'info',
       schedule: spec.schedule,
       concurrency: spec.concurrencyPolicy || 'Allow',
       progress: latest?.progress,
@@ -382,8 +326,8 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
     const schedules = Array.isArray(spec.schedules) ? spec.schedules.join(', ') : spec.schedule
     const template = spec.workflowSpec?.workflowTemplateRef?.name || spec.workflowSpec?.entrypoint
     return {
-      state: spec.suspend ? 'Suspended' : latest?.phase ?? 'Idle',
-      stateTone: spec.suspend ? 'warning' : latest ? phaseTone(latest.phase) : 'info',
+      state: spec.suspend ? 'Suspended' : (status.active?.length ?? 0) > 0 ? 'Active' : 'Scheduled',
+      stateTone: spec.suspend ? 'warning' : 'info',
       schedule: schedules,
       concurrency: spec.concurrencyPolicy || 'Allow',
       progress: latest?.progress,
@@ -399,8 +343,8 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
   }
   if (kind === 'WorkflowTemplate') {
     return {
-      state: latest?.phase ?? 'Idle',
-      stateTone: latest ? phaseTone(latest.phase) : 'info',
+      state: 'Definition',
+      stateTone: 'info',
       progress: latest?.progress,
       duration: latest ? formatRunDuration(latest) : '',
       work: `${runs.filter((run) => run.active).length} active`,
@@ -408,14 +352,13 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
         ['Entrypoint', spec.entrypoint || '-'],
         ['Templates', Array.isArray(spec.templates) ? String(spec.templates.length) : '-'],
         ['Service account', spec.serviceAccountName || '-'],
-        ['Retained history', runs.length ? `${runs.length} Workflow ${runs.length === 1 ? 'run' : 'runs'}` : 'No retained runs'],
       ],
     }
   }
   if (kind === 'ClusterWorkflowTemplate') {
     return {
-      state: latest?.phase ?? 'Idle',
-      stateTone: latest ? phaseTone(latest.phase) : 'info',
+      state: 'Definition',
+      stateTone: 'info',
       progress: latest?.progress,
       duration: latest ? formatRunDuration(latest) : '',
       work: `${runs.filter((run) => run.active).length} active`,
@@ -423,7 +366,6 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
         ['Entrypoint', spec.entrypoint || '-'],
         ['Templates', Array.isArray(spec.templates) ? String(spec.templates.length) : '-'],
         ['Scope', 'Cluster'],
-        ['Retained history', runs.length ? `${runs.length} Workflow ${runs.length === 1 ? 'run' : 'runs'}` : 'No retained runs'],
       ],
     }
   }
@@ -432,8 +374,8 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
     const triggers = Array.isArray(spec.triggers) ? spec.triggers : []
     const image = spec.jobTargetRef?.template?.spec?.containers?.[0]?.image || 'Job template'
     return {
-      state: latest?.phase ?? scaledJobState(resource),
-      stateTone: latest ? phaseTone(latest.phase) : scaledJobTone(resource),
+      state: scaledJobState(resource),
+      stateTone: scaledJobTone(resource),
       progress: latest?.progress,
       duration: latest ? formatRunDuration(latest) : '',
       work: `${active} active`,
@@ -481,6 +423,7 @@ function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
   return (
     <>
       <div className="grid grid-cols-2 gap-2">
+        {source.state !== 'Definition' && <FactTile label="State" value={source.state} tone={source.stateTone} />}
         {source.schedule && <FactTile label="Schedule" value={source.schedule} mono />}
         {source.concurrency && <FactTile label="Concurrency" value={source.concurrency} />}
       </div>
@@ -498,12 +441,13 @@ function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
 
 function RunDetailList({ run, resource, workflowExecution, scheduledParent }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null; scheduledParent: boolean }) {
   const isWorkflowRun = run.kind === 'workflows' || !!workflowExecution
-  const jobSummary = isWorkflowRun ? null : jobRunSummary(run)
   const rows: Array<[string, string]> = [
     ['Started', run.startedAt ? formatAge(run.startedAt) : '-'],
     ['Finished', run.finishedAt ? formatAge(run.finishedAt) : run.active ? 'Running' : '-'],
+    ['Duration', formatRunDuration(run) || '-'],
+    ...(run.progress ? [['Progress', run.progress]] as Array<[string, string]> : []),
     ...(scheduledParent || run.trigger || run.scheduledAt ? [
-      ['Trigger', run.trigger === 'manual' ? 'Manual' : run.scheduledAt ? 'Cron schedule' : '-'],
+      ['Trigger', run.trigger === 'manual' ? 'Manual' : run.trigger === 'event' ? 'Event' : run.scheduledAt ? 'Cron schedule' : '-'],
     ] as Array<[string, string]> : []),
     ...(run.scheduledAt ? [
       ['Cron scheduled', formatAge(run.scheduledAt)],
@@ -512,28 +456,14 @@ function RunDetailList({ run, resource, workflowExecution, scheduledParent }: { 
     ['Parallelism', run.parallelism ? String(run.parallelism) : '-'],
     ['Pods', podBreakdown(run, workflowExecution) || '-'],
     ...(isWorkflowRun ? [
-      ['Steps', stepBreakdown(run, workflowExecution) || '-'],
-      ['Message', run.message || '-'],
+      ['Execution nodes', executionNodeBreakdown(workflowExecution) || '-'],
+      ...(workflowExecution?.resourcesDuration ? [['Resource duration', formatResourceDuration(workflowExecution.resourcesDuration)]] as Array<[string, string]> : []),
     ] as Array<[string, string]> : [
       ['Retry limit', jobRetryLimitValue(resource)],
     ] as Array<[string, string]>),
   ]
   return (
     <div className="space-y-2 p-4">
-      {jobSummary && (
-        <div className="mb-3 rounded-md border border-theme-border bg-theme-elevated/40 px-3 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 gap-3">
-              <StatusDot tone={mapHealthToTone(phaseHealth(run.phase))} className="mt-1" />
-              <div className="min-w-0">
-                <div className="font-medium text-theme-text-primary">{jobSummary.title}</div>
-                <div className="mt-0.5 break-words text-sm text-theme-text-secondary">{jobSummary.detail}</div>
-              </div>
-            </div>
-            <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{run.phase}</span>
-          </div>
-        </div>
-      )}
       {rows.map(([label, value]) => (
         <div key={label} className="flex items-start justify-between gap-3 text-sm">
           <span className="text-theme-text-tertiary">{label}</span>
@@ -544,83 +474,61 @@ function RunDetailList({ run, resource, workflowExecution, scheduledParent }: { 
   )
 }
 
-function RunMetrics({ run, resource, workflowExecution, retainedRuns, scheduledParent }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null; retainedRuns: WorkloadRun[]; scheduledParent: boolean }) {
-  const failedRuns = retainedRuns.filter((r) => r.phase === 'Failed' || r.phase === 'Error').length
-  const activeRuns = retainedRuns.filter((r) => r.active).length
-  const resourceDuration = workflowExecution?.resourcesDuration ? formatResourceDuration(workflowExecution.resourcesDuration) : ''
-  const jobSpec = resource?.spec ?? {}
-  const rows = [
-    ...(scheduledParent ? [
-      ['Retained runs', retainedRuns.length ? String(retainedRuns.length) : '-'],
-      ['Active retained', activeRuns ? String(activeRuns) : '0'],
-      ['Failed retained', failedRuns ? String(failedRuns) : '0'],
-    ] as Array<[string, string]> : []),
-    ['Current duration', formatRunDuration(run) || '-'],
-    ...(run.scheduledAt ? [
-      ['Start delay', formatScheduleDelay(run) || '-'],
-    ] as Array<[string, string]> : []),
-    ['Completions', jobSpec.completions != null ? String(jobSpec.completions) : run.desired ? String(run.desired) : '-'],
-    ['Resource duration', resourceDuration || '-'],
-  ]
+function RunMessageDetails({ run }: { run: WorkloadRun }) {
+  const failed = run.phase === 'Failed' || run.phase === 'Error'
   return (
-    <div>
-      <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">Live metrics</h4>
-      <div className="space-y-2">
-        {rows.map(([label, value]) => (
-          <div key={label} className="flex items-start justify-between gap-3 text-sm">
-            <span className="text-theme-text-tertiary">{label}</span>
-            <span className="min-w-0 truncate text-right text-theme-text-primary">{value}</span>
-          </div>
-        ))}
+    <details className="group border-t border-theme-border">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 hover:bg-theme-hover/50 [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform group-open:rotate-90" />
+        <span className={clsx('shrink-0 text-sm font-medium', failed ? 'text-red-700 dark:text-red-300' : 'text-theme-text-primary')}>
+          {failed ? 'Failure details' : 'Run message'}
+        </span>
+        <span className="min-w-0 truncate text-xs text-theme-text-tertiary">{run.message}</span>
+      </summary>
+      <div className="px-4 pb-4">
+        <div className={clsx('break-words rounded-md border px-3 py-2 text-sm', failed ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-theme-border bg-theme-elevated/40 text-theme-text-secondary')}>
+          {run.message}
+        </div>
       </div>
-      {scheduledParent && (
-        <p className="mt-3 text-xs leading-5 text-theme-text-tertiary">
-          Retained counts reflect objects still present in Kubernetes, not all-time history.
-        </p>
-      )}
-    </div>
+    </details>
   )
 }
 
-function RunExecutionPanel({ run, workflowExecution, loading }: { run: WorkloadRun; workflowExecution: WorkflowExecutionModel | null; loading: boolean }) {
+function RunExecutionPanel({ run, workflowExecution, loading, onNavigateToResource }: { run: WorkloadRun; workflowExecution: WorkflowExecutionModel | null; loading: boolean; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
+  const [showAll, setShowAll] = useState(false)
   if (run.kind === 'workflows') {
     if (loading && !workflowExecution) {
-      return <Panel title="Workflow lineage" icon={GitBranch}><FetchResult loading /></Panel>
+      return <Panel title="Execution" icon={GitBranch}><FetchResult loading /></Panel>
     }
     if (!workflowExecution || workflowExecution.nodes.length === 0) {
       return (
-        <Panel title="Workflow lineage" icon={GitBranch}>
-          <EmptyState tone="neutral" variant="card" headline="No step lineage" body="This Workflow has not reported status nodes yet." />
+        <Panel title="Execution" icon={GitBranch}>
+          <EmptyState tone="neutral" variant="card" headline="Execution detail unavailable" body={run.active ? 'This Workflow has not reported execution nodes yet.' : 'This retained Workflow no longer has execution-node detail.'} />
         </Panel>
       )
     }
-    const paths = workflowExecution.focusPaths
-    const fallbackSteps = workflowExecution.visibleSteps.slice(0, workflowExecution.isLarge ? 40 : 18)
+    const rows = flattenExecutionRows(workflowExecution)
+    const visibleRows = showAll || !workflowExecution.isLarge ? rows : executionPreviewRows(rows, workflowExecution)
+    const messageOwners = new Map<string, { id: string; depth: number; leaf: boolean }>()
+    for (const row of visibleRows) {
+      const message = row.node.message?.trim()
+      if (!message) continue
+      const candidate = { id: row.node.id, depth: row.depth, leaf: row.node.childIds.length === 0 }
+      const current = messageOwners.get(message)
+      if (!current || (candidate.leaf && !current.leaf) || candidate.leaf === current.leaf && candidate.depth > current.depth) messageOwners.set(message, candidate)
+    }
+    const runMessage = run.message?.trim()
+    const renderedRows = visibleRows.map((row) => {
+      const nodeMessage = row.node.message?.trim()
+      const repeatedRunMessage = Boolean(nodeMessage && runMessage && (runMessage.includes(nodeMessage) || nodeMessage.includes(runMessage)))
+      return { ...row, showMessage: Boolean(nodeMessage) && !repeatedRunMessage && messageOwners.get(nodeMessage!)?.id === row.node.id }
+    })
     return (
-      <Panel title="Workflow lineage" icon={GitBranch} detail={workflowExecution.isLarge ? `${workflowExecution.nodes.length} nodes · grouped view` : `${workflowExecution.nodes.length} nodes`}>
-        {paths.length > 0 ? (
-          <div className="space-y-3">
-            {paths.map((path) => (
-              <div key={path.terminal.id} className="rounded-md border border-theme-border bg-theme-elevated/40 p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="min-w-0 text-sm font-medium text-theme-text-primary">{path.terminal.displayName}</div>
-                  <span className={clsx('badge-sm', phaseBadgeClass(path.terminal.phase))}>{path.terminal.phase}</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {path.nodes.map((node, index) => (
-                    <span key={node.id} className="flex items-center gap-1.5">
-                      {index > 0 && <span className="text-theme-text-tertiary">/</span>}
-                      <LineageNode node={node} compact={path.nodes.length > 5} />
-                    </span>
-                  ))}
-                </div>
-                {path.terminal.message && <div className="mt-2 text-xs text-red-600 dark:text-red-400">{path.terminal.message}</div>}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <StepList steps={fallbackSteps} />
-        )}
+      <Panel title="Execution" icon={GitBranch} detail={`${workflowExecution.nodes.length} ${workflowExecution.nodes.length === 1 ? 'node' : 'nodes'}`}>
+        <div className="divide-y divide-theme-border rounded-md border border-theme-border">
+          {renderedRows.map(({ node, depth, showMessage }) => <ExecutionNodeRow key={node.id} node={node} depth={depth} showMessage={showMessage} namespace={run.namespace} onNavigateToResource={onNavigateToResource} />)}
+        </div>
+        {visibleRows.length < rows.length && <button type="button" className="mt-3 text-sm font-medium text-accent-text hover:underline" onClick={() => setShowAll(true)}>Show all {rows.length} nodes</button>}
       </Panel>
     )
   }
@@ -628,69 +536,97 @@ function RunExecutionPanel({ run, workflowExecution, loading }: { run: WorkloadR
   return null
 }
 
-function jobRunSummary(run: WorkloadRun): { title: string; detail: string } {
-  const podSummary = jobPodsValue(run)
-  const message = run.message && !/^\s*$/.test(run.message) ? run.message : ''
-  switch (run.phase) {
-    case 'Succeeded':
-    case 'Complete':
-      return { title: 'Job completed', detail: message || `${podSummary} finished successfully.` }
-    case 'Failed':
-    case 'Error':
-      return { title: 'Job failed', detail: message || 'The Job stopped before the required completions finished.' }
-    case 'Running':
-      return { title: 'Job is running', detail: podSummary === 'No pods reported' ? 'Kubernetes has accepted the Job and is waiting for pods to report.' : `${podSummary} now.` }
-    case 'Pending':
-      return { title: 'Job is pending', detail: 'Kubernetes has not reported active or completed pods yet.' }
-    default:
-      return { title: `Job ${run.phase.toLowerCase()}`, detail: message || podSummary }
+function executionPreviewRows(rows: ExecutionRow[], workflowExecution: WorkflowExecutionModel): ExecutionRow[] {
+  const preview = rows.slice(0, 40)
+  const included = new Set(preview.map((row) => row.node.id))
+  const rowByID = new Map(rows.map((row) => [row.node.id, row]))
+  for (const path of workflowExecution.focusPaths) {
+    for (const node of path.nodes) {
+      const row = rowByID.get(node.id)
+      if (!row || included.has(node.id)) continue
+      preview.push(row)
+      included.add(node.id)
+    }
   }
+  return preview
 }
 
 function RunActivityPanel({ run, resource, workflowExecution }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null }) {
+  const [showAll, setShowAll] = useState(false)
   const activity = run.kind === 'workflows' ? workflowExecution?.activity ?? [] : jobActivity(run, resource)
-  const visible = activity.slice(-28)
+  const significant = activity.filter((item) => item.tone === 'danger' || item.tone === 'warning' || item.id.startsWith('workflow-') || item.id === 'scheduled' || item.id === 'started')
+  const defaultItems = activity.length <= 8 ? activity : significant.length > 0 ? significant : activity.slice(-8)
+  const visible = showAll ? activity : defaultItems
   return (
-    <Panel title="Run activity" icon={Activity} detail={visible.length ? `${visible.length} events` : undefined}>
+    <Panel title="Activity" icon={Activity} detail={activity.length ? `${activity.length} events` : undefined}>
       {visible.length === 0 ? (
         <EmptyState tone="neutral" variant="card" headline="No activity yet" body="This run has not reported timing details yet." />
       ) : (
-        <div className="space-y-2">
+        <div className="divide-y divide-theme-border border-y border-theme-border">
           {visible.map((item) => (
-            <div key={item.id} className="flex gap-3 rounded-md border border-theme-border bg-theme-elevated/40 px-3 py-2">
+            <div key={item.id} className="flex gap-3 px-2 py-2">
               <ActivityDot tone={item.tone} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
                   <div className="truncate text-sm font-medium text-theme-text-primary">{item.label}</div>
                   <div className="shrink-0 text-xs text-theme-text-tertiary">{formatAge(item.at)}</div>
                 </div>
-                {item.detail && <div className="mt-0.5 break-words text-xs text-theme-text-secondary">{item.detail}</div>}
+                {item.detail && item.detail !== run.message && item.tone !== 'danger' && <div className="mt-0.5 break-words text-xs text-theme-text-secondary">{item.detail}</div>}
               </div>
             </div>
           ))}
         </div>
       )}
+      {!showAll && visible.length < activity.length && <button type="button" className="mt-3 text-sm font-medium text-accent-text hover:underline" onClick={() => setShowAll(true)}>Show all {activity.length} events</button>}
     </Panel>
   )
 }
 
-function TemplateReferencePanel({ refs, onNavigateToResource }: { refs: WorkflowTemplateReference[]; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
+function RunContext({ run, resource, workflowExecution, onNavigateToResource }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
+  const definition = workflowExecution?.templateRefs.find((ref) => ref.source === 'workflow')
+  const uses = dedupeResourceRefs(workflowExecution?.templateRefs.filter((ref) => ref.source === 'task') ?? [])
+  const entrypoint = resource?.spec?.entrypoint || resource?.status?.storedWorkflowTemplateSpec?.entrypoint
   return (
-    <Panel title="Template references" icon={Layers3} detail={`${refs.length} ${refs.length === 1 ? 'reference' : 'references'}`}>
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-        {refs.map((ref) => (
-          <div key={`${ref.resourceKind}/${ref.namespace}/${ref.name}/${ref.source}/${ref.template || ''}/${ref.taskName || ''}`} className="rounded-md border border-theme-border bg-theme-elevated/40 px-3 py-2">
-            <ResourceButton refInfo={ref} onNavigateToResource={onNavigateToResource} />
-            <div className="mt-1 text-xs text-theme-text-tertiary">
-              {ref.clusterScope ? 'ClusterWorkflowTemplate' : ref.namespace || 'WorkflowTemplate'}
-              {ref.template && <span> · template {ref.template}</span>}
-              {ref.taskName && <span> · task {ref.taskName}</span>}
-            </div>
-          </div>
-        ))}
+    <div>
+      <h4 className="mb-3 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">Run context</h4>
+      <div className="space-y-3">
+        <ContextRow label={run.launcher?.kind === 'ScaledJob' ? 'Triggered by' : run.launcher ? 'Scheduled by' : 'Created'}>
+          {run.launcher ? <GenericResourceButton refInfo={run.launcher} onNavigateToResource={onNavigateToResource} /> : <span>Directly</span>}
+        </ContextRow>
+        <ContextRow label="Definition">
+          {definition ? <ResourceButton refInfo={definition} onNavigateToResource={onNavigateToResource} /> : <span>Inline definition</span>}
+        </ContextRow>
+        {entrypoint && <ContextRow label="Entrypoint"><span className="font-mono text-xs">{entrypoint}</span></ContextRow>}
+        {uses.length > 0 && (
+          <ContextRow label="Uses">
+            <span className="flex flex-wrap justify-end gap-2">
+              {uses.map((ref) => <ResourceButton key={`${ref.resourceKind}/${ref.namespace}/${ref.name}`} refInfo={ref} onNavigateToResource={onNavigateToResource} />)}
+            </span>
+          </ContextRow>
+        )}
       </div>
-    </Panel>
+    </div>
   )
+}
+
+function ContextRow({ label, children }: { label: string; children: ReactNode }) {
+  return <div className="flex items-start justify-between gap-3 text-sm"><span className="text-theme-text-tertiary">{label}</span><span className="min-w-0 text-right text-theme-text-primary">{children}</span></div>
+}
+
+function GenericResourceButton({ refInfo, onNavigateToResource }: { refInfo: NonNullable<WorkloadRun['launcher']>; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
+  const label = `${refInfo.kind} · ${refInfo.namespace ? `${refInfo.namespace}/` : ''}${refInfo.name}`
+  if (!onNavigateToResource) return <span>{label}</span>
+  return <button type="button" className="text-accent-text hover:underline" onClick={() => onNavigateToResource({ kind: pluralKind(refInfo.kind), namespace: refInfo.namespace ?? '', name: refInfo.name, group: refInfo.group })}>{label}</button>
+}
+
+function dedupeResourceRefs(refs: WorkflowTemplateReference[]): WorkflowTemplateReference[] {
+  const seen = new Set<string>()
+  return refs.filter((ref) => {
+    const key = `${ref.resourceKind}/${ref.namespace}/${ref.name}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function Panel({ title, icon: Icon, detail, children }: { title: string; icon: ComponentType<{ className?: string }>; detail?: string; children: ReactNode }) {
@@ -708,29 +644,45 @@ function Panel({ title, icon: Icon, detail, children }: { title: string; icon: C
   )
 }
 
-function LineageNode({ node, compact }: { node: WorkflowExecutionNode; compact?: boolean }) {
+function ExecutionNodeRow({ node, depth, showMessage, namespace, onNavigateToResource }: { node: WorkflowExecutionNode; depth: number; showMessage: boolean; namespace: string; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
   return (
-    <span className={clsx('inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-1 text-xs', lineageNodeClass(node.phase))}>
-      <span className="truncate">{compact ? node.displayName.replace(/^.*\./, '') : node.displayName}</span>
-      <span className="text-[10px] opacity-70">{node.type}</span>
-    </span>
+    <div className="flex items-start gap-3 px-3 py-2" style={{ paddingLeft: `${12 + Math.min(depth, 8) * 18}px` }}>
+      <StatusDot tone={mapHealthToTone(phaseHealth(node.phase))} className="mt-1" />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="truncate text-sm font-medium text-theme-text-primary">{node.displayName}</span>
+          <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{node.type}</span>
+        </div>
+        {showMessage && (node.phase === 'Failed' || node.phase === 'Error') && <div className="mt-0.5 line-clamp-2 text-xs text-red-600 dark:text-red-400">{node.message}</div>}
+        <div className="mt-1 flex flex-wrap gap-2 text-xs">
+          {node.podName && <GenericResourceButton refInfo={{ kind: 'Pod', namespace, name: node.podName }} onNavigateToResource={onNavigateToResource} />}
+          {node.templateRef && <ResourceButton refInfo={node.templateRef} onNavigateToResource={onNavigateToResource} />}
+          {!node.templateRef && node.templateName && <span className="font-mono text-theme-text-tertiary">{node.templateName}</span>}
+        </div>
+      </div>
+      <span className={clsx('badge-sm shrink-0', phaseBadgeClass(node.phase))}>{node.phase}</span>
+    </div>
   )
 }
 
-function StepList({ steps }: { steps: WorkflowExecutionNode[] }) {
-  return (
-    <div className="space-y-1.5">
-      {steps.map((step) => (
-        <div key={step.id} className="flex items-start justify-between gap-3 rounded-md border border-theme-border bg-theme-elevated/40 px-3 py-2 text-sm">
-          <div className="min-w-0">
-            <div className="truncate font-medium text-theme-text-primary">{step.displayName}</div>
-            <div className="mt-0.5 text-xs text-theme-text-tertiary">{step.type}{step.message ? ` · ${step.message}` : ''}</div>
-          </div>
-          <span className={clsx('badge-sm shrink-0', phaseBadgeClass(step.phase))}>{step.phase}</span>
-        </div>
-      ))}
-    </div>
-  )
+type ExecutionRow = { node: WorkflowExecutionNode; depth: number }
+
+function flattenExecutionRows(model: WorkflowExecutionModel): ExecutionRow[] {
+  const byID = new Map(model.nodes.map((node) => [node.id, node]))
+  const seen = new Set<string>()
+  const rows: Array<{ node: WorkflowExecutionNode; depth: number }> = []
+  const visit = (node: WorkflowExecutionNode, depth: number) => {
+    if (seen.has(node.id)) return
+    seen.add(node.id)
+    rows.push({ node, depth })
+    for (const childID of node.childIds) {
+      const child = byID.get(childID)
+      if (child) visit(child, depth + 1)
+    }
+  }
+  for (const root of model.roots) visit(root, 0)
+  for (const node of model.nodes) visit(node, 0)
+  return rows
 }
 
 function ActivityDot({ tone }: { tone: string }) {
@@ -751,25 +703,7 @@ function ResourceButton({ refInfo, onNavigateToResource }: { refInfo: WorkflowTe
   )
 }
 
-function RunDigest({ run, compact }: { run: WorkloadRun; compact?: boolean }) {
-  return (
-    <div className="rounded-md border border-theme-border bg-theme-elevated/40 px-3 py-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-theme-text-primary">{run.name}</div>
-          <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-theme-text-tertiary">
-            <span>{formatRunDuration(run) || 'duration unknown'}</span>
-            <span>{workCount(run)}</span>
-          </div>
-        </div>
-        <span className={clsx('badge-sm', phaseBadgeClass(run.phase))}>{run.phase}</span>
-      </div>
-      {!compact && run.message && <div className="mt-2 text-xs text-theme-text-secondary">{run.message}</div>}
-    </div>
-  )
-}
-
-function RunRailButton({ run, selected, onClick }: { run: WorkloadRun; selected: boolean; onClick: () => void }) {
+function RunRailButton({ run, selected, showNamespace, onClick }: { run: WorkloadRun; selected: boolean; showNamespace: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -779,10 +713,9 @@ function RunRailButton({ run, selected, onClick }: { run: WorkloadRun; selected:
         selected ? 'selection selection-ring' : 'hover:bg-theme-hover',
       )}
     >
-      <StatusDot tone={mapHealthToTone(phaseHealth(run.phase))} className="mt-1" />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs font-medium text-theme-text-primary">{run.name}</span>
-        <span className="mt-0.5 block truncate text-[10px] text-theme-text-tertiary">{formatRunDuration(run) || formatRunTime(run) || 'time unknown'} · {workCount(run)}</span>
+          <span className="block truncate text-xs font-medium text-theme-text-primary" title={run.name}>{showNamespace ? `${run.namespace}/` : ''}{midTruncate(run.name, 34)}</span>
+          <span className="mt-0.5 block truncate text-[10px] text-theme-text-tertiary">{formatRunTime(run) || 'time unknown'}{formatRunDuration(run) ? ` · ${formatRunDuration(run)}` : ''} · {workCount(run)}</span>
       </span>
       <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{shortPhase(run.phase)}</span>
     </button>
@@ -892,8 +825,21 @@ function resourceTargetForRun(run: WorkloadRun) {
   }
 }
 
+function pluralKind(kind: string): string {
+  switch (kind) {
+    case 'Pod': return 'pods'
+    case 'Job': return 'jobs'
+    case 'CronJob': return 'cronjobs'
+    case 'Workflow': return 'workflows'
+    case 'CronWorkflow': return 'cronworkflows'
+    case 'WorkflowTemplate': return 'workflowtemplates'
+    case 'ClusterWorkflowTemplate': return 'clusterworkflowtemplates'
+    case 'ScaledJob': return 'scaledjobs'
+    default: return kind.toLowerCase()
+  }
+}
+
 function workCount(run: WorkloadRun): string {
-  if (run.stepTotal) return `${run.stepSucceeded ?? 0}/${run.stepTotal} steps`
   if (run.podTotal) {
     if (run.podRunning) return `${run.podRunning} running ${pluralize('pod', run.podRunning)}`
     if (run.podPending && !run.podSucceeded && !run.podFailed) return `${run.podPending} pending ${pluralize('pod', run.podPending)}`
@@ -902,21 +848,6 @@ function workCount(run: WorkloadRun): string {
   }
   if (run.desired) return `${run.succeeded ?? 0}/${run.desired} completions`
   return 'work unknown'
-}
-
-function jobPodsValue(run: WorkloadRun): string {
-  const parts = [
-    run.podRunning ? `${run.podRunning} running` : '',
-    run.podSucceeded ? `${run.podSucceeded} succeeded` : '',
-    run.podFailed ? `${run.podFailed} failed` : '',
-    run.podPending ? `${run.podPending} pending` : '',
-  ].filter(Boolean)
-  if (parts.length > 0) return parts.join(' / ')
-  if (run.podTotal) return `${run.podTotal} total`
-  if (run.running) return `${run.running} running`
-  if (run.succeeded) return `${run.succeeded} succeeded`
-  if (run.failed) return `${run.failed} failed`
-  return 'No pods reported'
 }
 
 function jobRetryLimitValue(resource: any): string {
@@ -938,17 +869,16 @@ function podBreakdown(run: WorkloadRun, workflowExecution?: WorkflowExecutionMod
   return parts.join(' · ') || `${podTotal} total`
 }
 
-function stepBreakdown(run: WorkloadRun, workflowExecution?: WorkflowExecutionModel | null): string | null {
+function executionNodeBreakdown(workflowExecution?: WorkflowExecutionModel | null): string | null {
   const counts = workflowExecution?.counts
-  const stepTotal = counts?.stepTotal ?? run.stepTotal
-  if (!stepTotal) return null
+  if (!counts?.nodeTotal) return null
   const parts = [
-    (counts?.stepRunning ?? run.stepRunning) ? `${counts?.stepRunning ?? run.stepRunning} running` : '',
-    (counts?.stepSucceeded ?? run.stepSucceeded) ? `${counts?.stepSucceeded ?? run.stepSucceeded} succeeded` : '',
-    (counts?.stepFailed ?? run.stepFailed) ? `${counts?.stepFailed ?? run.stepFailed} failed` : '',
-    (counts?.stepSkipped ?? run.stepSkipped) ? `${counts?.stepSkipped ?? run.stepSkipped} skipped` : '',
+    counts.nodeRunning ? `${counts.nodeRunning} running` : '',
+    counts.nodeSucceeded ? `${counts.nodeSucceeded} succeeded` : '',
+    counts.nodeFailed ? `${counts.nodeFailed} failed` : '',
+    counts.nodeSkipped ? `${counts.nodeSkipped} skipped` : '',
   ].filter(Boolean)
-  return parts.join(' · ') || `${stepTotal} total`
+  return parts.join(' · ') || `${counts.nodeTotal} total`
 }
 
 function formatScheduleDelay(run: WorkloadRun): string {
@@ -1019,24 +949,6 @@ function splitConditionName(type: string): string {
     .replace(/_/g, ' ')
 }
 
-function lineageNodeClass(phase: string): string {
-  switch (phase) {
-    case 'Succeeded':
-      return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-    case 'Failed':
-    case 'Error':
-      return 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
-    case 'Running':
-    case 'Pending':
-      return 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-    case 'Skipped':
-    case 'Omitted':
-      return 'border-theme-border bg-theme-hover text-theme-text-tertiary'
-    default:
-      return 'border-theme-border bg-theme-elevated text-theme-text-secondary'
-  }
-}
-
 function toneDotClass(tone: string): string {
   switch (tone) {
     case 'success':
@@ -1092,6 +1004,17 @@ function runKindPluralForSchedule(kind: string): string {
   if (kind === 'CronJob' || kind === 'ScaledJob') return 'Jobs'
   if (kind === 'CronWorkflow' || kind === 'WorkflowTemplate' || kind === 'ClusterWorkflowTemplate') return 'Workflows'
   return 'runs'
+}
+
+function emptyRunsCopy(kind: string, resource: any): { headline: string; body: string } {
+  if (isTemplateKind(kind)) {
+    return { headline: 'No retained Workflows use this definition', body: 'No readable Workflow objects currently reference this definition.' }
+  }
+  const lastScheduled = resource?.status?.lastScheduleTime || resource?.status?.lastScheduledTime
+  if (lastScheduled) {
+    return { headline: 'No retained runs', body: `This resource last scheduled work ${formatAge(lastScheduled)}, but its ${runKindPluralForSchedule(kind)} are no longer retained in Kubernetes.` }
+  }
+  return { headline: 'No runs yet', body: `Kubernetes does not currently have retained ${runKindPluralForSchedule(kind)} for this resource.` }
 }
 
 function pluralize(word: string, count: number): string {

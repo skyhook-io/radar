@@ -79,24 +79,27 @@ type WorkloadRun struct {
 	Trigger     string `json:"trigger,omitempty"`
 	Message     string `json:"message,omitempty"`
 
-	Succeeded   int32  `json:"succeeded,omitempty"`
-	Failed      int32  `json:"failed,omitempty"`
-	Running     int32  `json:"running,omitempty"`
-	Desired     int32  `json:"desired,omitempty"`
-	Parallelism int32  `json:"parallelism,omitempty"`
-	Progress    string `json:"progress,omitempty"`
-	Template    string `json:"template,omitempty"`
+	Succeeded   int32                   `json:"succeeded,omitempty"`
+	Failed      int32                   `json:"failed,omitempty"`
+	Running     int32                   `json:"running,omitempty"`
+	Desired     int32                   `json:"desired,omitempty"`
+	Parallelism int32                   `json:"parallelism,omitempty"`
+	Progress    string                  `json:"progress,omitempty"`
+	Template    string                  `json:"template,omitempty"`
+	Launcher    *WorkloadRunResourceRef `json:"launcher,omitempty"`
 
-	PodTotal      int `json:"podTotal,omitempty"`
-	PodSucceeded  int `json:"podSucceeded,omitempty"`
-	PodFailed     int `json:"podFailed,omitempty"`
-	PodRunning    int `json:"podRunning,omitempty"`
-	PodPending    int `json:"podPending,omitempty"`
-	StepTotal     int `json:"stepTotal,omitempty"`
-	StepSucceeded int `json:"stepSucceeded,omitempty"`
-	StepFailed    int `json:"stepFailed,omitempty"`
-	StepRunning   int `json:"stepRunning,omitempty"`
-	StepSkipped   int `json:"stepSkipped,omitempty"`
+	PodTotal     int `json:"podTotal,omitempty"`
+	PodSucceeded int `json:"podSucceeded,omitempty"`
+	PodFailed    int `json:"podFailed,omitempty"`
+	PodRunning   int `json:"podRunning,omitempty"`
+	PodPending   int `json:"podPending,omitempty"`
+}
+
+type WorkloadRunResourceRef struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Group     string `json:"group,omitempty"`
 }
 
 // validWorkloadKinds defines which resource types support workload logs.
@@ -158,6 +161,16 @@ func (s *Server) handleWorkloadRuns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch kind {
+	case "job", "jobs":
+		if !s.canRead(r, "batch", "jobs", namespace, "get") {
+			s.writeError(w, http.StatusForbidden, "no access to jobs in namespace "+namespace)
+			return
+		}
+	case "workflow", "workflows":
+		if !s.canRead(r, "argoproj.io", "workflows", namespace, "get") {
+			s.writeError(w, http.StatusForbidden, "no access to workflows in namespace "+namespace)
+			return
+		}
 	case "cronjob", "cronjobs":
 		if !s.canRead(r, "batch", "cronjobs", namespace, "get") {
 			s.writeError(w, http.StatusForbidden, "no access to cronjobs in namespace "+namespace)
@@ -498,7 +511,7 @@ func shouldWaitForPodsInLogStream(kind string, metadata workloadLogMetadata) boo
 	if metadata.EmptyReason != "no-pods" {
 		return false
 	}
-	return true
+	return kind == "job" || kind == "jobs" || kind == "workflow" || kind == "workflows"
 }
 
 // streamPodLogs streams logs from a single pod/container to the log channel
@@ -682,6 +695,21 @@ func (s *Server) getWorkloadRuns(ctx context.Context, kind, namespace, name stri
 
 	var runs []WorkloadRun
 	switch kind {
+	case "job", "jobs":
+		if cache.Jobs() == nil {
+			return nil, &workloadError{http.StatusForbidden, "insufficient permissions to get jobs"}
+		}
+		job, err := cache.Jobs().Jobs(namespace).Get(name)
+		if err != nil {
+			return nil, workloadParentGetError("job", namespace, name, err)
+		}
+		runs = append(runs, jobRunInfo(job))
+	case "workflow", "workflows":
+		workflow, err := cache.GetDynamicWithGroup(ctx, "Workflow", namespace, name, "argoproj.io")
+		if err != nil {
+			return nil, workloadParentGetError("workflow", namespace, name, err)
+		}
+		runs = append(runs, workflowRunInfo(workflow))
 	case "cronjob", "cronjobs":
 		if cache.CronJobs() == nil {
 			return nil, &workloadError{http.StatusForbidden, "insufficient permissions to list cronjobs"}
@@ -757,7 +785,7 @@ func (s *Server) getWorkloadRuns(ctx context.Context, kind, namespace, name stri
 			}
 		}
 	default:
-		return nil, &workloadError{http.StatusBadRequest, "only cronjobs, cronworkflows, workflowtemplates, clusterworkflowtemplates, and scaledjobs have runs"}
+		return nil, &workloadError{http.StatusBadRequest, "only jobs, workflows, cronjobs, cronworkflows, workflowtemplates, clusterworkflowtemplates, and scaledjobs have runs"}
 	}
 
 	sortRuns(runs)
@@ -827,6 +855,8 @@ func jobRunInfo(job *batchv1.Job) WorkloadRun {
 
 	phase := "Pending"
 	switch {
+	case jobIsSuspended(job):
+		phase = "Suspended"
 	case job.Status.Active > 0:
 		phase = "Running"
 	case complete:
@@ -845,6 +875,10 @@ func jobRunInfo(job *batchv1.Job) WorkloadRun {
 		trigger = "schedule"
 	}
 
+	launcher := jobLauncher(job)
+	if trigger == "" && launcher != nil && launcher.Kind == "ScaledJob" {
+		trigger = "event"
+	}
 	run := WorkloadRun{
 		Kind:         "jobs",
 		Namespace:    job.Namespace,
@@ -859,6 +893,7 @@ func jobRunInfo(job *batchv1.Job) WorkloadRun {
 		Running:      job.Status.Active,
 		Desired:      jobDesiredCount(job),
 		Parallelism:  jobParallelismCount(job),
+		Launcher:     launcher,
 		PodSucceeded: int(job.Status.Succeeded),
 		PodFailed:    int(job.Status.Failed),
 		PodRunning:   int(job.Status.Active),
@@ -873,6 +908,33 @@ func jobRunInfo(job *batchv1.Job) WorkloadRun {
 		applyJobCondition(&run, failedCondition)
 	}
 	return run
+}
+
+func jobIsSuspended(job *batchv1.Job) bool {
+	if job.Spec.Suspend != nil && *job.Spec.Suspend {
+		return true
+	}
+	for _, condition := range job.Status.Conditions {
+		if string(condition.Type) == "Suspended" && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func jobLauncher(job *batchv1.Job) *WorkloadRunResourceRef {
+	for _, owner := range job.OwnerReferences {
+		if owner.Controller == nil || !*owner.Controller {
+			continue
+		}
+		switch owner.Kind {
+		case "CronJob":
+			return &WorkloadRunResourceRef{Kind: owner.Kind, Namespace: job.Namespace, Name: owner.Name, Group: "batch"}
+		case "ScaledJob":
+			return &WorkloadRunResourceRef{Kind: owner.Kind, Namespace: job.Namespace, Name: owner.Name, Group: "keda.sh"}
+		}
+	}
+	return nil
 }
 
 func jobCondition(job *batchv1.Job, conditionType batchv1.JobConditionType) (batchv1.JobCondition, bool) {
@@ -915,6 +977,11 @@ func workflowRunInfo(workflow *unstructured.Unstructured) WorkloadRun {
 	if phase == "" {
 		phase = "Pending"
 	}
+	scheduledAt := workflow.GetAnnotations()["workflows.argoproj.io/scheduled-time"]
+	trigger := ""
+	if scheduledAt != "" {
+		trigger = "schedule"
+	}
 	run := WorkloadRun{
 		Kind:        "workflows",
 		Namespace:   workflow.GetNamespace(),
@@ -923,16 +990,27 @@ func workflowRunInfo(workflow *unstructured.Unstructured) WorkloadRun {
 		Active:      phase == "Running" || phase == "Pending",
 		StartedAt:   startedAt,
 		FinishedAt:  finishedAt,
-		ScheduledAt: workflow.GetAnnotations()["workflows.argoproj.io/scheduled-time"],
+		ScheduledAt: scheduledAt,
+		Trigger:     trigger,
 		Message:     message,
 		Progress:    progress,
 		Template:    template,
+		Launcher:    workflowLauncher(workflow),
 	}
-	applyWorkflowNodeCounts(&run, workflow)
+	applyWorkflowPodCounts(&run, workflow)
 	return run
 }
 
-func applyWorkflowNodeCounts(run *WorkloadRun, workflow *unstructured.Unstructured) {
+func workflowLauncher(workflow *unstructured.Unstructured) *WorkloadRunResourceRef {
+	for _, owner := range workflow.GetOwnerReferences() {
+		if owner.Controller != nil && *owner.Controller && owner.Kind == "CronWorkflow" {
+			return &WorkloadRunResourceRef{Kind: owner.Kind, Namespace: workflow.GetNamespace(), Name: owner.Name, Group: "argoproj.io"}
+		}
+	}
+	return nil
+}
+
+func applyWorkflowPodCounts(run *WorkloadRun, workflow *unstructured.Unstructured) {
 	nodes, found, _ := unstructured.NestedMap(workflow.Object, "status", "nodes")
 	if !found {
 		return
@@ -955,19 +1033,6 @@ func applyWorkflowNodeCounts(run *WorkloadRun, workflow *unstructured.Unstructur
 				run.PodRunning++
 			case "Pending":
 				run.PodPending++
-			}
-		}
-		if nodeType == "Pod" || nodeType == "Steps" || nodeType == "StepGroup" || nodeType == "DAG" || nodeType == "TaskGroup" || nodeType == "Suspend" || nodeType == "Skipped" {
-			run.StepTotal++
-			switch nodePhase {
-			case "Succeeded":
-				run.StepSucceeded++
-			case "Failed", "Error":
-				run.StepFailed++
-			case "Running":
-				run.StepRunning++
-			case "Skipped", "Omitted":
-				run.StepSkipped++
 			}
 		}
 	}
@@ -1076,7 +1141,8 @@ func applyTerminalJobEmptyState(metadata *workloadLogMetadata, job *batchv1.Job,
 		}
 	}
 	metadata.EmptyReason = "pods-gone"
-	metadata.EmptyMessage = "This Job has finished, but its pods are no longer present in Kubernetes. If logs were retained externally, use your logging system or try kubectl logs job/" + name + " -n " + namespace + "."
+	metadata.EmptyMessage = "This Job has finished, but its pods are no longer present in Kubernetes. If logs were retained externally, use your logging system; otherwise inspect the Job conditions and events."
+	metadata.Command = "kubectl describe job/" + name + " -n " + namespace
 }
 
 func (s *Server) describeWorkflowLogEmpty(ctx context.Context, namespace, name string) workloadLogMetadata {

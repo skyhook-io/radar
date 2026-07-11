@@ -21,6 +21,20 @@ func rawInput(kind, ns, name, version, health string) appWorkloadInput {
 	}
 }
 
+func TestWorkflowPrimaryImageUsesStoredTemplateSpec(t *testing.T) {
+	wf := &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{
+			"storedWorkflowTemplateSpec": map[string]any{
+				"templates": []any{map[string]any{"container": map[string]any{"image": "example.com/migrate:v2"}}},
+			},
+		},
+	}}
+
+	if got := workflowPrimaryImage(wf); got != "example.com/migrate:v2" {
+		t.Fatalf("workflowPrimaryImage() = %q", got)
+	}
+}
+
 // overlayInput builds a workload carrying a Tier-2 label overlay (Argo/Flux/Helm
 // /part-of), keyed by its own structural root.
 func overlayInput(kind, ns, name, version, health string, tier subject.Tier, key string, conf subject.Confidence) appWorkloadInput {

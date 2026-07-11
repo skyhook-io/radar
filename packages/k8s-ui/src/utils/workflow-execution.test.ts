@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildWorkflowExecutionModel, collectWorkflowTemplateRefs } from './workflow-execution'
 
 describe('workflow execution model', () => {
-  it('builds lineage from Argo child edges and counts pods/steps', () => {
+  it('builds execution edges and counts pods/nodes', () => {
     const model = buildWorkflowExecutionModel({
       metadata: {
         namespace: 'demo',
@@ -49,7 +49,7 @@ describe('workflow execution model', () => {
     expect(model.counts.podTotal).toBe(2)
     expect(model.counts.podSucceeded).toBe(1)
     expect(model.counts.podFailed).toBe(1)
-    expect(model.counts.stepTotal).toBe(3)
+    expect(model.counts.nodeTotal).toBe(3)
     expect(model.focusPaths[0].nodes.map((node) => node.id)).toEqual(['root', 'step-b'])
     expect(model.templateRefs).toMatchObject([{ name: 'main-template', resourceKind: 'workflowtemplates', namespace: 'demo' }])
     expect(model.activity.map((item) => item.id)).toContain('workflow-scheduled')
@@ -98,5 +98,28 @@ describe('workflow execution model', () => {
         taskName: 'one',
       },
     ])
+  })
+
+  it('uses exact status-node template refs and stored workflow specs', () => {
+    const model = buildWorkflowExecutionModel({
+      metadata: { namespace: 'demo' },
+      spec: { workflowTemplateRef: { name: 'main-definition' } },
+      status: {
+        storedWorkflowTemplateSpec: {
+          templates: [{ name: 'stored', dag: { tasks: [{ name: 'library', templateRef: { name: 'stored-lib', template: 'run' } }] } }],
+        },
+        nodes: {
+          task: {
+            displayName: 'library(0)',
+            type: 'Pod',
+            phase: 'Succeeded',
+            templateRef: { name: 'exact-lib', template: 'run', clusterScope: true },
+          },
+        },
+      },
+    })
+
+    expect(model.nodes[0].templateRef).toMatchObject({ name: 'exact-lib', resourceKind: 'clusterworkflowtemplates' })
+    expect(model.templateRefs.map((ref) => ref.name)).toEqual(expect.arrayContaining(['main-definition', 'stored-lib', 'exact-lib']))
   })
 })

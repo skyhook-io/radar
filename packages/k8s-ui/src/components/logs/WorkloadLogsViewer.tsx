@@ -65,6 +65,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
+  const [emptyCommand, setEmptyCommand] = useState<string | null>(null)
   const [showPodFilter, setShowPodFilter] = useState(false)
   const [logRange, setLogRange] = useState('100')
   const { showError, showSuccess } = useToast()
@@ -102,6 +103,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       const resultPods = result.pods ?? []
       const resultLogs = result.logs ?? []
       setEmptyMessage(result.emptyMessage || null)
+      setEmptyCommand(result.command || null)
 
       podColorIndexRef.current = new Map(resultPods.map((pod, i) => [pod.name, i]))
       setPods(resultPods)
@@ -162,6 +164,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             podColorIndexRef.current = new Map(nextPods.map((pod, i) => [pod.name, i]))
             setPods(nextPods)
             setEmptyMessage(data.emptyMessage || null)
+            setEmptyCommand(data.command || null)
             setSelectedPods(prev => (
               prev.size === 0 ? new Set(nextPods.map((p: WorkloadPodInfo) => p.name)) : prev
             ))
@@ -190,6 +193,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
               return next
             })
             setEmptyMessage(null)
+            setEmptyCommand(null)
             setSelectedPods(prev => {
               const next = new Set(prev)
               newPods.forEach(p => next.add(p.name))
@@ -207,6 +211,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         },
         onEnd: (data: any) => {
           if (data?.emptyMessage) setEmptyMessage(data.emptyMessage)
+          if (data?.command) setEmptyCommand(data.command)
         },
       },
       'Workload log stream connection failed',
@@ -380,6 +385,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       toolbarExtra={renderToolbarExtra}
       showPodName
       emptyMessage={emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
+      emptyCommand={emptyCommand}
       errorMessage={fetchError || (entries.length === 0 ? streamError : null)}
       forceDark={forceDark}
     />
