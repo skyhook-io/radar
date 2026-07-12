@@ -305,7 +305,7 @@ const SUMMARY_POD_KINDS = new Set<NodeKind>([
   "Service",
 ]);
 
-function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
+export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
   if (nodeData.deploymentMembership === 'source-only') {
     return `Declared by ${nodeData.deploymentSourceLabel ?? 'deployment source'}`
   }
@@ -384,6 +384,14 @@ function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string
       return `${nodeData.keys ?? 0} keys`
     case 'Secret':
       return `${nodeData.keys ?? 0} keys`
+    case 'WorkflowTemplate':
+    case 'ClusterWorkflowTemplate': {
+      const entrypoint = nodeData.entrypoint as string
+      const templateCount = nodeData.templateCount as number
+      if (entrypoint && templateCount) return `${entrypoint} • ${templateCount} templates`
+      if (entrypoint) return entrypoint
+      return templateCount ? `${templateCount} templates` : ''
+    }
     case 'ServiceAccount':
       return 'Workload identity'
     case 'SealedSecret':
