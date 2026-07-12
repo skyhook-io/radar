@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
-import { Activity, GitBranch } from 'lucide-react'
+import { Activity, GitBranch, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Collapse, CollapseChevron, EmptyState, FetchResult, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
 import { buildWorkflowExecutionModel, flattenWorkflowExecution, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowExecutionRow, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
@@ -9,6 +9,7 @@ import { getScaledJobStatus } from '../resources/resource-utils-keda'
 import { Tooltip } from '../ui/Tooltip'
 import { ImageFilesystemModal } from '../resources/ImageFilesystemModal'
 import { executionDefinitionFingerprint, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
+import { batchRunNextStep, isFailedRunPhase, type BatchRunNextStep } from './batch-run-actions'
 
 const EMPTY_RUNS: WorkloadRun[] = []
 const SCHEDULED_KINDS = new Set(['CronJob', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob'])
@@ -86,11 +87,14 @@ interface BatchExecutionProps {
   name: string
   resource: any
   selectedRunKey?: string
+  canViewLogs?: boolean
   onSelectRun?: (runKey: string) => void
+  onSwitchToLogs?: () => void
+  onSwitchToTimeline?: () => void
   onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
-export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resource, selectedRunKey = '', onSelectRun, onNavigateToResource }: BatchExecutionProps) {
+export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resource, selectedRunKey = '', canViewLogs = false, onSelectRun, onSwitchToLogs, onSwitchToTimeline, onNavigateToResource }: BatchExecutionProps) {
   const scheduled = SCHEDULED_KINDS.has(kind)
   const clusterScoped = kind === 'ClusterWorkflowTemplate'
   const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped })
@@ -123,6 +127,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   }, [runsQuery.data, runs, selectedRunKey, defaultRun, onSelectRun])
 
   const selectedRun = runs.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
+  const nextStep = selectedRun ? batchRunNextStep(selectedRun, canViewLogs) : null
   const visibleRuns = useMemo(() => runs.filter((run) => {
     if (runFilter === 'active' && !run.active) return false
     if (runFilter === 'failed' && run.phase !== 'Failed' && run.phase !== 'Error') return false
@@ -249,7 +254,13 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   </div>
                   <RunDetailList run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} scheduledParent={scheduled} />
                   <RunContext run={selectedRun} resource={selectedResource} definitionResource={definitionResource} workflowExecution={workflowExecution} currentWorkload={{ kind, namespace, name }} onNavigateToResource={onNavigateToResource} />
-                  {selectedRun.message && <RunMessageDetails run={selectedRun} />}
+                  {(selectedRun.message || isFailedRunPhase(selectedRun.phase)) && (
+                    <RunMessageDetails
+                      run={selectedRun}
+                      nextStep={nextStep}
+                      onNextStep={nextStep === 'logs' ? onSwitchToLogs : nextStep === 'timeline' ? onSwitchToTimeline : undefined}
+                    />
+                  )}
                 </section>
               ) : (
                 <EmptyState
@@ -643,34 +654,53 @@ function RunDetailList({ run, resource, workflowExecution, scheduledParent }: { 
   )
 }
 
-function RunMessageDetails({ run }: { run: WorkloadRun }) {
+function RunMessageDetails({ run, nextStep, onNextStep }: { run: WorkloadRun; nextStep: BatchRunNextStep | null; onNextStep?: () => void }) {
   const [open, setOpen] = useState(false)
-  const failed = run.phase === 'Failed' || run.phase === 'Error'
-  if (!runMessageNeedsDisclosure(run.message ?? '')) {
+  const failed = isFailedRunPhase(run.phase)
+  const action = nextStep && onNextStep ? <RunNextStep step={nextStep} onClick={onNextStep} /> : null
+  const message = run.message ?? ''
+  if (!runMessageNeedsDisclosure(message)) {
     return (
-      <div className="flex items-start gap-3 border-t border-theme-border px-4 py-3 text-sm">
-        <span className={clsx('shrink-0 font-medium', failed ? 'text-red-700 dark:text-red-300' : 'text-theme-text-primary')}>{failed ? 'Failure' : 'Run message'}</span>
-        <span className="min-w-0 break-words text-theme-text-tertiary">{run.message}</span>
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-2 border-t border-theme-border px-4 py-3 text-sm">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span className={clsx('shrink-0 font-medium', failed ? 'text-red-700 dark:text-red-300' : 'text-theme-text-primary')}>{failed ? 'Failure' : 'Run message'}</span>
+          {message && <span className="min-w-0 break-words text-theme-text-tertiary">{message}</span>}
+        </div>
+        {action}
       </div>
     )
   }
   return (
     <div className="border-t border-theme-border">
-      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-theme-hover/50">
-        <CollapseChevron open={open} className="h-4 w-4" />
-        <span className={clsx('shrink-0 text-sm font-medium', failed ? 'text-red-700 dark:text-red-300' : 'text-theme-text-primary')}>
-          {failed ? 'Failure details' : 'Run message'}
-        </span>
-        <span className="min-w-0 truncate text-xs text-theme-text-tertiary">{run.message}</span>
-      </button>
+      <div className="flex items-center gap-2 pr-4 hover:bg-theme-hover/50">
+        <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex min-w-0 flex-1 items-center gap-2 px-4 py-3 text-left">
+          <CollapseChevron open={open} className="h-4 w-4" />
+          <span className={clsx('shrink-0 text-sm font-medium', failed ? 'text-red-700 dark:text-red-300' : 'text-theme-text-primary')}>
+            {failed ? 'Failure details' : 'Run message'}
+          </span>
+          <span className="min-w-0 truncate text-xs text-theme-text-tertiary">{message}</span>
+        </button>
+        {action}
+      </div>
       <Collapse open={open}>
         <div className="p-4">
           <div className={clsx('whitespace-pre-wrap break-words rounded-md border px-3 py-2 text-sm', failed ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-theme-border bg-theme-elevated/40 text-theme-text-secondary')}>
-            {run.message}
+            {message}
           </div>
         </div>
       </Collapse>
     </div>
+  )
+}
+
+function RunNextStep({ step, onClick }: { step: BatchRunNextStep; onClick: () => void }) {
+  const Icon = step === 'logs' ? Terminal : Activity
+  const label = step === 'logs' ? 'View logs' : 'View timeline'
+  return (
+    <button type="button" onClick={onClick} className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text hover:underline">
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </button>
   )
 }
 

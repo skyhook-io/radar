@@ -716,7 +716,10 @@ export function WorkloadView({
             name={n}
             resource={res}
             selectedRunKey={selectedRunKey}
+            canViewLogs={baseActionsBarProps.canViewLogs}
             onSelectRun={handleSelectedRunChange}
+            onSwitchToLogs={() => handleTabChange('logs')}
+            onSwitchToTimeline={() => handleTabChange('timeline')}
             onNavigateToResource={rest.onNavigateToResource}
           />
         ) : null
