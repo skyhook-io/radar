@@ -966,10 +966,15 @@ export function batchRuntimeForApp(app: AppRow): AppBatchRuntime {
     const active = activity.reduce((sum, item) => sum + item.activeRuns, 0)
     return { label: active > 0 ? `${active} running` : 'Running', health: 'neutral', detail: 'Batch work is executing now.' }
   }
-  const latest = [...activity].sort((a, b) => batchActivityTimestamp(b) - batchActivityTimestamp(a))[0]
-  if (latest?.latestRunPhase === 'Failed' || latest?.latestRunPhase === 'Error') {
-    return { label: 'Failed', health: 'unhealthy', detail: latest.latestRunName ? `Latest retained run: ${latest.latestRunName}` : 'The latest retained run failed.' }
+  const failed = activity.filter((item) => item.latestRunPhase === 'Failed' || item.latestRunPhase === 'Error')
+  if (failed.length > 0) {
+    const item = failed[0]
+    const detail = failed.length === 1
+      ? `${item.workload.kind}/${item.workload.name} latest retained run${item.latestRunName ? ` ${item.latestRunName}` : ''} failed.`
+      : `${failed.length} batch workloads have failed latest runs.`
+    return { label: 'Failed', health: 'unhealthy', detail }
   }
+  const latest = [...activity].sort((a, b) => batchActivityTimestamp(b) - batchActivityTimestamp(a))[0]
   if (latest?.latestRunPhase === 'Succeeded') {
     return { label: 'Succeeded', health: 'healthy', detail: latest.latestRunName ? `Latest retained run: ${latest.latestRunName}` : 'The latest retained run succeeded.' }
   }

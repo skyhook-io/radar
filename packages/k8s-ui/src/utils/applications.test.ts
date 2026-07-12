@@ -13,6 +13,28 @@ describe('batch application runtime', () => {
     expect(batchRuntimeForApp(app)).toMatchObject({ label: 'Succeeded', health: 'healthy' })
   })
 
+  it('does not let one workload success mask another workload latest failure', () => {
+    const app: AppRow = {
+      key: 'batch', name: 'batch', health: 'healthy', workload_class: 'job',
+      workloads: [
+        {
+          kind: 'CronJob', namespace: 'demo', name: 'nightly', workload_class: 'job', health: 'healthy', ready: 0, desired: 0, restarts: 0,
+          batch: { retainedRuns: 1, succeededRuns: 1, latestRunName: 'nightly-new', latestRunPhase: 'Succeeded', latestFinishedAt: '2026-07-10T01:00:00Z' },
+        },
+        {
+          kind: 'CronWorkflow', namespace: 'demo', name: 'sync', workload_class: 'job', health: 'unhealthy', ready: 0, desired: 0, restarts: 0,
+          batch: { retainedRuns: 1, failedRuns: 1, latestRunName: 'sync-old', latestRunPhase: 'Failed', latestFinishedAt: '2026-07-10T00:00:00Z' },
+        },
+      ],
+    }
+
+    expect(batchRuntimeForApp(app)).toEqual({
+      label: 'Failed',
+      health: 'unhealthy',
+      detail: 'CronWorkflow/sync latest retained run sync-old failed.',
+    })
+  })
+
   it('excludes batch workloads from serving readiness', () => {
     expect(servingReadiness([
       { kind: 'Deployment', namespace: 'demo', name: 'api', workload_class: 'service', health: 'healthy', ready: 2, desired: 3, restarts: 0 },
