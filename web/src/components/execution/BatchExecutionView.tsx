@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from
 import { Activity, GitBranch } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Collapse, CollapseChevron, EmptyState, FetchResult, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
-import { buildWorkflowExecutionModel, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
+import { buildWorkflowExecutionModel, flattenWorkflowExecution, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowExecutionRow, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
 import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
 import { useResource, useWorkloadRuns, type WorkloadRun } from '../../api/client'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
@@ -578,14 +578,14 @@ function RunExecutionPanel({ run, workflowExecution, loading, onNavigateToResour
     if (loading && !workflowExecution) {
       return <Panel title="Execution" icon={GitBranch}><FetchResult loading /></Panel>
     }
-    if (!workflowExecution || workflowExecution.nodes.length === 0) {
+    if (!workflowExecution || workflowExecution.executionNodes.length === 0) {
       return (
         <Panel title="Execution" icon={GitBranch}>
           <EmptyState tone="neutral" variant="card" headline="Execution detail unavailable" body={run.active ? 'This Workflow has not reported execution nodes yet.' : 'This retained Workflow no longer has execution-node detail.'} />
         </Panel>
       )
     }
-    const rows = flattenExecutionRows(workflowExecution)
+    const rows = flattenWorkflowExecution(workflowExecution)
     const visibleRows = showAll || !workflowExecution.isLarge ? rows : executionPreviewRows(rows, workflowExecution)
     const messageOwners = new Map<string, { id: string; depth: number; leaf: boolean }>()
     for (const row of visibleRows) {
@@ -602,7 +602,7 @@ function RunExecutionPanel({ run, workflowExecution, loading, onNavigateToResour
       return { ...row, showMessage: Boolean(nodeMessage) && !repeatedRunMessage && messageOwners.get(nodeMessage!)?.id === row.node.id }
     })
     return (
-      <Panel title="Execution" icon={GitBranch} detail={`${workflowExecution.nodes.length} ${workflowExecution.nodes.length === 1 ? 'node' : 'nodes'}`}>
+      <Panel title="Execution" icon={GitBranch} detail={`${workflowExecution.executionNodes.length} ${workflowExecution.executionNodes.length === 1 ? 'node' : 'nodes'}`}>
         <div className="divide-y divide-theme-border rounded-md border border-theme-border">
           {renderedRows.map(({ node, depth, showMessage }) => <ExecutionNodeRow key={node.id} node={node} depth={depth} showMessage={showMessage} namespace={run.namespace} onNavigateToResource={onNavigateToResource} />)}
         </div>
@@ -614,7 +614,7 @@ function RunExecutionPanel({ run, workflowExecution, loading, onNavigateToResour
   return null
 }
 
-function executionPreviewRows(rows: ExecutionRow[], workflowExecution: WorkflowExecutionModel): ExecutionRow[] {
+function executionPreviewRows(rows: WorkflowExecutionRow[], workflowExecution: WorkflowExecutionModel): WorkflowExecutionRow[] {
   const preview = rows.slice(0, 40)
   const included = new Set(preview.map((row) => row.node.id))
   const rowByID = new Map(rows.map((row) => [row.node.id, row]))
@@ -763,39 +763,19 @@ function ExecutionNodeRow({ node, depth, showMessage, namespace, onNavigateToRes
       <StatusDot tone={mapHealthToTone(phaseHealth(node.phase))} className="mt-1" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="truncate text-sm font-medium text-theme-text-primary">{node.displayName}</span>
-          <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{node.type}</span>
+          <span className="truncate text-sm font-medium text-theme-text-primary">{node.displayLabel}</span>
+          <span className="text-[10px] tracking-wide text-theme-text-tertiary">{node.displayType}</span>
         </div>
         {showMessage && (node.phase === 'Failed' || node.phase === 'Error') && <div className="mt-0.5 line-clamp-2 text-xs text-red-600 dark:text-red-400">{node.message}</div>}
         <div className="mt-1 flex flex-wrap gap-2 text-xs">
           {node.podName && <GenericResourceButton refInfo={{ kind: 'Pod', namespace, name: node.podName }} onNavigateToResource={onNavigateToResource} />}
           {node.templateRef && <ResourceButton refInfo={node.templateRef} onNavigateToResource={onNavigateToResource} />}
-          {!node.templateRef && node.templateName && <span className="font-mono text-theme-text-tertiary">{node.templateName}</span>}
+          {!node.templateRef && node.templateName && node.templateName !== node.displayLabel && <span className="font-mono text-theme-text-tertiary">{node.templateName}</span>}
         </div>
       </div>
       <span className={clsx('badge-sm shrink-0', phaseBadgeClass(node.phase))}>{node.phase}</span>
     </div>
   )
-}
-
-type ExecutionRow = { node: WorkflowExecutionNode; depth: number }
-
-function flattenExecutionRows(model: WorkflowExecutionModel): ExecutionRow[] {
-  const byID = new Map(model.nodes.map((node) => [node.id, node]))
-  const seen = new Set<string>()
-  const rows: Array<{ node: WorkflowExecutionNode; depth: number }> = []
-  const visit = (node: WorkflowExecutionNode, depth: number) => {
-    if (seen.has(node.id)) return
-    seen.add(node.id)
-    rows.push({ node, depth })
-    for (const childID of node.childIds) {
-      const child = byID.get(childID)
-      if (child) visit(child, depth + 1)
-    }
-  }
-  for (const root of model.roots) visit(root, 0)
-  for (const node of model.nodes) visit(node, 0)
-  return rows
 }
 
 function ActivityDot({ tone }: { tone: string }) {

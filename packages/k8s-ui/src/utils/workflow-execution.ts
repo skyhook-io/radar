@@ -4,6 +4,8 @@ export interface WorkflowExecutionNode {
   id: string
   name: string
   displayName: string
+  displayLabel: string
+  displayType: string
   type: string
   phase: string
   templateName?: string
@@ -16,6 +18,7 @@ export interface WorkflowExecutionNode {
   finishedAt?: string
   parentIds: string[]
   childIds: string[]
+  hierarchyChildIds: string[]
 }
 
 export interface WorkflowExecutionEdge {
@@ -66,6 +69,8 @@ export interface WorkflowExecutionModel {
   nodes: WorkflowExecutionNode[]
   edges: WorkflowExecutionEdge[]
   roots: WorkflowExecutionNode[]
+  executionNodes: WorkflowExecutionNode[]
+  executionRoots: WorkflowExecutionNode[]
   visibleSteps: WorkflowExecutionNode[]
   focusPaths: WorkflowExecutionPath[]
   activity: WorkflowExecutionActivity[]
@@ -75,8 +80,13 @@ export interface WorkflowExecutionModel {
   isLarge: boolean
 }
 
-const STEP_NODE_TYPES = new Set(['Pod', 'Steps', 'StepGroup', 'DAG', 'TaskGroup', 'Suspend', 'Skipped'])
+export interface WorkflowExecutionRow {
+  node: WorkflowExecutionNode
+  depth: number
+}
+
 const LEAF_NODE_TYPES = new Set(['Pod', 'Suspend', 'Skipped'])
+const ACTIVITY_NODE_TYPES = new Set(['Pod', 'HTTP', 'Plugin', 'Suspend', 'Skipped'])
 const LARGE_WORKFLOW_NODE_COUNT = 80
 
 export function buildWorkflowExecutionModel(workflow: any): WorkflowExecutionModel {
@@ -91,6 +101,8 @@ export function buildWorkflowExecutionModel(workflow: any): WorkflowExecutionMod
       id,
       name: asString(node.name) || displayName,
       displayName,
+      displayLabel: displayName,
+      displayType: workflowNodeTypeLabel(asString(node.type) || 'Unknown'),
       type: asString(node.type) || 'Unknown',
       phase: asString(node.phase) || (asString(node.type) === 'Skipped' ? 'Skipped' : 'Pending'),
       templateName: asString(node.templateName),
@@ -103,6 +115,7 @@ export function buildWorkflowExecutionModel(workflow: any): WorkflowExecutionMod
       finishedAt: asString(node.finishedAt),
       parentIds: [],
       childIds: [],
+      hierarchyChildIds: [],
     })
   }
 
@@ -111,7 +124,9 @@ export function buildWorkflowExecutionModel(workflow: any): WorkflowExecutionMod
     const node = nodeById.get(id)
     if (!node) continue
     const rawNode = asRecord(raw)
-    const childIds = [...asStringArray(rawNode.children), ...asStringArray(rawNode.outboundNodes)]
+    const children = asStringArray(rawNode.children)
+    node.hierarchyChildIds = (children.length > 0 ? children : asStringArray(rawNode.outboundNodes)).filter((childID) => nodeById.has(childID))
+    const childIds = [...children, ...asStringArray(rawNode.outboundNodes)]
     for (const childId of childIds) {
       if (!nodeById.has(childId)) continue
       addWorkflowEdge(nodeById, edgeKeys, id, childId)
@@ -121,13 +136,17 @@ export function buildWorkflowExecutionModel(workflow: any): WorkflowExecutionMod
   for (const node of nodeById.values()) {
     if (node.parentIds.length > 0 || !node.boundaryId || node.boundaryId === node.id || !nodeById.has(node.boundaryId)) continue
     addWorkflowEdge(nodeById, edgeKeys, node.boundaryId, node.id)
+    const boundary = nodeById.get(node.boundaryId)
+    if (boundary && !boundary.hierarchyChildIds.includes(node.id)) boundary.hierarchyChildIds = [...boundary.hierarchyChildIds, node.id]
   }
 
   const nodes = [...nodeById.values()].sort(compareExecutionNodes)
   const roots = nodes.filter((node) => node.parentIds.length === 0)
-  const visibleSteps = nodes.filter((node) => STEP_NODE_TYPES.has(node.type))
-  const counts = countWorkflowExecution(nodes)
-  const focusNodes = pickFocusNodes(nodes)
+  const { nodes: executionNodes, roots: executionRoots } = buildPresentationGraph(nodes, asString(workflow?.metadata?.name))
+  const visibleSteps = executionNodes
+  const counts = countWorkflowExecution(executionNodes)
+  const focusNodes = pickFocusNodes(executionNodes)
+  const executionNodeById = new Map(executionNodes.map((node) => [node.id, node]))
 
   return {
     nodes,
@@ -136,18 +155,182 @@ export function buildWorkflowExecutionModel(workflow: any): WorkflowExecutionMod
       return { source, target }
     }),
     roots,
+    executionNodes,
+    executionRoots,
     visibleSteps,
     focusPaths: focusNodes.map((node) => ({
       terminal: node,
-      nodes: lineagePath(nodeById, node),
+      nodes: lineagePath(executionNodeById, node),
       tone: phaseTone(node.phase),
     })),
-    activity: workflowActivity(workflow, visibleSteps),
+    activity: workflowActivity(workflow, executionNodes),
     counts,
     templateRefs: collectWorkflowTemplateRefs(workflow),
     resourcesDuration: asNumberRecord(workflow?.status?.resourcesDuration),
-    isLarge: nodes.length > LARGE_WORKFLOW_NODE_COUNT,
+    isLarge: executionNodes.length > LARGE_WORKFLOW_NODE_COUNT,
   }
+}
+
+export function flattenWorkflowExecution(model: WorkflowExecutionModel): WorkflowExecutionRow[] {
+  const byID = new Map(model.executionNodes.map((node) => [node.id, node]))
+  const seen = new Set<string>()
+  const rows: WorkflowExecutionRow[] = []
+  const visit = (node: WorkflowExecutionNode, depth: number) => {
+    if (seen.has(node.id)) return
+    seen.add(node.id)
+    rows.push({ node, depth })
+    for (const childID of node.childIds) {
+      const child = byID.get(childID)
+      if (child) visit(child, depth + 1)
+    }
+  }
+  for (const root of model.executionRoots) visit(root, 0)
+  for (const node of model.executionNodes) visit(node, 0)
+  return rows
+}
+
+function buildPresentationGraph(rawNodes: WorkflowExecutionNode[], workflowName: string): { nodes: WorkflowExecutionNode[]; roots: WorkflowExecutionNode[] } {
+  const rawByID = new Map(rawNodes.map((node) => [node.id, node]))
+  const elided = new Set<string>()
+  for (const node of rawNodes) {
+    if (node.type !== 'StepGroup') continue
+    if (node.childIds.length === 1 || (node.childIds.length === 0 && !isWorkflowProblemPhase(node.phase))) elided.add(node.id)
+  }
+
+  const presentationByID = new Map<string, WorkflowExecutionNode>()
+  for (const rawNode of rawNodes) {
+    if (elided.has(rawNode.id)) continue
+    presentationByID.set(rawNode.id, {
+      ...rawNode,
+      parentIds: [],
+      childIds: [],
+      displayLabel: presentationLabel(rawNode, workflowName),
+      displayType: presentationType(rawNode),
+    })
+  }
+
+  const nearestVisibleDescendants = (id: string, path = new Set<string>()): string[] => {
+    if (path.has(id)) return []
+    if (!elided.has(id)) return presentationByID.has(id) ? [id] : []
+    const node = rawByID.get(id)
+    if (!node) return []
+    const nextPath = new Set(path).add(id)
+    return dedupeStrings(node.hierarchyChildIds.flatMap((childID) => nearestVisibleDescendants(childID, nextPath)))
+  }
+
+  for (const node of presentationByID.values()) {
+    for (const childID of dedupeStrings(rawByID.get(node.id)?.hierarchyChildIds ?? [])) {
+      for (const visibleChildID of nearestVisibleDescendants(childID)) addPresentationEdge(presentationByID, node.id, visibleChildID)
+    }
+  }
+
+  for (const hiddenID of elided) {
+    const hidden = rawByID.get(hiddenID)
+    if (!hidden || hidden.hierarchyChildIds.length !== 1) continue
+    const stepNumber = stepGroupNumber(hidden)
+    if (!stepNumber) continue
+    for (const childID of nearestVisibleDescendants(hidden.hierarchyChildIds[0])) {
+      const child = presentationByID.get(childID)
+      if (child) child.displayType = `Step ${stepNumber} · ${child.displayType}`
+    }
+  }
+
+  for (const node of presentationByID.values()) normalizeGroupedChildren(node, presentationByID)
+
+  const nodes = [...presentationByID.values()].sort(compareExecutionNodes)
+  return { nodes, roots: nodes.filter((node) => node.parentIds.length === 0) }
+}
+
+function presentationLabel(node: WorkflowExecutionNode, workflowName: string): string {
+  if (isExitHandlerNode(node, workflowName)) return 'Exit handler'
+  if (node.parentIds.length === 0 && node.displayName === workflowName && node.templateName) return node.templateName
+  if (node.type !== 'StepGroup') return node.displayName
+  const stepNumber = stepGroupNumber(node)
+  return stepNumber ? `Step ${stepNumber}` : node.childIds.length > 1 ? 'Parallel steps' : 'Workflow step'
+}
+
+function presentationType(node: WorkflowExecutionNode): string {
+  if (node.type === 'StepGroup') {
+    if (node.childIds.length > 1) return `Parallel · ${node.childIds.length} steps`
+    return 'Step group'
+  }
+  if (node.type === 'TaskGroup') return `Fan-out · ${node.childIds.length} runs`
+  return workflowNodeTypeLabel(node.type)
+}
+
+function normalizeGroupedChildren(parent: WorkflowExecutionNode, nodes: Map<string, WorkflowExecutionNode>) {
+  if (parent.type === 'Retry') {
+    for (const childID of parent.childIds) {
+      const child = nodes.get(childID)
+      if (!child) continue
+      const iteration = parseIterationName(child.displayName)
+      if (!iteration || iteration.base !== parent.displayName || iteration.value !== undefined) continue
+      child.displayLabel = `Attempt ${iteration.index + 1}`
+    }
+    return
+  }
+  if (parent.type !== 'TaskGroup' && parent.type !== 'StepGroup') return
+  const group = iterationGroupInfo(parent, nodes)
+  if (!group) return
+  parent.displayLabel = group.base
+  const stepNumber = parent.type === 'StepGroup' ? stepGroupNumber(parent) : null
+  parent.displayType = `${stepNumber ? `Step ${stepNumber} · ` : ''}Fan-out · ${parent.childIds.length} runs`
+  for (const childID of parent.childIds) {
+    const child = nodes.get(childID)
+    if (!child) continue
+    const iteration = parseIterationName(child.displayName)
+    if (!iteration) continue
+    child.displayLabel = iteration.value || `Run ${iteration.index + 1}`
+    child.displayType = `Run ${iteration.index + 1} · ${workflowNodeTypeLabel(child.type)}`
+  }
+}
+
+function iterationGroupInfo(parent: WorkflowExecutionNode, nodes?: Map<string, WorkflowExecutionNode>): { base: string } | null {
+  if (parent.childIds.length < 2) return null
+  if (!nodes) return null
+  const iterations = parent.childIds.map((id) => nodes.get(id)).map((node) => node ? parseIterationName(node.displayName) : null)
+  if (iterations.some((iteration) => !iteration)) return null
+  const base = iterations[0]!.base
+  return iterations.every((iteration) => iteration!.base === base) ? { base } : null
+}
+
+function parseIterationName(displayName: string): { base: string; index: number; value?: string } | null {
+  const match = displayName.match(/^(.+)\((\d+)(?::(.+))?\)$/)
+  if (!match) return null
+  return { base: match[1], index: Number(match[2]), value: match[3] }
+}
+
+function stepGroupNumber(node: WorkflowExecutionNode): number | null {
+  const match = node.name.match(/\[(\d+)\]$/)
+  return match ? Number(match[1]) + 1 : null
+}
+
+function isExitHandlerNode(node: WorkflowExecutionNode, workflowName: string): boolean {
+  return Boolean(workflowName && (node.name === `${workflowName}.onExit` || node.displayName === `${workflowName}.onExit`))
+}
+
+function workflowNodeTypeLabel(type: string): string {
+  switch (type) {
+    case 'Steps': return 'Steps template'
+    case 'StepGroup': return 'Step group'
+    case 'TaskGroup': return 'Fan-out'
+    case 'Retry': return 'Retry strategy'
+    case 'Skipped': return 'Skipped step'
+    default: return type
+  }
+}
+
+function addPresentationEdge(nodes: Map<string, WorkflowExecutionNode>, source: string, target: string) {
+  if (source === target) return
+  const parent = nodes.get(source)
+  const child = nodes.get(target)
+  if (!parent || !child || parent.childIds.includes(target)) return
+  parent.childIds = [...parent.childIds, target]
+  child.parentIds = [...child.parentIds, source]
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values)]
 }
 
 export function collectWorkflowTemplateRefs(workflow: any): WorkflowTemplateReference[] {
@@ -235,21 +418,19 @@ function countWorkflowExecution(nodes: WorkflowExecutionNode[]): WorkflowExecuti
       else if (node.phase === 'Running') counts.podRunning++
       else if (node.phase === 'Pending') counts.podPending++
     }
-    if (STEP_NODE_TYPES.has(node.type)) {
-      counts.nodeTotal++
-      if (node.phase === 'Succeeded') counts.nodeSucceeded++
-      else if (isWorkflowProblemPhase(node.phase)) counts.nodeFailed++
-      else if (node.phase === 'Running') counts.nodeRunning++
-      else if (node.phase === 'Skipped' || node.phase === 'Omitted') counts.nodeSkipped++
-    }
+    counts.nodeTotal++
+    if (node.phase === 'Succeeded') counts.nodeSucceeded++
+    else if (isWorkflowProblemPhase(node.phase)) counts.nodeFailed++
+    else if (node.phase === 'Running') counts.nodeRunning++
+    else if (node.phase === 'Skipped' || node.phase === 'Omitted') counts.nodeSkipped++
   }
   return counts
 }
 
 function pickFocusNodes(nodes: WorkflowExecutionNode[]): WorkflowExecutionNode[] {
-  const failed = nodes.filter((node) => isWorkflowProblemPhase(node.phase) && (LEAF_NODE_TYPES.has(node.type) || node.message))
+  const failed = nodes.filter((node) => isWorkflowProblemPhase(node.phase) && (LEAF_NODE_TYPES.has(node.type) || node.type === 'Container' || node.message))
   if (failed.length > 0) return failed.slice(0, 12)
-  const active = nodes.filter((node) => (node.phase === 'Running' || node.phase === 'Pending') && STEP_NODE_TYPES.has(node.type))
+  const active = nodes.filter((node) => node.phase === 'Running' || node.phase === 'Pending')
   return active.slice(0, 12)
 }
 
@@ -276,13 +457,13 @@ function workflowActivity(workflow: any, nodes: WorkflowExecutionNode[]): Workfl
   if (startedAt) {
     items.push({ id: 'workflow-started', at: startedAt, label: 'Workflow started', tone: 'info' })
   }
-  for (const node of nodes) {
+  for (const node of activityNodes(nodes)) {
     if (node.startedAt) {
       items.push({
         id: `${node.id}-started`,
         at: node.startedAt,
-        label: `${node.displayName} started`,
-        detail: node.type,
+        label: `${node.displayLabel} started`,
+        detail: node.displayType,
         tone: phaseTone(node.phase),
         nodeId: node.id,
       })
@@ -291,8 +472,8 @@ function workflowActivity(workflow: any, nodes: WorkflowExecutionNode[]): Workfl
       items.push({
         id: `${node.id}-finished`,
         at: node.finishedAt,
-        label: `${node.displayName} ${activityVerb(node.phase)}`,
-        detail: node.message || node.type,
+        label: `${node.displayLabel} ${activityVerb(node.phase)}`,
+        detail: node.message || node.displayType,
         tone: phaseTone(node.phase),
         nodeId: node.id,
       })
@@ -303,6 +484,30 @@ function workflowActivity(workflow: any, nodes: WorkflowExecutionNode[]): Workfl
     items.push({ id: 'workflow-finished', at: finishedAt, label: `Workflow ${activityVerb(asString(workflow?.status?.phase) || 'finished')}`, tone: phaseTone(asString(workflow?.status?.phase)) })
   }
   return items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+}
+
+function activityNodes(nodes: WorkflowExecutionNode[]): WorkflowExecutionNode[] {
+  const byID = new Map(nodes.map((node) => [node.id, node]))
+  const failedExecutableDescendant = (node: WorkflowExecutionNode): boolean => {
+    const queue = [...node.childIds]
+    const seen = new Set<string>()
+    while (queue.length > 0) {
+      const id = queue.shift()!
+      if (seen.has(id)) continue
+      seen.add(id)
+      const child = byID.get(id)
+      if (!child) continue
+      if (ACTIVITY_NODE_TYPES.has(child.type) && isWorkflowProblemPhase(child.phase)) return true
+      queue.push(...child.childIds)
+    }
+    return false
+  }
+  const executableMessages = new Set(nodes.filter((node) => ACTIVITY_NODE_TYPES.has(node.type) && isWorkflowProblemPhase(node.phase)).map((node) => node.message).filter(Boolean))
+  return nodes.filter((node) => {
+    if (ACTIVITY_NODE_TYPES.has(node.type)) return true
+    if (node.type === 'Container') return isWorkflowProblemPhase(node.phase) && Boolean(node.message) && !executableMessages.has(node.message)
+    return isWorkflowProblemPhase(node.phase) && Boolean(node.message) && !failedExecutableDescendant(node)
+  })
 }
 
 function activityVerb(phase: string): string {

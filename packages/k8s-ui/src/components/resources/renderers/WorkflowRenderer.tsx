@@ -2,7 +2,7 @@ import { Play, Clock, CheckCircle, XCircle, Loader2, SkipForward, PauseCircle } 
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { formatAge, formatDuration } from '../resource-utils'
-import { buildWorkflowExecutionModel, WorkflowExecutionNode, WorkflowTemplateReference } from '../../../utils/workflow-execution'
+import { buildWorkflowExecutionModel, flattenWorkflowExecution, WorkflowExecutionModel, WorkflowExecutionNode, WorkflowTemplateReference } from '../../../utils/workflow-execution'
 
 interface WorkflowRendererProps {
   data: any
@@ -27,6 +27,7 @@ function StepStatusIcon({ phase, nodeType }: { phase: string; nodeType?: string 
     case 'Succeeded':
       return <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
     case 'Failed':
+    case 'Error':
       return <XCircle className="w-4 h-4 text-red-400 shrink-0" />
     case 'Running':
       return <Loader2 className="w-4 h-4 text-yellow-400 shrink-0 animate-spin" />
@@ -66,7 +67,7 @@ function formatEstimatedDuration(seconds: number): string {
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
 }
 
-function getWorkflowProblems(data: any, steps: WorkflowExecutionNode[]): string[] {
+function getWorkflowProblems(data: any, execution: WorkflowExecutionModel): string[] {
   const problems: string[] = []
   const status = data.status || {}
   const phase = status.phase
@@ -77,16 +78,18 @@ function getWorkflowProblems(data: any, steps: WorkflowExecutionNode[]): string[
     problems.push(status.message || 'Workflow error')
   }
 
-  const failedNodes = steps.filter((node) => (node.type === 'Pod' || node.type === 'Suspend' || node.type === 'Skipped') && (node.phase === 'Failed' || node.phase === 'Error'))
+  const failedNodes = execution.focusPaths.map((path) => path.terminal).filter((node, index, nodes) =>
+    (node.phase === 'Failed' || node.phase === 'Error') && nodes.findIndex((candidate) => candidate.id === node.id) === index,
+  )
 
   if (failedNodes.length > 0) {
     const withMessages = failedNodes.filter((node: any) => node.message)
     if (withMessages.length > 0) {
       for (const n of withMessages as any[]) {
-        problems.push(`${n.displayName}: ${n.message}`)
+        problems.push(`${n.displayLabel}: ${n.message}`)
       }
     } else {
-      problems.push(`Failed steps: ${failedNodes.map((n: any) => n.displayName).join(', ')}`)
+      problems.push(`Failed steps: ${failedNodes.map((n: any) => n.displayLabel).join(', ')}`)
     }
   }
 
@@ -99,6 +102,7 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
   const phase = status.phase || 'Unknown'
   const execution = buildWorkflowExecutionModel(data)
   const steps = execution.visibleSteps
+  const stepRows = flattenWorkflowExecution(execution)
 
   // Compute duration
   const startedAt = status.startedAt ? new Date(status.startedAt) : null
@@ -109,7 +113,7 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
     ? formatDuration(Date.now() - startedAt.getTime(), true) + ' (running)'
     : null
 
-  const problems = getWorkflowProblems(data, steps)
+  const problems = [...new Set(getWorkflowProblems(data, execution))]
   const hasProblems = problems.length > 0
 
   // Arguments
@@ -167,7 +171,7 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
       {steps.length > 0 && (
         <Section title={`Steps (${steps.length})`} defaultExpanded>
           <div className="space-y-1.5">
-            {steps.map(step => {
+            {stepRows.map(({ node: step, depth }) => {
               const isFailed = step.phase === 'Failed' || step.phase === 'Error'
               const isSkipped = step.type === 'Skipped' || step.phase === 'Skipped'
               const isSuspend = step.type === 'Suspend'
@@ -175,17 +179,18 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
                 <div key={step.id} className={clsx(
                   'text-sm card-inner px-3 py-2',
                   isFailed && 'border-l-2 border-red-500'
-                )}>
+                )} style={{ marginLeft: `${Math.min(depth, 6) * 12}px` }}>
                   <div className="flex items-center gap-2">
                     <StepStatusIcon phase={step.phase} nodeType={step.type} />
                     <span className={clsx(
                       'flex-1',
                       isSkipped ? 'text-theme-text-tertiary' : isSuspend ? 'text-yellow-400' : 'text-theme-text-primary'
                     )}>
-                      {step.displayName}
+                      {step.displayLabel}
                       {isSkipped && <span className="ml-1 text-xs text-theme-text-tertiary">(skipped)</span>}
                       {isSuspend && <span className="ml-1 text-xs text-yellow-400/70">(suspend)</span>}
                     </span>
+                    <span className="text-xs text-theme-text-tertiary">{step.displayType}</span>
                     <span className="text-xs text-theme-text-secondary">{getStepDuration(step) || '-'}</span>
                   </div>
                   {isFailed && step.message && (
