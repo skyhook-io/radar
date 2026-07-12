@@ -171,7 +171,7 @@ describe('neighborhoodFor', () => {
     expect(out.warnings?.some((w) => w.includes('active and representative completed runs from 18 retained Workflow runs'))).toBe(true)
   })
 
-  it('keeps the oldest active runs and discloses active-run truncation', () => {
+  it('keeps the newest active runs plus the oldest potentially stuck run', () => {
     const active = Array.from({ length: 12 }, (_, i) => ({
       ...crdNode(`active${i}`, 'Workflow', 'app', `migration-active-${i}`, 'argoproj.io/v1alpha1'),
       data: { namespace: 'app', apiVersion: 'argoproj.io/v1alpha1', phase: 'Running', startedAt: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z` },
@@ -185,11 +185,12 @@ describe('neighborhoodFor', () => {
     }
     const out = neighborhoodFor(topo, [{ kind: 'WorkflowTemplate', group: 'argoproj.io', namespace: 'app', name: 'migration' }])
     const ids = new Set(out.nodes.map((node) => node.id))
-    for (let i = 0; i < 8; i++) expect(ids.has(`active${i}`)).toBe(true)
-    for (let i = 8; i < 12; i++) expect(ids.has(`active${i}`)).toBe(false)
+    expect(ids.has('active0')).toBe(true)
+    for (let i = 1; i < 5; i++) expect(ids.has(`active${i}`)).toBe(false)
+    for (let i = 5; i < 12; i++) expect(ids.has(`active${i}`)).toBe(true)
     expect(ids.has('failed')).toBe(true)
     expect(ids.has('succeeded')).toBe(true)
-    expect(out.warnings?.some((warning) => warning.includes('8 oldest of 12 active runs'))).toBe(true)
+    expect(out.warnings?.some((warning) => warning.includes('7 newest and oldest of 12 active runs'))).toBe(true)
   })
 
   it('uses the name tiebreak for runs without timestamps', () => {
@@ -305,5 +306,30 @@ describe('tagWorkloadOwnership', () => {
     const { topology } = tagWorkloadOwnership(topo, [{ kind: 'Deployment', namespace: 'app', name: 'web' }])
     expect(dataOf(topology, 'ks').ownerWorkloadId).toBeNull()
     expect(dataOf(topology, 'pod').ownerWorkloadId).toBe('Deployment/app/web')
+  })
+
+  it('keeps scheduler ownership authoritative over shared template provenance', () => {
+    const topo: Topology = {
+      nodes: [
+        crdNode('cron', 'CronWorkflow', 'app', 'migration-schedule', 'argoproj.io/v1alpha1'),
+        crdNode('template', 'WorkflowTemplate', 'app', 'migration', 'argoproj.io/v1alpha1'),
+        crdNode('workflow', 'Workflow', 'app', 'migration-run', 'argoproj.io/v1alpha1'),
+        node('pod', 'Pod', 'app', 'migration-run-step'),
+      ],
+      edges: [
+        edge('cron', 'workflow', 'manages'),
+        edge('template', 'workflow', 'configures'),
+        edge('workflow', 'pod', 'manages'),
+      ],
+    }
+
+    const { topology } = tagWorkloadOwnership(topo, [
+      { kind: 'CronWorkflow', group: 'argoproj.io', namespace: 'app', name: 'migration-schedule' },
+      { kind: 'WorkflowTemplate', group: 'argoproj.io', namespace: 'app', name: 'migration' },
+    ])
+
+    expect(dataOf(topology, 'workflow').ownerWorkloadId).toBe('CronWorkflow/app/migration-schedule')
+    expect(dataOf(topology, 'pod').ownerWorkloadId).toBe('CronWorkflow/app/migration-schedule')
+    expect(dataOf(topology, 'template').ownerWorkloadId).toBe('WorkflowTemplate/app/migration')
   })
 })

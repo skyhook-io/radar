@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { formatAge, formatDuration } from '../resource-utils'
 import { buildWorkflowExecutionModel, flattenWorkflowExecution, WorkflowExecutionModel, WorkflowExecutionNode, WorkflowTemplateReference } from '../../../utils/workflow-execution'
+import { SEVERITY_TEXT } from '../../../utils/badge-colors'
 
 interface WorkflowRendererProps {
   data: any
@@ -21,16 +22,16 @@ function StepStatusIcon({ phase, nodeType }: { phase: string; nodeType?: string 
     return <SkipForward className="w-4 h-4 text-theme-text-tertiary shrink-0" />
   }
   if (nodeType === 'Suspend' && phase !== 'Succeeded') {
-    return <PauseCircle className="w-4 h-4 text-yellow-400 shrink-0" />
+    return <PauseCircle className={clsx('h-4 w-4 shrink-0', SEVERITY_TEXT.warning)} />
   }
   switch (phase) {
     case 'Succeeded':
-      return <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
+      return <CheckCircle className={clsx('h-4 w-4 shrink-0', SEVERITY_TEXT.success)} />
     case 'Failed':
     case 'Error':
-      return <XCircle className="w-4 h-4 text-red-400 shrink-0" />
+      return <XCircle className={clsx('h-4 w-4 shrink-0', SEVERITY_TEXT.error)} />
     case 'Running':
-      return <Loader2 className="w-4 h-4 text-yellow-400 shrink-0 animate-spin" />
+      return <Loader2 className={clsx('h-4 w-4 shrink-0 animate-spin', SEVERITY_TEXT.warning)} />
     default:
       return <Clock className="w-4 h-4 text-theme-text-tertiary shrink-0" />
   }
@@ -176,23 +177,23 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
               return (
                 <div key={step.id} className={clsx(
                   'text-sm card-inner px-3 py-2',
-                  isFailed && 'border-l-2 border-red-500'
+                  isFailed && 'border-l-2 border-l-[var(--color-error)]'
                 )} style={{ marginLeft: `${Math.min(depth, 6) * 12}px` }}>
                   <div className="flex items-center gap-2">
                     <StepStatusIcon phase={step.phase} nodeType={step.type} />
                     <span className={clsx(
                       'flex-1',
-                      isSkipped ? 'text-theme-text-tertiary' : isSuspend ? 'text-yellow-400' : 'text-theme-text-primary'
+                      isSkipped ? 'text-theme-text-tertiary' : isSuspend ? SEVERITY_TEXT.warning : 'text-theme-text-primary'
                     )}>
                       {step.displayLabel}
                       {isSkipped && <span className="ml-1 text-xs text-theme-text-tertiary">(skipped)</span>}
-                      {isSuspend && <span className="ml-1 text-xs text-yellow-400/70">(suspend)</span>}
+                      {isSuspend && <span className={clsx('ml-1 text-xs opacity-70', SEVERITY_TEXT.warning)}>(suspend)</span>}
                     </span>
                     <span className="text-xs text-theme-text-tertiary">{step.displayType}</span>
                     <span className="text-xs text-theme-text-secondary">{getStepDuration(step) || '-'}</span>
                   </div>
                   {isFailed && step.message && (
-                    <div className="mt-1 ml-6 line-clamp-2 break-all text-xs text-red-400" title={step.message}>{step.message}</div>
+                    <div className={clsx('mt-1 ml-6 line-clamp-2 break-all text-xs', SEVERITY_TEXT.error)} title={step.message}>{step.message}</div>
                   )}
                   {step.templateRef && (
                     <div className="mt-1 ml-6 text-xs text-theme-text-tertiary">

@@ -16,7 +16,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
@@ -334,23 +333,12 @@ func describeMCPJobLogEmpty(namespace, name string) mcpWorkloadLogEmptyMetadata 
 }
 
 func applyMCPTerminalJobEmptyState(metadata *mcpWorkloadLogEmptyMetadata, job *batchv1.Job, namespace, name string) {
-	if _, complete := mcpJobCondition(job, batchv1.JobComplete); !complete {
-		if _, failed := mcpJobCondition(job, batchv1.JobFailed); !failed {
-			return
-		}
+	if !k8s.IsJobTerminal(job) {
+		return
 	}
 	metadata.Reason = "pods-gone"
 	metadata.Message = "This Job has finished, but its pods are no longer present in Kubernetes. If logs were retained externally, use your logging system; otherwise inspect the Job conditions and events."
 	metadata.Command = "kubectl describe job/" + name + " -n " + namespace
-}
-
-func mcpJobCondition(job *batchv1.Job, conditionType batchv1.JobConditionType) (batchv1.JobCondition, bool) {
-	for _, condition := range job.Status.Conditions {
-		if condition.Type == conditionType && condition.Status == corev1.ConditionTrue {
-			return condition, true
-		}
-	}
-	return batchv1.JobCondition{}, false
 }
 
 func describeMCPWorkflowLogEmpty(ctx context.Context, namespace, name string) mcpWorkloadLogEmptyMetadata {
@@ -372,45 +360,15 @@ func describeMCPWorkflowLogEmpty(ctx context.Context, namespace, name string) mc
 }
 
 func applyMCPTerminalWorkflowEmptyState(metadata *mcpWorkloadLogEmptyMetadata, workflow map[string]any, namespace, name string) {
-	phase, _, _ := unstructured.NestedString(workflow, "status", "phase")
-	if !mcpWorkflowTerminal(phase) {
+	if !k8s.IsWorkflowTerminal(workflow) {
 		return
 	}
 	metadata.Reason = "pods-gone"
-	if mcpWorkflowArchiveLogsConfigured(workflow) {
+	if k8s.WorkflowArchiveLogsConfigured(workflow) {
 		metadata.Message = "This Workflow has finished and its pods are no longer present. Archived logs appear to be enabled; use the configured Argo or logging UI, or try argo logs " + name + " -n " + namespace + "."
 	} else {
 		metadata.Message = "This Workflow has finished and its pods are no longer present. Argo may have garbage-collected them; Kubernetes pod logs are no longer available here."
 	}
-}
-
-func mcpWorkflowTerminal(phase string) bool {
-	switch phase {
-	case "Succeeded", "Failed", "Error":
-		return true
-	default:
-		return false
-	}
-}
-
-func mcpWorkflowArchiveLogsConfigured(obj map[string]any) bool {
-	if archiveLogs, ok, _ := unstructured.NestedBool(obj, "spec", "archiveLogs"); ok && archiveLogs {
-		return true
-	}
-	templates, ok, _ := unstructured.NestedSlice(obj, "spec", "templates")
-	if !ok {
-		return false
-	}
-	for _, template := range templates {
-		templateMap, ok := template.(map[string]any)
-		if !ok {
-			continue
-		}
-		if archiveLogs, ok, _ := unstructured.NestedBool(templateMap, "archiveLocation", "archiveLogs"); ok && archiveLogs {
-			return true
-		}
-	}
-	return false
 }
 
 func addMCPWorkloadLogEmptyMetadata(response map[string]any, metadata mcpWorkloadLogEmptyMetadata) {

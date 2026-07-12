@@ -50,49 +50,6 @@ func TestSortRunsUsesNewestRunTimestamp(t *testing.T) {
 	}
 }
 
-func TestWorkflowArchiveLogsConfigured(t *testing.T) {
-	cases := []struct {
-		name string
-		obj  map[string]any
-		want bool
-	}{
-		{
-			name: "workflow spec",
-			obj: map[string]any{
-				"spec": map[string]any{"archiveLogs": true},
-			},
-			want: true,
-		},
-		{
-			name: "template archive location",
-			obj: map[string]any{
-				"spec": map[string]any{
-					"templates": []any{
-						map[string]any{"name": "main"},
-						map[string]any{"archiveLocation": map[string]any{"archiveLogs": true}},
-					},
-				},
-			},
-			want: true,
-		},
-		{
-			name: "off",
-			obj: map[string]any{
-				"spec": map[string]any{"archiveLogs": false},
-			},
-			want: false,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := workflowArchiveLogsConfigured(tc.obj); got != tc.want {
-				t.Fatalf("workflowArchiveLogsConfigured() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestWorkflowRunInfo(t *testing.T) {
 	workflow := &unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{

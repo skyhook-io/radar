@@ -291,7 +291,12 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   <h3 className="text-sm font-semibold text-theme-text-primary">{configurationTitle(kind)}</h3>
                 </div>
                 <div className="space-y-3 p-4">
-                  <SourceFacts source={source} namespace={selectedRun?.namespace || namespace} />
+                  <SourceFacts
+                    source={source}
+                    namespace={selectedRun?.namespace || namespace}
+                    definitionLoading={Boolean(referencedDefinitionTarget) && referencedDefinitionQuery.isLoading}
+                    definitionError={referencedDefinitionTarget ? referencedDefinitionQuery.error : undefined}
+                  />
                 </div>
               </section>
 
@@ -490,7 +495,7 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
   }
 }
 
-function SourceFacts({ source, namespace }: { source: ReturnType<typeof sourceFacts>; namespace: string }) {
+function SourceFacts({ source, namespace, definitionLoading = false, definitionError }: { source: ReturnType<typeof sourceFacts>; namespace: string; definitionLoading?: boolean; definitionError?: unknown }) {
   const parameters = 'parameters' in source ? source.parameters : undefined
   return (
     <>
@@ -499,7 +504,13 @@ function SourceFacts({ source, namespace }: { source: ReturnType<typeof sourceFa
         {source.schedule && <FactTile label="Schedule" value={source.schedule} mono />}
         {source.concurrency && <FactTile label="Concurrency" value={source.concurrency} />}
       </div>
-      {source.definition && <ExecutionDefinitionDetails summary={source.definition} namespace={namespace} />}
+      {definitionLoading ? (
+        <div className="border-t border-theme-border pt-3"><FetchResult loading /></div>
+      ) : definitionError ? (
+        <EmptyState tone="neutral" variant="card" headline="Referenced definition unavailable" body={definitionError instanceof Error ? definitionError.message : 'Radar could not load the referenced workflow definition.'} />
+      ) : source.definition ? (
+        <ExecutionDefinitionDetails summary={source.definition} namespace={namespace} />
+      ) : null}
       <div className="space-y-2">
         {source.facts.map(([label, value]) => (
           <div key={label} className="flex items-start justify-between gap-3 text-sm">
@@ -787,7 +798,7 @@ function RunActivityPanel({ run, resource, workflowExecution }: { run: WorkloadR
         <div className="divide-y divide-theme-border border-y border-theme-border">
           {defaultItems.map((item) => <RunActivityRow key={item.id} item={item} runMessage={run.message} />)}
           {overflowItems.length > 0 && (
-            <Collapse open={showAll}>
+            <Collapse open={showAll} mountLazily>
               <div className="divide-y divide-theme-border border-t border-theme-border">
                 {overflowItems.map((item) => <RunActivityRow key={item.id} item={item} runMessage={run.message} />)}
               </div>
@@ -806,13 +817,7 @@ function RunActivityPanel({ run, resource, workflowExecution }: { run: WorkloadR
 }
 
 export function activityPreviewItems(activity: WorkflowExecutionActivity[], limit = 8): WorkflowExecutionActivity[] {
-  let previewLength = Math.min(limit, activity.length)
-  activity.forEach((item, index) => {
-    if (item.tone === 'danger' || item.tone === 'warning') {
-      previewLength = Math.max(previewLength, index + 1)
-    }
-  })
-  return activity.slice(0, previewLength)
+  return activity.slice(0, Math.max(0, limit))
 }
 
 function RunActivityRow({ item, runMessage }: { item: WorkflowExecutionActivity; runMessage?: string }) {

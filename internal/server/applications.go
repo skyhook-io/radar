@@ -257,7 +257,7 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	resp, err := ListApplications(r.Context(), namespaces)
+	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -287,7 +287,7 @@ func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	resp, err := ListApplications(r.Context(), namespaces)
+	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -530,11 +530,15 @@ type appGraph struct {
 // workload to its graph root + label overlay, and groups them into logical
 // apps. Add-on machinery is classified (not dropped); nothing is hidden.
 func ListApplications(ctx context.Context, namespaces []string) (*applicationsResponse, error) {
+	return listApplicationsForRequest(ctx, namespaces, true)
+}
+
+func listApplicationsForRequest(ctx context.Context, namespaces []string, canListClusterWorkflowTemplates bool) (*applicationsResponse, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, errResourceCacheUnavailable
 	}
-	cacheKey := applicationsCacheKeyFor(namespaces)
+	cacheKey := applicationsCacheKeyFor(namespaces, canListClusterWorkflowTemplates)
 	applicationsCacheMu.Lock()
 	entry, hit := applicationsCache[cacheKey]
 	applicationsCacheMu.Unlock()
@@ -543,7 +547,7 @@ func ListApplications(ctx context.Context, namespaces []string) (*applicationsRe
 	}
 
 	g := buildAppGraph(cache, namespaces)
-	wls := collectAppWorkloads(ctx, cache, namespaces, g)
+	wls := collectAppWorkloads(ctx, cache, namespaces, g, canListClusterWorkflowTemplates)
 	rows := groupApplications(wls)
 	sourcePaths, appSetChildren, argoItems := argoApplicationFacts(ctx, cache)
 	appSetByKey := appSetFanouts(appSetChildren)
@@ -581,13 +585,17 @@ func clearApplicationsCache() {
 	applicationsCacheMu.Unlock()
 }
 
-func applicationsCacheKeyFor(namespaces []string) string {
+func applicationsCacheKeyFor(namespaces []string, canListClusterWorkflowTemplates bool) string {
+	permissionMode := "cwt-denied:"
+	if canListClusterWorkflowTemplates {
+		permissionMode = "cwt-visible:"
+	}
 	if namespaces == nil {
-		return "*"
+		return permissionMode + "*"
 	}
 	ns := append([]string(nil), namespaces...)
 	sort.Strings(ns)
-	return strings.Join(ns, ",")
+	return permissionMode + strings.Join(ns, ",")
 }
 
 // buildAppGraph constructs the same resources-view topology the /api/topology
@@ -754,7 +762,7 @@ type appWorkloadInput struct {
 // each to its structural root and label overlay, and classifies add-on
 // machinery. Pods and Warning events are indexed once per namespace and joined,
 // not re-listed per workload.
-func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *appGraph) []appWorkloadInput {
+func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *appGraph, canListClusterWorkflowTemplates bool) []appWorkloadInput {
 	var out []appWorkloadInput
 
 	podsByNS := indexPodsByNamespace(cache, namespaces)
@@ -908,7 +916,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 		})
 	}
 	addScaledJobWorkloads(ctx, cache, namespaces, add, scaledJobBatches)
-	addArgoBatchWorkloads(ctx, cache, namespaces, add, cronWorkflowBatches)
+	addArgoBatchWorkloads(ctx, cache, namespaces, add, cronWorkflowBatches, canListClusterWorkflowTemplates)
 	return out
 }
 
@@ -1004,14 +1012,14 @@ func addScaledJobWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 	}
 }
 
-func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, add addAppWorkloadFunc, cronWorkflowBatches map[string]*appBatchSummary) {
+func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, add addAppWorkloadFunc, cronWorkflowBatches map[string]*appBatchSummary, canListClusterWorkflowTemplates bool) {
 	workflows := listArgoWorkflows(ctx, cache, namespaces)
 	cronWorkflows := listArgoCronWorkflows(ctx, cache, namespaces)
 	cronWorkflowKeys := map[string]bool{}
 	for _, cwf := range cronWorkflows {
 		cronWorkflowKeys[cwf.GetNamespace()+"/"+cwf.GetName()] = true
 	}
-	templateInfos := argoWorkflowTemplateInfos(ctx, cache, namespaces)
+	templateInfos := argoWorkflowTemplateInfos(ctx, cache, namespaces, workflows, canListClusterWorkflowTemplates)
 	templateBatches := workflowTemplateBatchSummaries(workflows, cronWorkflowKeys)
 
 	for _, wf := range workflows {
@@ -1085,7 +1093,7 @@ type argoTemplateInfo struct {
 	object      map[string]any
 }
 
-func argoWorkflowTemplateInfos(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) map[string]argoTemplateInfo {
+func argoWorkflowTemplateInfos(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, workflows []*unstructured.Unstructured, canListClusterWorkflowTemplates bool) map[string]argoTemplateInfo {
 	out := map[string]argoTemplateInfo{}
 	for _, wt := range listDynamicByNamespaces(ctx, cache, namespaces, "WorkflowTemplate") {
 		ref := argoTemplateRef{kind: "WorkflowTemplate", namespace: wt.GetNamespace(), name: wt.GetName()}
@@ -1096,7 +1104,13 @@ func argoWorkflowTemplateInfos(ctx context.Context, cache *k8s.ResourceCache, na
 			object:          wt.Object,
 		}
 	}
+	if !canListClusterWorkflowTemplates {
+		return out
+	}
 	for _, cwt := range listDynamicClusterScoped(ctx, cache, "ClusterWorkflowTemplate", "argoproj.io") {
+		if !shouldIncludeClusterWorkflowTemplate(namespaces, workflows, cwt.GetName(), canListClusterWorkflowTemplates) {
+			continue
+		}
 		ref := argoTemplateRef{kind: "ClusterWorkflowTemplate", name: cwt.GetName()}
 		out[ref.key()] = argoTemplateInfo{
 			argoTemplateRef: ref,
@@ -1106,6 +1120,23 @@ func argoWorkflowTemplateInfos(ctx context.Context, cache *k8s.ResourceCache, na
 		}
 	}
 	return out
+}
+
+func shouldIncludeClusterWorkflowTemplate(namespaces []string, workflows []*unstructured.Unstructured, name string, canList bool) bool {
+	if !canList {
+		return false
+	}
+	return namespaces == nil || clusterWorkflowTemplateReferenced(workflows, name)
+}
+
+func clusterWorkflowTemplateReferenced(workflows []*unstructured.Unstructured, name string) bool {
+	for _, workflow := range workflows {
+		ref, ok := argoWorkflowTemplateRef(workflow)
+		if ok && ref.kind == "ClusterWorkflowTemplate" && ref.name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func workflowTemplateBatchSummaries(workflows []*unstructured.Unstructured, cronWorkflowKeys map[string]bool) map[string]*appBatchSummary {
@@ -1174,6 +1205,7 @@ func applyRunToBatch(b *appBatchSummary, run WorkloadRun) {
 	switch run.Phase {
 	case "Succeeded":
 		b.SucceededRuns++
+		setLatestBatchTime(&b.LastSuccessfulAt, firstNonEmptyString(run.FinishedAt, run.StartedAt, run.ScheduledAt))
 	case "Failed", "Error":
 		b.FailedRuns++
 	}
@@ -1413,6 +1445,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 		ins := members[comp]
 		r := &appRow{}
 		identifyApp(r, ins)
+		servingHealth := packages.Health("")
 		appVers := map[string]struct{}{}
 		labeled := 0
 		nss := map[string]struct{}{}
@@ -1421,6 +1454,9 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			r.Workloads = append(r.Workloads, in.wl)
 			r.Events = append(r.Events, in.events...)
 			r.Health = string(packages.WorseHealth(packages.Health(r.Health), packages.Health(in.wl.Health)))
+			if in.wl.WorkloadClass == "service" || in.wl.WorkloadClass == "worker" {
+				servingHealth = packages.WorseHealth(servingHealth, packages.Health(in.wl.Health))
+			}
 			if v := in.wl.Version; v != "" && !slices.Contains(r.Versions, v) {
 				r.Versions = append(r.Versions, v)
 			}
@@ -1438,6 +1474,9 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 				tagsByRepo[repo][tag] = struct{}{}
 			}
 			mergeRelationships(r, in.rels)
+		}
+		if r.WorkloadClass == "mixed" && servingHealth != "" {
+			r.Health = string(servingHealth)
 		}
 		setStrictSourceRef(r, ins)
 		// The app lives where its WORKLOADS run — a Flux HelmRelease in

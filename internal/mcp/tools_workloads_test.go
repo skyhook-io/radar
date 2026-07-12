@@ -9,7 +9,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -110,21 +109,5 @@ func TestApplyMCPTerminalWorkflowEmptyStateWithArchiveLogs(t *testing.T) {
 	}
 	if metadata.Command != "argo logs nightly -n ci" {
 		t.Fatalf("Command = %q", metadata.Command)
-	}
-}
-
-func TestMCPJobConditionIgnoresRetryCounters(t *testing.T) {
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "retrying",
-			Namespace: "ci",
-		},
-		Status: batchv1.JobStatus{
-			Failed: 1,
-		},
-	}
-
-	if _, ok := mcpJobCondition(job, batchv1.JobFailed); ok {
-		t.Fatal("mcpJobCondition treated failed counter as terminal condition")
 	}
 }

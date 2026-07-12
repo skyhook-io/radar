@@ -124,7 +124,9 @@ function runDisposition(node: TopologyNode): 'active' | 'failed' | 'succeeded' |
 function representativeRuns(targets: TopologyNode[]): TopologyNode[] {
   const sorted = [...targets].sort(compareRunsNewestFirst)
   const active = sorted.filter((node) => runDisposition(node) === 'active')
-  const selected: TopologyNode[] = active.length > BATCH_RUN_FANOUT_LIMIT ? active.slice(-BATCH_RUN_FANOUT_LIMIT) : active
+  const selected: TopologyNode[] = active.length > BATCH_RUN_FANOUT_LIMIT
+    ? [...active.slice(0, BATCH_RUN_FANOUT_LIMIT - 1), active[active.length - 1]]
+    : active
   const addLatest = (disposition: 'failed' | 'succeeded') => {
     const node = sorted.find((candidate) => runDisposition(candidate) === disposition)
     if (node && !selected.some((candidate) => candidate.id === node.id)) selected.push(node)
@@ -253,7 +255,7 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
       ...Array.from(cappedSources).map((sourceId) => {
         const source = nodeById.get(sourceId)
         const fanout = limitedFanouts.get(sourceId)
-        const activeNote = fanout && fanout.activeTotal > fanout.activeShown ? ` showing the ${fanout.activeShown} oldest of ${fanout.activeTotal} active runs plus representative completed runs` : ' showing active and representative completed runs'
+        const activeNote = fanout && fanout.activeTotal > fanout.activeShown ? ` showing the ${fanout.activeShown - 1} newest and oldest of ${fanout.activeTotal} active runs plus representative completed runs` : ' showing active and representative completed runs'
         return `Topology view:${activeNote} from ${fanout?.total ?? BATCH_RUN_FANOUT_LIMIT} retained ${fanout?.kind ?? 'batch'} runs for ${source?.kind ?? 'workload'}/${source?.name ?? sourceId}. Use Run history for the full retained set.`
       }),
     ],
@@ -323,15 +325,19 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
     }
   }
 
-  // manages-DOWN children (source manages target) + undirected neighbors.
+  // manages-DOWN children, template-to-run provenance, and undirected neighbors.
   const nodeById = new Map<string, TopologyNode>()
   for (const n of sub.nodes) nodeById.set(n.id, n)
-  const downChildren = new Map<string, string[]>()
+  const managedChildren = new Map<string, string[]>()
+  const templateRunChildren = new Map<string, string[]>()
   const neighbors = new Map<string, Set<string>>()
   for (const e of sub.edges) {
-    if (e.type === 'manages' || isTemplateToRunEdge(e, nodeById)) {
-      if (!downChildren.has(e.source)) downChildren.set(e.source, [])
-      downChildren.get(e.source)!.push(e.target)
+    if (e.type === 'manages') {
+      if (!managedChildren.has(e.source)) managedChildren.set(e.source, [])
+      managedChildren.get(e.source)!.push(e.target)
+    } else if (isTemplateToRunEdge(e, nodeById)) {
+      if (!templateRunChildren.has(e.source)) templateRunChildren.set(e.source, [])
+      templateRunChildren.get(e.source)!.push(e.target)
     }
     for (const [a, b] of [[e.source, e.target], [e.target, e.source]] as const) {
       if (!neighbors.has(a)) neighbors.set(a, new Set())
@@ -339,9 +345,10 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
     }
   }
 
-  // Core = each seed plus everything reachable DOWN its runtime chain. For most
-  // workloads that is `manages`; Argo templates also treat template→run as core
-  // so their Workflows and Pods inherit the template workload color.
+  // Scheduler/controller ownership is authoritative. Claim every seed and its
+  // manages descendants first, then let template seeds claim only unowned runs
+  // and their descendants. A shared template remains provenance when a
+  // CronWorkflow in the same app already owns the Workflow.
   const coreOwner = new Map<string, string>()
   for (const [seedId, key] of seedKeyById) {
     const queue = [seedId]
@@ -349,7 +356,18 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
       const id = queue.shift()!
       if (coreOwner.has(id)) continue
       coreOwner.set(id, key)
-      for (const c of downChildren.get(id) ?? []) if (!coreOwner.has(c)) queue.push(c)
+      for (const c of managedChildren.get(id) ?? []) if (!coreOwner.has(c)) queue.push(c)
+    }
+  }
+  for (const [seedId, key] of seedKeyById) {
+    const seed = nodeById.get(seedId)
+    if (!seed || !isWorkflowTemplateKind(seed.kind)) continue
+    const queue = [...(templateRunChildren.get(seedId) ?? [])]
+    while (queue.length) {
+      const id = queue.shift()!
+      if (coreOwner.has(id)) continue
+      coreOwner.set(id, key)
+      for (const c of managedChildren.get(id) ?? []) if (!coreOwner.has(c)) queue.push(c)
     }
   }
 

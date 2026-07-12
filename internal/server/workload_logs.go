@@ -1137,10 +1137,8 @@ func (s *Server) describeJobLogEmpty(namespace, name string) workloadLogMetadata
 }
 
 func applyTerminalJobEmptyState(metadata *workloadLogMetadata, job *batchv1.Job, namespace, name string) {
-	if _, complete := jobCondition(job, batchv1.JobComplete); !complete {
-		if _, failed := jobCondition(job, batchv1.JobFailed); !failed {
-			return
-		}
+	if !k8s.IsJobTerminal(job) {
+		return
 	}
 	metadata.EmptyReason = "pods-gone"
 	metadata.EmptyMessage = "This Job has finished, but its pods are no longer present in Kubernetes. If logs were retained externally, use your logging system; otherwise inspect the Job conditions and events."
@@ -1166,45 +1164,15 @@ func (s *Server) describeWorkflowLogEmpty(ctx context.Context, namespace, name s
 }
 
 func applyTerminalWorkflowEmptyState(metadata *workloadLogMetadata, workflow map[string]any, namespace, name string) {
-	phase, _, _ := unstructured.NestedString(workflow, "status", "phase")
-	if !isWorkflowTerminal(phase) {
+	if !k8s.IsWorkflowTerminal(workflow) {
 		return
 	}
 	metadata.EmptyReason = "pods-gone"
-	if workflowArchiveLogsConfigured(workflow) {
+	if k8s.WorkflowArchiveLogsConfigured(workflow) {
 		metadata.EmptyMessage = "This Workflow has finished and its pods are no longer present. Archived logs appear to be enabled; use the configured Argo or logging UI, or try argo logs " + name + " -n " + namespace + "."
 	} else {
 		metadata.EmptyMessage = "This Workflow has finished and its pods are no longer present. Argo may have garbage-collected them; Kubernetes pod logs are no longer available here."
 	}
-}
-
-func isWorkflowTerminal(phase string) bool {
-	switch phase {
-	case "Succeeded", "Failed", "Error":
-		return true
-	default:
-		return false
-	}
-}
-
-func workflowArchiveLogsConfigured(obj map[string]any) bool {
-	if archiveLogs, ok, _ := unstructured.NestedBool(obj, "spec", "archiveLogs"); ok && archiveLogs {
-		return true
-	}
-	templates, ok, _ := unstructured.NestedSlice(obj, "spec", "templates")
-	if !ok {
-		return false
-	}
-	for _, template := range templates {
-		templateMap, ok := template.(map[string]any)
-		if !ok {
-			continue
-		}
-		if archiveLogs, ok, _ := unstructured.NestedBool(templateMap, "archiveLocation", "archiveLogs"); ok && archiveLogs {
-			return true
-		}
-	}
-	return false
 }
 
 // writeWorkloadError writes an error response based on workloadError

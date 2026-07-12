@@ -17,10 +17,10 @@ describe('activityPreviewItems', () => {
     expect(activityPreviewItems(items)).toEqual(items.slice(0, 8))
   })
 
-  it('extends the chronological prefix through the last warning or failure', () => {
-    const items = Array.from({ length: 12 }, (_, index) => activity(`event-${index}`, index === 9 ? 'warning' : 'success'))
+  it('keeps large failed histories capped while preserving chronological prefix ordering', () => {
+    const items = Array.from({ length: 500 }, (_, index) => activity(`event-${index}`, index === 499 ? 'danger' : 'success'))
 
-    expect(activityPreviewItems(items)).toEqual(items.slice(0, 10))
+    expect(activityPreviewItems(items)).toEqual(items.slice(0, 8))
   })
 })
 

@@ -175,6 +175,33 @@ func TestApplyRunToBatchUsesNewestRunAndLatestSchedule(t *testing.T) {
 	if batch.LastScheduledAt != "2026-01-03T00:00:00Z" {
 		t.Fatalf("last scheduled = %q, want newest schedule", batch.LastScheduledAt)
 	}
+	if batch.LastSuccessfulAt != "2026-01-03T00:01:00Z" {
+		t.Fatalf("last successful = %q, want successful run finish time", batch.LastSuccessfulAt)
+	}
+}
+
+func TestApplyRunToBatchLastSuccessfulAtFallbacks(t *testing.T) {
+	batch := &appBatchSummary{}
+	applyRunToBatch(batch, WorkloadRun{
+		Name:        "scheduled-only",
+		Phase:       "Succeeded",
+		ScheduledAt: "2026-01-01T00:00:00Z",
+	})
+	applyRunToBatch(batch, WorkloadRun{
+		Name:       "started-only",
+		Phase:      "Succeeded",
+		StartedAt:  "2026-01-02T00:00:00Z",
+		FinishedAt: "",
+	})
+	applyRunToBatch(batch, WorkloadRun{
+		Name:       "failed-newer",
+		Phase:      "Failed",
+		FinishedAt: "2026-01-03T00:00:00Z",
+	})
+
+	if batch.LastSuccessfulAt != "2026-01-02T00:00:00Z" {
+		t.Fatalf("last successful = %q, want newest successful fallback time", batch.LastSuccessfulAt)
+	}
 }
 
 func TestWorkflowTemplateBatchSummariesGroupGeneratedWorkflows(t *testing.T) {
@@ -212,6 +239,36 @@ func TestWorkflowTemplateBatchSummariesGroupClusterWorkflowTemplates(t *testing.
 	}
 	if batch.LatestRunName != "global-b" || batch.LatestRunPhase != "Running" {
 		t.Fatalf("latest run = %s/%s, want global-b/Running", batch.LatestRunName, batch.LatestRunPhase)
+	}
+}
+
+func TestClusterWorkflowTemplateVisibility(t *testing.T) {
+	workflows := []*unstructured.Unstructured{
+		clusterWorkflowRun("dev", "global-a", "referenced", "Succeeded", "2026-01-03T00:00:00Z"),
+	}
+
+	if shouldIncludeClusterWorkflowTemplate([]string{"dev"}, workflows, "referenced", false) {
+		t.Fatal("denied ClusterWorkflowTemplate must not be included even when referenced")
+	}
+	if !shouldIncludeClusterWorkflowTemplate([]string{"dev"}, workflows, "referenced", true) {
+		t.Fatal("referenced ClusterWorkflowTemplate should be included in a namespace-filtered view")
+	}
+	if shouldIncludeClusterWorkflowTemplate([]string{"dev"}, workflows, "unused", true) {
+		t.Fatal("unused ClusterWorkflowTemplate should not be included in a namespace-filtered view")
+	}
+	if !shouldIncludeClusterWorkflowTemplate(nil, workflows, "unused", true) {
+		t.Fatal("all-namespace view should include unused ClusterWorkflowTemplates")
+	}
+}
+
+func TestApplicationsCacheKeySeparatesClusterWorkflowTemplatePermission(t *testing.T) {
+	visible := applicationsCacheKeyFor([]string{"prod", "dev"}, true)
+	denied := applicationsCacheKeyFor([]string{"dev", "prod"}, false)
+	if visible == denied {
+		t.Fatalf("cache keys collide across ClusterWorkflowTemplate permission modes: %q", visible)
+	}
+	if visible != applicationsCacheKeyFor([]string{"dev", "prod"}, true) {
+		t.Fatal("cache key should remain namespace-order independent")
 	}
 }
 
@@ -746,6 +803,28 @@ func TestWorkloadClass_FacetIsDerivedFromRuntimeShape(t *testing.T) {
 	}
 	if got := rowByName(rows, "nightly"); got == nil || got.WorkloadClass != "job" {
 		t.Fatalf("cronjob row class = %+v, want job", got)
+	}
+}
+
+func TestGroupApplications_MixedHealthUsesServingWorkloads(t *testing.T) {
+	service := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
+	service.wl.WorkloadClass = "service"
+	failedBatch := overlayInput("CronWorkflow", "prod", "nightly", "", "unhealthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
+
+	rows := groupApplications([]appWorkloadInput{service, failedBatch})
+	if len(rows) != 1 {
+		t.Fatalf("shared overlay should produce one mixed app, got %+v", rows)
+	}
+	if rows[0].WorkloadClass != "mixed" {
+		t.Fatalf("workload class = %q, want mixed", rows[0].WorkloadClass)
+	}
+	if rows[0].Health != "healthy" {
+		t.Fatalf("mixed app health = %q, want serving-only healthy verdict", rows[0].Health)
+	}
+
+	pureBatch := groupApplications([]appWorkloadInput{rawInput("CronWorkflow", "prod", "nightly", "", "unhealthy")})
+	if len(pureBatch) != 1 || pureBatch[0].Health != "unhealthy" {
+		t.Fatalf("pure batch health = %+v, want unhealthy batch verdict", pureBatch)
 	}
 }
 

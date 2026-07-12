@@ -28,7 +28,8 @@ import {
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
 import { AlertTriangle, Boxes } from 'lucide-react'
-import { useApplicationHistory, useApplications, useIssues, useTopology } from '../../api/client'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
+import { useApplicationHistory, useApplications, useIssues, useTopology, type IssuesResponse } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import { buildWorkloadPath, kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
@@ -292,6 +293,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
       const target = apps.find((a) => a.key === targetKey);
       const params = new URLSearchParams(searchParams);
       params.set('app', targetKey);
+      params.delete('run');
       const wk = params.get('workload');
       let matched = false;
       if (wk && target) {
@@ -353,6 +355,9 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         renderOverviewIssues={() => (
           <AppOverviewIssues
             issues={appIssues}
+            error={issuesQuery.error}
+            hasData={Boolean(issuesQuery.data)}
+            visibility={issuesQuery.data?.visibility}
             onOpenResource={onOpenResource}
           />
         )}
@@ -376,10 +381,52 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   )
 }
 
-function AppOverviewIssues({ issues, onOpenResource }: { issues: Issue[]; onOpenResource: (resource: SelectedResource) => void }) {
+function AppOverviewIssues({ issues, error, hasData, visibility, onOpenResource }: { issues: Issue[]; error: unknown; hasData: boolean; visibility?: IssuesResponse['visibility']; onOpenResource: (resource: SelectedResource) => void }) {
   const [openId, setOpenId] = useState<string | null>(null)
   const sorted = useMemo(() => [...issues].sort(compareAppOverviewIssues), [issues])
+
+  if (error && !hasData) {
+    return <AppOverviewIssuesState headline="Operational issues unavailable" body={error instanceof Error ? error.message : 'Radar could not load issues for this application.'} />
+  }
+
+  if (error) {
+    return (
+      <section className="space-y-2">
+        <AppOverviewIssuesState headline="Operational issue refresh failed" body="Showing the last successful result for this application." />
+        {sorted.length > 0 && <AppOverviewIssueRows issues={sorted} openId={openId} setOpenId={setOpenId} onOpenResource={onOpenResource} />}
+      </section>
+    )
+  }
+
+  if (visibility?.impact) {
+    return (
+      <section className="space-y-2">
+        <AppOverviewIssuesState headline={sorted.length === 0 ? 'No visible operational issues' : 'Operational issue visibility is limited'} body={`${visibility.impact} Results may be incomplete.`} />
+        {sorted.length > 0 && <AppOverviewIssueRows issues={sorted} openId={openId} setOpenId={setOpenId} onOpenResource={onOpenResource} />}
+      </section>
+    )
+  }
+
   if (sorted.length === 0) return null
+
+  return <AppOverviewIssueRows issues={sorted} openId={openId} setOpenId={setOpenId} onOpenResource={onOpenResource} />
+}
+
+function AppOverviewIssuesState({ headline, body }: { headline: string; body: string }) {
+  return (
+    <section className="rounded-lg border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className={`mt-0.5 h-4 w-4 shrink-0 ${SEVERITY_TEXT.warning}`} aria-hidden />
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-theme-text-primary">{headline}</h2>
+          <p className="mt-0.5 text-sm text-theme-text-secondary">{body}</p>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function AppOverviewIssueRows({ issues: sorted, openId, setOpenId, onOpenResource }: { issues: Issue[]; openId: string | null; setOpenId: (value: string | null) => void; onOpenResource: (resource: SelectedResource) => void }) {
 
   const navigate = (ref: IssueResourceRef) => {
     onOpenResource({
@@ -408,7 +455,7 @@ function AppOverviewIssues({ issues, onOpenResource }: { issues: Issue[]; onOpen
               key={rowKey}
               issue={issue}
               open={openId === rowKey}
-              onToggle={() => setOpenId((cur) => (cur === rowKey ? null : rowKey))}
+              onToggle={() => setOpenId(openId === rowKey ? null : rowKey)}
               onResourceClick={navigate}
             />
           )
