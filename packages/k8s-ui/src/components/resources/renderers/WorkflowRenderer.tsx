@@ -73,27 +73,26 @@ function getWorkflowProblems(data: any, execution: WorkflowExecutionModel): stri
   const phase = status.phase
 
   if (phase === 'Failed') {
-    problems.push(status.message || 'Workflow failed')
+    problems.push(workflowProblemSummary(status.message || 'Workflow failed'))
   } else if (phase === 'Error') {
-    problems.push(status.message || 'Workflow error')
+    problems.push(workflowProblemSummary(status.message || 'Workflow error'))
   }
 
-  const failedNodes = execution.focusPaths.map((path) => path.terminal).filter((node, index, nodes) =>
-    (node.phase === 'Failed' || node.phase === 'Error') && nodes.findIndex((candidate) => candidate.id === node.id) === index,
-  )
+  const failedNodes = phase === 'Failed' || phase === 'Error'
+    ? execution.focusPaths.map((path) => path.terminal).filter((node, index, nodes) =>
+        (node.phase === 'Failed' || node.phase === 'Error') && nodes.findIndex((candidate) => candidate.id === node.id) === index,
+      )
+    : []
 
-  if (failedNodes.length > 0) {
-    const withMessages = failedNodes.filter((node: any) => node.message)
-    if (withMessages.length > 0) {
-      for (const n of withMessages as any[]) {
-        problems.push(`${n.displayLabel}: ${n.message}`)
-      }
-    } else {
-      problems.push(`Failed steps: ${failedNodes.map((n: any) => n.displayLabel).join(', ')}`)
-    }
+  for (const node of failedNodes) {
+    problems.push(workflowProblemSummary(node.message ? `${node.displayLabel}: ${node.message}` : `${node.displayLabel} failed`))
   }
 
   return problems
+}
+
+function workflowProblemSummary(message: string): string {
+  return message.length > 300 ? `${message.slice(0, 299)}…` : message
 }
 
 export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
@@ -101,7 +100,7 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
   const spec = data.spec || {}
   const phase = status.phase || 'Unknown'
   const execution = buildWorkflowExecutionModel(data)
-  const steps = execution.visibleSteps
+  const executionNodes = execution.visibleSteps
   const stepRows = flattenWorkflowExecution(execution)
 
   // Compute duration
@@ -167,9 +166,8 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
         </PropertyList>
       </Section>
 
-      {/* Steps section */}
-      {steps.length > 0 && (
-        <Section title={`Steps (${steps.length})`} defaultExpanded>
+      {executionNodes.length > 0 && (
+        <Section title={`Execution (${executionNodes.length} nodes)`} defaultExpanded>
           <div className="space-y-1.5">
             {stepRows.map(({ node: step, depth }) => {
               const isFailed = step.phase === 'Failed' || step.phase === 'Error'
@@ -194,7 +192,7 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
                     <span className="text-xs text-theme-text-secondary">{getStepDuration(step) || '-'}</span>
                   </div>
                   {isFailed && step.message && (
-                    <div className="text-xs text-red-400 mt-1 ml-6 break-all">{step.message}</div>
+                    <div className="mt-1 ml-6 line-clamp-2 break-all text-xs text-red-400" title={step.message}>{step.message}</div>
                   )}
                   {step.templateRef && (
                     <div className="mt-1 ml-6 text-xs text-theme-text-tertiary">
