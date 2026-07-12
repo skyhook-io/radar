@@ -70,6 +70,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   }), [runs, runFilter, runSearch])
   const source = sourceFacts(kind, resource, runs)
   const phaseCounts = countPhases(runs)
+  const retentionCopy = retentionHistoryCopy(kind, resource, phaseCounts)
   const fetchTarget = selectedRun && scheduled ? resourceTargetForRun(selectedRun) : null
   const selectedResourceQuery = useResource<any>(
     fetchTarget?.kind ?? '',
@@ -113,6 +114,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               {phaseCounts.succeeded > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.succeeded} succeeded</span>}
             </div>
             <p className="mt-2 text-[10px] leading-4 text-theme-text-tertiary">Retained Kubernetes objects, not all-time history.</p>
+            {retentionCopy && <p className="mt-1 text-[10px] leading-4 text-theme-text-secondary">{retentionCopy}</p>}
             {(runs.length > 8 || phaseCounts.failed > 0) && (
               <div className="mt-3 space-y-2">
                 <div className="flex gap-1">
@@ -319,7 +321,6 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
         ['Last schedule', status.lastScheduleTime ? formatAge(status.lastScheduleTime) : 'Never'],
         ['Last success', status.lastSuccessfulTime ? formatAge(status.lastSuccessfulTime) : 'Never'],
         ['Starting deadline', spec.startingDeadlineSeconds ? `${spec.startingDeadlineSeconds}s` : 'None'],
-        ['Retention limits', `${spec.successfulJobsHistoryLimit ?? 3} successful / ${spec.failedJobsHistoryLimit ?? 1} failed`],
       ],
     }
   }
@@ -338,7 +339,6 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
         ['Timezone', spec.timezone || 'Cluster default'],
         ['Template', template || '-'],
         ['Starting deadline', spec.startingDeadlineSeconds ? `${spec.startingDeadlineSeconds}s` : 'None'],
-        ['Retention limits', `${spec.successfulJobsHistoryLimit ?? 3} successful / ${spec.failedJobsHistoryLimit ?? 1} failed`],
       ],
     }
   }
@@ -384,7 +384,6 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
         ['Job image', String(image)],
         ['Triggers', triggers.length ? triggers.map((trigger: any) => trigger.type || 'trigger').join(', ') : '-'],
         ['Polling interval', spec.pollingInterval != null ? `${spec.pollingInterval}s` : 'Default'],
-        ['History limits', `${spec.successfulJobsHistoryLimit ?? '-'} successful / ${spec.failedJobsHistoryLimit ?? '-'} failed`],
         ['Replica range', `${spec.minReplicaCount ?? 0} min / ${spec.maxReplicaCount ?? '-'} max`],
       ],
     }
@@ -829,6 +828,32 @@ function countPhases(runs: WorkloadRun[]) {
     failed: runs.filter((run) => run.phase === 'Failed' || run.phase === 'Error').length,
     succeeded: runs.filter((run) => run.phase === 'Succeeded').length,
   }
+}
+
+export function retentionHistoryCopy(kind: string, resource: any, counts: { succeeded: number; failed: number }): string | null {
+  const spec = resource?.spec ?? {}
+  const defaults = kind === 'CronJob' || kind === 'CronWorkflow'
+  const succeeded = numericLimit(spec.successfulJobsHistoryLimit, defaults ? 3 : undefined)
+  const failed = numericLimit(spec.failedJobsHistoryLimit, defaults ? 1 : undefined)
+  if (kind !== 'CronJob' && kind !== 'CronWorkflow' && kind !== 'ScaledJob') return null
+  if (succeeded == null && failed == null) return null
+
+  const retained = [retentionLimitCopy(succeeded, 'succeeded'), retentionLimitCopy(failed, 'failed')].filter(Boolean)
+  const reached = [
+    succeeded != null && succeeded > 0 && counts.succeeded >= succeeded ? 'success' : '',
+    failed != null && failed > 0 && counts.failed >= failed ? 'failure' : '',
+  ].filter(Boolean)
+  const reachedCopy = reached.length === 2 ? ' Success and failure limits reached.' : reached.length === 1 ? ` ${reached[0] === 'success' ? 'Success' : 'Failure'} limit reached.` : ''
+  return `Keeps ${retained.join(' / ')}.${reachedCopy}`
+}
+
+function numericLimit(value: unknown, fallback?: number): number | undefined {
+  return typeof value === 'number' ? value : fallback
+}
+
+function retentionLimitCopy(limit: number | undefined, phase: string): string {
+  if (limit == null) return ''
+  return limit === 0 ? `no ${phase}` : `latest ${limit} ${phase}`
 }
 
 function resourceTargetForRun(run: WorkloadRun) {
