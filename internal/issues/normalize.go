@@ -49,7 +49,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		since = now.Add(-time.Duration(p.AgeSeconds) * time.Second)
 	}
 	reason := p.Reason
-	if isForbiddenMessage(p.Message) {
+	if isForbiddenMessage(p.Message) && !isBatchFailureProblem(p.Kind, p.Reason) {
 		reason = "RBACForbidden"
 	}
 	iss := Issue{

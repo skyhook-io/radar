@@ -170,6 +170,29 @@ func TestCompose_ClassifiesArgoWorkflowForbiddenMessage(t *testing.T) {
 	}
 }
 
+func TestCompose_PreservesExplicitJobFailureOverEmbeddedForbiddenMessage(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{{
+			Kind:      "Job",
+			Namespace: "ns",
+			Name:      "daily-import",
+			Severity:  "critical",
+			Reason:    "BackoffLimitExceeded",
+			Message:   `workflowtaskresults.argoproj.io is forbidden: User "system:serviceaccount:ns:default" cannot create resource "workflowtaskresults"`,
+		}},
+	}
+	out := Compose(p, Filters{})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues: %+v", len(out), out)
+	}
+	if out[0].Reason != "BackoffLimitExceeded" {
+		t.Fatalf("reason = %q, want BackoffLimitExceeded", out[0].Reason)
+	}
+	if out[0].Category != issuesapi.CategoryJobFailed {
+		t.Fatalf("category = %q, want %q", out[0].Category, issuesapi.CategoryJobFailed)
+	}
+}
+
 func TestCompose_GroupsMemberPodsUnderOwner(t *testing.T) {
 	// Two pods of the same Deployment failing the same way share one issue
 	// ID (the future collapse target); a third pod failing differently gets

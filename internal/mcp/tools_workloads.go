@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,10 +15,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // Workload tool input types
@@ -197,7 +200,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	// Get the workload's label selector
 	selector, err := k8s.GetWorkloadSelector(cache, kind, input.Namespace, input.Name)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, workloadSelectorMCPError(ctx, err, kind, input.Namespace, input.Name)
 	}
 
 	// Get pods matching the workload
@@ -280,6 +283,16 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		resp["warnings"] = w
 	}
 	return toJSONResult(resp)
+}
+
+func workloadSelectorMCPError(ctx context.Context, err error, kind, namespace, name string) error {
+	if errors.Is(err, k8s.ErrWorkloadAccessDenied) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		return fmt.Errorf("forbidden: cannot access %s %s/%s: %w", kind, namespace, name, err)
+	}
+	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+		return notFoundError(ctx, err, kind, namespace, name)
+	}
+	return fmt.Errorf("get %s %s/%s: %w", kind, namespace, name, err)
 }
 
 type mcpWorkloadLogEmptyMetadata struct {

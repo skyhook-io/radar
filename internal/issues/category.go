@@ -146,7 +146,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	case "Service port mismatch":
 		return issuesapi.CategoryMissingConfigRef
 	}
-	if isForbiddenMessage(in.Message) {
+	if isForbiddenMessage(in.Message) && !isBatchFailureProblem(in.Kind, in.Reason) {
 		return issuesapi.CategoryRBACForbidden
 	}
 	switch in.Kind {
@@ -313,6 +313,13 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 func isForbiddenMessage(message string) bool {
 	m := strings.ToLower(message)
 	return strings.Contains(m, " is forbidden: user ") && strings.Contains(m, " cannot ")
+}
+
+func isBatchFailureProblem(kind, reason string) bool {
+	if kind == "Job" {
+		return true
+	}
+	return kind == "CronJob" && (reason == "stale" || reason == "never-scheduled")
 }
 
 // classifyGitOpsReason maps a GitOps detector/condition reason to a specific
