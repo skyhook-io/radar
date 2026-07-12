@@ -810,11 +810,18 @@ function ApplicationOverview({
   const latestChange = history?.summary?.state === 'change' ? history.summary : undefined
   const runtimeHealth = healthOf(app.runtimeHealth ?? worstHealth(workloads.map((workload) => workload.health)))
   const hasDeliveryStatus = Boolean(app.sourceStatus?.sync || app.sourceStatus?.health)
-  const factGrid = latestChange && hasDeliveryStatus
-    ? '2xl:grid-cols-5'
-    : latestChange || hasDeliveryStatus
-      ? '2xl:grid-cols-4'
-      : '2xl:grid-cols-3'
+  const extraFactCount = Number(Boolean(latestChange)) + Number(hasDeliveryStatus)
+  const factGrid = pureBatch
+    ? extraFactCount === 2
+      ? '2xl:grid-cols-6'
+      : extraFactCount === 1
+        ? '2xl:grid-cols-5'
+        : '2xl:grid-cols-4'
+    : extraFactCount === 2
+      ? '2xl:grid-cols-5'
+      : extraFactCount === 1
+        ? '2xl:grid-cols-4'
+        : '2xl:grid-cols-3'
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">

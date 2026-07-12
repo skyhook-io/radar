@@ -529,5 +529,6 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain("ad-hoc-import");
     expect(html).not.toContain("ad-hoc-import is down");
     expect(html).not.toContain("Runtime for");
+    expect(html).toContain('2xl:grid-cols-4')
   });
 });
