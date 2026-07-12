@@ -343,11 +343,9 @@ export function ApplicationDetail({
   );
   const setView = useCallback(
     (view: CanonicalApplicationView) => {
+      setInternalCostSelected(false);
       if (onSelectView) onSelectView(view);
-      else {
-        setInternalView(view);
-        setInternalCostSelected(false);
-      }
+      else setInternalView(view);
     },
     [onSelectView],
   );
