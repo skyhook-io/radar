@@ -832,7 +832,10 @@ func workloadParentGetError(kind, namespace, name string, err error) *workloadEr
 	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 		return &workloadError{http.StatusForbidden, "insufficient permissions to get " + kind + " " + displayName}
 	}
-	return &workloadError{http.StatusNotFound, kind + " " + displayName + " not found"}
+	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+		return &workloadError{http.StatusNotFound, kind + " " + displayName + " not found"}
+	}
+	return &workloadError{http.StatusInternalServerError, "failed to get " + kind + " " + displayName + ": " + err.Error()}
 }
 
 func workflowReferencesTemplate(workflow *unstructured.Unstructured, namespace, name string) bool {

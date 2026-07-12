@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -351,6 +352,21 @@ func TestWorkloadParentGetErrorPreservesForbidden(t *testing.T) {
 	}
 	if !strings.Contains(got.message, "insufficient permissions") {
 		t.Fatalf("message = %q, want insufficient permissions", got.message)
+	}
+}
+
+func TestWorkloadParentGetErrorClassifiesNotFoundAndUnexpectedErrors(t *testing.T) {
+	notFound := workloadParentGetError("workflow", "ci", "nightly", fmt.Errorf("cache lookup: %w", k8score.ErrResourceNotFound))
+	if notFound.statusCode != 404 {
+		t.Fatalf("not found statusCode = %d, want 404", notFound.statusCode)
+	}
+
+	unexpected := workloadParentGetError("workflow", "ci", "nightly", errors.New("cache unavailable"))
+	if unexpected.statusCode != 500 {
+		t.Fatalf("unexpected statusCode = %d, want 500", unexpected.statusCode)
+	}
+	if !strings.Contains(unexpected.message, "cache unavailable") {
+		t.Fatalf("message = %q, want original error context", unexpected.message)
 	}
 }
 

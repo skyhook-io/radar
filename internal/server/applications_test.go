@@ -21,6 +21,13 @@ func rawInput(kind, ns, name, version, health string) appWorkloadInput {
 	}
 }
 
+func TestBatchHealthPrefersActiveRunsOverRetainedFailure(t *testing.T) {
+	batch := &appBatchSummary{ActiveRuns: 1, LatestRunPhase: "Failed"}
+	if got := batchHealth(batch, packages.HealthUnknown); got != packages.HealthNeutral {
+		t.Fatalf("batchHealth = %q, want neutral while a run is active", got)
+	}
+}
+
 func TestWorkflowPrimaryImageUsesStoredTemplateSpec(t *testing.T) {
 	wf := &unstructured.Unstructured{Object: map[string]any{
 		"status": map[string]any{

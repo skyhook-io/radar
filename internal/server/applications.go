@@ -1231,11 +1231,11 @@ func batchHealth(batch *appBatchSummary, fallback packages.Health) packages.Heal
 	if batch == nil {
 		return fallback
 	}
-	if batch.LatestRunPhase == "Failed" || batch.LatestRunPhase == "Error" {
-		return packages.HealthUnhealthy
-	}
 	if batch.ActiveRuns > 0 {
 		return packages.HealthNeutral
+	}
+	if batch.LatestRunPhase == "Failed" || batch.LatestRunPhase == "Error" {
+		return packages.HealthUnhealthy
 	}
 	if batch.Suspended {
 		return packages.HealthNeutral
