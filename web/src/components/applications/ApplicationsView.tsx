@@ -384,6 +384,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
             onOpenResource={onOpenResource}
           />
         )}
+        hasOverviewIssues={appIssues.length > 0}
         renderWorkload={(workload: SelectedAppWorkload) => (
           <div className="h-full overflow-hidden">
             <WorkloadView

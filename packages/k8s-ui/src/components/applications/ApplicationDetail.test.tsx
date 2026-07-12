@@ -375,6 +375,24 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain('View history')
   })
 
+  it('does not duplicate retained incidents when the host renders current issues', () => {
+    const healthyApp: AppRow = { ...app, events: [] }
+    const history: AppHistory = {
+      appKey: healthyApp.key,
+      summary: { state: 'incident', title: 'Current incident: FailedScheduling on Pod/checkout-api-abc' },
+    }
+    const html = renderDetail({
+      app: healthyApp,
+      history,
+      renderOverviewIssues: () => <div>Operational Issues (1)</div>,
+      hasOverviewIssues: true,
+    })
+
+    expect(html).toContain('Operational Issues (1)')
+    expect(html).not.toContain('Latest incident')
+    expect(html).not.toContain('Current incident: FailedScheduling on Pod/checkout-api-abc')
+  })
+
   it('does not report idle zero-replica workloads as application issues', () => {
     const idleApp: AppRow = {
       ...app,

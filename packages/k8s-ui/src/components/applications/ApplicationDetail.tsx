@@ -114,6 +114,8 @@ export type ApplicationDetailProps = {
   renderWorkload: (workload: SelectedAppWorkload) => ReactNode;
   /** Render host-scoped operational issues for the app overview. */
   renderOverviewIssues?: () => ReactNode;
+  /** Whether the host-scoped issue surface contains current issues. */
+  hasOverviewIssues?: boolean;
   /** Resources-view topology spanning the app's namespaces. When present, it
    *  powers the application Topology view and workload hover focus. */
   topology?: Topology;
@@ -216,7 +218,7 @@ function compareDefinedVersions(
   return compareVersions(a, b) ?? 0;
 }
 
-export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewIssues, topology, topologyLoading, deploymentInventory, onNavigateToResource, onSelectWorkloadRun, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
+export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewIssues, hasOverviewIssues, topology, topologyLoading, deploymentInventory, onNavigateToResource, onSelectWorkloadRun, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
   // Stable order regardless of API ordering: rail rows and the per-workload
   // color assignment both follow this array, so an order flap between
   // refetches must not reshuffle rows or reassign a workload's hue.
@@ -578,6 +580,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewI
             onOpenSource={onOpenSource}
             onToggleReplicaSets={toggleReplicaSets}
             renderOverviewIssues={renderOverviewIssues}
+            hasOverviewIssues={hasOverviewIssues}
           />
         )}
       </div>
@@ -611,6 +614,7 @@ function ApplicationWorkspace({
   onOpenSource,
   onToggleReplicaSets,
   renderOverviewIssues,
+  hasOverviewIssues,
 }: {
   app: AppRow
   activeView: CanonicalApplicationView
@@ -637,6 +641,7 @@ function ApplicationWorkspace({
   onOpenSource?: (source: AppSourceRef) => void
   onToggleReplicaSets: (ownerID: string) => void
   renderOverviewIssues?: () => ReactNode
+  hasOverviewIssues?: boolean
 }) {
   const historyCount =
     (history?.anchors?.length ?? 0) +
@@ -661,6 +666,7 @@ function ApplicationWorkspace({
           onSelectHistory={() => onViewChange("history")}
           onOpenSource={onOpenSource}
           renderOverviewIssues={renderOverviewIssues}
+          hasOverviewIssues={hasOverviewIssues}
         />
       )}
       {activeView === "topology" && (
@@ -766,6 +772,7 @@ function ApplicationOverview({
   onSelectHistory,
   onOpenSource,
   renderOverviewIssues,
+  hasOverviewIssues,
 }: {
   app: AppRow
   workloads: AppWorkload[]
@@ -778,6 +785,7 @@ function ApplicationOverview({
   onSelectHistory: () => void
   onOpenSource?: (source: AppSourceRef) => void
   renderOverviewIssues?: () => ReactNode
+  hasOverviewIssues?: boolean
 }) {
   const rel = app.relationships
   const hasEntrypoints = Boolean(rel && (relationshipRefs(rel, 'service').length > 0 || relationshipRefs(rel, 'ingress').length > 0 || relationshipRefs(rel, 'route').length > 0))
@@ -792,6 +800,9 @@ function ApplicationOverview({
     .map(({ cls, count }) => `${count} ${cls}`)
     .join(' / ')
   const issues = useMemo(() => buildAppIssues(workloads, app.events ?? []), [workloads, app.events])
+  const currentIssuesPresent = renderOverviewIssues
+    ? hasOverviewIssues ?? issues.length > 0
+    : issues.length > 0
   const batchActivity = useMemo(() => batchActivityForApp(app), [app])
   const batchStats = batchOverviewStats(batchActivity)
   const pureBatch = workloadClassOf(app.workload_class) === 'job'
@@ -813,7 +824,7 @@ function ApplicationOverview({
           <ApplicationLatestHistory
             history={history}
             sourceRef={app.sourceRef}
-            showIncidentPreview={issues.length === 0}
+            showIncidentPreview={!currentIssuesPresent}
             onSelectHistory={onSelectHistory}
             onOpenSource={onOpenSource}
           />
