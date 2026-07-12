@@ -239,7 +239,7 @@ describe('ApplicationDetail shell', () => {
     const html = renderDetail({ app: { ...app, tier: 5 } })
 
     expect(html).toContain('Application identity')
-    expect(html).toContain('Identified by Helm')
+    expect(html).toContain('Grouped by Helm metadata')
     expect(html).not.toContain('Grouped from Kubernetes ownership')
   })
 

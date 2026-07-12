@@ -682,7 +682,7 @@ function ApplicationSourceProvenance({
                 ? 'Inferred application boundary'
                 : `Identified by ${identityLabel}`
               : tierLabel
-                ? `Identified by ${tierLabel}`
+                ? `Grouped by ${tierLabel} metadata`
                 : 'Grouped from Kubernetes ownership'}
           </span>
         </div>
