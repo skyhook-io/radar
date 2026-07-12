@@ -1306,14 +1306,37 @@ function applicationRuntimeHealth(app: AppRow): AppHealth {
     : healthOf(app.health);
 }
 
+export function sourceSyncHealth(status: string): AppHealth {
+  const normalized = status.toLowerCase();
+  if (normalized === "synced") return "healthy";
+  if (normalized === "outofsync") return "degraded";
+  return "unknown";
+}
+
+export function sourceReportedHealth(status: string): AppHealth {
+  const normalized = status.toLowerCase();
+  if (normalized === "healthy") return "healthy";
+  if (normalized === "progressing") return "neutral";
+  if (normalized === "degraded") return "degraded";
+  if (normalized === "missing") return "unhealthy";
+  if (normalized === "suspended") return "neutral";
+  return "unknown";
+}
+
+function applicationDeliveryHealth(status?: AppSourceStatus): AppHealth {
+  if (!status) return "neutral";
+  const signals = [
+    status.sync ? sourceSyncHealth(status.sync) : null,
+    status.health ? sourceReportedHealth(status.health) : null,
+  ].filter((health): health is AppHealth => health !== null && health !== "unknown");
+  return signals.length > 0 ? worstHealth(signals) : "neutral";
+}
+
 export function applicationDisplayHealth(app: AppRow): AppHealth {
-  const runtime = applicationRuntimeHealth(app);
-  if (!app.runtimeHealth) return runtime;
-  const overall = healthOf(app.health);
-  const backendRuntime = healthOf(app.runtimeHealth);
-  return HEALTH_RANK[overall] > HEALTH_RANK[backendRuntime]
-    ? worstHealth([runtime, overall])
-    : runtime;
+  return worstHealth([
+    applicationRuntimeHealth(app),
+    applicationDeliveryHealth(app.sourceStatus),
+  ]);
 }
 
 export function servingReadiness(workloads: AppWorkload[]): {

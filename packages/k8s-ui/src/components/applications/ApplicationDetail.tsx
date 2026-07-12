@@ -35,6 +35,8 @@ import {
   batchActivityForApp,
   batchRuntimeForApp,
   applicationDisplayHealth,
+  sourceReportedHealth,
+  sourceSyncHealth,
   servingReadiness,
   worstHealth,
   appGroupLagMessage,
@@ -237,7 +239,9 @@ export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewI
   const overall = applicationDisplayHealth(app);
   const verdictTone = HEALTH_META[overall].pill;
   const verdictLabel =
-    workloadClass === "job" ? batchRuntime.label : HEALTH_META[overall].label;
+    workloadClass === "job" && overall === batchRuntime.health
+      ? batchRuntime.label
+      : HEALTH_META[overall].label;
   const versions = useMemo(
     () => Array.from(new Set((app.versions || []).filter(Boolean))),
     [app.versions],
@@ -1999,23 +2003,6 @@ function SourceDeliveryStatus({ status }: { status: NonNullable<AppRow['sourceSt
       ))}
     </span>
   )
-}
-
-function sourceSyncHealth(status: string): AppHealth {
-  const normalized = status.toLowerCase()
-  if (normalized === 'synced') return 'healthy'
-  if (normalized === 'outofsync') return 'degraded'
-  return 'unknown'
-}
-
-function sourceReportedHealth(status: string): AppHealth {
-  const normalized = status.toLowerCase()
-  if (normalized === 'healthy') return 'healthy'
-  if (normalized === 'progressing') return 'neutral'
-  if (normalized === 'degraded') return 'degraded'
-  if (normalized === 'missing') return 'unhealthy'
-  if (normalized === 'suspended') return 'neutral'
-  return 'unknown'
 }
 
 function formatAppEventTime(value?: string): string {

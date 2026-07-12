@@ -529,6 +529,41 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain("ad-hoc-import");
     expect(html).not.toContain("ad-hoc-import is down");
     expect(html).not.toContain("Runtime for");
-    expect(html).toContain('2xl:grid-cols-4')
+    expect(html).toContain('2xl:grid-cols-4');
+  });
+
+  it("uses the delivery verdict in a successful batch application header", () => {
+    const batchApp: AppRow = {
+      key: "app:prod:batch",
+      name: "batch",
+      namespace: "prod",
+      health: "unhealthy",
+      runtimeHealth: "unhealthy",
+      workload_class: "job",
+      sourceStatus: { sync: "Synced", health: "Degraded" },
+      workloads: [
+        {
+          kind: "CronJob",
+          namespace: "prod",
+          name: "nightly",
+          workload_class: "job",
+          health: "unhealthy",
+          ready: 0,
+          desired: 0,
+          restarts: 0,
+          batch: {
+            retainedRuns: 2,
+            succeededRuns: 1,
+            failedRuns: 1,
+            activeRuns: 0,
+            latestRunPhase: "Succeeded",
+          },
+        },
+      ],
+    };
+    const html = renderDetail({ app: batchApp });
+
+    expect(html).toMatch(/<span class="text-sm font-semibold">Degraded<\/span>/);
+    expect(html).toContain("Succeeded");
   });
 });
