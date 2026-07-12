@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GitOpsResourceTree, Topology } from '../types'
-import { collapseStableReplicaSets, deploymentInventoryFromGitOps, deploymentInventoryFromHelm, layerDeploymentInventory } from './application-topology'
+import { collapseStableReplicaSets, deploymentInventoryFromGitOps, deploymentInventoryFromHelm, layerDeploymentInventory, topologyGroup } from './application-topology'
 
 const topology: Topology = {
   nodes: [
@@ -9,6 +9,16 @@ const topology: Topology = {
   ],
   edges: [],
 }
+
+it('resolves the stored API group for source-only CRD nodes', () => {
+  expect(topologyGroup({
+    id: 'source/prometheusrule',
+    kind: 'PrometheusRule',
+    name: 'alerts',
+    status: 'healthy',
+    data: { namespace: 'monitoring', sourceGroup: 'monitoring.coreos.com' },
+  })).toBe('monitoring.coreos.com')
+})
 
 function inventory(warnings?: string[]): GitOpsResourceTree {
   const root = { id: 'root', ref: { group: 'argoproj.io', kind: 'Application', namespace: 'argocd', name: 'api' }, role: 'root' as const, tool: 'argocd' as const }

@@ -94,8 +94,8 @@ function identityKey(kind: string, group: string | undefined, namespace: string,
   return `${identityGroup}/${kind.toLowerCase()}/${namespace}/${name}`
 }
 
-function topologyGroup(node: TopologyNode): string | undefined {
-  return apiVersionToGroup(node.data?.apiVersion as string | undefined)
+export function topologyGroup(node: TopologyNode): string | undefined {
+  return apiVersionToGroup(node.data?.apiVersion as string | undefined) || (node.data?.sourceGroup as string | undefined)
 }
 
 export function deploymentInventoryFromGitOps(tree: GitOpsResourceTree | undefined): DeploymentInventory | undefined {

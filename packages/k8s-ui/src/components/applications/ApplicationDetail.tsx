@@ -10,7 +10,7 @@ import { EmptyState } from '../ui/EmptyState'
 import { ResourceRefBadge } from '../ui/drawer-components'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { pluralize } from '../../utils/pluralize'
-import { kindToPlural, apiVersionToGroup, refToSelectedResource } from '../../utils/navigation'
+import { kindToPlural, refToSelectedResource } from '../../utils/navigation'
 import { tagWorkloadOwnership, seedNodeIds, ownershipOf, workloadKey, type NeighborhoodSeed } from '../../utils/topology-neighborhood'
 import { workloadHue, NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import { getTopologyIcon } from '../../utils/resource-icons'
@@ -41,7 +41,7 @@ import { midTruncate } from '../../utils/format'
 import { VersionTooltip, AppIdentityTooltip } from './AppTooltips'
 import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo } from './AppChips'
 import { ReadyBar } from './ReadyBar'
-import { collapseStableReplicaSets, layerDeploymentInventory, type DeploymentInventory, type DeploymentTopologyLayer } from '../../utils/application-topology'
+import { collapseStableReplicaSets, layerDeploymentInventory, topologyGroup, type DeploymentInventory, type DeploymentTopologyLayer } from '../../utils/application-topology'
 
 // ApplicationDetail owns the application chrome and scope switcher. The selected
 // scope decides the one tab row shown in the detail pane: app scope gets
@@ -291,7 +291,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
         kind: kindToPlural(node.kind),
         namespace: ns,
         name: node.name,
-        group: apiVersionToGroup(node.data?.apiVersion as string | undefined) ?? (node.data?.sourceGroup as string | undefined),
+        group: topologyGroup(node),
       })
     },
     [app.sourceRef, workloads, onNavigateToResource, onOpenSource, setSelected],
