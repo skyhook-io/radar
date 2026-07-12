@@ -377,8 +377,6 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
             activeView={activeView}
             onViewChange={setView}
             workloads={workloads}
-            namespace={namespace}
-            namespaces={namespaces}
             verdictLabel={verdictLabel}
             ready={ready}
             desired={desired}
@@ -409,8 +407,6 @@ function ApplicationWorkspace({
   activeView,
   onViewChange,
   workloads,
-  namespace,
-  namespaces,
   verdictLabel,
   ready,
   desired,
@@ -434,8 +430,6 @@ function ApplicationWorkspace({
   activeView: CanonicalApplicationView
   onViewChange: (view: CanonicalApplicationView) => void
   workloads: AppWorkload[]
-  namespace: string
-  namespaces: string[]
   verdictLabel: string
   ready: number
   desired: number
@@ -467,8 +461,6 @@ function ApplicationWorkspace({
         <ApplicationOverview
           app={app}
           workloads={workloads}
-          namespace={namespace}
-          namespaces={namespaces}
           verdictLabel={verdictLabel}
           ready={ready}
           desired={desired}
@@ -556,8 +548,6 @@ type AppIssue = {
 function ApplicationOverview({
   app,
   workloads,
-  namespace,
-  namespaces,
   verdictLabel,
   ready,
   desired,
@@ -570,8 +560,6 @@ function ApplicationOverview({
 }: {
   app: AppRow
   workloads: AppWorkload[]
-  namespace: string
-  namespaces: string[]
   verdictLabel: string
   ready: number
   desired: number
@@ -624,8 +612,8 @@ function ApplicationOverview({
             <WorkloadsMatrix workloads={workloads} onSelectWorkload={onSelectWorkload} />
           </ApplicationPanel>
         </div>
-        <aside className="min-w-0 space-y-4">
-          <ApplicationSourceProvenance app={app} namespace={namespace} namespaces={namespaces} composition={composition} onOpenSource={onOpenSource} />
+        <aside className={clsx('min-w-0 gap-4 xl:block xl:space-y-4', hasDependencies ? 'grid md:grid-cols-2' : 'max-w-xl xl:max-w-none')}>
+          <ApplicationSourceProvenance app={app} onOpenSource={onOpenSource} />
           {hasDependencies && <ApplicationDependencies relationships={rel} onNavigateToResource={onNavigateToResource} />}
         </aside>
       </div>
@@ -635,44 +623,74 @@ function ApplicationOverview({
 
 function ApplicationSourceProvenance({
   app,
-  namespace,
-  namespaces,
-  composition,
   onOpenSource,
 }: {
   app: AppRow
-  namespace: string
-  namespaces: string[]
-  composition: string
   onOpenSource?: (source: AppSourceRef) => void
 }) {
-  const source = app.identity?.source ? appSourceLabel(app.identity.source) : app.tier ? overlayProvenance(app.tier) : 'raw workload'
-  const confidence = app.confidence || (app.tier ? 'low' : 'raw')
-  return (
-    <ApplicationPanel title="Source & provenance">
-      <div className="grid gap-3">
-        <ApplicationFact variant="row" label="Grouped by" value={source} detail={app.identity?.evidence ?? app.key} monoDetail />
-        <ApplicationFact variant="row" label="App key" value={app.name} detail={app.key} monoDetail />
-        <ApplicationFact
-          variant="row"
-          label={namespaces.length > 1 ? 'Namespaces' : 'Namespace'}
-          value={namespace || `${namespaces.length} namespaces`}
-          detail={namespaces.length > 1 ? namespaces.join(', ') : undefined}
-          monoDetail
-        />
-        <div className="grid grid-cols-2 gap-4 border-t border-theme-border pt-3">
-          <ApplicationFact variant="bare" label="Confidence" value={confidence} />
-          <ApplicationFact variant="bare" label="Class" value={workloadClassOf(app.workload_class)} detail={composition || undefined} />
+  if (app.sourceRef) {
+    const sourceName = `${app.sourceRef.namespace}/${app.sourceRef.name}`
+    return (
+      <ApplicationPanel title="Deployment source">
+        <div className="space-y-3">
+          <div>
+            <div className="text-xs font-semibold uppercase text-theme-text-tertiary">{sourceObjectLabel(app.sourceRef)}</div>
+            <Tooltip content={sourceName} delay={150}>
+              <div className="mt-1 truncate font-mono text-sm font-medium text-theme-text-primary">{sourceName}</div>
+            </Tooltip>
+          </div>
+          {onOpenSource && (
+            <button
+              type="button"
+              onClick={() => onOpenSource(app.sourceRef!)}
+              className="inline-flex w-fit items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-accent-text hover:bg-theme-hover"
+            >
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+              {sourceLinkLabel(app.sourceRef)}
+            </button>
+          )}
         </div>
-        {app.sourceRef && onOpenSource && (
-          <button
-            type="button"
-            onClick={() => onOpenSource(app.sourceRef!)}
-            className="inline-flex w-fit items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-accent-text hover:bg-theme-hover"
-          >
-            <ExternalLink className="h-3.5 w-3.5" aria-hidden />
-            {sourceLinkLabel(app.sourceRef)}
-          </button>
+      </ApplicationPanel>
+    )
+  }
+
+  if (app.sourceConflict) {
+    return (
+      <ApplicationPanel title="Deployment source">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" aria-hidden />
+            <span className="text-sm font-semibold text-theme-text-primary">Multiple deployment sources detected</span>
+          </div>
+          <p className="text-sm text-theme-text-secondary">Workloads in this application do not share one deployment manager.</p>
+        </div>
+      </ApplicationPanel>
+    )
+  }
+
+  const inferred = app.identity?.confidence === 'medium'
+  const identityLabel = app.identity?.source ? appSourceLabel(app.identity.source) : undefined
+  const tierLabel = !app.identity && app.tier ? overlayProvenance(app.tier) : undefined
+  return (
+    <ApplicationPanel title="Application identity">
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          {inferred && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" aria-hidden />}
+          <span className="text-sm font-semibold text-theme-text-primary">
+            {identityLabel
+              ? inferred
+                ? 'Inferred application boundary'
+                : `Identified by ${identityLabel}`
+              : tierLabel
+                ? `Identified by ${tierLabel}`
+                : 'Grouped from Kubernetes ownership'}
+          </span>
+        </div>
+        {inferred && identityLabel && <p className="text-sm text-theme-text-secondary">Matched using {identityLabel}.</p>}
+        {app.identity?.evidence && (
+          <Tooltip content={app.identity.evidence} delay={150}>
+            <div className="truncate font-mono text-xs text-theme-text-tertiary">{app.identity.evidence}</div>
+          </Tooltip>
         )}
       </div>
     </ApplicationPanel>
@@ -956,7 +974,7 @@ function ApplicationLatestHistory({
           {summary.timestamp && <p className="mt-1 text-xs text-theme-text-tertiary">{formatAppEventTime(summary.timestamp)}</p>}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {resolvedSource && onOpenSource && (
+          {resolvedSource && !sourceRef && onOpenSource && (
             <button type="button" onClick={() => onOpenSource(resolvedSource)} className="rounded-md px-2.5 py-1.5 text-sm font-medium text-accent-text hover:bg-theme-hover">
               {sourceLinkLabel(resolvedSource)}
             </button>
@@ -1295,8 +1313,15 @@ function historyStatusTone(status: string): string {
 }
 
 function sourceLinkLabel(source: AppSourceRef): string {
-  if (source.type === 'helm') return 'View Helm release'
-  return 'View GitOps source'
+  return `View ${sourceObjectLabel(source)}`
+}
+
+function sourceObjectLabel(source: AppSourceRef): string {
+  if (source.type === 'helm') return 'Helm release'
+  if (source.tool === 'argocd' || source.kind.toLowerCase() === 'application') return 'Argo CD application'
+  if (source.kind.toLowerCase() === 'helmrelease') return 'Flux HelmRelease'
+  if (source.kind.toLowerCase() === 'kustomization') return 'Flux Kustomization'
+  return 'GitOps source'
 }
 
 function formatAppEventTime(value?: string): string {

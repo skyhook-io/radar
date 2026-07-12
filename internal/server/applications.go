@@ -94,28 +94,28 @@ type applicationsCacheEntry struct {
 
 // appRow is one logical app in this cluster.
 type appRow struct {
-	Key           string            `json:"key"`                      // overlay key, structural-root key, or "<ns>/<kind>/<name>" raw
-	Name          string            `json:"name"`                     // display name
-	Namespace     string            `json:"namespace,omitempty"`      // the single namespace the WORKLOADS run in (residence, not the GitOps manager's home); empty when they span several — see Namespaces
-	Namespaces    []string          `json:"namespaces,omitempty"`     // all distinct workload namespaces, sorted; the unambiguous form of Namespace
-	Tier          int               `json:"tier,omitempty"`           // pkg/subject overlay tier (0 = raw, no signal)
-	Confidence    string            `json:"confidence,omitempty"`     // high | medium | low
-	Category      string            `json:"category,omitempty"`       // app | addon | mixed; classification hint, never identity
-	AddonReason   string            `json:"addonReason,omitempty"`    // add-on evidence when Category == addon/mixed
-	WorkloadClass string            `json:"workload_class,omitempty"` // service | worker | job | mixed | unknown
-	Health        string            `json:"health"`                   // worst-of across workloads
-	Versions      []string          `json:"versions,omitempty"`       // distinct image tags (the running version)
-	VersionSkew   bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
-	AppVersion    string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
-	Identity      *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
-	MatchKeys     []string          `json:"matchKeys,omitempty"`      // exact grouping-signal evidence keys, namespace-scoped ("instance:ns:x","helm:ns:x",…) + informational "name-stem:x" (unscoped); the client joins timeline events to this app by these, matching on the event's namespace
-	SourceRef     *appSourceRef     `json:"sourceRef,omitempty"`      // exact source system object when known (GitOps / native Helm)
-	Workloads     []appWorkload     `json:"workloads"`
-	Events        []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
-	Relationships *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
+	Key            string            `json:"key"`                      // overlay key, structural-root key, or "<ns>/<kind>/<name>" raw
+	Name           string            `json:"name"`                     // display name
+	Namespace      string            `json:"namespace,omitempty"`      // the single namespace the WORKLOADS run in (residence, not the GitOps manager's home); empty when they span several — see Namespaces
+	Namespaces     []string          `json:"namespaces,omitempty"`     // all distinct workload namespaces, sorted; the unambiguous form of Namespace
+	Tier           int               `json:"tier,omitempty"`           // pkg/subject overlay tier (0 = raw, no signal)
+	Confidence     string            `json:"confidence,omitempty"`     // high | medium | low
+	Category       string            `json:"category,omitempty"`       // app | addon | mixed; classification hint, never identity
+	AddonReason    string            `json:"addonReason,omitempty"`    // add-on evidence when Category == addon/mixed
+	WorkloadClass  string            `json:"workload_class,omitempty"` // service | worker | job | mixed | unknown
+	Health         string            `json:"health"`                   // worst-of across workloads
+	Versions       []string          `json:"versions,omitempty"`       // distinct image tags (the running version)
+	VersionSkew    bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
+	AppVersion     string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
+	Identity       *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
+	MatchKeys      []string          `json:"matchKeys,omitempty"`      // exact grouping-signal evidence keys, namespace-scoped ("instance:ns:x","helm:ns:x",…) + informational "name-stem:x" (unscoped); the client joins timeline events to this app by these, matching on the event's namespace
+	SourceRef      *appSourceRef     `json:"sourceRef,omitempty"`      // exact source system object when known (GitOps / native Helm)
+	SourceConflict bool              `json:"sourceConflict,omitempty"` // workloads resolve to different source-system objects
+	Workloads      []appWorkload     `json:"workloads"`
+	Events         []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
+	Relationships  *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
 
-	sourceConflict bool
-	sourceStrict   bool
+	sourceStrict bool
 }
 
 // appSourceRef is the source-of-truth object when the grouping signal names one
@@ -1236,7 +1236,7 @@ func sourceRefFromRoot(rootKind, rootKey string) *appSourceRef {
 }
 
 func mergeSourceRef(r *appRow, ref *appSourceRef) {
-	if ref == nil || r.sourceConflict {
+	if ref == nil || r.SourceConflict {
 		return
 	}
 	if r.SourceRef == nil {
@@ -1249,7 +1249,7 @@ func mergeSourceRef(r *appRow, ref *appSourceRef) {
 			return
 		}
 		r.SourceRef = nil
-		r.sourceConflict = true
+		r.SourceConflict = true
 	}
 }
 

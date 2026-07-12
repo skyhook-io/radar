@@ -204,6 +204,8 @@ export interface AppRow {
   /** Exact source-system object when the grouping signal names one. Label/name
    *  inferred apps intentionally omit this instead of guessing. */
   sourceRef?: AppSourceRef
+  /** Workloads resolve to different Helm/GitOps source objects. */
+  sourceConflict?: boolean
   workloads: AppWorkload[]
   events?: AppEvent[]
   relationships?: AppRelationships

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { ApplicationDetail, type ApplicationDetailProps } from './ApplicationDetail'
-import type { AppHistory, AppRow } from '../../utils/applications'
+import type { AppHistory, AppRow, AppSourceRef } from '../../utils/applications'
 import { workloadKey } from '../../utils/topology-neighborhood'
 
 const app: AppRow = {
@@ -83,7 +83,8 @@ describe('ApplicationDetail shell', () => {
     expect(html).toContain('Topology')
     expect(html).toContain('History')
     expect(html).toContain('BackOff on checkout-api')
-    expect(html).toContain('Source &amp; provenance')
+    expect(html).toContain('Application identity')
+    expect(html).toContain('Grouped from Kubernetes ownership')
     expect(html).toContain('Entrypoints')
     expect(html).toContain('Dependencies')
     expect(html).toContain('svc<!-- -->/</span>checkout-api')
@@ -117,7 +118,7 @@ describe('ApplicationDetail shell', () => {
     expect(html).not.toContain('Overview')
     expect(html).not.toContain('Topology')
     expect(html).not.toContain('History')
-    expect(html).not.toContain('Source &amp; provenance')
+    expect(html).not.toContain('Application identity')
   })
 
   it('does not render a workload selector for a single-workload app', () => {
@@ -183,7 +184,63 @@ describe('ApplicationDetail shell', () => {
     expect(html).toContain('Latest change')
     expect(html).toContain('Argo CD sync')
     expect(html).toContain('View history')
-    expect(html).toContain('View GitOps source')
+    expect(html).toContain('View Argo CD application')
+  })
+
+  it('shows an authoritative deployment source without duplicating its action in history', () => {
+    const sourceRef: AppSourceRef = { type: 'gitops', tool: 'flux', group: 'kustomize.toolkit.fluxcd.io', kind: 'Kustomization', namespace: 'flux-system', name: 'checkout' }
+    const sourceApp: AppRow = { ...app, events: [], sourceRef }
+    const history: AppHistory = {
+      appKey: sourceApp.key,
+      sourceRef,
+      summary: { state: 'change', title: 'Flux reconciliation', timestamp: '2026-07-08T12:00:00Z' },
+    }
+    const html = renderDetail({ app: sourceApp, history, onOpenSource: () => {} })
+
+    expect(html).toContain('Deployment source')
+    expect(html).toContain('Flux Kustomization')
+    expect(html).toContain('flux-system/checkout')
+    expect(html.match(/View Flux Kustomization/g)).toHaveLength(1)
+    expect(html).not.toContain('App key')
+    expect(html).not.toContain('Confidence')
+    expect(html).not.toContain('Source &amp; provenance')
+  })
+
+  it('warns when application workloads resolve to different deployment sources', () => {
+    const html = renderDetail({ app: { ...app, sourceConflict: true } })
+
+    expect(html).toContain('Deployment source')
+    expect(html).toContain('Multiple deployment sources detected')
+    expect(html).toContain('do not share one deployment manager')
+  })
+
+  it('distinguishes inferred application identity from declared identity', () => {
+    const inferred = renderDetail({
+      app: {
+        ...app,
+        identity: { key: 'checkout', env: 'prod', confidence: 'medium', evidence: 'name stem checkout + shared image repo', source: 'name-stem' },
+      },
+    })
+    expect(inferred).toContain('Application identity')
+    expect(inferred).toContain('Inferred application boundary')
+    expect(inferred).toContain('a shared name + image')
+
+    const declared = renderDetail({
+      app: {
+        ...app,
+        identity: { key: 'checkout', env: 'prod', confidence: 'high', evidence: 'app.skyhook.io/app=checkout', source: 'explicit' },
+      },
+    })
+    expect(declared).toContain('Identified by the app.skyhook.io/app annotation')
+    expect(declared).not.toContain('Inferred application boundary')
+  })
+
+  it('uses tier provenance when a grouped app has no cross-app identity', () => {
+    const html = renderDetail({ app: { ...app, tier: 5 } })
+
+    expect(html).toContain('Application identity')
+    expect(html).toContain('Identified by Helm')
+    expect(html).not.toContain('Grouped from Kubernetes ownership')
   })
 
   it('does not duplicate current incidents in the Overview history preview', () => {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -195,8 +196,12 @@ func TestSetStrictSourceRefMarksConflictingSources(t *testing.T) {
 		{source: &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}},
 		{source: &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"}},
 	})
-	if row.SourceRef != nil || row.sourceStrict || !row.sourceConflict {
-		t.Fatalf("conflicting strict sources should mark conflict only: ref=%+v strict=%v conflict=%v", row.SourceRef, row.sourceStrict, row.sourceConflict)
+	if row.SourceRef != nil || row.sourceStrict || !row.SourceConflict {
+		t.Fatalf("conflicting strict sources should mark conflict only: ref=%+v strict=%v conflict=%v", row.SourceRef, row.sourceStrict, row.SourceConflict)
+	}
+	payload, err := json.Marshal(row)
+	if err != nil || !strings.Contains(string(payload), `"sourceConflict":true`) {
+		t.Fatalf("conflict must be exposed to clients: payload=%s err=%v", payload, err)
 	}
 	mergeSourceRef(&row, &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"})
 	if row.SourceRef != nil {
@@ -235,7 +240,7 @@ func TestMergeSourceRefPreservesStrictSourceRefOnManagedConflict(t *testing.T) {
 	if row.SourceRef == nil || row.SourceRef.Type != "helm" || row.SourceRef.Name != "checkout" {
 		t.Fatalf("strict source ref should survive managed conflict: %+v", row.SourceRef)
 	}
-	if row.sourceConflict {
+	if row.SourceConflict {
 		t.Fatalf("strict source ref conflict should not mark row conflicted")
 	}
 }
@@ -243,8 +248,8 @@ func TestMergeSourceRefPreservesStrictSourceRefOnManagedConflict(t *testing.T) {
 func TestMergeSourceRefClearsWeakConflict(t *testing.T) {
 	row := appRow{SourceRef: &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}}
 	mergeSourceRef(&row, &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"})
-	if row.SourceRef != nil || !row.sourceConflict {
-		t.Fatalf("weak source conflict should clear source ref and mark conflict: ref=%+v conflict=%v", row.SourceRef, row.sourceConflict)
+	if row.SourceRef != nil || !row.SourceConflict {
+		t.Fatalf("weak source conflict should clear source ref and mark conflict: ref=%+v conflict=%v", row.SourceRef, row.SourceConflict)
 	}
 }
 

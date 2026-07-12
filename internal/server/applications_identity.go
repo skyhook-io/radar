@@ -1076,7 +1076,7 @@ func setStrictSourceRef(r *appRow, ins []appWorkloadInput) {
 			continue
 		}
 		if !sameSourceRef(ref, in.source) {
-			r.sourceConflict = true
+			r.SourceConflict = true
 			return
 		}
 	}
