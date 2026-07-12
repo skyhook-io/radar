@@ -159,8 +159,8 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
           {scheduled && selectedResourceQuery.error && (
             <EmptyState tone="neutral" variant="card" headline="Selected run unavailable" body={selectedResourceQuery.error instanceof Error ? selectedResourceQuery.error.message : 'Radar could not load this retained run.'} />
           )}
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]">
-            <section className="space-y-3">
+          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]">
+            <section className="min-w-0 space-y-4">
               {selectedRun ? (
                 <section className="rounded-lg border border-theme-border bg-theme-surface">
                   <div className="flex items-start justify-between gap-3 border-b border-theme-border px-4 py-3">
@@ -201,27 +201,27 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   body={`There are no retained ${runKindPluralForSchedule(kind)} to inspect.`}
                 />
               )}
+
+              {selectedRun?.kind === 'workflows' && (
+                <RunExecutionPanel run={selectedRun} workflowExecution={workflowExecution} loading={selectedResourceQuery.isLoading} onNavigateToResource={onNavigateToResource} />
+              )}
             </section>
 
-            <section className="self-start rounded-lg border border-theme-border bg-theme-surface">
-              <div className="border-b border-theme-border px-4 py-3">
-                <h3 className="text-sm font-semibold text-theme-text-primary">{configurationTitle(kind)}</h3>
-              </div>
-              <div className="space-y-3 p-4">
-                <SourceFacts source={source} />
-              </div>
+            <section className="min-w-0 space-y-4">
+              <section className="rounded-lg border border-theme-border bg-theme-surface">
+                <div className="border-b border-theme-border px-4 py-3">
+                  <h3 className="text-sm font-semibold text-theme-text-primary">{configurationTitle(kind)}</h3>
+                </div>
+                <div className="space-y-3 p-4">
+                  <SourceFacts source={source} />
+                </div>
+              </section>
+
+              {selectedRun && (
+                <RunActivityPanel run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} />
+              )}
             </section>
           </div>
-
-          {selectedRun && selectedRun.kind === 'workflows' ? (
-            <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
-              <RunExecutionPanel run={selectedRun} workflowExecution={workflowExecution} loading={selectedResourceQuery.isLoading} onNavigateToResource={onNavigateToResource} />
-              <RunActivityPanel run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} />
-            </div>
-          ) : selectedRun ? (
-            <RunActivityPanel run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} />
-          ) : null}
-
         </div>
       </main>
     </div>
@@ -555,8 +555,7 @@ function executionPreviewRows(rows: ExecutionRow[], workflowExecution: WorkflowE
 function RunActivityPanel({ run, resource, workflowExecution }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null }) {
   const [showAll, setShowAll] = useState(false)
   const activity = run.kind === 'workflows' ? workflowExecution?.activity ?? [] : jobActivity(run, resource)
-  const significant = activity.filter((item) => item.tone === 'danger' || item.tone === 'warning' || item.id.startsWith('workflow-') || item.id === 'scheduled' || item.id === 'started')
-  const defaultItems = activity.length <= 8 ? activity : significant.length > 0 ? significant : activity.slice(-8)
+  const defaultItems = activity.length <= 10 ? activity : activityPreviewItems(activity)
   const visible = showAll ? activity : defaultItems
   return (
     <Panel title="Activity" icon={Activity} detail={activity.length ? `${activity.length} events` : undefined}>
@@ -581,6 +580,19 @@ function RunActivityPanel({ run, resource, workflowExecution }: { run: WorkloadR
       {!showAll && visible.length < activity.length && <button type="button" className="mt-3 text-sm font-medium text-accent-text hover:underline" onClick={() => setShowAll(true)}>Show all {activity.length} events</button>}
     </Panel>
   )
+}
+
+export function activityPreviewItems(activity: WorkflowExecutionActivity[], limit = 8): WorkflowExecutionActivity[] {
+  const included = new Set<number>()
+  activity.forEach((item, index) => {
+    if (item.tone === 'danger' || item.tone === 'warning' || item.id.startsWith('workflow-') || item.id === 'scheduled' || item.id === 'started') {
+      included.add(index)
+    }
+  })
+  for (let index = activity.length - 1; index >= 0 && included.size < limit; index -= 1) {
+    included.add(index)
+  }
+  return activity.filter((_, index) => included.has(index))
 }
 
 function RunContext({ run, resource, workflowExecution, onNavigateToResource }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
