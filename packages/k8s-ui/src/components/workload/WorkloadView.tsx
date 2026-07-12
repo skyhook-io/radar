@@ -167,6 +167,8 @@ interface WorkloadViewProps {
   // ── Timeline data ────────────────────────────────────────────────────────
   /** All timeline events for this resource's namespace */
   allEvents?: TimelineEvent[]
+  /** Persisted lifecycle events reconstructed for resources related to this workload. */
+  relatedTimelineEvents?: TimelineEvent[]
   /** Whether timeline events are loading */
   eventsLoading?: boolean
   /** Topology data for hierarchy building + the Topology tab's neighborhood. */
@@ -334,6 +336,7 @@ export function WorkloadView({
   refetch: refetchProp,
   // Timeline
   allEvents,
+  relatedTimelineEvents = [],
   eventsLoading = false,
   topology,
   resourceFocusedK8sEvents,
@@ -490,8 +493,10 @@ export function WorkloadView({
 
   // Flatten events from hierarchy
   const resourceEvents = useMemo(() => {
-    return getAllEventsFromHierarchy(resourceLanes)
-  }, [resourceLanes])
+    const events = [...getAllEventsFromHierarchy(resourceLanes), ...relatedTimelineEvents]
+    const unique = new Map(events.map((event) => [event.id, event]))
+    return Array.from(unique.values()).sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp) || a.id.localeCompare(b.id))
+  }, [resourceLanes, relatedTimelineEvents])
   const overviewEvents = resourceEvents.length > 0 ? resourceEvents : (resourceFocusedK8sEvents ?? [])
   const overviewEventsLoading = resourceEvents.length > 0 ? eventsLoading : resourceFocusedEventsLoading
   const overviewEventsError = resourceEvents.length > 0 ? undefined : resourceFocusedK8sError

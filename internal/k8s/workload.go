@@ -2,11 +2,14 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+var ErrWorkloadAccessDenied = errors.New("workload access denied")
 
 // GetWorkloadSelector returns the label selector for a workload from cache.
 // kind is case-insensitive and accepts either singular ("deployment") or plural
@@ -16,44 +19,44 @@ func GetWorkloadSelector(cache *ResourceCache, kind, namespace, name string) (*m
 	case "deployment", "deployments":
 		lister := cache.Deployments()
 		if lister == nil {
-			return nil, fmt.Errorf("insufficient permissions to list deployments")
+			return nil, fmt.Errorf("%w: list deployments", ErrWorkloadAccessDenied)
 		}
 		dep, err := lister.Deployments(namespace).Get(name)
 		if err != nil {
-			return nil, fmt.Errorf("deployment %s/%s not found: %w", namespace, name, err)
+			return nil, fmt.Errorf("deployment %s/%s: %w", namespace, name, err)
 		}
 		return dep.Spec.Selector, nil
 
 	case "statefulset", "statefulsets":
 		lister := cache.StatefulSets()
 		if lister == nil {
-			return nil, fmt.Errorf("insufficient permissions to list statefulsets")
+			return nil, fmt.Errorf("%w: list statefulsets", ErrWorkloadAccessDenied)
 		}
 		sts, err := lister.StatefulSets(namespace).Get(name)
 		if err != nil {
-			return nil, fmt.Errorf("statefulset %s/%s not found: %w", namespace, name, err)
+			return nil, fmt.Errorf("statefulset %s/%s: %w", namespace, name, err)
 		}
 		return sts.Spec.Selector, nil
 
 	case "daemonset", "daemonsets":
 		lister := cache.DaemonSets()
 		if lister == nil {
-			return nil, fmt.Errorf("insufficient permissions to list daemonsets")
+			return nil, fmt.Errorf("%w: list daemonsets", ErrWorkloadAccessDenied)
 		}
 		ds, err := lister.DaemonSets(namespace).Get(name)
 		if err != nil {
-			return nil, fmt.Errorf("daemonset %s/%s not found: %w", namespace, name, err)
+			return nil, fmt.Errorf("daemonset %s/%s: %w", namespace, name, err)
 		}
 		return ds.Spec.Selector, nil
 
 	case "job", "jobs":
 		lister := cache.Jobs()
 		if lister == nil {
-			return nil, fmt.Errorf("insufficient permissions to list jobs")
+			return nil, fmt.Errorf("%w: list jobs", ErrWorkloadAccessDenied)
 		}
 		job, err := lister.Jobs(namespace).Get(name)
 		if err != nil {
-			return nil, fmt.Errorf("job %s/%s not found: %w", namespace, name, err)
+			return nil, fmt.Errorf("job %s/%s: %w", namespace, name, err)
 		}
 		if job.Spec.Selector == nil {
 			return &metav1.LabelSelector{
@@ -64,7 +67,7 @@ func GetWorkloadSelector(cache *ResourceCache, kind, namespace, name string) (*m
 
 	case "workflow", "workflows":
 		if _, err := cache.GetDynamicWithGroup(context.Background(), "Workflow", namespace, name, "argoproj.io"); err != nil {
-			return nil, fmt.Errorf("workflow %s/%s not found: %w", namespace, name, err)
+			return nil, fmt.Errorf("workflow %s/%s: %w", namespace, name, err)
 		}
 		return &metav1.LabelSelector{
 			MatchLabels: map[string]string{"workflows.argoproj.io/workflow": name},

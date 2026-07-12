@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -671,16 +672,20 @@ func (s *Server) getWorkloadPods(kind, namespace, name string) ([]*corev1.Pod, *
 
 	selector, err := k8s.GetWorkloadSelector(cache, kind, namespace, name)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return nil, &workloadError{http.StatusNotFound, err.Error()}
-		}
-		if strings.Contains(err.Error(), "insufficient permissions") {
-			return nil, &workloadError{http.StatusForbidden, err.Error()}
-		}
-		return nil, &workloadError{http.StatusInternalServerError, err.Error()}
+		return nil, workloadSelectorGetError(err)
 	}
 
 	return cache.GetPodsForWorkload(namespace, selector), nil
+}
+
+func workloadSelectorGetError(err error) *workloadError {
+	if errors.Is(err, k8s.ErrWorkloadAccessDenied) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		return &workloadError{http.StatusForbidden, err.Error()}
+	}
+	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+		return &workloadError{http.StatusNotFound, err.Error()}
+	}
+	return &workloadError{http.StatusInternalServerError, err.Error()}
 }
 
 func (s *Server) getWorkloadRuns(ctx context.Context, kind, namespace, name string, runNamespaces []string) ([]WorkloadRun, *workloadError) {

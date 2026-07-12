@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkflowExecutionActivity } from '@skyhook-io/k8s-ui/utils/workflow-execution'
-import { activityPreviewItems, retentionHistoryCopy } from './BatchExecutionView'
+import { activityPreviewItems, retentionHistoryCopy, runMessageNeedsDisclosure, workflowDefinitionParameters, workflowRunArguments } from './BatchExecutionView'
 
 function activity(id: string, tone: WorkflowExecutionActivity['tone'] = 'success'): WorkflowExecutionActivity {
   return { id, at: '2026-01-01T00:00:00Z', label: id, tone }
@@ -54,5 +54,59 @@ describe('retentionHistoryCopy', () => {
 
   it('does not show retention settings for template-level histories', () => {
     expect(retentionHistoryCopy('WorkflowTemplate', { spec: {} }, { succeeded: 4, failed: 2 })).toBeNull()
+  })
+})
+
+describe('runMessageNeedsDisclosure', () => {
+  it('keeps short successful messages inline', () => {
+    expect(runMessageNeedsDisclosure('Reached expected number of succeeded pods', false)).toBe(false)
+  })
+
+  it('uses a disclosure for failures, multiline messages, and long messages', () => {
+    expect(runMessageNeedsDisclosure('permission denied', true)).toBe(true)
+    expect(runMessageNeedsDisclosure('first line\nsecond line', false)).toBe(true)
+    expect(runMessageNeedsDisclosure('x'.repeat(141), false)).toBe(true)
+  })
+})
+
+describe('workflow parameters', () => {
+  const definition = {
+    spec: {
+      arguments: {
+        parameters: [
+          { name: 'region', value: 'us-east-1', description: 'Deployment region' },
+          { name: 'mode' },
+        ],
+      },
+    },
+  }
+
+  it('reads the input contract from workflow definitions', () => {
+    expect(workflowDefinitionParameters('WorkflowTemplate', definition)).toEqual(definition.spec.arguments.parameters)
+    expect(workflowDefinitionParameters('Workflow', definition)).toEqual([])
+  })
+
+  it('shows only selected-run arguments that differ from definition defaults', () => {
+    const run = {
+      spec: {
+        arguments: {
+          parameters: [
+            { name: 'region', value: 'eu-west-1' },
+            { name: 'mode', value: 'safe' },
+            { name: 'unchanged', value: 'same' },
+          ],
+        },
+      },
+    }
+    const definitionWithUnchanged = {
+      spec: {
+        arguments: {
+          parameters: [...definition.spec.arguments.parameters, { name: 'unchanged', value: 'same' }],
+        },
+      },
+    }
+
+    expect(workflowRunArguments(run, 'WorkflowTemplate', definitionWithUnchanged).map((parameter) => parameter.name)).toEqual(['region', 'mode'])
+    expect(workflowRunArguments(run, 'Workflow', run)).toHaveLength(3)
   })
 })

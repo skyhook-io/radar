@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
-import { Activity, ChevronRight, GitBranch } from 'lucide-react'
+import { Activity, GitBranch } from 'lucide-react'
 import { clsx } from 'clsx'
-import { EmptyState, FetchResult, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
+import { Collapse, CollapseChevron, EmptyState, FetchResult, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
 import { buildWorkflowExecutionModel, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
 import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
 import { useResource, useWorkloadRuns, type WorkloadRun } from '../../api/client'
@@ -187,12 +187,8 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                     </div>
                     <span className={clsx('badge', phaseBadgeClass(selectedRun.phase))}>{selectedRun.phase}</span>
                   </div>
-                  <div className="grid gap-0 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.7fr)]">
-                    <RunDetailList run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} scheduledParent={scheduled} />
-                    <div className="border-t border-theme-border p-4 xl:border-l xl:border-t-0">
-                      <RunContext run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} onNavigateToResource={onNavigateToResource} />
-                    </div>
-                  </div>
+                  <RunDetailList run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} scheduledParent={scheduled} />
+                  <RunContext run={selectedRun} resource={selectedResource} definitionResource={resource} workflowExecution={workflowExecution} currentWorkload={{ kind, namespace, name }} onNavigateToResource={onNavigateToResource} />
                   {selectedRun.message && <RunMessageDetails run={selectedRun} />}
                 </section>
               ) : (
@@ -327,6 +323,7 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
   if (kind === 'CronWorkflow') {
     const schedules = Array.isArray(spec.schedules) ? spec.schedules.join(', ') : spec.schedule
     const template = spec.workflowSpec?.workflowTemplateRef?.name || spec.workflowSpec?.entrypoint
+    const workflowSpec = spec.workflowSpec ?? {}
     return {
       state: spec.suspend ? 'Suspended' : (status.active?.length ?? 0) > 0 ? 'Active' : 'Scheduled',
       stateTone: spec.suspend ? 'warning' : 'info',
@@ -339,7 +336,9 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
         ['Timezone', spec.timezone || 'Cluster default'],
         ['Template', template || '-'],
         ['Starting deadline', spec.startingDeadlineSeconds ? `${spec.startingDeadlineSeconds}s` : 'None'],
+        ...workflowDefinitionDetails(workflowSpec),
       ],
+      parameters: workflowDefinitionParameters(kind, resource),
     }
   }
   if (kind === 'WorkflowTemplate') {
@@ -352,8 +351,9 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
       facts: [
         ['Entrypoint', spec.entrypoint || '-'],
         ['Templates', Array.isArray(spec.templates) ? String(spec.templates.length) : '-'],
-        ['Service account', spec.serviceAccountName || '-'],
+        ...workflowDefinitionDetails(spec),
       ],
+      parameters: workflowDefinitionParameters(kind, resource),
     }
   }
   if (kind === 'ClusterWorkflowTemplate') {
@@ -366,8 +366,10 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
       facts: [
         ['Entrypoint', spec.entrypoint || '-'],
         ['Templates', Array.isArray(spec.templates) ? String(spec.templates.length) : '-'],
+        ...workflowDefinitionDetails(spec),
         ['Scope', 'Cluster'],
       ],
+      parameters: workflowDefinitionParameters(kind, resource),
     }
   }
   if (kind === 'ScaledJob') {
@@ -414,12 +416,23 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
       ['Entrypoint', spec.entrypoint || '-'],
       ['Template', spec.workflowTemplateRef?.name || '-'],
       ['Priority', spec.priority != null ? String(spec.priority) : '-'],
-      ['Service account', spec.serviceAccountName || '-'],
+      ...workflowDefinitionDetails(spec),
     ],
   }
 }
 
+function workflowDefinitionDetails(spec: any): Array<[string, string]> {
+  return [
+    ['Service account', spec.serviceAccountName || '-'],
+    ...(spec.onExit ? [['Exit handler', String(spec.onExit)] as [string, string]] : []),
+    ...(spec.parallelism != null ? [['Parallelism', String(spec.parallelism)] as [string, string]] : []),
+    ...(spec.activeDeadlineSeconds != null ? [['Active deadline', `${spec.activeDeadlineSeconds}s`] as [string, string]] : []),
+    ...(spec.synchronization ? [['Synchronization', 'Configured'] as [string, string]] : []),
+  ]
+}
+
 function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
+  const parameters = 'parameters' in source ? source.parameters : undefined
   return (
     <>
       <div className="grid grid-cols-2 gap-2">
@@ -435,8 +448,58 @@ function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
           </div>
         ))}
       </div>
+      {parameters && parameters.length > 0 && (
+        <ParameterSection title="Inputs" parameters={parameters} showDescription />
+      )}
     </>
   )
+}
+
+interface WorkflowParameter {
+  name: string
+  value?: unknown
+  valueFrom?: unknown
+  description?: string
+  enum?: unknown[]
+}
+
+export function workflowDefinitionParameters(kind: string, resource: any): WorkflowParameter[] {
+  const parameters = kind === 'CronWorkflow'
+    ? resource?.spec?.workflowSpec?.arguments?.parameters
+    : isTemplateKind(kind)
+      ? resource?.spec?.arguments?.parameters
+      : undefined
+  return Array.isArray(parameters) ? parameters.filter((parameter) => parameter?.name) : []
+}
+
+function ParameterSection({ title, parameters, showDescription = false, divided = true }: { title: string; parameters: WorkflowParameter[]; showDescription?: boolean; divided?: boolean }) {
+  return (
+    <div className={clsx(divided && 'border-t border-theme-border pt-3')}>
+      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">{title}</div>
+      <div className="space-y-2">
+        {parameters.map((parameter) => (
+          <div key={parameter.name} className="rounded-md bg-theme-elevated/40 px-3 py-2 text-sm">
+            <div className="flex items-start justify-between gap-3">
+              <span className="min-w-0 break-words font-mono text-xs text-theme-text-primary">{parameter.name}</span>
+              <span className="min-w-0 break-words text-right text-xs text-theme-text-secondary">
+                {showDescription && parameter.value !== undefined && parameter.value !== null ? `Default · ${parameterValue(parameter)}` : parameterValue(parameter)}
+              </span>
+            </div>
+            {showDescription && parameter.description && <div className="mt-1 text-xs leading-4 text-theme-text-tertiary">{parameter.description}</div>}
+            {showDescription && Array.isArray(parameter.enum) && parameter.enum.length > 0 && <div className="mt-1 text-xs text-theme-text-tertiary">Allowed: {parameter.enum.map(String).join(', ')}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function parameterValue(parameter: WorkflowParameter): string {
+  if (parameter.value !== undefined && parameter.value !== null) {
+    return typeof parameter.value === 'string' ? parameter.value : (JSON.stringify(parameter.value) ?? String(parameter.value))
+  }
+  if (parameter.valueFrom) return 'Resolved at runtime'
+  return 'Required'
 }
 
 function RunDetailList({ run, resource, workflowExecution, scheduledParent }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null; scheduledParent: boolean }) {
@@ -463,7 +526,7 @@ function RunDetailList({ run, resource, workflowExecution, scheduledParent }: { 
     ] as Array<[string, string]>),
   ]
   return (
-    <div className="space-y-2 p-4">
+    <div className="grid gap-x-8 gap-y-2 p-4 xl:grid-cols-2">
       {rows.map(([label, value]) => (
         <div key={label} className="flex items-start justify-between gap-3 text-sm">
           <span className="text-theme-text-tertiary">{label}</span>
@@ -475,23 +538,38 @@ function RunDetailList({ run, resource, workflowExecution, scheduledParent }: { 
 }
 
 function RunMessageDetails({ run }: { run: WorkloadRun }) {
+  const [open, setOpen] = useState(false)
   const failed = run.phase === 'Failed' || run.phase === 'Error'
+  if (!runMessageNeedsDisclosure(run.message ?? '', failed)) {
+    return (
+      <div className="flex items-start gap-3 border-t border-theme-border px-4 py-3 text-sm">
+        <span className="shrink-0 font-medium text-theme-text-primary">Run message</span>
+        <span className="min-w-0 break-words text-theme-text-tertiary">{run.message}</span>
+      </div>
+    )
+  }
   return (
-    <details className="group border-t border-theme-border">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 hover:bg-theme-hover/50 [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform group-open:rotate-90" />
+    <div className="border-t border-theme-border">
+      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-theme-hover/50">
+        <CollapseChevron open={open} className="h-4 w-4" />
         <span className={clsx('shrink-0 text-sm font-medium', failed ? 'text-red-700 dark:text-red-300' : 'text-theme-text-primary')}>
           {failed ? 'Failure details' : 'Run message'}
         </span>
         <span className="min-w-0 truncate text-xs text-theme-text-tertiary">{run.message}</span>
-      </summary>
-      <div className="p-4">
-        <div className={clsx('break-words rounded-md border px-3 py-2 text-sm', failed ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-theme-border bg-theme-elevated/40 text-theme-text-secondary')}>
-          {run.message}
+      </button>
+      <Collapse open={open}>
+        <div className="p-4">
+          <div className={clsx('whitespace-pre-wrap break-words rounded-md border px-3 py-2 text-sm', failed ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-theme-border bg-theme-elevated/40 text-theme-text-secondary')}>
+            {run.message}
+          </div>
         </div>
-      </div>
-    </details>
+      </Collapse>
+    </div>
   )
+}
+
+export function runMessageNeedsDisclosure(message: string, failed: boolean): boolean {
+  return failed || message.includes('\n') || message.length > 140
 }
 
 function RunExecutionPanel({ run, workflowExecution, loading, onNavigateToResource }: { run: WorkloadRun; workflowExecution: WorkflowExecutionModel | null; loading: boolean; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
@@ -594,35 +672,58 @@ export function activityPreviewItems(activity: WorkflowExecutionActivity[], limi
   return activity.filter((_, index) => included.has(index))
 }
 
-function RunContext({ run, resource, workflowExecution, onNavigateToResource }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
-  const definition = workflowExecution?.templateRefs.find((ref) => ref.source === 'workflow')
+function RunContext({ run, resource, definitionResource, workflowExecution, currentWorkload, onNavigateToResource }: { run: WorkloadRun; resource: any; definitionResource: any; workflowExecution: WorkflowExecutionModel | null; currentWorkload: { kind: string; namespace: string; name: string }; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
+  const launcher = run.launcher && !sameResource(run.launcher, currentWorkload) ? run.launcher : null
+  const workflowDefinition = workflowExecution?.templateRefs.find((ref) => ref.source === 'workflow')
+  const definition = workflowDefinition && !sameResource({ kind: workflowDefinition.kind, namespace: workflowDefinition.namespace, name: workflowDefinition.name }, currentWorkload) ? workflowDefinition : null
   const uses = dedupeResourceRefs(workflowExecution?.templateRefs.filter((ref) => ref.source === 'task') ?? [])
-  const entrypoint = resource?.spec?.entrypoint || resource?.status?.storedWorkflowTemplateSpec?.entrypoint
+  const arguments_ = workflowRunArguments(resource, currentWorkload.kind, definitionResource)
+  const outputs = workflowOutputParameters(resource)
+  if (!launcher && !definition && uses.length === 0 && arguments_.length === 0 && outputs.length === 0) return null
   return (
-    <div>
-      <h4 className="mb-3 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">Run context</h4>
-      <div className="space-y-3">
-        <ContextRow label={run.launcher?.kind === 'ScaledJob' ? 'Triggered by' : run.launcher ? 'Scheduled by' : 'Created'}>
-          {run.launcher ? <GenericResourceButton refInfo={run.launcher} onNavigateToResource={onNavigateToResource} /> : <span>Directly</span>}
-        </ContextRow>
-        <ContextRow label="Definition">
-          {definition ? <ResourceButton refInfo={definition} onNavigateToResource={onNavigateToResource} /> : <span>Inline definition</span>}
-        </ContextRow>
-        {entrypoint && <ContextRow label="Entrypoint"><span className="font-mono text-xs">{entrypoint}</span></ContextRow>}
-        {uses.length > 0 && (
-          <ContextRow label="Uses">
-            <span className="flex flex-wrap justify-end gap-2">
-              {uses.map((ref) => <ResourceButton key={`${ref.resourceKind}/${ref.namespace}/${ref.name}`} refInfo={ref} onNavigateToResource={onNavigateToResource} />)}
-            </span>
-          </ContextRow>
-        )}
-      </div>
+    <div className="border-t border-theme-border p-4">
+      {(launcher || definition || uses.length > 0) && (
+        <div>
+          <h4 className="mb-3 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">Run context</h4>
+          <div className="space-y-3">
+            {launcher && <ContextRow label={launcher.kind === 'ScaledJob' ? 'Triggered by' : 'Scheduled by'}><GenericResourceButton refInfo={launcher} onNavigateToResource={onNavigateToResource} /></ContextRow>}
+            {definition && <ContextRow label="Definition"><ResourceButton refInfo={definition} onNavigateToResource={onNavigateToResource} /></ContextRow>}
+            {uses.length > 0 && (
+              <ContextRow label="Uses">
+                <span className="flex flex-wrap justify-end gap-2">
+                  {uses.map((ref) => <ResourceButton key={`${ref.resourceKind}/${ref.namespace}/${ref.name}`} refInfo={ref} onNavigateToResource={onNavigateToResource} />)}
+                </span>
+              </ContextRow>
+            )}
+          </div>
+        </div>
+      )}
+      {arguments_.length > 0 && <div className={clsx((launcher || definition || uses.length > 0) && 'mt-4')}><ParameterSection title="Run arguments" parameters={arguments_} divided={Boolean(launcher || definition || uses.length > 0)} /></div>}
+      {outputs.length > 0 && <div className={clsx((launcher || definition || uses.length > 0 || arguments_.length > 0) && 'mt-4')}><ParameterSection title="Outputs" parameters={outputs} divided={Boolean(launcher || definition || uses.length > 0 || arguments_.length > 0)} /></div>}
     </div>
   )
 }
 
+export function workflowRunArguments(resource: any, currentKind: string, definitionResource: any): WorkflowParameter[] {
+  const parameters = resource?.spec?.arguments?.parameters
+  if (!Array.isArray(parameters)) return []
+  const values = parameters.filter((parameter) => parameter?.name)
+  const defaults = new Map(workflowDefinitionParameters(currentKind, definitionResource).map((parameter) => [parameter.name, parameterValue(parameter)]))
+  if (defaults.size === 0) return values
+  return values.filter((parameter) => defaults.get(parameter.name) !== parameterValue(parameter))
+}
+
+function workflowOutputParameters(resource: any): WorkflowParameter[] {
+  const parameters = resource?.status?.outputs?.parameters
+  return Array.isArray(parameters) ? parameters.filter((parameter) => parameter?.name) : []
+}
+
 function ContextRow({ label, children }: { label: string; children: ReactNode }) {
-  return <div className="flex items-start justify-between gap-3 text-sm"><span className="text-theme-text-tertiary">{label}</span><span className="min-w-0 text-right text-theme-text-primary">{children}</span></div>
+  return <div className="flex items-start justify-between gap-3 text-sm"><span className="shrink-0 text-theme-text-tertiary">{label}</span><span className="min-w-0 break-words text-right text-theme-text-primary">{children}</span></div>
+}
+
+function sameResource(ref: { kind: string; namespace?: string; name: string }, current: { kind: string; namespace: string; name: string }): boolean {
+  return ref.kind === current.kind && (ref.namespace ?? '') === current.namespace && ref.name === current.name
 }
 
 function GenericResourceButton({ refInfo, onNavigateToResource }: { refInfo: NonNullable<WorkloadRun['launcher']>; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {

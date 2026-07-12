@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func TestSortRunsPrefersActiveThenNewest(t *testing.T) {
@@ -335,6 +339,24 @@ func TestWorkloadParentGetErrorPreservesForbidden(t *testing.T) {
 	}
 	if !strings.Contains(got.message, "insufficient permissions") {
 		t.Fatalf("message = %q, want insufficient permissions", got.message)
+	}
+}
+
+func TestWorkloadSelectorGetErrorPreservesKubernetesStatus(t *testing.T) {
+	forbidden := fmt.Errorf("workflow dev/migration: %w", apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "workflows"}, "migration", nil))
+	notFound := fmt.Errorf("job dev/nightly: %w", apierrors.NewNotFound(schema.GroupResource{Group: "batch", Resource: "jobs"}, "nightly"))
+
+	if got := workloadSelectorGetError(forbidden); got.statusCode != 403 {
+		t.Fatalf("forbidden statusCode = %d, want 403", got.statusCode)
+	}
+	if got := workloadSelectorGetError(notFound); got.statusCode != 404 {
+		t.Fatalf("not found statusCode = %d, want 404", got.statusCode)
+	}
+	if got := workloadSelectorGetError(fmt.Errorf("workflow dev/migration: %w", k8score.ErrResourceNotFound)); got.statusCode != 404 {
+		t.Fatalf("dynamic not found statusCode = %d, want 404", got.statusCode)
+	}
+	if got := workloadSelectorGetError(fmt.Errorf("%w: list jobs", k8s.ErrWorkloadAccessDenied)); got.statusCode != 403 {
+		t.Fatalf("cache permission statusCode = %d, want 403", got.statusCode)
 	}
 }
 

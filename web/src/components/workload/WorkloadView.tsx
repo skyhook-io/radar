@@ -23,7 +23,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import type { SelectedResource, ResourceRef, Relationships, ResolvedEnvFrom } from '../../types'
-import { kindToPlural, relatedResourcePath, type NavigateToResource } from '../../utils/navigation'
+import { kindToPlural, pluralToKind, relatedResourcePath, type NavigateToResource } from '../../utils/navigation'
 import {
   useChanges, useResourceWithRelationships, usePodLogs, useTopology, useUpdateResource,
   useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob,
@@ -35,6 +35,7 @@ import {
   useCascadeDeletePreview,
   useResourceEvents,
   useResource,
+  useWorkloadRuns,
   useApplications,
   fetchJSON,
 } from '../../api/client'
@@ -48,6 +49,7 @@ import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
+import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import { useCanUpdateSecrets, useCanNodeWrite, useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs, useOpenNodeTerminal } from '../dock'
 import { PortForwardButton, PortForwardInlineButton } from '../portforward/PortForwardButton'
@@ -316,6 +318,17 @@ export function WorkloadView({
     else params.delete('run')
     setSearchParams(params, { replace: true })
   }, [searchParams, setSearchParams])
+
+  const batchKind = pluralToKind(apiKind)
+  const batchExecution = BATCH_EXECUTION_KINDS.has(batchKind)
+  const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
+    refetchActive: true,
+    clusterScoped: batchKind === 'ClusterWorkflowTemplate',
+  })
+  const relatedTimelineEvents = useMemo(
+    () => workloadRunTimelineEvents(batchRunsQuery.data?.runs ?? []),
+    [batchRunsQuery.data?.runs],
+  )
 
   // Fetch resource with relationships
   const { data: resourceResponse, isLoading: resourceLoading, error: resourceError, refetch: refetchResource } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
@@ -675,7 +688,8 @@ export function WorkloadView({
       refetch={refetchResourceAndRuns}
       // Timeline
       allEvents={allEvents}
-      eventsLoading={eventsLoading}
+      relatedTimelineEvents={relatedTimelineEvents}
+      eventsLoading={eventsLoading || (batchExecution && batchRunsQuery.isLoading)}
       topology={topology}
       resourceFocusedK8sEvents={resourceFocusedK8sEvents}
       resourceFocusedUpdates={resourceFocusedUpdates}
