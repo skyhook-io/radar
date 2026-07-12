@@ -34,6 +34,7 @@ import {
   batchSignalForApp,
   batchActivityForApp,
   batchRuntimeForApp,
+  applicationDisplayHealth,
   servingReadiness,
   worstHealth,
   appGroupLagMessage,
@@ -231,13 +232,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewI
   );
   const workloadClass = workloadClassOf(app.workload_class);
   const batchRuntime = batchRuntimeForApp(app);
-  const servingWorkloads = workloads.filter((workload) => !workload.batch);
-  const overall =
-    workloadClass === "job"
-      ? batchRuntime.health
-      : servingWorkloads.length > 0
-        ? worstHealth(servingWorkloads.map((workload) => workload.health))
-        : healthOf(app.health);
+  const overall = applicationDisplayHealth(app);
   const verdictTone = HEALTH_META[overall].pill;
   const verdictLabel =
     workloadClass === "job" ? batchRuntime.label : HEALTH_META[overall].label;

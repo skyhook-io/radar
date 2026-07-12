@@ -1306,6 +1306,16 @@ function applicationRuntimeHealth(app: AppRow): AppHealth {
     : healthOf(app.health);
 }
 
+export function applicationDisplayHealth(app: AppRow): AppHealth {
+  const runtime = applicationRuntimeHealth(app);
+  if (!app.runtimeHealth) return runtime;
+  const overall = healthOf(app.health);
+  const backendRuntime = healthOf(app.runtimeHealth);
+  return HEALTH_RANK[overall] > HEALTH_RANK[backendRuntime]
+    ? worstHealth([runtime, overall])
+    : runtime;
+}
+
 export function servingReadiness(workloads: AppWorkload[]): {
   ready: number;
   desired: number;
@@ -1568,7 +1578,7 @@ export function buildSingleAppEntry(
   return {
     variant: "single",
     row,
-    health: applicationRuntimeHealth(row),
+    health: applicationDisplayHealth(row),
     versions: Array.from(new Set((row.versions || []).filter(Boolean))),
     namespace,
     namespaces: namespacesOf(row),

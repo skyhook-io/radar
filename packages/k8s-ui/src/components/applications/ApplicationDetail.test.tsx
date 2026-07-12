@@ -273,7 +273,7 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain('4/4 ready')
     expect(html).toContain('Delivery')
     expect(html.match(/Synced/g)).toHaveLength(2)
-    expect((html.match(/Degraded/g) ?? []).length).toBeGreaterThanOrEqual(2)
+    expect((html.match(/Degraded/g) ?? []).length).toBeGreaterThanOrEqual(3)
   })
 
   it('warns when application workloads resolve to different deployment sources', () => {

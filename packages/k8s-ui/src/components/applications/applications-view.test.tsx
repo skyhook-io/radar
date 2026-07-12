@@ -67,6 +67,34 @@ describe('buildSingleAppEntry', () => {
     expect(e.env).toBe('staging')
     expect(e.envInferred).toBe(false)
   })
+
+  it('uses delivery degradation in the displayed application health', () => {
+    const e = buildSingleAppEntry(app({
+      health: 'degraded',
+      runtimeHealth: 'healthy',
+      sourceStatus: { sync: 'Synced', health: 'Degraded' },
+    }))
+
+    expect(e.health).toBe('degraded')
+  })
+
+  it('preserves the latest retained batch outcome when delivery adds no degradation', () => {
+    const e = buildSingleAppEntry(app({
+      health: 'unhealthy',
+      runtimeHealth: 'unhealthy',
+      workload_class: 'job',
+      workloads: [wl({
+        kind: 'CronJob',
+        workload_class: 'job',
+        health: 'unhealthy',
+        ready: 0,
+        desired: 0,
+        batch: { retainedRuns: 2, failedRuns: 1, succeededRuns: 1, latestRunPhase: 'Succeeded' },
+      })],
+    }))
+
+    expect(e.health).toBe('healthy')
+  })
 })
 
 describe('searchTextForEntry (single)', () => {
