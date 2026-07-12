@@ -167,7 +167,7 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
       </Section>
 
       {executionNodes.length > 0 && (
-        <Section title={`Execution (${executionNodes.length} nodes)`} defaultExpanded>
+        <Section title={`Execution (${executionNodes.length} ${executionNodes.length === 1 ? 'node' : 'nodes'})`} defaultExpanded>
           <div className="space-y-1.5">
             {stepRows.map(({ node: step, depth }) => {
               const isFailed = step.phase === 'Failed' || step.phase === 'Error'
