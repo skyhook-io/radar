@@ -699,6 +699,12 @@ func TestNormalizeWorkloadLogsKind_DefaultsToDeployment(t *testing.T) {
 	if got := normalizeWorkloadLogsKind("statefulset"); got != "statefulsets" {
 		t.Fatalf("statefulset workload-log kind = %q, want statefulsets", got)
 	}
+	if got := normalizeWorkloadLogsKind("job"); got != "jobs" {
+		t.Fatalf("job workload-log kind = %q, want jobs", got)
+	}
+	if got := normalizeWorkloadLogsKind("Workflow"); got != "workflows" {
+		t.Fatalf("Workflow workload-log kind = %q, want workflows", got)
+	}
 }
 
 func TestParseLogsSince(t *testing.T) {

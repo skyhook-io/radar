@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -417,23 +418,23 @@ func TestSQLiteStore_ResourceSeen(t *testing.T) {
 	defer cleanup()
 
 	// Initially not seen
-	if store.IsResourceSeen("Pod", "default", "test-pod") {
+	if store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen initially")
 	}
 
 	// Mark as seen
-	store.MarkResourceSeen("Pod", "default", "test-pod")
+	store.MarkResourceSeen("ctx", "Pod", "default", "test-pod")
 
 	// Now should be seen
-	if !store.IsResourceSeen("Pod", "default", "test-pod") {
+	if !store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
 		t.Error("Resource should be seen after marking")
 	}
 
 	// Clear seen
-	store.ClearResourceSeen("Pod", "default", "test-pod")
+	store.ClearResourceSeen("ctx", "Pod", "default", "test-pod")
 
 	// Should not be seen again
-	if store.IsResourceSeen("Pod", "default", "test-pod") {
+	if store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen after clearing")
 	}
 }
@@ -629,8 +630,8 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	store1.MarkResourceSeen("Pod", "default", "p1")
-	store1.MarkResourceSeen("Deployment", "kube-system", "d1")
+	store1.MarkResourceSeen("ctx", "Pod", "default", "p1")
+	store1.MarkResourceSeen("ctx", "Deployment", "kube-system", "d1")
 	store1.Close()
 
 	store2, err := NewSQLiteStore(dbPath)
@@ -639,13 +640,13 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	}
 	defer store2.Close()
 
-	if !store2.IsResourceSeen("Pod", "default", "p1") {
+	if !store2.IsResourceSeen("ctx", "Pod", "default", "p1") {
 		t.Error("expected Pod default/p1 to be seen after restart")
 	}
-	if !store2.IsResourceSeen("Deployment", "kube-system", "d1") {
+	if !store2.IsResourceSeen("ctx", "Deployment", "kube-system", "d1") {
 		t.Error("expected Deployment kube-system/d1 to be seen after restart")
 	}
-	if store2.IsResourceSeen("Pod", "default", "never-marked") {
+	if store2.IsResourceSeen("ctx", "Pod", "default", "never-marked") {
 		t.Error("did not expect unmarked resource to be seen")
 	}
 }
@@ -1144,5 +1145,464 @@ func TestSQLiteStore_Migration_AddsClusterContext(t *testing.T) {
 	}
 	if len(scoped) != 0 {
 		t.Errorf("scoped query must exclude unknowable-provenance legacy rows, got %d", len(scoped))
+	}
+}
+
+// A database created before the seq column existed must come back with arrival
+// numbers backfilled from rowid, so pre-upgrade rows are addressable by cursor.
+func TestSQLiteStore_SeqMigrationBackfillsFromRowid(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "timeline-migrate-*")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, "legacy.db")
+
+	// Recreate the pre-seq schema by hand and insert two rows in order.
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	legacySchema := `CREATE TABLE events (
+		id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, source TEXT NOT NULL,
+		kind TEXT NOT NULL, namespace TEXT, name TEXT NOT NULL, uid TEXT,
+		event_type TEXT NOT NULL, reason TEXT, message TEXT, diff_json TEXT,
+		health_state TEXT, owner_kind TEXT, owner_name TEXT, labels_json TEXT,
+		count INTEGER DEFAULT 0, correlation_id TEXT,
+		created_at TEXT DEFAULT (datetime('now')),
+		cluster_context TEXT NOT NULL DEFAULT '', api_version TEXT
+	)`
+	if _, err := db.Exec(legacySchema); err != nil {
+		t.Fatalf("legacy schema: %v", err)
+	}
+	insert := `INSERT INTO events (id, timestamp, source, kind, namespace, name, event_type, health_state) VALUES (?, ?, 'informer', 'Pod', 'default', ?, 'update', '')`
+	base := time.Now()
+	if _, err := db.Exec(insert, "old-1", base.Format(time.RFC3339Nano), "old-1"); err != nil {
+		t.Fatalf("legacy insert 1: %v", err)
+	}
+	if _, err := db.Exec(insert, "old-2", base.Add(time.Second).Format(time.RFC3339Nano), "old-2"); err != nil {
+		t.Fatalf("legacy insert 2: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	all, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(all) != 2 || all[0].Seq == 0 || all[1].Seq == 0 {
+		t.Fatalf("expected 2 migrated rows with backfilled seq, got %+v", all)
+	}
+
+	// New appends must continue above the backfilled numbers.
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "new-1", Timestamp: base.Add(2 * time.Second), Source: SourceInformer,
+		Kind: "Pod", Namespace: "default", Name: "new-1", EventType: EventTypeUpdate,
+	}); err != nil {
+		t.Fatalf("Append new: %v", err)
+	}
+	maxOld := max(all[0].Seq, all[1].Seq)
+	delta, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, SinceSeq: maxOld})
+	if err != nil {
+		t.Fatalf("Query delta: %v", err)
+	}
+	if len(delta) != 1 || delta[0].ID != "new-1" {
+		t.Fatalf("expected only the post-migration append past the cursor, got %+v", delta)
+	}
+}
+
+// event.CreatedAt (the resource's birth, distinct from observation time) must
+// survive a write/read roundtrip — the health-strip birth clamp depends on it.
+func TestSQLiteStore_ResourceCreatedAtRoundtrip(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	born := time.Now().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "with-birth", Timestamp: time.Now(), Source: SourceInformer,
+		Kind: "Pod", Namespace: "default", Name: "with-birth",
+		EventType: EventTypeAdd, CreatedAt: &born,
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Query: %v %+v", err, got)
+	}
+	if got[0].CreatedAt == nil || !got[0].CreatedAt.Equal(born) {
+		t.Fatalf("expected CreatedAt %v to roundtrip, got %+v", born, got[0].CreatedAt)
+	}
+}
+
+// Timestamps are stored as TEXT and ordered lexically; informer events carry
+// the host's local zone while K8s events are UTC. Without UTC normalization on
+// write, a local-zone wall clock sorts ahead of an earlier-instant UTC string.
+// Normalized, lexical order matches chronological order.
+func TestSQLiteStore_UTCTimestampOrdering(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	east := time.FixedZone("east", 5*3600)
+	// A: 12:00 +05:00 == 07:00Z — the EARLIER instant, but a later wall clock.
+	a := TimelineEvent{
+		ID: "a", Timestamp: time.Date(2026, 1, 1, 12, 0, 0, 0, east),
+		Source: SourceInformer, Kind: "Deployment", Namespace: "default", Name: "a", EventType: EventTypeUpdate,
+	}
+	// B: 09:00Z — the LATER instant.
+	b := TimelineEvent{
+		ID: "b", Timestamp: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC),
+		Source: SourceInformer, Kind: "Deployment", Namespace: "default", Name: "b", EventType: EventTypeUpdate,
+	}
+	if err := store.AppendBatch(ctx, []TimelineEvent{a, b}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	events, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	// Query is newest-instant-first: B (09:00Z) then A (07:00Z).
+	if events[0].ID != "b" || events[1].ID != "a" {
+		t.Fatalf("expected chronological order [b, a], got [%s, %s]", events[0].ID, events[1].ID)
+	}
+}
+
+// seq must not rewind when retention empties the table: a live client's cursor
+// (seq>N) would otherwise go dead with no forced resync while the store lives.
+func TestSQLiteStore_SeqSurvivesEmptyTable(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	past := time.Now().Add(-time.Hour)
+	for i := 0; i < 3; i++ {
+		if err := store.Append(ctx, TimelineEvent{
+			ID: fmt.Sprintf("old%d", i), Timestamp: past, Source: SourceInformer,
+			Kind: "Deployment", Namespace: "default", Name: fmt.Sprintf("old%d", i), EventType: EventTypeUpdate,
+		}); err != nil {
+			t.Fatalf("Append old %d: %v", i, err)
+		}
+	}
+	before, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query before: %v", err)
+	}
+	var maxBefore int64
+	for _, e := range before {
+		if e.Seq > maxBefore {
+			maxBefore = e.Seq
+		}
+	}
+	if maxBefore == 0 {
+		t.Fatalf("expected non-zero seq before cleanup")
+	}
+
+	// Retention deletes everything (rows are an hour old).
+	deleted, err := store.Cleanup(ctx, time.Minute)
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if deleted != 3 {
+		t.Fatalf("expected all 3 rows deleted, got %d", deleted)
+	}
+
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "fresh", Timestamp: time.Now(), Source: SourceInformer,
+		Kind: "Deployment", Namespace: "default", Name: "fresh", EventType: EventTypeUpdate,
+	}); err != nil {
+		t.Fatalf("Append fresh: %v", err)
+	}
+	fresh, err := store.GetEvent(ctx, "fresh")
+	if err != nil || fresh == nil {
+		t.Fatalf("GetEvent fresh: %v %+v", err, fresh)
+	}
+	if fresh.Seq <= maxBefore {
+		t.Fatalf("seq rewound after empty table: fresh seq %d must exceed prior max %d", fresh.Seq, maxBefore)
+	}
+}
+
+// A corrupt on-disk store must be quarantined and recreated rather than killing
+// the timeline for the whole process.
+func TestIsCorruptedSQLiteError(t *testing.T) {
+	// Corruption → safe to quarantine and recreate.
+	for _, msg := range []string{
+		"database disk image is malformed",
+		"file is not a database",
+		"file is encrypted or is not a database",
+		"failed to init schema: database disk image is malformed", // wrapped
+	} {
+		if !isCorruptedSQLiteError(fmt.Errorf("%s", msg)) {
+			t.Errorf("expected %q classified as corruption", msg)
+		}
+	}
+	// Transient / environmental → must NOT quarantine, or a healthy db is lost.
+	for _, msg := range []string{
+		"database is locked",
+		"permission denied",
+		"disk I/O error",
+		"no space left on device",
+		"unable to open database file",
+	} {
+		if isCorruptedSQLiteError(fmt.Errorf("%s", msg)) {
+			t.Errorf("expected %q NOT classified as corruption (would move a healthy db aside)", msg)
+		}
+	}
+	if isCorruptedSQLiteError(nil) {
+		t.Error("nil must not classify as corruption")
+	}
+}
+
+func TestOpenSQLiteWithRecovery_QuarantinesCorruptFile(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "timeline-corrupt-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	// A non-SQLite file: initSchema's CREATE TABLE fails with "file is not a database".
+	if err := os.WriteFile(dbPath, []byte("this is not a sqlite database"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := NewSQLiteStore(dbPath); err == nil {
+		t.Fatalf("expected NewSQLiteStore to error on a malformed file")
+	}
+
+	store, err := openSQLiteWithRecovery(dbPath)
+	if err != nil {
+		t.Fatalf("openSQLiteWithRecovery: %v", err)
+	}
+	defer store.Close()
+
+	if _, statErr := os.Stat(dbPath + ".corrupt"); statErr != nil {
+		t.Fatalf("expected quarantined file at %s.corrupt: %v", dbPath, statErr)
+	}
+
+	ctx := context.Background()
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "post-recovery", Timestamp: time.Now(), Source: SourceInformer,
+		Kind: "Deployment", Namespace: "default", Name: "post-recovery", EventType: EventTypeUpdate,
+	}); err != nil {
+		t.Fatalf("Append after recovery: %v", err)
+	}
+	events, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query after recovery: %v", err)
+	}
+	if len(events) != 1 || events[0].ID != "post-recovery" {
+		t.Fatalf("recovered store not usable, got %+v", events)
+	}
+}
+
+// RFC3339Nano strips trailing fraction zeros, and '.' < 'Z' lexically, so a
+// second-aligned stamp would sort AFTER a sub-second one in the same second.
+// The fixed-width sqliteTimeLayout keeps lexical order chronological; K8s
+// Events (second precision) and informer events (sub-second) interleave within
+// one second constantly.
+func TestSQLiteStore_SubSecondLexicalOrdering(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// A: second-aligned (a K8s Event's metav1.Time precision).
+	a := TimelineEvent{
+		ID: "aligned", Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Source: SourceK8sEvent, Kind: "Pod", Namespace: "default", Name: "a", EventType: EventTypeNormal,
+	}
+	// B: half a second LATER (an informer event's time.Now() precision).
+	b := TimelineEvent{
+		ID: "subsecond", Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 500_000_000, time.UTC),
+		Source: SourceInformer, Kind: "Deployment", Namespace: "default", Name: "b", EventType: EventTypeUpdate,
+	}
+	if err := store.AppendBatch(ctx, []TimelineEvent{a, b}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	events, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if events[0].ID != "subsecond" || events[1].ID != "aligned" {
+		t.Fatalf("expected newest-first [subsecond, aligned], got [%s, %s]", events[0].ID, events[1].ID)
+	}
+
+	// A limit-1 page must pick the chronologically newest, not the
+	// lexically-greatest under the old variable-width encoding.
+	page, err := store.Query(ctx, QueryOptions{Limit: 1, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query limit 1: %v", err)
+	}
+	if len(page) != 1 || page[0].ID != "subsecond" {
+		t.Fatalf("limit-1 page picked %v, want subsecond", page)
+	}
+}
+
+// Rows written by older builds carry local-zone offsets and variable-width
+// fractions; reopening the store must rewrite them to sqliteTimeLayout so
+// ordering and range filters stay correct across the upgrade boundary.
+func TestSQLiteStore_NormalizeLegacyTimestamps(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "timeline-migrate-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	// Simulate an old build's rows: local zone, no fraction, and sub-second
+	// variable width. Instants: legacy-zone 00:00:00Z < legacy-plain
+	// 00:00:01Z < legacy-frac 00:00:01.5Z.
+	rawRows := []struct{ id, ts string }{
+		{"legacy-zone", "2026-01-01T02:00:00+02:00"},
+		{"legacy-plain", "2026-01-01T00:00:01Z"},
+		{"legacy-frac", "2026-01-01T00:00:01.5Z"},
+	}
+	for i, r := range rawRows {
+		if _, err := store.db.Exec(
+			`INSERT INTO events (id, timestamp, source, kind, namespace, name, uid, event_type, reason, message, diff_json, health_state, owner_kind, owner_name, labels_json, correlation_id, seq)
+			 VALUES (?, ?, 'informer', 'Deployment', 'default', ?, '', 'update', '', '', '', '', '', '', '', '', ?)`,
+			r.id, r.ts, r.id, i+1,
+		); err != nil {
+			t.Fatalf("raw insert %s: %v", r.id, err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+
+	rows, err := reopened.db.Query("SELECT id, timestamp FROM events")
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	defer rows.Close()
+	stamps := map[string]string{}
+	for rows.Next() {
+		var id, ts string
+		if err := rows.Scan(&id, &ts); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		stamps[id] = ts
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	want := map[string]string{
+		"legacy-zone":  "2026-01-01T00:00:00.000000000Z",
+		"legacy-plain": "2026-01-01T00:00:01.000000000Z",
+		"legacy-frac":  "2026-01-01T00:00:01.500000000Z",
+	}
+	for id, w := range want {
+		if stamps[id] != w {
+			t.Errorf("%s: normalized to %q, want %q", id, stamps[id], w)
+		}
+	}
+
+	// Ordering and a range filter across the formerly-mixed rows.
+	ctx := context.Background()
+	events, err := reopened.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	gotOrder := []string{}
+	for _, e := range events {
+		gotOrder = append(gotOrder, e.ID)
+	}
+	wantOrder := []string{"legacy-frac", "legacy-plain", "legacy-zone"}
+	if strings.Join(gotOrder, ",") != strings.Join(wantOrder, ",") {
+		t.Fatalf("order = %v, want %v", gotOrder, wantOrder)
+	}
+	since := time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)
+	filtered, err := reopened.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, Since: since})
+	if err != nil {
+		t.Fatalf("Query since: %v", err)
+	}
+	if len(filtered) != 2 {
+		t.Fatalf("since filter returned %d events, want 2 (plain + frac)", len(filtered))
+	}
+}
+
+// A transient open failure (permissions here) must propagate — NOT quarantine
+// the healthy database file the way corruption does.
+func TestOpenSQLiteWithRecovery_TransientErrorDoesNotQuarantine(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-denied simulation is a no-op as root")
+	}
+	tmpDir, err := os.MkdirTemp("", "timeline-transient-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	if err := store.Append(context.Background(), TimelineEvent{
+		ID: "keep", Timestamp: time.Now(), Source: SourceInformer,
+		Kind: "Deployment", Namespace: "default", Name: "keep", EventType: EventTypeUpdate,
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := os.Chmod(dbPath, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	defer os.Chmod(dbPath, 0o644)
+
+	if _, err := openSQLiteWithRecovery(dbPath); err == nil {
+		t.Fatalf("expected openSQLiteWithRecovery to propagate the transient error")
+	}
+	if _, statErr := os.Stat(dbPath + ".corrupt"); !os.IsNotExist(statErr) {
+		t.Fatalf("healthy file was quarantined: stat .corrupt = %v", statErr)
+	}
+	if _, statErr := os.Stat(dbPath); statErr != nil {
+		t.Fatalf("original file missing after transient failure: %v", statErr)
+	}
+
+	// Once the transient condition clears, the data is intact.
+	if err := os.Chmod(dbPath, 0o644); err != nil {
+		t.Fatalf("Chmod restore: %v", err)
+	}
+	recovered, err := openSQLiteWithRecovery(dbPath)
+	if err != nil {
+		t.Fatalf("open after restore: %v", err)
+	}
+	defer recovered.Close()
+	events, err := recovered.Query(context.Background(), QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 1 || events[0].ID != "keep" {
+		t.Fatalf("data lost across transient failure, got %+v", events)
 	}
 }

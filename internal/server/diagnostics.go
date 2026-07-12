@@ -107,8 +107,14 @@ type DiagCache struct {
 
 // DiagTimeline holds timeline store info.
 type DiagTimeline struct {
-	StorageType  string `json:"storageType"`
-	TotalEvents  int64  `json:"totalEvents"`
+	StorageType string `json:"storageType"`
+	// Degraded reports that the configured persistent backend failed to open
+	// and this session runs on a volatile in-memory fallback — the first thing
+	// to check when history vanished after a restart. StorageType reflects the
+	// ACTUAL store in use, not the configured one.
+	Degraded       bool   `json:"degraded,omitempty"`
+	DegradedReason string `json:"degradedReason,omitempty"`
+	TotalEvents    int64  `json:"totalEvents"`
 	OldestEvent  string `json:"oldestEvent,omitempty"`
 	NewestEvent  string `json:"newestEvent,omitempty"`
 	StorageBytes int64  `json:"storageBytes,omitempty"`
@@ -317,6 +323,11 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		diag.MaxStorageBytes = stats.MaxStorageBytes
 		if s.diagConfig != nil {
 			diag.StorageType = s.diagConfig.TimelineStorage
+		}
+		if stats.Degraded {
+			diag.StorageType = "memory"
+			diag.Degraded = true
+			diag.DegradedReason = stats.DegradedReason
 		}
 		snap.Timeline = diag
 	})

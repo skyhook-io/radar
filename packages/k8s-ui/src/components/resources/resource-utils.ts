@@ -1406,6 +1406,36 @@ export function getWorkflowTemplate(workflow: any): string | null {
   return workflow.spec?.workflowTemplateRef?.name || null
 }
 
+export function getCronWorkflowStatus(cwf: any): StatusBadge {
+  const spec = cwf.spec || {}
+  const status = cwf.status || {}
+  const active = Array.isArray(status.active) ? status.active.length : 0
+  if (spec.suspend === true) {
+    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (active > 0) {
+    return { text: `${active} active`, color: healthColors.neutral, level: 'neutral' }
+  }
+  if (status.lastScheduledTime) {
+    return { text: 'Idle', color: healthColors.neutral, level: 'neutral' }
+  }
+  return { text: 'Never run', color: healthColors.unknown, level: 'unknown' }
+}
+
+export function getCronWorkflowSchedule(cwf: any): string {
+  const schedules = cwf.spec?.schedules
+  if (Array.isArray(schedules) && schedules.length > 0) return schedules.join(', ')
+  return cwf.spec?.schedule || '-'
+}
+
+export function getCronWorkflowLastRun(cwf: any): string {
+  return cwf.status?.lastScheduledTime ? formatAge(cwf.status.lastScheduledTime) : 'Never'
+}
+
+export function getCronWorkflowTemplate(cwf: any): string {
+  return cwf.spec?.workflowSpec?.workflowTemplateRef?.name || cwf.spec?.workflowSpec?.entrypoint || '-'
+}
+
 // ============================================================================
 // CERT-MANAGER UTILITIES — re-exported from resource-utils-certmanager.ts
 // ============================================================================
@@ -1866,6 +1896,7 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'persistentvolumes') return getPVStatus(resource).text
       if (kindLower === 'rollouts') return getRolloutStatus(resource).text
       if (kindLower === 'workflows') return getWorkflowStatus(resource).text
+      if (kindLower === 'cronworkflows') return getCronWorkflowStatus(resource).text
       if (kindLower === 'hpas' || kindLower === 'horizontalpodautoscalers') return getHPAStatus(resource).text
       if (kindLower === 'gateways') return getGatewayStatus(resource).text
       if (kindLower === 'gatewayclasses') return getGatewayClassStatus(resource).text

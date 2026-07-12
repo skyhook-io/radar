@@ -3,6 +3,7 @@ package topology
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -271,6 +272,14 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	jobIDs := make(map[string]string)
 	cronJobIDs := make(map[string]string)
 	jobToCronJob := make(map[string]string) // jobKey -> cronJobID (for shortcut edges)
+	scaledJobIDs := make(map[string]string)
+	jobToScaledJob := make(map[string]string) // jobKey -> scaledJobID (for shortcut edges)
+	workflowIDs := make(map[string]string)
+	cronWorkflowIDs := make(map[string]string)
+	workflowToCronWorkflow := make(map[string]string) // workflowKey -> cronWorkflowID (for shortcut edges)
+	workflowTemplateIDs := make(map[string]string)
+	clusterWorkflowTemplateIDs := make(map[string]string)
+	workflowTemplateNodes := make(map[string]Node)
 
 	// Track ConfigMap/Secret/PVC references from workloads
 	// Maps workloadID -> set of resource names
@@ -1056,6 +1065,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := sj.GetName()
 
 			sjID := fmt.Sprintf("scaledjob/%s/%s", ns, name)
+			scaledJobIDs[ns+"/"+name] = sjID
 			nodes = append(nodes, Node{
 				ID:     sjID,
 				Kind:   KindScaledJob,
@@ -2546,6 +2556,173 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// 4b. Add Argo Workflow/CronWorkflow nodes
+	var cronWorkflowGVR schema.GroupVersionResource
+	hasCronWorkflows := false
+	var workflowGVR schema.GroupVersionResource
+	hasWorkflows := false
+	var workflowTemplateGVR schema.GroupVersionResource
+	hasWorkflowTemplates := false
+	var clusterWorkflowTemplateGVR schema.GroupVersionResource
+	hasClusterWorkflowTemplates := false
+	if resourceDiscovery != nil {
+		cronWorkflowGVR, hasCronWorkflows = resourceDiscovery.GetGVRWithGroup("CronWorkflow", "argoproj.io")
+		workflowGVR, hasWorkflows = resourceDiscovery.GetGVRWithGroup("Workflow", "argoproj.io")
+		workflowTemplateGVR, hasWorkflowTemplates = resourceDiscovery.GetGVRWithGroup("WorkflowTemplate", "argoproj.io")
+		clusterWorkflowTemplateGVR, hasClusterWorkflowTemplates = resourceDiscovery.GetGVRWithGroup("ClusterWorkflowTemplate", "argoproj.io")
+	}
+	if hasWorkflowTemplates && dynamicCache != nil {
+		workflowTemplates, err := dynamicCache.ListNamespaces(workflowTemplateGVR, opts.Namespaces)
+		if err != nil {
+			log.Printf("WARNING [topology] Failed to list Argo WorkflowTemplates: %v", err)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Argo WorkflowTemplates: %v", err))
+		}
+		for _, wt := range workflowTemplates {
+			ns := wt.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := wt.GetName()
+			entrypoint, _, _ := unstructured.NestedString(wt.Object, "spec", "entrypoint")
+			templates, _, _ := unstructured.NestedSlice(wt.Object, "spec", "templates")
+			wtID := fmt.Sprintf("workflowtemplate/%s/%s", ns, name)
+			workflowTemplateIDs[ns+"/"+name] = wtID
+			workflowTemplateNodes[wtID] = Node{
+				ID:     wtID,
+				Kind:   KindWorkflowTemplate,
+				Name:   name,
+				Status: StatusNeutral,
+				Data: map[string]any{
+					"namespace":     ns,
+					"entrypoint":    entrypoint,
+					"templateCount": len(templates),
+					"labels":        wt.GetLabels(),
+					"apiVersion":    wt.GetAPIVersion(),
+				},
+			}
+		}
+	}
+	if hasClusterWorkflowTemplates && dynamicCache != nil {
+		clusterWorkflowTemplates, err := dynamicCache.ListNamespaces(clusterWorkflowTemplateGVR, opts.Namespaces)
+		if err != nil {
+			log.Printf("WARNING [topology] Failed to list Argo ClusterWorkflowTemplates: %v", err)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Argo ClusterWorkflowTemplates: %v", err))
+		}
+		for _, cwt := range clusterWorkflowTemplates {
+			name := cwt.GetName()
+			entrypoint, _, _ := unstructured.NestedString(cwt.Object, "spec", "entrypoint")
+			templates, _, _ := unstructured.NestedSlice(cwt.Object, "spec", "templates")
+			cwtID := fmt.Sprintf("clusterworkflowtemplate//%s", name)
+			clusterWorkflowTemplateIDs[name] = cwtID
+			workflowTemplateNodes[cwtID] = Node{
+				ID:     cwtID,
+				Kind:   KindClusterWorkflowTemplate,
+				Name:   name,
+				Status: StatusNeutral,
+				Data: map[string]any{
+					"entrypoint":    entrypoint,
+					"templateCount": len(templates),
+					"labels":        cwt.GetLabels(),
+					"apiVersion":    cwt.GetAPIVersion(),
+				},
+			}
+		}
+	}
+	if hasCronWorkflows && dynamicCache != nil {
+		cronWorkflows, err := dynamicCache.ListNamespaces(cronWorkflowGVR, opts.Namespaces)
+		if err != nil {
+			log.Printf("WARNING [topology] Failed to list Argo CronWorkflows: %v", err)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Argo CronWorkflows: %v", err))
+		}
+		for _, cwf := range cronWorkflows {
+			ns := cwf.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := cwf.GetName()
+			cwfID := fmt.Sprintf("cronworkflow/%s/%s", ns, name)
+			cronWorkflowIDs[ns+"/"+name] = cwfID
+			suspended, _, _ := unstructured.NestedBool(cwf.Object, "spec", "suspend")
+			lastScheduled, _, _ := unstructured.NestedString(cwf.Object, "status", "lastScheduledTime")
+			nodes = append(nodes, Node{
+				ID:     cwfID,
+				Kind:   KindCronWorkflow,
+				Name:   name,
+				Status: cronWorkflowTopologyStatus(cwf),
+				Data: map[string]any{
+					"namespace":         ns,
+					"schedule":          cronWorkflowScheduleString(cwf),
+					"suspend":           suspended,
+					"lastScheduledTime": lastScheduled,
+					"labels":            cwf.GetLabels(),
+					"apiVersion":        cwf.GetAPIVersion(),
+				},
+			})
+			edges = addArgoWorkflowTemplateEdges(edges, cwfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(cwf.Object, "spec", "workflowSpec"), workflowTemplateIDs, clusterWorkflowTemplateIDs)
+		}
+	}
+	if hasWorkflows && dynamicCache != nil {
+		workflows, err := dynamicCache.ListNamespaces(workflowGVR, opts.Namespaces)
+		if err != nil {
+			log.Printf("WARNING [topology] Failed to list Argo Workflows: %v", err)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Argo Workflows: %v", err))
+		}
+		for _, wf := range workflows {
+			ns := wf.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := wf.GetName()
+			wfID := fmt.Sprintf("workflow/%s/%s", ns, name)
+			workflowIDs[ns+"/"+name] = wfID
+			phase, _, _ := unstructured.NestedString(wf.Object, "status", "phase")
+			progress, _, _ := unstructured.NestedString(wf.Object, "status", "progress")
+			startedAt, _, _ := unstructured.NestedString(wf.Object, "status", "startedAt")
+			finishedAt, _, _ := unstructured.NestedString(wf.Object, "status", "finishedAt")
+			template, _, _ := unstructured.NestedString(wf.Object, "spec", "workflowTemplateRef", "name")
+			nodes = append(nodes, Node{
+				ID:     wfID,
+				Kind:   KindWorkflow,
+				Name:   name,
+				Status: workflowTopologyStatus(phase),
+				Data: map[string]any{
+					"namespace":  ns,
+					"phase":      phase,
+					"progress":   progress,
+					"startedAt":  startedAt,
+					"finishedAt": finishedAt,
+					"template":   template,
+					"labels":     wf.GetLabels(),
+					"apiVersion": wf.GetAPIVersion(),
+				},
+			})
+			edges = addArgoWorkflowTemplateEdges(edges, wfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(wf.Object, "spec"), workflowTemplateIDs, clusterWorkflowTemplateIDs)
+			if owner := argoWorkflowCronOwnerName(wf); owner != "" {
+				if cwfID, ok := cronWorkflowIDs[ns+"/"+owner]; ok {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", cwfID, wfID),
+						Source: cwfID,
+						Target: wfID,
+						Type:   EdgeManages,
+					})
+					workflowToCronWorkflow[ns+"/"+name] = cwfID
+				}
+			}
+		}
+	}
+	if len(workflowTemplateNodes) > 0 {
+		templateIDs := make([]string, 0, len(workflowTemplateNodes))
+		for id := range workflowTemplateNodes {
+			templateIDs = append(templateIDs, id)
+		}
+		sort.Strings(templateIDs)
+		for _, id := range templateIDs {
+			if node, ok := workflowTemplateNodes[id]; ok {
+				nodes = append(nodes, node)
+			}
+		}
+	}
+
 	// 5. Add Job nodes
 	var jobs []*batchv1.Job
 	{
@@ -2566,6 +2743,14 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		// Determine status
 		status := getJobStatus(job)
+		startTime := ""
+		if job.Status.StartTime != nil {
+			startTime = job.Status.StartTime.Format(time.RFC3339)
+		}
+		completionTime := ""
+		if job.Status.CompletionTime != nil {
+			completionTime = job.Status.CompletionTime.Format(time.RFC3339)
+		}
 
 		nodes = append(nodes, Node{
 			ID:     jobID,
@@ -2573,13 +2758,15 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Name:   job.Name,
 			Status: status,
 			Data: map[string]any{
-				"namespace":   job.Namespace,
-				"completions": job.Spec.Completions,
-				"parallelism": job.Spec.Parallelism,
-				"succeeded":   job.Status.Succeeded,
-				"failed":      job.Status.Failed,
-				"active":      job.Status.Active,
-				"labels":      job.Labels,
+				"namespace":      job.Namespace,
+				"completions":    job.Spec.Completions,
+				"parallelism":    job.Spec.Parallelism,
+				"succeeded":      job.Status.Succeeded,
+				"failed":         job.Status.Failed,
+				"active":         job.Status.Active,
+				"startTime":      startTime,
+				"completionTime": completionTime,
+				"labels":         job.Labels,
 			},
 		})
 
@@ -2598,9 +2785,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			workloadPVCRefs[jobID] = refs.pvcs
 		}
 
-		// Connect to owner CronJob
+		// Connect to owner CronJob or KEDA ScaledJob
 		for _, ownerRef := range job.OwnerReferences {
-			if ownerRef.Kind == "CronJob" {
+			switch ownerRef.Kind {
+			case "CronJob":
 				ownerKey := job.Namespace + "/" + ownerRef.Name
 				if ownerID, ok := cronJobIDs[ownerKey]; ok {
 					edges = append(edges, Edge{
@@ -2612,6 +2800,18 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					// Track for shortcut edges (CronJob -> Pod)
 					jobKey := job.Namespace + "/" + job.Name
 					jobToCronJob[jobKey] = ownerID
+				}
+			case "ScaledJob":
+				ownerKey := job.Namespace + "/" + ownerRef.Name
+				if ownerID, ok := scaledJobIDs[ownerKey]; ok {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", ownerID, jobID),
+						Source: ownerID,
+						Target: jobID,
+						Type:   EdgeManages,
+					})
+					jobKey := job.Namespace + "/" + job.Name
+					jobToScaledJob[jobKey] = ownerID
 				}
 			}
 		}
@@ -2730,7 +2930,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !opts.MatchesNamespaceFilter(pod.Namespace) {
 				continue
 			}
-			workloadID := b.resolvePodWorkloadID(pod, existingNodeIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs)
+			workloadID := b.resolvePodWorkloadID(pod, existingNodeIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, workflowIDs)
 			if workloadID == "" {
 				addPodHealth(orphanByNS, pod.Namespace, pod)
 				orphanRestarts[pod.Namespace] += ComputePodRestarts(pod)
@@ -2762,7 +2962,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					nodes = append(nodes, CreatePodNode(pod, b.provider, true)) // includeNodeName=true for resources view
 
 					// Connect to owner (resources view specific)
-					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobToCronJob)...)
+					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow)...)
 				}
 			} else {
 				// Large group - create PodGroup
@@ -2771,7 +2971,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 				// Connect to owner using first pod's owner (resources view specific)
 				firstPod := group.Pods[0]
-				edges = append(edges, b.createPodOwnerEdges(firstPod, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobToCronJob)...)
+				edges = append(edges, b.createPodOwnerEdges(firstPod, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow)...)
 			}
 		}
 	}
@@ -6793,7 +6993,13 @@ func (b *Builder) resolvePodWorkloadID(
 	replicaSetToDeployment map[string]string,
 	replicaSetToRollout map[string]string,
 	jobIDs map[string]string,
+	workflowIDs map[string]string,
 ) string {
+	if workflowName := pod.Labels["workflows.argoproj.io/workflow"]; workflowName != "" {
+		if workflowID, ok := workflowIDs[pod.Namespace+"/"+workflowName]; ok {
+			return workflowID
+		}
+	}
 	for _, ownerRef := range pod.OwnerReferences {
 		if ownerRef.Controller == nil || !*ownerRef.Controller {
 			continue
@@ -6890,8 +7096,32 @@ func (b *Builder) createPodOwnerEdges(
 	replicaSetToRollout map[string]string,
 	jobIDs map[string]string,
 	jobToCronJob map[string]string,
+	jobToScaledJob map[string]string,
+	workflowIDs map[string]string,
+	workflowToCronWorkflow map[string]string,
 ) []Edge {
 	var edges []Edge
+	if workflowName := pod.Labels["workflows.argoproj.io/workflow"]; workflowName != "" {
+		workflowKey := pod.Namespace + "/" + workflowName
+		if ownerID, ok := workflowIDs[workflowKey]; ok {
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),
+				Source: ownerID,
+				Target: targetID,
+				Type:   EdgeManages,
+			})
+			if cronWorkflowID, ok := workflowToCronWorkflow[workflowKey]; ok {
+				edges = append(edges, Edge{
+					ID:                fmt.Sprintf("%s-to-%s-shortcut", cronWorkflowID, targetID),
+					Source:            cronWorkflowID,
+					Target:            targetID,
+					Type:              EdgeManages,
+					SkipIfKindVisible: string(KindWorkflow),
+				})
+			}
+			return edges
+		}
+	}
 
 	for _, ownerRef := range pod.OwnerReferences {
 		ownerKey := pod.Namespace + "/" + ownerRef.Name
@@ -6959,6 +7189,15 @@ func (b *Builder) createPodOwnerEdges(
 						SkipIfKindVisible: string(KindJob),
 					})
 				}
+				if scaledJobID, ok := jobToScaledJob[ownerKey]; ok {
+					edges = append(edges, Edge{
+						ID:                fmt.Sprintf("%s-to-%s-shortcut", scaledJobID, targetID),
+						Source:            scaledJobID,
+						Target:            targetID,
+						Type:              EdgeManages,
+						SkipIfKindVisible: string(KindJob),
+					})
+				}
 			}
 		}
 	}
@@ -6989,6 +7228,137 @@ func getDeploymentStatus(ready, total int32) HealthStatus {
 
 func getJobStatus(job *batchv1.Job) HealthStatus {
 	return healthLevelToStatus(health.Workload(job, time.Now()).Level)
+}
+
+func workflowTopologyStatus(phase string) HealthStatus {
+	switch phase {
+	case "Succeeded":
+		return StatusHealthy
+	case "Running":
+		return StatusNeutral
+	case "Failed", "Error":
+		return StatusUnhealthy
+	case "Pending":
+		return StatusDegraded
+	default:
+		return StatusUnknown
+	}
+}
+
+func cronWorkflowTopologyStatus(cwf *unstructured.Unstructured) HealthStatus {
+	suspended, _, _ := unstructured.NestedBool(cwf.Object, "spec", "suspend")
+	if suspended {
+		return StatusNeutral
+	}
+	active, found, _ := unstructured.NestedSlice(cwf.Object, "status", "active")
+	if found && len(active) > 0 {
+		return StatusNeutral
+	}
+	if lastScheduled, _, _ := unstructured.NestedString(cwf.Object, "status", "lastScheduledTime"); lastScheduled != "" {
+		return StatusNeutral
+	}
+	return StatusUnknown
+}
+
+func cronWorkflowScheduleString(cwf *unstructured.Unstructured) string {
+	schedules, found, _ := unstructured.NestedStringSlice(cwf.Object, "spec", "schedules")
+	if found && len(schedules) > 0 {
+		return strings.Join(schedules, ", ")
+	}
+	schedule, _, _ := unstructured.NestedString(cwf.Object, "spec", "schedule")
+	return schedule
+}
+
+func argoWorkflowCronOwnerName(wf *unstructured.Unstructured) string {
+	for _, ref := range wf.GetOwnerReferences() {
+		if ref.Kind == "CronWorkflow" && ref.Name != "" && ref.Controller != nil && *ref.Controller {
+			return ref.Name
+		}
+	}
+	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
+}
+
+type argoWorkflowTemplateRef struct {
+	name         string
+	clusterScope bool
+}
+
+func argoWorkflowTemplateRefsFromWorkflowSpec(obj map[string]any, fields ...string) []argoWorkflowTemplateRef {
+	spec, found, _ := unstructured.NestedMap(obj, fields...)
+	if !found {
+		return nil
+	}
+	refs := make([]argoWorkflowTemplateRef, 0)
+	seen := make(map[string]bool)
+	addRef := func(raw map[string]any) {
+		name, _, _ := unstructured.NestedString(raw, "name")
+		if name == "" {
+			return
+		}
+		clusterScope, _, _ := unstructured.NestedBool(raw, "clusterScope")
+		key := fmt.Sprintf("%t/%s", clusterScope, name)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		refs = append(refs, argoWorkflowTemplateRef{name: name, clusterScope: clusterScope})
+	}
+
+	if workflowRef, found, _ := unstructured.NestedMap(spec, "workflowTemplateRef"); found {
+		addRef(workflowRef)
+	}
+	templates, _, _ := unstructured.NestedSlice(spec, "templates")
+	for _, rawTemplate := range templates {
+		template, ok := rawTemplate.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, rawTask := range argoTemplateTasks(template) {
+			task, ok := rawTask.(map[string]any)
+			if !ok {
+				continue
+			}
+			if templateRef, found, _ := unstructured.NestedMap(task, "templateRef"); found {
+				addRef(templateRef)
+			}
+		}
+	}
+	return refs
+}
+
+func argoTemplateTasks(template map[string]any) []any {
+	tasks := make([]any, 0)
+	if dagTasks, found, _ := unstructured.NestedSlice(template, "dag", "tasks"); found {
+		tasks = append(tasks, dagTasks...)
+	}
+	stepGroups, _, _ := unstructured.NestedSlice(template, "steps")
+	for _, rawGroup := range stepGroups {
+		if group, ok := rawGroup.([]any); ok {
+			tasks = append(tasks, group...)
+		}
+	}
+	return tasks
+}
+
+func addArgoWorkflowTemplateEdges(edges []Edge, sourceID, sourceNamespace string, refs []argoWorkflowTemplateRef, workflowTemplateIDs, clusterWorkflowTemplateIDs map[string]string) []Edge {
+	for _, ref := range refs {
+		targetID := ""
+		if ref.clusterScope {
+			targetID = clusterWorkflowTemplateIDs[ref.name]
+		} else {
+			targetID = workflowTemplateIDs[sourceNamespace+"/"+ref.name]
+		}
+		if targetID == "" {
+			continue
+		}
+		edges = append(edges, Edge{
+			ID:     fmt.Sprintf("%s-to-%s", targetID, sourceID),
+			Source: targetID,
+			Target: sourceID,
+			Type:   EdgeConfigures,
+		})
+	}
+	return edges
 }
 
 func getPVCStatus(pvc *corev1.PersistentVolumeClaim) HealthStatus {
@@ -7656,6 +8026,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"nodepool": true, "nodeclaim": true, // Karpenter
 		"ec2nodeclass": true, "aksnodeclass": true, "gcenodeclass": true, // Karpenter NodeClass
 		"scaledobject": true, "scaledjob": true, // KEDA
+		"workflowtemplate": true, "clusterworkflowtemplate": true, // Argo Workflows
 		"gatewayclass":   true,                                                // Gateway API
 		"virtualservice": true, "destinationrule": true, "serviceentry": true, // Istio networking
 		"peerauthentication": true, "authorizationpolicy": true, // Istio security
@@ -7686,6 +8057,8 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"replicaset": true, "pod": true, "service": true, "ingress": true,
 		"job": true, "cronjob": true, "configmap": true, "secret": true,
 		"persistentvolumeclaim": true, "horizontalpodautoscaler": true,
+		// Argo Workflows handled explicitly above
+		"workflow": true, "cronworkflow": true,
 		// Also skip namespace (not typically owned)
 		"namespace": true,
 	}

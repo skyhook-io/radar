@@ -150,6 +150,12 @@ export function ResourceActionsBar({
   onDrainNode, isDrainingNode,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
+  const canOpenWorkloadLogs = Boolean(
+    canViewLogs &&
+    !hideLogs &&
+    openWorkloadLogs &&
+    ['deployments', 'statefulsets', 'daemonsets', 'jobs', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kind)
+  )
 
   // Delete confirmation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -378,19 +384,6 @@ export function ResourceActionsBar({
               </button>
             </Tooltip>
           )}
-          {canViewLogs && !hideLogs && ['deployments', 'statefulsets', 'daemonsets'].includes(kind) && openWorkloadLogs && (
-            <button
-              onClick={() => openWorkloadLogs({
-                namespace: resource.namespace,
-                workloadKind: kind,
-                workloadName: resource.name,
-              })}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
-            >
-              <FileText className="w-3.5 h-3.5" />
-              Logs
-            </button>
-          )}
         </>
       )}
 
@@ -474,11 +467,39 @@ export function ResourceActionsBar({
         />
       )}
 
+      {canOpenWorkloadLogs && (
+        <button
+          onClick={() => openWorkloadLogs?.({
+            namespace: resource.namespace,
+            workloadKind: kind,
+            workloadName: resource.name,
+          })}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+        >
+          <FileText className="w-3.5 h-3.5" />
+          Logs
+        </button>
+      )}
+
       {/* Job logs */}
-      {kind === 'jobs' && onCopyCommand && (
+      {kind === 'jobs' && onCopyCommand && (!canViewLogs || !openWorkloadLogs) && (
         <button
           onClick={(e) => onCopyCommand(
             `kubectl logs job/${resource.name} -n ${resource.namespace} -f`,
+            'Logs command copied',
+            e
+          )}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+        >
+          <FileText className="w-3.5 h-3.5" />
+          Logs
+        </button>
+      )}
+
+      {kind === 'workflows' && onCopyCommand && (!canViewLogs || !openWorkloadLogs) && (
+        <button
+          onClick={(e) => onCopyCommand(
+            `argo logs ${resource.name} -n ${resource.namespace}`,
             'Logs command copied',
             e
           )}

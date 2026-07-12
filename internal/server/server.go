@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -91,6 +92,12 @@ type Server struct {
 	// ends on another (PerformNamespaceRescope's own lock only serializes the
 	// rebuild, not this handler's persist step).
 	scopeMutationMu sync.Mutex
+
+	// nsPickMu serializes namespace-pick mutations: the POST handler's
+	// persist+set pair and the read-path stale-pick prune. Without it, a
+	// prune computed from a stale snapshot can land after a user's fresh
+	// pick and silently revert it.
+	nsPickMu sync.Mutex
 
 	// Short-TTL cache for topology builds. The Topology graph is a
 	// deterministic projection of the informer cache; rebuilding it walks
@@ -277,9 +284,12 @@ func (s *Server) setupRoutes() {
 
 	// CORS for development
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:*", "http://127.0.0.1:*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Content-Type"},
+		AllowedOrigins: []string{"http://localhost:*", "http://127.0.0.1:*"},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Accept", "Content-Type"},
+		// Without an expose entry, cross-origin JS reads these as "" and the
+		// timeline client silently falls back to full-ring refetches.
+		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq"},
 		AllowCredentials: true,
 	}))
 
@@ -475,6 +485,7 @@ func (s *Server) setupRoutes() {
 
 			// Workload logs (non-streaming)
 			r.Get("/workloads/{kind}/{namespace}/{name}/logs", s.handleWorkloadLogs)
+			r.Get("/workloads/{kind}/{namespace}/{name}/runs", s.handleWorkloadRuns)
 			r.Get("/workloads/{kind}/{namespace}/{name}/pods", s.handleWorkloadPods)
 
 			// Helm routes
@@ -931,6 +942,7 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	namespaces := parseNamespaces(r.URL.Query())
 	pickFallback := false
+	pickCtx := ""
 	if k8s.ForceNamespaceScope {
 		target := k8s.GetNamespaceScopeTarget()
 		if target == "" {
@@ -945,11 +957,20 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 		}
 	}
 	if namespaces == nil {
-		// No explicit filter — use the user's saved picks if any.
+		// No explicit filter — use the user's saved picks if any, pruned of
+		// namespaces that were deleted from the cluster since the pick was made.
+		// When every pick is stale, fall through with no filter so the user sees
+		// the full cluster instead of a silently-empty UI. Read the pick and its
+		// context as one snapshot so the empty-fallback clear below commits
+		// against the same context, not one switched in mid-request.
 		s.loadSavedNamespacePreference(r)
-		if picks := s.getActiveNamespaceForUser(r); len(picks) > 0 {
-			namespaces = picks
-			pickFallback = true
+		if ctx, picks := s.getActiveNamespaceForUserInContext(r); len(picks) > 0 {
+			picks = s.pruneDeletedNamespacePicks(r, ctx, picks)
+			if len(picks) > 0 {
+				namespaces = picks
+				pickFallback = true
+				pickCtx = ctx
+			}
 		}
 	}
 	filtered := s.getUserNamespaces(r, namespaces)
@@ -958,8 +979,11 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	// stale pick entirely and recomputing as if no filter were set, so the
 	// user sees their full RBAC ceiling instead of a silently-empty UI.
 	// Symmetric with handleGetNamespaceScope's partial-revocation eviction.
+	// namespaces holds the pruned picks this fallback filtered on; clear only
+	// if it's still the live pick, so a stale read can't wipe a concurrent
+	// POST or clear across a context switch.
 	if pickFallback && noNamespaceAccess(filtered) {
-		s.setActiveNamespaceForUser(r, nil)
+		s.commitPickMutation(r, pickCtx, namespaces, nil, false)
 		filtered = s.getUserNamespaces(r, nil)
 	}
 	return filtered
@@ -2868,6 +2892,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	kind := r.URL.Query().Get("kind")
 	name := r.URL.Query().Get("name")
 	sinceStr := r.URL.Query().Get("since")
+	sinceSeqStr := r.URL.Query().Get("since_seq")
 	limitStr := r.URL.Query().Get("limit")
 	filterPreset := r.URL.Query().Get("filter")
 	includeK8sEvents := r.URL.Query().Get("include_k8s_events") != "false" // default true
@@ -2915,6 +2940,14 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		// clusters; the timeline view answers for the current one only.
 		ClusterContext: k8s.ActiveClusterContext(),
 	}
+	if sinceSeqStr != "" {
+		n, err := strconv.ParseInt(sinceSeqStr, 10, 64)
+		if err != nil || n < 0 {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid since_seq %q (expected a non-negative integer)", sinceSeqStr))
+			return
+		}
+		opts.SinceSeq = n
+	}
 	if kind != "" {
 		opts.Kinds = []string{kind}
 	}
@@ -2945,8 +2978,38 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Cursor progress must be derived from the page BEFORE the RBAC filter
+	// below: rows the user can't read still advance the delta frontier, or a
+	// run of unreadable rows would pin a delta client's cursor in place while
+	// it re-fetches the same page forever.
+	//
+	// Known limitation: rows dropped inside store.Query (managed resources,
+	// excluded K8s events, presets — and every filter in the memory store)
+	// can't advance maxSeq, so a client whose newest rows are all filtered
+	// re-reads that filtered tail on every poll. A re-scan inefficiency, not
+	// data loss: every matching row is still delivered. Worst case is the
+	// SQLite store, whose SQL LIMIT applies before the Go-side content filter
+	// — a matching row buried behind more than `limit` consecutive filtered
+	// rows in seq order never surfaces through the delta path and reaches the
+	// client only via its periodic full resync. A precise fix needs a
+	// same-snapshot store max-seq that ignores content filters; deferred as
+	// not worth the concurrency risk here.
+	var maxSeq int64
+	for _, e := range events {
+		if e.Seq > maxSeq {
+			maxSeq = e.Seq
+		}
+	}
 	events = s.filterChangesByClusterScopedRBAC(r, events)
 
+	// The store epoch validates delta cursors: seq restarts from 1 when the
+	// store is re-created (process restart, context switch), so a client
+	// holding a cursor from another epoch must full-resync instead of
+	// trusting an empty delta as "nothing new".
+	w.Header().Set("X-Radar-Timeline-Epoch", strconv.FormatInt(timeline.ObservationStart().UnixNano(), 10))
+	if maxSeq > 0 {
+		w.Header().Set("X-Radar-Timeline-Max-Seq", strconv.FormatInt(maxSeq, 10))
+	}
 	s.writeJSON(w, events)
 }
 

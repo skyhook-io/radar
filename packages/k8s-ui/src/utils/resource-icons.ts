@@ -129,7 +129,9 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
 
   // Argo
   workflow: Activity,
+  cronworkflow: Activity,
   workflowtemplate: Activity,
+  clusterworkflowtemplate: Activity,
   application: GitBranch, // ArgoCD Application
   applicationset: GitBranch, // ArgoCD ApplicationSet
 

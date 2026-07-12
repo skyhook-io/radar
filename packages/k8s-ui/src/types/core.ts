@@ -126,6 +126,10 @@ export type CoreNodeKind =
   | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
+  | 'Workflow'
+  | 'CronWorkflow'
+  | 'WorkflowTemplate'
+  | 'ClusterWorkflowTemplate'
   | 'PersistentVolumeClaim'
   | 'Node'
   | 'Namespace'
@@ -275,6 +279,10 @@ export interface TimelineEvent {
   id: string
   timestamp: string // ISO date string
   source: EventSource // Where event originated: 'informer', 'k8s_event', 'historical'
+  // Store-assigned arrival number (monotonic per store instance). The delta
+  // cursor keys on it — arrival order, not event time, so late-arriving
+  // events can't slip behind a client's cursor.
+  seq?: number
 
   // Resource identity
   kind: string
@@ -367,7 +375,7 @@ export interface TimelineFilters {
   timeRange: TimeRange
 }
 
-export type TimeRange = '5m' | '30m' | '1h' | '6h' | '24h' | 'all'
+export type TimeRange = '5m' | '30m' | '1h' | '6h' | '24h' | '7d' | '30d' | 'all'
 
 // Cluster info
 export interface ClusterInfo {
@@ -853,6 +861,8 @@ export interface BatchUpgradeInfo {
 // Request body for applying new values to a release
 export interface ApplyValuesRequest {
   values: Record<string, unknown>
+  version?: string
+  repository?: string
 }
 
 // Response for previewing values changes
@@ -1270,6 +1280,9 @@ export interface WorkloadPodInfo {
   lastTerminationReason?: string
   createdAt?: string
   containerStatuses?: WorkloadPodContainerInfo[]
+  stepID?: string
+  stepName?: string
+  stepPhase?: string
 }
 
 // SSE event types for workload log streaming

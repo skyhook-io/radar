@@ -1,6 +1,6 @@
 {
   "name": "@skyhook-io/radar-app",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Radar's full web UI as a reusable React component. Used by Radar's own binary and by external consumers like Radar Cloud.",
   "repository": {
     "type": "git",
@@ -24,6 +24,7 @@
     "preview": "vite preview",
     "tsc": "node ../node_modules/typescript-7/bin/tsc --noEmit",
     "tsc:ts6": "tsc --noEmit",
+    "test": "vitest run src",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "lint": "eslint src && node scripts/check-no-native-title.mjs"
   },

@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, type RefObject } from 'react'
 import { Search, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Input } from './Input'
@@ -18,6 +18,9 @@ export function SearchBox({
   className,
   onEnter,
   onArrowDown,
+  inputRef: externalRef,
+  shortcutEnabled = true,
+  onBlur,
 }: {
   value: string
   onChange: (value: string) => void
@@ -32,8 +35,17 @@ export function SearchBox({
   onEnter?: () => void
   /** ArrowDown in the box — hand focus off to list keyboard navigation. */
   onArrowDown?: () => void
+  /** Externally-owned input ref — lets a collapsible wrapper focus the box
+   *  after it mounts. Falls back to an internal ref when omitted. */
+  inputRef?: RefObject<HTMLInputElement | null>
+  /** Set false when a wrapper owns the `/` shortcut, so it isn't registered
+   *  twice under the same id. */
+  shortcutEnabled?: boolean
+  /** Blur handler — a collapsible wrapper uses it to fold back when empty. */
+  onBlur?: () => void
 }) {
-  const inputRef = useRef<HTMLInputElement>(null)
+  const internalRef = useRef<HTMLInputElement>(null)
+  const inputRef = externalRef ?? internalRef
 
   useRegisterShortcut({
     id: shortcutId,
@@ -41,6 +53,7 @@ export function SearchBox({
     description: 'Focus search',
     category: 'Search',
     scope,
+    enabled: shortcutEnabled,
     handler: () => inputRef.current?.focus(),
   })
 
@@ -52,6 +65,7 @@ export function SearchBox({
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             inputRef.current?.blur()

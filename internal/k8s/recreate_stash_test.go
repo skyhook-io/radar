@@ -50,10 +50,10 @@ func TestRecreateJoin_DeleteThenRecreateCarriesDiff(t *testing.T) {
 	}
 
 	oldDep := testDeployment("uid-1", "nginx:1.0", time.Now().Add(-time.Hour))
-	recordToTimelineStore("Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
 
 	newDep := testDeployment("uid-2", "nginx:2.0", time.Now())
-	recordToTimelineStore("Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Deployment"}, Namespaces: []string{"shop"},
@@ -111,8 +111,8 @@ func TestRecreateJoin_SameUIDReAdd_NoJoin(t *testing.T) {
 	}
 
 	dep := testDeployment("uid-1", "nginx:1.0", time.Now())
-	recordToTimelineStore("Deployment", "shop", "web", "uid-1", "delete", nil, dep, nil, false)
-	recordToTimelineStore("Deployment", "shop", "web", "uid-1", "add", nil, dep, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, dep, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "add", nil, dep, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Deployment"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},
@@ -203,10 +203,10 @@ func TestRecreateJoin_SpecIdenticalRecreate_NoJoin(t *testing.T) {
 
 	oldDep := testDeployment("uid-1", "nginx:1.0", time.Now().Add(-time.Hour))
 	oldDep.Status = appsv1.DeploymentStatus{ReadyReplicas: 1, AvailableReplicas: 1}
-	recordToTimelineStore("Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "delete", nil, oldDep, nil, false)
 
 	newDep := testDeployment("uid-2", "nginx:1.0", time.Now()) // same spec, fresh status
-	recordToTimelineStore("Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-2", "add", nil, newDep, nil, false)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Deployment"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},

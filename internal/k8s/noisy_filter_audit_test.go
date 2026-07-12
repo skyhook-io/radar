@@ -173,13 +173,13 @@ func TestRecordToTimelineStore_SyncAddMarksResourceSeen(t *testing.T) {
 		},
 	}
 
-	recordToTimelineStore("Pod", "default", "p", "pod-uid", "add", nil, pod, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "default", "p", "pod-uid", "add", nil, pod, nil, false)
 
 	store := timeline.GetStore()
 	if store == nil {
 		t.Fatal("timeline store is nil")
 	}
-	if !store.IsResourceSeen("Pod", "default", "p") {
+	if !store.IsResourceSeen(ActiveClusterContext(), "Pod", "default", "p") {
 		t.Fatal("sync add should mark resource seen after historical event recording")
 	}
 }

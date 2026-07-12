@@ -237,9 +237,9 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_workload_logs',
-    desc: 'Aggregated, filtered logs across all pods of a workload (Deployment, StatefulSet, or DaemonSet) — collected concurrently, filtered for errors/warnings, and deduplicated.',
+    desc: 'Aggregated, filtered logs across all pods of a workload (Deployment, StatefulSet, DaemonSet, Job, or Argo Workflow) — collected concurrently, filtered for errors/warnings, and deduplicated.',
     params: [
-      { arg: 'kind', desc: 'deployment (default), statefulset, or daemonset' },
+      { arg: 'kind', desc: 'deployment (default), statefulset, daemonset, job, or workflow' },
       { arg: 'namespace', required: true, desc: 'workload namespace' },
       { arg: 'name', required: true, desc: 'workload name' },
       { arg: 'container', desc: 'specific container (defaults to all)' },

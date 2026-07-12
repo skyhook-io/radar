@@ -119,6 +119,122 @@ func (m *rolloutDynamicProvider) IsCRD(kind string) bool {
 	return kind == "Rollout"
 }
 
+func TestArgoWorkflowTemplateRefsFromWorkflowSpec(t *testing.T) {
+	obj := map[string]any{
+		"spec": map[string]any{
+			"workflowTemplateRef": map[string]any{"name": "main"},
+			"templates": []any{
+				map[string]any{
+					"name": "dag",
+					"dag": map[string]any{
+						"tasks": []any{
+							map[string]any{"name": "build", "templateRef": map[string]any{"name": "shared", "clusterScope": true}},
+							map[string]any{"name": "test", "templateRef": map[string]any{"name": "shared", "clusterScope": true}},
+						},
+					},
+				},
+				map[string]any{
+					"name": "steps",
+					"steps": []any{
+						[]any{map[string]any{"name": "cleanup", "templateRef": map[string]any{"name": "cleanup"}}},
+					},
+				},
+			},
+		},
+	}
+
+	refs := argoWorkflowTemplateRefsFromWorkflowSpec(obj, "spec")
+	if len(refs) != 3 {
+		t.Fatalf("expected 3 deduped refs, got %#v", refs)
+	}
+	want := []argoWorkflowTemplateRef{
+		{name: "main"},
+		{name: "shared", clusterScope: true},
+		{name: "cleanup"},
+	}
+	for i := range want {
+		if refs[i] != want[i] {
+			t.Fatalf("ref %d = %#v, want %#v", i, refs[i], want[i])
+		}
+	}
+}
+
+func TestAddArgoWorkflowTemplateEdges(t *testing.T) {
+	edges := addArgoWorkflowTemplateEdges(nil, "workflow/demo/run", "demo", []argoWorkflowTemplateRef{
+		{name: "local"},
+		{name: "global", clusterScope: true},
+		{name: "missing"},
+	}, map[string]string{
+		"demo/local": "workflowtemplate/demo/local",
+	}, map[string]string{
+		"global": "clusterworkflowtemplate//global",
+	})
+
+	if len(edges) != 2 {
+		t.Fatalf("expected 2 edges, got %#v", edges)
+	}
+	if edges[0].Source != "workflowtemplate/demo/local" || edges[0].Target != "workflow/demo/run" || edges[0].Type != EdgeConfigures {
+		t.Fatalf("local edge = %#v", edges[0])
+	}
+	if edges[1].Source != "clusterworkflowtemplate//global" || edges[1].Target != "workflow/demo/run" || edges[1].Type != EdgeConfigures {
+		t.Fatalf("cluster edge = %#v", edges[1])
+	}
+}
+
+func TestArgoWorkflowCronOwnerNamePrefersControllerOwnerReference(t *testing.T) {
+	controller := true
+	wf := &unstructured.Unstructured{}
+	wf.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "label-owner"})
+	wf.SetOwnerReferences([]metav1.OwnerReference{{
+		Kind:       "CronWorkflow",
+		Name:       "owner-ref",
+		Controller: &controller,
+	}})
+
+	if got := argoWorkflowCronOwnerName(wf); got != "owner-ref" {
+		t.Fatalf("argoWorkflowCronOwnerName = %q, want owner-ref", got)
+	}
+}
+
+func TestCreatePodOwnerEdgesAddsScaledJobShortcut(t *testing.T) {
+	controller := true
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "demo",
+			Name:      "run-pod",
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind:       "Job",
+				Name:       "scaled-run",
+				Controller: &controller,
+			}},
+		},
+	}
+	builder := &Builder{}
+	edges := builder.createPodOwnerEdges(
+		pod,
+		"pod/demo/run-pod",
+		BuildOptions{},
+		nil,
+		nil,
+		nil,
+		map[string]string{"demo/scaled-run": "job/demo/scaled-run"},
+		nil,
+		map[string]string{"demo/scaled-run": "scaledjob/demo/importer"},
+		nil,
+		nil,
+	)
+
+	if len(edges) != 2 {
+		t.Fatalf("expected Job edge plus ScaledJob shortcut, got %#v", edges)
+	}
+	if edges[0].Source != "job/demo/scaled-run" || edges[0].Target != "pod/demo/run-pod" || edges[0].Type != EdgeManages {
+		t.Fatalf("job edge = %#v", edges[0])
+	}
+	if edges[1].Source != "scaledjob/demo/importer" || edges[1].Target != "pod/demo/run-pod" || edges[1].SkipIfKindVisible != string(KindJob) {
+		t.Fatalf("scaledjob shortcut edge = %#v", edges[1])
+	}
+}
+
 // --- Generators ---
 
 func makePods(n int, ns string) []*corev1.Pod {

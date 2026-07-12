@@ -17,6 +17,8 @@ interface ConfirmDialogProps {
   variant?: 'danger' | 'warning'
   isLoading?: boolean
   isClosable?: boolean // Allow closing even when isLoading (e.g., for long-running ops the user can dismiss)
+  confirmDisabled?: boolean // Block the confirm action while custom content is invalid (e.g., bad YAML)
+  className?: string
   children?: ReactNode // Optional custom content (e.g., checkboxes)
 }
 
@@ -32,6 +34,8 @@ export function ConfirmDialog({
   variant = 'danger',
   isLoading = false,
   isClosable = false,
+  confirmDisabled = false,
+  className,
   children,
 }: ConfirmDialogProps) {
   const canClose = !isLoading || isClosable
@@ -39,7 +43,7 @@ export function ConfirmDialog({
   const severity = isDanger ? 'error' : 'warning'
 
   return (
-    <DialogPortal open={open} onClose={onClose} closable={canClose} className="max-w-md w-full">
+    <DialogPortal open={open} onClose={onClose} closable={canClose} className={clsx('w-full', className ?? 'max-w-md')}>
       {/* Header */}
       <div className="flex items-start gap-3 p-4 border-b border-theme-border">
         <div
@@ -109,9 +113,9 @@ export function ConfirmDialog({
         </button>
         <button
           onClick={onConfirm}
-          disabled={isLoading}
+          disabled={isLoading || confirmDisabled}
           className={clsx(
-            'px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2',
+            'px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2',
             isDanger
               ? 'bg-red-600 hover:bg-red-700 text-theme-text-primary'
               : 'bg-amber-600 hover:bg-amber-700 text-theme-text-primary'

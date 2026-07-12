@@ -721,6 +721,17 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appS
 			Source:     SourceExplicit,
 		}
 	}
+
+	// Informational name-stem match key. Ships alongside the exact evidence keys
+	// so the surface can show/debug how a name-stem/namespace app was grouped;
+	// the client EXCLUDES it from event-evidence matching, because a bare name
+	// stem is not a label an event carries.
+	for i := range rows {
+		r := &rows[i]
+		if id := r.Identity; id != nil && (id.Source == SourceNameStem || id.Source == SourceNamespace) && id.Key != "" {
+			r.MatchKeys = append(r.MatchKeys, "name-stem:"+id.Key)
+		}
+	}
 }
 
 // sharedRepo returns one image repository present in EVERY candidate's repo

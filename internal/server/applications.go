@@ -16,6 +16,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -108,6 +109,7 @@ type appRow struct {
 	VersionSkew   bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
 	AppVersion    string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
 	Identity      *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
+	MatchKeys     []string          `json:"matchKeys,omitempty"`      // exact grouping-signal evidence keys, namespace-scoped ("instance:ns:x","helm:ns:x",…) + informational "name-stem:x" (unscoped); the client joins timeline events to this app by these, matching on the event's namespace
 	SourceRef     *appSourceRef     `json:"sourceRef,omitempty"`      // exact source system object when known (GitOps / native Helm)
 	Workloads     []appWorkload     `json:"workloads"`
 	Events        []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
@@ -172,11 +174,13 @@ type appHistoryIncident struct {
 type appRelationships struct {
 	Services  []string `json:"services,omitempty"`
 	Ingresses []string `json:"ingresses,omitempty"`
-	Routes    []string `json:"routes,omitempty"`
-	Configs   int      `json:"configs,omitempty"`
-	Scalers   int      `json:"scalers,omitempty"`
-	Storage   int      `json:"storage,omitempty"`
-	PDBs      int      `json:"pdbs,omitempty"`
+	// "Kind/name" (routes are polymorphic); Services/Ingresses carry bare names
+	// since their kind is fixed.
+	Routes  []string `json:"routes,omitempty"`
+	Configs int      `json:"configs,omitempty"`
+	Scalers int      `json:"scalers,omitempty"`
+	Storage int      `json:"storage,omitempty"`
+	PDBs    int      `json:"pdbs,omitempty"`
 
 	configRefs  map[string]struct{}
 	scalerRefs  map[string]struct{}
@@ -199,18 +203,20 @@ type appEvent struct {
 // appWorkload is one concrete workload belonging to an app, with its primary
 // container image as the version anchor when the workload has a pod template.
 type appWorkload struct {
-	Kind          string `json:"kind"`
-	Namespace     string `json:"namespace"`
-	Name          string `json:"name"`
-	WorkloadClass string `json:"workload_class,omitempty"` // service | worker | job | unknown
-	Image         string `json:"image,omitempty"`          // full primary-container image ref
-	Version       string `json:"version,omitempty"`        // image tag (digest-only → empty)
-	AppVersion    string `json:"appVersion,omitempty"`     // app.kubernetes.io/version label (upstream release, e.g. v2.49.1)
-	Health        string `json:"health"`
-	Ready         int    `json:"ready"`            // ready/available replicas
-	Desired       int    `json:"desired"`          // desired replicas
-	Restarts      int    `json:"restarts"`         // total container restarts across the workload's pods
-	Reason        string `json:"reason,omitempty"` // last-terminated reason of the worst pod (CrashLoopBackOff/OOMKilled/…)
+	Kind          string           `json:"kind"`
+	Group         string           `json:"group,omitempty"`
+	Namespace     string           `json:"namespace"`
+	Name          string           `json:"name"`
+	WorkloadClass string           `json:"workload_class,omitempty"` // service | worker | job | unknown
+	Image         string           `json:"image,omitempty"`          // full primary-container image ref
+	Version       string           `json:"version,omitempty"`        // image tag (digest-only → empty)
+	AppVersion    string           `json:"appVersion,omitempty"`     // app.kubernetes.io/version label (upstream release, e.g. v2.49.1)
+	Health        string           `json:"health"`
+	Ready         int              `json:"ready"`            // ready/available replicas
+	Desired       int              `json:"desired"`          // desired replicas
+	Restarts      int              `json:"restarts"`         // total container restarts across the workload's pods
+	Reason        string           `json:"reason,omitempty"` // last-terminated reason of the worst pod (CrashLoopBackOff/OOMKilled/…)
+	Batch         *appBatchSummary `json:"batch,omitempty"`
 
 	// envLabel is the explicit environment label, when the workload carries
 	// one (see envLabelOf) — app-identity resolver input, not on the wire.
@@ -224,6 +230,25 @@ type appWorkload struct {
 	appAnnotation string
 }
 
+type appBatchSummary struct {
+	Schedule         string `json:"schedule,omitempty"`
+	Suspended        bool   `json:"suspended,omitempty"`
+	ActiveRuns       int    `json:"activeRuns,omitempty"`
+	RetainedRuns     int    `json:"retainedRuns,omitempty"`
+	FailedRuns       int    `json:"failedRuns,omitempty"`
+	SucceededRuns    int    `json:"succeededRuns,omitempty"`
+	LatestRunName    string `json:"latestRunName,omitempty"`
+	LatestRunPhase   string `json:"latestRunPhase,omitempty"`
+	LatestStartedAt  string `json:"latestStartedAt,omitempty"`
+	LatestFinishedAt string `json:"latestFinishedAt,omitempty"`
+	LastScheduledAt  string `json:"lastScheduledAt,omitempty"`
+	LastSuccessfulAt string `json:"lastSuccessfulAt,omitempty"`
+	Message          string `json:"message,omitempty"`
+
+	latestRunActive      bool
+	latestRunScheduledAt string
+}
+
 // handleListApplications serves GET /api/applications.
 //
 //	?namespaces=a,b,c | ?namespace=a — limit to workloads in the namespace set.
@@ -232,7 +257,7 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	resp, err := ListApplications(r.Context(), namespaces)
+	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -262,7 +287,7 @@ func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	resp, err := ListApplications(r.Context(), namespaces)
+	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -505,11 +530,15 @@ type appGraph struct {
 // workload to its graph root + label overlay, and groups them into logical
 // apps. Add-on machinery is classified (not dropped); nothing is hidden.
 func ListApplications(ctx context.Context, namespaces []string) (*applicationsResponse, error) {
+	return listApplicationsForRequest(ctx, namespaces, true)
+}
+
+func listApplicationsForRequest(ctx context.Context, namespaces []string, canListClusterWorkflowTemplates bool) (*applicationsResponse, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, errResourceCacheUnavailable
 	}
-	cacheKey := applicationsCacheKeyFor(namespaces)
+	cacheKey := applicationsCacheKeyFor(namespaces, canListClusterWorkflowTemplates)
 	applicationsCacheMu.Lock()
 	entry, hit := applicationsCache[cacheKey]
 	applicationsCacheMu.Unlock()
@@ -518,7 +547,7 @@ func ListApplications(ctx context.Context, namespaces []string) (*applicationsRe
 	}
 
 	g := buildAppGraph(cache, namespaces)
-	wls := collectAppWorkloads(cache, namespaces, g)
+	wls := collectAppWorkloads(ctx, cache, namespaces, g, canListClusterWorkflowTemplates)
 	rows := groupApplications(wls)
 	sourcePaths, appSetChildren, argoItems := argoApplicationFacts(ctx, cache)
 	appSetByKey := appSetFanouts(appSetChildren)
@@ -556,13 +585,17 @@ func clearApplicationsCache() {
 	applicationsCacheMu.Unlock()
 }
 
-func applicationsCacheKeyFor(namespaces []string) string {
+func applicationsCacheKeyFor(namespaces []string, canListClusterWorkflowTemplates bool) string {
+	permissionMode := "cwt-denied:"
+	if canListClusterWorkflowTemplates {
+		permissionMode = "cwt-visible:"
+	}
 	if namespaces == nil {
-		return "*"
+		return permissionMode + "*"
 	}
 	ns := append([]string(nil), namespaces...)
 	sort.Strings(ns)
-	return strings.Join(ns, ",")
+	return permissionMode + strings.Join(ns, ",")
 }
 
 // buildAppGraph constructs the same resources-view topology the /api/topology
@@ -697,7 +730,10 @@ func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
 		out.Ingresses = append(out.Ingresses, i.Name)
 	}
 	for _, r := range rel.Routes {
-		out.Routes = append(out.Routes, r.Name)
+		// Routes are polymorphic (HTTPRoute/GRPCRoute/TCPRoute/TLSRoute), so ship
+		// "Kind/name": the client keys its membership index on the concrete kind
+		// (matching the lane ids), which a bare name can't reconstruct.
+		out.Routes = append(out.Routes, r.Kind+"/"+r.Name)
 	}
 	if len(out.Services) == 0 && len(out.Ingresses) == 0 && len(out.Routes) == 0 &&
 		out.Configs == 0 && out.Scalers == 0 && out.Storage == 0 && out.PDBs == 0 {
@@ -726,13 +762,16 @@ type appWorkloadInput struct {
 // each to its structural root and label overlay, and classifies add-on
 // machinery. Pods and Warning events are indexed once per namespace and joined,
 // not re-listed per workload.
-func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGraph) []appWorkloadInput {
+func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *appGraph, canListClusterWorkflowTemplates bool) []appWorkloadInput {
 	var out []appWorkloadInput
 
 	podsByNS := indexPodsByNamespace(cache, namespaces)
 	eventsByObj := indexWarningEventsByObject(cache, namespaces)
+	cronJobBatches := cronJobBatchSummaries(cache, namespaces)
+	scaledJobBatches := scaledJobBatchSummaries(cache, namespaces)
+	cronWorkflowBatches := cronWorkflowBatchSummaries(ctx, cache, namespaces)
 
-	add := func(kind, ns, name string, lbls, anns map[string]string, image string, health packages.Health, ready, desired int, selector *metav1.LabelSelector) {
+	add := func(kind, ns, name string, lbls, anns map[string]string, image string, health packages.Health, ready, desired int, selector *metav1.LabelSelector, batch *appBatchSummary) {
 		pods := podsForSelector(podsByNS[ns], selector)
 		restarts, reason := podsRestarts(pods)
 		meta := metav1.ObjectMeta{Namespace: ns, Name: name, Labels: lbls, Annotations: anns}
@@ -743,6 +782,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 		out = append(out, appWorkloadInput{
 			wl: appWorkload{
 				Kind:          kind,
+				Group:         appWorkloadAPIGroup(kind),
 				Namespace:     ns,
 				Name:          name,
 				WorkloadClass: classifyWorkload(kind, rels),
@@ -754,6 +794,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				Desired:       desired,
 				Restarts:      restarts,
 				Reason:        reason,
+				Batch:         batch,
 				envLabel:      envLabelOf(lbls),
 				nameLabel:     lbls["app.kubernetes.io/name"],
 				appAnnotation: strings.TrimSpace(anns[appIdentityAnnotation]),
@@ -791,7 +832,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
-					int(d.Status.AvailableReplicas), int(d.Status.Replicas), d.Spec.Selector)
+					int(d.Status.AvailableReplicas), int(d.Status.Replicas), d.Spec.Selector, nil)
 			}
 		})
 	}
@@ -807,7 +848,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
-					int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled), d.Spec.Selector)
+					int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled), d.Spec.Selector, nil)
 			}
 		})
 	}
@@ -823,7 +864,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				add("StatefulSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
-					int(d.Status.ReadyReplicas), int(d.Status.Replicas), d.Spec.Selector)
+					int(d.Status.ReadyReplicas), int(d.Status.Replicas), d.Spec.Selector, nil)
 			}
 		})
 	}
@@ -836,13 +877,17 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				items, _ = jobLister.Jobs(ns).List(labels.Everything())
 			}
 			for _, j := range items {
-				if ownedByCronJob(j) {
+				if controllerOwnerName(j.OwnerReferences, "CronJob") != "" {
 					continue
 				}
+				if controllerOwnerName(j.OwnerReferences, "ScaledJob") != "" {
+					continue
+				}
+				batch := jobBatchSummary(j)
 				add("Job", j.Namespace, j.Name, j.Labels, j.Annotations,
 					primaryImage(j.Spec.Template.Spec.Containers),
-					levelToPackagesHealth(health.Workload(j, time.Now()).Level),
-					int(j.Status.Succeeded), jobDesired(j), j.Spec.Selector)
+					batchHealth(batch, levelToPackagesHealth(health.Workload(j, time.Now()).Level)),
+					0, 0, j.Spec.Selector, batch)
 			}
 		})
 	}
@@ -855,14 +900,516 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				items, _ = cjLister.CronJobs(ns).List(labels.Everything())
 			}
 			for _, cj := range items {
+				batch := cronJobBatches[cj.Namespace+"/"+cj.Name]
+				if batch == nil {
+					batch = &appBatchSummary{}
+				}
+				batch.Schedule = cj.Spec.Schedule
+				batch.Suspended = cj.Spec.Suspend != nil && *cj.Spec.Suspend
+				setLatestBatchTime(&batch.LastScheduledAt, formatMetaTime(cj.Status.LastScheduleTime))
+				setLatestBatchTime(&batch.LastSuccessfulAt, formatMetaTime(cj.Status.LastSuccessfulTime))
 				add("CronJob", cj.Namespace, cj.Name, cj.Labels, cj.Annotations,
 					primaryImage(cj.Spec.JobTemplate.Spec.Template.Spec.Containers),
-					levelToPackagesHealth(health.Workload(cj, time.Now()).Level),
-					0, 0, nil)
+					batchHealth(batch, levelToPackagesHealth(health.Workload(cj, time.Now()).Level)),
+					0, 0, nil, batch)
 			}
 		})
 	}
+	addScaledJobWorkloads(ctx, cache, namespaces, add, scaledJobBatches)
+	addArgoBatchWorkloads(ctx, cache, namespaces, add, cronWorkflowBatches, canListClusterWorkflowTemplates)
 	return out
+}
+
+type addAppWorkloadFunc func(kind, ns, name string, lbls, anns map[string]string, image string, health packages.Health, ready, desired int, selector *metav1.LabelSelector, batch *appBatchSummary)
+
+func jobBatchSummary(job *batchv1.Job) *appBatchSummary {
+	b := &appBatchSummary{}
+	applyRunToBatch(b, jobRunInfo(job))
+	return b
+}
+
+func cronJobBatchSummaries(cache *k8s.ResourceCache, namespaces []string) map[string]*appBatchSummary {
+	out := map[string]*appBatchSummary{}
+	jobLister := cache.Jobs()
+	if jobLister == nil {
+		return out
+	}
+	forEachWorkloadNamespace(namespaces, func(ns string) {
+		var jobs []*batchv1.Job
+		if ns == "" {
+			jobs, _ = jobLister.List(labels.Everything())
+		} else {
+			jobs, _ = jobLister.Jobs(ns).List(labels.Everything())
+		}
+		for _, job := range jobs {
+			owner := controllerOwnerName(job.OwnerReferences, "CronJob")
+			if owner == "" {
+				continue
+			}
+			key := job.Namespace + "/" + owner
+			if out[key] == nil {
+				out[key] = &appBatchSummary{}
+			}
+			applyRunToBatch(out[key], jobRunInfo(job))
+		}
+	})
+	return out
+}
+
+func scaledJobBatchSummaries(cache *k8s.ResourceCache, namespaces []string) map[string]*appBatchSummary {
+	out := map[string]*appBatchSummary{}
+	jobLister := cache.Jobs()
+	if jobLister == nil {
+		return out
+	}
+	forEachWorkloadNamespace(namespaces, func(ns string) {
+		var jobs []*batchv1.Job
+		if ns == "" {
+			jobs, _ = jobLister.List(labels.Everything())
+		} else {
+			jobs, _ = jobLister.Jobs(ns).List(labels.Everything())
+		}
+		for _, job := range jobs {
+			owner := controllerOwnerName(job.OwnerReferences, "ScaledJob")
+			if owner == "" {
+				continue
+			}
+			key := job.Namespace + "/" + owner
+			if out[key] == nil {
+				out[key] = &appBatchSummary{}
+			}
+			applyRunToBatch(out[key], jobRunInfo(job))
+		}
+	})
+	return out
+}
+
+func cronWorkflowBatchSummaries(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) map[string]*appBatchSummary {
+	out := map[string]*appBatchSummary{}
+	workflows := listArgoWorkflows(ctx, cache, namespaces)
+	for _, wf := range workflows {
+		owner := cronWorkflowOwnerName(wf)
+		if owner == "" {
+			continue
+		}
+		key := wf.GetNamespace() + "/" + owner
+		if out[key] == nil {
+			out[key] = &appBatchSummary{}
+		}
+		applyRunToBatch(out[key], workflowRunInfo(wf))
+	}
+	return out
+}
+
+func addScaledJobWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, add addAppWorkloadFunc, batches map[string]*appBatchSummary) {
+	for _, sj := range listDynamicByNamespacesGroup(ctx, cache, namespaces, "ScaledJob", "keda.sh") {
+		batch := batches[sj.GetNamespace()+"/"+sj.GetName()]
+		if batch == nil {
+			batch = &appBatchSummary{}
+		}
+		add("ScaledJob", sj.GetNamespace(), sj.GetName(), sj.GetLabels(), sj.GetAnnotations(),
+			scaledJobPrimaryImage(sj), batchHealth(batch, scaledJobHealth(sj)), 0, 0, nil, batch)
+	}
+}
+
+func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, add addAppWorkloadFunc, cronWorkflowBatches map[string]*appBatchSummary, canListClusterWorkflowTemplates bool) {
+	workflows := listArgoWorkflows(ctx, cache, namespaces)
+	cronWorkflows := listArgoCronWorkflows(ctx, cache, namespaces)
+	cronWorkflowKeys := map[string]bool{}
+	for _, cwf := range cronWorkflows {
+		cronWorkflowKeys[cwf.GetNamespace()+"/"+cwf.GetName()] = true
+	}
+	templateInfos := argoWorkflowTemplateInfos(ctx, cache, namespaces, workflows, canListClusterWorkflowTemplates)
+	templateBatches := workflowTemplateBatchSummaries(workflows, cronWorkflowKeys)
+
+	for _, wf := range workflows {
+		if owner := cronWorkflowOwnerName(wf); owner != "" && cronWorkflowKeys[wf.GetNamespace()+"/"+owner] {
+			continue
+		}
+		if ref, ok := argoWorkflowTemplateRef(wf); ok {
+			if _, exists := templateInfos[ref.key()]; exists {
+				continue
+			}
+		}
+		run := workflowRunInfo(wf)
+		batch := &appBatchSummary{}
+		applyRunToBatch(batch, run)
+		add("Workflow", wf.GetNamespace(), wf.GetName(), wf.GetLabels(), wf.GetAnnotations(),
+			workflowPrimaryImage(wf), workflowHealth(run.Phase), 0, 0, nil, batch)
+	}
+
+	templateKeys := make([]string, 0, len(templateInfos))
+	for key := range templateInfos {
+		templateKeys = append(templateKeys, key)
+	}
+	sort.Strings(templateKeys)
+	for _, key := range templateKeys {
+		info := templateInfos[key]
+		batch := templateBatches[key]
+		if batch == nil {
+			batch = &appBatchSummary{}
+		}
+		add(info.kind, info.namespace, info.name, info.labels, info.annotations,
+			templateImage(info.object, "spec", "templates"), batchHealth(batch, packages.HealthNeutral), 0, 0, nil, batch)
+	}
+
+	for _, cwf := range cronWorkflows {
+		batch := cronWorkflowBatches[cwf.GetNamespace()+"/"+cwf.GetName()]
+		if batch == nil {
+			batch = &appBatchSummary{}
+		}
+		batch.Schedule = cronWorkflowSchedule(cwf)
+		suspended, _, _ := unstructured.NestedBool(cwf.Object, "spec", "suspend")
+		batch.Suspended = suspended
+		lastScheduled, _, _ := unstructured.NestedString(cwf.Object, "status", "lastScheduledTime")
+		setLatestBatchTime(&batch.LastScheduledAt, lastScheduled)
+		add("CronWorkflow", cwf.GetNamespace(), cwf.GetName(), cwf.GetLabels(), cwf.GetAnnotations(),
+			cronWorkflowPrimaryImage(cwf), batchHealth(batch, packages.HealthNeutral), 0, 0, nil, batch)
+	}
+}
+
+func listArgoWorkflows(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) []*unstructured.Unstructured {
+	return listDynamicByNamespaces(ctx, cache, namespaces, "Workflow")
+}
+
+func listArgoCronWorkflows(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) []*unstructured.Unstructured {
+	return listDynamicByNamespaces(ctx, cache, namespaces, "CronWorkflow")
+}
+
+type argoTemplateRef struct {
+	kind      string
+	namespace string
+	name      string
+}
+
+func (r argoTemplateRef) key() string {
+	return r.kind + "/" + r.namespace + "/" + r.name
+}
+
+type argoTemplateInfo struct {
+	argoTemplateRef
+	labels      map[string]string
+	annotations map[string]string
+	object      map[string]any
+}
+
+func argoWorkflowTemplateInfos(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, workflows []*unstructured.Unstructured, canListClusterWorkflowTemplates bool) map[string]argoTemplateInfo {
+	out := map[string]argoTemplateInfo{}
+	for _, wt := range listDynamicByNamespaces(ctx, cache, namespaces, "WorkflowTemplate") {
+		ref := argoTemplateRef{kind: "WorkflowTemplate", namespace: wt.GetNamespace(), name: wt.GetName()}
+		out[ref.key()] = argoTemplateInfo{
+			argoTemplateRef: ref,
+			labels:          wt.GetLabels(),
+			annotations:     wt.GetAnnotations(),
+			object:          wt.Object,
+		}
+	}
+	if !canListClusterWorkflowTemplates {
+		return out
+	}
+	for _, cwt := range listDynamicClusterScoped(ctx, cache, "ClusterWorkflowTemplate", "argoproj.io") {
+		if !shouldIncludeClusterWorkflowTemplate(namespaces, workflows, cwt.GetName(), canListClusterWorkflowTemplates) {
+			continue
+		}
+		ref := argoTemplateRef{kind: "ClusterWorkflowTemplate", name: cwt.GetName()}
+		out[ref.key()] = argoTemplateInfo{
+			argoTemplateRef: ref,
+			labels:          cwt.GetLabels(),
+			annotations:     cwt.GetAnnotations(),
+			object:          cwt.Object,
+		}
+	}
+	return out
+}
+
+func shouldIncludeClusterWorkflowTemplate(namespaces []string, workflows []*unstructured.Unstructured, name string, canList bool) bool {
+	if !canList {
+		return false
+	}
+	return namespaces == nil || clusterWorkflowTemplateReferenced(workflows, name)
+}
+
+func clusterWorkflowTemplateReferenced(workflows []*unstructured.Unstructured, name string) bool {
+	for _, workflow := range workflows {
+		ref, ok := argoWorkflowTemplateRef(workflow)
+		if ok && ref.kind == "ClusterWorkflowTemplate" && ref.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowTemplateBatchSummaries(workflows []*unstructured.Unstructured, cronWorkflowKeys map[string]bool) map[string]*appBatchSummary {
+	out := map[string]*appBatchSummary{}
+	for _, wf := range workflows {
+		if owner := cronWorkflowOwnerName(wf); owner != "" && cronWorkflowKeys[wf.GetNamespace()+"/"+owner] {
+			continue
+		}
+		ref, ok := argoWorkflowTemplateRef(wf)
+		if !ok {
+			continue
+		}
+		key := ref.key()
+		if out[key] == nil {
+			out[key] = &appBatchSummary{}
+		}
+		applyRunToBatch(out[key], workflowRunInfo(wf))
+	}
+	return out
+}
+
+func argoWorkflowTemplateRef(wf *unstructured.Unstructured) (argoTemplateRef, bool) {
+	name, _, _ := unstructured.NestedString(wf.Object, "spec", "workflowTemplateRef", "name")
+	clusterScope, _, _ := unstructured.NestedBool(wf.Object, "spec", "workflowTemplateRef", "clusterScope")
+	if name == "" {
+		name = wf.GetLabels()["workflows.argoproj.io/workflow-template"]
+	}
+	if name == "" {
+		return argoTemplateRef{}, false
+	}
+	if clusterScope {
+		return argoTemplateRef{kind: "ClusterWorkflowTemplate", name: name}, true
+	}
+	return argoTemplateRef{kind: "WorkflowTemplate", namespace: wf.GetNamespace(), name: name}, true
+}
+
+func listDynamicByNamespaces(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, kind string) []*unstructured.Unstructured {
+	return listDynamicByNamespacesGroup(ctx, cache, namespaces, kind, "argoproj.io")
+}
+
+func listDynamicByNamespacesGroup(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, kind, group string) []*unstructured.Unstructured {
+	var out []*unstructured.Unstructured
+	forEachWorkloadNamespace(namespaces, func(ns string) {
+		items, err := cache.ListDynamicWithGroup(ctx, kind, ns, group)
+		if err != nil {
+			return
+		}
+		out = append(out, items...)
+	})
+	return out
+}
+
+func listDynamicClusterScoped(ctx context.Context, cache *k8s.ResourceCache, kind, group string) []*unstructured.Unstructured {
+	items, err := cache.ListDynamicWithGroup(ctx, kind, "", group)
+	if err != nil {
+		return nil
+	}
+	return items
+}
+
+func applyRunToBatch(b *appBatchSummary, run WorkloadRun) {
+	b.RetainedRuns++
+	if run.Active {
+		b.ActiveRuns++
+	}
+	switch run.Phase {
+	case "Succeeded":
+		b.SucceededRuns++
+		setLatestBatchTime(&b.LastSuccessfulAt, firstNonEmptyString(run.FinishedAt, run.StartedAt, run.ScheduledAt))
+	case "Failed", "Error":
+		b.FailedRuns++
+	}
+	setLatestBatchTime(&b.LastScheduledAt, run.ScheduledAt)
+	if b.LatestRunName == "" || runIsNewer(run, b.latestRun()) {
+		b.LatestRunName = run.Name
+		b.LatestRunPhase = run.Phase
+		b.LatestStartedAt = run.StartedAt
+		b.LatestFinishedAt = run.FinishedAt
+		b.latestRunActive = run.Active
+		b.latestRunScheduledAt = run.ScheduledAt
+		b.Message = run.Message
+	}
+}
+
+func runIsNewer(a, b WorkloadRun) bool {
+	aTime := runSortTime(a)
+	bTime := runSortTime(b)
+	if !aTime.Equal(bTime) {
+		return aTime.After(bTime)
+	}
+	return runComesBefore(a, b)
+}
+
+func (b *appBatchSummary) latestRun() WorkloadRun {
+	return WorkloadRun{
+		Name:        b.LatestRunName,
+		Phase:       b.LatestRunPhase,
+		Active:      b.latestRunActive,
+		StartedAt:   b.LatestStartedAt,
+		FinishedAt:  b.LatestFinishedAt,
+		ScheduledAt: b.latestRunScheduledAt,
+	}
+}
+
+func setLatestBatchTime(target *string, value string) {
+	if value == "" {
+		return
+	}
+	if *target == "" || parseBatchTime(value).After(parseBatchTime(*target)) {
+		*target = value
+	}
+}
+
+func parseBatchTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+func batchHealth(batch *appBatchSummary, fallback packages.Health) packages.Health {
+	if batch == nil {
+		return fallback
+	}
+	if fallback == packages.HealthUnhealthy {
+		return fallback
+	}
+	if batch.ActiveRuns > 0 {
+		if fallback == packages.HealthDegraded {
+			return fallback
+		}
+		return packages.HealthNeutral
+	}
+	if batch.LatestRunPhase == "Failed" || batch.LatestRunPhase == "Error" {
+		return packages.HealthUnhealthy
+	}
+	if fallback == packages.HealthDegraded {
+		return fallback
+	}
+	if batch.Suspended {
+		return packages.HealthNeutral
+	}
+	if batch.LatestRunPhase == "Succeeded" {
+		return packages.HealthHealthy
+	}
+	return fallback
+}
+
+func workflowHealth(phase string) packages.Health {
+	switch phase {
+	case "Succeeded":
+		return packages.HealthHealthy
+	case "Running":
+		return packages.HealthNeutral
+	case "Failed", "Error":
+		return packages.HealthUnhealthy
+	case "Pending":
+		return packages.HealthDegraded
+	default:
+		return packages.HealthUnknown
+	}
+}
+
+func scaledJobPrimaryImage(sj *unstructured.Unstructured) string {
+	containers, found, _ := unstructured.NestedSlice(sj.Object, "spec", "jobTargetRef", "template", "spec", "containers")
+	if !found || len(containers) == 0 {
+		return ""
+	}
+	first, ok := containers[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	image, _ := first["image"].(string)
+	return image
+}
+
+func scaledJobHealth(sj *unstructured.Unstructured) packages.Health {
+	conditions, _, _ := unstructured.NestedSlice(sj.Object, "status", "conditions")
+	var activeCond, readyCond, pausedCond map[string]any
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch condition["type"] {
+		case "Active":
+			activeCond = condition
+		case "Paused":
+			pausedCond = condition
+		case "Ready":
+			readyCond = condition
+		}
+	}
+	if pausedCond != nil && pausedCond["status"] == "True" {
+		return packages.HealthNeutral
+	}
+	if readyCond != nil {
+		switch readyCond["status"] {
+		case "False":
+			return packages.HealthUnhealthy
+		case "True":
+			if activeCond == nil {
+				return packages.HealthHealthy
+			}
+		}
+	}
+	if activeCond != nil {
+		switch activeCond["status"] {
+		case "True":
+			return packages.HealthHealthy
+		case "False":
+			return packages.HealthNeutral
+		}
+	}
+	active, _, _ := unstructured.NestedString(sj.Object, "status", "active")
+	if active == "True" {
+		return packages.HealthHealthy
+	}
+	return packages.HealthNeutral
+}
+
+func workflowPrimaryImage(wf *unstructured.Unstructured) string {
+	if image := templateImage(wf.Object, "spec", "templates"); image != "" {
+		return image
+	}
+	return templateImage(wf.Object, "status", "storedWorkflowTemplateSpec", "templates")
+}
+
+func cronWorkflowPrimaryImage(cwf *unstructured.Unstructured) string {
+	if image := templateImage(cwf.Object, "spec", "workflowSpec", "templates"); image != "" {
+		return image
+	}
+	return ""
+}
+
+func templateImage(obj map[string]any, path ...string) string {
+	templates, found, _ := unstructured.NestedSlice(obj, path...)
+	if !found {
+		return ""
+	}
+	for _, raw := range templates {
+		tpl, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		container, _, _ := unstructured.NestedMap(tpl, "container")
+		if image, _ := container["image"].(string); image != "" {
+			return image
+		}
+	}
+	return ""
+}
+
+func cronWorkflowSchedule(cwf *unstructured.Unstructured) string {
+	schedules, found, _ := unstructured.NestedStringSlice(cwf.Object, "spec", "schedules")
+	if found && len(schedules) > 0 {
+		return strings.Join(schedules, ", ")
+	}
+	schedule, _, _ := unstructured.NestedString(cwf.Object, "spec", "schedule")
+	return schedule
+}
+
+func forEachWorkloadNamespace(namespaces []string, fn func(ns string)) {
+	if namespaces == nil {
+		fn("")
+		return
+	}
+	for _, ns := range namespaces {
+		fn(ns)
+	}
 }
 
 // --- grouping ------------------------------------------------------------
@@ -898,6 +1445,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 		ins := members[comp]
 		r := &appRow{}
 		identifyApp(r, ins)
+		servingHealth := packages.Health("")
 		appVers := map[string]struct{}{}
 		labeled := 0
 		nss := map[string]struct{}{}
@@ -906,6 +1454,9 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			r.Workloads = append(r.Workloads, in.wl)
 			r.Events = append(r.Events, in.events...)
 			r.Health = string(packages.WorseHealth(packages.Health(r.Health), packages.Health(in.wl.Health)))
+			if in.wl.WorkloadClass == "service" || in.wl.WorkloadClass == "worker" {
+				servingHealth = packages.WorseHealth(servingHealth, packages.Health(in.wl.Health))
+			}
 			if v := in.wl.Version; v != "" && !slices.Contains(r.Versions, v) {
 				r.Versions = append(r.Versions, v)
 			}
@@ -923,6 +1474,9 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 				tagsByRepo[repo][tag] = struct{}{}
 			}
 			mergeRelationships(r, in.rels)
+		}
+		if r.WorkloadClass == "mixed" && servingHealth != "" {
+			r.Health = string(servingHealth)
 		}
 		setStrictSourceRef(r, ins)
 		// The app lives where its WORKLOADS run — a Flux HelmRelease in
@@ -1032,6 +1586,81 @@ func identifyApp(r *appRow, ins []appWorkloadInput) {
 
 	r.Category, r.AddonReason = classifyAppCategory(ins)
 	r.WorkloadClass = classifyAppWorkloads(ins)
+	r.MatchKeys = collectExactMatchKeys(ins)
+}
+
+// signalMatchKind maps an overlay Signal (winner or retained runner-up) to its
+// client-facing evidence kind + the EXACT grouping value the server keyed on —
+// appNameFromKey(sig.Key), never a recomputed display name. Kinds are pinned to
+// the pkg/subject tiers: note that "instance" is app.kubernetes.io/instance
+// (TierInstance) while argocd.argoproj.io/instance (TierArgoInstance) maps to
+// "argo". TierFluxKustomize has no event-matchable label kind, so it is
+// skipped. The caller namespace-scopes the final key (see collectExactMatchKeys).
+func signalMatchKind(sig subject.Signal) (kind, value string, ok bool) {
+	value = appNameFromKey(sig.Key)
+	if value == "" {
+		return "", "", false
+	}
+	switch sig.Tier {
+	// Native Helm (TierHelmRelease) is deliberately absent: its identity is
+	// the meta.helm.sh/release-name ANNOTATION, and timeline events carry only
+	// labels, so a key derived from it can never join. The chart's recommended
+	// labels (instance/name/part-of) surface through their own tiers. Flux
+	// HelmRelease identity is a label (helm.toolkit.fluxcd.io/name) — joinable.
+	// TierArgoTrackingID stays even though the tracking id is an annotation:
+	// its key equals the argocd.argoproj.io/instance label's, so it joins
+	// whenever Argo's tracking mode also applies the label.
+	case subject.TierFluxHelmRelease:
+		return "helm", value, true
+	case subject.TierArgoTrackingID, subject.TierArgoInstance:
+		return "argo", value, true
+	case subject.TierInstance:
+		return "instance", value, true
+	case subject.TierPartOf:
+		return "part-of", value, true
+	case subject.TierAppName:
+		return "name", value, true
+	case subject.TierBareApp:
+		return "app", value, true
+	}
+	return "", "", false
+}
+
+// collectExactMatchKeys gathers the exact grouping-signal evidence keys for an
+// app from EVERY member workload's overlay (winner + retained conflicts), deduped
+// and sorted. These are the kinds a deleted member's timeline event can still
+// carry as labels, so the client can re-join it to this app.
+//
+// Keys are namespace-scoped as "<kind>:<namespace>:<value>" using the workload's
+// OWN namespace: the same label value (e.g. instance=redis) can appear in two
+// namespaces belonging to different apps, and an unscoped "instance:redis" would
+// let a historical lane join the wrong one. An app whose workloads span multiple
+// namespaces therefore emits one scoped key per namespace it lives in. The
+// client looks these up with the matching EVENT's namespace. The informational
+// name-stem key is appended later (resolveAppIdentities), unscoped and excluded
+// from event matching.
+func collectExactMatchKeys(ins []appWorkloadInput) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, in := range ins {
+		if in.overlay == nil {
+			continue
+		}
+		signals := append([]subject.Signal{in.overlay.Winner}, in.overlay.Conflicts...)
+		for _, sig := range signals {
+			kind, value, ok := signalMatchKind(sig)
+			if !ok {
+				continue
+			}
+			key := kind + ":" + in.wl.Namespace + ":" + value
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, key)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // pickRoot prefers a GitOps-manager root over a raw workload root for identity.
@@ -1277,7 +1906,7 @@ func refKey(r topology.ResourceRef) string {
 
 func classifyWorkload(kind string, rels *appRelationships) string {
 	switch kind {
-	case "Job", "CronJob":
+	case "Job", "CronJob", "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "ScaledJob":
 		return "job"
 	case "Deployment", "StatefulSet", "DaemonSet":
 		if rels != nil && (len(rels.Services) > 0 || len(rels.Ingresses) > 0 || len(rels.Routes) > 0) {
@@ -1286,6 +1915,17 @@ func classifyWorkload(kind string, rels *appRelationships) string {
 		return "worker"
 	default:
 		return "unknown"
+	}
+}
+
+func appWorkloadAPIGroup(kind string) string {
+	switch kind {
+	case "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate":
+		return "argoproj.io"
+	case "ScaledJob":
+		return "keda.sh"
+	default:
+		return ""
 	}
 }
 
@@ -1584,6 +2224,22 @@ func appEventLastSeen(e *corev1.Event) string {
 	return ""
 }
 
+func controllerOwnerName(refs []metav1.OwnerReference, kind string) string {
+	for _, owner := range refs {
+		if owner.Kind == kind && owner.Name != "" && owner.Controller != nil && *owner.Controller {
+			return owner.Name
+		}
+	}
+	return ""
+}
+
+func cronWorkflowOwnerName(wf *unstructured.Unstructured) string {
+	if owner := controllerOwnerName(wf.GetOwnerReferences(), "CronWorkflow"); owner != "" {
+		return owner
+	}
+	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
+}
+
 // imageTag extracts the tag from an image ref. Digest-pinned refs (@sha256:…)
 // and untagged refs (implicit :latest) return "" — no false version.
 func imageTag(image string) string {
@@ -1616,22 +2272,6 @@ func imageRepo(image string) string {
 		return image[:colon]
 	}
 	return image
-}
-
-func ownedByCronJob(j *batchv1.Job) bool {
-	for _, owner := range j.OwnerReferences {
-		if owner.Kind == "CronJob" {
-			return true
-		}
-	}
-	return false
-}
-
-func jobDesired(j *batchv1.Job) int {
-	if j.Spec.Completions != nil && *j.Spec.Completions > 0 {
-		return int(*j.Spec.Completions)
-	}
-	return 1
 }
 
 // levelToPackagesHealth projects a canonical health.Level onto the package wire

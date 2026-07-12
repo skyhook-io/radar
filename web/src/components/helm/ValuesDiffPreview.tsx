@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { X, Play, Loader2, FileText, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { ValuesPreviewResponse } from '../../types'
@@ -8,6 +9,8 @@ interface ValuesDiffPreviewProps {
   onClose: () => void
   onApply: () => void
   isApplying: boolean
+  title?: string
+  applyLabel?: string
 }
 
 export function ValuesDiffPreview({
@@ -15,6 +18,8 @@ export function ValuesDiffPreview({
   onClose,
   onApply,
   isApplying,
+  title = 'Preview Changes',
+  applyLabel = 'Apply Changes',
 }: ValuesDiffPreviewProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
 
@@ -40,7 +45,10 @@ export function ValuesDiffPreview({
   const hasChanges = previewData.manifestDiff.trim().length > 0 &&
     previewData.manifestDiff.split('\n').some(line => line.startsWith('+') || line.startsWith('-'))
 
-  return (
+  // Portal to body so the modal escapes any CSS-transformed ancestor (the release
+  // drawer, the upgrade ConfirmDialog) and layers on top rather than being trapped
+  // in a lower stacking context.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
@@ -51,6 +59,8 @@ export function ValuesDiffPreview({
       {/* Dialog */}
       <div
         ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
         tabIndex={-1}
         className="relative dialog max-w-4xl w-full mx-4 max-h-[85vh] flex flex-col outline-none"
       >
@@ -58,7 +68,7 @@ export function ValuesDiffPreview({
         <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border shrink-0">
           <div className="flex items-center gap-2">
             <FileText className="w-5 h-5 text-blue-400" />
-            <h3 className="text-lg font-semibold text-theme-text-primary">Preview Changes</h3>
+            <h3 className="text-lg font-semibold text-theme-text-primary">{title}</h3>
           </div>
           <button
             onClick={onClose}
@@ -120,12 +130,13 @@ export function ValuesDiffPreview({
               ) : (
                 <Play className="w-4 h-4" />
               )}
-              Apply Changes
+              {applyLabel}
             </button>
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

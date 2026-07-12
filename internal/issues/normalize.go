@@ -48,6 +48,10 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		// issue looking fresh. AgeSeconds (resource age) is a stable lower bound.
 		since = now.Add(-time.Duration(p.AgeSeconds) * time.Second)
 	}
+	reason := p.Reason
+	if isForbiddenMessage(p.Message) && !isBatchFailureProblem(p.Kind, p.Reason) {
+		reason = "RBACForbidden"
+	}
 	iss := Issue{
 		Severity:             sev,
 		Source:               source,
@@ -55,7 +59,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		Group:                resolveGroup(p.Group, p.Kind),
 		Namespace:            p.Namespace,
 		Name:                 p.Name,
-		Reason:               p.Reason,
+		Reason:               reason,
 		Message:              p.Message,
 		RawMessage:           p.RawMessage,
 		Cause:                p.Cause,
@@ -103,6 +107,7 @@ func classifyIssue(i *Issue) {
 		APIGroup:             i.Group,
 		Kind:                 i.Kind,
 		Reason:               i.Reason,
+		Message:              i.Message,
 		LastTerminatedReason: i.LastTerminatedReason,
 	})
 	i.CategoryGroup = issuesapi.GroupOf(i.Category)

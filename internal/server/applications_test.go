@@ -7,6 +7,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/subject"
 	"github.com/skyhook-io/radar/pkg/topology"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -17,6 +18,69 @@ func rawInput(kind, ns, name, version, health string) appWorkloadInput {
 		wl:       appWorkload{Kind: kind, Namespace: ns, Name: name, Version: version, Health: health, WorkloadClass: classifyWorkload(kind, nil)},
 		rootKey:  ns + "/" + kind + "/" + name,
 		rootKind: kind,
+	}
+}
+
+func TestBatchHealthPrefersActiveRunsOverRetainedFailure(t *testing.T) {
+	batch := &appBatchSummary{ActiveRuns: 1, LatestRunPhase: "Failed"}
+	if got := batchHealth(batch, packages.HealthUnknown); got != packages.HealthNeutral {
+		t.Fatalf("batchHealth = %q, want neutral while a run is active", got)
+	}
+}
+
+func TestBatchHealthPreservesLauncherProblems(t *testing.T) {
+	tests := []struct {
+		name     string
+		batch    *appBatchSummary
+		fallback packages.Health
+		want     packages.Health
+	}{
+		{
+			name:     "stale schedule stays degraded after an older success",
+			batch:    &appBatchSummary{LatestRunPhase: "Succeeded"},
+			fallback: packages.HealthDegraded,
+			want:     packages.HealthDegraded,
+		},
+		{
+			name:     "unhealthy launcher stays unhealthy while a retained run is active",
+			batch:    &appBatchSummary{ActiveRuns: 1},
+			fallback: packages.HealthUnhealthy,
+			want:     packages.HealthUnhealthy,
+		},
+		{
+			name:     "failed run is worse than a degraded launcher",
+			batch:    &appBatchSummary{LatestRunPhase: "Failed"},
+			fallback: packages.HealthDegraded,
+			want:     packages.HealthUnhealthy,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := batchHealth(tt.batch, tt.fallback); got != tt.want {
+				t.Fatalf("batchHealth = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBatchHealthUsesStandaloneJobResult(t *testing.T) {
+	batch := &appBatchSummary{LatestRunPhase: "Succeeded"}
+	if got := batchHealth(batch, packages.HealthNeutral); got != packages.HealthHealthy {
+		t.Fatalf("batchHealth = %q, want healthy for a succeeded standalone Job", got)
+	}
+}
+
+func TestWorkflowPrimaryImageUsesStoredTemplateSpec(t *testing.T) {
+	wf := &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{
+			"storedWorkflowTemplateSpec": map[string]any{
+				"templates": []any{map[string]any{"container": map[string]any{"image": "example.com/migrate:v2"}}},
+			},
+		},
+	}}
+
+	if got := workflowPrimaryImage(wf); got != "example.com/migrate:v2" {
+		t.Fatalf("workflowPrimaryImage() = %q", got)
 	}
 }
 
@@ -37,6 +101,38 @@ func rowByName(rows []appRow, name string) *appRow {
 	return nil
 }
 
+func workflowRun(ns, name, template, phase, startedAt string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": ns,
+		},
+		"spec": map[string]any{
+			"workflowTemplateRef": map[string]any{"name": template},
+		},
+		"status": map[string]any{
+			"phase":     phase,
+			"startedAt": startedAt,
+		},
+	}}
+}
+
+func clusterWorkflowRun(ns, name, template, phase, startedAt string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": ns,
+		},
+		"spec": map[string]any{
+			"workflowTemplateRef": map[string]any{"name": template, "clusterScope": true},
+		},
+		"status": map[string]any{
+			"phase":     phase,
+			"startedAt": startedAt,
+		},
+	}}
+}
+
 func TestEventsForWorkload_MatchesKindAndName(t *testing.T) {
 	byObject := map[string][]*corev1.Event{
 		"Service/api": {
@@ -52,6 +148,226 @@ func TestEventsForWorkload_MatchesKindAndName(t *testing.T) {
 	}
 	if got[0].Object != "Deployment/api" || got[0].Reason != "ProgressDeadlineExceeded" {
 		t.Fatalf("eventsForWorkload picked wrong event: %+v", got[0])
+	}
+}
+
+func TestApplyRunToBatchUsesNewestRunAndLatestSchedule(t *testing.T) {
+	batch := &appBatchSummary{}
+
+	applyRunToBatch(batch, WorkloadRun{
+		Name:        "success-new",
+		Phase:       "Succeeded",
+		StartedAt:   "2026-01-03T00:00:00Z",
+		FinishedAt:  "2026-01-03T00:01:00Z",
+		ScheduledAt: "2026-01-03T00:00:00Z",
+	})
+	applyRunToBatch(batch, WorkloadRun{
+		Name:        "failed-old",
+		Phase:       "Failed",
+		StartedAt:   "2026-01-02T00:00:00Z",
+		FinishedAt:  "2026-01-02T00:01:00Z",
+		ScheduledAt: "2026-01-02T00:00:00Z",
+	})
+
+	if batch.LatestRunName != "success-new" || batch.LatestRunPhase != "Succeeded" {
+		t.Fatalf("latest run = %s/%s, want success-new/Succeeded", batch.LatestRunName, batch.LatestRunPhase)
+	}
+	if batch.LastScheduledAt != "2026-01-03T00:00:00Z" {
+		t.Fatalf("last scheduled = %q, want newest schedule", batch.LastScheduledAt)
+	}
+	if batch.LastSuccessfulAt != "2026-01-03T00:01:00Z" {
+		t.Fatalf("last successful = %q, want successful run finish time", batch.LastSuccessfulAt)
+	}
+}
+
+func TestApplyRunToBatchLastSuccessfulAtFallbacks(t *testing.T) {
+	batch := &appBatchSummary{}
+	applyRunToBatch(batch, WorkloadRun{
+		Name:        "scheduled-only",
+		Phase:       "Succeeded",
+		ScheduledAt: "2026-01-01T00:00:00Z",
+	})
+	applyRunToBatch(batch, WorkloadRun{
+		Name:       "started-only",
+		Phase:      "Succeeded",
+		StartedAt:  "2026-01-02T00:00:00Z",
+		FinishedAt: "",
+	})
+	applyRunToBatch(batch, WorkloadRun{
+		Name:       "failed-newer",
+		Phase:      "Failed",
+		FinishedAt: "2026-01-03T00:00:00Z",
+	})
+
+	if batch.LastSuccessfulAt != "2026-01-02T00:00:00Z" {
+		t.Fatalf("last successful = %q, want newest successful fallback time", batch.LastSuccessfulAt)
+	}
+}
+
+func TestWorkflowTemplateBatchSummariesGroupGeneratedWorkflows(t *testing.T) {
+	workflows := []*unstructured.Unstructured{
+		workflowRun("dev", "migration-a", "migration-template", "Failed", "2026-01-02T00:00:00Z"),
+		workflowRun("dev", "migration-b", "migration-template", "Succeeded", "2026-01-03T00:00:00Z"),
+	}
+
+	summaries := workflowTemplateBatchSummaries(workflows, nil)
+	batch := summaries["WorkflowTemplate/dev/migration-template"]
+	if batch == nil {
+		t.Fatalf("missing WorkflowTemplate batch summary: %#v", summaries)
+	}
+	if batch.RetainedRuns != 2 || batch.FailedRuns != 1 || batch.SucceededRuns != 1 {
+		t.Fatalf("unexpected counts: %#v", batch)
+	}
+	if batch.LatestRunName != "migration-b" || batch.LatestRunPhase != "Succeeded" {
+		t.Fatalf("latest run = %s/%s, want newest run", batch.LatestRunName, batch.LatestRunPhase)
+	}
+}
+
+func TestWorkflowTemplateBatchSummariesGroupClusterWorkflowTemplates(t *testing.T) {
+	workflows := []*unstructured.Unstructured{
+		clusterWorkflowRun("dev", "global-a", "cluster-migration", "Succeeded", "2026-01-03T00:00:00Z"),
+		clusterWorkflowRun("prod", "global-b", "cluster-migration", "Running", "2026-01-04T00:00:00Z"),
+	}
+
+	summaries := workflowTemplateBatchSummaries(workflows, nil)
+	batch := summaries["ClusterWorkflowTemplate//cluster-migration"]
+	if batch == nil {
+		t.Fatalf("missing ClusterWorkflowTemplate batch summary: %#v", summaries)
+	}
+	if batch.RetainedRuns != 2 || batch.ActiveRuns != 1 || batch.SucceededRuns != 1 {
+		t.Fatalf("unexpected counts: %#v", batch)
+	}
+	if batch.LatestRunName != "global-b" || batch.LatestRunPhase != "Running" {
+		t.Fatalf("latest run = %s/%s, want global-b/Running", batch.LatestRunName, batch.LatestRunPhase)
+	}
+}
+
+func TestClusterWorkflowTemplateVisibility(t *testing.T) {
+	workflows := []*unstructured.Unstructured{
+		clusterWorkflowRun("dev", "global-a", "referenced", "Succeeded", "2026-01-03T00:00:00Z"),
+	}
+
+	if shouldIncludeClusterWorkflowTemplate([]string{"dev"}, workflows, "referenced", false) {
+		t.Fatal("denied ClusterWorkflowTemplate must not be included even when referenced")
+	}
+	if !shouldIncludeClusterWorkflowTemplate([]string{"dev"}, workflows, "referenced", true) {
+		t.Fatal("referenced ClusterWorkflowTemplate should be included in a namespace-filtered view")
+	}
+	if shouldIncludeClusterWorkflowTemplate([]string{"dev"}, workflows, "unused", true) {
+		t.Fatal("unused ClusterWorkflowTemplate should not be included in a namespace-filtered view")
+	}
+	if !shouldIncludeClusterWorkflowTemplate(nil, workflows, "unused", true) {
+		t.Fatal("all-namespace view should include unused ClusterWorkflowTemplates")
+	}
+}
+
+func TestApplicationsCacheKeySeparatesClusterWorkflowTemplatePermission(t *testing.T) {
+	visible := applicationsCacheKeyFor([]string{"prod", "dev"}, true)
+	denied := applicationsCacheKeyFor([]string{"dev", "prod"}, false)
+	if visible == denied {
+		t.Fatalf("cache keys collide across ClusterWorkflowTemplate permission modes: %q", visible)
+	}
+	if visible != applicationsCacheKeyFor([]string{"dev", "prod"}, true) {
+		t.Fatal("cache key should remain namespace-order independent")
+	}
+}
+
+func TestWorkflowTemplateBatchSummariesKeepsStaleCronLabel(t *testing.T) {
+	wf := workflowRun("dev", "migration-a", "migration-template", "Succeeded", "2026-01-03T00:00:00Z")
+	wf.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "deleted-parent"})
+
+	summaries := workflowTemplateBatchSummaries([]*unstructured.Unstructured{wf}, map[string]bool{})
+	if batch := summaries["WorkflowTemplate/dev/migration-template"]; batch == nil || batch.RetainedRuns != 1 {
+		t.Fatalf("stale CronWorkflow label dropped template run: %#v", summaries)
+	}
+}
+
+func TestWorkflowTemplateBatchSummariesExcludesExistingCronOwner(t *testing.T) {
+	wf := workflowRun("dev", "migration-a", "migration-template", "Succeeded", "2026-01-03T00:00:00Z")
+	wf.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "nightly"})
+
+	summaries := workflowTemplateBatchSummaries([]*unstructured.Unstructured{wf}, map[string]bool{"dev/nightly": true})
+	if len(summaries) != 0 {
+		t.Fatalf("existing CronWorkflow run also appeared in template summary: %#v", summaries)
+	}
+}
+
+func TestArgoWorkflowTemplateRefFallsBackToWorkflowTemplateLabel(t *testing.T) {
+	wf := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name":      "migration-x",
+			"namespace": "dev",
+			"labels": map[string]any{
+				"workflows.argoproj.io/workflow-template": "migration-template",
+			},
+		},
+	}}
+
+	ref, ok := argoWorkflowTemplateRef(wf)
+	if !ok {
+		t.Fatal("expected template ref from workflow-template label")
+	}
+	if ref.key() != "WorkflowTemplate/dev/migration-template" {
+		t.Fatalf("template ref = %q", ref.key())
+	}
+}
+
+func TestCronWorkflowOwnerNamePrefersControllerOwnerReference(t *testing.T) {
+	controller := true
+	wf := &unstructured.Unstructured{}
+	wf.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "label-owner"})
+	wf.SetOwnerReferences([]metav1.OwnerReference{{
+		Kind:       "CronWorkflow",
+		Name:       "owner-ref",
+		Controller: &controller,
+	}})
+
+	if got := cronWorkflowOwnerName(wf); got != "owner-ref" {
+		t.Fatalf("cronWorkflowOwnerName = %q, want owner-ref", got)
+	}
+}
+
+func TestScaledJobHealthFollowsKedaConditions(t *testing.T) {
+	tests := []struct {
+		name       string
+		conditions []any
+		want       packages.Health
+	}{
+		{
+			name: "not ready is unhealthy",
+			conditions: []any{
+				map[string]any{"type": "Ready", "status": "False"},
+				map[string]any{"type": "Active", "status": "False"},
+			},
+			want: packages.HealthUnhealthy,
+		},
+		{
+			name: "active is healthy",
+			conditions: []any{
+				map[string]any{"type": "Ready", "status": "True"},
+				map[string]any{"type": "Active", "status": "True"},
+			},
+			want: packages.HealthHealthy,
+		},
+		{
+			name: "ready but idle is neutral",
+			conditions: []any{
+				map[string]any{"type": "Ready", "status": "True"},
+				map[string]any{"type": "Active", "status": "False"},
+			},
+			want: packages.HealthNeutral,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sj := &unstructured.Unstructured{Object: map[string]any{
+				"status": map[string]any{"conditions": tt.conditions},
+			}}
+			if got := scaledJobHealth(sj); got != tt.want {
+				t.Fatalf("scaledJobHealth = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -394,6 +710,35 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 	}
 }
 
+// relationshipsFor ships routes as "Kind/name" so the client can index them
+// under the concrete (polymorphic) route kind — HTTPRoute/GRPCRoute/… — matching
+// the route lane id. A bare name would collapse to a generic "Route" that never
+// resolves.
+func TestRelationshipsFor_RoutesCarryConcreteKind(t *testing.T) {
+	node := func(id, kind, ns, name string) topology.Node {
+		return topology.Node{ID: id, Kind: topology.NodeKind(kind), Name: name, Data: map[string]any{"namespace": ns}}
+	}
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			node("gateway/prod/gw", "Gateway", "prod", "gw"),
+			node("httproute/prod/web", "HTTPRoute", "prod", "web"),
+		},
+		Edges: []topology.Edge{
+			// A Gateway routes to an HTTPRoute → rel.Routes for the Gateway query.
+			{ID: "gw->web", Source: "gateway/prod/gw", Target: "httproute/prod/web", Type: topology.EdgeRoutesTo},
+		},
+	}
+	g := &appGraph{byID: map[string]topology.Node{}, byKNN: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
+
+	rels := g.relationshipsFor("Gateway", "prod", "gw")
+	if rels == nil {
+		t.Fatal("relationshipsFor returned nil; want Routes populated")
+	}
+	if len(rels.Routes) != 1 || rels.Routes[0] != "HTTPRoute/web" {
+		t.Fatalf("Routes = %v, want [\"HTTPRoute/web\"] (concrete kind, not bare name)", rels.Routes)
+	}
+}
+
 // Add-ons are classified with evidence, never dropped (raw-always). A user
 // workload named "grafana" still appears — tagged, explained, foldable.
 func TestClassifyAddon_ClassifiesNotHides(t *testing.T) {
@@ -458,6 +803,28 @@ func TestWorkloadClass_FacetIsDerivedFromRuntimeShape(t *testing.T) {
 	}
 	if got := rowByName(rows, "nightly"); got == nil || got.WorkloadClass != "job" {
 		t.Fatalf("cronjob row class = %+v, want job", got)
+	}
+}
+
+func TestGroupApplications_MixedHealthUsesServingWorkloads(t *testing.T) {
+	service := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
+	service.wl.WorkloadClass = "service"
+	failedBatch := overlayInput("CronWorkflow", "prod", "nightly", "", "unhealthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
+
+	rows := groupApplications([]appWorkloadInput{service, failedBatch})
+	if len(rows) != 1 {
+		t.Fatalf("shared overlay should produce one mixed app, got %+v", rows)
+	}
+	if rows[0].WorkloadClass != "mixed" {
+		t.Fatalf("workload class = %q, want mixed", rows[0].WorkloadClass)
+	}
+	if rows[0].Health != "healthy" {
+		t.Fatalf("mixed app health = %q, want serving-only healthy verdict", rows[0].Health)
+	}
+
+	pureBatch := groupApplications([]appWorkloadInput{rawInput("CronWorkflow", "prod", "nightly", "", "unhealthy")})
+	if len(pureBatch) != 1 || pureBatch[0].Health != "unhealthy" {
+		t.Fatalf("pure batch health = %+v, want unhealthy batch verdict", pureBatch)
 	}
 }
 
@@ -538,6 +905,66 @@ func TestGroupApplications_AppVersionUnanimity(t *testing.T) {
 	}
 	if r := rowByName(groupApplications([]appWorkloadInput{mk("a", "v3.2.6"), mk("b", "v2.44.0")}), "argo"); r == nil || r.AppVersion != "" {
 		t.Errorf("disagreeing labels must not set AppVersion, got %+v", r)
+	}
+}
+
+// matchKeys carry the EXACT grouping-signal values the server keyed on, so the
+// client can re-join timeline events (including deleted members) to an app.
+// They collect from every member's overlay winner + retained conflicts, deduped
+// and sorted, and use the tier→kind mapping (part-of/name/instance/app/helm/argo).
+func TestGroupApplications_MatchKeys(t *testing.T) {
+	// A workload whose winner is part-of but which ALSO carries a bare-app
+	// conflict — both surface as match keys.
+	partOf := overlayInput("Deployment", "team-a", "billing-api", "1.0", "healthy", subject.TierPartOf, "team-a/app/checkout", subject.ConfidenceMedium)
+	partOf.overlay.Conflicts = []subject.Signal{{Tier: subject.TierBareApp, Key: "team-a/app/checkout", Confidence: subject.ConfidenceLow}}
+	// A second member keyed identically — dedup must collapse the repeated key.
+	partOfSibling := overlayInput("Deployment", "team-a", "billing-worker", "1.0", "healthy", subject.TierPartOf, "team-a/app/checkout", subject.ConfidenceMedium)
+
+	rows := groupApplications([]appWorkloadInput{partOf, partOfSibling})
+	r := rowByName(rows, "checkout")
+	if r == nil {
+		t.Fatalf("checkout app missing: %+v", rows)
+	}
+	want := []string{"app:team-a:checkout", "part-of:team-a:checkout"} // namespace-scoped, sorted, deduped
+	if len(r.MatchKeys) != len(want) {
+		t.Fatalf("matchKeys = %v, want %v", r.MatchKeys, want)
+	}
+	for i := range want {
+		if r.MatchKeys[i] != want[i] {
+			t.Errorf("matchKeys[%d] = %q, want %q (full: %v)", i, r.MatchKeys[i], want[i], r.MatchKeys)
+		}
+	}
+
+	// Flux HelmRelease winner → "helm:<name>".
+	helm := groupApplications([]appWorkloadInput{
+		overlayInput("Deployment", "demo", "podinfo", "6.13.0", "healthy", subject.TierFluxHelmRelease, "flux-system/HelmRelease/podinfo", subject.ConfidenceHigh),
+	})
+	if r := rowByName(helm, "podinfo"); r == nil || len(r.MatchKeys) != 1 || r.MatchKeys[0] != "helm:demo:podinfo" {
+		t.Errorf("helm matchKeys = %+v, want [helm:demo:podinfo]", r)
+	}
+
+	// Native Helm winner → NO match key: release identity is an annotation
+	// (meta.helm.sh/release-name), which events never carry, so the key could
+	// never join a timeline event to the app.
+	nativeHelm := groupApplications([]appWorkloadInput{
+		overlayInput("Deployment", "prod", "checkout-api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium),
+	})
+	if r := rowByName(nativeHelm, "checkout"); r == nil || len(r.MatchKeys) != 0 {
+		t.Errorf("native helm matchKeys = %+v, want none", r)
+	}
+
+	// Argo tracking-id winner → "argo:<name>".
+	argo := groupApplications([]appWorkloadInput{
+		overlayInput("Deployment", "team-a", "storefront-api", "2.0.0", "healthy", subject.TierArgoTrackingID, "argocd/Application/storefront", subject.ConfidenceHigh),
+	})
+	if r := rowByName(argo, "storefront"); r == nil || len(r.MatchKeys) != 1 || r.MatchKeys[0] != "argo:team-a:storefront" {
+		t.Errorf("argo matchKeys = %+v, want [argo:team-a:storefront]", r)
+	}
+
+	// A raw (no-overlay) singleton has no exact match keys.
+	raw := groupApplications([]appWorkloadInput{rawInput("StatefulSet", "team-a", "lonely-db", "15", "healthy")})
+	if r := rowByName(raw, "lonely-db"); r == nil || len(r.MatchKeys) != 0 {
+		t.Errorf("raw app should have no matchKeys, got %+v", r)
 	}
 }
 

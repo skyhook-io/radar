@@ -898,10 +898,12 @@ export function TopologyGraph({
       {/* Warning banner for partial topology data */}
       {topology?.warnings && topology.warnings.length > 0 && (() => {
         const rbacWarnings = topology.warnings.filter(w => w.includes('RBAC not granted'))
-        const otherWarnings = topology.warnings.filter(w => !w.includes('RBAC not granted'))
-        const isAllRbac = otherWarnings.length === 0
+        const viewWarnings = topology.warnings.filter(w => w.startsWith('Topology view:'))
+        const otherWarnings = topology.warnings.filter(w => !w.includes('RBAC not granted') && !w.startsWith('Topology view:'))
+        const isAllRbac = otherWarnings.length === 0 && viewWarnings.length === 0
+        const isViewLimited = otherWarnings.length === 0 && rbacWarnings.length === 0 && viewWarnings.length > 0
         return (
-          <div className={`absolute top-2 left-2 right-2 z-10 ${isAllRbac ? 'bg-amber-500/10 border-amber-500/20' : 'bg-amber-500/10 border-amber-500/30'} border rounded-lg p-2 backdrop-blur-sm`}>
+          <div className={`absolute top-2 z-10 ${isViewLimited ? 'left-2 max-w-xl' : 'left-2 right-2'} ${isAllRbac ? 'bg-amber-500/10 border-amber-500/20' : 'bg-amber-500/10 border-amber-500/30'} border rounded-lg p-2 backdrop-blur-sm`}>
             <div className="flex items-start gap-2">
               {isAllRbac ? (
                 <Shield className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
@@ -910,12 +912,14 @@ export function TopologyGraph({
               )}
               <div className="text-sm">
                 <span className="font-medium text-amber-400">
-                  {isAllRbac ? 'Limited Access:' : 'Warning:'}
+                  {isAllRbac ? 'Limited Access:' : isViewLimited ? 'View limited:' : 'Warning:'}
                 </span>
                 <span className="text-theme-text-secondary ml-1">
                   {isAllRbac
                     ? `${pluralize(rbacWarnings.length, 'resource type')} not accessible due to RBAC restrictions.`
-                    : 'Some resources failed to load. Data may be incomplete.'}
+                    : isViewLimited
+                      ? 'Large retained run history is summarized to keep the graph readable.'
+                      : 'Some resources failed to load. Data may be incomplete.'}
                 </span>
                 <details className="mt-1">
                   <summary className="text-xs text-amber-400/80 hover:text-amber-400">
@@ -928,7 +932,13 @@ export function TopologyGraph({
                     {rbacWarnings.map((w, i) => (
                       <li key={`rbac-${i}`} className="font-mono">{w}</li>
                     ))}
-                    {otherWarnings.length > 0 && rbacWarnings.length > 0 && (
+                    {viewWarnings.length > 0 && (rbacWarnings.length > 0 || otherWarnings.length > 0) && (
+                      <li className="text-amber-400/60 font-medium mt-1">View limits:</li>
+                    )}
+                    {viewWarnings.map((w, i) => (
+                      <li key={`view-${i}`} className="font-mono">{w}</li>
+                    ))}
+                    {otherWarnings.length > 0 && (rbacWarnings.length > 0 || viewWarnings.length > 0) && (
                       <li className="text-amber-400/60 font-medium mt-1">Other warnings:</li>
                     )}
                     {otherWarnings.map((w, i) => (

@@ -11,6 +11,7 @@ import {
   getPVCStatus,
   getRolloutStatus,
   getWorkflowStatus,
+  getCronWorkflowStatus,
   getCertificateStatus,
   getPVStatus,
   getClusterIssuerStatus,
@@ -82,6 +83,7 @@ import {
   SecretRenderer,
   JobRenderer,
   CronJobRenderer,
+  CronWorkflowRenderer,
   HPARenderer,
   NodeRenderer,
   PVCRenderer,
@@ -316,12 +318,12 @@ export interface RendererOverrides {
 // Known resource types with specific renderers (module-level to avoid re-allocation)
 const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
-  'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs',
+  'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
   'rollouts', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
   'orders', 'challenges',
-  'gateways', 'gatewayclasses', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'sealedsecrets', 'workflowtemplates',
+  'gateways', 'gatewayclasses', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'sealedsecrets', 'workflowtemplates', 'clusterworkflowtemplates',
   'networkpolicies', 'networkpolicy',
   'ciliumnetworkpolicies', 'ciliumnetworkpolicy', 'ciliumclusterwidenetworkpolicies', 'ciliumclusterwidenetworkpolicy',
   'clusternetworkpolicies', 'clusternetworkpolicy',
@@ -530,12 +532,13 @@ export function ResourceRendererDispatch({
         {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && <JobRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
         {kind === 'nodes' && <NodeComp data={data} relationships={relationships} />}
         {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && <RolloutRenderer data={data} />}
         {kind === 'certificates' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <CertificateRenderer data={data} />}
-        {kind === 'workflows' && <WorkflowRenderer data={data} />}
+        {kind === 'workflows' && <WorkflowRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'persistentvolumes' && <PersistentVolumeRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'storageclasses' && <StorageClassRenderer data={data} />}
         {kind === 'certificaterequests' && <CertificateRequestRenderer data={data} />}
@@ -550,7 +553,7 @@ export function ResourceRendererDispatch({
         {kind === 'tcproutes' && <SimpleRouteRenderer data={data} kind="TCPRoute" onNavigate={onNavigate} />}
         {kind === 'tlsroutes' && <SimpleRouteRenderer data={data} kind="TLSRoute" onNavigate={onNavigate} />}
         {kind === 'sealedsecrets' && <SealedSecretRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'workflowtemplates' && <WorkflowTemplateRenderer data={data} />}
+        {(kind === 'workflowtemplates' || kind === 'clusterworkflowtemplates') && <WorkflowTemplateRenderer data={data} />}
         {(kind === 'networkpolicies' || kind === 'networkpolicy') && <NetworkPolicyRenderer data={data} />}
         {(kind === 'ciliumnetworkpolicies' || kind === 'ciliumnetworkpolicy' || kind === 'ciliumclusterwidenetworkpolicies' || kind === 'ciliumclusterwidenetworkpolicy') && <CiliumNetworkPolicyRenderer data={data} />}
         {(kind === 'clusternetworkpolicies' || kind === 'clusternetworkpolicy') && <ClusterNetworkPolicyRenderer data={data} />}
@@ -777,6 +780,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'persistentvolumeclaims') return getPVCStatus(data)
   if (k === 'rollouts') return getRolloutStatus(data)
   if (k === 'workflows') return getWorkflowStatus(data)
+  if (k === 'cronworkflows') return getCronWorkflowStatus(data)
   if (k === 'certificates') {
     if (data.apiVersion?.includes('networking.internal.knative.dev')) {
       const status = getKnativeConditionStatus(data)

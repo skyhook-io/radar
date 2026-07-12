@@ -65,6 +65,10 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			sharedDiscovery = discovery.ResourceDiscovery
 		}
 
+		// Wiring-time capture — same rationale as InitResourceCache: a late
+		// callback after a context switch must stamp its own cluster.
+		recordClusterContext := ActiveClusterContext()
+
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
 			DynamicClient:     client,
 			Discovery:         sharedDiscovery,
@@ -82,6 +86,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 					return
 				}
 				recordToTimelineStore(
+					recordClusterContext,
 					change.Kind,
 					change.Namespace,
 					change.Name,
@@ -162,6 +167,8 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "rollouts", Kind: "Rollout", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "workflows", Kind: "Workflow", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "cronworkflows", Kind: "CronWorkflow", Namespaced: true},
+	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "workflowtemplates", Kind: "WorkflowTemplate", Namespaced: true},
+	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "clusterworkflowtemplates", Kind: "ClusterWorkflowTemplate", Namespaced: false},
 	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "certificates", Kind: "Certificate", Namespaced: true},
 	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "issuers", Kind: "Issuer", Namespaced: true},
 	{Group: "cert-manager.io", Versions: []string{"v1"}, Resource: "clusterissuers", Kind: "ClusterIssuer", Namespaced: false},
