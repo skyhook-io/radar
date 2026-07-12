@@ -3,7 +3,6 @@ import { Handle, Position } from '@xyflow/react'
 import {
   ChevronDown,
   ChevronUp,
-  GitBranch,
   Radio,
   TriangleAlert,
 } from 'lucide-react'
@@ -409,7 +408,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const statusIssue = nodeData.statusIssue as string | undefined
   const issueTooltip = getIssueTooltip(statusIssue)
   const policyStatus = nodeData.policyStatus as string | undefined
-  const deploymentMembership = nodeData.deploymentMembership as 'managed-runtime' | 'runtime-only' | undefined
+  const deploymentMembership = nodeData.deploymentMembership as 'runtime-only' | undefined
   const deploymentSourceLabel = nodeData.deploymentSourceLabel as string | undefined
 
   const Icon = getTopologyIcon(kind)
@@ -483,16 +482,12 @@ export const K8sResourceNode = memo(function K8sResourceNode({
             <div className="ml-auto flex items-center gap-1.5">
               {deploymentMembership && (
                 <Tooltip
-                  content={deploymentMembership === 'managed-runtime'
-                    ? `Managed by ${deploymentSourceLabel ?? 'the deployment source'} and connected in the runtime graph.`
-                    : `Observed in the runtime graph but not present in the visible ${deploymentSourceLabel ?? 'deployment'} inventory.`}
+                  content={`Observed in runtime but not present in the visible ${deploymentSourceLabel ?? 'deployment'} inventory.`}
                   position="right"
                 >
                   <span className="inline-flex cursor-help items-center gap-1 rounded bg-theme-elevated px-1 py-0.5 text-[9px] font-medium normal-case tracking-normal text-theme-text-tertiary">
-                    {deploymentMembership === 'managed-runtime'
-                      ? <GitBranch className="h-2.5 w-2.5" aria-hidden />
-                      : <Radio className="h-2.5 w-2.5" aria-hidden />}
-                    {!isSmallNode && (deploymentMembership === 'managed-runtime' ? deploymentSourceLabel : 'Runtime only')}
+                    <Radio className="h-2.5 w-2.5" aria-hidden />
+                    {!isSmallNode && 'Runtime only'}
                   </span>
                 </Tooltip>
               )}

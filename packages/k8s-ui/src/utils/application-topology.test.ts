@@ -31,7 +31,7 @@ describe('layerDeploymentInventory', () => {
     expect(result.managedRuntimeCount).toBe(1)
     expect(result.runtimeOnlyCount).toBe(1)
     expect(result.managedOnly.map((node) => node.ref.name)).toEqual(['api-config'])
-    expect(result.topology.nodes[0].data?.deploymentMembership).toBe('managed-runtime')
+    expect(result.topology.nodes[0].data?.deploymentMembership).toBeUndefined()
     expect(result.topology.nodes[1].data?.deploymentMembership).toBe('runtime-only')
   })
 
@@ -41,6 +41,21 @@ describe('layerDeploymentInventory', () => {
     expect(result.inventoryComplete).toBe(false)
     expect(result.runtimeOnlyCount).toBe(0)
     expect(result.topology.nodes[1].data?.deploymentMembership).toBeUndefined()
+  })
+
+  it('adds no membership markers when source and runtime agree', () => {
+    const matchingTopology: Topology = {
+      nodes: [topology.nodes[0]],
+      edges: [],
+    }
+    const matchingInventory = inventory()
+    matchingInventory.nodes = matchingInventory.nodes.filter((node) => node.id !== 'config')
+
+    const result = layerDeploymentInventory(matchingTopology, matchingInventory, 'Argo CD')
+
+    expect(result.runtimeOnlyCount).toBe(0)
+    expect(result.managedOnly).toEqual([])
+    expect(result.topology.nodes[0].data?.deploymentMembership).toBeUndefined()
   })
 
   it('does not merge same-named resources from different CRD groups', () => {

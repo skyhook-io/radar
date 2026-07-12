@@ -1,7 +1,7 @@
 import type { GitOpsResourceTree, GitOpsTreeNode, Topology, TopologyNode } from '../types'
 import { apiVersionToGroup, groupQualifiesLaneId } from './navigation'
 
-export type DeploymentMembership = 'managed-runtime' | 'runtime-only'
+export type DeploymentMembership = 'runtime-only'
 
 export interface DeploymentTopologyLayer {
   topology: Topology
@@ -39,21 +39,18 @@ export function layerDeploymentInventory(
     if (node.kind === 'PodGroup' || node.kind === 'Internet') return node
     const namespace = (node.data?.namespace as string) || ''
     const match = inventoryByExact.get(identityKey(node.kind, topologyGroup(node), namespace, node.name))
-    let membership: DeploymentMembership | undefined
     if (match) {
       matchedInventoryIds.add(match.id)
       managedRuntimeCount += 1
-      membership = 'managed-runtime'
-    } else if (inventoryComplete) {
-      runtimeOnlyCount += 1
-      membership = 'runtime-only'
+      return node
     }
-    if (!membership) return node
+    if (!inventoryComplete) return node
+    runtimeOnlyCount += 1
     return {
       ...node,
       data: {
         ...node.data,
-        deploymentMembership: membership,
+        deploymentMembership: 'runtime-only' satisfies DeploymentMembership,
         deploymentSourceLabel: sourceLabel,
       },
     }

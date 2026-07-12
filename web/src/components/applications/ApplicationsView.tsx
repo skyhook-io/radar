@@ -320,7 +320,6 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         topology={topology}
         topologyLoading={topologyLoading}
         deploymentTree={deploymentTreeQuery.data}
-        deploymentTreeLoading={deploymentTreeQuery.isLoading}
         identityInstances={identityInstances}
         onSwitchInstance={switchInstance}
         discoveredEnvs={discoveredEnvs}

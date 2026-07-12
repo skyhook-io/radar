@@ -1,7 +1,9 @@
 import { useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, Boxes, ChevronDown, ExternalLink, GitBranch, Layers, Search } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Boxes, ChevronDown, ExternalLink, Layers, Radio, Search } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { GitOpsResourceTree, GitOpsTreeNode, ResourceRef, Topology, TopologyNode } from '../../types'
+import type { GitOpsResourceTree, ResourceRef, Topology, TopologyNode } from '../../types'
+import argoCdLogo from '../../assets/gitops/argocd.png'
+import fluxLogo from '../../assets/gitops/flux.svg'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
 import { EmptyState } from '../ui/EmptyState'
@@ -101,7 +103,6 @@ export type ApplicationDetailProps = {
   topologyLoading?: boolean
   /** Exact resources reported by the app's Argo CD or Flux deployment source. */
   deploymentTree?: GitOpsResourceTree
-  deploymentTreeLoading?: boolean
   /** Open a related (non-workload) resource clicked in the app graph. */
   onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
   /** App identity siblings (this instance included, ladder-ordered) — turns the
@@ -164,7 +165,7 @@ function compareDefinedVersions(a: string | undefined, b: string | undefined): n
   return compareVersions(a, b) ?? 0
 }
 
-export function ApplicationDetail({ app, onBack, renderWorkload, topology, topologyLoading, deploymentTree, deploymentTreeLoading, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
+export function ApplicationDetail({ app, onBack, renderWorkload, topology, topologyLoading, deploymentTree, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
   // Stable order regardless of API ordering: rail rows and the per-workload
   // color assignment both follow this array, so an order flap between
   // refetches must not reshuffle rows or reassign a workload's hue.
@@ -393,7 +394,6 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
             topology={appTopology}
             topologyLoading={topologyLoading}
             deploymentLayer={deploymentLayer}
-            deploymentTreeLoading={deploymentTreeLoading}
             deploymentSource={app.sourceRef?.type === 'gitops' ? app.sourceRef : undefined}
             topologyAvailable={appTopologyAvailable}
             focusNodeId={appGraphFocusId}
@@ -425,7 +425,6 @@ function ApplicationWorkspace({
   topology,
   topologyLoading,
   deploymentLayer,
-  deploymentTreeLoading,
   deploymentSource,
   topologyAvailable,
   focusNodeId,
@@ -450,7 +449,6 @@ function ApplicationWorkspace({
   topology: Topology | null
   topologyLoading?: boolean
   deploymentLayer: DeploymentTopologyLayer | null
-  deploymentTreeLoading?: boolean
   deploymentSource?: AppSourceRef
   topologyAvailable: boolean
   focusNodeId?: string
@@ -501,9 +499,8 @@ function ApplicationWorkspace({
           onFocusWorkload={onFocusWorkload}
           onSelectWorkload={onSelectWorkload}
           deploymentLayer={deploymentLayer}
-          deploymentTreeLoading={deploymentTreeLoading}
           deploymentSource={deploymentSource}
-          onNavigateToResource={onNavigateToResource}
+          onOpenSource={onOpenSource}
         />
       )}
       {activeView === 'history' && <ApplicationHistoryView history={history} loading={historyLoading} fallbackEvents={app.events ?? []} workloads={workloads} onSelectWorkload={onSelectWorkload} onOpenSource={onOpenSource} />}
@@ -1104,9 +1101,8 @@ function ApplicationTopology({
   onFocusWorkload,
   onSelectWorkload,
   deploymentLayer,
-  deploymentTreeLoading,
   deploymentSource,
-  onNavigateToResource,
+  onOpenSource,
 }: {
   topology: Topology | null
   loading?: boolean
@@ -1120,9 +1116,8 @@ function ApplicationTopology({
   onFocusWorkload: (owner: WorkloadFocus) => void
   onSelectWorkload: (workload: AppWorkload) => void
   deploymentLayer: DeploymentTopologyLayer | null
-  deploymentTreeLoading?: boolean
   deploymentSource?: AppSourceRef
-  onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
+  onOpenSource?: (source: AppSourceRef) => void
 }) {
   const hasSharedOrUnscopedNodes = useMemo(
     () => topology?.nodes.some((node) => {
@@ -1154,15 +1149,10 @@ function ApplicationTopology({
             showSharedOrUnscoped={hasSharedOrUnscopedNodes}
             onFocus={onFocusWorkload}
             onSelectWorkload={onSelectWorkload}
+            deploymentLayer={deploymentLayer}
+            deploymentSource={deploymentSource}
+            onOpenSource={onOpenSource}
           />
-          {deploymentSource && (
-            <DeploymentInventoryPanel
-              source={deploymentSource}
-              layer={deploymentLayer}
-              loading={deploymentTreeLoading}
-              onNavigateToResource={onNavigateToResource}
-            />
-          )}
         </>
       ) : loading ? (
         <PaneLoader label="Loading topology..." className="absolute inset-0" />
@@ -1172,88 +1162,6 @@ function ApplicationTopology({
         </div>
       )}
     </div>
-  )
-}
-
-function DeploymentInventoryPanel({
-  source,
-  layer,
-  loading,
-  onNavigateToResource,
-}: {
-  source: AppSourceRef
-  layer: DeploymentTopologyLayer | null
-  loading?: boolean
-  onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const sourceLabel = sourceInventoryLabel(source)
-  const managedOnly = layer?.managedOnly ?? []
-
-  return (
-    <div className="absolute bottom-4 right-4 z-10 w-[min(22rem,calc(100%-2rem))] overflow-hidden rounded-lg border border-theme-border bg-theme-surface/95 shadow-theme-md backdrop-blur sm:bottom-auto sm:top-4">
-      <button
-        type="button"
-        onClick={() => managedOnly.length > 0 && setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-theme-hover"
-        aria-expanded={expanded}
-      >
-        <GitBranch className="h-4 w-4 shrink-0 text-theme-text-secondary" aria-hidden />
-        <span className="min-w-0 flex-1">
-          <span className="block text-xs font-semibold text-theme-text-primary">{sourceLabel} inventory</span>
-          <span className="block truncate text-[11px] text-theme-text-tertiary">
-            {loading && !layer
-              ? `Loading ${sourceLabel} resources...`
-              : layer
-                ? `${layer.managedRuntimeCount} managed in runtime${managedOnly.length > 0 ? ` · ${managedOnly.length} managed only` : ''}${layer.runtimeOnlyCount > 0 ? ` · ${layer.runtimeOnlyCount} runtime only` : ''}`
-                : `${sourceLabel} inventory unavailable`}
-          </span>
-        </span>
-        {managedOnly.length > 0 && <ChevronDown className={clsx('h-4 w-4 shrink-0 transition-transform', expanded && 'rotate-180')} aria-hidden />}
-      </button>
-      {layer && !layer.inventoryComplete && (
-        <div className="border-t border-theme-border px-3 py-2 text-[11px] text-theme-text-tertiary">
-          Visible inventory is partial; unmatched runtime resources are not classified.
-        </div>
-      )}
-      {expanded && managedOnly.length > 0 && (
-        <div className="max-h-72 overflow-y-auto border-t border-theme-border p-1">
-          {managedOnly.map((node) => (
-            <ManagedResourceRow key={node.id} node={node} onNavigateToResource={onNavigateToResource} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function ManagedResourceRow({
-  node,
-  onNavigateToResource,
-}: {
-  node: GitOpsTreeNode
-  onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
-}) {
-  const Icon = getTopologyIcon(node.ref.kind)
-  return (
-    <button
-      type="button"
-      onClick={() => onNavigateToResource?.({
-        kind: kindToPlural(node.ref.kind),
-        namespace: node.ref.namespace,
-        name: node.ref.name,
-        group: node.ref.group,
-      })}
-      disabled={!onNavigateToResource}
-      className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-theme-hover disabled:cursor-default"
-    >
-      <Icon className="h-4 w-4 shrink-0 text-theme-text-tertiary" aria-hidden />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs font-medium text-theme-text-primary">{node.ref.name}</span>
-        <span className="block truncate text-[10px] uppercase text-theme-text-tertiary">{node.ref.kind}</span>
-      </span>
-      {node.health && <StatusDot tone={mapHealthToTone(sourceReportedHealth(node.health))} size="xs" />}
-    </button>
   )
 }
 
@@ -1694,6 +1602,9 @@ function TopologyWorkloadLegend({
   showSharedOrUnscoped,
   onFocus,
   onSelectWorkload,
+  deploymentLayer,
+  deploymentSource,
+  onOpenSource,
 }: {
   workloads: AppWorkload[]
   colorByWorkload: Map<string, number> | null
@@ -1701,7 +1612,15 @@ function TopologyWorkloadLegend({
   showSharedOrUnscoped: boolean
   onFocus: (owner: WorkloadFocus) => void
   onSelectWorkload: (workload: AppWorkload) => void
+  deploymentLayer: DeploymentTopologyLayer | null
+  deploymentSource?: AppSourceRef
+  onOpenSource?: (source: AppSourceRef) => void
 }) {
+  const managedOnlyCount = deploymentLayer?.managedOnly.length ?? 0
+  const runtimeOnlyCount = deploymentLayer?.runtimeOnlyCount ?? 0
+  const showSourceDifferences = !!deploymentSource && managedOnlyCount + runtimeOnlyCount > 0
+  const sourceLabel = deploymentSource ? sourceInventoryLabel(deploymentSource) : ''
+
   return (
     <div className="absolute left-4 top-4 z-10 w-[min(22rem,calc(100%-2rem))] overflow-hidden rounded-lg border border-theme-border bg-theme-surface/95 shadow-theme-md backdrop-blur">
       <div className="flex items-center justify-between gap-3 border-b border-theme-border bg-theme-base px-3 py-2">
@@ -1738,8 +1657,42 @@ function TopologyWorkloadLegend({
           />
         )}
       </div>
+      {showSourceDifferences && deploymentSource && (
+        <div className="border-t border-theme-border px-3 py-2.5">
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Source differences</div>
+          <div className="space-y-1">
+            {managedOnlyCount > 0 && (
+              <Tooltip content={`View resources that exist only in the ${sourceLabel} inventory`} delay={150}>
+                <button
+                  type="button"
+                  onClick={() => onOpenSource?.(deploymentSource)}
+                  disabled={!onOpenSource}
+                  className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-theme-text-secondary hover:bg-theme-hover disabled:cursor-default"
+                >
+                  <DeploymentSourceLogo source={deploymentSource} />
+                  <span className="min-w-0 flex-1">{managedOnlyCount} only in {sourceLabel}</span>
+                  {onOpenSource && <ExternalLink className="h-3 w-3 shrink-0 text-theme-text-tertiary" aria-hidden />}
+                </button>
+              </Tooltip>
+            )}
+            {runtimeOnlyCount > 0 && (
+              <div className="flex items-center gap-2 px-1.5 py-1 text-xs text-theme-text-secondary">
+                <Radio className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" aria-hidden />
+                <span>{pluralize(runtimeOnlyCount, 'runtime-only resource')}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+function DeploymentSourceLogo({ source }: { source: AppSourceRef }) {
+  const sourceLabel = sourceInventoryLabel(source)
+  const logo = sourceLabel === 'Argo CD' ? argoCdLogo : sourceLabel === 'Flux' ? fluxLogo : null
+  if (!logo) return <Layers className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" aria-hidden />
+  return <img src={logo} alt="" className="h-4 w-4 shrink-0 object-contain" />
 }
 
 function StaticWorkloadScope({ workload }: { workload: AppWorkload }) {
