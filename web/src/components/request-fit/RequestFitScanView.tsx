@@ -10,7 +10,7 @@ import {
   useRequestFitScan,
   type RightsizingRow,
 } from '../../api/client'
-import { REQUEST_FIT_DOCS_URL } from '../resource/RightsizingStrip'
+import { RIGHTSIZING_DOCS_URL } from '../resource/RightsizingStrip'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { CostViewTabs } from '../cost/CostViewTabs'
 import {
@@ -154,7 +154,7 @@ export function RequestFitScanView({ namespaces }: RequestFitScanViewProps) {
             <p className="mt-0.5 text-sm text-theme-text-secondary">{REQUEST_FIT_SCAN_DESCRIPTION}</p>
           </div>
           <div className="flex items-center gap-3">
-            <a href={REQUEST_FIT_DOCS_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline">
+            <a href={RIGHTSIZING_DOCS_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline">
               Methodology <ExternalLink className="h-3 w-3" />
             </a>
             {result?.scannedAt && <span className="text-xs text-theme-text-tertiary">Scanned {formatScanTime(result.scannedAt)}</span>}

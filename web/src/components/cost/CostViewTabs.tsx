@@ -3,11 +3,11 @@ import { clsx } from 'clsx'
 
 export function CostViewTabs() {
   const { pathname } = useLocation()
-  const requestFit = pathname.startsWith('/cost/request-fit')
+  const rightsizing = pathname.startsWith('/cost/rightsizing')
   return (
     <div className="flex items-center gap-1 border-b border-theme-border" role="tablist" aria-label="Cost views">
-      <CostTab to="/cost" active={!requestFit}>Overview</CostTab>
-      <CostTab to="/cost/request-fit" active={requestFit}>Rightsizing</CostTab>
+      <CostTab to="/cost" active={!rightsizing}>Overview</CostTab>
+      <CostTab to="/cost/rightsizing" active={rightsizing}>Rightsizing</CostTab>
     </div>
   )
 }

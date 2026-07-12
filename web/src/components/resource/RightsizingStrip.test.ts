@@ -4,7 +4,7 @@ import {
   getRequestFitExplanation,
   getRequestFitPresentation,
   REQUEST_FIT_METHODOLOGY,
-  REQUEST_FIT_DOCS_URL,
+  RIGHTSIZING_DOCS_URL,
   REQUEST_FIT_SUMMARY,
 } from './RightsizingStrip'
 
@@ -73,6 +73,6 @@ describe('request-fit presentation', () => {
     expect(REQUEST_FIT_METHODOLOGY).toContain('CPU P95 and memory maximum')
     expect(REQUEST_FIT_METHODOLOGY).toContain('Reductions are staged')
     expect(REQUEST_FIT_METHODOLOGY).toContain('Radar does not change requests')
-    expect(REQUEST_FIT_DOCS_URL).toContain('/features/request-fit')
+    expect(RIGHTSIZING_DOCS_URL).toContain('/features/rightsizing')
   })
 })

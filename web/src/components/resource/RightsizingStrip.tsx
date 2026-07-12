@@ -12,7 +12,7 @@ import {
 import { Tooltip } from '../ui/Tooltip'
 
 const RIGHTSIZING_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet'])
-export const REQUEST_FIT_DOCS_URL = 'https://radarhq.io/docs/features/request-fit'
+export const RIGHTSIZING_DOCS_URL = 'https://radarhq.io/docs/features/rightsizing'
 export const REQUEST_FIT_SUMMARY = 'Evidence-based guidance for this workload, not a savings estimate or automatic change.'
 export const REQUEST_FIT_METHODOLOGY = 'Uses seven days of 5-minute samples: CPU P95 and memory maximum, plus 15% headroom. Reductions are staged and rounded to practical values. Radar does not change requests.'
 
@@ -50,7 +50,7 @@ export function RequestFitPanel(props: RequestFitProps) {
             <p className="text-xs text-theme-text-tertiary">
               {REQUEST_FIT_SUMMARY}{' '}
               <a
-                href={REQUEST_FIT_DOCS_URL}
+                href={RIGHTSIZING_DOCS_URL}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-accent-text hover:underline"
@@ -63,7 +63,7 @@ export function RequestFitPanel(props: RequestFitProps) {
         </div>
         <div className="flex items-center gap-3">
           {state.data && <RequestFitContext data={state.data} />}
-          <Link to="/cost/request-fit" className="text-xs font-medium text-accent-text hover:underline">Scan visible workloads</Link>
+          <Link to="/cost/rightsizing" className="text-xs font-medium text-accent-text hover:underline">Scan visible workloads</Link>
         </div>
       </header>
       <div className="p-4">

@@ -153,7 +153,11 @@ function namespaceFilterDisabled(
   pathname: string,
   apiResources?: { name: string; kind: string; namespaced: boolean }[],
 ): { disabled: boolean; tooltip?: string } {
-  if (view === 'cost' && !pathname.startsWith('/cost/request-fit')) {
+  if (
+    view === 'cost' &&
+    !pathname.startsWith('/cost/rightsizing') &&
+    !pathname.startsWith('/cost/request-fit')
+  ) {
     return {
       disabled: true,
       tooltip: 'Cost is reported per namespace across the whole cluster — the namespace filter doesn’t apply here.',
