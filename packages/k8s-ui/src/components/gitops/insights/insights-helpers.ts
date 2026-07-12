@@ -46,6 +46,11 @@ export function changeHealth(change: GitOpsChange): GitOpsHealthStatus {
   return normalizeHealthStatus(change.health)
 }
 
+export function isArgoResourceSyncEligible(change: GitOpsChange, declared: boolean, hook?: string): boolean {
+  if (!declared || hook || change.hookPhase) return false
+  return changeSync(change) === 'OutOfSync' || changeHealth(change) === 'Missing' || change.category === 'Missing'
+}
+
 // Rank sync/health so an ascending sort surfaces the states an operator cares
 // about first (drift, then failures). Mirrors the GitOps application table's
 // syncRank/healthRank so the two tables order status the same way.

@@ -46,6 +46,7 @@ import { useToast } from '../ui/Toast'
 
 import {
   fetchJSON,
+  buildArgoResourceSyncVars,
   useApplyResource,
   useArgoRefresh,
   useArgoResume,
@@ -79,6 +80,10 @@ const GITOPS_KINDS: APIResource[] = [
   { name: 'helmrepositories', kind: 'HelmRepository', group: 'source.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
   { name: 'alerts', kind: 'Alert', group: 'notification.toolkit.fluxcd.io', version: 'v1beta3', namespaced: true, verbs: ['list', 'get'], isCrd: true },
 ]
+
+type ArgoSyncDialogTarget =
+  | { scope: 'application' }
+  | { scope: 'resource'; resource: GitOpsInsightRef }
 
 const KIND_BY_NAME = new Map(GITOPS_KINDS.map((k) => [k.name, k]))
 
@@ -414,7 +419,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const fluxSuspend = useFluxSuspend()
   const fluxResume = useFluxResume()
 
-  const [syncDialogOpen, setSyncDialogOpen] = useState(false)
+  const [syncDialogTarget, setSyncDialogTarget] = useState<ArgoSyncDialogTarget | null>(null)
   // Doubles as the "open" flag (truthy = dialog open) and the data carrier
   // for which history entry to roll back to.
   const [rollbackTarget, setRollbackTarget] = useState<GitOpsHistoryItem | null>(null)
@@ -463,7 +468,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
 
   // Detail-page shortcuts. Skip when a modal is already open so a stray "s"
   // in an input field doesn't pop another sync dialog.
-  const shortcutsEnabled = !syncDialogOpen && !rollbackTarget
+  const shortcutsEnabled = !syncDialogTarget && !rollbackTarget
   useRegisterShortcut({
     id: 'gitops-detail-sync',
     keys: 's',
@@ -472,7 +477,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
     scope: 'gitops',
     handler: () => {
       if (effectiveSuspended || terminating) return
-      if (isArgoApp) setSyncDialogOpen(true)
+      if (isArgoApp) setSyncDialogTarget({ scope: 'application' })
       else if (isFlux) fluxReconcile.mutate({ kind, namespace, name })
     },
     enabled: shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating,
@@ -529,7 +534,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   }
 
   const argoHandlers: ArgoActionHandlers | undefined = isArgoApp ? {
-    onSyncRequested: () => setSyncDialogOpen(true),
+    onSyncRequested: () => setSyncDialogTarget({ scope: 'application' }),
     onRefresh: (refreshType) => {
       setRefreshKind(refreshType)
       argoRefresh.mutate({ namespace, name, hard: refreshType === 'hard' })
@@ -692,6 +697,16 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
               insight={insightsQ.data}
               error={insightsQ.error as Error | null}
               onOpenResource={openResourceFromTree}
+              onSyncResource={isArgoApp ? (resource) => setSyncDialogTarget({ scope: 'resource', resource }) : undefined}
+              syncResourceDisabledReason={isArgoApp ? (
+                terminating
+                  ? terminatingActionTooltip
+                  : effectiveSuspended
+                    ? 'Resume the Application before syncing a resource.'
+                    : isRunning || argoSync.isPending
+                      ? 'Wait for the current sync operation to finish.'
+                      : undefined
+              ) : undefined}
               focusKey={changesFocusKey}
               tree={tree}
             />
@@ -739,13 +754,18 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
       {isArgoApp && (
         <>
           <SyncOptionsDialog
-            open={syncDialogOpen}
+            open={!!syncDialogTarget}
             appLabel={`${namespace}/${name}`}
+            resource={syncDialogTarget?.scope === 'resource' ? syncDialogTarget.resource : undefined}
             pending={argoSync.isPending}
-            onCancel={() => setSyncDialogOpen(false)}
+            onCancel={() => setSyncDialogTarget(null)}
             onConfirm={(opts) => {
-              argoSync.mutate({ namespace, name, ...opts }, {
-                onSettled: () => setSyncDialogOpen(false),
+              if (!syncDialogTarget) return
+              const variables = syncDialogTarget.scope === 'resource'
+                ? buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts)
+                : { namespace, name, ...opts }
+              argoSync.mutate(variables, {
+                onSettled: () => setSyncDialogTarget(null),
               })
             }}
           />

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { AppHistory, AppRow } from '@skyhook-io/k8s-ui'
+import type { AppHistory, AppRow, ArgoSyncOpts, GitOpsInsightRef } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
@@ -3283,7 +3283,7 @@ type ArgoAppVars = { namespace: string; name: string }
 // ArgoSyncVars extends ArgoAppVars with the sync request body fields. Only
 // useArgoSync sends these — splitting the type prevents callers from passing
 // resources/revision/prune to mutations that would silently drop them.
-type ArgoSyncVars = ArgoAppVars & {
+export type ArgoSyncVars = ArgoAppVars & {
   resources?: Array<{ group?: string; kind: string; namespace?: string; name: string }>
   revision?: string
   prune?: boolean
@@ -3294,6 +3294,18 @@ type ArgoSyncVars = ArgoAppVars & {
   // "ServerSideApply=true", "PruneLast=true". Caller is responsible for
   // spelling.
   syncOptions?: string[]
+}
+
+export function buildArgoResourceSyncVars(namespace: string, name: string, resource: GitOpsInsightRef, opts: ArgoSyncOpts): ArgoSyncVars {
+  return {
+    namespace,
+    name,
+    ...opts,
+    resources: [{ group: resource.group, kind: resource.kind, namespace: resource.namespace, name: resource.name }],
+    revision: undefined,
+    prune: false,
+    applyOnly: false,
+  }
 }
 
 // ArgoRollbackVars targets a specific Argo history entry by ID. Prune and
