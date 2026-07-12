@@ -502,7 +502,7 @@ func runRightsizingQueries(ctx context.Context, client rightsizingQuerier, queri
 			<-sem
 			outcome := queryOutcome{values: resultByContainer(result), err: err}
 			if err != nil {
-				errorlog.Record("prometheus", "warning", "request fit query %s failed: %v", key, err)
+				errorlog.Record("prometheus", "warning", "rightsizing query %s failed: %v", key, err)
 			}
 			mu.Lock()
 			results[key] = outcome
