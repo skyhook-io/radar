@@ -28,6 +28,48 @@ func TestBatchHealthPrefersActiveRunsOverRetainedFailure(t *testing.T) {
 	}
 }
 
+func TestBatchHealthPreservesLauncherProblems(t *testing.T) {
+	tests := []struct {
+		name     string
+		batch    *appBatchSummary
+		fallback packages.Health
+		want     packages.Health
+	}{
+		{
+			name:     "stale schedule stays degraded after an older success",
+			batch:    &appBatchSummary{LatestRunPhase: "Succeeded"},
+			fallback: packages.HealthDegraded,
+			want:     packages.HealthDegraded,
+		},
+		{
+			name:     "unhealthy launcher stays unhealthy while a retained run is active",
+			batch:    &appBatchSummary{ActiveRuns: 1},
+			fallback: packages.HealthUnhealthy,
+			want:     packages.HealthUnhealthy,
+		},
+		{
+			name:     "failed run is worse than a degraded launcher",
+			batch:    &appBatchSummary{LatestRunPhase: "Failed"},
+			fallback: packages.HealthDegraded,
+			want:     packages.HealthUnhealthy,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := batchHealth(tt.batch, tt.fallback); got != tt.want {
+				t.Fatalf("batchHealth = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBatchHealthUsesStandaloneJobResult(t *testing.T) {
+	batch := &appBatchSummary{LatestRunPhase: "Succeeded"}
+	if got := batchHealth(batch, packages.HealthNeutral); got != packages.HealthHealthy {
+		t.Fatalf("batchHealth = %q, want healthy for a succeeded standalone Job", got)
+	}
+}
+
 func TestWorkflowPrimaryImageUsesStoredTemplateSpec(t *testing.T) {
 	wf := &unstructured.Unstructured{Object: map[string]any{
 		"status": map[string]any{

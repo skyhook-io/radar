@@ -875,10 +875,11 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				if controllerOwnerName(j.OwnerReferences, "ScaledJob") != "" {
 					continue
 				}
+				batch := jobBatchSummary(j)
 				add("Job", j.Namespace, j.Name, j.Labels, j.Annotations,
 					primaryImage(j.Spec.Template.Spec.Containers),
-					levelToPackagesHealth(health.Workload(j, time.Now()).Level),
-					0, 0, j.Spec.Selector, jobBatchSummary(j))
+					batchHealth(batch, levelToPackagesHealth(health.Workload(j, time.Now()).Level)),
+					0, 0, j.Spec.Selector, batch)
 			}
 		})
 	}
@@ -1231,11 +1232,20 @@ func batchHealth(batch *appBatchSummary, fallback packages.Health) packages.Heal
 	if batch == nil {
 		return fallback
 	}
+	if fallback == packages.HealthUnhealthy {
+		return fallback
+	}
 	if batch.ActiveRuns > 0 {
+		if fallback == packages.HealthDegraded {
+			return fallback
+		}
 		return packages.HealthNeutral
 	}
 	if batch.LatestRunPhase == "Failed" || batch.LatestRunPhase == "Error" {
 		return packages.HealthUnhealthy
+	}
+	if fallback == packages.HealthDegraded {
+		return fallback
 	}
 	if batch.Suspended {
 		return packages.HealthNeutral
