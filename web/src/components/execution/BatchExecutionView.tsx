@@ -633,43 +633,56 @@ function RunActivityPanel({ run, resource, workflowExecution }: { run: WorkloadR
   const [showAll, setShowAll] = useState(false)
   const activity = run.kind === 'workflows' ? workflowExecution?.activity ?? [] : jobActivity(run, resource)
   const defaultItems = activity.length <= 10 ? activity : activityPreviewItems(activity)
-  const visible = showAll ? activity : defaultItems
+  const overflowItems = activity.slice(defaultItems.length)
   return (
     <Panel title="Activity" icon={Activity} detail={activity.length ? `${activity.length} events` : undefined}>
-      {visible.length === 0 ? (
+      {activity.length === 0 ? (
         <EmptyState tone="neutral" variant="card" headline="No activity yet" body="This run has not reported timing details yet." />
       ) : (
         <div className="divide-y divide-theme-border border-y border-theme-border">
-          {visible.map((item) => (
-            <div key={item.id} className="flex gap-3 px-2 py-2">
-              <ActivityDot tone={item.tone} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="truncate text-sm font-medium text-theme-text-primary">{item.label}</div>
-                  <div className="shrink-0 text-xs text-theme-text-tertiary">{formatAge(item.at)}</div>
-                </div>
-                {item.detail && item.detail !== run.message && item.tone !== 'danger' && <div className="mt-0.5 break-words text-xs text-theme-text-secondary">{item.detail}</div>}
+          {defaultItems.map((item) => <RunActivityRow key={item.id} item={item} runMessage={run.message} />)}
+          {overflowItems.length > 0 && (
+            <Collapse open={showAll}>
+              <div className="divide-y divide-theme-border border-t border-theme-border">
+                {overflowItems.map((item) => <RunActivityRow key={item.id} item={item} runMessage={run.message} />)}
               </div>
-            </div>
-          ))}
+            </Collapse>
+          )}
         </div>
       )}
-      {!showAll && visible.length < activity.length && <button type="button" className="mt-3 text-sm font-medium text-accent-text hover:underline" onClick={() => setShowAll(true)}>Show all {activity.length} events</button>}
+      {overflowItems.length > 0 && (
+        <button type="button" className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-accent-text hover:underline" onClick={() => setShowAll((open) => !open)} aria-expanded={showAll}>
+          <CollapseChevron open={showAll} className="h-3.5 w-3.5" />
+          {showAll ? 'Show fewer events' : `Show all ${activity.length} events`}
+        </button>
+      )}
     </Panel>
   )
 }
 
 export function activityPreviewItems(activity: WorkflowExecutionActivity[], limit = 8): WorkflowExecutionActivity[] {
-  const included = new Set<number>()
+  let previewLength = Math.min(limit, activity.length)
   activity.forEach((item, index) => {
-    if (item.tone === 'danger' || item.tone === 'warning' || item.id.startsWith('workflow-') || item.id === 'scheduled' || item.id === 'started') {
-      included.add(index)
+    if (item.tone === 'danger' || item.tone === 'warning') {
+      previewLength = Math.max(previewLength, index + 1)
     }
   })
-  for (let index = activity.length - 1; index >= 0 && included.size < limit; index -= 1) {
-    included.add(index)
-  }
-  return activity.filter((_, index) => included.has(index))
+  return activity.slice(0, previewLength)
+}
+
+function RunActivityRow({ item, runMessage }: { item: WorkflowExecutionActivity; runMessage?: string }) {
+  return (
+    <div className="flex gap-3 px-2 py-2">
+      <ActivityDot tone={item.tone} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <div className="truncate text-sm font-medium text-theme-text-primary">{item.label}</div>
+          <div className="shrink-0 text-xs text-theme-text-tertiary">{formatAge(item.at)}</div>
+        </div>
+        {item.detail && item.detail !== runMessage && item.tone !== 'danger' && <div className="mt-0.5 break-words text-xs text-theme-text-secondary">{item.detail}</div>}
+      </div>
+    </div>
+  )
 }
 
 function RunContext({ run, resource, definitionResource, workflowExecution, currentWorkload, onNavigateToResource }: { run: WorkloadRun; resource: any; definitionResource: any; workflowExecution: WorkflowExecutionModel | null; currentWorkload: { kind: string; namespace: string; name: string }; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {

@@ -7,29 +7,20 @@ function activity(id: string, tone: WorkflowExecutionActivity['tone'] = 'success
 }
 
 describe('activityPreviewItems', () => {
-  it('keeps workflow lifecycle events and fills the preview with recent activity', () => {
+  it('keeps a stable chronological prefix so expansion only appends activity', () => {
     const items = [
       activity('workflow-started', 'info'),
       ...Array.from({ length: 14 }, (_, index) => activity(`node-${index}`)),
       activity('workflow-finished'),
     ]
 
-    expect(activityPreviewItems(items).map((item) => item.id)).toEqual([
-      'workflow-started',
-      'node-8',
-      'node-9',
-      'node-10',
-      'node-11',
-      'node-12',
-      'node-13',
-      'workflow-finished',
-    ])
+    expect(activityPreviewItems(items)).toEqual(items.slice(0, 8))
   })
 
-  it('never hides warning or failure events to satisfy the preview limit', () => {
-    const items = Array.from({ length: 12 }, (_, index) => activity(`event-${index}`, index < 9 ? 'warning' : 'success'))
+  it('extends the chronological prefix through the last warning or failure', () => {
+    const items = Array.from({ length: 12 }, (_, index) => activity(`event-${index}`, index === 9 ? 'warning' : 'success'))
 
-    expect(activityPreviewItems(items).slice(0, 9)).toEqual(items.slice(0, 9))
+    expect(activityPreviewItems(items)).toEqual(items.slice(0, 10))
   })
 })
 
