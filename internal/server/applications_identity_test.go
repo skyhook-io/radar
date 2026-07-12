@@ -48,27 +48,31 @@ func TestEnrichRowsWithArgoStatus(t *testing.T) {
 	}
 }
 
-func TestEnrichRowsWithArgoProgressingPreservesHealthyRuntime(t *testing.T) {
-	rows := []appRow{{
-		Health:        "healthy",
-		RuntimeHealth: "healthy",
-		SourceRef:     &appSourceRef{Type: "gitops", Tool: "argocd", Kind: "Application", Namespace: "argocd", Name: "checkout"},
-	}}
-	app := &unstructured.Unstructured{Object: map[string]any{
-		"metadata": map[string]any{"namespace": "argocd", "name": "checkout"},
-		"status": map[string]any{
-			"sync":   map[string]any{"status": "Synced"},
-			"health": map[string]any{"status": "Progressing"},
-		},
-	}}
+func TestEnrichRowsWithNonDegradingArgoStatesPreservesHealthyRuntime(t *testing.T) {
+	for _, healthStatus := range []string{"Progressing", "Unknown", "Suspended"} {
+		t.Run(healthStatus, func(t *testing.T) {
+			rows := []appRow{{
+				Health:        "healthy",
+				RuntimeHealth: "healthy",
+				SourceRef:     &appSourceRef{Type: "gitops", Tool: "argocd", Kind: "Application", Namespace: "argocd", Name: "checkout"},
+			}}
+			app := &unstructured.Unstructured{Object: map[string]any{
+				"metadata": map[string]any{"namespace": "argocd", "name": "checkout"},
+				"status": map[string]any{
+					"sync":   map[string]any{"status": "Synced"},
+					"health": map[string]any{"status": healthStatus},
+				},
+			}}
 
-	enrichRowsWithArgoStatus(rows, []*unstructured.Unstructured{app})
+			enrichRowsWithArgoStatus(rows, []*unstructured.Unstructured{app})
 
-	if rows[0].SourceStatus == nil || rows[0].SourceStatus.Health != "Progressing" {
-		t.Fatalf("source status = %#v", rows[0].SourceStatus)
-	}
-	if rows[0].RuntimeHealth != "healthy" || rows[0].Health != "healthy" {
-		t.Fatalf("runtime=%q overall=%q", rows[0].RuntimeHealth, rows[0].Health)
+			if rows[0].SourceStatus == nil || rows[0].SourceStatus.Health != healthStatus {
+				t.Fatalf("source status = %#v", rows[0].SourceStatus)
+			}
+			if rows[0].RuntimeHealth != "healthy" || rows[0].Health != "healthy" {
+				t.Fatalf("runtime=%q overall=%q", rows[0].RuntimeHealth, rows[0].Health)
+			}
+		})
 	}
 }
 

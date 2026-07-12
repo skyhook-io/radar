@@ -1141,7 +1141,7 @@ func argoDeliveryHealth(syncStatus, healthStatus string) packages.Health {
 	case "suspended":
 		health = packages.HealthNeutral
 	case "unknown":
-		health = packages.HealthUnknown
+		health = packages.HealthNeutral
 	}
 	if strings.EqualFold(syncStatus, "OutOfSync") {
 		health = packages.WorseHealth(health, packages.HealthDegraded)
