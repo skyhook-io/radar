@@ -7,6 +7,7 @@ import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
 import { useResource, useWorkloadRuns, type WorkloadRun } from '../../api/client'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
 import { Tooltip } from '../ui/Tooltip'
+import { executionDefinitionFingerprint, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
 
 const EMPTY_RUNS: WorkloadRun[] = []
 const SCHEDULED_KINDS = new Set(['CronJob', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob'])
@@ -24,11 +25,57 @@ function isTemplateKind(kind: string): boolean {
 }
 
 function configurationTitle(kind: string): string {
-  if (kind === 'CronJob' || kind === 'CronWorkflow') return 'Schedule'
-  if (kind === 'ScaledJob') return 'Trigger configuration'
-  if (isTemplateKind(kind)) return 'Definition'
-  if (kind === 'Job') return 'Job configuration'
-  return 'Workflow configuration'
+  if (kind === 'CronJob') return 'Schedule & job definition'
+  if (kind === 'CronWorkflow') return 'Schedule & workflow definition'
+  if (kind === 'ScaledJob') return 'Trigger & job definition'
+  if (isTemplateKind(kind)) return 'Current definition'
+  if (kind === 'Job') return 'Job definition'
+  return 'Workflow definition'
+}
+
+export function workflowDefinitionTarget(kind: string, resource: any): { kind: string; namespace: string; name: string; group: string } | null {
+  if (kind !== 'CronWorkflow') return null
+  const ref = resource?.spec?.workflowSpec?.workflowTemplateRef
+  if (!ref?.name) return null
+  return {
+    kind: ref.clusterScope ? 'clusterworkflowtemplates' : 'workflowtemplates',
+    namespace: ref.clusterScope ? '' : resource?.metadata?.namespace || '',
+    name: ref.name,
+    group: 'argoproj.io',
+  }
+}
+
+export function effectiveDefinitionResource(kind: string, resource: any, referencedDefinition: any): any {
+  if (kind !== 'CronWorkflow' || !referencedDefinition) return resource
+  const base = referencedDefinition.spec ?? {}
+  const overlay = resource?.spec?.workflowSpec ?? {}
+  return {
+    ...resource,
+    spec: {
+      ...resource.spec,
+      workflowSpec: {
+        ...base,
+        ...overlay,
+        templates: overlay.templates ?? base.templates,
+        arguments: mergeWorkflowArguments(base.arguments, overlay.arguments),
+      },
+    },
+  }
+}
+
+function mergeWorkflowArguments(base: any, overlay: any): any {
+  const parameters = new Map<string, any>()
+  for (const parameter of base?.parameters ?? []) {
+    if (parameter?.name) parameters.set(parameter.name, parameter)
+  }
+  for (const parameter of overlay?.parameters ?? []) {
+    if (!parameter?.name) continue
+    const merged = { ...parameters.get(parameter.name), ...parameter }
+    if (Object.prototype.hasOwnProperty.call(parameter, 'value')) delete merged.valueFrom
+    else if (Object.prototype.hasOwnProperty.call(parameter, 'valueFrom')) delete merged.value
+    parameters.set(parameter.name, merged)
+  }
+  return { ...base, ...overlay, parameters: [...parameters.values()] }
 }
 
 interface BatchExecutionProps {
@@ -50,6 +97,18 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   const defaultRun = useMemo(() => pickDefaultRun(runs), [runs])
   const [runFilter, setRunFilter] = useState<'all' | 'active' | 'failed'>('all')
   const [runSearch, setRunSearch] = useState('')
+  const referencedDefinitionTarget = workflowDefinitionTarget(kind, resource)
+  const referencedDefinitionQuery = useResource<any>(
+    referencedDefinitionTarget?.kind ?? '',
+    referencedDefinitionTarget?.namespace ?? '',
+    referencedDefinitionTarget?.name ?? '',
+    referencedDefinitionTarget?.group,
+    { enabled: Boolean(referencedDefinitionTarget) },
+  )
+  const definitionResource = useMemo(
+    () => effectiveDefinitionResource(kind, resource, referencedDefinitionQuery.data),
+    [kind, resource, referencedDefinitionQuery.data],
+  )
 
   useEffect(() => {
     if (!runsQuery.data) return
@@ -68,7 +127,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
     if (runFilter === 'failed' && run.phase !== 'Failed' && run.phase !== 'Error') return false
     return !runSearch || run.name.toLowerCase().includes(runSearch.toLowerCase())
   }), [runs, runFilter, runSearch])
-  const source = sourceFacts(kind, resource, runs)
+  const source = sourceFacts(kind, definitionResource, runs)
   const phaseCounts = countPhases(runs)
   const retentionCopy = retentionHistoryCopy(kind, resource, phaseCounts)
   const fetchTarget = selectedRun && scheduled ? resourceTargetForRun(selectedRun) : null
@@ -188,7 +247,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                     <span className={clsx('badge', phaseBadgeClass(selectedRun.phase))}>{selectedRun.phase}</span>
                   </div>
                   <RunDetailList run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} scheduledParent={scheduled} />
-                  <RunContext run={selectedRun} resource={selectedResource} definitionResource={resource} workflowExecution={workflowExecution} currentWorkload={{ kind, namespace, name }} onNavigateToResource={onNavigateToResource} />
+                  <RunContext run={selectedRun} resource={selectedResource} definitionResource={definitionResource} workflowExecution={workflowExecution} currentWorkload={{ kind, namespace, name }} onNavigateToResource={onNavigateToResource} />
                   {selectedRun.message && <RunMessageDetails run={selectedRun} />}
                 </section>
               ) : (
@@ -304,6 +363,7 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
   const spec = resource?.spec ?? {}
   const status = resource?.status ?? {}
   const latest = pickLatestRun(runs)
+  const definition = executionDefinitionSummary(kind, resource)
   if (kind === 'CronJob') {
     return {
       state: spec.suspend ? 'Suspended' : (status.active?.length ?? 0) > 0 ? 'Active' : 'Scheduled',
@@ -318,12 +378,12 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
         ['Last success', status.lastSuccessfulTime ? formatAge(status.lastSuccessfulTime) : 'Never'],
         ['Starting deadline', spec.startingDeadlineSeconds ? `${spec.startingDeadlineSeconds}s` : 'None'],
       ],
+      definition,
     }
   }
   if (kind === 'CronWorkflow') {
     const schedules = Array.isArray(spec.schedules) ? spec.schedules.join(', ') : spec.schedule
     const template = spec.workflowSpec?.workflowTemplateRef?.name || spec.workflowSpec?.entrypoint
-    const workflowSpec = spec.workflowSpec ?? {}
     return {
       state: spec.suspend ? 'Suspended' : (status.active?.length ?? 0) > 0 ? 'Active' : 'Scheduled',
       stateTone: spec.suspend ? 'warning' : 'info',
@@ -336,9 +396,9 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
         ['Timezone', spec.timezone || 'Cluster default'],
         ['Template', template || '-'],
         ['Starting deadline', spec.startingDeadlineSeconds ? `${spec.startingDeadlineSeconds}s` : 'None'],
-        ...workflowDefinitionDetails(workflowSpec),
       ],
       parameters: workflowDefinitionParameters(kind, resource),
+      definition,
     }
   }
   if (kind === 'WorkflowTemplate') {
@@ -348,12 +408,9 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
       progress: latest?.progress,
       duration: latest ? formatRunDuration(latest) : '',
       work: `${runs.filter((run) => run.active).length} active`,
-      facts: [
-        ['Entrypoint', spec.entrypoint || '-'],
-        ['Templates', Array.isArray(spec.templates) ? String(spec.templates.length) : '-'],
-        ...workflowDefinitionDetails(spec),
-      ],
+      facts: [],
       parameters: workflowDefinitionParameters(kind, resource),
+      definition,
     }
   }
   if (kind === 'ClusterWorkflowTemplate') {
@@ -363,19 +420,14 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
       progress: latest?.progress,
       duration: latest ? formatRunDuration(latest) : '',
       work: `${runs.filter((run) => run.active).length} active`,
-      facts: [
-        ['Entrypoint', spec.entrypoint || '-'],
-        ['Templates', Array.isArray(spec.templates) ? String(spec.templates.length) : '-'],
-        ...workflowDefinitionDetails(spec),
-        ['Scope', 'Cluster'],
-      ],
+      facts: [['Scope', 'Cluster']],
       parameters: workflowDefinitionParameters(kind, resource),
+      definition,
     }
   }
   if (kind === 'ScaledJob') {
     const active = runs.filter((run) => run.active).length
     const triggers = Array.isArray(spec.triggers) ? spec.triggers : []
-    const image = spec.jobTargetRef?.template?.spec?.containers?.[0]?.image || 'Job template'
     return {
       state: scaledJobState(resource),
       stateTone: scaledJobTone(resource),
@@ -383,11 +435,11 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
       duration: latest ? formatRunDuration(latest) : '',
       work: `${active} active`,
       facts: [
-        ['Job image', String(image)],
         ['Triggers', triggers.length ? triggers.map((trigger: any) => trigger.type || 'trigger').join(', ') : '-'],
         ['Polling interval', spec.pollingInterval != null ? `${spec.pollingInterval}s` : 'Default'],
         ['Replica range', `${spec.minReplicaCount ?? 0} min / ${spec.maxReplicaCount ?? '-'} max`],
       ],
+      definition,
     }
   }
   if (kind === 'Job') {
@@ -398,12 +450,9 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
       duration: latest ? formatRunDuration(latest) : '',
       work: latest ? workCount(latest) : '',
       facts: [
-        ['Parallelism', String(spec.parallelism ?? 1)],
-        ['Completions', String(spec.completions ?? 1)],
-        ['Completion mode', spec.completionMode || 'NonIndexed'],
-        ['Backoff limit', String(spec.backoffLimit ?? 6)],
         ['TTL after finish', spec.ttlSecondsAfterFinished != null ? `${spec.ttlSecondsAfterFinished}s` : 'None'],
       ],
+      definition,
     }
   }
   return {
@@ -413,22 +462,11 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
     duration: latest ? formatRunDuration(latest) : '',
     work: latest ? workCount(latest) : '',
     facts: [
-      ['Entrypoint', spec.entrypoint || '-'],
       ['Template', spec.workflowTemplateRef?.name || '-'],
       ['Priority', spec.priority != null ? String(spec.priority) : '-'],
-      ...workflowDefinitionDetails(spec),
     ],
+    definition,
   }
-}
-
-function workflowDefinitionDetails(spec: any): Array<[string, string]> {
-  return [
-    ['Service account', spec.serviceAccountName || '-'],
-    ...(spec.onExit ? [['Exit handler', String(spec.onExit)] as [string, string]] : []),
-    ...(spec.parallelism != null ? [['Parallelism', String(spec.parallelism)] as [string, string]] : []),
-    ...(spec.activeDeadlineSeconds != null ? [['Active deadline', `${spec.activeDeadlineSeconds}s`] as [string, string]] : []),
-    ...(spec.synchronization ? [['Synchronization', 'Configured'] as [string, string]] : []),
-  ]
 }
 
 function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
@@ -440,6 +478,7 @@ function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
         {source.schedule && <FactTile label="Schedule" value={source.schedule} mono />}
         {source.concurrency && <FactTile label="Concurrency" value={source.concurrency} />}
       </div>
+      {source.definition && <ExecutionDefinitionDetails summary={source.definition} />}
       <div className="space-y-2">
         {source.facts.map(([label, value]) => (
           <div key={label} className="flex items-start justify-between gap-3 text-sm">
@@ -452,6 +491,56 @@ function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
         <ParameterSection title="Inputs" parameters={parameters} showDescription />
       )}
     </>
+  )
+}
+
+function ExecutionDefinitionDetails({ summary, compact = false }: { summary: ExecutionDefinitionSummary; compact?: boolean }) {
+  const visibleUnits = summary.units.slice(0, compact ? 1 : 3)
+  return (
+    <div className={clsx(!compact && 'border-t border-theme-border pt-3')}>
+      {!compact && <div className="mb-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">What it runs</div>}
+      <div className="space-y-2">
+        <DefinitionFact label="Execution" value={summary.shape} />
+        {visibleUnits.map((unit) => <ExecutionUnitDetails key={`${unit.type}/${unit.name}`} unit={unit} compact={compact} />)}
+        {summary.units.length > visibleUnits.length && <div className="text-right text-xs text-theme-text-tertiary">+{summary.units.length - visibleUnits.length} more executable {summary.units.length - visibleUnits.length === 1 ? 'template' : 'templates'}</div>}
+        {summary.externalTemplates.length > 0 && <DefinitionFact label="Uses" value={summary.externalTemplates.join(', ')} mono />}
+        {!compact && (
+          <>
+            <DefinitionFact label="Retries" value={summary.retry} />
+            {summary.deadline && <DefinitionFact label="Deadline" value={summary.deadline} />}
+            {summary.parallelism && <DefinitionFact label="Parallelism" value={summary.parallelism} />}
+            <DefinitionFact label="Service account" value={summary.serviceAccount} mono />
+            {summary.configMaps.length > 0 && <DefinitionFact label="ConfigMaps" value={summary.configMaps.join(', ')} mono />}
+            {summary.secrets.length > 0 && <DefinitionFact label="Secrets" value={summary.secrets.join(', ')} mono />}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ExecutionUnitDetails({ unit, compact }: { unit: ExecutionUnitSummary; compact: boolean }) {
+  return (
+    <div className={clsx(!compact && 'rounded-md bg-theme-elevated/40 px-3 py-2')}>
+      {!compact && <div className="mb-1 flex items-center justify-between gap-3"><span className="truncate text-xs font-medium text-theme-text-primary">{unit.name}</span><span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{unit.type}</span></div>}
+      <div className="space-y-1">
+        {unit.image && <DefinitionFact label="Image" value={unit.image} mono />}
+        {unit.command && <DefinitionFact label="Command" value={unit.command} mono />}
+        {!compact && unit.requests && <DefinitionFact label="Requests" value={unit.requests} />}
+        {!compact && unit.limits && <DefinitionFact label="Limits" value={unit.limits} />}
+      </div>
+    </div>
+  )
+}
+
+function DefinitionFact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-start justify-between gap-3 text-sm">
+      <span className="shrink-0 text-theme-text-tertiary">{label}</span>
+      <Tooltip content={value} delay={300} wrapperClassName="min-w-0 text-right">
+        <span className={clsx('break-words text-theme-text-primary', mono && 'font-mono text-xs')}>{value}</span>
+      </Tooltip>
+    </div>
   )
 }
 
@@ -576,11 +665,11 @@ function RunExecutionPanel({ run, workflowExecution, loading, onNavigateToResour
   const [showAll, setShowAll] = useState(false)
   if (run.kind === 'workflows') {
     if (loading && !workflowExecution) {
-      return <Panel title="Execution" icon={GitBranch}><FetchResult loading /></Panel>
+      return <Panel title="Run execution" icon={GitBranch}><FetchResult loading /></Panel>
     }
     if (!workflowExecution || workflowExecution.executionNodes.length === 0) {
       return (
-        <Panel title="Execution" icon={GitBranch}>
+        <Panel title="Run execution" icon={GitBranch}>
           <EmptyState tone="neutral" variant="card" headline="Execution detail unavailable" body={run.active ? 'This Workflow has not reported execution nodes yet.' : 'This retained Workflow no longer has execution-node detail.'} />
         </Panel>
       )
@@ -602,7 +691,7 @@ function RunExecutionPanel({ run, workflowExecution, loading, onNavigateToResour
       return { ...row, showMessage: Boolean(nodeMessage) && !repeatedRunMessage && messageOwners.get(nodeMessage!)?.id === row.node.id }
     })
     return (
-      <Panel title="Execution" icon={GitBranch} detail={`${workflowExecution.executionNodes.length} ${workflowExecution.executionNodes.length === 1 ? 'node' : 'nodes'}`}>
+      <Panel title="Run execution" icon={GitBranch} detail={`${workflowExecution.executionNodes.length} ${workflowExecution.executionNodes.length === 1 ? 'node' : 'nodes'}`}>
         <div className="divide-y divide-theme-border rounded-md border border-theme-border">
           {renderedRows.map(({ node, depth, showMessage }) => <ExecutionNodeRow key={node.id} node={node} depth={depth} showMessage={showMessage} namespace={run.namespace} onNavigateToResource={onNavigateToResource} />)}
         </div>
@@ -635,7 +724,7 @@ function RunActivityPanel({ run, resource, workflowExecution }: { run: WorkloadR
   const defaultItems = activity.length <= 10 ? activity : activityPreviewItems(activity)
   const overflowItems = activity.slice(defaultItems.length)
   return (
-    <Panel title="Activity" icon={Activity} detail={activity.length ? `${activity.length} events` : undefined}>
+    <Panel title="Run activity" icon={Activity} detail={activity.length ? `${activity.length} events` : undefined}>
       {activity.length === 0 ? (
         <EmptyState tone="neutral" variant="card" headline="No activity yet" body="This run has not reported timing details yet." />
       ) : (
@@ -692,7 +781,12 @@ function RunContext({ run, resource, definitionResource, workflowExecution, curr
   const uses = dedupeResourceRefs(workflowExecution?.templateRefs.filter((ref) => ref.source === 'task') ?? [])
   const arguments_ = workflowRunArguments(resource, currentWorkload.kind, definitionResource)
   const outputs = workflowOutputParameters(resource)
-  if (!launcher && !definition && uses.length === 0 && arguments_.length === 0 && outputs.length === 0) return null
+  const runDefinition = executionDefinitionSummary(run.kind, resource)
+  const currentDefinition = executionDefinitionSummary(currentWorkload.kind, definitionResource)
+  const parentDefinesRun = !isDirectRunKind(currentWorkload.kind, run.kind)
+  const showRunConfiguration = parentDefinesRun && Boolean(runDefinition)
+  const definitionDiffers = showRunConfiguration && executionDefinitionFingerprint(runDefinition) !== executionDefinitionFingerprint(currentDefinition)
+  if (!launcher && !definition && uses.length === 0 && arguments_.length === 0 && outputs.length === 0 && !showRunConfiguration) return null
   return (
     <div className="border-t border-theme-border p-4">
       {(launcher || definition || uses.length > 0) && (
@@ -713,8 +807,26 @@ function RunContext({ run, resource, definitionResource, workflowExecution, curr
       )}
       {arguments_.length > 0 && <div className={clsx((launcher || definition || uses.length > 0) && 'mt-4')}><ParameterSection title="Run arguments" parameters={arguments_} divided={Boolean(launcher || definition || uses.length > 0)} /></div>}
       {outputs.length > 0 && <div className={clsx((launcher || definition || uses.length > 0 || arguments_.length > 0) && 'mt-4')}><ParameterSection title="Outputs" parameters={outputs} divided={Boolean(launcher || definition || uses.length > 0 || arguments_.length > 0)} /></div>}
+      {showRunConfiguration && runDefinition && (
+        <div className={clsx((launcher || definition || uses.length > 0 || arguments_.length > 0 || outputs.length > 0) && 'mt-4 border-t border-theme-border pt-3')}>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <h4 className="text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">Run configuration</h4>
+            <span className={clsx('text-[10px] font-medium', definitionDiffers ? phaseTextClass('warning') : 'text-theme-text-tertiary')}>
+              {definitionDiffers ? 'Execution differs from current definition' : 'Execution captured for this run'}
+            </span>
+          </div>
+          <ExecutionDefinitionDetails summary={runDefinition} compact />
+        </div>
+      )}
     </div>
   )
+}
+
+export function isDirectRunKind(currentKind: string, runKind: string): boolean {
+  const current = currentKind.toLowerCase()
+  const run = runKind.toLowerCase()
+  return (current === 'job' || current === 'jobs') && (run === 'job' || run === 'jobs')
+    || (current === 'workflow' || current === 'workflows') && (run === 'workflow' || run === 'workflows')
 }
 
 export function workflowRunArguments(resource: any, currentKind: string, definitionResource: any): WorkflowParameter[] {

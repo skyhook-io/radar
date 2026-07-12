@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkflowExecutionActivity } from '@skyhook-io/k8s-ui/utils/workflow-execution'
-import { activityPreviewItems, retentionHistoryCopy, runMessageNeedsDisclosure, workflowDefinitionParameters, workflowRunArguments } from './BatchExecutionView'
+import { activityPreviewItems, effectiveDefinitionResource, isDirectRunKind, retentionHistoryCopy, runMessageNeedsDisclosure, workflowDefinitionParameters, workflowDefinitionTarget, workflowRunArguments } from './BatchExecutionView'
 
 function activity(id: string, tone: WorkflowExecutionActivity['tone'] = 'success'): WorkflowExecutionActivity {
   return { id, at: '2026-01-01T00:00:00Z', label: id, tone }
@@ -99,5 +99,72 @@ describe('workflow parameters', () => {
 
     expect(workflowRunArguments(run, 'WorkflowTemplate', definitionWithUnchanged).map((parameter) => parameter.name)).toEqual(['region', 'mode'])
     expect(workflowRunArguments(run, 'Workflow', run)).toHaveLength(3)
+  })
+})
+
+describe('referenced CronWorkflow definitions', () => {
+  const cronWorkflow = {
+    metadata: { namespace: 'jobs' },
+    spec: {
+      workflowSpec: {
+        workflowTemplateRef: { name: 'shared' },
+        arguments: { parameters: [{ name: 'region', value: 'eu' }] },
+      },
+    },
+  }
+
+  it('fetches the referenced namespaced definition', () => {
+    expect(workflowDefinitionTarget('CronWorkflow', cronWorkflow)).toEqual({
+      kind: 'workflowtemplates',
+      namespace: 'jobs',
+      name: 'shared',
+      group: 'argoproj.io',
+    })
+  })
+
+  it('combines referenced execution details with CronWorkflow overrides', () => {
+    const referenced = {
+      spec: {
+        entrypoint: 'main',
+        serviceAccountName: 'base-account',
+        arguments: { parameters: [{ name: 'region', value: 'us', description: 'Target region' }, { name: 'mode', value: 'safe' }] },
+        templates: [{ name: 'main', container: { image: 'example/shared:v1' } }],
+      },
+    }
+
+    const effective = effectiveDefinitionResource('CronWorkflow', cronWorkflow, referenced)
+
+    expect(effective.spec.workflowSpec).toMatchObject({
+      entrypoint: 'main',
+      serviceAccountName: 'base-account',
+      templates: referenced.spec.templates,
+      arguments: {
+        parameters: [
+          { name: 'region', value: 'eu', description: 'Target region' },
+          { name: 'mode', value: 'safe' },
+        ],
+      },
+    })
+  })
+
+  it('replaces valueFrom when a schedule supplies a concrete value', () => {
+    const referenced = {
+      spec: {
+        arguments: { parameters: [{ name: 'region', valueFrom: { configMapKeyRef: { name: 'defaults', key: 'region' } } }] },
+      },
+    }
+
+    const effective = effectiveDefinitionResource('CronWorkflow', cronWorkflow, referenced)
+
+    expect(effective.spec.workflowSpec.arguments.parameters[0]).toEqual({ name: 'region', value: 'eu' })
+  })
+})
+
+describe('direct run identity', () => {
+  it('suppresses captured configuration only when the workload is the run itself', () => {
+    expect(isDirectRunKind('Job', 'jobs')).toBe(true)
+    expect(isDirectRunKind('Workflow', 'workflows')).toBe(true)
+    expect(isDirectRunKind('CronJob', 'jobs')).toBe(false)
+    expect(isDirectRunKind('WorkflowTemplate', 'workflows')).toBe(false)
   })
 })
