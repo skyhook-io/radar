@@ -745,7 +745,7 @@ export function TopologyGraph({
     // No cleanup function - we use version-based invalidation instead
     // This prevents React's effect re-runs from canceling in-flight layouts
     // when the actual structure hasn't changed
-  }, [workingNodes, workingEdges, structureKey, groupingMode, hideGroupHeader, collapsedGroups, groupLevels, handleSetLevel, handleCardClick, onMaximizeNamespace, isTrafficView, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, setNodes, setEdges, layoutRetryCount])
+  }, [workingNodes, workingEdges, structureKey, groupingMode, hideGroupHeader, collapsedGroups, groupLevels, handleSetLevel, handleCardClick, onMaximizeNamespace, isTrafficView, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, onToggleReplicaSets, setNodes, setEdges, layoutRetryCount])
 
   // Handle node click
   const handleNodeClick = useCallback(
@@ -849,11 +849,23 @@ export function TopologyGraph({
         if (node.type === 'group') return node
         const topologyNode = topologyById.get(node.id)
         if (!topologyNode) return node
+        const nodeData = topologyNode.data as Record<string, unknown>
+        const pods = nodeData.pods
+        const isExpandablePodGroup = topologyNode.kind === 'PodGroup' && Array.isArray(pods) && pods.length > 0
+        const expandedFromGroup = nodeData.expandedFromGroup as string | undefined
+        const onExpand = isExpandablePodGroup ? handleExpandPodGroup : undefined
+        const onCollapse = expandedFromGroup ? handleCollapsePodGroup : undefined
+        const isExpanded = isExpandablePodGroup ? expandedPodGroups.has(node.id) : undefined
+        const toggleReplicaSets = nodeData.replicaSetsExpandable ? onToggleReplicaSets : undefined
         if (
           node.data?.kind === topologyNode.kind &&
           node.data?.name === topologyNode.name &&
           node.data?.status === topologyNode.status &&
-          node.data?.nodeData === topologyNode.data
+          node.data?.nodeData === topologyNode.data &&
+          node.data?.onExpand === onExpand &&
+          node.data?.onCollapse === onCollapse &&
+          node.data?.isExpanded === isExpanded &&
+          node.data?.onToggleReplicaSets === toggleReplicaSets
         ) return node
         changed = true
         return {
@@ -864,12 +876,16 @@ export function TopologyGraph({
             name: topologyNode.name,
             status: topologyNode.status,
             nodeData: topologyNode.data,
+            onExpand,
+            onCollapse,
+            isExpanded,
+            onToggleReplicaSets: toggleReplicaSets,
           },
         }
       })
       return changed ? updated : nds
     })
-  }, [workingNodes, setNodes, nodes])
+  }, [workingNodes, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, onToggleReplicaSets, setNodes, nodes])
 
   if (!topology) {
     return <PaneLoader label="Loading topology…" className="absolute inset-0" />
