@@ -486,7 +486,7 @@ function RunMessageDetails({ run }: { run: WorkloadRun }) {
         </span>
         <span className="min-w-0 truncate text-xs text-theme-text-tertiary">{run.message}</span>
       </summary>
-      <div className="px-4 pb-4">
+      <div className="p-4">
         <div className={clsx('break-words rounded-md border px-3 py-2 text-sm', failed ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-theme-border bg-theme-elevated/40 text-theme-text-secondary')}>
           {run.message}
         </div>
