@@ -1,9 +1,5 @@
 import { memo } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { ChevronDown, ChevronUp, TriangleAlert } from "lucide-react";
-import { clsx } from "clsx";
-import type { NodeKind, HealthStatus, PodSummary } from "../../types";
-import { displayKind } from "../../types";
 import {
   ChevronDown,
   ChevronUp,
@@ -401,11 +397,6 @@ function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string
       const storage = (nodeData.storage as string) || ''
       const phase = (nodeData.phase as string) || ''
       return storage ? `${storage} (${phase})` : phase
-    }
-    case "PersistentVolumeClaim": {
-      const storage = (nodeData.storage as string) || "";
-      const phase = (nodeData.phase as string) || "";
-      return storage ? `${storage} (${phase})` : phase;
     }
     case "PodGroup": {
       const count = (nodeData.podCount as number) || 0;

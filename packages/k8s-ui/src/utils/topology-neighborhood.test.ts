@@ -288,6 +288,17 @@ describe('batchRunParentNodes', () => {
 
     expect(batchRunParentNodes(topology, workflow)).toEqual([cronWorkflow, template])
   })
+
+  it('finds template provenance for a CronWorkflow', () => {
+    const template = crdNode('template', 'WorkflowTemplate', 'app', 'scheduled-migration', 'argoproj.io/v1alpha1')
+    const cronWorkflow = crdNode('cron', 'CronWorkflow', 'app', 'scheduled-migration', 'argoproj.io/v1alpha1')
+    const topology: Topology = {
+      nodes: [template, cronWorkflow],
+      edges: [edge('template', 'cron', 'configures')],
+    }
+
+    expect(batchRunParentNodes(topology, cronWorkflow)).toEqual([template])
+  })
 })
 
 describe('tagWorkloadOwnership', () => {

@@ -17,6 +17,8 @@ import {
   gitOpsRouteForKind,
   deploymentInventoryFromGitOps,
   deploymentInventoryFromHelm,
+  memberRef,
+  subjectRef,
   type AppRow,
   type AppWorkload,
   type AppIdentityInstance,
@@ -27,8 +29,9 @@ import {
   type SelectedAppWorkload,
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
-import { Boxes } from 'lucide-react'
-import { useApplicationHistory, useApplications, useGitOpsTree, useHelmRelease, useTopology } from '../../api/client'
+import { AlertTriangle, Boxes } from 'lucide-react'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
+import { useApplicationHistory, useApplications, useGitOpsTree, useHelmRelease, useIssues, useTopology, type IssuesResponse } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import { buildWorkloadPath, kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
@@ -148,7 +151,13 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', {
     enabled: appNamespaces.length > 0,
     includeReplicaSets: true,
+    refetchInterval: 10_000,
   })
+  const issuesQuery = useIssues(appNamespaces)
+  const appIssues = useMemo(
+    () => appIssuesForWorkloads(issuesQuery.data?.issues ?? [], app.workloads ?? []),
+    [issuesQuery.data?.issues, app.workloads],
+  )
 
   // The selected workload (?workload=<key>) is the scope switch and wins over
   // ?view= when both are present. With neither param, use the product default:

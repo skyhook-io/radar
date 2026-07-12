@@ -11,7 +11,7 @@ import { ResourceRefBadge } from '../ui/drawer-components'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { pluralize } from '../../utils/pluralize'
 import { kindToPlural, refToSelectedResource } from '../../utils/navigation'
-import { tagWorkloadOwnership, seedNodeIds, ownershipOf, workloadKey, type NeighborhoodSeed } from '../../utils/topology-neighborhood'
+import { batchRunParentNodes, tagWorkloadOwnership, seedNodeIds, ownershipOf, workloadKey, type NeighborhoodSeed } from '../../utils/topology-neighborhood'
 import { workloadHue, NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import { getTopologyIcon } from '../../utils/resource-icons'
 import {
@@ -44,7 +44,7 @@ import {
 import { PaneLoader } from '../ui/PaneLoader'
 import { midTruncate } from '../../utils/format'
 import { VersionTooltip, AppIdentityTooltip } from './AppTooltips'
-import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo } from './AppChips'
+import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo, BatchSignalChip } from './AppChips'
 import { ReadyBar } from './ReadyBar'
 import { collapseStableReplicaSets, layerDeploymentInventory, topologyGroup, type DeploymentInventory, type DeploymentTopologyLayer } from '../../utils/application-topology'
 
@@ -215,7 +215,7 @@ function compareDefinedVersions(
   return compareVersions(a, b) ?? 0;
 }
 
-export function ApplicationDetail({ app, onBack, renderWorkload, topology, topologyLoading, deploymentInventory, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
+export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewIssues, topology, topologyLoading, deploymentInventory, onNavigateToResource, onSelectWorkloadRun, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
   // Stable order regardless of API ordering: rail rows and the per-workload
   // color assignment both follow this array, so an order flap between
   // refetches must not reshuffle rows or reassign a workload's hue.
@@ -400,7 +400,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
         group: topologyGroup(node),
       })
     },
-    [app.sourceRef, workloads, onNavigateToResource, onOpenSource, setSelected],
+    [app.sourceRef, appGraph, workloads, onNavigateToResource, onOpenSource, onSelectWorkloadRun, setSelected],
   )
 
   const appTopology = deploymentLayer?.topology ?? appGraph ?? null
@@ -582,6 +582,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
             historyLoading={historyLoading}
             onOpenSource={onOpenSource}
             onToggleReplicaSets={toggleReplicaSets}
+            renderOverviewIssues={renderOverviewIssues}
           />
         )}
       </div>
@@ -614,6 +615,7 @@ function ApplicationWorkspace({
   historyLoading,
   onOpenSource,
   onToggleReplicaSets,
+  renderOverviewIssues,
 }: {
   app: AppRow
   activeView: CanonicalApplicationView
@@ -639,6 +641,7 @@ function ApplicationWorkspace({
   historyLoading?: boolean
   onOpenSource?: (source: AppSourceRef) => void
   onToggleReplicaSets: (ownerID: string) => void
+  renderOverviewIssues?: () => ReactNode
 }) {
   const historyCount =
     (history?.anchors?.length ?? 0) +
@@ -779,6 +782,7 @@ function ApplicationOverview({
   history?: AppHistory
   onSelectHistory: () => void
   onOpenSource?: (source: AppSourceRef) => void
+  renderOverviewIssues?: () => ReactNode
 }) {
   const rel = app.relationships
   const hasEntrypoints = Boolean(rel && (relationshipRefs(rel, 'service').length > 0 || relationshipRefs(rel, 'ingress').length > 0 || relationshipRefs(rel, 'route').length > 0))
@@ -793,6 +797,10 @@ function ApplicationOverview({
     .map(({ cls, count }) => `${count} ${cls}`)
     .join(' / ')
   const issues = useMemo(() => buildAppIssues(workloads, app.events ?? []), [workloads, app.events])
+  const batchActivity = useMemo(() => batchActivityForApp(app), [app])
+  const batchStats = batchOverviewStats(batchActivity)
+  const pureBatch = workloadClassOf(app.workload_class) === 'job'
+  const workloadComposition = workloadKindComposition(workloads)
   const latestChange = history?.summary?.state === 'change' ? history.summary : undefined
   const runtimeHealth = healthOf(app.runtimeHealth ?? worstHealth(workloads.map((workload) => workload.health)))
   const hasDeliveryStatus = Boolean(app.sourceStatus?.sync || app.sourceStatus?.health)
@@ -806,7 +814,7 @@ function ApplicationOverview({
     <div className="min-h-0 flex-1 overflow-auto">
       <div className="grid w-full max-w-[2400px] gap-4 p-4 sm:p-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
         <div className="min-w-0 space-y-4">
-          <ApplicationNow issues={issues} onSelectWorkload={onSelectWorkload} />
+          {renderOverviewIssues ? renderOverviewIssues() : <ApplicationNow issues={issues} onSelectWorkload={onSelectWorkload} />}
           <ApplicationLatestHistory
             history={history}
             sourceRef={app.sourceRef}
@@ -817,8 +825,8 @@ function ApplicationOverview({
           <div className={clsx('grid gap-3 md:grid-cols-2', factGrid)}>
             <ApplicationFact
               label="Runtime"
-              value={HEALTH_META[runtimeHealth].label}
-              detail={desired > 0 ? `${ready}/${desired} ready` : 'No desired replicas'}
+              value={pureBatch ? batchRuntimeForApp(app).label : HEALTH_META[runtimeHealth].label}
+              detail={pureBatch ? batchStats.activeDetail : desired > 0 ? `${ready}/${desired} ready` : 'No desired replicas'}
             />
             {hasDeliveryStatus && (
               <ApplicationFact
@@ -827,8 +835,18 @@ function ApplicationOverview({
                 detail={app.sourceRef ? sourceObjectLabel(app.sourceRef) : undefined}
               />
             )}
-            <ApplicationFact label="Workloads" value={String(workloads.length)} detail={composition || 'No workloads'} />
-            <ApplicationFact label="Version" value={app.appVersion || (versions.length === 1 ? versions[0] : versions.length > 1 ? `${versions.length} versions` : 'Unknown')} />
+            {pureBatch ? (
+              <>
+                <ApplicationFact label="Batch resources" value={String(workloads.length)} detail={workloadComposition || 'No workloads'} />
+                <ApplicationFact label="Active runs" value={batchStats.activeValue} detail={batchStats.activeDetail} />
+                <ApplicationFact label="Retained runs" value={batchStats.retainedValue} detail="Kubernetes-retained history" />
+              </>
+            ) : (
+              <>
+                <ApplicationFact label="Workloads" value={String(workloads.length)} detail={composition || 'No workloads'} />
+                <ApplicationFact label="Version" value={app.appVersion || (versions.length === 1 ? versions[0] : versions.length > 1 ? `${versions.length} versions` : 'Unknown')} />
+              </>
+            )}
             {latestChange && (
               <ApplicationLatestChangeFact
                 summary={latestChange}
@@ -1464,7 +1482,7 @@ function WorkloadsMatrix({ workloads, onSelectWorkload }: { workloads: AppWorklo
         </thead>
         <tbody>
           {workloads.map((w) => {
-            const tone = healthOf(w.health)
+            const status = workloadRuntimeStatus(w)
             const reason = w.reason === 'Completed' && w.kind !== 'Job' ? undefined : w.reason
             return (
               <tr
@@ -1481,6 +1499,8 @@ function WorkloadsMatrix({ workloads, onSelectWorkload }: { workloads: AppWorklo
                   </button>
                   {reason && <div className="truncate text-xs text-theme-text-tertiary">{reason}</div>}
                 </td>
+                <td className="px-2 py-2 text-theme-text-secondary">{w.kind}</td>
+                <td className="px-2 py-2 text-theme-text-secondary">{workloadClassOf(w.workload_class)}</td>
                 <td className="px-2 py-2">
                   <span className="inline-flex items-center gap-1.5 text-theme-text-secondary">
                     <StatusDot tone={mapHealthToTone(status.health)} />

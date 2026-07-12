@@ -115,8 +115,8 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain("Application identity");
     expect(html).toContain("Entrypoints");
     expect(html).toContain("Dependencies");
-    expect(html).toContain("Service<!-- -->/</span>checkout-api");
-    expect(html).toContain("Ingress<!-- -->/</span>checkout");
+    expect(html).toContain("svc<!-- -->/</span>checkout-api");
+    expect(html).toContain("ing<!-- -->/</span>checkout");
     expect(html).toContain("Configuration");
     expect(html).toContain("Autoscaling");
     expect(html).toContain("Storage");
@@ -273,7 +273,7 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain('4/4 ready')
     expect(html).toContain('Delivery')
     expect(html.match(/Synced/g)).toHaveLength(2)
-    expect((html.match(/Degraded/g) ?? []).length).toBeGreaterThanOrEqual(3)
+    expect((html.match(/Degraded/g) ?? []).length).toBeGreaterThanOrEqual(2)
   })
 
   it('warns when application workloads resolve to different deployment sources', () => {

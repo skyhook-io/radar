@@ -1534,6 +1534,9 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			}
 			mergeRelationships(r, in.rels)
 		}
+		if r.WorkloadClass == "mixed" && servingHealth != "" {
+			r.Health = string(servingHealth)
+		}
 		r.RuntimeHealth = r.Health
 		setStrictSourceRef(r, ins)
 		// The app lives where its WORKLOADS run — a Flux HelmRelease in

@@ -55,6 +55,8 @@ const RESOURCE_KINDS: {
   { kind: 'SealedSecret', label: 'Sealed Secret', icon: getTopologyIcon('SealedSecret'), color: 'text-violet-400', category: 'config' },
   { kind: 'ServiceMonitor', label: 'Service Monitor', icon: getTopologyIcon('ServiceMonitor'), color: 'text-sky-400', category: 'config' },
   { kind: 'PodMonitor', label: 'Pod Monitor', icon: getTopologyIcon('PodMonitor'), color: 'text-sky-400', category: 'config' },
+  { kind: 'WorkflowTemplate', label: 'WorkflowTemplate', icon: getTopologyIcon('WorkflowTemplate'), color: 'text-purple-300', category: 'config' },
+  { kind: 'ClusterWorkflowTemplate', label: 'ClusterWorkflowTemplate', icon: getTopologyIcon('ClusterWorkflowTemplate'), color: 'text-purple-300', category: 'config' },
 
   // Scaling
   { kind: 'HorizontalPodAutoscaler', label: 'HPA', icon: getTopologyIcon('HorizontalPodAutoscaler'), color: 'text-pink-400', category: 'scaling' },

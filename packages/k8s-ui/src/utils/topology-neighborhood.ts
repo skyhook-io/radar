@@ -81,7 +81,7 @@ function isBatchRunFanoutEdge(edge: TopologyEdge, nodeById: Map<string, Topology
     return (source.kind === 'CronJob' || source.kind === 'ScaledJob') && target.kind === 'Job'
       || source.kind === 'CronWorkflow' && target.kind === 'Workflow'
   }
-  return edge.type === 'configures' && isWorkflowTemplateKind(source.kind) && target.kind === 'Workflow'
+  return isTemplateToRunEdge(edge, nodeById)
 }
 
 export function batchRunParentNodes(topology: Topology, run: TopologyNode): TopologyNode[] {
@@ -242,6 +242,8 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
         // A Service reached from a workload may expand once more to the
         // Ingress/Route in front of it. The entrypoint itself remains a leaf.
         asLeaf = e.type === 'routes-to' || nextNode.kind !== 'Service'
+      } else if (currentNode && isTemplateToRunEdge(e, nodeById) && e.source === currentNode.id) {
+        asLeaf = false
       } else {
         asLeaf = true // configures / uses / protects — leaf
       }
