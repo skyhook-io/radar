@@ -93,6 +93,8 @@ const (
 	KindSecret                         NodeKind = "Secret"
 	KindServiceAccount                 NodeKind = "ServiceAccount"
 	KindSealedSecret                   NodeKind = "SealedSecret"
+	KindServiceMonitor                 NodeKind = "ServiceMonitor"
+	KindPodMonitor                     NodeKind = "PodMonitor"
 	KindHPA                            NodeKind = "HorizontalPodAutoscaler"
 	KindJob                            NodeKind = "Job"
 	KindCronJob                        NodeKind = "CronJob"

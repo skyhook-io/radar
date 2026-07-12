@@ -808,6 +808,8 @@ func buildNodeID(kind, namespace, name string, dp DynamicProvider) string {
 		"ciliumclusterwidenetworkpolicies": "ciliumclusterwidenetworkpolicy",
 		"clusternetworkpolicies":           "clusternetworkpolicy",
 		"verticalpodautoscalers":           "verticalpodautoscaler",
+		"servicemonitors":                  "servicemonitor",
+		"podmonitors":                      "podmonitor",
 		"vpas":                             "verticalpodautoscaler",
 		"nodes":                            "node",
 		"clusterclasses":                   "clusterclass",        // Cluster API
@@ -898,6 +900,8 @@ func normalizeKind(kind string, dp DynamicProvider) string {
 		"secret":                         "Secret",
 		"serviceaccount":                 "ServiceAccount",
 		"sealedsecret":                   "SealedSecret",
+		"servicemonitor":                 "ServiceMonitor",
+		"podmonitor":                     "PodMonitor",
 		"horizontalpodautoscaler":        "HorizontalPodAutoscaler",
 		"job":                            "Job",
 		"cronjob":                        "CronJob",

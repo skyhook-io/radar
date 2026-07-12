@@ -451,8 +451,8 @@ The legacy `traefik.containo.us` API group (pre-v2.11) is warm-listed alongside 
 
 | CRD | Group | Topology | Detail View | AI Summary |
 |-----|-------|----------|-------------|------------|
-| ServiceMonitor | `monitoring.coreos.com/v1` | — | Yes | — |
-| PodMonitor | `monitoring.coreos.com/v1` | — | Yes | — |
+| ServiceMonitor | `monitoring.coreos.com/v1` | Service selection and scrape configuration | Yes | — |
+| PodMonitor | `monitoring.coreos.com/v1` | Pod selection and scrape configuration | Yes | — |
 | PrometheusRule | `monitoring.coreos.com/v1` | — | Yes | — |
 | Alertmanager | `monitoring.coreos.com/v1` | — | Generic | — |
 

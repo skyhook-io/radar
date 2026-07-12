@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/health"
@@ -2852,6 +2853,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if job.Namespace != svc.Namespace {
 				continue
 			}
+			if job.Status.Active == 0 {
+				continue
+			}
 			if matchesSelector(job.Spec.Template.ObjectMeta.Labels, svc.Spec.Selector) {
 				jobID := jobIDs[job.Namespace+"/"+job.Name]
 				if jobID != "" {
@@ -2864,20 +2868,97 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 		}
-		// Check CronJobs
-		for _, cj := range cronjobs {
-			if cj.Namespace != svc.Namespace {
-				continue
+	}
+
+	// 8b. Add Prometheus Operator monitor nodes. These are configuration
+	// resources: ServiceMonitors select Services, while PodMonitors select pod
+	// templates owned by workloads. Empty selectors remain visible but do not
+	// fan out across the entire graph.
+	if dynamicCache != nil && resourceDiscovery != nil {
+		if gvr, ok := resourceDiscovery.GetGVRWithGroup("ServiceMonitor", "monitoring.coreos.com"); ok {
+			monitors, monitorErr := dynamicCache.ListNamespaces(gvr, opts.Namespaces)
+			if monitorErr != nil {
+				log.Printf("WARNING [topology] Failed to list ServiceMonitors: %v", monitorErr)
+				warnings = append(warnings, fmt.Sprintf("Failed to list ServiceMonitors: %v", monitorErr))
 			}
-			if matchesSelector(cj.Spec.JobTemplate.Spec.Template.ObjectMeta.Labels, svc.Spec.Selector) {
-				cjID := cronJobIDs[cj.Namespace+"/"+cj.Name]
-				if cjID != "" {
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", svcID, cjID),
-						Source: svcID,
-						Target: cjID,
-						Type:   EdgeExposes,
-					})
+			for _, monitor := range monitors {
+				if !opts.MatchesNamespaceFilter(monitor.GetNamespace()) {
+					continue
+				}
+				monitorID := fmt.Sprintf("servicemonitor/%s/%s", monitor.GetNamespace(), monitor.GetName())
+				nodeData := monitorNodeData(monitor, "endpoints")
+				nodes = append(nodes, Node{ID: monitorID, Kind: KindServiceMonitor, Name: monitor.GetName(), Status: StatusHealthy, Data: nodeData})
+
+				selector, empty, selectorErr := monitorLabelSelector(monitor)
+				if selectorErr != nil {
+					warnings = append(warnings, fmt.Sprintf("ServiceMonitor %s/%s has an invalid selector: %v", monitor.GetNamespace(), monitor.GetName(), selectorErr))
+					continue
+				}
+				if empty {
+					nodeData["matchesAllTargets"] = true
+					continue
+				}
+				for _, svc := range services {
+					if !monitorSelectsNamespace(monitor, svc.Namespace) || !selector.Matches(labels.Set(svc.Labels)) {
+						continue
+					}
+					if targetID := serviceIDs[svc.Namespace+"/"+svc.Name]; targetID != "" {
+						edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", monitorID, targetID), Source: monitorID, Target: targetID, Type: EdgeConfigures})
+					}
+				}
+			}
+		}
+
+		if gvr, ok := resourceDiscovery.GetGVRWithGroup("PodMonitor", "monitoring.coreos.com"); ok {
+			monitors, monitorErr := dynamicCache.ListNamespaces(gvr, opts.Namespaces)
+			if monitorErr != nil {
+				log.Printf("WARNING [topology] Failed to list PodMonitors: %v", monitorErr)
+				warnings = append(warnings, fmt.Sprintf("Failed to list PodMonitors: %v", monitorErr))
+			}
+			for _, monitor := range monitors {
+				if !opts.MatchesNamespaceFilter(monitor.GetNamespace()) {
+					continue
+				}
+				monitorID := fmt.Sprintf("podmonitor/%s/%s", monitor.GetNamespace(), monitor.GetName())
+				nodeData := monitorNodeData(monitor, "podMetricsEndpoints")
+				nodes = append(nodes, Node{ID: monitorID, Kind: KindPodMonitor, Name: monitor.GetName(), Status: StatusHealthy, Data: nodeData})
+
+				selector, empty, selectorErr := monitorLabelSelector(monitor)
+				if selectorErr != nil {
+					warnings = append(warnings, fmt.Sprintf("PodMonitor %s/%s has an invalid selector: %v", monitor.GetNamespace(), monitor.GetName(), selectorErr))
+					continue
+				}
+				if empty {
+					nodeData["matchesAllTargets"] = true
+					continue
+				}
+				addTarget := func(namespace string, targetLabels map[string]string, targetID string) {
+					if targetID != "" && opts.MatchesNamespaceFilter(namespace) && monitorSelectsNamespace(monitor, namespace) && selector.Matches(labels.Set(targetLabels)) {
+						edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", monitorID, targetID), Source: monitorID, Target: targetID, Type: EdgeConfigures})
+					}
+				}
+				for _, deploy := range deployments {
+					addTarget(deploy.Namespace, deploy.Spec.Template.Labels, deploymentIDs[deploy.Namespace+"/"+deploy.Name])
+				}
+				for _, sts := range statefulsets {
+					addTarget(sts.Namespace, sts.Spec.Template.Labels, statefulSetIDs[sts.Namespace+"/"+sts.Name])
+				}
+				for _, ds := range daemonsets {
+					addTarget(ds.Namespace, ds.Spec.Template.Labels, fmt.Sprintf("daemonset/%s/%s", ds.Namespace, ds.Name))
+				}
+				for _, job := range jobs {
+					if job.Status.Active > 0 {
+						addTarget(job.Namespace, job.Spec.Template.Labels, jobIDs[job.Namespace+"/"+job.Name])
+					}
+				}
+				for _, cj := range cronjobs {
+					addTarget(cj.Namespace, cj.Spec.JobTemplate.Spec.Template.Labels, cronJobIDs[cj.Namespace+"/"+cj.Name])
+				}
+				for _, rollout := range rolloutsByNamespace {
+					for _, item := range rollout {
+						podLabels, _, _ := unstructured.NestedStringMap(item.Object, "spec", "template", "metadata", "labels")
+						addTarget(item.GetNamespace(), podLabels, rolloutIDs[item.GetNamespace()+"/"+item.GetName()])
+					}
 				}
 			}
 		}
@@ -7066,6 +7147,46 @@ func matchesSelector(labels, selector map[string]string) bool {
 	return true
 }
 
+func monitorLabelSelector(monitor *unstructured.Unstructured) (labels.Selector, bool, error) {
+	raw, found, err := unstructured.NestedMap(monitor.Object, "spec", "selector")
+	if err != nil || !found || len(raw) == 0 {
+		return labels.Nothing(), true, err
+	}
+	var selector metav1.LabelSelector
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &selector); err != nil {
+		return labels.Nothing(), false, err
+	}
+	parsed, err := metav1.LabelSelectorAsSelector(&selector)
+	return parsed, len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0, err
+}
+
+func monitorSelectsNamespace(monitor *unstructured.Unstructured, namespace string) bool {
+	anyNamespace, _, _ := unstructured.NestedBool(monitor.Object, "spec", "namespaceSelector", "any")
+	if anyNamespace {
+		return true
+	}
+	matchNames, _, _ := unstructured.NestedStringSlice(monitor.Object, "spec", "namespaceSelector", "matchNames")
+	if len(matchNames) == 0 {
+		return namespace == monitor.GetNamespace()
+	}
+	for _, selected := range matchNames {
+		if selected == namespace {
+			return true
+		}
+	}
+	return false
+}
+
+func monitorNodeData(monitor *unstructured.Unstructured, endpointField string) map[string]any {
+	endpoints, _, _ := unstructured.NestedSlice(monitor.Object, "spec", endpointField)
+	return map[string]any{
+		"namespace":     monitor.GetNamespace(),
+		"labels":        monitor.GetLabels(),
+		"apiVersion":    monitor.GetAPIVersion(),
+		"endpointCount": len(endpoints),
+	}
+}
+
 // matchesHelmRelease checks if a resource's labels indicate it's managed by a FluxCD HelmRelease
 // Checks both FluxCD-specific labels and standard Helm labels
 func matchesHelmRelease(labels map[string]string, hrName, hrNamespace string) bool {
@@ -7739,6 +7860,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"replicaset": true, "pod": true, "service": true, "ingress": true,
 		"job": true, "cronjob": true, "configmap": true, "secret": true,
 		"serviceaccount": true, "sealedsecret": true,
+		"servicemonitor": true, "podmonitor": true,
 		"persistentvolumeclaim": true, "horizontalpodautoscaler": true,
 		// Also skip namespace (not typically owned)
 		"namespace": true,

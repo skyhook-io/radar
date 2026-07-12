@@ -125,6 +125,8 @@ export type CoreNodeKind =
   | 'Secret'
   | 'ServiceAccount'
   | 'SealedSecret'
+  | 'ServiceMonitor'
+  | 'PodMonitor'
   | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
@@ -172,6 +174,8 @@ export function displayKind(kind: string): string {
     PersistentVolumeClaim: 'PVC',
     ServiceAccount: 'Service Account',
     SealedSecret: 'Sealed Secret',
+    ServiceMonitor: 'Service Monitor',
+    PodMonitor: 'Pod Monitor',
     EC2NodeClass: 'NodeClass',
     KnativeService: 'Knative Svc',
     KnativeConfiguration: 'Knative Config',

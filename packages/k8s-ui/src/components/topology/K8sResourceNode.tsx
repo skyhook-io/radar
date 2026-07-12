@@ -166,6 +166,8 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   Secret: { width: 180, height: 84 },
   ServiceAccount: { width: 220, height: 84 },
   SealedSecret: { width: 220, height: 84 },
+  ServiceMonitor: { width: 240, height: 84 },
+  PodMonitor: { width: 240, height: 84 },
   HorizontalPodAutoscaler: { width: 280, height: 84 },
   Job: { width: 180, height: 84 },
   CronJob: { width: 200, height: 84 },
@@ -340,6 +342,11 @@ function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string
       return 'Workload identity'
     case 'SealedSecret':
       return nodeData.targetSecret ? `Creates ${nodeData.targetSecret}` : 'Encrypted secret'
+    case 'ServiceMonitor':
+    case 'PodMonitor': {
+      const count = (nodeData.endpointCount as number) || 0
+      return `${count} scrape endpoint${count === 1 ? '' : 's'}`
+    }
     case 'PersistentVolumeClaim': {
       const storage = (nodeData.storage as string) || ''
       const phase = (nodeData.phase as string) || ''
@@ -415,7 +422,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const subtitle = getSubtitle(kind, nodeData)
   const isInternet = kind === 'Internet'
   const isPodGroup = kind === 'PodGroup'
-  const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'ServiceAccount' || kind === 'SealedSecret' || kind === 'HorizontalPodAutoscaler'
+  const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'ServiceAccount' || kind === 'SealedSecret' || kind === 'ServiceMonitor' || kind === 'PodMonitor' || kind === 'HorizontalPodAutoscaler'
   const canExpand = isPodGroup && onExpand && !isExpanded
   const canCollapse = isPodGroup && onCollapse && isExpanded
   const statusIssue = nodeData.statusIssue as string | undefined
