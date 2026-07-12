@@ -157,6 +157,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   const singleWorkloadKey = appWorkloads.length === 1 ? workloadKey(appWorkloads[0]) : null
   const selectedWorkloadKey = singleWorkloadKey ?? selectedWorkloadParam
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, { enabled: !selectedWorkloadKey })
+  const sourceInventoryEnabled = !selectedWorkloadKey && selectedView === 'topology'
   const gitOpsSource = app.sourceRef?.type === 'gitops' ? app.sourceRef : undefined
   const deploymentTreeQuery = useGitOpsTree(
     gitOpsSource?.kind ?? '',
@@ -164,9 +165,10 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     gitOpsSource?.name ?? '',
     gitOpsSource?.group,
     appHistoryNamespaces,
+    { enabled: sourceInventoryEnabled },
   )
   const helmSource = app.sourceRef?.type === 'helm' ? app.sourceRef : undefined
-  const helmReleaseQuery = useHelmRelease(helmSource?.namespace ?? '', helmSource?.name ?? '')
+  const helmReleaseQuery = useHelmRelease(helmSource?.namespace ?? '', helmSource?.name ?? '', { enabled: sourceInventoryEnabled })
   const deploymentInventory = useMemo(
     () => deploymentInventoryFromGitOps(deploymentTreeQuery.data) ?? deploymentInventoryFromHelm(helmReleaseQuery.data?.resources),
     [deploymentTreeQuery.data, helmReleaseQuery.data?.resources],

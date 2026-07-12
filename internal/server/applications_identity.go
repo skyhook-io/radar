@@ -1132,7 +1132,9 @@ func argoDeliveryHealth(syncStatus, healthStatus string) packages.Health {
 	switch strings.ToLower(healthStatus) {
 	case "healthy":
 		health = packages.HealthHealthy
-	case "progressing", "degraded":
+	case "progressing":
+		health = packages.HealthNeutral
+	case "degraded":
 		health = packages.HealthDegraded
 	case "missing":
 		health = packages.HealthUnhealthy

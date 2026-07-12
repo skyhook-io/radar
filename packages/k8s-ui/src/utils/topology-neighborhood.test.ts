@@ -74,6 +74,29 @@ describe('neighborhoodFor', () => {
     expect(ids.has('depB')).toBe(false) // …but it doesn't drag in the other app
   })
 
+  it('includes resources that produce a workload Secret without crossing through it', () => {
+    const topo: Topology = {
+      nodes: [
+        node('depA', 'Deployment', 'app', 'a'),
+        node('depB', 'Deployment', 'app', 'b'),
+        node('secret', 'Secret', 'app', 'generated'),
+        node('sealed', 'SealedSecret', 'app', 'encrypted'),
+        node('cert', 'Certificate', 'app', 'tls'),
+      ],
+      edges: [
+        edge('sealed', 'secret', 'manages'),
+        edge('cert', 'secret', 'manages'),
+        edge('secret', 'depA', 'configures'),
+        edge('secret', 'depB', 'configures'),
+      ],
+    }
+
+    const out = neighborhoodFor(topo, [{ kind: 'Deployment', namespace: 'app', name: 'a' }])
+    expect(new Set(out.nodes.map((n) => n.id))).toEqual(new Set(['depA', 'secret', 'sealed', 'cert']))
+    expect(out.edges).toEqual(expect.arrayContaining([expect.objectContaining({ source: 'sealed', target: 'secret' })]))
+    expect(out.edges).toEqual(expect.arrayContaining([expect.objectContaining({ source: 'cert', target: 'secret' })]))
+  })
+
   // A GitOps manager reached upward is a leaf: "managed by" is shown, but its
   // sibling workloads are not pulled in.
   it('does not expand through a GitOps manager to its siblings', () => {
@@ -206,5 +229,22 @@ describe('tagWorkloadOwnership', () => {
     const { topology } = tagWorkloadOwnership(topo, [{ kind: 'Deployment', namespace: 'app', name: 'web' }])
     expect(dataOf(topology, 'ks').ownerWorkloadId).toBeNull()
     expect(dataOf(topology, 'pod').ownerWorkloadId).toBe('Deployment/app/web')
+  })
+
+  it('attributes Secret producers through the Secret they produce', () => {
+    const topo: Topology = {
+      nodes: [
+        node('dep', 'Deployment', 'app', 'web'),
+        node('secret', 'Secret', 'app', 'generated'),
+        node('sealed', 'SealedSecret', 'app', 'encrypted'),
+        node('cert', 'Certificate', 'app', 'tls'),
+      ],
+      edges: [edge('sealed', 'secret', 'manages'), edge('cert', 'secret', 'manages'), edge('secret', 'dep', 'configures')],
+    }
+
+    const { topology } = tagWorkloadOwnership(topo, [{ kind: 'Deployment', namespace: 'app', name: 'web' }])
+    expect(dataOf(topology, 'secret').ownerWorkloadId).toBe('Deployment/app/web')
+    expect(dataOf(topology, 'sealed').ownerWorkloadId).toBe('Deployment/app/web')
+    expect(dataOf(topology, 'cert').ownerWorkloadId).toBe('Deployment/app/web')
   })
 })

@@ -45,6 +45,7 @@ const GITOPS_MANAGER_KINDS = new Set<NodeKind>([
   'HelmRelease',
   'GitRepository',
 ] as NodeKind[])
+const SECRET_PRODUCER_KINDS = new Set<NodeKind>(['SealedSecret', 'Certificate'])
 
 function nodeNamespace(node: TopologyNode): string {
   const ns = node.data?.namespace
@@ -130,6 +131,16 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
         keep.add(nextId)
         if (asLeaf) leaf.add(nextId)
         queue.push(nextId)
+      }
+
+      if (asLeaf && nextNode.kind === 'Secret') {
+        for (const producerEdge of adjacency.get(nextId) ?? []) {
+          if (producerEdge.type !== 'manages' || producerEdge.target !== nextId) continue
+          const producer = nodeById.get(producerEdge.source)
+          if (!producer || !SECRET_PRODUCER_KINDS.has(producer.kind)) continue
+          keep.add(producer.id)
+          leaf.add(producer.id)
+        }
       }
     }
   }
@@ -254,6 +265,12 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
           for (const serviceNeighbor of neighbors.get(nb) ?? []) {
             const serviceOwner = coreOwner.get(serviceNeighbor)
             if (serviceOwner) related.add(serviceOwner)
+          }
+        }
+        if (SECRET_PRODUCER_KINDS.has(n.kind) && neighborNode?.kind === 'Secret') {
+          for (const secretNeighbor of neighbors.get(nb) ?? []) {
+            const secretOwner = coreOwner.get(secretNeighbor)
+            if (secretOwner) related.add(secretOwner)
           }
         }
       }

@@ -3360,7 +3360,9 @@ function ConfigurationInputsCard({
   onNavigate?: NavigateToResource
   onSwitchToTopology?: () => void
 }) {
-  const configRefs = dedupeResourceRefs(relationships?.configRefs ?? [])
+  const configRefs = dedupeResourceRefs(relationships?.configRefs ?? []).filter((ref) =>
+    ['ConfigMap', 'Secret', 'SealedSecret'].includes(ref.kind),
+  )
   const policyRefs = dedupeResourceRefs([
     ...(relationships?.pdbs ?? []),
     ...(relationships?.networkPolicies ?? []),

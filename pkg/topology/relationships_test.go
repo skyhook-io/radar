@@ -114,11 +114,15 @@ func TestGetRelationships_ConfiguresDispatchesByKind(t *testing.T) {
 			{ID: "serviceaccount/demo/web", Kind: KindServiceAccount, Name: "web"},
 			{ID: "sealedsecret/demo/web", Kind: KindSealedSecret, Name: "web"},
 			{ID: "configmap/demo/web", Kind: KindConfigMap, Name: "web"},
+			{ID: "destinationrule/demo/web", Kind: KindDestinationRule, Name: "web"},
+			{ID: "podmonitor/demo/web", Kind: KindPodMonitor, Name: "web"},
 		},
 		Edges: []Edge{
 			{ID: "sa-to-web", Source: "serviceaccount/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
 			{ID: "sealed-to-web", Source: "sealedsecret/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
 			{ID: "config-to-web", Source: "configmap/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
+			{ID: "destination-rule-to-web", Source: "destinationrule/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
+			{ID: "monitor-to-web", Source: "podmonitor/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
 		},
 	}
 
@@ -129,8 +133,20 @@ func TestGetRelationships_ConfiguresDispatchesByKind(t *testing.T) {
 	if rel.ServiceAccount == nil || rel.ServiceAccount.Name != "web" {
 		t.Fatalf("expected workload ServiceAccount, got %+v", rel.ServiceAccount)
 	}
-	if len(rel.ConfigRefs) != 1 || rel.ConfigRefs[0].Kind != "ConfigMap" {
-		t.Fatalf("expected only ConfigMap in ConfigRefs, got %+v", rel.ConfigRefs)
+	if len(rel.ConfigRefs) != 3 {
+		t.Fatalf("expected all non-identity configurers in ConfigRefs, got %+v", rel.ConfigRefs)
+	}
+	gotConfigKinds := make(map[string]bool, len(rel.ConfigRefs))
+	for _, ref := range rel.ConfigRefs {
+		gotConfigKinds[ref.Kind] = true
+	}
+	for _, kind := range []string{"SealedSecret", "ConfigMap", "destinationrule"} {
+		if !gotConfigKinds[kind] {
+			t.Errorf("ConfigRefs missing %s; got kinds=%v", kind, gotConfigKinds)
+		}
+	}
+	if gotConfigKinds["PodMonitor"] {
+		t.Errorf("PodMonitor observes the workload and must not be projected as configuration")
 	}
 }
 

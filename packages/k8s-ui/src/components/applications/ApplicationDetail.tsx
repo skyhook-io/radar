@@ -1444,7 +1444,8 @@ function sourceSyncHealth(status: string): AppHealth {
 function sourceReportedHealth(status: string): AppHealth {
   const normalized = status.toLowerCase()
   if (normalized === 'healthy') return 'healthy'
-  if (normalized === 'progressing' || normalized === 'degraded') return 'degraded'
+  if (normalized === 'progressing') return 'neutral'
+  if (normalized === 'degraded') return 'degraded'
   if (normalized === 'missing') return 'unhealthy'
   if (normalized === 'suspended') return 'neutral'
   return 'unknown'

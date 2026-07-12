@@ -335,7 +335,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			switch ref.Kind {
 			case "ServiceAccount":
 				rel.ServiceAccount = ref
-			case "ConfigMap", "Secret":
+			case "ServiceMonitor", "PodMonitor":
+				// Monitor resources observe their targets; topology carries the edge,
+				// but Relationships has no observability group to project it into yet.
+			default:
 				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
 			}
 		}

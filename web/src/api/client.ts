@@ -1030,7 +1030,7 @@ export function useApplicationHistory(appKey: string | undefined, namespaces: st
   })
 }
 
-export function useGitOpsTree(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = []) {
+export function useGitOpsTree(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = [], options?: { enabled?: boolean }) {
   const ns = namespace || '_'
   const params = new URLSearchParams()
   if (group) params.set('group', group)
@@ -1040,7 +1040,7 @@ export function useGitOpsTree(kind: string, namespace: string, name: string, gro
   return useQuery<GitOpsResourceTree>({
     queryKey: ['gitops-tree', kind, namespace, name, group, namespaces],
     queryFn: () => fetchJSON(`/gitops/tree/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
-    enabled: Boolean(kind && name),
+    enabled: Boolean(kind && name) && (options?.enabled ?? true),
     staleTime: 5000,
   })
 }
@@ -2600,11 +2600,11 @@ export function useHelmReleases(namespaces: string[] = []) {
 }
 
 // Get details for a specific Helm release
-export function useHelmRelease(namespace: string, name: string) {
+export function useHelmRelease(namespace: string, name: string, options?: { enabled?: boolean }) {
   return useQuery<HelmReleaseDetail>({
     queryKey: ['helm-release', namespace, name],
     queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}`),
-    enabled: Boolean(namespace && name),
+    enabled: Boolean(namespace && name) && (options?.enabled ?? true),
     staleTime: 5000,
     refetchInterval: 10000, // Poll for live resource status updates (post-upgrade/rollback)
   })
