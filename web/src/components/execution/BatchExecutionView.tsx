@@ -4,12 +4,12 @@ import { clsx } from 'clsx'
 import { Collapse, CollapseChevron, EmptyState, FetchResult, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
 import { buildWorkflowExecutionModel, flattenWorkflowExecution, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowExecutionRow, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
 import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
-import { useResource, useWorkloadRuns, type WorkloadRun } from '../../api/client'
+import { useResource, useWorkloadPods, useWorkloadRuns, type WorkloadRun } from '../../api/client'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
 import { Tooltip } from '../ui/Tooltip'
 import { ImageFilesystemModal } from '../resources/ImageFilesystemModal'
 import { executionDefinitionFingerprint, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
-import { batchRunNextStep, isFailedRunPhase, type BatchRunNextStep } from './batch-run-actions'
+import { batchRunHasContainerOutcome, batchRunNextStep, isFailedRunPhase, type BatchRunNextStep } from './batch-run-actions'
 
 const EMPTY_RUNS: WorkloadRun[] = []
 const SCHEDULED_KINDS = new Set(['CronJob', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob'])
@@ -127,7 +127,16 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   }, [runsQuery.data, runs, selectedRunKey, defaultRun, onSelectRun])
 
   const selectedRun = runs.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
-  const nextStep = selectedRun ? batchRunNextStep(selectedRun, canViewLogs) : null
+  const shouldResolveLivePods = Boolean(selectedRun && canViewLogs && isFailedRunPhase(selectedRun.phase) && batchRunHasContainerOutcome(selectedRun))
+  const selectedRunPodsQuery = useWorkloadPods(
+    shouldResolveLivePods ? selectedRun?.kind ?? '' : '',
+    selectedRun?.namespace ?? '',
+    selectedRun?.name ?? '',
+  )
+  const hasLivePods = shouldResolveLivePods && selectedRunPodsQuery.isLoading
+    ? undefined
+    : Boolean(selectedRunPodsQuery.data?.pods.length)
+  const nextStep = selectedRun ? batchRunNextStep(selectedRun, canViewLogs, hasLivePods) : null
   const visibleRuns = useMemo(() => runs.filter((run) => {
     if (runFilter === 'active' && !run.active) return false
     if (runFilter === 'failed' && run.phase !== 'Failed' && run.phase !== 'Error') return false
