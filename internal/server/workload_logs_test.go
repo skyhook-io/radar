@@ -287,6 +287,18 @@ func TestWorkflowRunInfoIncludesCronWorkflowLauncher(t *testing.T) {
 	}
 }
 
+func TestWorkflowRunInfoUsesCronWorkflowLabelLauncher(t *testing.T) {
+	workflow := &unstructured.Unstructured{}
+	workflow.SetName("nightly-abc")
+	workflow.SetNamespace("ci")
+	workflow.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "nightly"})
+
+	run := workflowRunInfo(workflow)
+	if run.Launcher == nil || run.Launcher.Kind != "CronWorkflow" || run.Launcher.Namespace != "ci" || run.Launcher.Name != "nightly" {
+		t.Fatalf("unexpected launcher: %#v", run)
+	}
+}
+
 func TestJobRunInfoDistinguishesManualAndScheduledCronRuns(t *testing.T) {
 	startedAt := metav1.NewTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
 	manual := jobRunInfo(&batchv1.Job{

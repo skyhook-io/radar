@@ -1003,10 +1003,8 @@ func workflowRunInfo(workflow *unstructured.Unstructured) WorkloadRun {
 }
 
 func workflowLauncher(workflow *unstructured.Unstructured) *WorkloadRunResourceRef {
-	for _, owner := range workflow.GetOwnerReferences() {
-		if owner.Controller != nil && *owner.Controller && owner.Kind == "CronWorkflow" {
-			return &WorkloadRunResourceRef{Kind: owner.Kind, Namespace: workflow.GetNamespace(), Name: owner.Name, Group: "argoproj.io"}
-		}
+	if name := cronWorkflowOwnerName(workflow); name != "" {
+		return &WorkloadRunResourceRef{Kind: "CronWorkflow", Namespace: workflow.GetNamespace(), Name: name, Group: "argoproj.io"}
 	}
 	return nil
 }
