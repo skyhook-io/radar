@@ -21,7 +21,7 @@ import {
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
 import { Boxes } from 'lucide-react'
-import { useApplicationHistory, useApplications, useTopology } from '../../api/client'
+import { useApplicationHistory, useApplications, useGitOpsTree, useTopology } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import { buildWorkloadPath, kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
@@ -152,6 +152,14 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   const singleWorkloadKey = appWorkloads.length === 1 ? workloadKey(appWorkloads[0]) : null
   const selectedWorkloadKey = singleWorkloadKey ?? selectedWorkloadParam
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, { enabled: !selectedWorkloadKey })
+  const gitOpsSource = app.sourceRef?.type === 'gitops' ? app.sourceRef : undefined
+  const deploymentTreeQuery = useGitOpsTree(
+    gitOpsSource?.kind ?? '',
+    gitOpsSource?.namespace ?? '',
+    gitOpsSource?.name ?? '',
+    gitOpsSource?.group,
+    appHistoryNamespaces,
+  )
   useEffect(() => {
     if (!singleWorkloadKey) return
     if (selectedWorkloadParam === singleWorkloadKey && !viewParam) return
@@ -311,6 +319,8 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         onBack={onBack}
         topology={topology}
         topologyLoading={topologyLoading}
+        deploymentTree={deploymentTreeQuery.data}
+        deploymentTreeLoading={deploymentTreeQuery.isLoading}
         identityInstances={identityInstances}
         onSwitchInstance={switchInstance}
         discoveredEnvs={discoveredEnvs}

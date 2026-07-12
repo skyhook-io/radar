@@ -830,6 +830,39 @@ export function TopologyGraph({
     })
   }, [focusedOwnerId, setNodes, nodes])
 
+  // Data-only topology updates must repaint existing nodes without forcing an
+  // ELK relayout. Structure hashing deliberately ignores status and metadata;
+  // keep the React Flow node payload in sync on that fast path.
+  useEffect(() => {
+    const topologyById = new Map(workingNodes.map(node => [node.id, node]))
+    setNodes(nds => {
+      let changed = false
+      const updated = nds.map(node => {
+        if (node.type === 'group') return node
+        const topologyNode = topologyById.get(node.id)
+        if (!topologyNode) return node
+        if (
+          node.data?.kind === topologyNode.kind &&
+          node.data?.name === topologyNode.name &&
+          node.data?.status === topologyNode.status &&
+          node.data?.nodeData === topologyNode.data
+        ) return node
+        changed = true
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            kind: topologyNode.kind,
+            name: topologyNode.name,
+            status: topologyNode.status,
+            nodeData: topologyNode.data,
+          },
+        }
+      })
+      return changed ? updated : nds
+    })
+  }, [workingNodes, setNodes, nodes])
+
   if (!topology) {
     return <PaneLoader label="Loading topology…" className="absolute inset-0" />
   }
