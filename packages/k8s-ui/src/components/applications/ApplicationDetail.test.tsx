@@ -243,6 +243,26 @@ describe('ApplicationDetail shell', () => {
     expect(html).not.toContain('Grouped from Kubernetes ownership')
   })
 
+  it('does not present completed init containers as a long-running workload state', () => {
+    const statefulApp: AppRow = {
+      ...app,
+      workloads: [
+        { ...app.workloads[0], kind: 'StatefulSet', name: 'redis-master', reason: 'Completed' },
+        { ...app.workloads[1], kind: 'StatefulSet', name: 'redis-replicas', reason: 'Completed' },
+      ],
+    }
+    const jobApp: AppRow = {
+      ...app,
+      workloads: [
+        { ...app.workloads[0], kind: 'Job', name: 'database-migration', workload_class: 'job', reason: 'Completed' },
+        { ...app.workloads[1], kind: 'CronJob', name: 'database-migration-schedule', workload_class: 'job' },
+      ],
+    }
+
+    expect(renderDetail({ app: statefulApp })).not.toMatch(/redis-master<\/button><div[^>]*>Completed/)
+    expect(renderDetail({ app: jobApp })).toMatch(/database-migration<\/button><div[^>]*>Completed/)
+  })
+
   it('does not duplicate current incidents in the Overview history preview', () => {
     const history: AppHistory = {
       appKey: app.key,

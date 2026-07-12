@@ -1009,6 +1009,7 @@ function WorkloadsMatrix({ workloads, onSelectWorkload }: { workloads: AppWorklo
         <tbody>
           {workloads.map((w) => {
             const tone = healthOf(w.health)
+            const reason = w.reason === 'Completed' && w.kind !== 'Job' ? undefined : w.reason
             return (
               <tr key={workloadKey(w)} className="border-b border-theme-border last:border-b-0 hover:bg-theme-hover">
                 <td className="truncate px-2 py-2">
@@ -1019,7 +1020,7 @@ function WorkloadsMatrix({ workloads, onSelectWorkload }: { workloads: AppWorklo
                   >
                     {w.name}
                   </button>
-                  {w.reason && <div className="truncate text-xs text-theme-text-tertiary">{w.reason}</div>}
+                  {reason && <div className="truncate text-xs text-theme-text-tertiary">{reason}</div>}
                 </td>
                 <td className="px-2 py-2 text-theme-text-secondary">{w.kind}</td>
                 <td className="px-2 py-2 text-theme-text-secondary">{workloadClassOf(w.workload_class)}</td>
