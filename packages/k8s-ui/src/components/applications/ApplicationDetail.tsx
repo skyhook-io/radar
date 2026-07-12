@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, Boxes, CheckCircle2, ChevronDown, Clock3, ExternalLink, Layers, Search } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Boxes, CheckCircle2, ChevronDown, ExternalLink, Layers, Search } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { ResourceRef, Topology, TopologyNode } from '../../types'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
@@ -583,12 +583,13 @@ function ApplicationOverview({
     .map(({ cls, count }) => `${count} ${cls}`)
     .join(' / ')
   const issues = useMemo(() => buildAppIssues(workloads, app.events ?? []), [workloads, app.events])
+  const latestChange = history?.summary?.state === 'change' ? history.summary : undefined
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
       <div className="grid w-full max-w-[2400px] gap-4 p-4 sm:p-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
         <div className="min-w-0 space-y-4">
-          <ApplicationNow issues={issues} ready={ready} desired={desired} onSelectWorkload={onSelectWorkload} />
+          <ApplicationNow issues={issues} onSelectWorkload={onSelectWorkload} />
           <ApplicationLatestHistory
             history={history}
             sourceRef={app.sourceRef}
@@ -596,11 +597,28 @@ function ApplicationOverview({
             onSelectHistory={onSelectHistory}
             onOpenSource={onOpenSource}
           />
-          <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+          <div className={clsx('grid gap-3 md:grid-cols-2', latestChange ? '2xl:grid-cols-5' : '2xl:grid-cols-4')}>
             <ApplicationFact label="State" value={verdictLabel} />
             <ApplicationFact label="Workloads" value={String(workloads.length)} detail={composition || 'No workloads'} />
-            <ApplicationFact label="Ready" value={`${ready}/${desired}`} detail={desired === 0 ? 'No desired replicas' : undefined} />
+            <ApplicationFact
+              label="Ready"
+              value={
+                <span className="inline-flex items-center gap-1.5">
+                  {desired > 0 && ready === desired && <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden />}
+                  {ready}/{desired}
+                </span>
+              }
+              detail={desired === 0 ? 'No desired replicas' : undefined}
+            />
             <ApplicationFact label="Version" value={app.appVersion || (versions.length === 1 ? versions[0] : versions.length > 1 ? `${versions.length} versions` : 'Unknown')} />
+            {latestChange && (
+              <ApplicationLatestChangeFact
+                summary={latestChange}
+                sourceRef={app.sourceRef ? undefined : history?.sourceRef}
+                onSelectHistory={onSelectHistory}
+                onOpenSource={onOpenSource}
+              />
+            )}
           </div>
           {hasEntrypoints && (
             <ApplicationEntrypoints
@@ -869,32 +887,12 @@ function relationshipRefs(relationships: AppRow['relationships'] | undefined, gr
 
 function ApplicationNow({
   issues,
-  ready,
-  desired,
   onSelectWorkload,
 }: {
   issues: AppIssue[]
-  ready: number
-  desired: number
   onSelectWorkload: (workload: AppWorkload) => void
 }) {
-  if (issues.length === 0) {
-    return (
-      <section className="rounded-lg border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ring-1 ring-inset ${CHIP_TONE.emerald}`}>
-            <CheckCircle2 className="h-4 w-4" aria-hidden />
-          </span>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-semibold text-theme-text-primary">No application issues detected</h2>
-            <p className="mt-0.5 text-sm text-theme-text-secondary">
-              {desired === 0 ? 'No desired workload replicas are currently expected.' : `${ready}/${desired} workload replicas are ready.`}
-            </p>
-          </div>
-        </div>
-      </section>
-    )
-  }
+  if (issues.length === 0) return null
 
   const top = issues[0]
   return (
@@ -952,23 +950,21 @@ function ApplicationLatestHistory({
   onOpenSource?: (source: AppSourceRef) => void
 }) {
   const summary = history?.summary
-  const showChange = summary?.state === 'change'
   const showIncident = summary?.state === 'incident' && showIncidentPreview
-  if (!summary || (!showChange && !showIncident)) return null
+  if (!summary || !showIncident) return null
   const resolvedSource = sourceRef ?? history?.sourceRef
-  const tone = showIncident ? CHIP_TONE.amber : CHIP_TONE.blue
-  const label = showIncident ? 'Latest incident' : 'Latest change'
+  const tone = CHIP_TONE.amber
 
   return (
     <section className="rounded-lg border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
       <div className="flex flex-wrap items-start gap-3">
         <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ring-1 ring-inset ${tone}`}>
-          {showIncident ? <AlertTriangle className="h-4 w-4" aria-hidden /> : <Clock3 className="h-4 w-4" aria-hidden />}
+          <AlertTriangle className="h-4 w-4" aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-semibold text-theme-text-primary">{summary.title}</h2>
-            <span className={`${CHIP} ${tone}`}>{label}</span>
+            <span className={`${CHIP} ${tone}`}>Latest incident</span>
           </div>
           {summary.detail && <p className="mt-0.5 line-clamp-2 text-sm text-theme-text-secondary">{summary.detail}</p>}
           {summary.timestamp && <p className="mt-1 text-xs text-theme-text-tertiary">{formatAppEventTime(summary.timestamp)}</p>}
@@ -985,6 +981,34 @@ function ApplicationLatestHistory({
         </div>
       </div>
     </section>
+  )
+}
+
+function ApplicationLatestChangeFact({
+  summary,
+  sourceRef,
+  onSelectHistory,
+  onOpenSource,
+}: {
+  summary: NonNullable<AppHistory['summary']>
+  sourceRef?: AppSourceRef
+  onSelectHistory: () => void
+  onOpenSource?: (source: AppSourceRef) => void
+}) {
+  return (
+    <div className="min-w-0 rounded-lg border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm md:col-span-2 2xl:col-span-1">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Latest change</div>
+        <button type="button" onClick={onSelectHistory} className="shrink-0 text-xs font-medium text-accent-text hover:underline">History</button>
+      </div>
+      <div className="mt-1 truncate text-sm font-semibold text-theme-text-primary">{summary.title}</div>
+      {summary.detail && <div className="mt-0.5 truncate font-mono text-xs text-theme-text-tertiary">{summary.detail}</div>}
+      {sourceRef && onOpenSource && (
+        <button type="button" onClick={() => onOpenSource(sourceRef)} className="mt-1 text-xs font-medium text-accent-text hover:underline">
+          {sourceLinkLabel(sourceRef)}
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -1348,7 +1372,7 @@ function ApplicationFact({
   variant = 'card',
 }: {
   label: string
-  value: string
+  value: ReactNode
   detail?: string
   monoValue?: boolean
   monoDetail?: boolean

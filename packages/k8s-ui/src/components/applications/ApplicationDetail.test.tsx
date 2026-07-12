@@ -183,8 +183,9 @@ describe('ApplicationDetail shell', () => {
 
     expect(html).toContain('Latest change')
     expect(html).toContain('Argo CD sync')
-    expect(html).toContain('View history')
+    expect(html).toContain('History')
     expect(html).toContain('View Argo CD application')
+    expect(html).not.toContain('No application issues detected')
   })
 
   it('shows an authoritative deployment source without duplicating its action in history', () => {
@@ -325,7 +326,7 @@ describe('ApplicationDetail shell', () => {
     }
     const html = renderDetail({ app: idleApp })
 
-    expect(html).toContain('No application issues detected')
+    expect(html).not.toContain('No application issues detected')
     expect(html).not.toContain('needs attention')
   })
 
