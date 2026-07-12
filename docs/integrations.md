@@ -493,13 +493,15 @@ The legacy `traefik.containo.us` API group (pre-v2.11) is warm-listed alongside 
 
 ### What Radar Shows
 
+**Topology:** SealedSecret → Secret → workload when Secret metadata is visible, or SealedSecret → workload when Secret reads are restricted. Only SealedSecrets that configure a visible workload are included.
+
 **SealedSecret Detail View:** Encrypted data keys, template metadata, and the target Secret's scope and namespace.
 
 ### Supported CRDs
 
 | CRD | Group | Topology | Detail View | AI Summary |
 |-----|-------|----------|-------------|------------|
-| SealedSecret | `bitnami.com/v1alpha1` | — | Yes | — |
+| SealedSecret | `bitnami.com/v1alpha1` | Yes | Yes | — |
 
 ---
 

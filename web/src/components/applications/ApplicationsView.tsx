@@ -13,6 +13,8 @@ import {
   healthOf,
   compareVersions,
   gitOpsRouteForKind,
+  deploymentInventoryFromGitOps,
+  deploymentInventoryFromHelm,
   type AppRow,
   type AppIdentityInstance,
   type ApplicationView,
@@ -21,7 +23,7 @@ import {
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
 import { Boxes } from 'lucide-react'
-import { useApplicationHistory, useApplications, useGitOpsTree, useTopology } from '../../api/client'
+import { useApplicationHistory, useApplications, useGitOpsTree, useHelmRelease, useTopology } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import { buildWorkloadPath, kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
@@ -138,7 +140,10 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     if (app.sourceRef?.namespace) namespaces.add(app.sourceRef.namespace)
     return Array.from(namespaces).sort()
   }, [app.sourceRef?.namespace, appNamespaces])
-  const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', { enabled: appNamespaces.length > 0 })
+  const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', {
+    enabled: appNamespaces.length > 0,
+    includeReplicaSets: true,
+  })
 
   // The selected workload (?workload=<key>) is the scope switch and wins over
   // ?view= when both are present. With neither param, use the product default:
@@ -159,6 +164,12 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     gitOpsSource?.name ?? '',
     gitOpsSource?.group,
     appHistoryNamespaces,
+  )
+  const helmSource = app.sourceRef?.type === 'helm' ? app.sourceRef : undefined
+  const helmReleaseQuery = useHelmRelease(helmSource?.namespace ?? '', helmSource?.name ?? '')
+  const deploymentInventory = useMemo(
+    () => deploymentInventoryFromGitOps(deploymentTreeQuery.data) ?? deploymentInventoryFromHelm(helmReleaseQuery.data?.resources),
+    [deploymentTreeQuery.data, helmReleaseQuery.data?.resources],
   )
   useEffect(() => {
     if (!singleWorkloadKey) return
@@ -319,7 +330,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         onBack={onBack}
         topology={topology}
         topologyLoading={topologyLoading}
-        deploymentTree={deploymentTreeQuery.data}
+        deploymentInventory={deploymentInventory}
         identityInstances={identityInstances}
         onSwitchInstance={switchInstance}
         discoveredEnvs={discoveredEnvs}

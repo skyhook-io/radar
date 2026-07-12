@@ -277,8 +277,26 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	workloadConfigMapRefs := make(map[string]map[string]bool)
 	workloadSecretRefs := make(map[string]map[string]bool)
 	workloadPVCRefs := make(map[string]map[string]bool)
+	workloadServiceAccountRefs := make(map[string]string)
 	// Track workload namespaces for cross-namespace validation
 	workloadNamespaces := make(map[string]string) // workloadID -> namespace
+	trackWorkloadRefs := func(workloadID, namespace string, refs workloadRefs) {
+		if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 || refs.serviceAccount != "" {
+			workloadNamespaces[workloadID] = namespace
+		}
+		if len(refs.configMaps) > 0 {
+			workloadConfigMapRefs[workloadID] = refs.configMaps
+		}
+		if len(refs.secrets) > 0 {
+			workloadSecretRefs[workloadID] = refs.secrets
+		}
+		if len(refs.pvcs) > 0 {
+			workloadPVCRefs[workloadID] = refs.pvcs
+		}
+		if refs.serviceAccount != "" {
+			workloadServiceAccountRefs[workloadID] = refs.serviceAccount
+		}
+	}
 
 	// 1. Add Deployment nodes
 	var deployments []*appsv1.Deployment
@@ -330,18 +348,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		// Track ConfigMap/Secret/PVC references
 		refs := extractWorkloadReferences(deploy.Spec.Template.Spec)
-		if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
-			workloadNamespaces[deployID] = deploy.Namespace
-		}
-		if len(refs.configMaps) > 0 {
-			workloadConfigMapRefs[deployID] = refs.configMaps
-		}
-		if len(refs.secrets) > 0 {
-			workloadSecretRefs[deployID] = refs.secrets
-		}
-		if len(refs.pvcs) > 0 {
-			workloadPVCRefs[deployID] = refs.pvcs
-		}
+		trackWorkloadRefs(deployID, deploy.Namespace, refs)
 	}
 
 	// 1b. Add Argo Rollout nodes (CRD - fetched via dynamic cache)
@@ -413,18 +420,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			template, _, _ := unstructured.NestedMap(spec, "template", "spec")
 			if template != nil {
 				refs := extractWorkloadReferencesFromMap(template)
-				if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
-					workloadNamespaces[rolloutID] = ns
-				}
-				if len(refs.configMaps) > 0 {
-					workloadConfigMapRefs[rolloutID] = refs.configMaps
-				}
-				if len(refs.secrets) > 0 {
-					workloadSecretRefs[rolloutID] = refs.secrets
-				}
-				if len(refs.pvcs) > 0 {
-					workloadPVCRefs[rolloutID] = refs.pvcs
-				}
+				trackWorkloadRefs(rolloutID, ns, refs)
 			}
 		}
 	}
@@ -2421,18 +2417,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		refs := extractWorkloadReferences(ds.Spec.Template.Spec)
-		if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
-			workloadNamespaces[dsID] = ds.Namespace
-		}
-		if len(refs.configMaps) > 0 {
-			workloadConfigMapRefs[dsID] = refs.configMaps
-		}
-		if len(refs.secrets) > 0 {
-			workloadSecretRefs[dsID] = refs.secrets
-		}
-		if len(refs.pvcs) > 0 {
-			workloadPVCRefs[dsID] = refs.pvcs
-		}
+		trackWorkloadRefs(dsID, ds.Namespace, refs)
 	}
 
 	// 3. Add StatefulSet nodes
@@ -2483,18 +2468,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		refs := extractWorkloadReferences(sts.Spec.Template.Spec)
-		if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
-			workloadNamespaces[stsID] = sts.Namespace
-		}
-		if len(refs.configMaps) > 0 {
-			workloadConfigMapRefs[stsID] = refs.configMaps
-		}
-		if len(refs.secrets) > 0 {
-			workloadSecretRefs[stsID] = refs.secrets
-		}
-		if len(refs.pvcs) > 0 {
-			workloadPVCRefs[stsID] = refs.pvcs
-		}
+		trackWorkloadRefs(stsID, sts.Namespace, refs)
 	}
 
 	// 4. Add CronJob nodes
@@ -2532,18 +2506,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		// Track ConfigMap/Secret/PVC references
 		refs := extractWorkloadReferences(cj.Spec.JobTemplate.Spec.Template.Spec)
-		if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
-			workloadNamespaces[cjID] = cj.Namespace
-		}
-		if len(refs.configMaps) > 0 {
-			workloadConfigMapRefs[cjID] = refs.configMaps
-		}
-		if len(refs.secrets) > 0 {
-			workloadSecretRefs[cjID] = refs.secrets
-		}
-		if len(refs.pvcs) > 0 {
-			workloadPVCRefs[cjID] = refs.pvcs
-		}
+		trackWorkloadRefs(cjID, cj.Namespace, refs)
 	}
 
 	// 5. Add Job nodes
@@ -2585,18 +2548,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		// Track ConfigMap/Secret/PVC references
 		refs := extractWorkloadReferences(job.Spec.Template.Spec)
-		if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
-			workloadNamespaces[jobID] = job.Namespace
-		}
-		if len(refs.configMaps) > 0 {
-			workloadConfigMapRefs[jobID] = refs.configMaps
-		}
-		if len(refs.secrets) > 0 {
-			workloadSecretRefs[jobID] = refs.secrets
-		}
-		if len(refs.pvcs) > 0 {
-			workloadPVCRefs[jobID] = refs.pvcs
-		}
+		trackWorkloadRefs(jobID, job.Namespace, refs)
 
 		// Connect to owner CronJob
 		for _, ownerRef := range job.OwnerReferences {
@@ -3168,6 +3120,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 9. Add Secret nodes (if enabled and RBAC permits)
+	visibleSecretIDs := make(map[workloadRefKey]string)
 	if opts.IncludeSecrets {
 		secrets, secretsErr := b.provider.Secrets()
 		if secretsErr != nil {
@@ -3194,6 +3147,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 
 			if len(consumers) > 0 {
+				visibleSecretIDs[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] = secretID
 				nodes = append(nodes, Node{
 					ID:     secretID,
 					Kind:   KindSecret,
@@ -3206,6 +3160,80 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						"labels":    secret.Labels,
 					},
 				})
+			}
+		}
+	}
+
+	// Workload identities are useful topology only when explicitly selected.
+	if provider, ok := b.provider.(ServiceAccountProvider); ok {
+		serviceAccounts, serviceAccountsErr := provider.ServiceAccounts()
+		if serviceAccountsErr != nil {
+			log.Printf("WARNING [topology] Failed to list ServiceAccounts: %v", serviceAccountsErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list ServiceAccounts: %v", serviceAccountsErr))
+		}
+		consumersByServiceAccount := make(map[workloadRefKey][]string)
+		for workloadID, name := range workloadServiceAccountRefs {
+			key := workloadRefKey{namespace: workloadNamespaces[workloadID], name: name}
+			consumersByServiceAccount[key] = append(consumersByServiceAccount[key], workloadID)
+		}
+		for _, serviceAccount := range serviceAccounts {
+			if !opts.MatchesNamespaceFilter(serviceAccount.Namespace) {
+				continue
+			}
+			key := workloadRefKey{namespace: serviceAccount.Namespace, name: serviceAccount.Name}
+			consumers := consumersByServiceAccount[key]
+			if len(consumers) == 0 {
+				continue
+			}
+			serviceAccountID := fmt.Sprintf("serviceaccount/%s/%s", serviceAccount.Namespace, serviceAccount.Name)
+			nodes = append(nodes, Node{
+				ID: serviceAccountID, Kind: KindServiceAccount, Name: serviceAccount.Name, Status: StatusHealthy,
+				Data: map[string]any{"namespace": serviceAccount.Namespace, "labels": serviceAccount.Labels},
+			})
+			for _, workloadID := range consumers {
+				edges = append(edges, Edge{
+					ID: fmt.Sprintf("%s-to-%s", serviceAccountID, workloadID), Source: serviceAccountID, Target: workloadID, Type: EdgeConfigures,
+				})
+			}
+		}
+	}
+
+	// SealedSecrets are linked through the Secret name they materialize. Direct
+	// consumer edges preserve the relationship when Secret reads are forbidden.
+	if dynamicCache != nil && resourceDiscovery != nil {
+		if sealedSecretGVR, ok := resourceDiscovery.GetGVRWithGroup("SealedSecret", "bitnami.com"); ok {
+			sealedSecrets, sealedSecretsErr := dynamicCache.ListNamespaces(sealedSecretGVR, opts.Namespaces)
+			if sealedSecretsErr != nil {
+				log.Printf("WARNING [topology] Failed to list SealedSecrets: %v", sealedSecretsErr)
+				warnings = append(warnings, fmt.Sprintf("Failed to list SealedSecrets: %v", sealedSecretsErr))
+			}
+			secretConsumers := buildConsumerIndex(workloadSecretRefs, workloadNamespaces)
+			for _, sealedSecret := range sealedSecrets {
+				namespace := sealedSecret.GetNamespace()
+				if !opts.MatchesNamespaceFilter(namespace) {
+					continue
+				}
+				targetName, _, _ := unstructured.NestedString(sealedSecret.Object, "spec", "template", "metadata", "name")
+				if targetName == "" {
+					targetName = sealedSecret.GetName()
+				}
+				key := workloadRefKey{namespace: namespace, name: targetName}
+				consumers := secretConsumers[key]
+				if len(consumers) == 0 {
+					continue
+				}
+				sealedSecretID := fmt.Sprintf("sealedsecret/%s/%s", namespace, sealedSecret.GetName())
+				nodes = append(nodes, Node{
+					ID: sealedSecretID, Kind: KindSealedSecret, Name: sealedSecret.GetName(), Status: sealedSecretHealth(sealedSecret),
+					Data: map[string]any{"namespace": namespace, "targetSecret": targetName, "labels": sealedSecret.GetLabels(), "apiVersion": sealedSecret.GetAPIVersion()},
+				})
+				if secretID := visibleSecretIDs[key]; secretID != "" {
+					edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", sealedSecretID, secretID), Source: sealedSecretID, Target: secretID, Type: EdgeManages})
+					continue
+				}
+				for _, workloadID := range consumers {
+					edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", sealedSecretID, workloadID), Source: sealedSecretID, Target: workloadID, Type: EdgeConfigures})
+				}
 			}
 		}
 	}
@@ -7098,16 +7126,18 @@ func resolveKnativeRef(kind, ns, name string, serviceIDs, knativeServiceIDs, bro
 }
 
 type workloadRefs struct {
-	configMaps map[string]bool
-	secrets    map[string]bool
-	pvcs       map[string]bool
+	configMaps     map[string]bool
+	secrets        map[string]bool
+	pvcs           map[string]bool
+	serviceAccount string
 }
 
 func extractWorkloadReferences(spec corev1.PodSpec) workloadRefs {
 	refs := workloadRefs{
-		configMaps: make(map[string]bool),
-		secrets:    make(map[string]bool),
-		pvcs:       make(map[string]bool),
+		configMaps:     make(map[string]bool),
+		secrets:        make(map[string]bool),
+		pvcs:           make(map[string]bool),
+		serviceAccount: spec.ServiceAccountName,
 	}
 
 	// From containers
@@ -7165,6 +7195,7 @@ func extractWorkloadReferencesFromMap(spec map[string]any) workloadRefs {
 		}
 		return ""
 	}
+	refs.serviceAccount = getString(spec, "serviceAccountName")
 
 	// Process containers
 	processContainers := func(containersField string) {
@@ -7315,6 +7346,28 @@ func getRouteHealth(route *unstructured.Unstructured) HealthStatus {
 		return StatusDegraded
 	}
 	return StatusUnhealthy
+}
+
+func sealedSecretHealth(resource *unstructured.Unstructured) HealthStatus {
+	conditions, _, _ := unstructured.NestedSlice(resource.Object, "status", "conditions")
+	if len(conditions) == 0 {
+		return StatusUnknown
+	}
+	for _, condition := range conditions {
+		conditionMap, ok := condition.(map[string]any)
+		if !ok {
+			continue
+		}
+		conditionType, _ := conditionMap["type"].(string)
+		conditionStatus, _ := conditionMap["status"].(string)
+		if conditionType == "Synced" && conditionStatus == "True" {
+			return StatusHealthy
+		}
+		if conditionStatus == "False" {
+			return StatusUnhealthy
+		}
+	}
+	return StatusUnknown
 }
 
 // extractGenericStatus determines health from common CRD status patterns
@@ -7685,6 +7738,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"deployment": true, "daemonset": true, "statefulset": true,
 		"replicaset": true, "pod": true, "service": true, "ingress": true,
 		"job": true, "cronjob": true, "configmap": true, "secret": true,
+		"serviceaccount": true, "sealedsecret": true,
 		"persistentvolumeclaim": true, "horizontalpodautoscaler": true,
 		// Also skip namespace (not typically owned)
 		"namespace": true,

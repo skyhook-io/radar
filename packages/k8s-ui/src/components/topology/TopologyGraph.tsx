@@ -14,6 +14,7 @@ import {
   type NodeTypes,
   type NodeChange,
   type Viewport,
+  type FitViewOptions,
   BackgroundVariant,
   MarkerType,
 } from '@xyflow/react'
@@ -202,6 +203,10 @@ interface TopologyGraphProps {
   /** Hover a node → reports its TopologyNode (null on leave). Drives the rail's
    *  reciprocal highlight. */
   onNodeHover?: (node: TopologyNode | null) => void
+  /** Toggle a stable Deployment's normally-collapsed ReplicaSet tier. */
+  onToggleReplicaSets?: (ownerID: string) => void
+  /** Padding reserved around fit-to-view operations for overlaid UI. */
+  fitViewPadding?: FitViewOptions['padding']
 }
 
 export function TopologyGraph({
@@ -222,6 +227,8 @@ export function TopologyGraph({
   focusNonce,
   focusedOwnerId,
   onNodeHover,
+  onToggleReplicaSets,
+  fitViewPadding = 0.15,
 }: TopologyGraphProps) {
   const isTrafficView = viewMode === 'traffic'
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([] as Node[])
@@ -702,6 +709,7 @@ export function TopologyGraph({
             onExpand: isExpandablePodGroup ? handleExpandPodGroup : undefined,
             onCollapse: expandedFromGroup ? handleCollapsePodGroup : undefined,
             isExpanded: isExpandablePodGroup ? expandedPodGroups.has(node.id) : undefined,
+            onToggleReplicaSets: nodeData?.replicaSetsExpandable ? onToggleReplicaSets : undefined,
           },
         }
       })
@@ -1008,7 +1016,7 @@ export function TopologyGraph({
         onNodeMouseLeave={handleNodeMouseLeave}
         nodeTypes={nodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        fitViewOptions={{ padding: fitViewPadding }}
         minZoom={0.1}
         maxZoom={2}
         proOptions={{ hideAttribution: true }}
@@ -1055,6 +1063,7 @@ export function TopologyGraph({
               paused={paused}
               onTogglePause={onTogglePause}
               onExportingChange={setIsExporting}
+              fitViewPadding={fitViewPadding}
             />
           </div>
           {!isTrafficView && (
@@ -1091,6 +1100,7 @@ export function TopologyGraph({
           focusNodeId={focusNodeId}
           focusNonce={focusNonce}
           onRequestExpandForNode={expandGroupForNode}
+          fitViewPadding={fitViewPadding}
         />
       </ReactFlow>
     </ReactFlowProvider>
@@ -1373,11 +1383,13 @@ function CustomControlButtons({
   paused,
   onTogglePause,
   onExportingChange,
+  fitViewPadding,
 }: {
   showExportButton: boolean
   paused: boolean
   onTogglePause?: () => void
   onExportingChange: (v: boolean) => void
+  fitViewPadding: FitViewOptions['padding']
 }) {
   const { zoomIn, zoomOut, fitView } = useReactFlow()
   const TIP = 100
@@ -1394,7 +1406,7 @@ function CustomControlButtons({
         </button>
       </Tooltip>
       <Tooltip content="Fit view" delay={TIP} position="right">
-        <button className="react-flow__controls-button" onClick={() => fitView({ padding: 0.15, duration: 400 })}>
+        <button className="react-flow__controls-button" onClick={() => fitView({ padding: fitViewPadding, duration: 400 })}>
           <Maximize className="w-3 h-3" />
         </button>
       </Tooltip>
@@ -1427,6 +1439,7 @@ function ViewportController({
   focusNodeId,
   focusNonce = 0,
   onRequestExpandForNode,
+  fitViewPadding,
 }: {
   viewMode: string
   layoutRetryCount: number
@@ -1436,6 +1449,7 @@ function ViewportController({
   focusNodeId?: string
   focusNonce?: number
   onRequestExpandForNode?: (nodeId: string) => void
+  fitViewPadding: FitViewOptions['padding']
 }) {
   const { fitView, zoomIn, zoomOut, setViewport, getViewport, getInternalNode, setCenter } = useReactFlow()
   const nodes = useNodes() // Reactive hook to watch node changes
@@ -1464,7 +1478,7 @@ function ViewportController({
       description: 'Fit graph to screen',
       category: 'Topology',
       scope: 'topology',
-      handler: () => fitView({ padding: 0.15, duration: VIEWPORT_ANIMATION_DURATION }),
+      handler: () => fitView({ padding: fitViewPadding, duration: VIEWPORT_ANIMATION_DURATION }),
     },
     {
       id: 'topology-zoom-in',
@@ -1541,14 +1555,14 @@ function ViewportController({
     if (nodesJustPopulated || viewModeChanged || retryRequested || fitViewRequested) {
       const timeoutId = setTimeout(() => {
         fitView({
-          padding: 0.15,
+          padding: fitViewPadding,
           duration: nodesJustPopulated ? 0 : VIEWPORT_ANIMATION_DURATION,
         })
       }, 10)
 
       return () => clearTimeout(timeoutId)
     }
-  }, [viewMode, layoutRetryCount, fitViewCounter, nodes.length, fitView])
+  }, [viewMode, layoutRetryCount, fitViewCounter, nodes.length, fitView, fitViewPadding])
 
   // Pan/zoom to a single searched node. Gated on focusNonce so the same
   // node can be re-focused, and so this never fires on background updates.
@@ -1596,10 +1610,10 @@ function ViewportController({
     if (!fitAllAfterLayoutRef?.current) return
     const id = setTimeout(() => {
       fitAllAfterLayoutRef.current = false
-      fitView({ padding: 0.15, duration: VIEWPORT_ANIMATION_DURATION })
+      fitView({ padding: fitViewPadding, duration: VIEWPORT_ANIMATION_DURATION })
     }, 250)
     return () => clearTimeout(id)
-  }, [nodes, fitView, fitAllAfterLayoutRef])
+  }, [nodes, fitView, fitAllAfterLayoutRef, fitViewPadding])
 
   return null
 }

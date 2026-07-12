@@ -983,14 +983,15 @@ export function useNamespaces() {
 }
 
 // Topology (for manual refresh)
-export function useTopology(namespaces: string[], viewMode: string = 'resources', options?: { enabled?: boolean }) {
+export function useTopology(namespaces: string[], viewMode: string = 'resources', options?: { enabled?: boolean; includeReplicaSets?: boolean }) {
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
   if (viewMode) params.set('view', viewMode)
+  if (options?.includeReplicaSets) params.set('includeReplicaSets', 'true')
   const queryString = params.toString()
 
   return useQuery<Topology>({
-    queryKey: ['topology', namespaces, viewMode],
+    queryKey: ['topology', namespaces, viewMode, options?.includeReplicaSets ?? false],
     queryFn: () => fetchJSON(`/topology${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // 5 seconds
     enabled: options?.enabled !== false,

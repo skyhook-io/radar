@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { AlertTriangle, ArrowLeft, Boxes, ChevronDown, ExternalLink, Layers, Radio, Search } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { GitOpsResourceTree, ResourceRef, Topology, TopologyNode } from '../../types'
+import type { ResourceRef, Topology, TopologyNode } from '../../types'
 import argoCdLogo from '../../assets/gitops/argocd.png'
 import fluxLogo from '../../assets/gitops/flux.svg'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
@@ -41,7 +41,7 @@ import { midTruncate } from '../../utils/format'
 import { VersionTooltip, AppIdentityTooltip } from './AppTooltips'
 import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo } from './AppChips'
 import { ReadyBar } from './ReadyBar'
-import { layerDeploymentInventory, type DeploymentTopologyLayer } from '../../utils/application-topology'
+import { collapseStableReplicaSets, layerDeploymentInventory, type DeploymentInventory, type DeploymentTopologyLayer } from '../../utils/application-topology'
 
 // ApplicationDetail owns the application chrome and scope switcher. The selected
 // scope decides the one tab row shown in the detail pane: app scope gets
@@ -101,8 +101,8 @@ export type ApplicationDetailProps = {
   /** True while the host's topology fetch is in flight. Without it, a
    *  multi-workload app can briefly show an empty topology while topology loads. */
   topologyLoading?: boolean
-  /** Exact resources reported by the app's Argo CD or Flux deployment source. */
-  deploymentTree?: GitOpsResourceTree
+  /** Exact resources reported by the app's Argo CD, Flux, or Helm deployment source. */
+  deploymentInventory?: DeploymentInventory
   /** Open a related (non-workload) resource clicked in the app graph. */
   onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
   /** App identity siblings (this instance included, ladder-ordered) — turns the
@@ -165,7 +165,7 @@ function compareDefinedVersions(a: string | undefined, b: string | undefined): n
   return compareVersions(a, b) ?? 0
 }
 
-export function ApplicationDetail({ app, onBack, renderWorkload, topology, topologyLoading, deploymentTree, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
+export function ApplicationDetail({ app, onBack, renderWorkload, topology, topologyLoading, deploymentInventory, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
   // Stable order regardless of API ordering: rail rows and the per-workload
   // color assignment both follow this array, so an order flap between
   // refetches must not reshuffle rows or reassign a workload's hue.
@@ -224,22 +224,36 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
   // while the rest of the graph dims. Driven by the rail and, reciprocally, by
   // hovering a node.
   const [focusedOwnerId, setFocusedOwnerId] = useState<WorkloadFocus>(null)
+  const [expandedReplicaSetOwners, setExpandedReplicaSetOwners] = useState<Set<string>>(new Set())
+  useEffect(() => setExpandedReplicaSetOwners(new Set()), [app.key])
+  const toggleReplicaSets = useCallback((ownerID: string) => {
+    setExpandedReplicaSetOwners((current) => {
+      const next = new Set(current)
+      if (next.has(ownerID)) next.delete(ownerID)
+      else next.add(ownerID)
+      return next
+    })
+  }, [])
 
   const appSeeds = useMemo(
     () => workloads.map((w) => ({ kind: w.kind, namespace: w.namespace, name: w.name })),
     [workloads],
   )
   // Neighborhood subgraph + per-workload color/ownership tagging in one pass.
+  const composedTopology = useMemo(
+    () => topology ? collapseStableReplicaSets(topology, expandedReplicaSetOwners) : null,
+    [topology, expandedReplicaSetOwners],
+  )
   const ownership = useMemo(
-    () => (topology ? tagWorkloadOwnership(topology, appSeeds) : null),
-    [topology, appSeeds],
+    () => (composedTopology ? tagWorkloadOwnership(composedTopology, appSeeds) : null),
+    [composedTopology, appSeeds],
   )
   const appGraph = ownership?.topology ?? null
   const deploymentLayer = useMemo(
-    () => appGraph && deploymentTree && app.sourceRef
-      ? layerDeploymentInventory(appGraph, deploymentTree, sourceInventoryLabel(app.sourceRef))
+    () => appGraph && deploymentInventory && app.sourceRef
+      ? layerDeploymentInventory(appGraph, deploymentInventory, sourceInventoryLabel(app.sourceRef))
       : null,
-    [appGraph, deploymentTree, app.sourceRef],
+    [appGraph, deploymentInventory, app.sourceRef],
   )
   const appGraphFocusId = useMemo(
     () => (topology ? seedNodeIds(topology, appSeeds)[0] : undefined),
@@ -263,6 +277,10 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
   // (its runtime) or opens a related resource (Service/config/…) via the host.
   const handleAppNodeClick = useCallback(
     (node: TopologyNode) => {
+      if (node.data?.sourceInventoryGroup && app.sourceRef) {
+        onOpenSource?.(app.sourceRef)
+        return
+      }
       const ns = (node.data?.namespace as string) || ''
       const match = workloads.find((w) => w.kind === node.kind && w.name === node.name && w.namespace === ns)
       if (match) {
@@ -273,10 +291,10 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
         kind: kindToPlural(node.kind),
         namespace: ns,
         name: node.name,
-        group: apiVersionToGroup(node.data?.apiVersion as string | undefined),
+        group: apiVersionToGroup(node.data?.apiVersion as string | undefined) ?? (node.data?.sourceGroup as string | undefined),
       })
     },
-    [workloads, onNavigateToResource, setSelected],
+    [app.sourceRef, workloads, onNavigateToResource, onOpenSource, setSelected],
   )
 
   const appTopology = deploymentLayer?.topology ?? appGraph ?? null
@@ -394,7 +412,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
             topology={appTopology}
             topologyLoading={topologyLoading}
             deploymentLayer={deploymentLayer}
-            deploymentSource={app.sourceRef?.type === 'gitops' ? app.sourceRef : undefined}
+            deploymentSource={app.sourceRef}
             topologyAvailable={appTopologyAvailable}
             focusNodeId={appGraphFocusId}
             focusedOwnerId={focusedOwnerId}
@@ -407,6 +425,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
             history={history}
             historyLoading={historyLoading}
             onOpenSource={onOpenSource}
+            onToggleReplicaSets={toggleReplicaSets}
           />
         )}
       </div>
@@ -438,6 +457,7 @@ function ApplicationWorkspace({
   history,
   historyLoading,
   onOpenSource,
+  onToggleReplicaSets,
 }: {
   app: AppRow
   activeView: CanonicalApplicationView
@@ -462,6 +482,7 @@ function ApplicationWorkspace({
   history?: AppHistory
   historyLoading?: boolean
   onOpenSource?: (source: AppSourceRef) => void
+  onToggleReplicaSets: (ownerID: string) => void
 }) {
   const historyCount = (history?.anchors?.length ?? 0) + (history?.incidents?.length ?? (app.events?.length ?? 0))
   return (
@@ -501,6 +522,7 @@ function ApplicationWorkspace({
           deploymentLayer={deploymentLayer}
           deploymentSource={deploymentSource}
           onOpenSource={onOpenSource}
+          onToggleReplicaSets={onToggleReplicaSets}
         />
       )}
       {activeView === 'history' && <ApplicationHistoryView history={history} loading={historyLoading} fallbackEvents={app.events ?? []} workloads={workloads} onSelectWorkload={onSelectWorkload} onOpenSource={onOpenSource} />}
@@ -1103,6 +1125,7 @@ function ApplicationTopology({
   deploymentLayer,
   deploymentSource,
   onOpenSource,
+  onToggleReplicaSets,
 }: {
   topology: Topology | null
   loading?: boolean
@@ -1118,9 +1141,11 @@ function ApplicationTopology({
   deploymentLayer: DeploymentTopologyLayer | null
   deploymentSource?: AppSourceRef
   onOpenSource?: (source: AppSourceRef) => void
+  onToggleReplicaSets: (ownerID: string) => void
 }) {
   const hasSharedOrUnscopedNodes = useMemo(
     () => topology?.nodes.some((node) => {
+      if (node.data?.deploymentMembership === 'source-only') return false
       const stamp = ownershipOf(node.data)
       return !stamp.ownerWorkloadId && stamp.focusWorkloadIds.length !== 1
     }) ?? false,
@@ -1141,6 +1166,8 @@ function ApplicationTopology({
             focusNodeId={focusNodeId}
             focusedOwnerId={focusedOwnerId}
             onNodeHover={onNodeHover}
+            onToggleReplicaSets={onToggleReplicaSets}
+            fitViewPadding={{ top: 0.08, right: 0.05, bottom: 0.08, left: '360px' }}
           />
           <TopologyWorkloadLegend
             workloads={workloads}
@@ -1382,6 +1409,7 @@ function sourceObjectLabel(source: AppSourceRef): string {
 }
 
 function sourceInventoryLabel(source: AppSourceRef): string {
+  if (source.type === 'helm') return 'Helm'
   if (source.tool === 'argocd' || source.kind.toLowerCase() === 'application') return 'Argo CD'
   if (source.tool === 'fluxcd') return 'Flux'
   return 'GitOps'
@@ -1622,7 +1650,7 @@ function TopologyWorkloadLegend({
   const sourceLabel = deploymentSource ? sourceInventoryLabel(deploymentSource) : ''
 
   return (
-    <div className="absolute left-4 top-4 z-10 w-[min(22rem,calc(100%-2rem))] overflow-hidden rounded-lg border border-theme-border bg-theme-surface/95 shadow-theme-md backdrop-blur">
+    <div className="absolute left-4 top-4 z-10 w-[min(18.5rem,calc(100%-2rem))] 2xl:w-[min(22rem,calc(100%-2rem))] overflow-hidden rounded-lg border border-theme-border bg-theme-surface/95 shadow-theme-md backdrop-blur">
       <div className="flex items-center justify-between gap-3 border-b border-theme-border bg-theme-base px-3 py-2">
         <span className="text-xs font-semibold text-theme-text-primary">Workloads</span>
         <span className="rounded-full bg-theme-hover px-1.5 text-[10px] font-medium text-theme-text-tertiary">{workloads.length}</span>
@@ -1662,18 +1690,22 @@ function TopologyWorkloadLegend({
           <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Source differences</div>
           <div className="space-y-1">
             {managedOnlyCount > 0 && (
-              <Tooltip content={`View resources that exist only in the ${sourceLabel} inventory`} delay={150}>
-                <button
-                  type="button"
-                  onClick={() => onOpenSource?.(deploymentSource)}
-                  disabled={!onOpenSource}
-                  className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-theme-text-secondary hover:bg-theme-hover disabled:cursor-default"
-                >
-                  <DeploymentSourceLogo source={deploymentSource} />
-                  <span className="min-w-0 flex-1">{managedOnlyCount} only in {sourceLabel}</span>
-                  {onOpenSource && <ExternalLink className="h-3 w-3 shrink-0 text-theme-text-tertiary" aria-hidden />}
-                </button>
-              </Tooltip>
+              <div className="flex items-center gap-2 px-1.5 py-1 text-xs text-theme-text-secondary">
+                <DeploymentSourceLogo source={deploymentSource} />
+                <span className="min-w-0 flex-1">
+                  <span className="block">{managedOnlyCount} only in {sourceLabel}</span>
+                  {deploymentLayer?.managedOnlySummary && (
+                    <span className="mt-0.5 block text-[10px] text-theme-text-tertiary">{deploymentLayer.managedOnlySummary}</span>
+                  )}
+                </span>
+                {onOpenSource && (
+                  <Tooltip content={`Open ${sourceLabel} view`} delay={150}>
+                    <button type="button" onClick={() => onOpenSource(deploymentSource)} className="rounded p-0.5 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary">
+                      <ExternalLink className="h-3 w-3" aria-hidden />
+                    </button>
+                  </Tooltip>
+                )}
+              </div>
             )}
             {runtimeOnlyCount > 0 && (
               <div className="flex items-center gap-2 px-1.5 py-1 text-xs text-theme-text-secondary">

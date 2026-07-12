@@ -31,6 +31,7 @@ type mockProvider struct {
 	ingresses       []*networkingv1.Ingress
 	configMaps      []*corev1.ConfigMap
 	secrets         []*corev1.Secret
+	serviceAccounts []*corev1.ServiceAccount
 	pvcs            []*corev1.PersistentVolumeClaim
 	pvs             []*corev1.PersistentVolume
 	hpas            []*autoscalingv2.HorizontalPodAutoscaler
@@ -50,6 +51,9 @@ func (m *mockProvider) CronJobs() ([]*batchv1.CronJob, error)        { return m.
 func (m *mockProvider) Ingresses() ([]*networkingv1.Ingress, error)  { return m.ingresses, nil }
 func (m *mockProvider) ConfigMaps() ([]*corev1.ConfigMap, error)     { return m.configMaps, nil }
 func (m *mockProvider) Secrets() ([]*corev1.Secret, error)           { return m.secrets, nil }
+func (m *mockProvider) ServiceAccounts() ([]*corev1.ServiceAccount, error) {
+	return m.serviceAccounts, nil
+}
 func (m *mockProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
 	return m.pvcs, nil
 }

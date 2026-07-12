@@ -1260,6 +1260,9 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("policyEffect") == "true" {
 		opts.ShowPolicyEffect = true
 	}
+	if r.URL.Query().Get("includeReplicaSets") == "true" {
+		opts.IncludeReplicaSets = true
+	}
 
 	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	topo, err := builder.Build(opts)

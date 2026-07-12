@@ -125,6 +125,17 @@ func (a *topologyResourceProvider) Secrets() ([]*corev1.Secret, error) {
 	return lister.List(labels.Everything())
 }
 
+func (a *topologyResourceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, error) {
+	lister := a.cache.ServiceAccounts()
+	if lister == nil {
+		if a.cache.IsDeferredPending(k8score.ServiceAccounts) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("serviceaccounts not available (RBAC not granted)")
+	}
+	return lister.List(labels.Everything())
+}
+
 func (a *topologyResourceProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
 	lister := a.cache.PersistentVolumeClaims()
 	if lister == nil {
