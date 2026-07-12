@@ -24,6 +24,30 @@ func identRow(name, ns string, tier int, key string, images ...string) appRow {
 	return r
 }
 
+func TestEnrichRowsWithArgoStatus(t *testing.T) {
+	rows := []appRow{{
+		Health:        "healthy",
+		RuntimeHealth: "healthy",
+		SourceRef:     &appSourceRef{Type: "gitops", Tool: "argocd", Kind: "Application", Namespace: "argocd", Name: "checkout"},
+	}}
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "argocd", "name": "checkout"},
+		"status": map[string]any{
+			"sync":   map[string]any{"status": "Synced"},
+			"health": map[string]any{"status": "Degraded"},
+		},
+	}}
+
+	enrichRowsWithArgoStatus(rows, []*unstructured.Unstructured{app})
+
+	if rows[0].SourceStatus == nil || rows[0].SourceStatus.Sync != "Synced" || rows[0].SourceStatus.Health != "Degraded" {
+		t.Fatalf("source status = %#v", rows[0].SourceStatus)
+	}
+	if rows[0].RuntimeHealth != "healthy" || rows[0].Health != "degraded" {
+		t.Fatalf("runtime=%q overall=%q", rows[0].RuntimeHealth, rows[0].Health)
+	}
+}
+
 func identOf(t *testing.T, rows []appRow, name string) *appIdentity {
 	t.Helper()
 	for i := range rows {

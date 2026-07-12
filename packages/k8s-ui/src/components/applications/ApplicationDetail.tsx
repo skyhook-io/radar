@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, Boxes, CheckCircle2, ChevronDown, ExternalLink, Layers, Search } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Boxes, ChevronDown, ExternalLink, Layers, Search } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { ResourceRef, Topology, TopologyNode } from '../../types'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
@@ -377,7 +377,6 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
             activeView={activeView}
             onViewChange={setView}
             workloads={workloads}
-            verdictLabel={verdictLabel}
             ready={ready}
             desired={desired}
             versions={versions}
@@ -407,7 +406,6 @@ function ApplicationWorkspace({
   activeView,
   onViewChange,
   workloads,
-  verdictLabel,
   ready,
   desired,
   versions,
@@ -430,7 +428,6 @@ function ApplicationWorkspace({
   activeView: CanonicalApplicationView
   onViewChange: (view: CanonicalApplicationView) => void
   workloads: AppWorkload[]
-  verdictLabel: string
   ready: number
   desired: number
   versions: string[]
@@ -461,7 +458,6 @@ function ApplicationWorkspace({
         <ApplicationOverview
           app={app}
           workloads={workloads}
-          verdictLabel={verdictLabel}
           ready={ready}
           desired={desired}
           versions={versions}
@@ -548,7 +544,6 @@ type AppIssue = {
 function ApplicationOverview({
   app,
   workloads,
-  verdictLabel,
   ready,
   desired,
   versions,
@@ -560,7 +555,6 @@ function ApplicationOverview({
 }: {
   app: AppRow
   workloads: AppWorkload[]
-  verdictLabel: string
   ready: number
   desired: number
   versions: string[]
@@ -584,6 +578,13 @@ function ApplicationOverview({
     .join(' / ')
   const issues = useMemo(() => buildAppIssues(workloads, app.events ?? []), [workloads, app.events])
   const latestChange = history?.summary?.state === 'change' ? history.summary : undefined
+  const runtimeHealth = healthOf(app.runtimeHealth ?? worstHealth(workloads.map((workload) => workload.health)))
+  const hasDeliveryStatus = Boolean(app.sourceStatus?.sync || app.sourceStatus?.health)
+  const factGrid = latestChange && hasDeliveryStatus
+    ? '2xl:grid-cols-5'
+    : latestChange || hasDeliveryStatus
+      ? '2xl:grid-cols-4'
+      : '2xl:grid-cols-3'
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
@@ -597,19 +598,20 @@ function ApplicationOverview({
             onSelectHistory={onSelectHistory}
             onOpenSource={onOpenSource}
           />
-          <div className={clsx('grid gap-3 md:grid-cols-2', latestChange ? '2xl:grid-cols-5' : '2xl:grid-cols-4')}>
-            <ApplicationFact label="State" value={verdictLabel} />
-            <ApplicationFact label="Workloads" value={String(workloads.length)} detail={composition || 'No workloads'} />
+          <div className={clsx('grid gap-3 md:grid-cols-2', factGrid)}>
             <ApplicationFact
-              label="Ready"
-              value={
-                <span className="inline-flex items-center gap-1.5">
-                  {desired > 0 && ready === desired && <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden />}
-                  {ready}/{desired}
-                </span>
-              }
-              detail={desired === 0 ? 'No desired replicas' : undefined}
+              label="Runtime"
+              value={HEALTH_META[runtimeHealth].label}
+              detail={desired > 0 ? `${ready}/${desired} ready` : 'No desired replicas'}
             />
+            {hasDeliveryStatus && (
+              <ApplicationFact
+                label="Delivery"
+                value={<SourceDeliveryStatus status={app.sourceStatus!} />}
+                detail={app.sourceRef ? sourceObjectLabel(app.sourceRef) : undefined}
+              />
+            )}
+            <ApplicationFact label="Workloads" value={String(workloads.length)} detail={composition || 'No workloads'} />
             <ApplicationFact label="Version" value={app.appVersion || (versions.length === 1 ? versions[0] : versions.length > 1 ? `${versions.length} versions` : 'Unknown')} />
             {latestChange && (
               <ApplicationLatestChangeFact
@@ -657,6 +659,7 @@ function ApplicationSourceProvenance({
               <div className="mt-1 truncate font-mono text-sm font-medium text-theme-text-primary">{sourceName}</div>
             </Tooltip>
           </div>
+          {app.sourceStatus && <SourceDeliveryStatus status={app.sourceStatus} />}
           {onOpenSource && (
             <button
               type="button"
@@ -1347,6 +1350,41 @@ function sourceObjectLabel(source: AppSourceRef): string {
   if (source.kind.toLowerCase() === 'helmrelease') return 'Flux HelmRelease'
   if (source.kind.toLowerCase() === 'kustomization') return 'Flux Kustomization'
   return 'GitOps source'
+}
+
+function SourceDeliveryStatus({ status }: { status: NonNullable<AppRow['sourceStatus']> }) {
+  const values = [
+    status.sync ? { label: status.sync, tone: sourceSyncHealth(status.sync) } : null,
+    status.health ? { label: status.health, tone: sourceReportedHealth(status.health) } : null,
+  ].filter((value): value is { label: string; tone: AppHealth } => value !== null)
+
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      {values.map((value, index) => (
+        <span key={`${value.label}-${index}`} className="inline-flex min-w-0 items-center gap-1.5">
+          {index > 0 && <span className="text-theme-text-tertiary" aria-hidden>·</span>}
+          <StatusDot tone={mapHealthToTone(value.tone)} />
+          <span className="truncate">{value.label}</span>
+        </span>
+      ))}
+    </span>
+  )
+}
+
+function sourceSyncHealth(status: string): AppHealth {
+  const normalized = status.toLowerCase()
+  if (normalized === 'synced') return 'healthy'
+  if (normalized === 'outofsync') return 'degraded'
+  return 'unknown'
+}
+
+function sourceReportedHealth(status: string): AppHealth {
+  const normalized = status.toLowerCase()
+  if (normalized === 'healthy') return 'healthy'
+  if (normalized === 'progressing' || normalized === 'degraded') return 'degraded'
+  if (normalized === 'missing') return 'unhealthy'
+  if (normalized === 'suspended') return 'neutral'
+  return 'unknown'
 }
 
 function formatAppEventTime(value?: string): string {

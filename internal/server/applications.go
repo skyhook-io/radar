@@ -103,19 +103,26 @@ type appRow struct {
 	Category       string            `json:"category,omitempty"`       // app | addon | mixed; classification hint, never identity
 	AddonReason    string            `json:"addonReason,omitempty"`    // add-on evidence when Category == addon/mixed
 	WorkloadClass  string            `json:"workload_class,omitempty"` // service | worker | job | mixed | unknown
-	Health         string            `json:"health"`                   // worst-of across workloads
+	Health         string            `json:"health"`                   // worst-of runtime + exact deployment-source status
+	RuntimeHealth  string            `json:"runtimeHealth"`            // worst-of across workloads
 	Versions       []string          `json:"versions,omitempty"`       // distinct image tags (the running version)
 	VersionSkew    bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
 	AppVersion     string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
 	Identity       *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
 	MatchKeys      []string          `json:"matchKeys,omitempty"`      // exact grouping-signal evidence keys, namespace-scoped ("instance:ns:x","helm:ns:x",…) + informational "name-stem:x" (unscoped); the client joins timeline events to this app by these, matching on the event's namespace
 	SourceRef      *appSourceRef     `json:"sourceRef,omitempty"`      // exact source system object when known (GitOps / native Helm)
+	SourceStatus   *appSourceStatus  `json:"sourceStatus,omitempty"`   // controller-reported delivery state for the exact source
 	SourceConflict bool              `json:"sourceConflict,omitempty"` // workloads resolve to different source-system objects
 	Workloads      []appWorkload     `json:"workloads"`
 	Events         []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
 	Relationships  *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
 
 	sourceStrict bool
+}
+
+type appSourceStatus struct {
+	Sync   string `json:"sync,omitempty"`
+	Health string `json:"health,omitempty"`
 }
 
 // appSourceRef is the source-of-truth object when the grouping signal names one
@@ -536,6 +543,7 @@ func ListApplications(ctx context.Context, namespaces []string) (*applicationsRe
 	sourcePaths, appSetChildren, argoItems := argoApplicationFacts(ctx, cache)
 	appSetByKey := appSetFanouts(appSetChildren)
 	enrichRowsWithManagedSourceRefs(ctx, cache, rows, argoItems)
+	enrichRowsWithArgoStatus(rows, argoItems)
 	resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(ctx, cache))
 	claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
 	applicationsCacheMu.Lock()
@@ -981,6 +989,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			}
 			mergeRelationships(r, in.rels)
 		}
+		r.RuntimeHealth = r.Health
 		setStrictSourceRef(r, ins)
 		// The app lives where its WORKLOADS run — a Flux HelmRelease in
 		// flux-system deploying into demo is a demo app, not a flux-system one

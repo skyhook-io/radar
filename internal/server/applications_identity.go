@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/packages"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
@@ -1098,6 +1099,52 @@ func enrichRowsWithManagedSourceRefs(ctx context.Context, cache resourceLister, 
 		}
 		mergeSourceRef(&rows[i], ref)
 	}
+}
+
+func enrichRowsWithArgoStatus(rows []appRow, items []*unstructured.Unstructured) {
+	byKey := make(map[string]*unstructured.Unstructured, len(items))
+	for _, item := range items {
+		if item != nil && item.GetNamespace() != "" && item.GetName() != "" {
+			byKey[item.GetNamespace()+"/"+item.GetName()] = item
+		}
+	}
+	for i := range rows {
+		ref := rows[i].SourceRef
+		if ref == nil || ref.Tool != "argocd" || ref.Kind != "Application" {
+			continue
+		}
+		item := byKey[ref.Namespace+"/"+ref.Name]
+		if item == nil {
+			continue
+		}
+		syncStatus, _, _ := unstructured.NestedString(item.Object, "status", "sync", "status")
+		healthStatus, _, _ := unstructured.NestedString(item.Object, "status", "health", "status")
+		if syncStatus == "" && healthStatus == "" {
+			continue
+		}
+		rows[i].SourceStatus = &appSourceStatus{Sync: syncStatus, Health: healthStatus}
+		rows[i].Health = string(packages.WorseHealth(packages.Health(rows[i].RuntimeHealth), argoDeliveryHealth(syncStatus, healthStatus)))
+	}
+}
+
+func argoDeliveryHealth(syncStatus, healthStatus string) packages.Health {
+	health := packages.HealthNeutral
+	switch strings.ToLower(healthStatus) {
+	case "healthy":
+		health = packages.HealthHealthy
+	case "progressing", "degraded":
+		health = packages.HealthDegraded
+	case "missing":
+		health = packages.HealthUnhealthy
+	case "suspended":
+		health = packages.HealthNeutral
+	case "unknown":
+		health = packages.HealthUnknown
+	}
+	if strings.EqualFold(syncStatus, "OutOfSync") {
+		health = packages.WorseHealth(health, packages.HealthDegraded)
+	}
+	return health
 }
 
 func addArgoManagedSourceRefs(out map[string][]appSourceRef, items []*unstructured.Unstructured) {

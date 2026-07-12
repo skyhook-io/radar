@@ -207,6 +207,28 @@ describe('ApplicationDetail shell', () => {
     expect(html).not.toContain('Source &amp; provenance')
   })
 
+  it('separates healthy runtime from degraded delivery and rolls up the application status', () => {
+    const sourceRef: AppSourceRef = { type: 'gitops', tool: 'argocd', group: 'argoproj.io', kind: 'Application', namespace: 'argocd', name: 'checkout' }
+    const html = renderDetail({
+      app: {
+        ...app,
+        health: 'degraded',
+        runtimeHealth: 'healthy',
+        sourceRef,
+        sourceStatus: { sync: 'Synced', health: 'Degraded' },
+      },
+      onOpenSource: () => {},
+    })
+
+    expect(html).toContain('Degraded')
+    expect(html).toContain('Runtime')
+    expect(html).toContain('Healthy')
+    expect(html).toContain('4/4 ready')
+    expect(html).toContain('Delivery')
+    expect(html.match(/Synced/g)).toHaveLength(2)
+    expect(html.match(/Degraded/g).length).toBeGreaterThanOrEqual(3)
+  })
+
   it('warns when application workloads resolve to different deployment sources', () => {
     const html = renderDetail({ app: { ...app, sourceConflict: true } })
 

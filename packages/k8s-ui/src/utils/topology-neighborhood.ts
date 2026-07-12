@@ -12,10 +12,10 @@ import type { Topology, TopologyNode, TopologyEdge, EdgeType, NodeKind } from '.
 //   identity (`manages`)            — the ownerRef / controller chain
 //                                     (Deployment→ReplicaSet→Pod). Walk it: a
 //                                     workload's pods ARE the workload.
-//   routing  (`exposes`,`routes-to`)— a Service/Ingress/Route in front of the
-//                                     workload. INCLUDE it, but as a LEAF: a
-//                                     shared Ingress fronts many unrelated apps,
-//                                     so we don't expand THROUGH it.
+//   routing  (`exposes`,`routes-to`)— walk UPSTREAM from workload to Service to
+//                                     Ingress/Route, then stop. Never walk back
+//                                     DOWN through a shared Service into another
+//                                     workload.
 //   context  (`configures`,`uses`,  — a ConfigMap/Secret/HPA/PDB attached to the
 //             `protects`)             workload. INCLUDE as a LEAF: a shared
 //                                     ConfigMap mounted by two apps must not glue
@@ -114,7 +114,15 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
         // every sibling Job its CronJob owns).
         asLeaf = nextId === e.source
       } else if (ROUTING_EDGES.has(e.type)) {
-        asLeaf = true // a Service/Ingress in front of the workload — leaf
+        if (e.type === 'exposes' && id === e.source) {
+          // We reached a Service from one of its workloads. Only continue
+          // upstream to its routes; following the Service's other targets would
+          // pull sibling or unrelated workloads into this neighborhood.
+          continue
+        }
+        // A Service reached from a workload may expand once more to the
+        // Ingress/Route in front of it. The entrypoint itself remains a leaf.
+        asLeaf = e.type === 'routes-to' || nextNode.kind !== 'Service'
       } else {
         asLeaf = true // configures / uses / protects — leaf
       }
@@ -190,6 +198,7 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
 
   // The seed nodes present in the subgraph, by their workload key.
   const seedKeyById = new Map<string, string>()
+  const subNodeById = new Map(sub.nodes.map((node) => [node.id, node]))
   for (const n of sub.nodes) {
     if (matchSeedNode(n, seeds)) {
       seedKeyById.set(n.id, workloadKey({ kind: n.kind, namespace: nodeNamespace(n), name: n.name }))
@@ -240,6 +249,13 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
       for (const nb of neighbors.get(n.id) ?? []) {
         const o = coreOwner.get(nb)
         if (o) related.add(o)
+        const neighborNode = subNodeById.get(nb)
+        if (neighborNode?.kind === 'Service') {
+          for (const serviceNeighbor of neighbors.get(nb) ?? []) {
+            const serviceOwner = coreOwner.get(serviceNeighbor)
+            if (serviceOwner) related.add(serviceOwner)
+          }
+        }
       }
       focusWorkloadIds = [...related]
       owner = related.size === 1 && !GITOPS_MANAGER_KINDS.has(n.kind) ? [...related][0] : null

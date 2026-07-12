@@ -64,6 +64,11 @@ export interface AppSourceRef {
   name: string
 }
 
+export interface AppSourceStatus {
+  sync?: string
+  health?: string
+}
+
 export interface AppHistorySummary {
   state: 'change' | 'incident' | 'none'
   title: string
@@ -191,8 +196,10 @@ export interface AppRow {
   category?: string
   addonReason?: string
   workload_class?: AppWorkloadClass
-  /** worst-of across workloads: healthy | degraded | unhealthy | unknown. */
+  /** Worst-of runtime health and exact deployment-source status. */
   health: string
+  /** Worst-of across workloads, independent of the deployment source. */
+  runtimeHealth?: string
   /** distinct image tags. */
   versions?: string[]
   /** True when the SAME image runs different tags across workloads — real
@@ -204,6 +211,8 @@ export interface AppRow {
   /** Exact source-system object when the grouping signal names one. Label/name
    *  inferred apps intentionally omit this instead of guessing. */
   sourceRef?: AppSourceRef
+  /** Controller-reported delivery state for the exact source. */
+  sourceStatus?: AppSourceStatus
   /** Workloads resolve to different Helm/GitOps source objects. */
   sourceConflict?: boolean
   workloads: AppWorkload[]
