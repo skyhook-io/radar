@@ -7,6 +7,7 @@ import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
 import { useResource, useWorkloadRuns, type WorkloadRun } from '../../api/client'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
 import { Tooltip } from '../ui/Tooltip'
+import { ImageFilesystemModal } from '../resources/ImageFilesystemModal'
 import { executionDefinitionFingerprint, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
 
 const EMPTY_RUNS: WorkloadRun[] = []
@@ -270,7 +271,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   <h3 className="text-sm font-semibold text-theme-text-primary">{configurationTitle(kind)}</h3>
                 </div>
                 <div className="space-y-3 p-4">
-                  <SourceFacts source={source} />
+                  <SourceFacts source={source} namespace={selectedRun?.namespace || namespace} />
                 </div>
               </section>
 
@@ -469,7 +470,7 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
   }
 }
 
-function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
+function SourceFacts({ source, namespace }: { source: ReturnType<typeof sourceFacts>; namespace: string }) {
   const parameters = 'parameters' in source ? source.parameters : undefined
   return (
     <>
@@ -478,7 +479,7 @@ function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
         {source.schedule && <FactTile label="Schedule" value={source.schedule} mono />}
         {source.concurrency && <FactTile label="Concurrency" value={source.concurrency} />}
       </div>
-      {source.definition && <ExecutionDefinitionDetails summary={source.definition} />}
+      {source.definition && <ExecutionDefinitionDetails summary={source.definition} namespace={namespace} />}
       <div className="space-y-2">
         {source.facts.map(([label, value]) => (
           <div key={label} className="flex items-start justify-between gap-3 text-sm">
@@ -494,14 +495,14 @@ function SourceFacts({ source }: { source: ReturnType<typeof sourceFacts> }) {
   )
 }
 
-function ExecutionDefinitionDetails({ summary, compact = false }: { summary: ExecutionDefinitionSummary; compact?: boolean }) {
+function ExecutionDefinitionDetails({ summary, namespace, compact = false }: { summary: ExecutionDefinitionSummary; namespace: string; compact?: boolean }) {
   const visibleUnits = summary.units.slice(0, compact ? 1 : 3)
   return (
     <div className={clsx(!compact && 'border-t border-theme-border pt-3')}>
       {!compact && <div className="mb-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">What it runs</div>}
       <div className="space-y-2">
         <DefinitionFact label="Execution" value={summary.shape} />
-        {visibleUnits.map((unit) => <ExecutionUnitDetails key={`${unit.type}/${unit.name}`} unit={unit} compact={compact} />)}
+        {visibleUnits.map((unit) => <ExecutionUnitDetails key={`${unit.type}/${unit.name}`} unit={unit} namespace={namespace} pullSecrets={summary.imagePullSecrets} compact={compact} />)}
         {summary.units.length > visibleUnits.length && <div className="text-right text-xs text-theme-text-tertiary">+{summary.units.length - visibleUnits.length} more executable {summary.units.length - visibleUnits.length === 1 ? 'template' : 'templates'}</div>}
         {summary.externalTemplates.length > 0 && <DefinitionFact label="Uses" value={summary.externalTemplates.join(', ')} mono />}
         {!compact && (
@@ -519,26 +520,42 @@ function ExecutionDefinitionDetails({ summary, compact = false }: { summary: Exe
   )
 }
 
-function ExecutionUnitDetails({ unit, compact }: { unit: ExecutionUnitSummary; compact: boolean }) {
+function ExecutionUnitDetails({ unit, namespace, pullSecrets, compact }: { unit: ExecutionUnitSummary; namespace: string; pullSecrets: string[]; compact: boolean }) {
+  const [browseImage, setBrowseImage] = useState(false)
   return (
-    <div className={clsx(!compact && 'rounded-md bg-theme-elevated/40 px-3 py-2')}>
-      {!compact && <div className="mb-1 flex items-center justify-between gap-3"><span className="truncate text-xs font-medium text-theme-text-primary">{unit.name}</span><span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{unit.type}</span></div>}
-      <div className="space-y-1">
-        {unit.image && <DefinitionFact label="Image" value={unit.image} mono />}
-        {unit.command && <DefinitionFact label="Command" value={unit.command} mono />}
-        {!compact && unit.requests && <DefinitionFact label="Requests" value={unit.requests} />}
-        {!compact && unit.limits && <DefinitionFact label="Limits" value={unit.limits} />}
+    <>
+      <div className={clsx(!compact && 'rounded-md bg-theme-elevated/40 px-3 py-2')}>
+        {!compact && <div className="mb-1 flex items-center justify-between gap-3"><span className="truncate text-xs font-medium text-theme-text-primary">{unit.name}</span><span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{unit.type}</span></div>}
+        <div className="space-y-1">
+          {unit.image && <DefinitionFact label="Image" value={unit.image} mono onClick={() => setBrowseImage(true)} tooltip="Browse image filesystem from registry" />}
+          {unit.command && <DefinitionFact label="Command" value={unit.command} mono />}
+          {!compact && unit.requests && <DefinitionFact label="Requests" value={unit.requests} />}
+          {!compact && unit.limits && <DefinitionFact label="Limits" value={unit.limits} />}
+        </div>
       </div>
-    </div>
+      {unit.image && (
+        <ImageFilesystemModal
+          open={browseImage}
+          onClose={() => setBrowseImage(false)}
+          image={unit.image}
+          namespace={namespace}
+          podName=""
+          pullSecrets={pullSecrets}
+        />
+      )}
+    </>
   )
 }
 
-function DefinitionFact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function DefinitionFact({ label, value, mono = false, onClick, tooltip }: { label: string; value: string; mono?: boolean; onClick?: () => void; tooltip?: string }) {
+  const valueClassName = clsx('break-words text-theme-text-primary', mono && 'font-mono text-xs', onClick && 'text-accent-text hover:underline')
   return (
     <div className="flex items-start justify-between gap-3 text-sm">
       <span className="shrink-0 text-theme-text-tertiary">{label}</span>
-      <Tooltip content={value} delay={300} wrapperClassName="min-w-0 text-right">
-        <span className={clsx('break-words text-theme-text-primary', mono && 'font-mono text-xs')}>{value}</span>
+      <Tooltip content={tooltip ?? value} delay={300} wrapperClassName="min-w-0 text-right">
+        {onClick
+          ? <button type="button" onClick={onClick} className={clsx(valueClassName, 'text-right')}>{value}</button>
+          : <span className={valueClassName}>{value}</span>}
       </Tooltip>
     </div>
   )
@@ -629,10 +646,10 @@ function RunDetailList({ run, resource, workflowExecution, scheduledParent }: { 
 function RunMessageDetails({ run }: { run: WorkloadRun }) {
   const [open, setOpen] = useState(false)
   const failed = run.phase === 'Failed' || run.phase === 'Error'
-  if (!runMessageNeedsDisclosure(run.message ?? '', failed)) {
+  if (!runMessageNeedsDisclosure(run.message ?? '')) {
     return (
       <div className="flex items-start gap-3 border-t border-theme-border px-4 py-3 text-sm">
-        <span className="shrink-0 font-medium text-theme-text-primary">Run message</span>
+        <span className={clsx('shrink-0 font-medium', failed ? 'text-red-700 dark:text-red-300' : 'text-theme-text-primary')}>{failed ? 'Failure' : 'Run message'}</span>
         <span className="min-w-0 break-words text-theme-text-tertiary">{run.message}</span>
       </div>
     )
@@ -657,8 +674,8 @@ function RunMessageDetails({ run }: { run: WorkloadRun }) {
   )
 }
 
-export function runMessageNeedsDisclosure(message: string, failed: boolean): boolean {
-  return failed || message.includes('\n') || message.length > 140
+export function runMessageNeedsDisclosure(message: string): boolean {
+  return message.includes('\n') || message.length > 140
 }
 
 function RunExecutionPanel({ run, workflowExecution, loading, onNavigateToResource }: { run: WorkloadRun; workflowExecution: WorkflowExecutionModel | null; loading: boolean; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
@@ -815,7 +832,7 @@ function RunContext({ run, resource, definitionResource, workflowExecution, curr
               {definitionDiffers ? 'Execution differs from current definition' : 'Execution captured for this run'}
             </span>
           </div>
-          <ExecutionDefinitionDetails summary={runDefinition} compact />
+          <ExecutionDefinitionDetails summary={runDefinition} namespace={run.namespace} compact />
         </div>
       )}
     </div>

@@ -9,7 +9,7 @@ import { ResourceRefBadge } from '../ui/drawer-components'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { pluralize } from '../../utils/pluralize'
 import { kindToPlural, apiVersionToGroup, refToSelectedResource } from '../../utils/navigation'
-import { tagWorkloadOwnership, seedNodeIds, ownershipOf, workloadKey, type NeighborhoodSeed } from '../../utils/topology-neighborhood'
+import { batchRunParentNodes, tagWorkloadOwnership, seedNodeIds, ownershipOf, workloadKey, type NeighborhoodSeed } from '../../utils/topology-neighborhood'
 import { workloadHue, NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import { getTopologyIcon } from '../../utils/resource-icons'
 import {
@@ -107,6 +107,8 @@ export type ApplicationDetailProps = {
   topologyLoading?: boolean
   /** Open a related (non-workload) resource clicked in the app graph. */
   onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
+  /** Open a generated Job or Workflow in the run history of its parent workload. */
+  onSelectWorkloadRun?: (workload: SelectedAppWorkload, run: TopologyNode) => void
   /** App identity siblings (this instance included, ladder-ordered) — turns the
    *  context strip's Environment fact into a switcher. Identity grouping is
    *  classification, not an address: it switches between REAL instances, never
@@ -167,7 +169,7 @@ function compareDefinedVersions(a: string | undefined, b: string | undefined): n
   return compareVersions(a, b) ?? 0
 }
 
-export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewIssues, topology, topologyLoading, onNavigateToResource, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
+export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewIssues, topology, topologyLoading, onNavigateToResource, onSelectWorkloadRun, identityInstances, onSwitchInstance, discoveredEnvs, activeInstanceKey, history, historyLoading, onOpenSource, selectedWorkloadKey, onSelectWorkload, selectedView, onSelectView }: ApplicationDetailProps) {
   // Stable order regardless of API ordering: rail rows and the per-workload
   // color assignment both follow this array, so an order flap between
   // refetches must not reshuffle rows or reassign a workload's hue.
@@ -267,6 +269,16 @@ export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewI
         setSelected(workloadKey(match))
         return
       }
+      const parents = appGraph ? batchRunParentNodes(appGraph, node) : []
+      const parentWorkload = parents.flatMap((parent) => {
+        const parentNamespace = (parent.data?.namespace as string) || ''
+        const workload = workloads.find((candidate) => candidate.kind === parent.kind && candidate.name === parent.name && candidate.namespace === parentNamespace)
+        return workload ? [workload] : []
+      })[0]
+      if (parentWorkload && onSelectWorkloadRun) {
+        onSelectWorkloadRun(parentWorkload, node)
+        return
+      }
       onNavigateToResource?.({
         kind: kindToPlural(node.kind),
         namespace: ns,
@@ -274,7 +286,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, renderOverviewI
         group: apiVersionToGroup(node.data?.apiVersion as string | undefined),
       })
     },
-    [workloads, onNavigateToResource, setSelected],
+    [appGraph, workloads, onNavigateToResource, onSelectWorkloadRun, setSelected],
   )
 
   const appTopology = appGraph ?? null

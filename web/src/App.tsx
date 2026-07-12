@@ -2184,9 +2184,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               // detail panel) sits behind the peek. Search-only change keeps the
               // pathname — and thus the peek's owner-path — intact.
               const params = new URLSearchParams(window.location.search)
-              if (params.has('workload') || params.has('tab')) {
+              if (params.has('workload') || params.has('tab') || params.has('run')) {
                 params.delete('workload')
                 params.delete('tab')
+                params.delete('run')
                 navigate({ pathname: window.location.pathname, search: params.toString() }, { replace: true })
               }
               navigateToResource(resource)

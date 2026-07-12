@@ -50,13 +50,13 @@ describe('retentionHistoryCopy', () => {
 
 describe('runMessageNeedsDisclosure', () => {
   it('keeps short successful messages inline', () => {
-    expect(runMessageNeedsDisclosure('Reached expected number of succeeded pods', false)).toBe(false)
+    expect(runMessageNeedsDisclosure('Reached expected number of succeeded pods')).toBe(false)
   })
 
-  it('uses a disclosure for failures, multiline messages, and long messages', () => {
-    expect(runMessageNeedsDisclosure('permission denied', true)).toBe(true)
-    expect(runMessageNeedsDisclosure('first line\nsecond line', false)).toBe(true)
-    expect(runMessageNeedsDisclosure('x'.repeat(141), false)).toBe(true)
+  it('keeps short failures inline and discloses multiline or long messages', () => {
+    expect(runMessageNeedsDisclosure('permission denied')).toBe(false)
+    expect(runMessageNeedsDisclosure('first line\nsecond line')).toBe(true)
+    expect(runMessageNeedsDisclosure('x'.repeat(141))).toBe(true)
   })
 })
 

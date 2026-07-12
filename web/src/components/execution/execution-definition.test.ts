@@ -35,6 +35,7 @@ describe('executionDefinitionSummary', () => {
       parallelism: '1 parallel · 2 completions · NonIndexed',
       configMaps: ['backup-config', 'projected-config'],
       secrets: ['projected-secret', 'registry-credentials'],
+      imagePullSecrets: ['registry-credentials'],
       externalTemplates: [],
       units: [{
         name: 'backup',
@@ -54,10 +55,12 @@ describe('executionDefinitionSummary', () => {
         serviceAccountName: 'migrator',
         parallelism: 3,
         activeDeadlineSeconds: 600,
+        imagePullSecrets: [{ name: 'workflow-registry' }],
         templates: [
           { name: 'main', dag: { tasks: [{ name: 'prepare' }, { name: 'publish' }] } },
           {
             name: 'worker',
+            imagePullSecrets: [{ name: 'template-registry' }],
             retryStrategy: { limit: 2, retryPolicy: 'OnError', backoff: { duration: '5s' } },
             container: {
               image: 'example/worker:v3',
@@ -75,7 +78,8 @@ describe('executionDefinitionSummary', () => {
       retry: 'worker: 2 retries · OnError · 5s backoff',
       deadline: '600s',
       parallelism: '3 maximum',
-      secrets: ['worker-secret'],
+      secrets: ['template-registry', 'worker-secret', 'workflow-registry'],
+      imagePullSecrets: ['template-registry', 'workflow-registry'],
       units: [{ name: 'worker', type: 'Container', image: 'example/worker:v3', command: 'worker' }],
     })
   })

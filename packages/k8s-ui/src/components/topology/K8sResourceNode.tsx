@@ -137,6 +137,11 @@ function getIssueTooltip(issue: string | undefined): React.ReactNode {
 // Default dimensions for unknown CRD kinds
 export const DEFAULT_NODE_DIMENSIONS = { width: 260, height: 84 }
 
+export const NODE_NAME_LENGTH_LIMITS: Partial<Record<NodeKind, number>> = {
+  Job: 40,
+  Workflow: 48,
+}
+
 // Node dimensions for ELK layout - sized for typical K8s resource names
 export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }> = {
   Internet: { width: 120, height: 52 },
@@ -161,9 +166,9 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   ConfigMap: { width: 180, height: 84 },
   Secret: { width: 180, height: 84 },
   HorizontalPodAutoscaler: { width: 280, height: 84 },
-  Job: { width: 180, height: 84 },
+  Job: { width: 300, height: 84 },
   CronJob: { width: 200, height: 84 },
-  Workflow: { width: 220, height: 84 },
+  Workflow: { width: 400, height: 84 },
   CronWorkflow: { width: 240, height: 84 },
   WorkflowTemplate: { width: 240, height: 84 },
   ClusterWorkflowTemplate: { width: 260, height: 84 },
@@ -550,7 +555,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
           {/* Name — middle-ellipsis so the differentiating suffix survives
               (a column of pods sharing a long prefix must stay tellable apart). */}
           <div className="text-sm font-medium text-theme-text-primary truncate pr-1">
-            {midTruncate(name, 34)}
+            {midTruncate(name, NODE_NAME_LENGTH_LIMITS[kind] ?? 34)}
           </div>
 
           {/* Subtitle */}

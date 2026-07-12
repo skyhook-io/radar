@@ -83,6 +83,16 @@ function isBatchRunFanoutEdge(edge: TopologyEdge, nodeById: Map<string, Topology
   return edge.type === 'configures' && isWorkflowTemplateKind(source.kind) && target.kind === 'Workflow'
 }
 
+export function batchRunParentNodes(topology: Topology, run: TopologyNode): TopologyNode[] {
+  const nodeById = new Map(topology.nodes.map((node) => [node.id, node]))
+  const parentEdges = topology.edges.filter((edge) => edge.target === run.id && isBatchRunFanoutEdge(edge, nodeById))
+  parentEdges.sort((left, right) => Number(right.type === 'manages') - Number(left.type === 'manages'))
+  return parentEdges.flatMap((edge) => {
+    const parent = nodeById.get(edge.source)
+    return parent ? [parent] : []
+  })
+}
+
 function nodeRunTime(node: TopologyNode): number {
   const data = node.data ?? {}
   for (const key of ['startedAt', 'finishedAt', 'startTime', 'completionTime', 'creationTimestamp']) {

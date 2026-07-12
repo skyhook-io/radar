@@ -983,7 +983,7 @@ export function useNamespaces() {
 }
 
 // Topology (for manual refresh)
-export function useTopology(namespaces: string[], viewMode: string = 'resources', options?: { enabled?: boolean }) {
+export function useTopology(namespaces: string[], viewMode: string = 'resources', options?: { enabled?: boolean; refetchInterval?: number | false }) {
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
   if (viewMode) params.set('view', viewMode)
@@ -994,6 +994,7 @@ export function useTopology(namespaces: string[], viewMode: string = 'resources'
     queryFn: () => fetchJSON(`/topology${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // 5 seconds
     enabled: options?.enabled !== false,
+    refetchInterval: options?.refetchInterval,
   })
 }
 

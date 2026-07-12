@@ -145,7 +145,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     if (app.sourceRef?.namespace) namespaces.add(app.sourceRef.namespace)
     return Array.from(namespaces).sort()
   }, [app.sourceRef?.namespace, appNamespaces])
-  const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', { enabled: appNamespaces.length > 0 })
+  const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', { enabled: appNamespaces.length > 0, refetchInterval: 10_000 })
   const issuesQuery = useIssues(appNamespaces)
   const appIssues = useMemo(
     () => appIssuesForWorkloads(issuesQuery.data?.issues ?? [], app.workloads ?? []),
@@ -212,6 +212,18 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
       setSearchParams(params)
     },
     [searchParams, selectedWorkloadKey, setSearchParams, singleWorkloadKey],
+  )
+  const selectWorkloadRun = useCallback(
+    (workload: SelectedAppWorkload, run: { kind: string; name: string; data: Record<string, unknown> }) => {
+      const params = new URLSearchParams(searchParams)
+      const runNamespace = typeof run.data?.namespace === 'string' ? run.data.namespace : workload.namespace
+      params.delete('view')
+      params.delete('tab')
+      params.set('workload', workloadKey(workload))
+      params.set('run', `${kindToPlural(run.kind)}/${runNamespace}/${run.name}`)
+      setSearchParams(params)
+    },
+    [searchParams, setSearchParams],
   )
   const openWorkloadResource = useCallback(
     (resource: SelectedResource) => {
@@ -330,6 +342,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         onSwitchInstance={switchInstance}
         discoveredEnvs={discoveredEnvs}
         onNavigateToResource={onOpenResource}
+        onSelectWorkloadRun={selectWorkloadRun}
         history={historyQuery.data}
         historyLoading={historyQuery.isLoading}
         onOpenSource={openSource}

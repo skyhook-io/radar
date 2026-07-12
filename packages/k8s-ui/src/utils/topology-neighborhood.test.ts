@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { neighborhoodFor, tagWorkloadOwnership } from './topology-neighborhood'
+import { batchRunParentNodes, neighborhoodFor, tagWorkloadOwnership } from './topology-neighborhood'
 import type { Topology, NodeKind, EdgeType } from '../types/core'
 
 function node(id: string, kind: string, ns: string, name: string): Topology['nodes'][number] {
@@ -204,6 +204,44 @@ describe('neighborhoodFor', () => {
     }
     const out = neighborhoodFor(topo, [{ kind: 'WorkflowTemplate', group: 'argoproj.io', namespace: 'app', name: 'migration' }])
     expect(out.nodes.some((node) => node.id === 'wf9')).toBe(true)
+  })
+})
+
+describe('batchRunParentNodes', () => {
+  it('finds scheduled and template parents for generated runs only', () => {
+    const cronJob = node('cron', 'CronJob', 'app', 'backup')
+    const job = node('job', 'Job', 'app', 'backup-123')
+    const template = crdNode('template', 'WorkflowTemplate', 'app', 'migration', 'argoproj.io/v1alpha1')
+    const workflow = crdNode('workflow', 'Workflow', 'app', 'migration-abc', 'argoproj.io/v1alpha1')
+    const deployment = node('deployment', 'Deployment', 'app', 'api')
+    const pod = node('pod', 'Pod', 'app', 'api-123')
+    const topology: Topology = {
+      nodes: [cronJob, job, template, workflow, deployment, pod],
+      edges: [
+        edge('cron', 'job', 'manages'),
+        edge('template', 'workflow', 'configures'),
+        edge('deployment', 'pod', 'manages'),
+      ],
+    }
+
+    expect(batchRunParentNodes(topology, job)).toEqual([cronJob])
+    expect(batchRunParentNodes(topology, workflow)).toEqual([template])
+    expect(batchRunParentNodes(topology, pod)).toEqual([])
+  })
+
+  it('prefers a scheduler over template provenance when a Workflow has both', () => {
+    const cronWorkflow = crdNode('cron', 'CronWorkflow', 'app', 'scheduled-migration', 'argoproj.io/v1alpha1')
+    const template = crdNode('template', 'WorkflowTemplate', 'app', 'migration', 'argoproj.io/v1alpha1')
+    const workflow = crdNode('workflow', 'Workflow', 'app', 'scheduled-migration-123', 'argoproj.io/v1alpha1')
+    const topology: Topology = {
+      nodes: [cronWorkflow, template, workflow],
+      edges: [
+        edge('template', 'workflow', 'configures'),
+        edge('cron', 'workflow', 'manages'),
+      ],
+    }
+
+    expect(batchRunParentNodes(topology, workflow)).toEqual([cronWorkflow, template])
   })
 })
 

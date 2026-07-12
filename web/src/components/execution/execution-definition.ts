@@ -15,6 +15,7 @@ export interface ExecutionDefinitionSummary {
   externalTemplates: string[]
   configMaps: string[]
   secrets: string[]
+  imagePullSecrets: string[]
   serviceAccount: string
   retry: string
   deadline?: string
@@ -74,6 +75,7 @@ function kubernetesJobSummary(jobSpec: any): ExecutionDefinitionSummary {
     externalTemplates: [],
     configMaps: dependencies.configMaps,
     secrets: dependencies.secrets,
+    imagePullSecrets: pullSecretNames(podSpec),
     serviceAccount: podSpec.serviceAccountName || 'default',
     retry: `Backoff limit ${jobSpec.backoffLimit ?? 6} · restart ${podSpec.restartPolicy || 'Never'}`,
     ...(jobSpec.activeDeadlineSeconds != null ? { deadline: `${jobSpec.activeDeadlineSeconds}s` } : {}),
@@ -91,6 +93,10 @@ function argoWorkflowSummary(spec: any): ExecutionDefinitionSummary {
     dependencies.configMaps.push(...templateDependencies.configMaps)
     dependencies.secrets.push(...templateDependencies.secrets)
   }
+  const imagePullSecrets = unique([
+    ...pullSecretNames(spec),
+    ...templates.flatMap((template: any) => pullSecretNames(template)),
+  ])
   const retries = templates
     .filter((template: any) => template?.retryStrategy != null)
     .map((template: any) => formatArgoRetry(template.name || 'template', template.retryStrategy))
@@ -108,11 +114,16 @@ function argoWorkflowSummary(spec: any): ExecutionDefinitionSummary {
     externalTemplates: argoExternalTemplateRefs(spec, templates),
     configMaps: unique(dependencies.configMaps),
     secrets: unique(dependencies.secrets),
+    imagePullSecrets,
     serviceAccount: spec.serviceAccountName || 'default',
     retry: retries.length > 0 ? retries.join(' · ') : 'Not configured',
     ...(spec.activeDeadlineSeconds != null ? { deadline: `${spec.activeDeadlineSeconds}s` } : {}),
     ...(spec.parallelism != null ? { parallelism: `${spec.parallelism} maximum` } : argoShapePolicy(entrypoint)),
   }
+}
+
+function pullSecretNames(podSpec: any): string[] {
+  return unique((podSpec?.imagePullSecrets ?? []).flatMap((secret: any) => secret?.name ? [String(secret.name)] : []))
 }
 
 function argoTemplateShape(template: any): string {
