@@ -1758,21 +1758,32 @@ export interface RightsizingRow {
   currentLimit?: string
   currentLimitValue?: number
   observed?: {
-    name: 'P95' | 'P99'
+    name: 'P95' | 'P99' | 'Max'
     value: number
     formatted: string
   }
+  peak?: {
+    name: 'P99'
+    value: number
+    formatted: string
+  }
+  calculatedRequest?: string
+  calculatedRequestValue?: number
   recommendedRequest?: string
   recommendedRequestValue?: number
+  reductionLimited?: boolean
+  bursty?: boolean
   recommendationReason?: string
   sampleCount: number
   expectedSamples: number
   coverage: number
   hpaManaged: boolean
+  hpaEvidenceAvailable: boolean
   throttleAvailable?: boolean
   throttleRatio?: number
   currentPodOOM?: boolean
   windowOomEvidence?: boolean
+  oomEvidenceAvailable: boolean
   limitConflict?: boolean
   queryError?: string
 }
@@ -1797,6 +1808,47 @@ export interface PrometheusRightsizing {
     throttled: number
     oomEvidence: number
   }
+  reason?: string
+}
+
+export type RequestFitScanState = 'complete' | 'partial' | 'unavailable'
+
+export interface RequestFitScanWorkload {
+  kind: string
+  namespace: string
+  name: string
+  replicas: number
+  scaledToZero: boolean
+  rows: RightsizingRow[]
+  summary?: PrometheusRightsizing['summary']
+}
+
+export interface RequestFitScanCoverage {
+  workloadsDiscovered: number
+  workloadsEvaluated: number
+  workloadsWithData: number
+  batches: number
+  completedBatches: number
+  restrictedKinds?: string[]
+  unavailableKinds?: string[]
+}
+
+export interface RequestFitScanSummary {
+  workloads: number
+  actionableWorkloads: number
+  recommendations: number
+  fit: PrometheusRightsizing['summary']
+}
+
+export interface RequestFitScanResponse {
+  state: RequestFitScanState
+  scannedAt: string
+  window: string
+  source: 'radar'
+  summary: RequestFitScanSummary
+  coverage: RequestFitScanCoverage
+  workloads: RequestFitScanWorkload[]
+  warnings?: { code: string; message: string }[]
   reason?: string
 }
 
@@ -1990,6 +2042,22 @@ export function usePrometheusRightsizing(kind: string, namespace: string, name: 
     enabled: enabled && Boolean(kind && namespace && name),
     staleTime: 5 * 60 * 1000,
     refetchInterval: 10 * 60 * 1000,
+  })
+}
+
+// A fleet request-fit scan is intentionally manual. It can query seven days of
+// Prometheus history for many containers, so navigation alone must never run it.
+export function useRequestFitScan(namespaces: string[]) {
+  const namespaceKey = [...namespaces].sort().join(',')
+  return useMutation({
+    mutationFn: async () => {
+      const params = new URLSearchParams()
+      if (namespaceKey) params.set('namespaces', namespaceKey)
+      const query = params.toString()
+      return fetchJSON<RequestFitScanResponse>(`/prometheus/rightsizing/scan${query ? `?${query}` : ''}`, {
+        method: 'POST',
+      })
+    },
   })
 }
 

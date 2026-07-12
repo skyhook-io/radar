@@ -507,6 +507,7 @@ func (s *Server) setupRoutes() {
 				}
 				return true
 			})
+			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
 
 			// OpenCost routes

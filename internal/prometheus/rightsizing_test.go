@@ -49,7 +49,7 @@ func TestClassifyRequestFit(t *testing.T) {
 		wantReason                 string
 	}{
 		{"balanced inside 30 percent band", 0.08, q("100m"), q("1"), "cpu", false, false, FitBalanced, false, false, "request_within_fit_range"},
-		{"oversized at 30 percent reduction", 0.06, q("100m"), q("1"), "cpu", false, false, FitOversized, true, false, ""},
+		{"oversized beyond 30 percent reduction", 0.05, q("100m"), q("1"), "cpu", false, false, FitOversized, true, false, ""},
 		{"under requested includes headroom", 0.09, q("100m"), q("1"), "cpu", false, false, FitUnderRequested, true, false, ""},
 		{"missing request", 0.2, nil, q("1"), "cpu", false, false, FitMissingRequest, true, false, ""},
 		{"zero request is missing", 0.2, q("0"), q("1"), "cpu", false, false, FitMissingRequest, true, false, ""},
@@ -59,11 +59,13 @@ func TestClassifyRequestFit(t *testing.T) {
 		{"recommended request above limit is withheld", 0.95, q("100m"), q("1"), "cpu", false, false, FitUnderRequested, false, true, "recommended_request_exceeds_limit"},
 		{"rounded CPU request above limit is withheld", 0.095, q("50m"), q("105m"), "cpu", false, false, FitUnderRequested, false, true, "recommended_request_exceeds_limit"},
 		{"rounded memory request above limit is withheld", 100 * 1024 * 1024, q("64Mi"), q("120Mi"), "memory", false, false, FitUnderRequested, false, true, "recommended_request_exceeds_limit"},
+		{"rounded target equal to request is in range", 0, q("10m"), nil, "cpu", false, false, FitBalanced, false, false, "request_within_fit_range"},
+		{"rounding does not turn covered demand into an increase", 0.9, q("1200m"), q("2"), "cpu", false, false, FitBalanced, false, false, "request_within_fit_range"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			row := RightsizingRow{HPAManaged: tc.hpa, CurrentPodOOM: tc.oom}
+			row := RightsizingRow{HPAManaged: tc.hpa, HPAEvidenceAvailable: true, CurrentPodOOM: tc.oom, OOMEvidenceAvailable: true}
 			classifyRequestFit(&row, tc.observed, tc.req, tc.lim, tc.resource)
 			if row.Fit != tc.wantFit {
 				t.Errorf("fit = %s, want %s", row.Fit, tc.wantFit)
@@ -84,36 +86,69 @@ func TestClassifyRequestFit(t *testing.T) {
 	}
 }
 
-func TestRecommendRequest(t *testing.T) {
+func TestCalculatedRequestUsesPracticalScaleAwareSteps(t *testing.T) {
 	tests := []struct {
-		name    string
-		p95     float64
-		resKind string
-		want    string
+		name     string
+		observed float64
+		resKind  string
+		want     string
 	}{
-		// CPU — 15% headroom, round to a clean 10m step, floor at 10m. Exact
-		// step depends on float repr (1.15× a non-representable value can
-		// round down by one step), but the result is always a clean 10m
-		// boundary — the "no noisy 137m recommendations" promise.
-		{"cpu sub-milli rounds to 1m", 0.0001, "cpu", "1m"},
-		{"cpu 100m → ~115m → clean 110m step", 0.100, "cpu", "110m"},
-		{"cpu 1 core → ~1150m → 1.1 cores (round-half-to-even)", 1.0, "cpu", "1.1"},
-		{"cpu integer cores trim trailing zero", 0.870, "cpu", "1"},
-		{"cpu floor at 10m", 0.001, "cpu", "10m"},
-
-		// Memory — 15% headroom, round up to next 16Mi, floor at 16Mi.
-		{"memory tiny floors at 16Mi", 1024, "memory", "16Mi"},
-		{"memory 100Mi → 115Mi → next 16Mi step", 100 * 1024 * 1024, "memory", "128Mi"},
-		{"memory 1Gi exact boundary", 1024 * 1024 * 1024, "memory", "1.1Gi"},
-		{"memory just under 1Gi crosses Gi", 900 * 1024 * 1024, "memory", "1.0Gi"},
+		{"cpu tiny usage keeps a 10m floor", 0.0001, "cpu", "10m"},
+		{"cpu 100m demand uses a 50m step", 0.100, "cpu", "150m"},
+		{"cpu 1 core demand uses a 500m step", 1.0, "cpu", "1.5"},
+		{"cpu crossing one core rounds to half a core", 0.870, "cpu", "1.5"},
+		{"cpu above four cores uses whole cores", 3.56, "cpu", "5"},
+		{"memory tiny usage keeps a 64Mi floor", 1024, "memory", "64Mi"},
+		{"memory 100Mi demand uses the preferred ladder", 100 * 1024 * 1024, "memory", "128Mi"},
+		{"memory 1Gi demand rounds to 1.5Gi", 1024 * 1024 * 1024, "memory", "1.5Gi"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := recommendRequest(tc.p95, tc.resKind)
+			got := calculatedRequest(tc.observed, tc.resKind)
 			if got != tc.want {
-				t.Errorf("recommendRequest(%g, %q) = %q, want %q", tc.p95, tc.resKind, got, tc.want)
+				t.Errorf("calculatedRequest(%g, %q) = %q, want %q", tc.observed, tc.resKind, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRecommendRequestStagesLargeReductions(t *testing.T) {
+	tests := []struct {
+		name         string
+		observed     float64
+		current      *resource.Quantity
+		resourceName string
+		conservative bool
+		want         string
+		wantLimited  bool
+	}{
+		{"200m CPU reduces no lower than one quarter", 0.001, mustQuantity(t, "200m"), "cpu", false, "50m", true},
+		{"one CPU reduces no lower than one half", 0.001, mustQuantity(t, "1"), "cpu", false, "500m", true},
+		{"small CPU can reduce to the 10m minimum", 0.001, mustQuantity(t, "50m"), "cpu", false, "10m", false},
+		{"bursty CPU uses the one-half floor", 0.001, mustQuantity(t, "200m"), "cpu", true, "100m", true},
+		{"memory reduces no lower than one half", 1024, mustQuantity(t, "1Gi"), "memory", false, "512Mi", true},
+		{"missing request uses the demand target", 0.1, nil, "cpu", false, "150m", false},
+		{"increase uses the demand target", 0.2, mustQuantity(t, "100m"), "cpu", false, "250m", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, limited := recommendRequest(tc.observed, tc.current, tc.resourceName, tc.conservative)
+			if got != tc.want || limited != tc.wantLimited {
+				t.Errorf("recommendRequest() = %q, %t; want %q, %t", got, limited, tc.want, tc.wantLimited)
+			}
+		})
+	}
+}
+
+func TestIsBurstyCPURequiresMaterialAbsoluteAndRelativeGap(t *testing.T) {
+	if !isBurstyCPU(0.02, 0.20) {
+		t.Fatal("expected a material P95-to-P99 jump to be bursty")
+	}
+	if isBurstyCPU(0.10, 0.20) {
+		t.Fatal("a two-fold jump must not be marked bursty")
+	}
+	if isBurstyCPU(0.001, 0.010) {
+		t.Fatal("a tiny absolute jump must not be marked bursty")
 	}
 }
 
@@ -125,6 +160,7 @@ func TestComputeRightsizingUsesGroupedEvidence(t *testing.T) {
 		}},
 		currentPodOOM: map[string]bool{},
 		hpaManaged:    map[string]bool{},
+		hpaAvailable:  true,
 	}
 	querier := fakeRightsizingQuerier(func(query string) (*prom.QueryResult, error) {
 		switch {
@@ -132,11 +168,13 @@ func TestComputeRightsizingUsesGroupedEvidence(t *testing.T) {
 			return &prom.QueryResult{Series: []prom.Series{{DataPoints: []prom.DataPoint{{Value: 1}}}}}, nil
 		case strings.HasPrefix(query, "quantile_over_time(0.95"):
 			return containerResult(map[string]float64{"server": 0.1}), nil
-		case strings.HasPrefix(query, "quantile_over_time(0.99"):
-			return containerResult(map[string]float64{"server": 100 * 1024 * 1024}), nil
+		case strings.HasPrefix(query, "quantile_over_time(0.99") && strings.Contains(query, "container_cpu_usage_seconds_total"):
+			return containerResult(map[string]float64{"server": 0.4}), nil
 		case strings.HasPrefix(query, "count_over_time"):
 			return containerResult(map[string]float64{"server": 2016}), nil
-		case strings.HasPrefix(query, "max_over_time"):
+		case strings.HasPrefix(query, "max_over_time") && strings.Contains(query, "container_memory_working_set_bytes"):
+			return containerResult(map[string]float64{"server": 100 * 1024 * 1024}), nil
+		case strings.HasPrefix(query, "max_over_time") && strings.Contains(query, "container_cpu_cfs_throttled"):
 			return containerResult(map[string]float64{"server": 0.2}), nil
 		case strings.Contains(query, "last_terminated_timestamp"):
 			return containerResult(nil), nil
@@ -160,7 +198,7 @@ func TestComputeRightsizingUsesGroupedEvidence(t *testing.T) {
 		t.Errorf("throttle evidence not preserved: row=%+v summary=%+v", cpu, response.Summary)
 	}
 	memory := response.Rows[1]
-	if memory.Observed == nil || memory.Observed.Name != "P99" || memory.Fit != FitOversized {
+	if memory.Observed == nil || memory.Observed.Name != "Max" || memory.Fit != FitOversized {
 		t.Errorf("memory row = %+v", memory)
 	}
 }
@@ -307,12 +345,12 @@ func TestFormatRightsizingValue(t *testing.T) {
 		resKind string
 		want    string
 	}{
-		{0.0005, "cpu", "1m"},
+		{0.0005, "cpu", "10m"},
 		{2.0, "cpu", "2"},
 		{1.5, "cpu", "1.5"},
-		{1024, "memory", "16Mi"},
-		{0, "memory", "16Mi"},
-		{float64(2 * 1024 * 1024 * 1024), "memory", "2.0Gi"},
+		{1024, "memory", "64Mi"},
+		{0, "memory", "64Mi"},
+		{float64(2 * 1024 * 1024 * 1024), "memory", "2Gi"},
 		{1.0, "disk", ""},
 	}
 	for _, tc := range tests {

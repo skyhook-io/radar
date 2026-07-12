@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   COST_DISCOVERY_GRACE_MS,
   useClusterInfo,
@@ -8,7 +9,7 @@ import {
 } from '../../api/client'
 import type { OpenCostNamespaceCost, OpenCostWorkloadCost, OpenCostNodeCost } from '../../api/client'
 import { ChevronDown, ChevronRight, DollarSign, ExternalLink, HelpCircle, Loader2, Server, X } from 'lucide-react'
-import { PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
+import { PaneLoader, FreshnessControl, PageHeader } from '@skyhook-io/k8s-ui'
 import { CostTrendChart } from './CostTrendChart'
 import {
   COST_HOURS_PER_MONTH,
@@ -22,15 +23,26 @@ import { useConnection } from '../../context/ConnectionContext'
 import type { SelectedResource } from '../../types'
 import { kindToPlural, openExternal } from '../../utils/navigation'
 import { clusterCloudConsoleLink, nodeCloudConsoleLink } from './cloud-console'
+import { RequestFitScanView } from '../request-fit/RequestFitScanView'
+import { CostViewTabs } from './CostViewTabs'
 
 interface CostViewProps {
   onBack: () => void
   onOpenResource?: (resource: SelectedResource) => void
+  namespaces: string[]
 }
 
 const SYSTEM_COST_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node-lease'])
 
-export function CostView({ onBack, onOpenResource }: CostViewProps) {
+export function CostView(props: CostViewProps) {
+  const { pathname } = useLocation()
+  if (pathname.startsWith('/cost/request-fit')) {
+    return <RequestFitScanView namespaces={props.namespaces} />
+  }
+  return <CostOverview {...props} />
+}
+
+function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useOpenCostSummary()
   const { data: nodeData } = useOpenCostNodes()
   const { data: clusterInfo } = useClusterInfo()
@@ -47,7 +59,7 @@ export function CostView({ onBack, onOpenResource }: CostViewProps) {
   }, [data?.available, data?.reason])
 
   if (isLoading) {
-    return <PaneLoader label="Loading cost data…" className="flex-1" />
+    return <CostOverviewState><PaneLoader label="Loading cost data…" className="min-h-64" /></CostOverviewState>
   }
 
   if (!data || !data.available) {
@@ -55,7 +67,8 @@ export function CostView({ onBack, onOpenResource }: CostViewProps) {
     const discoveryAgeMs = noPrometheusSince == null ? 0 : Date.now() - noPrometheusSince
     if (reason === 'no_prometheus' && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
       return (
-        <div className="flex-1 flex items-center justify-center">
+        <CostOverviewState>
+        <div className="flex min-h-64 items-center justify-center">
           <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
             <Loader2 className="w-8 h-8 animate-spin text-theme-text-tertiary/60" />
             <div>
@@ -77,6 +90,7 @@ export function CostView({ onBack, onOpenResource }: CostViewProps) {
             </button>
           </div>
         </div>
+        </CostOverviewState>
       )
     }
     const message =
@@ -89,27 +103,29 @@ export function CostView({ onBack, onOpenResource }: CostViewProps) {
             : 'OpenCost not detected — install OpenCost for cost visibility'
 
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-theme-text-secondary">
-          <DollarSign className="w-8 h-8 text-theme-text-tertiary/40" />
-          <p className="text-sm">{message}</p>
-          <button onClick={onBack} className="text-xs text-skyhook-400 hover:text-skyhook-300 transition-colors">
-            Back to Dashboard
-          </button>
-          {reason === 'no_prometheus' && (
-            <button
-              onClick={() => {
-                setNoPrometheusSince(Date.now())
-                refetch()
-              }}
-              disabled={isFetching}
-              className="text-xs text-accent-text hover:text-theme-text-primary disabled:cursor-not-allowed disabled:text-theme-text-disabled transition-colors"
-            >
-              {isFetching ? 'Checking…' : 'Check again'}
+      <CostOverviewState>
+        <div className="flex min-h-64 items-center justify-center">
+          <div className="flex flex-col items-center gap-3 text-theme-text-secondary">
+            <DollarSign className="w-8 h-8 text-theme-text-tertiary/40" />
+            <p className="text-sm">{message}</p>
+            <button onClick={onBack} className="text-xs text-skyhook-400 hover:text-skyhook-300 transition-colors">
+              Back to Dashboard
             </button>
-          )}
+            {reason === 'no_prometheus' && (
+              <button
+                onClick={() => {
+                  setNoPrometheusSince(Date.now())
+                  refetch()
+                }}
+                disabled={isFetching}
+                className="text-xs text-accent-text hover:text-theme-text-primary disabled:cursor-not-allowed disabled:text-theme-text-disabled transition-colors"
+              >
+                {isFetching ? 'Checking…' : 'Check again'}
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      </CostOverviewState>
     )
   }
 
@@ -187,6 +203,8 @@ export function CostView({ onBack, onOpenResource }: CostViewProps) {
             </div>
           </div>
         </div>
+
+        <CostViewTabs />
 
         {/* CPU vs Memory (vs Storage) split bar */}
         <div className="rounded-lg border border-theme-border bg-theme-surface/50 p-4">
@@ -282,6 +300,18 @@ export function CostView({ onBack, onOpenResource }: CostViewProps) {
 
       {/* Help dialog */}
       {showHelp && <CostHelpDialog onClose={() => setShowHelp(false)} />}
+    </div>
+  )
+}
+
+function CostOverviewState({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[1920px] flex-col gap-4 px-6 py-6">
+        <PageHeader icon={DollarSign} title="Cost Insights" description="Understand current allocation and find workload requests worth tuning." />
+        <CostViewTabs />
+        {children}
+      </div>
     </div>
   )
 }

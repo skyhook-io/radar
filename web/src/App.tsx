@@ -153,7 +153,7 @@ function namespaceFilterDisabled(
   pathname: string,
   apiResources?: { name: string; kind: string; namespaced: boolean }[],
 ): { disabled: boolean; tooltip?: string } {
-  if (view === 'cost') {
+  if (view === 'cost' && !pathname.startsWith('/cost/request-fit')) {
     return {
       disabled: true,
       tooltip: 'Cost is reported per namespace across the whole cluster — the namespace filter doesn’t apply here.',
@@ -2183,7 +2183,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {/* Cost detail view */}
         {mainView === 'cost' && (
-          <CostView onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
+          <CostView namespaces={namespaces} onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
         )}
 
         {/* Takeover splash. When the host claims the current view via

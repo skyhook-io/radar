@@ -1,4 +1,5 @@
 import { ArrowRight, ExternalLink, Gauge, HelpCircle, Loader2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { Badge } from '@skyhook-io/k8s-ui/components/ui/Badge'
 import {
   usePrometheusRightsizing,
@@ -11,9 +12,9 @@ import {
 import { Tooltip } from '../ui/Tooltip'
 
 const RIGHTSIZING_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet'])
-const REQUEST_FIT_DOCS_URL = 'https://radarhq.io/docs/features/request-fit'
-export const REQUEST_FIT_SUMMARY = 'Workload-level guidance from recent demand, not a fleet scan or savings estimate.'
-export const REQUEST_FIT_METHODOLOGY = 'Uses seven days of 5-minute samples: CPU P95 and memory P99, plus 15% headroom. Radar does not change requests.'
+export const REQUEST_FIT_DOCS_URL = 'https://radarhq.io/docs/features/request-fit'
+export const REQUEST_FIT_SUMMARY = 'Evidence-based guidance for this workload, not a savings estimate or automatic change.'
+export const REQUEST_FIT_METHODOLOGY = 'Uses seven days of 5-minute samples: CPU P95 and memory maximum, plus 15% headroom. Reductions are staged and rounded to practical values. Radar does not change requests.'
 
 interface RequestFitProps {
   kind: string
@@ -41,7 +42,7 @@ export function RequestFitPanel(props: RequestFitProps) {
           <Gauge className="mt-0.5 h-4 w-4 text-theme-text-tertiary" />
           <div>
             <div className="flex items-center gap-1.5">
-              <h3 className="text-sm font-semibold text-theme-text-primary">Request fit</h3>
+              <h3 className="text-sm font-semibold text-theme-text-primary">Rightsizing</h3>
               <Tooltip content={REQUEST_FIT_METHODOLOGY}>
                 <HelpCircle className="h-3.5 w-3.5 text-theme-text-tertiary" />
               </Tooltip>
@@ -60,7 +61,10 @@ export function RequestFitPanel(props: RequestFitProps) {
             </p>
           </div>
         </div>
-        {state.data && <RequestFitContext data={state.data} />}
+        <div className="flex items-center gap-3">
+          {state.data && <RequestFitContext data={state.data} />}
+          <Link to="/cost/request-fit" className="text-xs font-medium text-accent-text hover:underline">Scan visible workloads</Link>
+        </div>
       </header>
       <div className="p-4">
         <RequestFitBody state={state} compact={false} />
@@ -76,7 +80,7 @@ export function RightsizingStrip(props: RequestFitProps) {
     <section className="mb-3 rounded-lg border border-theme-border bg-theme-surface/40 p-3">
       <header className="mb-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-medium text-theme-text-primary">Request fit</h3>
+          <h3 className="text-sm font-medium text-theme-text-primary">Rightsizing</h3>
           <Tooltip content={REQUEST_FIT_METHODOLOGY}>
             <HelpCircle className="h-3.5 w-3.5 text-theme-text-tertiary" />
           </Tooltip>
@@ -103,11 +107,11 @@ function RequestFitBody({ state, compact }: {
   }
   if (state.error && !state.data) {
     const message = state.error instanceof Error ? state.error.message : String(state.error)
-    return <EmptyState text={`Request fit unavailable — ${message}`} />
+    return <EmptyState text={`Rightsizing unavailable — ${message}`} />
   }
   if (!state.data) return null
   if (!state.data.sampleAvailable || state.data.rows.length === 0) {
-    return <EmptyState text={state.data.reason ?? 'No request-fit evidence is available.'} />
+    return <EmptyState text={state.data.reason ?? 'No rightsizing evidence is available.'} />
   }
 
   const byContainer = new Map<string, RightsizingRow[]>()
@@ -160,6 +164,7 @@ function FitCard({ row, window }: { row: RightsizingRow; window: string }) {
         <div className="flex flex-wrap items-center justify-end gap-1.5">
           <FitBadge fit={row.fit} queryError={row.queryError} />
           {row.hpaManaged && <Badge severity="info" size="sm">HPA-managed</Badge>}
+          {row.bursty && <Badge severity="warning" size="sm">Bursty CPU</Badge>}
           {row.throttleRatio != null && row.throttleRatio >= 0.1 && <Badge severity="alert" size="sm">Throttling observed</Badge>}
           {(row.currentPodOOM || row.windowOomEvidence) && <Badge severity="error" size="sm">OOM evidence</Badge>}
         </div>
@@ -171,12 +176,12 @@ function FitCard({ row, window }: { row: RightsizingRow; window: string }) {
         </div>
         <ArrowRight className="h-4 w-4 text-theme-text-quaternary" />
         <div>
-          <div className="text-[10px] uppercase tracking-wide text-theme-text-quaternary">Suggested</div>
+          <div className="text-[10px] uppercase tracking-wide text-theme-text-quaternary">Suggested next step</div>
           <div className="text-lg font-semibold text-theme-text-primary">{row.recommendedRequest ?? '—'}</div>
         </div>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-3 border-t border-theme-border pt-3 text-xs">
-        <Metric label={`${row.observed?.name ?? (row.resource === 'cpu' ? 'P95' : 'P99')} observed`} value={row.observed?.formatted ?? 'No samples'} />
+        <Metric label={`${row.observed?.name ?? (row.resource === 'cpu' ? 'P95' : 'Max')} observed`} value={row.observed?.formatted ?? 'No samples'} />
         <Metric label={`Evidence · ${window}`} value={`${confidenceLabel(row)} · 5m samples`} />
       </div>
       <FitExplanation row={row} />
@@ -236,8 +241,14 @@ export function getRequestFitExplanation(row: RightsizingRow): string | undefine
     request_within_fit_range: 'The configured request is within 30% of the evidence-based target.',
     insufficient_history: 'At least six hours of samples are required before suggesting a request.',
     hpa_managed: `The HPA manages ${row.resource}; review its target before changing this request.`,
+    hpa_evidence_unavailable: 'Radar could not verify HPA ownership, so it withheld a suggested request.',
     oom_evidence: 'A lower memory request is withheld because OOM evidence exists.',
+    oom_evidence_unavailable: 'Radar could not verify recent OOM history, so it withheld a lower memory request.',
     recommended_request_exceeds_limit: 'The evidence-based request would exceed the current limit; review the limit first.',
+  }
+  if (row.reductionLimited && row.calculatedRequest && row.recommendedRequest) {
+    const burstNote = row.bursty && row.peak ? ` CPU P99 reached ${row.peak.formatted}.` : ''
+    return `Demand-based target: ${row.calculatedRequest}. Radar suggests ${row.recommendedRequest} as a conservative next step; observe another full window before reducing further.${burstNote}`
   }
   const message = row.queryError ? `Partial result: ${row.queryError}.` : messages[row.recommendationReason ?? '']
   const throttleUnavailable = row.resource === 'cpu' && !row.throttleAvailable
