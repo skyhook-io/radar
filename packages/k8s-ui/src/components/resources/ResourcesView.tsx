@@ -85,6 +85,10 @@ import {
   getWorkflowDuration,
   getWorkflowProgress,
   getWorkflowTemplate,
+  getCronWorkflowStatus,
+  getCronWorkflowSchedule,
+  getCronWorkflowLastRun,
+  getCronWorkflowTemplate,
   getPVStatus,
   getPVAccessModes,
   getPVClaim,
@@ -461,6 +465,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  cronworkflows: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'schedule', label: 'Schedule', width: 'w-40' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', hideOnMobile: true },
+    { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   certificates: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
@@ -759,6 +772,12 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   workflowtemplates: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'entrypoint', label: 'Entrypoint', width: 'w-36' },
+    { key: 'templates', label: 'Templates', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  clusterworkflowtemplates: [
+    { key: 'name', label: 'Name' },
     { key: 'entrypoint', label: 'Entrypoint', width: 'w-36' },
     { key: 'templates', label: 'Templates', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -2758,11 +2777,11 @@ export function ResourcesView({
           if (containers.length > 0) {
             openLogs?.({ namespace: ns, podName: name, containers })
           }
-        } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs'].includes(kindLower)) {
+        } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower)) {
           openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
         }
       },
-      enabled: highlightedIndex >= 0 && !compareMode && ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs'].includes(selectedKind.name.toLowerCase()),
+      enabled: highlightedIndex >= 0 && !compareMode && ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()),
     },
     {
       id: 'resources-sort-name',
@@ -5351,6 +5370,8 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <RolloutCell resource={resource} column={column} />
     case 'workflows':
       return <WorkflowCell resource={resource} column={column} />
+    case 'cronworkflows':
+      return <CronWorkflowCell resource={resource} column={column} />
     case 'certificates':
       return <CertificateCell resource={resource} column={column} />
     case 'persistentvolumes':
@@ -5383,6 +5404,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'sealedsecrets':
       return <SealedSecretCell resource={resource} column={column} />
     case 'workflowtemplates':
+    case 'clusterworkflowtemplates':
       return <WorkflowTemplateCell resource={resource} column={column} />
     case 'networkpolicies':
       return <NetworkPolicyCell resource={resource} column={column} />
@@ -6709,6 +6731,33 @@ function WorkflowCell({ resource, column }: { resource: any; column: string }) {
       return (
         <Tooltip content={template}>
           <span className="text-sm text-theme-text-secondary truncate block">{template || '-'}</span>
+        </Tooltip>
+      )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function CronWorkflowCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'status': {
+      const status = getCronWorkflowStatus(resource)
+      return (
+        <span className={clsx('badge', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    case 'schedule':
+      return <span className="font-mono text-xs text-theme-text-secondary">{getCronWorkflowSchedule(resource)}</span>
+    case 'lastRun':
+      return <span className="text-sm text-theme-text-secondary">{getCronWorkflowLastRun(resource)}</span>
+    case 'template': {
+      const template = getCronWorkflowTemplate(resource)
+      return (
+        <Tooltip content={template}>
+          <span className="block truncate text-sm text-theme-text-secondary">{template}</span>
         </Tooltip>
       )
     }

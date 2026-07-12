@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
@@ -29,19 +29,40 @@ export function DialogPortal({ open, onClose, children, className, closable = tr
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
 
-  // Capture-phase ESC handler — stops event before it reaches document listeners (e.g. drawer shortcuts)
+  // Bubble phase lets nested editors and menus consume Escape before the dialog closes.
+  const handleDialogKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Escape') return
+
+    e.stopPropagation()
+    e.preventDefault()
+
+    if (closable) {
+      onClose()
+    }
+  }
+
   useEffect(() => {
     if (!open) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && closable) {
-        e.stopPropagation()
-        e.preventDefault()
+
+    const handleDocumentKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const modalDialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]'))
+      const topDialog = modalDialogs[modalDialogs.length - 1]
+      if (topDialog !== dialogRef.current) return
+
+      if (dialogRef.current?.contains(e.target as Node)) return
+
+      e.stopPropagation()
+      e.preventDefault()
+
+      if (closable) {
         onClose()
       }
     }
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [open, onClose, closable])
+
+    document.addEventListener('keydown', handleDocumentKeyDown, true)
+    return () => document.removeEventListener('keydown', handleDocumentKeyDown, true)
+  }, [open, closable, onClose])
 
   // Move focus into the dialog for accessibility and tab navigation
   useEffect(() => {
@@ -67,6 +88,7 @@ export function DialogPortal({ open, onClose, children, className, closable = tr
         role="dialog"
         aria-modal="true"
         tabIndex={-1}
+        onKeyDown={handleDialogKeyDown}
         className={clsx(
           'relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl mx-4 outline-none',
           TRANSITION_PANEL,

@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useCallback, useState } from 'react'
-import { useQueries } from '@tanstack/react-query'
+import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Terminal } from 'lucide-react'
@@ -23,7 +23,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import type { SelectedResource, ResourceRef, Relationships, ResolvedEnvFrom } from '../../types'
-import { kindToPlural, relatedResourcePath, type NavigateToResource } from '../../utils/navigation'
+import { kindToPlural, pluralToKind, relatedResourcePath, type NavigateToResource } from '../../utils/navigation'
 import {
   useChanges, useResourceWithRelationships, usePodLogs, useTopology, useUpdateResource,
   useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob,
@@ -35,6 +35,7 @@ import {
   useCascadeDeletePreview,
   useResourceEvents,
   useResource,
+  useWorkloadRuns,
   useApplications,
   fetchJSON,
 } from '../../api/client'
@@ -45,7 +46,10 @@ import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { useResourceAudit, useResourceIssues, useResources } from '../../api/client'
 import { AuditAlerts, ResourceIssuesSection } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
+import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
+import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
+import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import { useCanUpdateSecrets, useCanNodeWrite, useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs, useOpenNodeTerminal } from '../dock'
 import { PortForwardButton, PortForwardInlineButton } from '../portforward/PortForwardButton'
@@ -71,6 +75,7 @@ import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../../utils/navigation'
 
 type TabType = WorkloadTabType
+const BATCH_EXECUTION_KINDS = new Set(['Job', 'CronJob', 'Workflow', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob'])
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
@@ -288,6 +293,7 @@ export function WorkloadView({
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const apiKind = kindToPlural(kindProp)
+  const queryClient = useQueryClient()
 
   // Tab state from URL query param — migrate legacy tab names
   const rawTab = searchParams.get('tab')
@@ -305,10 +311,35 @@ export function WorkloadView({
     setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory })
   }, [pushTabHistory, searchParams, setSearchParams])
 
+  const selectedRunKey = searchParams.get('run') ?? ''
+  const handleSelectedRunChange = useCallback((runKey: string) => {
+    const params = new URLSearchParams(searchParams)
+    if (runKey) params.set('run', runKey)
+    else params.delete('run')
+    setSearchParams(params, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const batchKind = pluralToKind(apiKind)
+  const batchExecution = BATCH_EXECUTION_KINDS.has(batchKind)
+  const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
+    refetchActive: true,
+    clusterScoped: batchKind === 'ClusterWorkflowTemplate',
+  })
+  const relatedTimelineEvents = useMemo(
+    () => workloadRunTimelineEvents(batchRunsQuery.data?.runs ?? []),
+    [batchRunsQuery.data?.runs],
+  )
+
   // Fetch resource with relationships
   const { data: resourceResponse, isLoading: resourceLoading, error: resourceError, refetch: refetchResource } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
+  const refetchResourceAndRuns = useCallback(async () => {
+    await Promise.all([
+      refetchResource(),
+      queryClient.refetchQueries({ queryKey: ['workload-runs', apiKind, namespace, name] }),
+    ])
+  }, [apiKind, name, namespace, queryClient, refetchResource])
   const podWorkloadOwner = useMemo(
     () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
     [apiKind, namespace, relationships, resource],
@@ -654,10 +685,11 @@ export function WorkloadView({
       renderServicePortPanel={renderServicePortPanel}
       isLoading={resourceLoading}
       resourceError={resourceError}
-      refetch={refetchResource}
+      refetch={refetchResourceAndRuns}
       // Timeline
       allEvents={allEvents}
-      eventsLoading={eventsLoading}
+      relatedTimelineEvents={relatedTimelineEvents}
+      eventsLoading={eventsLoading || (batchExecution && batchRunsQuery.isLoading)}
       topology={topology}
       resourceFocusedK8sEvents={resourceFocusedK8sEvents}
       resourceFocusedUpdates={resourceFocusedUpdates}
@@ -674,7 +706,24 @@ export function WorkloadView({
       activeTab={migratedTab}
       onTabChange={handleTabChange}
       // Render props
-      renderLogsTab={(props) => <LogsTabContent {...props} />}
+      renderLogsTab={(props) => <LogsTabContent {...props} selectedRunKey={selectedRunKey} onSelectRun={handleSelectedRunChange} />}
+      renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
+        BATCH_EXECUTION_KINDS.has(k) && res ? (
+          <BatchExecutionFullscreen
+            kind={k}
+            apiKind={apiKind}
+            namespace={ns}
+            name={n}
+            resource={res}
+            selectedRunKey={selectedRunKey}
+            canViewLogs={baseActionsBarProps.canViewLogs}
+            onSelectRun={handleSelectedRunChange}
+            onSwitchToLogs={() => handleTabChange('logs')}
+            onSwitchToTimeline={() => handleTabChange('timeline')}
+            onNavigateToResource={rest.onNavigateToResource}
+          />
+        ) : null
+      }
       renderRelatedYaml={(ref) => <RelatedResourceYaml key={`${ref.kind}/${ref.namespace}/${ref.name}`} target={ref} />}
       renderMetricsTab={({ kind, namespace: ns, name: n }) => (
         <MetricsTabContent kind={kind} namespace={ns} name={n} resource={resource} expanded={expanded} />
@@ -911,7 +960,8 @@ function hasGitOpsStatusPayload(owner: GitOpsOwnerRef, resource: any): boolean {
 // LOGS TAB — platform-specific (uses data-fetching hooks)
 // ============================================================================
 
-const WORKLOAD_LOG_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet'])
+const WORKLOAD_LOG_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'Workflow'])
+const SCHEDULED_LOG_KINDS = new Set(['CronJob', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob'])
 
 function LogsTabContent({
   kind,
@@ -924,6 +974,8 @@ function LogsTabContent({
   onSelectPod,
   initialContainer,
   onConsumeInitialContainer,
+  selectedRunKey,
+  onSelectRun,
 }: {
   kind: string
   apiKind: string
@@ -935,12 +987,22 @@ function LogsTabContent({
   onSelectPod: (name: string | null) => void
   initialContainer: string | null
   onConsumeInitialContainer: () => void
+  selectedRunKey: string
+  onSelectRun: (runKey: string) => void
 }) {
-  // Workload kinds (Deployment, StatefulSet, DaemonSet) use the aggregated workload logs viewer
+  if (SCHEDULED_LOG_KINDS.has(kind)) {
+    return (
+      <div className="h-full">
+        <ScheduledWorkloadLogsViewer kind={apiKind} namespace={namespace} name={name} selectedRunKey={selectedRunKey} onSelectRun={onSelectRun} />
+      </div>
+    )
+  }
+
+  // Workload kinds with stable pod selectors use the aggregated workload logs viewer
   if (WORKLOAD_LOG_KINDS.has(kind)) {
     return (
       <div className="h-full">
-        <WorkloadLogsViewer kind={apiKind} namespace={namespace} name={name} />
+        <WorkloadLogsViewer kind={apiKind} namespace={namespace} name={name} autoStream={shouldAutoStreamWorkloadLogs(kind, resource)} />
       </div>
     )
   }
@@ -960,6 +1022,17 @@ function LogsTabContent({
       initialContainer={initialContainer}
     />
   )
+}
+
+function shouldAutoStreamWorkloadLogs(kind: string, resource: any): boolean {
+  if (kind === 'Job') {
+    return (resource?.status?.active ?? 0) > 0
+  }
+  if (kind === 'Workflow') {
+    const phase = resource?.status?.phase
+    return phase === 'Running' || phase === 'Pending'
+  }
+  return true
 }
 
 function PodLogsTab({ namespace, name, resource, initialContainer, onConsumeInitialContainer }: {

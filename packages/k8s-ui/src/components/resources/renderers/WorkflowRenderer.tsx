@@ -1,23 +1,16 @@
 import { Play, Clock, CheckCircle, XCircle, Loader2, SkipForward, PauseCircle } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { formatAge, formatDuration } from '../resource-utils'
+import { buildWorkflowExecutionModel, flattenWorkflowExecution, WorkflowExecutionModel, WorkflowExecutionNode, WorkflowTemplateReference } from '../../../utils/workflow-execution'
+import { SEVERITY_TEXT } from '../../../utils/badge-colors'
 
 interface WorkflowRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
-interface WorkflowStep {
-  id: string
-  displayName: string
-  phase: string
-  startedAt: string | null
-  finishedAt: string | null
-  message: string | null
-  nodeType: string
-}
-
-function getStepDuration(step: WorkflowStep): string | null {
+function getStepDuration(step: WorkflowExecutionNode): string | null {
   if (!step.startedAt) return null
   const start = new Date(step.startedAt)
   const end = step.finishedAt ? new Date(step.finishedAt) : new Date()
@@ -29,15 +22,16 @@ function StepStatusIcon({ phase, nodeType }: { phase: string; nodeType?: string 
     return <SkipForward className="w-4 h-4 text-theme-text-tertiary shrink-0" />
   }
   if (nodeType === 'Suspend' && phase !== 'Succeeded') {
-    return <PauseCircle className="w-4 h-4 text-yellow-400 shrink-0" />
+    return <PauseCircle className={clsx('h-4 w-4 shrink-0', SEVERITY_TEXT.warning)} />
   }
   switch (phase) {
     case 'Succeeded':
-      return <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
+      return <CheckCircle className={clsx('h-4 w-4 shrink-0', SEVERITY_TEXT.success)} />
     case 'Failed':
-      return <XCircle className="w-4 h-4 text-red-400 shrink-0" />
+    case 'Error':
+      return <XCircle className={clsx('h-4 w-4 shrink-0', SEVERITY_TEXT.error)} />
     case 'Running':
-      return <Loader2 className="w-4 h-4 text-yellow-400 shrink-0 animate-spin" />
+      return <Loader2 className={clsx('h-4 w-4 shrink-0 animate-spin', SEVERITY_TEXT.warning)} />
     default:
       return <Clock className="w-4 h-4 text-theme-text-tertiary shrink-0" />
   }
@@ -74,66 +68,41 @@ function formatEstimatedDuration(seconds: number): string {
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
 }
 
-function getWorkflowProblems(data: any): string[] {
+function getWorkflowProblems(data: any, execution: WorkflowExecutionModel): string[] {
   const problems: string[] = []
   const status = data.status || {}
   const phase = status.phase
 
   if (phase === 'Failed') {
-    problems.push(status.message || 'Workflow failed')
+    problems.push(workflowProblemSummary(status.message || 'Workflow failed'))
   } else if (phase === 'Error') {
-    problems.push(status.message || 'Workflow error')
+    problems.push(workflowProblemSummary(status.message || 'Workflow error'))
   }
 
-  // Check for failed nodes — include error messages when available
-  const nodes = status.nodes || {}
-  const failedNodes = Object.values(nodes)
-    .filter((node: any) => (node.type === 'Pod' || node.type === 'Suspend' || node.type === 'Skipped') && (node.phase === 'Failed' || node.phase === 'Error'))
+  const failedNodes = phase === 'Failed' || phase === 'Error'
+    ? execution.focusPaths.map((path) => path.terminal).filter((node, index, nodes) =>
+        (node.phase === 'Failed' || node.phase === 'Error') && nodes.findIndex((candidate) => candidate.id === node.id) === index,
+      )
+    : []
 
-  if (failedNodes.length > 0) {
-    const withMessages = failedNodes.filter((node: any) => node.message)
-    if (withMessages.length > 0) {
-      for (const n of withMessages as any[]) {
-        problems.push(`${n.displayName}: ${n.message}`)
-      }
-    } else {
-      problems.push(`Failed steps: ${failedNodes.map((n: any) => n.displayName).join(', ')}`)
-    }
+  for (const node of failedNodes) {
+    problems.push(workflowProblemSummary(node.message ? `${node.displayLabel}: ${node.message}` : `${node.displayLabel} failed`))
   }
 
   return problems
 }
 
-const VISIBLE_NODE_TYPES = new Set(['Pod', 'Skipped', 'Suspend'])
-
-function extractSteps(data: any): WorkflowStep[] {
-  const nodes = data.status?.nodes || {}
-  const steps: WorkflowStep[] = Object.entries(nodes)
-    .filter(([, node]: [string, any]) => VISIBLE_NODE_TYPES.has(node.type))
-    .map(([id, node]: [string, any]) => ({
-      id,
-      displayName: node.displayName || id,
-      phase: node.phase || (node.type === 'Skipped' ? 'Skipped' : 'Pending'),
-      startedAt: node.startedAt || null,
-      finishedAt: node.finishedAt || null,
-      message: node.message || null,
-      nodeType: node.type,
-    }))
-
-  steps.sort((a, b) => {
-    if (!a.startedAt && !b.startedAt) return 0
-    if (!a.startedAt) return 1
-    if (!b.startedAt) return -1
-    return new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
-  })
-
-  return steps
+function workflowProblemSummary(message: string): string {
+  return message.length > 300 ? `${message.slice(0, 299)}…` : message
 }
 
-export function WorkflowRenderer({ data }: WorkflowRendererProps) {
+export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const phase = status.phase || 'Unknown'
+  const execution = buildWorkflowExecutionModel(data)
+  const executionNodes = execution.visibleSteps
+  const stepRows = flattenWorkflowExecution(execution)
 
   // Compute duration
   const startedAt = status.startedAt ? new Date(status.startedAt) : null
@@ -144,18 +113,13 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
     ? formatDuration(Date.now() - startedAt.getTime(), true) + ' (running)'
     : null
 
-  // Extract problems
-  const problems = getWorkflowProblems(data)
+  const problems = [...new Set(getWorkflowProblems(data, execution))]
   const hasProblems = problems.length > 0
-
-  // Extract steps
-  const steps = extractSteps(data)
 
   // Arguments
   const parameters = spec.arguments?.parameters || []
 
-  // Template reference
-  const templateName = spec.workflowTemplateRef?.name || null
+  const workflowTemplateRef = execution.templateRefs.find((ref) => ref.source === 'workflow')
 
   // Estimated duration
   const estimatedDuration = status.estimatedDuration
@@ -183,7 +147,7 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
           {duration && <Property label="Duration" value={duration} />}
           {status.startedAt && <Property label="Started" value={formatAge(status.startedAt)} />}
           <Property label="Finished" value={status.finishedAt ? formatAge(status.finishedAt) : 'Running...'} />
-          {templateName && <Property label="Template" value={templateName} />}
+          {workflowTemplateRef && <Property label="Definition" value={<TemplateRefLink refInfo={workflowTemplateRef} onNavigate={onNavigate} />} />}
           {status.progress && (
             <Property label="Progress" value={status.progress} />
           )}
@@ -203,33 +167,38 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
         </PropertyList>
       </Section>
 
-      {/* Steps section */}
-      {steps.length > 0 && (
-        <Section title={`Steps (${steps.length})`} defaultExpanded>
+      {executionNodes.length > 0 && (
+        <Section title={`Execution (${executionNodes.length} ${executionNodes.length === 1 ? 'node' : 'nodes'})`} defaultExpanded>
           <div className="space-y-1.5">
-            {steps.map(step => {
+            {stepRows.map(({ node: step, depth }) => {
               const isFailed = step.phase === 'Failed' || step.phase === 'Error'
-              const isSkipped = step.nodeType === 'Skipped' || step.phase === 'Skipped'
-              const isSuspend = step.nodeType === 'Suspend'
+              const isSkipped = step.type === 'Skipped' || step.phase === 'Skipped'
+              const isSuspend = step.type === 'Suspend'
               return (
                 <div key={step.id} className={clsx(
                   'text-sm card-inner px-3 py-2',
-                  isFailed && 'border-l-2 border-red-500'
-                )}>
+                  isFailed && 'border-l-2 border-l-[var(--color-error)]'
+                )} style={{ marginLeft: `${Math.min(depth, 6) * 12}px` }}>
                   <div className="flex items-center gap-2">
-                    <StepStatusIcon phase={step.phase} nodeType={step.nodeType} />
+                    <StepStatusIcon phase={step.phase} nodeType={step.type} />
                     <span className={clsx(
                       'flex-1',
-                      isSkipped ? 'text-theme-text-tertiary' : isSuspend ? 'text-yellow-400' : 'text-theme-text-primary'
+                      isSkipped ? 'text-theme-text-tertiary' : isSuspend ? SEVERITY_TEXT.warning : 'text-theme-text-primary'
                     )}>
-                      {step.displayName}
+                      {step.displayLabel}
                       {isSkipped && <span className="ml-1 text-xs text-theme-text-tertiary">(skipped)</span>}
-                      {isSuspend && <span className="ml-1 text-xs text-yellow-400/70">(suspend)</span>}
+                      {isSuspend && <span className={clsx('ml-1 text-xs opacity-70', SEVERITY_TEXT.warning)}>(suspend)</span>}
                     </span>
+                    <span className="text-xs text-theme-text-tertiary">{step.displayType}</span>
                     <span className="text-xs text-theme-text-secondary">{getStepDuration(step) || '-'}</span>
                   </div>
                   {isFailed && step.message && (
-                    <div className="text-xs text-red-400 mt-1 ml-6 break-all">{step.message}</div>
+                    <div className={clsx('mt-1 ml-6 line-clamp-2 break-all text-xs', SEVERITY_TEXT.error)} title={step.message}>{step.message}</div>
+                  )}
+                  {step.templateRef && (
+                    <div className="mt-1 ml-6 text-xs text-theme-text-tertiary">
+                      Uses <TemplateRefLink refInfo={step.templateRef} onNavigate={onNavigate} />
+                    </div>
                   )}
                 </div>
               )
@@ -252,5 +221,18 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
       {/* Conditions section */}
       <ConditionsSection conditions={status.conditions} />
     </>
+  )
+}
+
+function TemplateRefLink({ refInfo, onNavigate }: { refInfo: WorkflowTemplateReference; onNavigate?: WorkflowRendererProps['onNavigate'] }) {
+  return (
+    <ResourceLink
+      name={refInfo.name}
+      kind={refInfo.resourceKind}
+      namespace={refInfo.namespace}
+      group="argoproj.io"
+      label={refInfo.clusterScope ? `${refInfo.name} (cluster)` : refInfo.name}
+      onNavigate={onNavigate}
+    />
   )
 }

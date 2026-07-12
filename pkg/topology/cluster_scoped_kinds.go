@@ -36,6 +36,7 @@ var ClusterScopedKinds = []ClusterScopedKindEntry{
 	{KindGatewayClass, "gateway.networking.k8s.io", "gatewayclasses"},
 	{KindPV, "", "persistentvolumes"},
 	{KindStorageClass, "storage.k8s.io", "storageclasses"},
+	{KindClusterWorkflowTemplate, "argoproj.io", "clusterworkflowtemplates"},
 	{KindCiliumClusterwideNetworkPolicy, "cilium.io", "ciliumclusterwidenetworkpolicies"},
 	{KindClusterNetworkPolicy, "policy.networking.k8s.io", "clusternetworkpolicies"},
 }
@@ -263,4 +264,3 @@ func RBACTuplesForNode(n *Node, disc PseudoKindDiscoveryLookup) (decision NodeRB
 	}
 	return NodeRBACDeny, nil
 }
-

@@ -637,6 +637,22 @@ func TestGetValuesWithAllValuesKeepsComputedWhenUserValuesReadFails(t *testing.T
 	}
 }
 
+func TestChartForUpgradeTargetReusesReleaseChartForSameVersion(t *testing.T) {
+	client := testHelmClientWithRepoConfigOnly(t)
+	rel := helmTestRelease("argo-cd", "demo", 1, release.StatusDeployed, "deployed")
+	rel.Chart.Metadata.Version = "9.5.11"
+
+	got, err := client.chartForUpgradeTarget(nil, rel, "9.5.11", "missing-repo", func(phase, message, detail string) {
+		t.Fatalf("same-version chart selection should not resolve/download chart, got progress %q %q %q", phase, message, detail)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != rel.Chart {
+		t.Fatal("chartForUpgradeTarget returned a different chart, want current release chart")
+	}
+}
+
 func TestDiffResourceRefs(t *testing.T) {
 	left := []ResourceRef{
 		{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "demo", Name: "cart"},
@@ -1434,6 +1450,49 @@ func TestResolveUpgradeChartPath_UsesRepositoryHint(t *testing.T) {
 	}
 	if !strings.Contains(chartPath, "argoproj.github.io") {
 		t.Fatalf("chart path = %q, want argo repo URL", chartPath)
+	}
+}
+
+func TestResolveUpgradeChartPath_RepositoryIndexOCIURLIsAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoFile := filepath.Join(dir, "repositories.yaml")
+	if err := os.WriteFile(repoFile, []byte(`apiVersion: v1
+generated: "2026-05-05T00:00:00Z"
+repositories:
+- name: bitnami
+  url: https://charts.bitnami.com/bitnami
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "bitnami-index.yaml"), []byte(`apiVersion: v1
+entries:
+  nginx:
+  - name: nginx
+    version: 25.0.5
+    urls:
+    - oci://registry-1.docker.io/bitnamicharts/nginx
+generated: "2026-05-05T00:00:00Z"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{settings: &cli.EnvSettings{
+		RepositoryConfig: repoFile,
+		RepositoryCache:  cacheDir,
+	}}
+
+	chartPath, repoName, err := client.resolveUpgradeChartPath("nginx", "25.0.5", "bitnami", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repoName != "bitnami" {
+		t.Fatalf("repo = %q, want bitnami", repoName)
+	}
+	if chartPath != "oci://registry-1.docker.io/bitnamicharts/nginx" {
+		t.Fatalf("chart path = %q, want OCI URL unchanged", chartPath)
 	}
 }
 

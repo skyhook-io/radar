@@ -141,6 +141,58 @@ func TestCompose_PopulatesCategoryAndGroup(t *testing.T) {
 	}
 }
 
+func TestCompose_ClassifiesArgoWorkflowForbiddenMessage(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{{
+			Kind:       "Pod",
+			Namespace:  "ns",
+			Name:       "daily-import-step-123",
+			Severity:   "critical",
+			Reason:     "Completed",
+			Message:    `workflowtaskresults.argoproj.io is forbidden: User "system:serviceaccount:ns:default" cannot create resource "workflowtaskresults" in API group "argoproj.io" in the namespace "ns"`,
+			OwnerKind:  "Workflow",
+			OwnerName:  "daily-import",
+			OwnerGroup: "argoproj.io",
+		}},
+	}
+	out := Compose(p, Filters{Grouped: true})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues: %+v", len(out), out)
+	}
+	if out[0].Kind != "Workflow" || out[0].Name != "daily-import" || out[0].Group != "argoproj.io" {
+		t.Fatalf("subject = %s/%s/%s, want argoproj.io/Workflow/daily-import", out[0].Group, out[0].Kind, out[0].Name)
+	}
+	if out[0].Reason != "RBACForbidden" {
+		t.Fatalf("reason = %q, want RBACForbidden", out[0].Reason)
+	}
+	if out[0].Category != issuesapi.CategoryRBACForbidden || out[0].CategoryGroup != issuesapi.GroupSecurity {
+		t.Fatalf("category = %q/%q, want %q/%q", out[0].Category, out[0].CategoryGroup, issuesapi.CategoryRBACForbidden, issuesapi.GroupSecurity)
+	}
+}
+
+func TestCompose_PreservesExplicitJobFailureOverEmbeddedForbiddenMessage(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{{
+			Kind:      "Job",
+			Namespace: "ns",
+			Name:      "daily-import",
+			Severity:  "critical",
+			Reason:    "BackoffLimitExceeded",
+			Message:   `workflowtaskresults.argoproj.io is forbidden: User "system:serviceaccount:ns:default" cannot create resource "workflowtaskresults"`,
+		}},
+	}
+	out := Compose(p, Filters{})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues: %+v", len(out), out)
+	}
+	if out[0].Reason != "BackoffLimitExceeded" {
+		t.Fatalf("reason = %q, want BackoffLimitExceeded", out[0].Reason)
+	}
+	if out[0].Category != issuesapi.CategoryJobFailed {
+		t.Fatalf("category = %q, want %q", out[0].Category, issuesapi.CategoryJobFailed)
+	}
+}
+
 func TestCompose_GroupsMemberPodsUnderOwner(t *testing.T) {
 	// Two pods of the same Deployment failing the same way share one issue
 	// ID (the future collapse target); a third pod failing differently gets
@@ -2020,8 +2072,8 @@ func TestSymptomNamesSecret(t *testing.T) {
 	}{
 		{`references Secret "foo" which does not exist`, "prod", true},
 		{`MountVolume.SetUp failed: secret "foo" not found`, "prod", true},
-		{`secrets "foo" not found`, "prod", true},                  // plural kubelet path
-		{`couldn't find key tls.crt in Secret prod/foo`, "prod", true}, // namespaced missing-key
+		{`secrets "foo" not found`, "prod", true},                          // plural kubelet path
+		{`couldn't find key tls.crt in Secret prod/foo`, "prod", true},     // namespaced missing-key
 		{`references ConfigMap "foo" which does not exist`, "prod", false}, // same name, wrong kind
 		{`waiting on something else`, "prod", false},
 	}

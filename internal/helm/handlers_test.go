@@ -3,8 +3,11 @@ package helm
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -78,6 +81,48 @@ func TestRequireCloudRole(t *testing.T) {
 				if resp["error"] == "" {
 					t.Error("error message is empty")
 				}
+			}
+		})
+	}
+}
+
+func TestDecodeOptionalApplyValuesRequest(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		hasBody bool
+		want    map[string]any
+		wantErr bool
+	}{
+		{name: "nil body"},
+		{name: "empty body", hasBody: true},
+		{name: "explicit empty values stays non nil", body: `{"values":{}}`, hasBody: true, want: map[string]any{}},
+		{name: "populated values", body: `{"values":{"replicaCount":2}}`, hasBody: true, want: map[string]any{"replicaCount": float64(2)}},
+		{name: "invalid json", body: `{"values":`, hasBody: true, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body io.Reader
+			if tc.hasBody {
+				body = strings.NewReader(tc.body)
+			}
+
+			got, err := decodeOptionalApplyValuesRequest(body)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("decodeOptionalApplyValuesRequest returned error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("values = %#v, want %#v", got, tc.want)
+			}
+			if tc.want != nil && got == nil {
+				t.Fatal("values = nil, want explicit non-nil map")
 			}
 		})
 	}

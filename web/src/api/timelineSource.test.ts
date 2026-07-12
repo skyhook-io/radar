@@ -151,6 +151,22 @@ describe('applyClientFilters', () => {
     const out = applyClientFilters(events, { limit: 2 })
     expect(out.map((e) => e.id)).toEqual(['del1', 'p1'])
   })
+
+  // Mirrors Go's TimelineEvent.IsManaged: owned, or ReplicaSet/Pod/Event.
+  // Enforced client-side so retained mode (whose endpoint has no
+  // include_managed param) behaves exactly like local mode.
+  it('drops managed rows only when includeManaged is explicitly false', () => {
+    const mixed: TimelineEvent[] = [
+      ev({ id: 'dep', kind: 'Deployment', namespace: 'ns-a' }),
+      ev({ id: 'pod', kind: 'Pod', namespace: 'ns-a' }),
+      ev({ id: 'rs', kind: 'ReplicaSet', namespace: 'ns-a' }),
+      ev({ id: 'owned-cm', kind: 'ConfigMap', namespace: 'ns-a', owner: { kind: 'Deployment', name: 'web' } }),
+    ]
+    const filtered = applyClientFilters(mixed, { includeManaged: false })
+    expect(filtered.map((e) => e.id)).toEqual(['dep'])
+    // Default (unset) keeps machinery rows — the swimlane's child lanes need them.
+    expect(applyClientFilters(mixed, {})).toHaveLength(4)
+  })
 })
 
 describe('localOverviewFromEvents', () => {

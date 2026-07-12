@@ -38,7 +38,7 @@ func (opts PodGroupingOptions) matchesNamespaceFilter(ns string) bool {
 	return MatchesNamespace(opts.Namespaces, ns)
 }
 
-// GroupPods groups pods by app label or owner reference
+// GroupPods groups pods by run identity, app label, or owner reference
 func GroupPods(pods []*corev1.Pod, opts PodGroupingOptions) *PodGroupingResult {
 	result := &PodGroupingResult{
 		Groups: make(map[string]*PodGroup),
@@ -104,6 +104,16 @@ func GroupPods(pods []*corev1.Pod, opts PodGroupingOptions) *PodGroupingResult {
 
 // determineGroupKey determines the group key, kind, and name for a pod
 func determineGroupKey(pod *corev1.Pod) (key, kind, name string) {
+	if workflowName := pod.Labels["workflows.argoproj.io/workflow"]; workflowName != "" {
+		return fmt.Sprintf("%s/Workflow/%s", pod.Namespace, workflowName), "Workflow", workflowName
+	}
+	if jobName := pod.Labels["batch.kubernetes.io/job-name"]; jobName != "" {
+		return fmt.Sprintf("%s/Job/%s", pod.Namespace, jobName), "Job", jobName
+	}
+	if jobName := pod.Labels["job-name"]; jobName != "" {
+		return fmt.Sprintf("%s/Job/%s", pod.Namespace, jobName), "Job", jobName
+	}
+
 	// First try app labels (groups all pods of the same app together)
 	if appName := pod.Labels["app.kubernetes.io/name"]; appName != "" {
 		return fmt.Sprintf("%s/app/%s", pod.Namespace, appName), "app", appName

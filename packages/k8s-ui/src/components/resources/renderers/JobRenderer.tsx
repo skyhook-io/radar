@@ -48,7 +48,9 @@ export function JobRenderer({ data }: JobRendererProps) {
   const conditions = status.conditions || []
 
   const startTime = status.startTime ? new Date(status.startTime) : null
-  const completionTime = status.completionTime ? new Date(status.completionTime) : null
+  const terminalCondition = conditions.find((c: any) => (c.type === 'Complete' || c.type === 'Failed') && c.status === 'True')
+  const finishedAt = status.completionTime || terminalCondition?.lastTransitionTime
+  const completionTime = finishedAt ? new Date(finishedAt) : null
   const duration = startTime && completionTime
     ? formatDuration(completionTime.getTime() - startTime.getTime(), true)
     : startTime

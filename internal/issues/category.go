@@ -13,6 +13,7 @@ type classifyInput struct {
 	APIGroup             string // the resource's API group (Issue.Group)
 	Kind                 string
 	Reason               string
+	Message              string
 	LastTerminatedReason string
 }
 
@@ -145,6 +146,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	case "Service port mismatch":
 		return issuesapi.CategoryMissingConfigRef
 	}
+	if isForbiddenMessage(in.Message) && !isBatchFailureProblem(in.Kind, in.Reason) {
+		return issuesapi.CategoryRBACForbidden
+	}
 	switch in.Kind {
 	case "Pod":
 		if in.Reason == "OOMKilled" {
@@ -259,6 +263,12 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		}
 		return issuesapi.CategoryUnknown
 
+	case "Workflow", "CronWorkflow":
+		if strings.Contains(strings.ToLower(in.APIGroup), "argoproj.io") && isForbiddenMessage(in.Message) {
+			return issuesapi.CategoryRBACForbidden
+		}
+		return issuesapi.CategoryUnknown
+
 	case "Application":
 		// ArgoCD Application health/sync failure from DetectGitOpsProblems.
 		// Gate on group so a same-named CRD from another controller can't be
@@ -298,6 +308,18 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	}
 
 	return issuesapi.CategoryUnknown
+}
+
+func isForbiddenMessage(message string) bool {
+	m := strings.ToLower(message)
+	return strings.Contains(m, " is forbidden: user ") && strings.Contains(m, " cannot ")
+}
+
+func isBatchFailureProblem(kind, reason string) bool {
+	if kind == "Job" {
+		return true
+	}
+	return kind == "CronJob" && (reason == "stale" || reason == "never-scheduled")
 }
 
 // classifyGitOpsReason maps a GitOps detector/condition reason to a specific

@@ -130,6 +130,10 @@ export type CoreNodeKind =
   | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
+  | 'Workflow'
+  | 'CronWorkflow'
+  | 'WorkflowTemplate'
+  | 'ClusterWorkflowTemplate'
   | 'PersistentVolumeClaim'
   | 'Node'
   | 'Namespace'
@@ -865,6 +869,8 @@ export interface BatchUpgradeInfo {
 // Request body for applying new values to a release
 export interface ApplyValuesRequest {
   values: Record<string, unknown>
+  version?: string
+  repository?: string
 }
 
 // Response for previewing values changes
@@ -1282,6 +1288,9 @@ export interface WorkloadPodInfo {
   lastTerminationReason?: string
   createdAt?: string
   containerStatuses?: WorkloadPodContainerInfo[]
+  stepID?: string
+  stepName?: string
+  stepPhase?: string
 }
 
 // SSE event types for workload log streaming
