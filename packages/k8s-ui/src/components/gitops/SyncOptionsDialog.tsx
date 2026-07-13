@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, RefreshCw, ShieldChe
 
 import { DialogPortal } from '../ui/DialogPortal'
 import { Input } from '../ui/Input'
+import { Tooltip } from '../ui/Tooltip'
 import type { GitOpsInsightRef } from '../../types/gitops-insights'
 
 // =============================================================================
@@ -167,15 +168,17 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncE
           Cancel
         </button>
         {richResourceValidation && (
-          <button
-            type="button"
-            onClick={validate}
-            disabled={optionsDisabled}
-            className="inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-surface px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {validationPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-            {validationPending ? 'Validating…' : 'Validate'}
-          </button>
+          <Tooltip content="Runs an Argo selective dry-run for this resource. Applies nothing." wrapperClassName="inline-flex">
+            <button
+              type="button"
+              onClick={validate}
+              disabled={optionsDisabled}
+              className="inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-surface px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {validationPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+              {validationPending ? 'Validating…' : 'Validate'}
+            </button>
+          </Tooltip>
         )}
         <PrimaryButton onClick={submit} disabled={optionsDisabled} icon={pending ? Loader2 : RefreshCw} loading={pending} label={dryRun && !richResourceValidation ? 'Run dry-run' : resource ? 'Sync resource' : 'Sync now'} />
       </div>

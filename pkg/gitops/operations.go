@@ -420,10 +420,12 @@ func argoOperationHasInfo(operation map[string]any, name, value string) bool {
 }
 
 func argoResourceResultMatches(entry map[string]any, target ArgoSyncResource) bool {
-	return stringValue(entry["group"]) == target.Group &&
-		stringValue(entry["kind"]) == target.Kind &&
-		stringValue(entry["namespace"]) == target.Namespace &&
-		stringValue(entry["name"]) == target.Name
+	if stringValue(entry["group"]) != target.Group ||
+		stringValue(entry["kind"]) != target.Kind ||
+		stringValue(entry["name"]) != target.Name {
+		return false
+	}
+	return target.Namespace == "" || stringValue(entry["namespace"]) == target.Namespace
 }
 
 func stringValue(value any) string {

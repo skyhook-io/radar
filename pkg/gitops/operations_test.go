@@ -605,6 +605,17 @@ func TestArgoResourceValidationResultCorrelatesAndReturnsTarget(t *testing.T) {
 	if result.Resource.Status != "Synced" || !strings.Contains(result.Resource.Message, "dry run") {
 		t.Fatalf("resource result = %#v, want exact Argo status and message", result.Resource)
 	}
+	targetWithoutNamespace := target
+	targetWithoutNamespace.Namespace = ""
+	result, done = argoResourceValidationResult(makeApp("current", "Succeeded", []any{matchingResource}), "current", targetWithoutNamespace)
+	if !done || result.Outcome != "succeeded" {
+		t.Fatalf("namespace-omitted selector result = %#v, done=%v; want succeeded", result, done)
+	}
+	targetInAnotherNamespace := target
+	targetInAnotherNamespace.Namespace = "other"
+	if argoResourceResultMatches(matchingResource, targetInAnotherNamespace) {
+		t.Fatal("an explicit selector namespace must match the result namespace")
+	}
 	result, done = argoResourceValidationResult(makeApp("current", "Succeeded", nil), "current", target)
 	if !done || result.Outcome != "inconclusive" {
 		t.Fatalf("missing target result = %#v, done=%v; want inconclusive", result, done)
