@@ -152,13 +152,26 @@ func TestResolveCloudInstallClusterName(t *testing.T) {
 
 func TestPrintInstallSuccessUsesRenderedDeploymentName(t *testing.T) {
 	var out bytes.Buffer
-	printInstallSuccess(&out, helm.DeploymentRef{Name: "prod-radar", Namespace: "radar-prod"})
+	printInstallSuccess(&out, "production", "https://app.radarhq.io/c/clus_123", helm.DeploymentRef{Name: "prod-radar", Namespace: "radar-prod"})
 	got := out.String()
-	if !strings.Contains(got, "Installed and connected") || !strings.Contains(got, "kubectl -n radar-prod rollout status deployment/prod-radar") {
-		t.Fatalf("success guidance does not use the rendered Deployment name:\n%s", got)
+	for _, want := range []string{
+		`Cluster "production" installed and connected`,
+		"Open: https://app.radarhq.io/c/clus_123",
+		"kubectl -n radar-prod rollout status deployment/prod-radar",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("success guidance missing %q:\n%s", want, got)
+		}
 	}
 	if strings.Contains(got, "deploy/prod") {
 		t.Fatalf("success guidance assumes the release name is the Deployment name:\n%s", got)
+	}
+}
+
+func TestCloudClusterURLUsesConnectOriginAndEscapesClusterID(t *testing.T) {
+	got := cloudClusterURL("https://app.radarhq.io/connect/req_123?from=cli#approval", "clus/a b")
+	if want := "https://app.radarhq.io/c/clus%2Fa%20b"; got != want {
+		t.Fatalf("cloudClusterURL() = %q, want %q", got, want)
 	}
 }
 

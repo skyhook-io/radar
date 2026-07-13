@@ -293,7 +293,7 @@ func cloudInstall(args []string) {
 		os.Exit(1)
 	}
 
-	printInstallSuccess(os.Stdout, prepared.Deployment())
+	printInstallSuccess(os.Stdout, clusterName, cloudClusterURL(cr.ConnectURL, pr.ClusterID), prepared.Deployment())
 }
 
 func normalizeCloudInstallNames(namespace, release string) (string, string, error) {
@@ -329,8 +329,15 @@ func resolveCloudInstallClusterName(explicit, contextName string) string {
 	return "my-cluster"
 }
 
-func printInstallSuccess(w io.Writer, deployment helm.DeploymentRef) {
-	fmt.Fprintln(w, "\n  ✓ Installed and connected to Radar Cloud.")
+func cloudClusterURL(connectURL, clusterID string) string {
+	u, _ := url.Parse(connectURL)
+	origin := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+	return origin + "/c/" + url.PathEscape(clusterID)
+}
+
+func printInstallSuccess(w io.Writer, clusterName, clusterURL string, deployment helm.DeploymentRef) {
+	fmt.Fprintf(w, "\n  ✓ Cluster %q installed and connected to Radar Cloud.\n", clusterName)
+	fmt.Fprintf(w, "    Open: %s\n", clusterURL)
 	fmt.Fprintf(w, "    Track it: kubectl -n %s rollout status deployment/%s\n\n", deployment.Namespace, deployment.Name)
 }
 
