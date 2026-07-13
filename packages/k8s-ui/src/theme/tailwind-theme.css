@@ -20,6 +20,7 @@
   --color-theme-text-secondary: var(--text-secondary);
   --color-theme-text-tertiary: var(--text-tertiary);
   --color-theme-text-disabled: var(--text-disabled);
+  --color-warning-text: var(--warning-text);
 
   /* Borders */
   --color-theme-border: var(--border-default);

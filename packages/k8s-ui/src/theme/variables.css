@@ -49,6 +49,7 @@
   --text-secondary: light-dark(#555860, #D8DAE0);
   --text-tertiary: light-dark(#6B7080, #B0B5C0);
   --text-disabled: light-dark(#A0A4AC, #6A7080);
+  --warning-text: light-dark(#92400E, #FBBF24);
 
   /* ── Borders (lightly blue-tinted in light mode) ── */
   --border-default: light-dark(#D8E0EE, #222840);

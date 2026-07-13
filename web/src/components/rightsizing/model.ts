@@ -1,7 +1,6 @@
 import type { RightsizingScanResponse, RightsizingRow } from '../../api/client'
 
 export type ScanClass = 'increase' | 'reduction' | 'review' | 'in_range' | 'need_data'
-export type ScanSignal = 'hpa' | 'oom' | 'bursty' | 'throttling' | 'query_error' | 'scaled_zero'
 
 export interface RightsizingImpact {
   replicas: number
@@ -19,7 +18,6 @@ export interface RightsizingScanRow {
   cpu?: RightsizingRow
   memory?: RightsizingRow
   classification: ScanClass
-  signals: Set<ScanSignal>
   impact: RightsizingImpact
   system: boolean
   scaledToZero: boolean
@@ -82,7 +80,7 @@ export function calculateImpact(rows: RightsizingRow[], replicas: number): Right
   let cpuChange = 0
   let memoryChange = 0
   for (const row of rows) {
-    if (row.recommendedRequestValue == null) continue
+    if (row.recommendedRequestValue == null || needsManualReview(row)) continue
     const change = (row.recommendedRequestValue - (row.currentRequestValue ?? 0)) * count
     if (row.resource === 'cpu') cpuChange += change
     else memoryChange += change
@@ -100,13 +98,6 @@ export function flattenScanResults(scan: RightsizingScanResponse): RightsizingSc
       byContainer.set(row.container, rows)
     }
     for (const [container, rows] of byContainer) {
-      const signals = new Set<ScanSignal>()
-      if (rows.some((row) => row.hpaManaged)) signals.add('hpa')
-      if (rows.some((row) => row.currentPodOOM || row.windowOomEvidence)) signals.add('oom')
-      if (rows.some((row) => row.bursty)) signals.add('bursty')
-      if (rows.some((row) => (row.throttleRatio ?? 0) >= 0.1)) signals.add('throttling')
-      if (rows.some((row) => row.queryError)) signals.add('query_error')
-      if (workload.scaledToZero) signals.add('scaled_zero')
       const replicas = workload.replicas ?? 1
       result.push({
         id: `${workload.kind}/${workload.namespace}/${workload.name}/${container}`,
@@ -118,7 +109,6 @@ export function flattenScanResults(scan: RightsizingScanResponse): RightsizingSc
         cpu: rows.find((row) => row.resource === 'cpu'),
         memory: rows.find((row) => row.resource === 'memory'),
         classification: classifyRows(rows, replicas, workload.scaledToZero),
-        signals,
         impact: calculateImpact(rows, replicas),
         system: isSystemNamespace(workload.namespace),
         scaledToZero: workload.scaledToZero,

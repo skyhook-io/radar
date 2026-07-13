@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, DollarSign, ExternalLink, Gauge, Loader2, RefreshCw } from 'lucide-react'
 import {
@@ -27,6 +27,12 @@ import {
   type RightsizingScanRow,
   type ScanClass,
 } from './model'
+import {
+  getResourceRequestPresentation,
+  RIGHTSIZING_ACTION_SEVERITY,
+  type ResourceSignal,
+  type RightsizingActionTone,
+} from './presentation'
 
 export const RIGHTSIZING_SCAN_DESCRIPTION =
   'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
@@ -74,17 +80,17 @@ const ACTION_META: Record<
 > = {
   reduction: {
     label: 'Reduce requests',
-    severity: 'info',
+    severity: RIGHTSIZING_ACTION_SEVERITY.reduction,
     helper: 'Reclaim meaningful capacity',
   },
   increase: {
     label: 'Increase or add',
-    severity: 'warning',
+    severity: RIGHTSIZING_ACTION_SEVERITY.increase,
     helper: 'Reduce reliability risk',
   },
   review: {
     label: 'Review first',
-    severity: 'neutral',
+    severity: RIGHTSIZING_ACTION_SEVERITY.review,
     helper: 'Check safety signals or workloads with no replicas',
   },
 }
@@ -99,26 +105,21 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
     isLoading: statusLoading,
     refetch: retryPrometheus,
   } = usePrometheusStatus()
-  const scan = useRightsizingScan(namespaces)
-  const [result, setResult] = useState<Awaited<ReturnType<typeof scan.mutateAsync>>>()
+  const scan = useRightsizingScan(namespaces, clusterInfo?.context)
+  const result = scan.data
   const [openRow, setOpenRow] = useState<string | null>(null)
   const [visibleLimit, setVisibleLimit] = useState(ROW_PAGE_SIZE)
   const scopeKey = `${clusterInfo?.context ?? ''}\0${[...namespaces].sort().join(',')}`
-  const scopeKeyRef = useRef(scopeKey)
-  scopeKeyRef.current = scopeKey
 
-  useEffect(() => {
-    setResult(undefined)
+  useLayoutEffect(() => {
     setOpenRow(null)
     scan.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeKey])
 
   const runScan = async () => {
-    const startedForScope = scopeKey
     try {
-      const next = await scan.mutateAsync()
-      if (scopeKeyRef.current === startedForScope) setResult(next)
+      await scan.mutateAsync()
     } catch {
       // A same-scope snapshot stays visible when refresh fails.
     }
@@ -364,10 +365,11 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
                   />
                 ) : (
                   <div>
-                    <div className="grid grid-cols-[minmax(260px,1.1fr)_minmax(360px,1.6fr)_minmax(220px,.9fr)_28px] gap-4 border-b border-theme-border px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+                    <div className="grid grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] gap-3 border-b border-theme-border px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
                       <span>Workload / container</span>
-                      <span>Suggested next step</span>
-                      <span>Across replicas</span>
+                      <span>CPU request</span>
+                      <span>Memory request</span>
+                      <span>Total request change</span>
                       <span />
                     </div>
                     <div className="table-divide-subtle">
@@ -559,13 +561,13 @@ function ScanFilters(props: {
         scope="global"
         shortcutId="rightsizing-search"
         placeholder="Search workloads…"
-        className="mr-auto w-72"
+        className="mr-auto w-60 2xl:w-72"
       />
       <SelectMenu
         ariaLabel="Filter by namespace"
         value={props.namespace}
         onChange={props.onNamespace}
-        className="w-48"
+        className="w-40 2xl:w-48"
         options={[
           { value: '', label: 'All namespaces' },
           ...props.namespaces.map((value) => ({ value, label: value })),
@@ -586,7 +588,7 @@ function ScanFilters(props: {
           ariaLabel="Choose workload scope"
           value={props.includeSystem ? 'all' : 'applications'}
           onChange={props.onScope}
-          className="w-48"
+          className="w-44 2xl:w-48"
           options={[
             { value: 'applications', label: 'Hide system workloads' },
             {
@@ -596,14 +598,14 @@ function ScanFilters(props: {
           ]}
         />
       )}
-      <span className="text-xs tabular-nums text-theme-text-tertiary">
+      <span className="shrink-0 text-xs tabular-nums text-theme-text-tertiary">
         {props.shown} of {props.total} containers
       </span>
       {props.active && (
         <button
           type="button"
           onClick={props.onClear}
-          className="text-xs text-accent-text hover:underline"
+          className="shrink-0 text-xs text-accent-text hover:underline"
         >
           Reset view
         </button>
@@ -629,7 +631,7 @@ function ScanResultRow({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="grid w-full grid-cols-[minmax(260px,1.1fr)_minmax(360px,1.6fr)_minmax(220px,.9fr)_28px] items-center gap-4 px-4 py-3 text-left hover:bg-theme-hover/50"
+        className="grid w-full grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] items-center gap-3 px-4 py-3 text-left hover:bg-theme-hover/50"
       >
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -642,7 +644,8 @@ function ScanResultRow({
             {row.namespace} · {row.container}
           </div>
         </div>
-        <RecommendationCell row={row} />
+        <ResourceRequestCell row={row.cpu} scaledToZero={row.scaledToZero} />
+        <ResourceRequestCell row={row.memory} scaledToZero={row.scaledToZero} />
         <ImpactCell row={row} />
         <CollapseChevron open={open} className="h-4 w-4" />
       </button>
@@ -663,106 +666,37 @@ function ScanResultRow({
   )
 }
 
-function RecommendationCell({ row }: { row: RightsizingScanRow }) {
-  if (row.classification === 'in_range') {
-    return <span className="text-xs text-theme-text-tertiary">No meaningful request change</span>
-  }
+function ResourceRequestCell({
+  row,
+  scaledToZero,
+}: {
+  row?: RightsizingRow
+  scaledToZero: boolean
+}) {
+  const presentation = getResourceRequestPresentation(row, scaledToZero)
   return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <ResourceAction
-        label="CPU"
-        row={row.cpu}
-        reviewWithNoCurrentReplicas={row.scaledToZero && row.classification === 'review'}
-      />
-      <ResourceAction
-        label="Memory"
-        row={row.memory}
-        reviewWithNoCurrentReplicas={row.scaledToZero && row.classification === 'review'}
-      />
+    <div className="min-w-0 text-xs">
+      <div className="truncate font-medium tabular-nums text-theme-text-primary">
+        {presentation.primary}
+      </div>
+      <div className={`mt-0.5 ${requestToneClass(presentation.tone)}`}>
+        {presentation.secondary}
+      </div>
+      {presentation.signals.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {presentation.signals.map((signal) => (
+            <SignalBadge key={signal} signal={signal} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
 
-function ResourceAction({
-  label,
-  row,
-  reviewWithNoCurrentReplicas = false,
-}: {
-  label: string
-  row?: RightsizingRow
-  reviewWithNoCurrentReplicas?: boolean
-}) {
-  if (!row) return <span className="text-xs text-theme-text-tertiary">{label}: no result</span>
-  const reason = row.recommendationReason
-  if (row.hpaManaged)
-    return (
-      <span className="text-xs font-medium text-theme-text-secondary">
-        Review {label} with the HPA
-      </span>
-    )
-  if (reason === 'hpa_evidence_unavailable')
-    return (
-      <span className="text-xs font-medium text-theme-text-secondary">
-        Review {label}; HPA status is unavailable
-      </span>
-    )
-  if (reason === 'oom_evidence')
-    return (
-      <span className="text-xs font-medium text-theme-text-secondary">
-        Keep {label}; an out-of-memory restart was seen
-      </span>
-    )
-  if (reason === 'oom_evidence_unavailable')
-    return (
-      <span className="text-xs font-medium text-theme-text-secondary">
-        Review {label}; restart history is incomplete
-      </span>
-    )
-  if (row.limitConflict)
-    return (
-      <span className="text-xs font-medium text-theme-text-secondary">
-        Raise the {label} limit before its request
-      </span>
-    )
-  if (row.queryError)
-    return <span className="text-xs text-theme-text-tertiary">{label}: metrics query failed</span>
-  if (row.fit === 'insufficient_history')
-    return <span className="text-xs text-theme-text-tertiary">{label}: not enough history</span>
-  if (reviewWithNoCurrentReplicas)
-    return (
-      <span className="text-xs font-medium text-theme-text-secondary">
-        Review {label} before the workload runs again
-      </span>
-    )
-  const isReduction =
-    row.recommendedRequestValue != null &&
-    row.currentRequestValue != null &&
-    row.recommendedRequestValue < row.currentRequestValue
-  if (row.resource === 'cpu' && isReduction && (row.bursty || (row.throttleRatio ?? 0) >= 0.1))
-    return (
-      <span className="text-xs font-medium text-theme-text-secondary">
-        Review {label} before reducing
-      </span>
-    )
-  if (row.recommendedRequest) {
-    if (!row.currentRequest || row.currentRequestValue === 0)
-      return (
-        <span className="text-xs font-medium text-theme-text-primary">
-          Add {label} request: {row.recommendedRequest}
-        </span>
-      )
-    const verb =
-      (row.recommendedRequestValue ?? 0) > (row.currentRequestValue ?? 0) ? 'Increase' : 'Reduce'
-    return (
-      <span className="text-xs font-medium text-theme-text-primary">
-        {verb} {label}:{' '}
-        <span className="tabular-nums">
-          {row.currentRequest} → {row.recommendedRequest}
-        </span>
-      </span>
-    )
-  }
-  return <span className="text-xs text-theme-text-tertiary">{label}: no meaningful change</span>
+function requestToneClass(tone: RightsizingActionTone): string {
+  if (tone === 'reduction') return 'text-accent-text'
+  if (tone === 'increase') return 'text-warning-text'
+  return 'text-theme-text-tertiary'
 }
 
 function ImpactCell({ row }: { row: RightsizingScanRow }) {
@@ -784,26 +718,26 @@ function ImpactCell({ row }: { row: RightsizingScanRow }) {
           </div>
         ))
       ) : (
-        <div className="mt-0.5 text-theme-text-tertiary">No calculated capacity change</div>
+        <div className="mt-0.5 text-theme-text-tertiary">No suggested change</div>
       )}
-      <div className="mt-1 flex flex-wrap gap-1">
-        {[...row.signals].map((signal) => (
-          <Badge
-            key={signal}
-            severity={
-              signal === 'oom' || signal === 'query_error'
-                ? 'error'
-                : signal === 'throttling'
-                  ? 'warning'
-                  : 'neutral'
-            }
-            size="sm"
-          >
-            {signalLabel(signal)}
-          </Badge>
-        ))}
-      </div>
     </div>
+  )
+}
+
+function SignalBadge({ signal }: { signal: ResourceSignal }) {
+  return (
+    <Badge
+      severity={
+        signal === 'oom' || signal === 'query_error'
+          ? 'error'
+          : signal === 'throttling'
+            ? 'warning'
+            : 'neutral'
+      }
+      size="sm"
+    >
+      {signalLabel(signal)}
+    </Badge>
   )
 }
 
@@ -957,16 +891,13 @@ function formatMemoryChange(value: number): string {
     : `${prefix}${Math.round(mib)}Mi memory requested`
 }
 
-function signalLabel(
-  signal: RightsizingScanRow['signals'] extends Set<infer T> ? T : never,
-): string {
+function signalLabel(signal: ResourceSignal): string {
   return {
     hpa: 'HPA',
-    oom: 'OOM',
+    oom: 'OOM restart',
     bursty: 'Bursty usage',
     throttling: 'Throttling',
-    query_error: 'Query error',
-    scaled_zero: 'No current replicas',
+    query_error: 'Metrics unavailable',
   }[signal]
 }
 

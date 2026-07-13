@@ -34,6 +34,7 @@ Cool, professional, data-dense. A barely-blue-tinted neutral palette — not gen
 | `text-theme-text-secondary` | `--text-secondary` | `#555860` | `#D8DAE0` | Body text, descriptions |
 | `text-theme-text-tertiary` | `--text-tertiary` | `#6B7080` | `#B0B5C0` | Placeholders, metadata, timestamps |
 | `text-theme-text-disabled` | `--text-disabled` | `#A0A4AC` | `#6A7080` | Disabled states |
+| `text-warning-text` | `--warning-text` | `#92400E` | `#FBBF24` | Warning or attention text on a plain background |
 
 ### Borders
 | Token | CSS Variable | Light | Dark | Use for |

@@ -2389,14 +2389,37 @@ export function usePrometheusRightsizing(
   })
 }
 
+const RIGHTSIZING_SCAN_CACHE_TIME = 5 * 60 * 1000
+
+export function getRightsizingScanCacheConfig(
+  namespaces: string[],
+  context = '',
+): {
+  namespaceKey: string
+  queryKey: readonly ['prometheus-rightsizing-scan', string, string]
+  queryFn: typeof skipToken
+  gcTime: number
+} {
+  const namespaceKey = [...namespaces].sort().join(',')
+  return {
+    namespaceKey,
+    queryKey: ['prometheus-rightsizing-scan', context, namespaceKey] as const,
+    queryFn: skipToken,
+    gcTime: RIGHTSIZING_SCAN_CACHE_TIME,
+  }
+}
+
 // A fleet rightsizing scan is intentionally manual. It can query seven days of
 // Prometheus history for many containers, so navigation alone must never run it.
-export function useRightsizingScan(namespaces: string[]) {
-  const namespaceKey = [...namespaces].sort().join(',')
-  return useMutation({
-    mutationFn: async () => {
+export function useRightsizingScan(namespaces: string[], context = '') {
+  const queryClient = useQueryClient()
+  const { namespaceKey, ...snapshotOptions } = getRightsizingScanCacheConfig(namespaces, context)
+  const scanScope = { namespaceKey, queryKey: snapshotOptions.queryKey }
+  const snapshot = useQuery<RightsizingScanResponse>(snapshotOptions)
+  const mutation = useMutation({
+    mutationFn: async (startedScope: typeof scanScope) => {
       const params = new URLSearchParams()
-      if (namespaceKey) params.set('namespaces', namespaceKey)
+      if (startedScope.namespaceKey) params.set('namespaces', startedScope.namespaceKey)
       const query = params.toString()
       return fetchJSON<RightsizingScanResponse>(
         `/prometheus/rightsizing/scan${query ? `?${query}` : ''}`,
@@ -2405,7 +2428,14 @@ export function useRightsizingScan(namespaces: string[]) {
         },
       )
     },
+    onSuccess: (result, startedScope) => queryClient.setQueryData(startedScope.queryKey, result),
   })
+  return {
+    ...mutation,
+    data: snapshot.data,
+    mutate: () => mutation.mutate(scanScope),
+    mutateAsync: () => mutation.mutateAsync(scanScope),
+  }
 }
 
 // Raw PromQL query (range). Used by HPA charts for status_current_replicas etc.

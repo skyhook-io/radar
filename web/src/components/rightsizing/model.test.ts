@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RightsizingScanResponse, RightsizingRow } from '../../api/client'
-import { classifyRows, flattenScanResults, scanClassCounts } from './model'
+import { calculateImpact, classifyRows, flattenScanResults, scanClassCounts } from './model'
 
 function metric(overrides: Partial<RightsizingRow> = {}): RightsizingRow {
   return {
@@ -125,6 +125,28 @@ describe('rightsizing scan model', () => {
     expect(classifyRows([meaningful], 1)).toBe('reduction')
   })
 
+  it('excludes recommendations that require manual review from aggregate impact', () => {
+    const cpu = metric({
+      fit: 'oversized',
+      currentRequestValue: 0.1,
+      recommendedRequestValue: 0.05,
+      recommendedRequest: '50m',
+      throttleRatio: 0.2,
+    })
+    const memory = metric({
+      resource: 'memory',
+      fit: 'oversized',
+      currentRequestValue: 128 * 1024 * 1024,
+      recommendedRequestValue: 64 * 1024 * 1024,
+      recommendedRequest: '64Mi',
+    })
+    expect(calculateImpact([cpu, memory], 3)).toEqual({
+      replicas: 3,
+      cpuChange: 0,
+      memoryChange: -192 * 1024 * 1024,
+    })
+  })
+
   it('keeps incomplete history out of no-change results', () => {
     expect(classifyRows([metric({ fit: 'insufficient_history' })])).toBe('need_data')
     expect(classifyRows([metric({ queryError: 'query failed' })])).toBe('need_data')
@@ -148,7 +170,6 @@ describe('rightsizing scan model', () => {
     )[0]
     expect(oversized.classification).toBe('review')
     expect(oversized.impact.cpuChange).toBe(0)
-    expect(oversized.signals).toContain('scaled_zero')
 
     expect(classifyRows([metric()], 0, true)).toBe('review')
     expect(classifyRows([metric({ fit: 'insufficient_history' })], 0, true)).toBe('need_data')
@@ -201,7 +222,6 @@ describe('rightsizing scan model', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].impact.cpuChange).toBeCloseTo(0.3)
     expect(rows[0].system).toBe(true)
-    expect(rows[0].signals).toEqual(new Set(['oom', 'throttling']))
     expect(scanClassCounts(rows).increase).toBe(1)
   })
 })
