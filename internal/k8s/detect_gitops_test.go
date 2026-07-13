@@ -394,7 +394,7 @@ func TestDetectArgoAppProblems_StuckDriftLoop(t *testing.T) {
 	mk := func(phase, reconciledAt string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
-			"metadata": map[string]any{"name": "stuck", "namespace": "argocd"},
+			"metadata": map[string]any{"name": "stuck", "namespace": "argocd", "uid": "stuck-uid"},
 			"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}},
 			"status": map[string]any{
 				"health":         map[string]any{"status": "Healthy"},
@@ -409,18 +409,27 @@ func TestDetectArgoAppProblems_StuckDriftLoop(t *testing.T) {
 		name       string
 		phase      string
 		reconciled string
+		sustained  bool // been OutOfSync long enough to satisfy the stuck-loop gate?
 		wantReason string
 	}{
-		{"recent reconcile is stuck", "Succeeded", ago(2 * time.Minute), "StuckDriftLoop"},
-		{"within the 30m window is stuck", "Succeeded", ago(29 * time.Minute), "StuckDriftLoop"},
-		{"past the 30m window is ordinary drift", "Succeeded", ago(31 * time.Minute), "OutOfSync"},
-		{"missing reconciledAt is ordinary drift", "Succeeded", "", "OutOfSync"},
-		{"unparseable reconciledAt is ordinary drift", "Succeeded", "not-a-timestamp", "OutOfSync"},
-		{"no completed operation is ordinary drift", "", ago(2 * time.Minute), "OutOfSync"},
+		{"recent reconcile + sustained is stuck", "Succeeded", ago(2 * time.Minute), true, "StuckDriftLoop"},
+		{"within the 30m window + sustained is stuck", "Succeeded", ago(29 * time.Minute), true, "StuckDriftLoop"},
+		{"recent reconcile but not yet sustained is ordinary drift", "Succeeded", ago(2 * time.Minute), false, "OutOfSync"},
+		{"past the 30m window is ordinary drift", "Succeeded", ago(31 * time.Minute), true, "OutOfSync"},
+		{"missing reconciledAt is ordinary drift", "Succeeded", "", true, "OutOfSync"},
+		{"unparseable reconciledAt is ordinary drift", "Succeeded", "not-a-timestamp", true, "OutOfSync"},
+		{"no completed operation is ordinary drift", "", ago(2 * time.Minute), true, "OutOfSync"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := detectArgoAppProblems([]*unstructured.Unstructured{mk(tc.phase, tc.reconciled)}, nil, now)
+			app := mk(tc.phase, tc.reconciled)
+			tracker := newArgoDriftTracker()
+			if tc.sustained {
+				// Establish continuous OutOfSync beyond argoStuckDriftMinDuration so
+				// the stuck-loop gate is satisfied; reconciledAt recency then decides.
+				tracker.observe(app.GetUID(), true, now.Add(-10*time.Minute))
+			}
+			got := detectArgoAppProblems([]*unstructured.Unstructured{app}, tracker, now)
 			if len(got) != 1 || got[0].Reason != tc.wantReason {
 				t.Fatalf("want 1 %s, got %+v", tc.wantReason, got)
 			}

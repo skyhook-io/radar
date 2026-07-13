@@ -1390,3 +1390,17 @@ func TestChangeRank(t *testing.T) {
 		t.Errorf("changeRank(Bogus) = %d, want > 4 (default branch must rank below all named constants)", got)
 	}
 }
+
+func TestDedupeIssues_SameNameDifferentNamespaceKept(t *testing.T) {
+	// Two genuinely distinct Degraded resources sharing a kind+name across
+	// namespaces (an ApplicationSet fanning out an identically-named workload)
+	// must BOTH survive dedup — the namespace is part of the key.
+	in := []Issue{
+		{Scope: "resource", Severity: "critical", Reason: "Degraded", Message: "Deployment api is Degraded", Refs: []Ref{{Kind: "Deployment", Namespace: "team-a", Name: "api"}}},
+		{Scope: "resource", Severity: "critical", Reason: "Degraded", Message: "Deployment api is Degraded", Refs: []Ref{{Kind: "Deployment", Namespace: "team-b", Name: "api"}}},
+	}
+	got := dedupeIssues(in)
+	if len(got) != 2 {
+		t.Fatalf("expected both namespaces' issues kept, got %d: %+v", len(got), got)
+	}
+}

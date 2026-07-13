@@ -50,6 +50,13 @@ const (
 	// argocd-cm's timeout.reconciliation is unreadable or small.
 	argoStaleFloor = 30 * time.Minute
 
+	// argoStuckDriftMinDuration is how long an auto-synced app must sit
+	// continuously OutOfSync-after-a-successful-sync before we call it a stuck
+	// drift loop rather than a healthy app briefly OutOfSync in the window between
+	// a self-healing sync completing and the next reconcile flipping it to Synced.
+	// Without this floor a single transient snapshot trips a critical issue.
+	argoStuckDriftMinDuration = 5 * time.Minute
+
 	argoControllerLabelKey = "app.kubernetes.io/name"
 	argoControllerLabelVal = "argocd-application-controller"
 )
@@ -218,13 +225,16 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 
 		automated := argoIsAutomated(app)
 		outOfSync := strings.EqualFold(sync, "OutOfSync")
-		// Track manual-sync drift continuity before any gate short-circuits the
+		// Track drift continuity for every app before any gate short-circuits the
 		// loop, so a suspended-then-resumed or mid-degraded app that stays
-		// OutOfSync keeps one clock. Only manual apps matter here; auto-synced
-		// drift is flagged directly below.
+		// OutOfSync keeps one clock. Manual apps use it for the 24h stale-drift
+		// warning; auto-synced apps use it to require SUSTAINED OutOfSync before a
+		// stuck-drift-loop verdict, so a transient post-sync snapshot doesn't trip
+		// a false critical.
+		outOfSyncFor := tracker.observe(app.GetUID(), outOfSync, now)
 		var manualDriftFor time.Duration
 		if !automated {
-			manualDriftFor = tracker.observe(app.GetUID(), outOfSync, now)
+			manualDriftFor = outOfSyncFor
 		}
 
 		if strings.EqualFold(phase, "Running") {
@@ -319,7 +329,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			// after each apply (mutating webhook, sibling controller, conversion
 			// webhook). Critical and distinct from ordinary drift, where the apply
 			// simply hasn't run.
-			if isArgoStuckDriftLoop(app, now) {
+			if isArgoStuckDriftLoop(app, now) && outOfSyncFor >= argoStuckDriftMinDuration {
 				d := gitopsProblem("Application", argoGroup, ns, name, "critical",
 					"StuckDriftLoop", "Sync succeeded but the application is still OutOfSync — a controller or admission webhook is likely mutating resources after each apply.", age)
 				d.Stuck = true

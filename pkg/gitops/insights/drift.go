@@ -397,9 +397,19 @@ func filterIgnoredPaths(entries []DriftEntry, pointers []string) []DriftEntry {
 func pointerToDotPath(pointer string) string {
 	out := ""
 	for seg := range strings.SplitSeq(strings.TrimPrefix(pointer, "/"), "/") {
-		out = joinPath(out, seg)
+		out = joinPath(out, decodeJSONPointerSegment(seg))
 	}
 	return out
+}
+
+// decodeJSONPointerSegment unescapes an RFC 6901 reference token: "~1" → "/"
+// and "~0" → "~". Order matters (~1 before ~0) so an escaped tilde isn't
+// re-interpreted. Without this, an ignoreDifferences.jsonPointers entry like
+// "/metadata/annotations/example.com~1checksum" wouldn't match the dotted path
+// carrying a literal "/", and the explicitly-ignored field is reported as drift.
+func decodeJSONPointerSegment(seg string) string {
+	seg = strings.ReplaceAll(seg, "~1", "/")
+	return strings.ReplaceAll(seg, "~0", "~")
 }
 
 func pathMatchesAnyPrefix(path string, prefixes []string) bool {

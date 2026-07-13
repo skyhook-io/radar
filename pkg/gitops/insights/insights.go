@@ -648,13 +648,16 @@ func dedupeIssues(in []Issue) []Issue {
 	out := make([]Issue, 0, len(in))
 	for _, i := range in {
 		// Refs differentiate per-resource issues; include the first ref's
-		// kind+name in the dedup key so a class of resource-level issues
-		// isn't silently collapsed into one. Empty refs (operation/
-		// condition/lifecycle scopes) collapse correctly because their
-		// ref-suffix is "" identically.
+		// namespace+kind+name in the dedup key so a class of resource-level
+		// issues isn't silently collapsed into one. Namespace is load-bearing:
+		// two genuinely distinct Degraded resources that share a kind+name across
+		// namespaces (an ApplicationSet fanning out an identically-named workload)
+		// must both survive — dropping the second would hide a real problem.
+		// Empty refs (operation/condition/lifecycle scopes) collapse correctly
+		// because their ref-suffix is "" identically.
 		var refKey string
 		if len(i.Refs) > 0 {
-			refKey = i.Refs[0].Kind + "/" + i.Refs[0].Name
+			refKey = i.Refs[0].Namespace + "/" + i.Refs[0].Kind + "/" + i.Refs[0].Name
 		}
 		k := string(i.Scope) + "|" + i.Reason + "|" + i.Message + "|" + refKey
 		if _, ok := seen[k]; ok {
