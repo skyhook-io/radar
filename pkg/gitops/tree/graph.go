@@ -279,6 +279,14 @@ func summarize(nodes []Node) Summary {
 		case RoleGroup:
 			s.Grouped += n.Count
 		}
+		// The root (the Application itself, whose health is a roll-up of its
+		// children) and synthetic group buckets are NOT managed resources, so
+		// they must not inflate the degraded/out-of-sync tallies that drive
+		// "N managed resources are degraded". The app's own health is shown
+		// separately in the header.
+		if n.Role == RoleRoot || n.Role == RoleGroup {
+			continue
+		}
 		if n.Health == "Degraded" || n.Health == "Missing" {
 			s.Degraded++
 		}

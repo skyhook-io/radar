@@ -393,6 +393,15 @@ func healthRefKey(group, kind, namespace, name string) string {
 	return group + "|" + kind + "|" + namespace + "|" + name
 }
 
+// pluralizeResourcesAre renders "resource is" for one and "resources are" for
+// any other count, so the degraded-resources message reads grammatically.
+func pluralizeResourcesAre(n int) string {
+	if n == 1 {
+		return "resource is"
+	}
+	return "resources are"
+}
+
 func detectTool(root *unstructured.Unstructured) string {
 	if root == nil {
 		return ""
@@ -633,7 +642,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		}
 	}
 	if resourceTree != nil && resourceTree.Summary.Degraded > 0 && len(out) == 0 {
-		out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed resources are degraded", resourceTree.Summary.Degraded), Action: "Use the graph or Resources tab to inspect affected resources."})
+		out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed %s degraded", resourceTree.Summary.Degraded, pluralizeResourcesAre(resourceTree.Summary.Degraded)), Action: "Use the graph or Resources tab to inspect affected resources."})
 	}
 	// Dedup by (scope, reason, message) — Flux carries the same failure
 	// reason in multiple status.conditions slots (Released=False *and*

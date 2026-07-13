@@ -72,3 +72,19 @@ func TestRolloutTopologyInfoAndPriority(t *testing.T) {
 		t.Fatalf("rollout priority = %d, want deployment priority %d", got, want)
 	}
 }
+
+func TestSummarize_ExcludesRootAndGroupFromDegraded(t *testing.T) {
+	nodes := []Node{
+		{Role: RoleRoot, Ref: ResourceRef{Kind: "Application", Name: "app"}, Health: "Degraded", Sync: "OutOfSync"}, // the app itself — must NOT count
+		{Role: RoleDeclared, Ref: ResourceRef{Kind: "HTTPRoute", Name: "r"}, Health: "Degraded"},
+		{Role: RoleDeclared, Ref: ResourceRef{Kind: "Deployment", Name: "d"}, Health: "Healthy", Sync: "OutOfSync"},
+		{Role: RoleGroup, Ref: ResourceRef{Kind: "ConfigMap", Name: "3 ConfigMaps"}, Health: "Degraded", Count: 3}, // synthetic bucket — must NOT count
+	}
+	s := summarize(nodes)
+	if s.Degraded != 1 {
+		t.Errorf("Degraded = %d, want 1 (only the managed HTTPRoute; not the app or the group)", s.Degraded)
+	}
+	if s.OutOfSync != 1 {
+		t.Errorf("OutOfSync = %d, want 1 (only the managed Deployment; not the app root)", s.OutOfSync)
+	}
+}
