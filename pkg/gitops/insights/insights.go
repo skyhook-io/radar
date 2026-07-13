@@ -357,7 +357,40 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 		Partial:      true,
 	}
 	out.Summary.PartialReason = "Radar shows the controller's drift assessment plus a per-resource field diff and recent events (when available). For the canonical line-by-line diff against Git, use the Argo CD UI or `argocd app diff`."
+	enrichChangeHealthFromTree(out.Changes, resourceTree)
 	return out
+}
+
+// enrichChangeHealthFromTree fills a Change's health from the live resource tree
+// when the Application's status.resources didn't carry one. Argo commonly leaves
+// status.resources[].health empty (many kinds it doesn't assess), while the tree
+// derives health from the actual cluster objects — so without this the
+// per-resource table reads "Unknown" and the health summary reads "all healthy"
+// even when the tree (and the app's own Degraded health) show degraded
+// resources. Backfilling keeps the table, the health summary, and the
+// DegradedResources issue (all three) telling the same story.
+func enrichChangeHealthFromTree(changes []Change, tree *gitopstree.ResourceTree) {
+	if tree == nil || len(changes) == 0 {
+		return
+	}
+	byRef := make(map[string]string, len(tree.Nodes))
+	for _, n := range tree.Nodes {
+		if n.Health != "" {
+			byRef[healthRefKey(n.Ref.Group, n.Ref.Kind, n.Ref.Namespace, n.Ref.Name)] = n.Health
+		}
+	}
+	for i := range changes {
+		if changes[i].Health != "" {
+			continue
+		}
+		if h, ok := byRef[healthRefKey(changes[i].Ref.Group, changes[i].Ref.Kind, changes[i].Ref.Namespace, changes[i].Ref.Name)]; ok {
+			changes[i].Health = h
+		}
+	}
+}
+
+func healthRefKey(group, kind, namespace, name string) string {
+	return group + "|" + kind + "|" + namespace + "|" + name
 }
 
 func detectTool(root *unstructured.Unstructured) string {

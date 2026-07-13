@@ -1404,3 +1404,27 @@ func TestDedupeIssues_SameNameDifferentNamespaceKept(t *testing.T) {
 		t.Fatalf("expected both namespaces' issues kept, got %d: %+v", len(got), got)
 	}
 }
+
+func TestEnrichChangeHealthFromTree_BackfillsEmptyHealth(t *testing.T) {
+	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{
+		{Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "staging", Name: "radar-hub"}, Health: "Degraded"},
+		{Ref: gitopstree.ResourceRef{Kind: "Service", Namespace: "staging", Name: "radar-hub"}, Health: "Healthy"},
+		{Ref: gitopstree.ResourceRef{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},
+	}}
+	changes := []Change{
+		{Ref: Ref{Group: "apps", Kind: "Deployment", Namespace: "staging", Name: "radar-hub"}, Health: ""},        // backfilled → Degraded
+		{Ref: Ref{Kind: "Service", Namespace: "staging", Name: "radar-hub"}, Health: "Progressing"},              // already set → unchanged
+		{Ref: Ref{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},                            // tree node empty → stays empty
+		{Ref: Ref{Kind: "SealedSecret", Namespace: "staging", Name: "x"}, Health: ""},                            // not in tree → stays empty
+	}
+	enrichChangeHealthFromTree(changes, tree)
+	if changes[0].Health != "Degraded" {
+		t.Errorf("Deployment health = %q, want Degraded (backfilled from tree)", changes[0].Health)
+	}
+	if changes[1].Health != "Progressing" {
+		t.Errorf("Service health = %q, want Progressing (already set, unchanged)", changes[1].Health)
+	}
+	if changes[2].Health != "" || changes[3].Health != "" {
+		t.Errorf("resources with no tree health must stay empty: %q %q", changes[2].Health, changes[3].Health)
+	}
+}

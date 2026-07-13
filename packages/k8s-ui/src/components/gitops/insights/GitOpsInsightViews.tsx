@@ -228,11 +228,13 @@ function buildHealthSummary(changes: GitOpsChange[]): { text: string; tone: stri
   let outOfSync = 0
   let other = 0
   for (const c of changes) {
-    const cat = c.category
-    if (cat === 'Synced' || c.health === 'Healthy') healthy++
-    else if (cat === 'Degraded') degraded++
-    else if (cat === 'Missing') missing++
-    else if (cat === 'OutOfSync') outOfSync++
+    // Count HEALTH, not sync — a Synced resource can still be Degraded, so check
+    // degraded/missing FIRST and never let a Synced sync-state mask it. A Synced
+    // resource with no assessed health (ConfigMaps etc.) still reads as fine.
+    if (c.health === 'Degraded' || c.category === 'Degraded') degraded++
+    else if (c.health === 'Missing' || c.category === 'Missing') missing++
+    else if (c.health === 'Healthy' || c.category === 'Synced') healthy++
+    else if (c.category === 'OutOfSync') outOfSync++
     else other++
   }
   const total = changes.length
