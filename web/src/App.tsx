@@ -71,7 +71,7 @@ import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 const ALL_NODE_KINDS: NodeKind[] = [
   'Internet', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute',
   'Service', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
-  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'PersistentVolumeClaim', 'Namespace',
+  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'ServiceAccount', 'SealedSecret', 'ServiceMonitor', 'PodMonitor', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'PersistentVolumeClaim', 'Namespace',
   'Application', 'Kustomization', 'HelmRelease', 'GitRepository',
   'KnativeService', 'KnativeConfiguration', 'KnativeRevision', 'KnativeRoute',
   'Broker', 'Trigger', 'PingSource', 'ApiServerSource', 'ContainerSource', 'SinkBinding', 'Channel',
@@ -2183,9 +2183,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               // detail panel) sits behind the peek. Search-only change keeps the
               // pathname — and thus the peek's owner-path — intact.
               const params = new URLSearchParams(window.location.search)
-              if (params.has('workload') || params.has('tab')) {
+              if (params.has('workload') || params.has('tab') || params.has('run')) {
                 params.delete('workload')
                 params.delete('tab')
+                params.delete('run')
                 navigate({ pathname: window.location.pathname, search: params.toString() }, { replace: true })
               }
               navigateToResource(resource)

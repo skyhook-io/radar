@@ -123,9 +123,17 @@ export type CoreNodeKind =
   | 'PodGroup'
   | 'ConfigMap'
   | 'Secret'
+  | 'ServiceAccount'
+  | 'SealedSecret'
+  | 'ServiceMonitor'
+  | 'PodMonitor'
   | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
+  | 'Workflow'
+  | 'CronWorkflow'
+  | 'WorkflowTemplate'
+  | 'ClusterWorkflowTemplate'
   | 'PersistentVolumeClaim'
   | 'Node'
   | 'Namespace'
@@ -168,6 +176,10 @@ export function displayKind(kind: string): string {
   const shortNames: Record<string, string> = {
     HorizontalPodAutoscaler: 'HPA',
     PersistentVolumeClaim: 'PVC',
+    ServiceAccount: 'Service Account',
+    SealedSecret: 'Sealed Secret',
+    ServiceMonitor: 'Service Monitor',
+    PodMonitor: 'Pod Monitor',
     EC2NodeClass: 'NodeClass',
     KnativeService: 'Knative Svc',
     KnativeConfiguration: 'Knative Config',
@@ -857,6 +869,8 @@ export interface BatchUpgradeInfo {
 // Request body for applying new values to a release
 export interface ApplyValuesRequest {
   values: Record<string, unknown>
+  version?: string
+  repository?: string
 }
 
 // Response for previewing values changes
@@ -1274,6 +1288,9 @@ export interface WorkloadPodInfo {
   lastTerminationReason?: string
   createdAt?: string
   containerStatuses?: WorkloadPodContainerInfo[]
+  stepID?: string
+  stepName?: string
+  stepPhase?: string
 }
 
 // SSE event types for workload log streaming

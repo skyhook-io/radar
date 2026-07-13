@@ -837,7 +837,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         Service: 1, Ingress: 2, Gateway: 2,
         HTTPRoute: 2, GRPCRoute: 2, TCPRoute: 2, TLSRoute: 2,
         Deployment: 3, Rollout: 3, StatefulSet: 3, DaemonSet: 3,
-        Job: 4, CronJob: 4,
+        Job: 4, CronJob: 4, Workflow: 4, CronWorkflow: 4,
         ConfigMap: 5, Secret: 5,
         ReplicaSet: 6, Pod: 7,
         KnativeService: 1, KnativeRoute: 2, Broker: 2, Channel: 2,

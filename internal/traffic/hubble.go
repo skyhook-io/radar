@@ -361,7 +361,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 
 	// Start port-forward to Hubble Relay
 	log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
-	connInfo, err := portforward.Start(ctx, namespace, hubbleRelayService, h.relayPort, contextName)
+	connInfo, err := portforward.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
 	if err != nil {
 		return &portforward.ConnectionInfo{
 			Connected:   false,
@@ -486,7 +486,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	}
 
 	// Both attempts failed
-	portforward.Stop()
+	portforward.Stop(portforward.OwnerTraffic)
 	h.localPort = 0
 	return &portforward.ConnectionInfo{
 		Connected: false,

@@ -594,8 +594,6 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 		return
 	}
 
-	log.Printf("Broadcasting topology update to %d clients", len(clients))
-
 	// One broadcast cycle = one debounce fire that reaches clients. Counted
 	// here (not in the per-group loop below) so the metric reflects cycles,
 	// not the number of distinct namespace/view/policy groups.

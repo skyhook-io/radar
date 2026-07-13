@@ -986,17 +986,19 @@ export function useNamespaces() {
 }
 
 // Topology (for manual refresh)
-export function useTopology(namespaces: string[], viewMode: string = 'resources', options?: { enabled?: boolean }) {
+export function useTopology(namespaces: string[], viewMode: string = 'resources', options?: { enabled?: boolean; includeReplicaSets?: boolean; refetchInterval?: number | false }) {
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
   if (viewMode) params.set('view', viewMode)
+  if (options?.includeReplicaSets) params.set('includeReplicaSets', 'true')
   const queryString = params.toString()
 
   return useQuery<Topology>({
-    queryKey: ['topology', namespaces, viewMode],
+    queryKey: ['topology', namespaces, viewMode, options?.includeReplicaSets ?? false],
     queryFn: () => fetchJSON(`/topology${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // 5 seconds
     enabled: options?.enabled !== false,
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -1032,7 +1034,7 @@ export function useApplicationHistory(appKey: string | undefined, namespaces: st
   })
 }
 
-export function useGitOpsTree(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = []) {
+export function useGitOpsTree(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = [], options?: { enabled?: boolean }) {
   const ns = namespace || '_'
   const params = new URLSearchParams()
   if (group) params.set('group', group)
@@ -1042,7 +1044,7 @@ export function useGitOpsTree(kind: string, namespace: string, name: string, gro
   return useQuery<GitOpsResourceTree>({
     queryKey: ['gitops-tree', kind, namespace, name, group, namespaces],
     queryFn: () => fetchJSON(`/gitops/tree/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
-    enabled: Boolean(kind && name),
+    enabled: Boolean(kind && name) && (options?.enabled ?? true),
     staleTime: 5000,
   })
 }
@@ -1119,7 +1121,7 @@ export function useArgoRevisionMetadata(
 
 // Generic resource fetching - returns resource with relationships
 // Uses '_' as placeholder for cluster-scoped resources (empty namespace)
-export function useResource<T>(kind: string, namespace: string, name: string, group?: string) {
+export function useResource<T>(kind: string, namespace: string, name: string, group?: string, options?: { enabled?: boolean; refetchInterval?: number | false }) {
   // For cluster-scoped resources, use '_' as namespace placeholder
   const ns = namespace || '_'
   const params = new URLSearchParams()
@@ -1129,7 +1131,8 @@ export function useResource<T>(kind: string, namespace: string, name: string, gr
   const query = useQuery<ResourceWithRelationships<T>>({
     queryKey: ['resource', kind, namespace, name, group],
     queryFn: () => fetchJSON(`/resources/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
-    enabled: Boolean(kind && name),  // namespace can be empty for cluster-scoped resources
+    enabled: (options?.enabled ?? true) && Boolean(kind && name),  // namespace can be empty for cluster-scoped resources
+    refetchInterval: options?.refetchInterval,
   })
 
   // Extract resource and relationships from the response
@@ -1276,6 +1279,39 @@ export function mergeDeltaEvents(
   return merged.length > cap ? merged.slice(0, cap) : merged
 }
 
+// Delta-sync orchestration for useChanges, extracted so the
+// full-fetch → delta-poll → epoch-mismatch-resync contract is exercisable
+// without a React render. State is passed in explicitly — the cached page and
+// the shared meta store — rather than closed over from module scope, so a
+// caller (and a test) drives it with fresh state each invocation.
+export async function runDeltaSyncFetch(deps: {
+  path: string
+  queryString: string
+  limit: number
+  metaKey: string
+  cached: TimelineEvent[] | undefined
+  metaStore: Map<string, ChangesDeltaMeta>
+  now: number
+  signal?: AbortSignal
+}): Promise<TimelineEvent[]> {
+  const { path, queryString, limit, metaKey, cached, metaStore, now, signal } = deps
+  const meta = metaStore.get(metaKey)
+  const cursor = deltaFetchCursor(meta, cached, now)
+  if (cursor > 0) {
+    const delta = await fetchChangesPage(`${path}${queryString ? '&' : '?'}since_seq=${cursor}`, signal)
+    if (delta.epoch && delta.epoch === meta!.epoch) {
+      meta!.highWaterSeq = Math.max(meta!.highWaterSeq, delta.maxSeq, maxEventSeq(delta.events))
+      // Returning the cached reference on an empty delta skips re-renders.
+      return delta.events.length ? mergeDeltaEvents(cached!, delta.events, limit) : cached!
+    }
+    // Epoch changed — the store restarted and seq numbering reset, so the
+    // cursor is meaningless. Fall through to a full resync.
+  }
+  const full = await fetchChangesPage(path, signal)
+  metaStore.set(metaKey, { epoch: full.epoch, lastFullMs: now, highWaterSeq: Math.max(full.maxSeq, maxEventSeq(full.events)) })
+  return full.events
+}
+
 function getTimeRangeDate(range: TimeRange): Date | null {
   if (range === 'all') return null
   const now = new Date()
@@ -1332,21 +1368,7 @@ export function useChanges(options: UseChangesOptions = {}) {
 
       const metaKey = JSON.stringify(queryKey)
       const cached = queryClient.getQueryData<TimelineEvent[]>(queryKey)
-      const meta = changesDeltaMeta.get(metaKey)
-      const cursor = deltaFetchCursor(meta, cached, Date.now())
-      if (cursor > 0) {
-        const delta = await fetchChangesPage(`${path}${queryString ? '&' : '?'}since_seq=${cursor}`, signal)
-        if (delta.epoch && delta.epoch === meta!.epoch) {
-          meta!.highWaterSeq = Math.max(meta!.highWaterSeq, delta.maxSeq, maxEventSeq(delta.events))
-          // Returning the cached reference on an empty delta skips re-renders.
-          return delta.events.length ? mergeDeltaEvents(cached!, delta.events, limit) : cached!
-        }
-        // Epoch changed — the store restarted and seq numbering reset, so the
-        // cursor is meaningless. Fall through to a full resync.
-      }
-      const full = await fetchChangesPage(path, signal)
-      changesDeltaMeta.set(metaKey, { epoch: full.epoch, lastFullMs: Date.now(), highWaterSeq: Math.max(full.maxSeq, maxEventSeq(full.events)) })
-      return full.events
+      return runDeltaSyncFetch({ path, queryString, limit, metaKey, cached, metaStore: changesDeltaMeta, now: Date.now(), signal })
     },
     staleTime: 5000, // Consider data stale after 5 seconds to ensure fresh data on navigation
     refetchInterval: CHANGES_REFRESH_INTERVAL_MS, // SSE-driven invalidation handles real-time updates; this is the no-SSE fallback
@@ -2358,6 +2380,17 @@ export function useApplyResource() {
 // CronJob operations
 // ============================================================================
 
+function invalidateCronJobOperationQueries(queryClient: ReturnType<typeof useQueryClient>, namespace: string, name: string) {
+  queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
+  queryClient.invalidateQueries({ queryKey: ['resources', 'jobs'] })
+  queryClient.invalidateQueries({ queryKey: ['resource', 'cronjobs', namespace, name] })
+  queryClient.invalidateQueries({ queryKey: ['workload-runs', 'cronjobs', namespace, name] })
+  queryClient.invalidateQueries({ queryKey: ['applications'] })
+  queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+  queryClient.invalidateQueries({ queryKey: ['resource-counts'] })
+  queryClient.invalidateQueries({ queryKey: ['topology'] })
+}
+
 // Trigger a CronJob (create a Job from it)
 export function useTriggerCronJob() {
   const queryClient = useQueryClient()
@@ -2377,10 +2410,8 @@ export function useTriggerCronJob() {
       errorMessage: 'Failed to trigger CronJob',
       successMessage: 'CronJob triggered',
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
-      queryClient.invalidateQueries({ queryKey: ['resources', 'jobs'] })
-      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    onSuccess: (_, variables) => {
+      invalidateCronJobOperationQueries(queryClient, variables.namespace, variables.name)
     },
   })
 }
@@ -2404,9 +2435,8 @@ export function useSuspendCronJob() {
       errorMessage: 'Failed to suspend CronJob',
       successMessage: 'CronJob suspended',
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
-      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    onSuccess: (_, variables) => {
+      invalidateCronJobOperationQueries(queryClient, variables.namespace, variables.name)
     },
   })
 }
@@ -2430,9 +2460,8 @@ export function useResumeCronJob() {
       errorMessage: 'Failed to resume CronJob',
       successMessage: 'CronJob resumed',
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
-      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    onSuccess: (_, variables) => {
+      invalidateCronJobOperationQueries(queryClient, variables.namespace, variables.name)
     },
   })
 }
@@ -2665,11 +2694,11 @@ export function useHelmReleases(namespaces: string[] = []) {
 }
 
 // Get details for a specific Helm release
-export function useHelmRelease(namespace: string, name: string) {
+export function useHelmRelease(namespace: string, name: string, options?: { enabled?: boolean }) {
   return useQuery<HelmReleaseDetail>({
     queryKey: ['helm-release', namespace, name],
     queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}`),
-    enabled: Boolean(namespace && name),
+    enabled: Boolean(namespace && name) && (options?.enabled ?? true),
     staleTime: 5000,
     refetchInterval: 10000, // Poll for live resource status updates (post-upgrade/rollback)
   })
@@ -2956,19 +2985,24 @@ function streamHelmProgress(
   })
 }
 
-// Upgrade a release with progress streaming via SSE
+// When `values` is provided, the upgrade applies exactly those edited values
+// instead of carrying the release's prior values over blindly.
 export function upgradeWithProgress(
   namespace: string,
   name: string,
   version: string,
   repositoryName: string | undefined,
-  onProgress: (event: InstallProgressEvent) => void
+  onProgress: (event: InstallProgressEvent) => void,
+  values?: Record<string, unknown>
 ): Promise<void> {
   const params = new URLSearchParams({ version })
   if (repositoryName) params.set('repository', repositoryName)
+  const options: RequestInit = values
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values }) }
+    : { method: 'POST' }
   return streamHelmProgress(
     `${getApiBase()}/helm/releases/${namespace}/${name}/upgrade-stream?${params.toString()}`,
-    { method: 'POST' },
+    options,
     onProgress,
     'Upgrade failed',
   ).then(() => {})
@@ -2989,14 +3023,15 @@ export function rollbackWithProgress(
   ).then(() => {})
 }
 
-// Preview values change (dry-run upgrade)
+// When `version` is supplied, preview renders against that target chart version
+// instead of the release's current chart.
 export function useHelmPreviewValues() {
-  return useMutation<ValuesPreviewResponse, Error, { namespace: string; name: string; values: Record<string, unknown> }>({
-    mutationFn: async ({ namespace, name, values }) => {
+  return useMutation<ValuesPreviewResponse, Error, { namespace: string; name: string; values: Record<string, unknown>; version?: string; repository?: string }>({
+    mutationFn: async ({ namespace, name, values, version, repository }) => {
       const response = await apiFetch(`${getApiBase()}/helm/releases/${namespace}/${name}/values/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values }),
+        body: JSON.stringify({ values, version, repository }),
       })
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))
@@ -3747,6 +3782,44 @@ export interface WorkloadLogsResponse {
     timestamp: string
     content: string
   }[]
+  emptyReason?: string
+  emptyMessage?: string
+  command?: string
+}
+
+export interface WorkloadRun {
+  kind: string
+  namespace: string
+  name: string
+  phase: string
+  active: boolean
+  startedAt?: string
+  finishedAt?: string
+  scheduledAt?: string
+  trigger?: 'manual' | 'schedule' | string
+  message?: string
+  succeeded?: number
+  failed?: number
+  running?: number
+  desired?: number
+  parallelism?: number
+  progress?: string
+  template?: string
+  launcher?: {
+    kind: string
+    namespace?: string
+    name: string
+    group?: string
+  }
+  podTotal?: number
+  podSucceeded?: number
+  podFailed?: number
+  podRunning?: number
+  podPending?: number
+}
+
+export interface WorkloadRunsResponse {
+  runs: WorkloadRun[]
 }
 
 // Fetch pods for a workload
@@ -3756,6 +3829,24 @@ export function useWorkloadPods(kind: string, namespace: string, name: string) {
     queryFn: () => fetchJSON(`/workloads/${kind}/${namespace}/${name}/pods`),
     enabled: Boolean(kind && namespace && name),
     staleTime: 10000, // 10 seconds - pods can change
+  })
+}
+
+export function useWorkloadRuns(kind: string, namespace: string, name: string, enabled = true, options?: { refetchActive?: boolean; clusterScoped?: boolean }) {
+  const clusterScoped = options?.clusterScoped ?? false
+  const ns = clusterScoped ? '_' : namespace
+  const params = new URLSearchParams()
+  if (clusterScoped) params.set('clusterScoped', 'true')
+  const queryString = params.toString()
+
+  return useQuery<WorkloadRunsResponse>({
+    queryKey: ['workload-runs', kind, namespace, name, clusterScoped],
+    queryFn: () => fetchJSON(`/workloads/${kind}/${ns}/${name}/runs${queryString ? `?${queryString}` : ''}`),
+    enabled: enabled && Boolean(kind && name && (namespace || clusterScoped)),
+    staleTime: 10000,
+    refetchInterval: options?.refetchActive
+      ? (query) => query.state.data?.runs?.some((run) => run.active) ? 5000 : 30000
+      : false,
   })
 }
 

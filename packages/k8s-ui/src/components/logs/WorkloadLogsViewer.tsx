@@ -27,6 +27,9 @@ export interface WorkloadLogsFetchParams {
 export interface WorkloadLogsResult {
   pods: WorkloadPodInfo[]
   logs: WorkloadRawLog[]
+  emptyReason?: string
+  emptyMessage?: string
+  command?: string
 }
 
 export interface WorkloadLogsViewerProps {
@@ -61,6 +64,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
+  const [emptyCommand, setEmptyCommand] = useState<string | null>(null)
   const [showPodFilter, setShowPodFilter] = useState(false)
   const [logRange, setLogRange] = useState('100')
   const { showError, showSuccess } = useToast()
@@ -95,9 +100,10 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     setFetchError(null)
     try {
       const result = await fetchAll({ container: selectedContainer || undefined, tailLines, sinceSeconds })
-      // Older backends marshal empty results as null rather than [].
       const resultPods = result.pods ?? []
       const resultLogs = result.logs ?? []
+      setEmptyMessage(result.emptyMessage || null)
+      setEmptyCommand(result.command || null)
 
       podColorIndexRef.current = new Map(resultPods.map((pod, i) => [pod.name, i]))
       setPods(resultPods)
@@ -157,6 +163,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             const nextPods = data.pods as WorkloadPodInfo[]
             podColorIndexRef.current = new Map(nextPods.map((pod, i) => [pod.name, i]))
             setPods(nextPods)
+            setEmptyMessage(data.emptyMessage || null)
+            setEmptyCommand(data.command || null)
             setSelectedPods(prev => (
               prev.size === 0 ? new Set(nextPods.map((p: WorkloadPodInfo) => p.name)) : prev
             ))
@@ -180,8 +188,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
               const existing = new Set(prev.map(p => p.name))
               const toAdd = newPods.filter(p => !existing.has(p.name))
               if (toAdd.length === 0) return prev
-              return [...prev, ...toAdd]
+              const next = [...prev, ...toAdd]
+              podColorIndexRef.current = new Map(next.map((pod, i) => [pod.name, i]))
+              return next
             })
+            setEmptyMessage(null)
+            setEmptyCommand(null)
             setSelectedPods(prev => {
               const next = new Set(prev)
               newPods.forEach(p => next.add(p.name))
@@ -196,6 +208,10 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             // Don't remove from selectedPods — keep old log entries visible
             // while new pod logs start flowing in
           }
+        },
+        onEnd: (data: any) => {
+          if (data?.emptyMessage) setEmptyMessage(data.emptyMessage)
+          if (data?.command) setEmptyCommand(data.command)
         },
       },
       'Workload log stream connection failed',
@@ -299,8 +315,13 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             </div>
             {pods.map(pod => {
               const dotBg = palette.podColors[(podColorIndex.get(pod.name) ?? 0) % palette.podColors.length].bg
+              const primaryLabel = pod.stepName || pod.name
+              const secondaryLabel = pod.stepName ? pod.name : ''
+              const stateLabel = pod.stepPhase || pod.phase || (pod.ready ? 'Ready' : 'Not Ready')
               let readyColor: string
-              if (pod.ready) {
+              if (stateLabel === 'Failed' || stateLabel === 'Error') {
+                readyColor = isDark ? 'text-red-400' : 'text-red-700'
+              } else if (pod.ready || stateLabel === 'Succeeded') {
                 readyColor = isDark ? 'text-emerald-400' : 'text-emerald-700'
               } else {
                 readyColor = isDark ? 'text-amber-400' : 'text-amber-700'
@@ -314,9 +335,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
                     className={`w-3 h-3 rounded ${palette.borderLight} ${palette.elevatedBg} text-blue-500 focus:ring-blue-500 focus:ring-offset-0`}
                   />
                   <span className={`w-2 h-2 rounded-full ${dotBg}`} />
-                  <span className={`text-xs ${palette.textPrimary} truncate flex-1`}>{pod.name}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className={`block truncate text-xs ${palette.textPrimary}`}>{primaryLabel}</span>
+                    {secondaryLabel && <span className={`block truncate text-[10px] ${palette.textTertiary}`}>{secondaryLabel}</span>}
+                  </span>
                   <span className={`text-xs ${readyColor}`}>
-                    {pod.ready ? 'Ready' : 'Not Ready'}
+                    {stateLabel}
                   </span>
                 </label>
               )
@@ -360,7 +384,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
       showPodName
-      emptyMessage={pods.length === 0 ? 'No pods found' : 'No logs available'}
+      emptyMessage={emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
+      emptyCommand={emptyCommand}
       errorMessage={fetchError || (entries.length === 0 ? streamError : null)}
       forceDark={forceDark}
     />

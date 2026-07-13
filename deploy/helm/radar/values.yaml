@@ -161,7 +161,7 @@ rbac:
     prometheus: true        # monitoring.coreos.com
     reflector: true         # reflector.v1.k8s.emberstack.com
     reloader: true          # reloader.stakater.com
-    sealedSecrets: true     # sealed-secrets.bitnami.com
+    sealedSecrets: true     # bitnami.com
     strimzi: true           # strimzi.io, kafka.strimzi.io
     tekton: true            # tekton.dev
     traefik: true           # traefik.io, traefik.containo.us

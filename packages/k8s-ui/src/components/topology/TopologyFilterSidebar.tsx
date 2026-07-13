@@ -45,13 +45,22 @@ const RESOURCE_KINDS: {
   { kind: 'PodGroup', label: 'Pod Group', icon: getTopologyIcon('PodGroup'), color: 'text-lime-400', category: 'workloads' },
   { kind: 'Job', label: 'Job', icon: getTopologyIcon('Job'), color: 'text-orange-400', category: 'workloads' },
   { kind: 'CronJob', label: 'CronJob', icon: getTopologyIcon('CronJob'), color: 'text-orange-300', category: 'workloads' },
+  { kind: 'Workflow', label: 'Workflow', icon: getTopologyIcon('Workflow'), color: 'text-purple-400', category: 'workloads' },
+  { kind: 'CronWorkflow', label: 'CronWorkflow', icon: getTopologyIcon('CronWorkflow'), color: 'text-purple-300', category: 'workloads' },
 
   // Config
   { kind: 'ConfigMap', label: 'ConfigMap', icon: getTopologyIcon('ConfigMap'), color: 'text-amber-400', category: 'config' },
   { kind: 'Secret', label: 'Secret', icon: getTopologyIcon('Secret'), color: 'text-red-400', category: 'config' },
+  { kind: 'ServiceAccount', label: 'Service Account', icon: getTopologyIcon('ServiceAccount'), color: 'text-fuchsia-400', category: 'config' },
+  { kind: 'SealedSecret', label: 'Sealed Secret', icon: getTopologyIcon('SealedSecret'), color: 'text-violet-400', category: 'config' },
+  { kind: 'ServiceMonitor', label: 'Service Monitor', icon: getTopologyIcon('ServiceMonitor'), color: 'text-sky-400', category: 'config' },
+  { kind: 'PodMonitor', label: 'Pod Monitor', icon: getTopologyIcon('PodMonitor'), color: 'text-sky-400', category: 'config' },
+  { kind: 'WorkflowTemplate', label: 'WorkflowTemplate', icon: getTopologyIcon('WorkflowTemplate'), color: 'text-purple-300', category: 'config' },
+  { kind: 'ClusterWorkflowTemplate', label: 'ClusterWorkflowTemplate', icon: getTopologyIcon('ClusterWorkflowTemplate'), color: 'text-purple-300', category: 'config' },
 
   // Scaling
   { kind: 'HorizontalPodAutoscaler', label: 'HPA', icon: getTopologyIcon('HorizontalPodAutoscaler'), color: 'text-pink-400', category: 'scaling' },
+  { kind: 'ScaledJob', label: 'ScaledJob', icon: getTopologyIcon('ScaledJob'), color: 'text-pink-300', category: 'scaling' },
 
   // Knative
   { kind: 'KnativeService', label: 'Knative Service', icon: getTopologyIcon('KnativeService'), color: 'text-fuchsia-400', category: 'custom' },

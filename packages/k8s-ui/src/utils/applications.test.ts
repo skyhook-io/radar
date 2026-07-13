@@ -1,5 +1,47 @@
 import { describe, it, expect } from 'vitest'
-import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, type AppGroupFoldEntry, type AppRow } from './applications'
+import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, batchActivityForApp, batchRuntimeForApp, servingReadiness, type AppGroupFoldEntry, type AppRow, type AppWorkload } from './applications'
+
+describe('batch application runtime', () => {
+  it('uses the latest retained outcome instead of historical failure count', () => {
+    const app: AppRow = {
+      key: 'batch', name: 'batch', health: 'unhealthy', workload_class: 'job',
+      workloads: [{
+        kind: 'CronJob', namespace: 'demo', name: 'nightly', workload_class: 'job', health: 'unhealthy', ready: 0, desired: 0, restarts: 0,
+        batch: { retainedRuns: 4, failedRuns: 1, succeededRuns: 3, latestRunName: 'nightly-new', latestRunPhase: 'Succeeded', latestFinishedAt: '2026-07-10T00:00:00Z' },
+      }],
+    }
+    expect(batchRuntimeForApp(app)).toMatchObject({ label: 'Succeeded', health: 'healthy' })
+  })
+
+  it('does not let one workload success mask another workload latest failure', () => {
+    const app: AppRow = {
+      key: 'batch', name: 'batch', health: 'healthy', workload_class: 'job',
+      workloads: [
+        {
+          kind: 'CronJob', namespace: 'demo', name: 'nightly', workload_class: 'job', health: 'healthy', ready: 0, desired: 0, restarts: 0,
+          batch: { retainedRuns: 1, succeededRuns: 1, latestRunName: 'nightly-new', latestRunPhase: 'Succeeded', latestFinishedAt: '2026-07-10T01:00:00Z' },
+        },
+        {
+          kind: 'CronWorkflow', namespace: 'demo', name: 'sync', workload_class: 'job', health: 'unhealthy', ready: 0, desired: 0, restarts: 0,
+          batch: { retainedRuns: 1, failedRuns: 1, latestRunName: 'sync-old', latestRunPhase: 'Failed', latestFinishedAt: '2026-07-10T00:00:00Z' },
+        },
+      ],
+    }
+
+    expect(batchRuntimeForApp(app)).toEqual({
+      label: 'Failed',
+      health: 'unhealthy',
+      detail: 'CronWorkflow/sync latest retained run sync-old failed.',
+    })
+  })
+
+  it('excludes batch workloads from serving readiness', () => {
+    expect(servingReadiness([
+      { kind: 'Deployment', namespace: 'demo', name: 'api', workload_class: 'service', health: 'healthy', ready: 2, desired: 3, restarts: 0 },
+      { kind: 'Job', namespace: 'demo', name: 'run', workload_class: 'job', health: 'healthy', ready: 1, desired: 1, restarts: 0, batch: { retainedRuns: 1 } },
+    ])).toEqual({ ready: 2, desired: 3 })
+  })
+})
 
 describe('compareVersions', () => {
   it('orders semver', () => {
@@ -84,6 +126,46 @@ describe('identityEnvInferred', () => {
     expect(identityEnvInferred({ key: 'billing', env: 'staging', confidence: 'medium', evidence: 'name stem "billing" + shared image repo repo/app' })).toBe(false)
     expect(identityEnvInferred({ key: 'billing', env: 'staging', confidence: 'medium', evidence: 'environment label "staging" + name/repo evidence' })).toBe(false)
     expect(identityEnvInferred({ key: 'billing', env: 'staging', confidence: 'high', evidence: 'Argo CD source path billing (env overlay staging)' })).toBe(false)
+  })
+})
+
+describe('batchActivityForApp', () => {
+  const workload = (kind: string, name: string, batch?: AppWorkload['batch']): AppWorkload => ({
+    kind,
+    namespace: 'prod',
+    name,
+    health: 'neutral',
+    ready: 0,
+    desired: 0,
+    restarts: 0,
+    workload_class: kind === 'Deployment' ? 'service' : 'job',
+    batch,
+  })
+  const app = (workloads: AppWorkload[]): AppRow => ({
+    key: 'billing',
+    name: 'billing',
+    health: 'neutral',
+    workloads,
+  })
+
+  it('ranks failed, active, suspended, and quiet batch workloads without inventing retained history', () => {
+    const activity = batchActivityForApp(app([
+      workload('Deployment', 'api'),
+      workload('CronJob', 'nightly-success', { retainedRuns: 2, latestRunPhase: 'Succeeded', latestRunName: 'nightly-success-1' }),
+      workload('CronWorkflow', 'hourly-suspended', { suspended: true, retainedRuns: 0, schedule: '0 * * * *' }),
+      workload('Job', 'active-reindex', { activeRuns: 1, retainedRuns: 1, latestRunPhase: 'Running' }),
+      workload('Workflow', 'failed-migration', { failedRuns: 1, retainedRuns: 1, latestRunPhase: 'Failed', latestRunName: 'failed-migration', message: 'pod crashed' }),
+    ]))
+
+    expect(activity.map((item) => item.workload.name)).toEqual([
+      'failed-migration',
+      'active-reindex',
+      'hourly-suspended',
+      'nightly-success',
+    ])
+    expect(activity[0]).toMatchObject({ tone: 'rose', label: 'Latest run failed', failedRuns: 1, detail: 'pod crashed' })
+    expect(activity[1]).toMatchObject({ tone: 'sky', label: '1 active run', activeRuns: 1 })
+    expect(activity[3]).toMatchObject({ tone: 'muted', label: 'Latest run succeeded', retainedRuns: 2 })
   })
 })
 

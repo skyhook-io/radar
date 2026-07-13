@@ -450,7 +450,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_workload_logs",
 		Description: "Get aggregated logs from all pods of a workload (Deployment, StatefulSet, " +
-			"or DaemonSet). Logs are collected from all matching pods concurrently, then " +
+			"DaemonSet, Job, or Argo Workflow). Logs are collected from all matching pods concurrently, then " +
 			"server-side filtered to errors, warnings, panics, and stack traces using " +
 			"deterministic regex patterns and deduplicated. Set grep for additional " +
 			"server-side filtering before that summary stage, like `kubectl logs | grep PATTERN`. " +

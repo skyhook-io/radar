@@ -2,6 +2,7 @@ import { Tooltip } from '../ui/Tooltip'
 import {
   type AppRow,
   type AppWorkloadClass,
+  type BatchSignal,
   CHIP,
   CHIP_TONE,
   CLASS_META,
@@ -65,6 +66,15 @@ export function CategoryChip({ category, addonReason }: { category?: string; add
   return (
     <Tooltip content={<CategoryTooltip category={category} addonReason={addonReason} />} delay={150}>
       <span className={`${CHIP} ${category === 'mixed' ? CHIP_TONE.amber : CHIP_TONE.muted}`}>{category === 'addon' ? 'add-on' : 'mixed'}</span>
+    </Tooltip>
+  )
+}
+
+export function BatchSignalChip({ signal }: { signal: BatchSignal | null }) {
+  if (!signal) return null
+  return (
+    <Tooltip content={signal.detail} delay={150}>
+      <span className={`${CHIP} ${CHIP_TONE[signal.tone]}`}>{signal.label}</span>
     </Tooltip>
   )
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ApplicationsList,
@@ -6,6 +6,8 @@ import {
   CenteredEmpty,
   PageHeader,
   FreshnessControl,
+  IssueRow,
+  ISSUE_SEVERITY_RANK,
   useToast,
   orderEnvs,
   matchWorkloadAcrossInstances,
@@ -13,15 +15,23 @@ import {
   healthOf,
   compareVersions,
   gitOpsRouteForKind,
+  deploymentInventoryFromGitOps,
+  deploymentInventoryFromHelm,
+  memberRef,
+  subjectRef,
   type AppRow,
+  type AppWorkload,
   type AppIdentityInstance,
   type ApplicationView,
   type AppSourceRef,
+  type Issue,
+  type IssueResourceRef,
   type SelectedAppWorkload,
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
-import { Boxes } from 'lucide-react'
-import { useApplicationHistory, useApplications, useTopology } from '../../api/client'
+import { AlertTriangle, Boxes } from 'lucide-react'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
+import { useApplicationHistory, useApplications, useGitOpsTree, useHelmRelease, useIssues, useTopology, type IssuesResponse } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import { buildWorkloadPath, kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
@@ -138,7 +148,16 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     if (app.sourceRef?.namespace) namespaces.add(app.sourceRef.namespace)
     return Array.from(namespaces).sort()
   }, [app.sourceRef?.namespace, appNamespaces])
-  const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', { enabled: appNamespaces.length > 0 })
+  const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', {
+    enabled: appNamespaces.length > 0,
+    includeReplicaSets: true,
+    refetchInterval: 10_000,
+  })
+  const issuesQuery = useIssues(appNamespaces)
+  const appIssues = useMemo(
+    () => appIssuesForWorkloads(issuesQuery.data?.issues ?? [], app.workloads ?? []),
+    [issuesQuery.data?.issues, app.workloads],
+  )
 
   // The selected workload (?workload=<key>) is the scope switch and wins over
   // ?view= when both are present. With neither param, use the product default:
@@ -152,11 +171,28 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   const singleWorkloadKey = appWorkloads.length === 1 ? workloadKey(appWorkloads[0]) : null
   const selectedWorkloadKey = singleWorkloadKey ?? selectedWorkloadParam
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, { enabled: !selectedWorkloadKey })
+  const sourceInventoryEnabled = !selectedWorkloadKey && selectedView === 'topology'
+  const gitOpsSource = app.sourceRef?.type === 'gitops' ? app.sourceRef : undefined
+  const deploymentTreeQuery = useGitOpsTree(
+    gitOpsSource?.kind ?? '',
+    gitOpsSource?.namespace ?? '',
+    gitOpsSource?.name ?? '',
+    gitOpsSource?.group,
+    appHistoryNamespaces,
+    { enabled: sourceInventoryEnabled },
+  )
+  const helmSource = app.sourceRef?.type === 'helm' ? app.sourceRef : undefined
+  const helmReleaseQuery = useHelmRelease(helmSource?.namespace ?? '', helmSource?.name ?? '', { enabled: sourceInventoryEnabled })
+  const deploymentInventory = useMemo(
+    () => deploymentInventoryFromGitOps(deploymentTreeQuery.data) ?? deploymentInventoryFromHelm(helmReleaseQuery.data?.resources),
+    [deploymentTreeQuery.data, helmReleaseQuery.data?.resources],
+  )
   useEffect(() => {
     if (!singleWorkloadKey) return
     if (selectedWorkloadParam === singleWorkloadKey && !viewParam) return
     const params = new URLSearchParams(searchParams)
     params.delete('view')
+    params.delete('run')
     params.set('workload', singleWorkloadKey)
     setSearchParams(params, { replace: true })
   }, [searchParams, selectedWorkloadParam, setSearchParams, singleWorkloadKey, viewParam])
@@ -164,6 +200,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     (view: ApplicationView) => {
       const params = new URLSearchParams(searchParams)
       params.delete('tab')
+      params.delete('run')
       if (singleWorkloadKey) {
         params.delete('view')
         params.set('workload', singleWorkloadKey)
@@ -181,6 +218,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   const selectWorkload = useCallback(
     (key: string | null) => {
       const params = new URLSearchParams(searchParams)
+      params.delete('run')
       if (key) {
         const wasInWorkloadScope = !!selectedWorkloadKey
         params.delete('view')
@@ -197,6 +235,18 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
       setSearchParams(params)
     },
     [searchParams, selectedWorkloadKey, setSearchParams, singleWorkloadKey],
+  )
+  const selectWorkloadRun = useCallback(
+    (workload: SelectedAppWorkload, run: { kind: string; name: string; data: Record<string, unknown> }) => {
+      const params = new URLSearchParams(searchParams)
+      const runNamespace = typeof run.data?.namespace === 'string' ? run.data.namespace : workload.namespace
+      params.delete('view')
+      params.delete('tab')
+      params.set('workload', workloadKey(workload))
+      params.set('run', `${kindToPlural(run.kind)}/${runNamespace}/${run.name}`)
+      setSearchParams(params)
+    },
+    [searchParams, setSearchParams],
   )
   const openWorkloadResource = useCallback(
     (resource: SelectedResource) => {
@@ -265,6 +315,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
       const target = apps.find((a) => a.key === targetKey);
       const params = new URLSearchParams(searchParams);
       params.set('app', targetKey);
+      params.delete('run');
       const wk = params.get('workload');
       let matched = false;
       if (wk && target) {
@@ -311,10 +362,12 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         onBack={onBack}
         topology={topology}
         topologyLoading={topologyLoading}
+        deploymentInventory={deploymentInventory}
         identityInstances={identityInstances}
         onSwitchInstance={switchInstance}
         discoveredEnvs={discoveredEnvs}
         onNavigateToResource={onOpenResource}
+        onSelectWorkloadRun={selectWorkloadRun}
         history={historyQuery.data}
         historyLoading={historyQuery.isLoading}
         onOpenSource={openSource}
@@ -322,10 +375,21 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         onSelectWorkload={selectWorkload}
         selectedView={selectedView}
         onSelectView={selectView}
+        renderOverviewIssues={() => (
+          <AppOverviewIssues
+            issues={appIssues}
+            error={issuesQuery.error}
+            hasData={Boolean(issuesQuery.data)}
+            visibility={issuesQuery.data?.visibility}
+            onOpenResource={onOpenResource}
+          />
+        )}
+        hasOverviewIssues={appIssues.length > 0}
         renderWorkload={(workload: SelectedAppWorkload) => (
           <div className="h-full overflow-hidden">
             <WorkloadView
               kind={kindToPlural(workload.kind)}
+              group={workload.group}
               namespace={workload.namespace}
               name={workload.name}
               onBack={() => selectWorkload(null)}
@@ -339,4 +403,140 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
       />
     </div>
   )
+}
+
+function AppOverviewIssues({ issues, error, hasData, visibility, onOpenResource }: { issues: Issue[]; error: unknown; hasData: boolean; visibility?: IssuesResponse['visibility']; onOpenResource: (resource: SelectedResource) => void }) {
+  const [openId, setOpenId] = useState<string | null>(null)
+  const sorted = useMemo(() => [...issues].sort(compareAppOverviewIssues), [issues])
+
+  if (error && !hasData) {
+    return <AppOverviewIssuesState headline="Operational issues unavailable" body={error instanceof Error ? error.message : 'Radar could not load issues for this application.'} />
+  }
+
+  if (error) {
+    return (
+      <section className="space-y-2">
+        <AppOverviewIssuesState headline="Operational issue refresh failed" body="Showing the last successful result for this application." />
+        {sorted.length > 0 && <AppOverviewIssueRows issues={sorted} openId={openId} setOpenId={setOpenId} onOpenResource={onOpenResource} />}
+      </section>
+    )
+  }
+
+  if (visibility?.impact) {
+    return (
+      <section className="space-y-2">
+        <AppOverviewIssuesState headline={sorted.length === 0 ? 'No visible operational issues' : 'Operational issue visibility is limited'} body={`${visibility.impact} Results may be incomplete.`} />
+        {sorted.length > 0 && <AppOverviewIssueRows issues={sorted} openId={openId} setOpenId={setOpenId} onOpenResource={onOpenResource} />}
+      </section>
+    )
+  }
+
+  if (sorted.length === 0) return null
+
+  return <AppOverviewIssueRows issues={sorted} openId={openId} setOpenId={setOpenId} onOpenResource={onOpenResource} />
+}
+
+function AppOverviewIssuesState({ headline, body }: { headline: string; body: string }) {
+  return (
+    <section className="rounded-lg border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className={`mt-0.5 h-4 w-4 shrink-0 ${SEVERITY_TEXT.warning}`} aria-hidden />
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-theme-text-primary">{headline}</h2>
+          <p className="mt-0.5 text-sm text-theme-text-secondary">{body}</p>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function AppOverviewIssueRows({ issues: sorted, openId, setOpenId, onOpenResource }: { issues: Issue[]; openId: string | null; setOpenId: (value: string | null) => void; onOpenResource: (resource: SelectedResource) => void }) {
+
+  const navigate = (ref: IssueResourceRef) => {
+    onOpenResource({
+      kind: kindToPlural(ref.kind),
+      namespace: ref.namespace ?? '',
+      name: ref.name,
+      group: ref.group ?? '',
+    })
+  }
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-theme-text-primary">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-theme-text-secondary" aria-hidden />
+          <span>Operational Issues</span>
+          <span className="badge-sm text-[10px] text-theme-text-secondary">{sorted.length}</span>
+        </div>
+        <span className="text-xs text-theme-text-tertiary">Scoped to this application</span>
+      </div>
+      <ol className="flex flex-col gap-1.5">
+        {sorted.slice(0, 4).map((issue) => {
+          const rowKey = `${issue.cluster_id ?? ''}:${issue.id}`
+          return (
+            <IssueRow
+              key={rowKey}
+              issue={issue}
+              open={openId === rowKey}
+              onToggle={() => setOpenId(openId === rowKey ? null : rowKey)}
+              onResourceClick={navigate}
+            />
+          )
+        })}
+      </ol>
+      {sorted.length > 4 ? (
+        <div className="text-xs text-theme-text-tertiary">
+          Showing 4 of {sorted.length} issues. Open Issues for the full queue.
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function compareAppOverviewIssues(a: Issue, b: Issue): number {
+  const severity = ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity]
+  if (severity !== 0) return severity
+  const fa = a.first_seen ?? ''
+  const fb = b.first_seen ?? ''
+  if (fa !== fb) return fb.localeCompare(fa)
+  const ns = (a.namespace ?? '').localeCompare(b.namespace ?? '')
+  if (ns !== 0) return ns
+  const name = a.name.localeCompare(b.name)
+  if (name !== 0) return name
+  return a.id.localeCompare(b.id)
+}
+
+function appIssuesForWorkloads(issues: Issue[], workloads: AppWorkload[]): Issue[] {
+  if (issues.length === 0 || workloads.length === 0) return []
+  const workloadKeys = new Set(workloads.map(workloadIssueKey))
+  const out: Issue[] = []
+  const seen = new Set<string>()
+  for (const issue of issues) {
+    if (!issueRefs(issue).some((ref) => workloadKeys.has(issueRefKey(ref)))) continue
+    if (seen.has(issue.id)) continue
+    seen.add(issue.id)
+    out.push(issue)
+  }
+  return out
+}
+
+function workloadIssueKey(workload: AppWorkload): string {
+  return `${workload.kind.toLowerCase()}|${workload.namespace}|${workload.name}`
+}
+
+function issueRefKey(ref: IssueResourceRef): string {
+  return `${ref.kind.toLowerCase()}|${ref.namespace ?? ''}|${ref.name}`
+}
+
+function issueRefs(issue: Issue): IssueResourceRef[] {
+  const refs: IssueResourceRef[] = [subjectRef(issue)]
+  if (issue.owner) refs.push(issue.owner)
+  if (issue.incident_parent?.ref) refs.push(issue.incident_parent.ref)
+  for (const member of issue.members ?? []) refs.push(memberRef(issue, member))
+  for (const fact of issue.diagnostic_context?.facts ?? []) {
+    refs.push(...(fact.refs ?? []))
+    for (const related of fact.related_issues ?? []) refs.push(related.ref)
+  }
+  return refs
 }

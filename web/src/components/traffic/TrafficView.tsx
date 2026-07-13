@@ -958,7 +958,11 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }
   }, [sourcesData, sourcesLoading])
 
-  // Shared connection handler — used by auto-connect and retry buttons
+  // Shared connection handler — used by auto-connect and retry buttons.
+  // Deliberately does NOT reset hasAutoConnectedRef on failure: that ref gates
+  // the auto-connect effect, and re-arming it would re-fire auto-connect on
+  // every failed attempt (unbounded loop). Retries come from the explicit
+  // Retry button, which calls handleConnect directly.
   const handleConnect = useCallback(() => {
     setIsConnecting(true)
     setConnectionError(null)
@@ -969,18 +973,18 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         setIsConnecting(false)
         if (!data.connected && data.error) {
           setConnectionError(data.error)
-          hasAutoConnectedRef.current = false // allow retry
         }
       },
       onError: (error) => {
         setIsConnecting(false)
         setConnectionError(error.message)
-        hasAutoConnectedRef.current = false // allow retry
       },
     })
   }, [connectMutation, queryClient])
 
-  // Auto-connect when source is detected
+  // Auto-connect once when a source is first detected. Strictly one-shot per
+  // mount / cluster (the ref resets on cluster change); failures surface a
+  // manual Retry rather than re-arming this effect.
   useEffect(() => {
     if (wizardState === 'ready' && !hasAutoConnectedRef.current && !isConnecting) {
       hasAutoConnectedRef.current = true

@@ -1,3 +1,5 @@
+import type { ResourceRef } from '../types/core'
+
 // Shared model for the Applications surface — host-agnostic. The OSS single-
 // cluster view and (eventually) the Cloud fleet view both build on these types
 // and helpers. No React, no fetching.
@@ -5,194 +7,243 @@
 // The wire shape mirrors radar OSS's GET /api/applications response
 // (internal/server/applications.go). Field names match the Go json tags.
 
-export type AppWorkloadClass = 'service' | 'worker' | 'job' | 'mixed' | 'unknown'
-export type AppHealth = 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
+export type AppWorkloadClass =
+  "service" | "worker" | "job" | "mixed" | "unknown";
+export type AppHealth =
+  "healthy" | "degraded" | "unhealthy" | "neutral" | "unknown";
 
 export interface AppWorkload {
-  kind: string
-  namespace: string
-  name: string
-  workload_class?: AppWorkloadClass
-  image?: string
-  version?: string
-  appVersion?: string
-  health: string
-  ready: number
-  desired: number
-  restarts: number
-  reason?: string
+  kind: string;
+  group?: string;
+  namespace: string;
+  name: string;
+  workload_class?: AppWorkloadClass;
+  image?: string;
+  version?: string;
+  appVersion?: string;
+  health: string;
+  ready: number;
+  desired: number;
+  restarts: number;
+  reason?: string;
+  batch?: AppBatchSummary;
+}
+
+export interface AppBatchSummary {
+  schedule?: string;
+  suspended?: boolean;
+  activeRuns?: number;
+  retainedRuns?: number;
+  failedRuns?: number;
+  succeededRuns?: number;
+  latestRunName?: string;
+  latestRunPhase?: string;
+  latestStartedAt?: string;
+  latestFinishedAt?: string;
+  lastScheduledAt?: string;
+  lastSuccessfulAt?: string;
+  message?: string;
 }
 
 export interface AppRelationships {
-  services?: string[]
-  ingresses?: string[]
+  services?: string[];
+  ingresses?: string[];
   /** "Kind/name" — routes are polymorphic (HTTPRoute/GRPCRoute/…). */
   routes?: string[]
   configs?: number
   scalers?: number
   storage?: number
   pdbs?: number
+  networkPolicies?: number
+  serviceRefs?: ResourceRef[]
+  ingressRefs?: ResourceRef[]
+  routeRefs?: ResourceRef[]
+  configRefs?: ResourceRef[]
+  scalerRefs?: ResourceRef[]
+  storageRefs?: ResourceRef[]
+  pdbRefs?: ResourceRef[]
+  networkPolicyRefs?: ResourceRef[]
 }
 
 export interface AppEvent {
-  type: string
-  reason: string
-  message?: string
-  count: number
-  object: string
-  firstSeen?: string
-  lastSeen?: string
+  type: string;
+  reason: string;
+  message?: string;
+  count: number;
+  object: string;
+  firstSeen?: string;
+  lastSeen?: string;
 }
 
 export interface AppSourceRef {
-  type: 'gitops' | 'helm'
-  tool?: 'argocd' | 'fluxcd' | 'helm' | string
-  group?: string
-  kind: string
-  namespace: string
-  name: string
+  type: "gitops" | "helm";
+  tool?: "argocd" | "fluxcd" | "helm" | string;
+  group?: string;
+  kind: string;
+  namespace: string;
+  name: string;
+}
+
+export interface AppSourceStatus {
+  sync?: string
+  health?: string
 }
 
 export interface AppHistorySummary {
-  state: 'change' | 'incident' | 'none'
-  title: string
-  detail?: string
-  timestamp?: string
+  state: "change" | "incident" | "none";
+  title: string;
+  detail?: string;
+  timestamp?: string;
 }
 
 export interface AppHistoryAnchor {
-  type: 'gitops' | 'helm' | string
-  title: string
-  status?: string
-  revision?: string
-  message?: string
-  source?: string
-  initiatedBy?: string
-  timestamp?: string
+  type: "gitops" | "helm" | string;
+  title: string;
+  status?: string;
+  revision?: string;
+  message?: string;
+  source?: string;
+  initiatedBy?: string;
+  timestamp?: string;
 }
 
 export interface AppHistoryIncident {
-  severity: 'warning' | 'error' | 'info' | string
-  title: string
-  object: string
-  message?: string
-  count?: number
-  firstSeen?: string
-  lastSeen?: string
+  severity: "warning" | "error" | "info" | string;
+  title: string;
+  object: string;
+  message?: string;
+  count?: number;
+  firstSeen?: string;
+  lastSeen?: string;
 }
 
 export interface AppHistory {
-  appKey: string
-  sourceRef?: AppSourceRef
-  summary?: AppHistorySummary
-  anchors?: AppHistoryAnchor[]
-  incidents?: AppHistoryIncident[]
-  partialSources?: string[]
+  appKey: string;
+  sourceRef?: AppSourceRef;
+  summary?: AppHistorySummary;
+  anchors?: AppHistoryAnchor[];
+  incidents?: AppHistoryIncident[];
+  partialSources?: string[];
 }
 
 export interface AppIdentity {
   /** Shared display identity (the name stem). Derived classification — never
    *  an address; instance keys remain the only URLs. */
-  key: string
+  key: string;
   /** This instance's canonical env token (dev | staging | prod | …). */
-  env: string
+  env: string;
   /** high (declared source path) | medium (name stem + shared image repo). */
-  confidence: string
+  confidence: string;
   /** Human-readable why, for the app group chip tooltip. */
-  evidence: string
+  evidence: string;
   /** True when the key is backed by declared upstream identity and can group across clusters. */
-  portable?: boolean
+  portable?: boolean;
   /** Machine-readable provenance tier (radar applications_identity.go):
    *  explicit | argo-path | argo-appset | flux-source (declared origins, portable)
    *  · label | name-stem | namespace (NAMEs, per-cluster). */
-  source?: string
+  source?: string;
   /** Declared source-path stem (argo-path / flux-source only). The display `key`
    *  is the name stem; this disambiguates same-name/different-path apps in the
    *  portable cross-cluster fold. */
-  pathKey?: string
+  pathKey?: string;
 }
 
 /** The user-set annotation that forces cross-cluster grouping — the canonical
  *  answer to "how do I make this fold?" for non-GitOps apps. */
-export const APP_IDENTITY_ANNOTATION = 'app.skyhook.io/app'
+export const APP_IDENTITY_ANNOTATION = "app.skyhook.io/app";
 
 /** Whether a Source is a declared cross-cluster origin (mirrors the hub's
  *  isDeclaredPortableSource). NAMEs collide across clusters and stay per-cluster. */
 export function isDeclaredAppSource(source?: string): boolean {
-  return source === 'explicit' || source === 'argo-path' || source === 'argo-appset' || source === 'flux-source'
+  return (
+    source === "explicit" ||
+    source === "argo-path" ||
+    source === "argo-appset" ||
+    source === "flux-source"
+  );
 }
 
 /** A short label for how an app's identity was determined, by Source — the
  *  plain-language "grouped by …" phrase shown in the identity tooltip. */
 export function appSourceLabel(source?: string): string {
   switch (source) {
-    case 'explicit':
-      return `the ${APP_IDENTITY_ANNOTATION} annotation`
-    case 'argo-path':
-      return 'its Argo CD source path'
-    case 'argo-appset':
-      return 'its ApplicationSet (env fan-out)'
-    case 'flux-source':
-      return 'its Flux source'
-    case 'addon':
-      return 'a shared add-on name + chart/image'
-    case 'label':
-      return 'the app.kubernetes.io/name label'
-    case 'name-stem':
-      return 'a shared name + image'
-    case 'namespace':
-      return 'a shared namespace + image'
+    case "explicit":
+      return `the ${APP_IDENTITY_ANNOTATION} annotation`;
+    case "argo-path":
+      return "its Argo CD source path";
+    case "argo-appset":
+      return "its ApplicationSet (env fan-out)";
+    case "flux-source":
+      return "its Flux source";
+    case "addon":
+      return "a shared add-on name + chart/image";
+    case "label":
+      return "the app.kubernetes.io/name label";
+    case "name-stem":
+      return "a shared name + image";
+    case "namespace":
+      return "a shared namespace + image";
     default:
-      return 'its workload grouping'
+      return "its workload grouping";
   }
 }
 
 /** The explainer for "why isn't this grouped across clusters, and how do I fix
  *  it?" — drives the per-cluster row hint. `folds` is true when the identity is a
  *  declared origin (folds cross-cluster); otherwise `fix` says what to add. */
-export function appGroupingExplainer(identity?: AppIdentity): { folds: boolean; how: string; fix?: string } {
-  const folds = isDeclaredAppSource(identity?.source)
+export function appGroupingExplainer(identity?: AppIdentity): {
+  folds: boolean;
+  how: string;
+  fix?: string;
+} {
+  const folds = isDeclaredAppSource(identity?.source);
   return {
     folds,
     how: `Grouped by ${appSourceLabel(identity?.source)}.`,
     fix: folds
       ? undefined
       : `This app only has a per-cluster name, which can't prove two clusters run the same app. To fold it across clusters, set ${APP_IDENTITY_ANNOTATION} on its workloads in each cluster (same value), or deploy it via Argo CD / Flux with the environment in the source path.`,
-  }
+  };
 }
 
 export interface AppRow {
-  key: string
-  name: string
+  key: string;
+  name: string;
   /** The single namespace the app's WORKLOADS run in; absent/empty when they
    *  span several (use `namespaces`). Residence, not the GitOps manager's home. */
-  namespace?: string
+  namespace?: string;
   /** All distinct workload namespaces, sorted. */
-  namespaces?: string[]
+  namespaces?: string[];
   /** App identity grouping evidence — instances of one logical app across
    *  environments share identity.key. See applications_identity.go. */
-  identity?: AppIdentity
+  identity?: AppIdentity;
   /** pkg/subject overlay tier (0 = raw, no signal); 1-9. */
-  tier?: number
+  tier?: number;
   /** high | medium | low */
-  confidence?: string
+  confidence?: string;
   /** app | addon | mixed — classification hint, never identity. */
   category?: string
   addonReason?: string
   workload_class?: AppWorkloadClass
-  /** worst-of across workloads: healthy | degraded | unhealthy | unknown. */
+  /** Worst-of runtime health and exact deployment-source status. */
   health: string
+  /** Worst-of across workloads, independent of the deployment source. */
+  runtimeHealth?: string
   /** distinct image tags. */
-  versions?: string[]
+  versions?: string[];
   /** True when the SAME image runs different tags across workloads — real
    *  drift. Multiple components on different images is normal, not skew. */
-  versionSkew?: boolean
+  versionSkew?: boolean;
   /** Single upstream version (app.kubernetes.io/version) when all workloads
    *  agree — the app's "main version". Empty for multi-chart umbrellas. */
-  appVersion?: string
+  appVersion?: string;
   /** Exact source-system object when the grouping signal names one. Label/name
    *  inferred apps intentionally omit this instead of guessing. */
   sourceRef?: AppSourceRef
+  /** Controller-reported delivery state for the exact source. */
+  sourceStatus?: AppSourceStatus
+  /** Workloads resolve to different Helm/GitOps source objects. */
+  sourceConflict?: boolean
   workloads: AppWorkload[]
   events?: AppEvent[]
   relationships?: AppRelationships
@@ -200,7 +251,7 @@ export interface AppRow {
    *  ("instance:billing-prod", "part-of:x", "name:x", "app:x", "helm:release",
    *  "argo:appname") plus informational "name-stem:<stem>". The timeline joins
    *  events to this app by these keys — see buildAppMembershipIndex. */
-  matchKeys?: string[]
+  matchKeys?: string[];
 }
 
 // -----------------------------------------------------------------------------
@@ -208,13 +259,13 @@ export interface AppRow {
 // envs sort trailing.
 // -----------------------------------------------------------------------------
 
-export const ENV_RANK: Record<string, number> = { dev: 0, staging: 1, prod: 2 }
+export const ENV_RANK: Record<string, number> = { dev: 0, staging: 1, prod: 2 };
 
 /** Rank for an environment label, or null when it isn't on the ladder. */
 export function envRank(env: string | undefined): number | null {
-  if (!env) return null
-  const r = ENV_RANK[env.toLowerCase()]
-  return r === undefined ? null : r
+  if (!env) return null;
+  const r = ENV_RANK[env.toLowerCase()];
+  return r === undefined ? null : r;
 }
 
 // Namespace-name token → canonical env. Matched on the whole name first, then
@@ -227,81 +278,123 @@ export function envRank(env: string | undefined): number | null {
 // so a "loadtest" namespace labels once the cluster itself proves the token is
 // an env. Zero local vocabulary beyond the trio.
 const ENV_NS_TOKENS: Record<string, string> = {
-  dev: 'dev', devel: 'dev', develop: 'dev', development: 'dev',
-  stg: 'staging', stage: 'staging', staging: 'staging',
-  prd: 'prod', prod: 'prod', production: 'prod', live: 'prod',
-}
+  dev: "dev",
+  devel: "dev",
+  develop: "dev",
+  development: "dev",
+  stg: "staging",
+  stage: "staging",
+  staging: "staging",
+  prd: "prod",
+  prod: "prod",
+  production: "prod",
+  live: "prod",
+};
 
 /** Infer a canonical environment from a namespace name, or null when nothing
  *  recognizable is present (conservative — `kube-system`, `billing` → null). */
-export function envFromNamespace(namespace: string | undefined, extraTokens?: ReadonlySet<string>): string | null {
-  if (!namespace) return null
-  const lower = namespace.toLowerCase()
-  const hit = (tok: string): string | null => ENV_NS_TOKENS[tok] ?? (extraTokens?.has(tok) ? tok : null)
-  const whole = hit(lower)
-  if (whole) return whole
+export function envFromNamespace(
+  namespace: string | undefined,
+  extraTokens?: ReadonlySet<string>,
+): string | null {
+  if (!namespace) return null;
+  const lower = namespace.toLowerCase();
+  const hit = (tok: string): string | null =>
+    ENV_NS_TOKENS[tok] ?? (extraTokens?.has(tok) ? tok : null);
+  const whole = hit(lower);
+  if (whole) return whole;
   for (const seg of lower.split(/[-_]/).filter(Boolean)) {
-    const h = hit(seg)
-    if (h) return h
+    const h = hit(seg);
+    if (h) return h;
   }
-  return null
+  return null;
 }
 
 export interface ResolvedAppEnv {
   /** Canonical env token (lowercased), or '' when unlabeled. */
-  env: string
+  env: string;
   /** True when derived from the namespace heuristic (not an explicit label). */
-  inferred: boolean
+  inferred: boolean;
 }
 
 /** Resolve an environment via the precedence cascade: an explicit env wins;
  *  otherwise the namespace heuristic (tagged inferred); otherwise unlabeled. */
-export function resolveEnv(explicitEnv: string | undefined, namespace: string | undefined, extraTokens?: ReadonlySet<string>): ResolvedAppEnv {
-  const explicit = (explicitEnv || '').trim()
-  if (explicit) return { env: explicit.toLowerCase(), inferred: false }
-  const inferred = envFromNamespace(namespace, extraTokens)
-  if (inferred) return { env: inferred, inferred: true }
-  return { env: '', inferred: false }
+export function resolveEnv(
+  explicitEnv: string | undefined,
+  namespace: string | undefined,
+  extraTokens?: ReadonlySet<string>,
+): ResolvedAppEnv {
+  const explicit = (explicitEnv || "").trim();
+  if (explicit) return { env: explicit.toLowerCase(), inferred: false };
+  const inferred = envFromNamespace(namespace, extraTokens);
+  if (inferred) return { env: inferred, inferred: true };
+  return { env: "", inferred: false };
 }
 
-export function identityEnvInferred(identity: AppIdentity | undefined): boolean {
-	if (!identity) return false
-	return identity.evidence.startsWith('namespace stem ')
+export function identityEnvInferred(
+  identity: AppIdentity | undefined,
+): boolean {
+  if (!identity) return false;
+  return identity.evidence.startsWith("namespace stem ");
 }
 
 // -----------------------------------------------------------------------------
 // System namespaces — cluster plumbing hidden by default on the app surface.
 // -----------------------------------------------------------------------------
 
-const SYSTEM_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node-lease', 'kube-flannel', 'local-path-storage'])
+const SYSTEM_NAMESPACES = new Set([
+  "kube-system",
+  "kube-public",
+  "kube-node-lease",
+  "kube-flannel",
+  "local-path-storage",
+]);
 
 /** True for cluster-plumbing namespaces (kube-*, *-system operators) the app
  *  list hides by default. The `-system` suffix catches operator namespaces like
  *  `cert-manager`'s `gatekeeper-system`, `kourier-system`, etc.; `gke-managed-`
  *  is Google's documented prefix for GKE-managed component namespaces. */
 export function isSystemNamespace(ns: string | undefined): boolean {
-  if (!ns) return false
-  const lower = ns.toLowerCase()
-  return SYSTEM_NAMESPACES.has(lower) || lower.endsWith('-system') || lower.startsWith('gke-managed-')
+  if (!ns) return false;
+  const lower = ns.toLowerCase();
+  return (
+    SYSTEM_NAMESPACES.has(lower) ||
+    lower.endsWith("-system") ||
+    lower.startsWith("gke-managed-")
+  );
 }
 
 // -----------------------------------------------------------------------------
 // Category — the app/add-on/mixed classification hint (never identity).
 // -----------------------------------------------------------------------------
 
-export type AppCategory = 'app' | 'addon' | 'mixed'
+export type AppCategory = "app" | "addon" | "mixed";
 
-export const CATEGORY_ORDER: AppCategory[] = ['app', 'addon', 'mixed']
+export const CATEGORY_ORDER: AppCategory[] = ["app", "addon", "mixed"];
 
-export const CATEGORY_META: Record<AppCategory, { label: string; tooltip: string }> = {
-  app: { label: 'App', tooltip: 'Software you deploy and run — services, workers, jobs.' },
-  addon: { label: 'Add-on', tooltip: 'Platform machinery (controllers, operators, system charts), classified by chart/label evidence. Shown for completeness.' },
-  mixed: { label: 'Mixed', tooltip: 'Has both app and add-on evidence. Kept visible — classification is informational, not identity.' },
-}
+export const CATEGORY_META: Record<
+  AppCategory,
+  { label: string; tooltip: string }
+> = {
+  app: {
+    label: "App",
+    tooltip: "Software you deploy and run — services, workers, jobs.",
+  },
+  addon: {
+    label: "Add-on",
+    tooltip:
+      "Platform machinery (controllers, operators, system charts), classified by chart/label evidence. Shown for completeness.",
+  },
+  mixed: {
+    label: "Mixed",
+    tooltip:
+      "Has both app and add-on evidence. Kept visible — classification is informational, not identity.",
+  },
+};
 
 /** The category bucket for a row — apps with no category default to 'app'. */
 export function categoryOf(category: string | undefined): AppCategory {
-  return category === 'addon' || category === 'mixed' ? category : 'app'
+  return category === "addon" || category === "mixed" ? category : "app";
 }
 
 // -----------------------------------------------------------------------------
@@ -311,47 +404,51 @@ export function categoryOf(category: string | undefined): AppCategory {
 // -----------------------------------------------------------------------------
 
 function parseVersion(v: string | undefined): number[] | null {
-  if (!v) return null
-  const t = v.trim().replace(/^v/i, '')
-  if (!/^\d+(\.\d+)*$/.test(t)) return null
-  return t.split('.').map((n) => parseInt(n, 10))
+  if (!v) return null;
+  const t = v.trim().replace(/^v/i, "");
+  if (!/^\d+(\.\d+)*$/.test(t)) return null;
+  return t.split(".").map((n) => parseInt(n, 10));
 }
 
 /** Date-stamped CI tags ("main_2026-03-26_05", "billing_main_2026-05-18_00"):
  *  same prefix + extractable date (+ optional sequence) gives a total order.
  *  Different prefixes or no date → not comparable; never guess. */
-const DATE_TAG = /^(.*?)[-_](\d{4})[-_.](\d{2})[-_.](\d{2})(?:[-_.](\d+))?$/
+const DATE_TAG = /^(.*?)[-_](\d{4})[-_.](\d{2})[-_.](\d{2})(?:[-_.](\d+))?$/;
 
 function parseDateTag(v: string): { prefix: string; ord: number } | null {
-  const m = DATE_TAG.exec(v)
-  if (!m) return null
-  const [, prefix, y, mo, d, seq] = m
-  const ord = Number(y) * 1e8 + Number(mo) * 1e6 + Number(d) * 1e4 + Number(seq ?? 0)
-  return { prefix, ord }
+  const m = DATE_TAG.exec(v);
+  if (!m) return null;
+  const [, prefix, y, mo, d, seq] = m;
+  const ord =
+    Number(y) * 1e8 + Number(mo) * 1e6 + Number(d) * 1e4 + Number(seq ?? 0);
+  return { prefix, ord };
 }
 
 /** -1 if a<b, 1 if a>b, 0 if equal, null if either isn't a comparable version. */
-export function compareVersions(a: string | undefined, b: string | undefined): number | null {
+export function compareVersions(
+  a: string | undefined,
+  b: string | undefined,
+): number | null {
   // Date-stamped pipeline tags first — semver parsing would misread them.
   if (a && b) {
-    const da = parseDateTag(a)
-    const db = parseDateTag(b)
+    const da = parseDateTag(a);
+    const db = parseDateTag(b);
     if (da && db) {
-      if (da.prefix !== db.prefix) return null
-      return da.ord === db.ord ? 0 : da.ord < db.ord ? -1 : 1
+      if (da.prefix !== db.prefix) return null;
+      return da.ord === db.ord ? 0 : da.ord < db.ord ? -1 : 1;
     }
-    if (da || db) return null
+    if (da || db) return null;
   }
-  const pa = parseVersion(a)
-  const pb = parseVersion(b)
-  if (!pa || !pb) return null
-  const len = Math.max(pa.length, pb.length)
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  if (!pa || !pb) return null;
+  const len = Math.max(pa.length, pb.length);
   for (let i = 0; i < len; i++) {
-    const x = pa[i] ?? 0
-    const y = pb[i] ?? 0
-    if (x !== y) return x < y ? -1 : 1
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x < y ? -1 : 1;
   }
-  return 0
+  return 0;
 }
 
 // -----------------------------------------------------------------------------
@@ -364,51 +461,72 @@ export function compareVersions(a: string | undefined, b: string | undefined): n
 /** Coarse provenance bucket for the Source facet. Stable ids — display labels
  *  live in SOURCE_META (the house meta-map pattern), so they can be re-worded
  *  without breaking facet state or future URL serialization. */
-export type AppSource = 'argocd' | 'flux' | 'helm' | 'label' | 'ungrouped'
+export type AppSource = "argocd" | "flux" | "helm" | "label" | "ungrouped";
 
-export const SOURCE_ORDER: AppSource[] = ['argocd', 'flux', 'helm', 'label', 'ungrouped']
+export const SOURCE_ORDER: AppSource[] = [
+  "argocd",
+  "flux",
+  "helm",
+  "label",
+  "ungrouped",
+];
 
 export const SOURCE_META: Record<AppSource, { label: string }> = {
-  argocd: { label: 'Argo CD' },
-  flux: { label: 'Flux' },
-  helm: { label: 'Helm' },
-  label: { label: 'Label' },
-  ungrouped: { label: 'Ungrouped' },
-}
+  argocd: { label: "Argo CD" },
+  flux: { label: "Flux" },
+  helm: { label: "Helm" },
+  label: { label: "Label" },
+  ungrouped: { label: "Ungrouped" },
+};
 
 interface TierMeta {
-  source: AppSource
+  source: AppSource;
   /** Tooltip phrase pieces: "Grouped by {lead} `{code(name)}` {trail}". */
-  lead: string
-  code: (name: string) => string
-  trail?: string
+  lead: string;
+  code: (name: string) => string;
+  trail?: string;
 }
 
 const TIER_META: Record<number, TierMeta> = {
-  1: { source: 'flux', lead: 'its Flux HelmRelease', code: (n) => n },
-  2: { source: 'flux', lead: 'its Flux Kustomization', code: (n) => n },
-  3: { source: 'argocd', lead: 'its Argo CD Application', code: (n) => n },
-  4: { source: 'argocd', lead: 'its Argo CD Application', code: (n) => n },
-  5: { source: 'helm', lead: 'its Helm release', code: (n) => n },
-  6: { source: 'label', lead: 'the', code: () => 'app.kubernetes.io/instance', trail: 'label' },
-  7: { source: 'label', lead: 'the', code: () => 'app.kubernetes.io/part-of', trail: 'label' },
-  8: { source: 'label', lead: 'the', code: () => 'app.kubernetes.io/name', trail: 'label' },
-  9: { source: 'label', lead: 'the', code: () => 'app', trail: 'label' },
-}
+  1: { source: "flux", lead: "its Flux HelmRelease", code: (n) => n },
+  2: { source: "flux", lead: "its Flux Kustomization", code: (n) => n },
+  3: { source: "argocd", lead: "its Argo CD Application", code: (n) => n },
+  4: { source: "argocd", lead: "its Argo CD Application", code: (n) => n },
+  5: { source: "helm", lead: "its Helm release", code: (n) => n },
+  6: {
+    source: "label",
+    lead: "the",
+    code: () => "app.kubernetes.io/instance",
+    trail: "label",
+  },
+  7: {
+    source: "label",
+    lead: "the",
+    code: () => "app.kubernetes.io/part-of",
+    trail: "label",
+  },
+  8: {
+    source: "label",
+    lead: "the",
+    code: () => "app.kubernetes.io/name",
+    trail: "label",
+  },
+  9: { source: "label", lead: "the", code: () => "app", trail: "label" },
+};
 
 export function sourceOf(tier: number | undefined): AppSource {
-  if (!tier) return 'ungrouped'
-  return TIER_META[tier]?.source ?? 'label'
+  if (!tier) return "ungrouped";
+  return TIER_META[tier]?.source ?? "label";
 }
 
 /** Short badge label for an app's provenance tier (which tool/source grouped it). */
 export function overlayProvenance(tier: number | undefined): string {
-  return SOURCE_META[sourceOf(tier)].label
+  return SOURCE_META[sourceOf(tier)].label;
 }
 
 function appNameFromKey(key: string): string {
-  const slash = key.lastIndexOf('/')
-  return slash >= 0 && slash < key.length - 1 ? key.slice(slash + 1) : key
+  const slash = key.lastIndexOf("/");
+  return slash >= 0 && slash < key.length - 1 ? key.slice(slash + 1) : key;
 }
 
 // How an app was grouped, decomposed so the tooltip can render the source
@@ -416,33 +534,41 @@ function appNameFromKey(key: string): string {
 // `lead` + `code` + `trail` reads as a phrase: "its Flux HelmRelease `argocd`"
 // or "the `app.kubernetes.io/part-of` label". `code` empty → no chip.
 export interface ProvenanceSource {
-  lead: string
-  code: string
-  trail?: string
+  lead: string;
+  code: string;
+  trail?: string;
 }
 
-export function provenanceSource(tier: number | undefined, key: string): ProvenanceSource {
-  const meta = tier ? TIER_META[tier] : undefined
-  if (!meta) return { lead: 'cluster-native evidence', code: '' }
-  return { lead: meta.lead, code: meta.code(appNameFromKey(key)), trail: meta.trail }
+export function provenanceSource(
+  tier: number | undefined,
+  key: string,
+): ProvenanceSource {
+  const meta = tier ? TIER_META[tier] : undefined;
+  if (!meta) return { lead: "cluster-native evidence", code: "" };
+  return {
+    lead: meta.lead,
+    code: meta.code(appNameFromKey(key)),
+    trail: meta.trail,
+  };
 }
-
 
 /** The distinct namespaces an app's workloads run in, sorted. Prefers the
  *  server's `namespaces` field, deriving from workloads for older payloads. */
 export function namespacesOf(app: AppRow): string[] {
-  if (app.namespaces && app.namespaces.length > 0) return app.namespaces
-  const nss = Array.from(new Set((app.workloads || []).map((w) => w.namespace).filter(Boolean))).sort()
-  if (nss.length > 0) return nss
-  return app.namespace ? [app.namespace] : []
+  if (app.namespaces && app.namespaces.length > 0) return app.namespaces;
+  const nss = Array.from(
+    new Set((app.workloads || []).map((w) => w.namespace).filter(Boolean)),
+  ).sort();
+  if (nss.length > 0) return nss;
+  return app.namespace ? [app.namespace] : [];
 }
 
 /** An app's single namespace, or '' when it spans several — callers must not
  *  pick an arbitrary one (env inference and the system-namespace filter both
  *  key off this; a wrong pick misleads). Use namespacesOf for the full list. */
 export function namespaceOf(app: AppRow): string {
-  const nss = namespacesOf(app)
-  return nss.length === 1 ? nss[0] : ''
+  const nss = namespacesOf(app);
+  return nss.length === 1 ? nss[0] : "";
 }
 
 // -----------------------------------------------------------------------------
@@ -457,27 +583,27 @@ export function namespaceOf(app: AppRow): string {
  *  server row key), so two env-instances that share identity.key stay distinct
  *  header lanes (each with its own env chip). */
 export interface AppMembership {
-  appKey: string
-  appName: string
-  env?: string
-  evidence?: string
+  appKey: string;
+  appName: string;
+  env?: string;
+  evidence?: string;
 }
 
 export interface AppMembershipIndex {
   /** 'Kind/namespace/name' → app. Built from row.workloads + satellite arrays. */
-  byResource: Map<string, AppMembership>
+  byResource: Map<string, AppMembership>;
   /** 'kind:namespace:value' (instance/part-of/name/app/helm/argo) → app. Built
    *  from row.matchKeys EXCLUDING name-stem (v1 matches exact kinds only). Keys
    *  are namespace-scoped so a shared label value across namespaces can't
    *  cross-join; lookups use the event's namespace. Catches events from
    *  resources deleted before the current snapshot. */
-  byEvidence: Map<string, AppMembership>
+  byEvidence: Map<string, AppMembership>;
 }
 
 // Collision policy: FIRST row wins (deterministic — rows arrive in the server's
 // sorted order). A satellite/evidence shared by two apps attributes to the first.
 function setFirst<V>(map: Map<string, V>, key: string, value: V): void {
-  if (!map.has(key)) map.set(key, value)
+  if (!map.has(key)) map.set(key, value);
 }
 
 /** Build the resource + evidence membership index from the applications rows.
@@ -487,37 +613,40 @@ function setFirst<V>(map: Map<string, V>, key: string, value: V): void {
  *  skipped (workloads still index fine). `byEvidence` drops name-stem keys: the
  *  server ships them for display, but v1 only joins events on exact label kinds. */
 export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
-  const byResource = new Map<string, AppMembership>()
-  const byEvidence = new Map<string, AppMembership>()
+  const byResource = new Map<string, AppMembership>();
+  const byEvidence = new Map<string, AppMembership>();
   for (const row of rows) {
     const membership: AppMembership = {
       appKey: row.key,
       appName: row.name,
       env: row.identity?.env || undefined,
       evidence: row.identity?.evidence || undefined,
-    }
+    };
     for (const w of row.workloads || []) {
-      if (w.kind && w.name) setFirst(byResource, `${w.kind}/${w.namespace}/${w.name}`, membership)
+      if (w.kind && w.name)
+        setFirst(byResource, `${w.kind}/${w.namespace}/${w.name}`, membership);
     }
-    const ns = namespaceOf(row)
+    const ns = namespaceOf(row);
     if (ns && row.relationships) {
-      for (const s of row.relationships.services || []) setFirst(byResource, `Service/${ns}/${s}`, membership)
-      for (const i of row.relationships.ingresses || []) setFirst(byResource, `Ingress/${ns}/${i}`, membership)
+      for (const s of row.relationships.services || [])
+        setFirst(byResource, `Service/${ns}/${s}`, membership);
+      for (const i of row.relationships.ingresses || [])
+        setFirst(byResource, `Ingress/${ns}/${i}`, membership);
       // Routes ship as "Kind/name" (HTTPRoute/GRPCRoute/…); index under the
       // concrete kind so the key matches the route lane's id, not a generic "Route".
       for (const r of row.relationships.routes || []) {
-        const slash = r.indexOf('/')
-        const routeKind = slash > 0 ? r.slice(0, slash) : 'Route'
-        const routeName = slash > 0 ? r.slice(slash + 1) : r
-        setFirst(byResource, `${routeKind}/${ns}/${routeName}`, membership)
+        const slash = r.indexOf("/");
+        const routeKind = slash > 0 ? r.slice(0, slash) : "Route";
+        const routeName = slash > 0 ? r.slice(slash + 1) : r;
+        setFirst(byResource, `${routeKind}/${ns}/${routeName}`, membership);
       }
     }
     for (const mk of row.matchKeys || []) {
-      if (mk.startsWith('name-stem:')) continue
-      setFirst(byEvidence, mk, membership)
+      if (mk.startsWith("name-stem:")) continue;
+      setFirst(byEvidence, mk, membership);
     }
   }
-  return { byResource, byEvidence }
+  return { byResource, byEvidence };
 }
 
 // -----------------------------------------------------------------------------
@@ -533,20 +662,35 @@ export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
  *  overview. Callers extend it with the group's own (discovered) env tokens
  *  via the extraTokens parameter. */
 const NAME_ENV_TOKENS = new Set([
-  'dev', 'development', 'staging', 'stage', 'stg', 'prod', 'production', 'prd',
-  'qa', 'uat', 'preprod', 'preview', 'canary',
-])
+  "dev",
+  "development",
+  "staging",
+  "stage",
+  "stg",
+  "prod",
+  "production",
+  "prd",
+  "qa",
+  "uat",
+  "preprod",
+  "preview",
+  "canary",
+]);
 
 /** Strip a recognized env affix from a workload/app name —
  *  "billing-staging" → "billing", "qa-koala-backend" → "koala-backend".
  *  Used to match "the same workload" across app group env instances. */
-export function stripEnvAffix(name: string, extraTokens?: ReadonlySet<string>): string {
-  const isEnv = (tok: string) => NAME_ENV_TOKENS.has(tok) || (extraTokens?.has(tok) ?? false)
-  const i = name.lastIndexOf('-')
-  if (i > 0 && isEnv(name.slice(i + 1).toLowerCase())) return name.slice(0, i)
-  const j = name.indexOf('-')
-  if (j > 0 && isEnv(name.slice(0, j).toLowerCase())) return name.slice(j + 1)
-  return name
+export function stripEnvAffix(
+  name: string,
+  extraTokens?: ReadonlySet<string>,
+): string {
+  const isEnv = (tok: string) =>
+    NAME_ENV_TOKENS.has(tok) || (extraTokens?.has(tok) ?? false);
+  const i = name.lastIndexOf("-");
+  if (i > 0 && isEnv(name.slice(i + 1).toLowerCase())) return name.slice(0, i);
+  const j = name.indexOf("-");
+  if (j > 0 && isEnv(name.slice(0, j).toLowerCase())) return name.slice(j + 1);
+  return name;
 }
 
 /** Find "the same workload" in a sibling env instance: exact kind+name first,
@@ -555,61 +699,77 @@ export function stripEnvAffix(name: string, extraTokens?: ReadonlySet<string>): 
  *  strip too. Null = no counterpart — the switch shows the instance overview. */
 export function matchWorkloadAcrossInstances(
   workloadKey: string,
-  targetWorkloads: Pick<AppWorkload, 'kind' | 'namespace' | 'name'>[] | undefined,
+  targetWorkloads:
+    Pick<AppWorkload, "kind" | "namespace" | "name">[] | undefined,
   extraTokens?: ReadonlySet<string>,
-): Pick<AppWorkload, 'kind' | 'namespace' | 'name'> | null {
-  const [kind, namespace, name] = workloadKey.split('/')
-  if (!kind || !name) return null
-  const ws = targetWorkloads ?? []
+): Pick<AppWorkload, "kind" | "namespace" | "name"> | null {
+  const [kind, namespace, name] = workloadKey.split("/");
+  if (!kind || !name) return null;
+  const ws = targetWorkloads ?? [];
   return (
-    ws.find((w) => w.kind === kind && w.namespace === namespace && w.name === name) ??
+    ws.find(
+      (w) => w.kind === kind && w.namespace === namespace && w.name === name,
+    ) ??
     uniqueMatch(ws, (w) => w.kind === kind && w.name === name) ??
-    uniqueMatch(ws, (w) => w.kind === kind && stripEnvAffix(w.name, extraTokens) === stripEnvAffix(name, extraTokens)) ??
+    uniqueMatch(
+      ws,
+      (w) =>
+        w.kind === kind &&
+        stripEnvAffix(w.name, extraTokens) === stripEnvAffix(name, extraTokens),
+    ) ??
     null
-  )
+  );
 }
 
 function uniqueMatch<T>(items: T[], pred: (item: T) => boolean): T | null {
-  let found: T | null = null
+  let found: T | null = null;
   for (const item of items) {
-    if (!pred(item)) continue
-    if (found) return null
-    found = item
+    if (!pred(item)) continue;
+    if (found) return null;
+    found = item;
   }
-  return found
+  return found;
 }
 
 /** Ladder order: ranked envs by rank (dev → staging → prod), then
  *  recognized-but-unranked alphabetically (qa, …). */
 export function orderEnvs(envs: string[]): string[] {
   return [...envs].sort((a, b) => {
-    const ra = envRank(a)
-    const rb = envRank(b)
-    if (ra !== null && rb !== null) return ra - rb
-    if (ra !== null) return -1
-    if (rb !== null) return 1
-    return a.localeCompare(b)
-  })
+    const ra = envRank(a);
+    const rb = envRank(b);
+    if (ra !== null && rb !== null) return ra - rb;
+    if (ra !== null) return -1;
+    if (rb !== null) return 1;
+    return a.localeCompare(b);
+  });
 }
 
 /** Promotion lag across an app group's env cells: fires only between RANKED envs,
  *  when a strictly-lower env runs a strictly-newer comparable version.
  *  Returns the human message ("staging is behind dev") or null. */
-export function appGroupLagMessage(cells: { env: string; version?: string }[]): string | null {
+export function appGroupLagMessage(
+  cells: { env: string; version?: string }[],
+): string | null {
   const ranked = cells
     .map((c) => ({ ...c, rank: envRank(c.env) }))
-    .filter((c): c is { env: string; version?: string; rank: number } => c.rank !== null && !!c.version)
-    .sort((a, b) => a.rank - b.rank)
+    .filter(
+      (c): c is { env: string; version?: string; rank: number } =>
+        c.rank !== null && !!c.version,
+    )
+    .sort((a, b) => a.rank - b.rank);
   for (let i = 0; i < ranked.length; i++) {
     for (let j = i + 1; j < ranked.length; j++) {
       // Strict rank inequality: two instances of the SAME env are siblings,
       // not a promotion pair — without this, "prod is behind prod" can fire.
-      if (ranked[i].rank < ranked[j].rank && compareVersions(ranked[i].version, ranked[j].version) === 1) {
-        return `${ranked[j].env} is behind ${ranked[i].env}`
+      if (
+        ranked[i].rank < ranked[j].rank &&
+        compareVersions(ranked[i].version, ranked[j].version) === 1
+      ) {
+        return `${ranked[j].env} is behind ${ranked[i].env}`;
       }
     }
   }
-  return null
+  return null;
 }
 
 // -----------------------------------------------------------------------------
@@ -622,53 +782,59 @@ export function appGroupLagMessage(cells: { env: string; version?: string }[]): 
 
 /** The slice of a list entry the fold needs. */
 export interface AppGroupFoldEntry {
-  row: { key: string; name: string; identity?: AppIdentity; appVersion?: string }
-  health: AppHealth
-  versions: string[]
-  ready: number
-  desired: number
-  kinds: Record<string, number>
-  classComposition: { cls: AppWorkloadClass; count: number }[]
+  row: {
+    key: string;
+    name: string;
+    identity?: AppIdentity;
+    appVersion?: string;
+  };
+  health: AppHealth;
+  versions: string[];
+  ready: number;
+  desired: number;
+  kinds: Record<string, number>;
+  classComposition: { cls: AppWorkloadClass; count: number }[];
 }
 
 export interface AppGroupEnvCell {
-  env: string
-  health: AppHealth
-  version?: string
-  count: number
-  firstKey: string
+  env: string;
+  health: AppHealth;
+  version?: string;
+  count: number;
+  firstKey: string;
 }
 
 export interface FoldedAppGroupRow<T extends AppGroupFoldEntry> {
-  kind: 'group'
-  key: string
-  label: string
-  members: T[]
-  expanded: boolean
-  cells: AppGroupEnvCell[]
-  lag: string | null
-  health: AppHealth
-  ready: number
-  desired: number
-  kinds: Record<string, number>
-  classComposition: { cls: AppWorkloadClass; count: number }[]
-  workloadClass: AppWorkloadClass
-  confidence: string
+  kind: "group";
+  key: string;
+  label: string;
+  members: T[];
+  expanded: boolean;
+  cells: AppGroupEnvCell[];
+  lag: string | null;
+  health: AppHealth;
+  ready: number;
+  desired: number;
+  kinds: Record<string, number>;
+  classComposition: { cls: AppWorkloadClass; count: number }[];
+  workloadClass: AppWorkloadClass;
+  confidence: string;
 }
 
-export type FoldedRow<T extends AppGroupFoldEntry> = FoldedAppGroupRow<T> | { kind: 'instance'; entry: T; child?: boolean }
+export type FoldedRow<T extends AppGroupFoldEntry> =
+  FoldedAppGroupRow<T> | { kind: "instance"; entry: T; child?: boolean };
 
 export interface FoldAppGroupsOptions<T extends AppGroupFoldEntry> {
   /** Scope for non-portable identities. OSS leaves this empty; fleet callers
    *  should include the cluster id so local name/repo evidence cannot merge
    *  unrelated clusters. Portable identities ignore the scope. */
-  localScope?: (entry: T) => string | undefined
+  localScope?: (entry: T) => string | undefined;
   /** Per-member env slices for the env ladder. A fleet member spans several
    *  per-cluster envs, so the host supplies them (cluster-coverage derived,
    *  authoritative) rather than the single `identity.env` — which the hub can
    *  stale when it joins the same overlay key across clusters. Defaults to the
    *  member's single identity env. */
-  envsOf?: (entry: T) => Array<{ env: string; health: AppHealth }>
+  envsOf?: (entry: T) => Array<{ env: string; health: AppHealth }>;
 }
 
 export function foldAppGroups<T extends AppGroupFoldEntry>(
@@ -678,78 +844,105 @@ export function foldAppGroups<T extends AppGroupFoldEntry>(
   options: FoldAppGroupsOptions<T> = {},
 ): FoldedRow<T>[] {
   const newest = (e: T): string | undefined =>
-    e.versions.reduce<string | undefined>((best, v) => (!best || compareVersions(v, best) === 1 ? v : best), undefined) ?? e.row.appVersion
+    e.versions.reduce<string | undefined>(
+      (best, v) => (!best || compareVersions(v, best) === 1 ? v : best),
+      undefined,
+    ) ?? e.row.appVersion;
   const groupKey = (e: T): string | null => {
-    const id = e.row.identity
-    if (!id) return null
-    const scope = options.localScope?.(e)
-    if (!scope) return id.key
+    const id = e.row.identity;
+    if (!id) return null;
+    const scope = options.localScope?.(e);
+    if (!scope) return id.key;
     // A declared-PATH identity displays its name stem as the key but carries the
     // path stem in pathKey; two different apps can share a name while declaring
     // different paths, so disambiguate the portable cross-cluster fold by pathKey.
-    return id.portable ? `portable:${id.key}${id.pathKey ? `:${id.pathKey}` : ''}` : `local:${scope}:${id.key}`
-  }
-  const byGroup = new Map<string, T[]>()
+    return id.portable
+      ? `portable:${id.key}${id.pathKey ? `:${id.pathKey}` : ""}`
+      : `local:${scope}:${id.key}`;
+  };
+  const byGroup = new Map<string, T[]>();
   for (const e of entries) {
-    const k = groupKey(e)
-    if (k) byGroup.set(k, [...(byGroup.get(k) ?? []), e])
+    const k = groupKey(e);
+    if (k) byGroup.set(k, [...(byGroup.get(k) ?? []), e]);
   }
-  const emitted = new Set<string>()
-  const out: FoldedRow<T>[] = []
+  const emitted = new Set<string>();
+  const out: FoldedRow<T>[] = [];
   for (const e of entries) {
-    const id = e.row.identity
-    const k = groupKey(e)
+    const id = e.row.identity;
+    const k = groupKey(e);
     // A group needs ≥2 SURVIVING members — filters can orphan one, which
     // then renders as the plain instance it is.
     if (!id || !k || (byGroup.get(k)?.length ?? 0) < 2) {
-      out.push({ kind: 'instance', entry: e })
-      continue
+      out.push({ kind: "instance", entry: e });
+      continue;
     }
-    if (emitted.has(k)) continue
-    emitted.add(k)
-    const members = byGroup.get(k)!
+    if (emitted.has(k)) continue;
+    emitted.add(k);
+    const members = byGroup.get(k)!;
 
-    const cellMap = new Map<string, AppGroupEnvCell>()
-    const kinds: Record<string, number> = {}
-    const compMap = new Map<AppWorkloadClass, number>()
-    let ready = 0
-    let desired = 0
+    const cellMap = new Map<string, AppGroupEnvCell>();
+    const kinds: Record<string, number> = {};
+    const compMap = new Map<AppWorkloadClass, number>();
+    let ready = 0;
+    let desired = 0;
     // Seed with the most-benign tier (rank 0) so the max-fold below has a valid
     // identity now that `unknown` ranks above healthy — see worstHealth.
-    let health: AppHealth = 'neutral'
+    let health: AppHealth = "neutral";
     for (const m of members) {
-      const v = newest(m)
+      const v = newest(m);
       // A fleet member spans several per-cluster envs; the host supplies them so
       // the ladder reflects every env, not just the member's (possibly stale)
       // single identity env. Default: the one identity env.
-      const slices = options.envsOf?.(m) ?? [{ env: m.row.identity!.env, health: m.health }]
+      const slices = options.envsOf?.(m) ?? [
+        { env: m.row.identity!.env, health: m.health },
+      ];
       for (const slice of slices) {
-        const cur = cellMap.get(slice.env)
+        const cur = cellMap.get(slice.env);
         if (!cur) {
-          cellMap.set(slice.env, { env: slice.env, health: slice.health, version: v, count: 1, firstKey: m.row.key })
+          cellMap.set(slice.env, {
+            env: slice.env,
+            health: slice.health,
+            version: v,
+            count: 1,
+            firstKey: m.row.key,
+          });
         } else {
-          cur.count++
-          if ((HEALTH_RANK[slice.health] ?? 0) > (HEALTH_RANK[cur.health] ?? 0)) cur.health = slice.health
-          if (v && (!cur.version || compareVersions(v, cur.version) === 1)) cur.version = v
+          cur.count++;
+          if ((HEALTH_RANK[slice.health] ?? 0) > (HEALTH_RANK[cur.health] ?? 0))
+            cur.health = slice.health;
+          if (v && (!cur.version || compareVersions(v, cur.version) === 1))
+            cur.version = v;
         }
       }
-      if ((HEALTH_RANK[m.health] ?? 0) > (HEALTH_RANK[health] ?? 0)) health = m.health
-      ready += m.ready
-      desired += m.desired
-      for (const [k, n] of Object.entries(m.kinds)) kinds[k] = (kinds[k] ?? 0) + n
-      for (const c of m.classComposition) compMap.set(c.cls, (compMap.get(c.cls) ?? 0) + c.count)
+      if ((HEALTH_RANK[m.health] ?? 0) > (HEALTH_RANK[health] ?? 0))
+        health = m.health;
+      ready += m.ready;
+      desired += m.desired;
+      for (const [k, n] of Object.entries(m.kinds))
+        kinds[k] = (kinds[k] ?? 0) + n;
+      for (const c of m.classComposition)
+        compMap.set(c.cls, (compMap.get(c.cls) ?? 0) + c.count);
     }
-    const cells = orderEnvs([...cellMap.keys()]).map((env) => cellMap.get(env)!)
-    const classComposition = CLASS_ORDER.filter((c) => compMap.has(c)).map((c) => ({ cls: c, count: compMap.get(c)! }))
-    const known = classComposition.map((c) => c.cls).filter((c) => c !== 'unknown')
+    const cells = orderEnvs([...cellMap.keys()]).map((env) =>
+      cellMap.get(env)!,
+    );
+    const classComposition = CLASS_ORDER.filter((c) => compMap.has(c)).map(
+      (c) => ({ cls: c, count: compMap.get(c)! }),
+    );
+    const known = classComposition
+      .map((c) => c.cls)
+      .filter((c) => c !== "unknown");
     const workloadClass: AppWorkloadClass =
-      known.length === 0 ? 'unknown'
-      : known.includes('service') && !known.includes('job') ? 'service'
-      : known.length === 1 ? known[0]
-      : 'mixed'
-    const expanded = autoExpand || expandedKeys.has(k)
+      known.length === 0
+        ? "unknown"
+        : known.includes("service") && !known.includes("job")
+          ? "service"
+          : known.length === 1
+            ? known[0]
+            : "mixed";
+    const expanded = autoExpand || expandedKeys.has(k);
     out.push({
-      kind: 'group',
+      kind: "group",
       key: k,
       label: id.key,
       members,
@@ -762,21 +955,27 @@ export function foldAppGroups<T extends AppGroupFoldEntry>(
       kinds,
       classComposition,
       workloadClass,
-      confidence: members.some((m) => m.row.identity!.confidence === 'high') ? 'high' : 'medium',
-    })
+      confidence: members.some((m) => m.row.identity!.confidence === "high")
+        ? "high"
+        : "medium",
+    });
     if (expanded) {
-      for (const m of members) out.push({ kind: 'instance', entry: m, child: true })
+      for (const m of members)
+        out.push({ kind: "instance", entry: m, child: true });
     }
   }
-  return out
+  return out;
 }
 
 /** Normalize a wire health string to the AppHealth union (the health twin of
  *  workloadClassOf — keeps `as AppHealth` casts out of components). */
 export function healthOf(value: string | undefined): AppHealth {
-  return value === 'unhealthy' || value === 'degraded' || value === 'healthy' || value === 'neutral'
+  return value === "unhealthy" ||
+    value === "degraded" ||
+    value === "healthy" ||
+    value === "neutral"
     ? value
-    : 'unknown'
+    : "unknown";
 }
 
 // -----------------------------------------------------------------------------
@@ -792,14 +991,26 @@ export function healthOf(value: string | undefined): AppHealth {
 // "Idle" while a mixed healthy+idle app still reads Healthy (healthy out-ranks
 // neutral in the max). `unknown` must outrank `healthy` here to agree with the
 // backend rollup — a node-lost workload can't read as healthy.
-export const HEALTH_ORDER: AppHealth[] = ['unhealthy', 'degraded', 'unknown', 'healthy', 'neutral']
-export const HEALTH_RANK: Record<string, number> = { unhealthy: 4, degraded: 3, unknown: 2, healthy: 1, neutral: 0 }
+export const HEALTH_ORDER: AppHealth[] = [
+  "unhealthy",
+  "degraded",
+  "unknown",
+  "healthy",
+  "neutral",
+];
+export const HEALTH_RANK: Record<string, number> = {
+  unhealthy: 4,
+  degraded: 3,
+  unknown: 2,
+  healthy: 1,
+  neutral: 0,
+};
 
 export interface HealthMeta {
-  label: string
-  bar: string
-  text: string
-  pill: string
+  label: string;
+  bar: string;
+  text: string;
+  pill: string;
 }
 
 // ─── Chip dialect ────────────────────────────────────────────────────────────
@@ -808,48 +1019,114 @@ export interface HealthMeta {
 // standalone status pills. A local dialect, but defined ONCE here: call sites
 // compose `CHIP` (chrome) + a `CHIP_TONE` (color), never inline the strings.
 // Literal class strings are required for Tailwind's content scanner.
-export const CHIP = 'inline-flex items-center rounded-sm px-1.5 py-px text-[10px] font-medium ring-1 ring-inset'
+export const CHIP =
+  "inline-flex items-center rounded-sm px-1.5 py-px text-[10px] font-medium ring-1 ring-inset";
 export const CHIP_TONE = {
-  rose: 'bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-900',
-  amber: 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900',
-  emerald: 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900',
-  blue: 'bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:ring-blue-900',
-  sky: 'bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-900',
-  violet: 'bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-950/40 dark:text-violet-300 dark:ring-violet-900',
-  neutral: 'bg-theme-hover text-theme-text-secondary ring-theme-border',
-  muted: 'bg-theme-hover text-theme-text-tertiary ring-theme-border',
-} as const
+  rose: "bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-900",
+  amber:
+    "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900",
+  emerald:
+    "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900",
+  blue: "bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:ring-blue-900",
+  sky: "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-900",
+  violet:
+    "bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-950/40 dark:text-violet-300 dark:ring-violet-900",
+  neutral: "bg-theme-hover text-theme-text-secondary ring-theme-border",
+  muted: "bg-theme-hover text-theme-text-tertiary ring-theme-border",
+} as const;
 
 export const HEALTH_META: Record<AppHealth, HealthMeta> = {
-  unhealthy: { label: 'Down', bar: 'bg-rose-500', text: 'text-rose-600 dark:text-rose-400', pill: CHIP_TONE.rose },
-  degraded: { label: 'Degraded', bar: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400', pill: CHIP_TONE.amber },
-  healthy: { label: 'Healthy', bar: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400', pill: CHIP_TONE.emerald },
+  unhealthy: {
+    label: "Unhealthy",
+    bar: "bg-rose-500",
+    text: "text-rose-600 dark:text-rose-400",
+    pill: CHIP_TONE.rose,
+  },
+  degraded: {
+    label: "Degraded",
+    bar: "bg-amber-500",
+    text: "text-amber-600 dark:text-amber-400",
+    pill: CHIP_TONE.amber,
+  },
+  healthy: {
+    label: "Healthy",
+    bar: "bg-emerald-500",
+    text: "text-emerald-600 dark:text-emerald-400",
+    pill: CHIP_TONE.emerald,
+  },
   // neutral = intentionally idle/off (every workload suspended or scaled to 0).
   // Sky, calm — not "Healthy" (it isn't serving) and not a problem to act on.
-  neutral: { label: 'Idle', bar: 'bg-sky-500', text: 'text-sky-600 dark:text-sky-400', pill: CHIP_TONE.sky },
-  unknown: { label: 'Unknown', bar: 'bg-slate-400', text: 'text-theme-text-tertiary', pill: CHIP_TONE.muted },
-}
+  neutral: {
+    label: "Idle",
+    bar: "bg-sky-500",
+    text: "text-sky-600 dark:text-sky-400",
+    pill: CHIP_TONE.sky,
+  },
+  unknown: {
+    label: "Unknown",
+    bar: "bg-slate-400",
+    text: "text-theme-text-tertiary",
+    pill: CHIP_TONE.muted,
+  },
+};
 
-export const CLASS_ORDER: AppWorkloadClass[] = ['service', 'worker', 'job', 'unknown']
+export const CLASS_ORDER: AppWorkloadClass[] = [
+  "service",
+  "worker",
+  "job",
+  "unknown",
+];
 
-export const CLASS_META: Record<AppWorkloadClass, { label: string; pill: string; tooltip: string }> = {
-  service: { label: 'Service', pill: CHIP_TONE.blue, tooltip: 'Long-running, request-serving (a Deployment/StatefulSet behind a Service/Ingress/route). Inferred from the workload shape + routing.' },
-  worker: { label: 'Worker', pill: CHIP_TONE.violet, tooltip: 'Long-running background processor (no serving edge). Inferred from the workload shape.' },
-  job: { label: 'Job', pill: CHIP_TONE.amber, tooltip: 'Finite or scheduled work (Job/CronJob).' },
-  mixed: { label: 'Mixed', pill: CHIP_TONE.neutral, tooltip: 'Contains workloads of more than one class (e.g. a service plus its scheduled jobs).' },
-  unknown: { label: 'Unknown', pill: CHIP_TONE.muted, tooltip: "Couldn't infer a runtime class from the workload." },
-}
+export const CLASS_META: Record<
+  AppWorkloadClass,
+  { label: string; pill: string; tooltip: string }
+> = {
+  service: {
+    label: "Service",
+    pill: CHIP_TONE.blue,
+    tooltip:
+      "Long-running, request-serving (a Deployment/StatefulSet behind a Service/Ingress/route). Inferred from the workload shape + routing.",
+  },
+  worker: {
+    label: "Worker",
+    pill: CHIP_TONE.violet,
+    tooltip:
+      "Long-running background processor (no serving edge). Inferred from the workload shape.",
+  },
+  job: {
+    label: "Job",
+    pill: CHIP_TONE.amber,
+    tooltip:
+      "Finite or scheduled work (Job/CronJob/Workflow/CronWorkflow/WorkflowTemplate/ClusterWorkflowTemplate/ScaledJob).",
+  },
+  mixed: {
+    label: "Mixed",
+    pill: CHIP_TONE.neutral,
+    tooltip:
+      "Contains workloads of more than one class (e.g. a service plus its scheduled jobs).",
+  },
+  unknown: {
+    label: "Unknown",
+    pill: CHIP_TONE.muted,
+    tooltip: "Couldn't infer a runtime class from the workload.",
+  },
+};
 
 /** Per-class workload counts for an app, in CLASS_ORDER — the composition
  *  behind a "Mixed" badge and the inclusive Class facet (filtering "Service"
  *  matches mixed apps that contain a service). */
-export function classCompositionOf(app: AppRow): { cls: AppWorkloadClass; count: number }[] {
-  const counts = new Map<AppWorkloadClass, number>()
+export function classCompositionOf(
+  app: AppRow,
+): { cls: AppWorkloadClass; count: number }[] {
+  const counts = new Map<AppWorkloadClass, number>();
   for (const w of app.workloads || []) {
-    const c = workloadClassOf(w.workload_class)
-    counts.set(c, (counts.get(c) ?? 0) + 1)
+    const c = workloadClassOf(w.workload_class);
+    counts.set(c, (counts.get(c) ?? 0) + 1);
   }
-  return CLASS_ORDER.filter((c) => counts.has(c)).map((c) => ({ cls: c, count: counts.get(c)! }))
+  return CLASS_ORDER.filter((c) => counts.has(c)).map((c) => ({
+    cls: c,
+    count: counts.get(c)!,
+  }));
 }
 
 /** The distinct KNOWN classes an app contains — the facet-matching set. Falls
@@ -857,20 +1134,358 @@ export function classCompositionOf(app: AppRow): { cls: AppWorkloadClass; count:
 export function classSetOf(app: AppRow): AppWorkloadClass[] {
   const known = classCompositionOf(app)
     .map((c) => c.cls)
-    .filter((c) => c === 'service' || c === 'worker' || c === 'job')
-  if (known.length > 0) return known
-  return [workloadClassOf(app.workload_class)]
+    .filter((c) => c === "service" || c === "worker" || c === "job");
+  if (known.length > 0) return known;
+  return [workloadClassOf(app.workload_class)];
+}
+
+export interface BatchSignal {
+  tone: "rose" | "amber" | "sky" | "emerald" | "muted";
+  label: string;
+  detail: string;
+  workload: AppWorkload;
+}
+
+export interface AppBatchActivity {
+  workload: AppWorkload;
+  tone: BatchSignal["tone"];
+  rank: number;
+  label: string;
+  detail: string;
+  latestRunName?: string;
+  latestRunPhase?: string;
+  latestStartedAt?: string;
+  latestFinishedAt?: string;
+  schedule?: string;
+  activeRuns: number;
+  retainedRuns: number;
+  failedRuns: number;
+  lastScheduledAt?: string;
+  lastSuccessfulAt?: string;
+}
+
+export function batchActivityForApp(app: AppRow): AppBatchActivity[] {
+  return (app.workloads || [])
+    .map(batchActivityForWorkload)
+    .filter((activity): activity is AppBatchActivity => Boolean(activity))
+    .sort(
+      (a, b) =>
+        b.rank - a.rank || a.workload.name.localeCompare(b.workload.name),
+    );
+}
+
+export function batchSignalForApp(app: AppRow): BatchSignal | null {
+  let best: BatchSignal | null = null;
+  for (const workload of app.workloads || []) {
+    const signal = batchSignalForWorkload(workload);
+    if (!signal) continue;
+    if (!best || batchSignalRank(signal) > batchSignalRank(best)) best = signal;
+  }
+  return best;
+}
+
+function batchSignalForWorkload(workload: AppWorkload): BatchSignal | null {
+  const batch = workload.batch;
+  if (!batch) return null;
+  const latestPhase = batch.latestRunPhase || "";
+  const name = `${workload.kind}/${workload.name}`;
+  if (latestPhase === "Failed" || latestPhase === "Error") {
+    return {
+      tone: "rose",
+      label: "batch failed",
+      detail:
+        batch.message ||
+        `${name} latest run ${batch.latestRunName || ""} ended ${latestPhase}.`,
+      workload,
+    };
+  }
+  if (batch.suspended) {
+    return {
+      tone: "sky",
+      label: "schedule suspended",
+      detail: `${name} will not create new runs until resumed.`,
+      workload,
+    };
+  }
+  if ((batch.activeRuns ?? 0) > 0) {
+    return {
+      tone: "sky",
+      label: `${batch.activeRuns} running`,
+      detail: `${name} currently has ${batch.activeRuns} active run${batch.activeRuns === 1 ? "" : "s"}.`,
+      workload,
+    };
+  }
+  return null;
+}
+
+export interface AppBatchRuntime {
+  label: string;
+  health: AppHealth;
+  detail: string;
+}
+
+export function batchRuntimeForApp(app: AppRow): AppBatchRuntime {
+  const activity = batchActivityForApp(app);
+  if (
+    activity.some(
+      (item) => item.activeRuns > 0 || item.latestRunPhase === "Running",
+    )
+  ) {
+    const active = activity.reduce((sum, item) => sum + item.activeRuns, 0);
+    return {
+      label: active > 0 ? `${active} running` : "Running",
+      health: "neutral",
+      detail: "Batch work is executing now.",
+    };
+  }
+  const failed = activity.filter(
+    (item) =>
+      item.latestRunPhase === "Failed" || item.latestRunPhase === "Error",
+  );
+  if (failed.length > 0) {
+    const item = failed[0];
+    const detail =
+      failed.length === 1
+        ? `${item.workload.kind}/${item.workload.name} latest retained run${item.latestRunName ? ` ${item.latestRunName}` : ""} failed.`
+        : `${failed.length} batch workloads have failed latest runs.`;
+    return { label: "Failed", health: "unhealthy", detail };
+  }
+  const latest = [...activity].sort(
+    (a, b) => batchActivityTimestamp(b) - batchActivityTimestamp(a),
+  )[0];
+  if (latest?.latestRunPhase === "Succeeded") {
+    return {
+      label: "Succeeded",
+      health: "healthy",
+      detail: latest.latestRunName
+        ? `Latest retained run: ${latest.latestRunName}`
+        : "The latest retained run succeeded.",
+    };
+  }
+  if (
+    activity.length > 0 &&
+    activity.every((item) => item.workload.batch?.suspended)
+  ) {
+    return {
+      label: "Suspended",
+      health: "neutral",
+      detail: "All batch launchers are suspended.",
+    };
+  }
+  if (activity.some((item) => item.retainedRuns > 0)) {
+    return {
+      label: latest?.latestRunPhase || "Idle",
+      health: "neutral",
+      detail: "No batch work is currently active.",
+    };
+  }
+  return {
+    label: "Idle",
+    health: "neutral",
+    detail: "No retained runs are present in Kubernetes.",
+  };
+}
+
+function batchActivityTimestamp(item: AppBatchActivity): number {
+  const raw =
+    item.latestStartedAt ||
+    item.latestFinishedAt ||
+    item.lastScheduledAt ||
+    item.lastSuccessfulAt;
+  if (!raw) return 0;
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function applicationRuntimeHealth(app: AppRow): AppHealth {
+  if (workloadClassOf(app.workload_class) === "job")
+    return batchRuntimeForApp(app).health;
+  const serving = (app.workloads || []).filter((workload) => !workload.batch);
+  return serving.length > 0
+    ? worstHealth(serving.map((workload) => workload.health))
+    : healthOf(app.health);
+}
+
+export function sourceSyncHealth(status: string): AppHealth {
+  const normalized = status.toLowerCase();
+  if (normalized === "synced") return "healthy";
+  if (normalized === "outofsync") return "degraded";
+  return "unknown";
+}
+
+export function sourceReportedHealth(status: string): AppHealth {
+  const normalized = status.toLowerCase();
+  if (normalized === "healthy") return "healthy";
+  if (normalized === "progressing") return "neutral";
+  if (normalized === "degraded") return "degraded";
+  if (normalized === "missing") return "unhealthy";
+  if (normalized === "suspended") return "neutral";
+  return "unknown";
+}
+
+function applicationDeliveryHealth(status?: AppSourceStatus): AppHealth {
+  if (!status) return "neutral";
+  const signals = [
+    status.sync ? sourceSyncHealth(status.sync) : null,
+    status.health ? sourceReportedHealth(status.health) : null,
+  ].filter((health): health is AppHealth => health !== null && health !== "unknown");
+  return signals.length > 0 ? worstHealth(signals) : "neutral";
+}
+
+export function applicationDisplayHealth(app: AppRow): AppHealth {
+  return worstHealth([
+    applicationRuntimeHealth(app),
+    applicationDeliveryHealth(app.sourceStatus),
+  ]);
+}
+
+export function servingReadiness(workloads: AppWorkload[]): {
+  ready: number;
+  desired: number;
+} {
+  let ready = 0;
+  let desired = 0;
+  for (const workload of workloads) {
+    const cls = workloadClassOf(workload.workload_class);
+    if (cls === "job" || workload.batch) continue;
+    ready += workload.ready ?? 0;
+    desired += workload.desired ?? 0;
+  }
+  return { ready, desired };
+}
+
+function batchActivityForWorkload(
+  workload: AppWorkload,
+): AppBatchActivity | null {
+  const batch = workload.batch;
+  if (!batch) return null;
+  const latestPhase = batch.latestRunPhase || "";
+  const name = `${workload.kind}/${workload.name}`;
+  const activeRuns = batch.activeRuns ?? 0;
+  const retainedRuns = batch.retainedRuns ?? 0;
+  const failedRuns = batch.failedRuns ?? 0;
+  if (latestPhase === "Failed" || latestPhase === "Error") {
+    return {
+      workload,
+      tone: "rose",
+      rank: 50,
+      label: "Latest run failed",
+      detail:
+        batch.message ||
+        `${name} latest run ${batch.latestRunName || ""} ended ${latestPhase}.`,
+      latestRunName: batch.latestRunName,
+      latestRunPhase: latestPhase,
+      latestStartedAt: batch.latestStartedAt,
+      latestFinishedAt: batch.latestFinishedAt,
+      schedule: batch.schedule,
+      activeRuns,
+      retainedRuns,
+      failedRuns,
+      lastScheduledAt: batch.lastScheduledAt,
+      lastSuccessfulAt: batch.lastSuccessfulAt,
+    };
+  }
+  if (failedRuns > 0) {
+    return {
+      workload,
+      tone: "amber",
+      rank: 40,
+      label: `${failedRuns} retained failed ${failedRuns === 1 ? "run" : "runs"}`,
+      detail: `${name} has retained failed executions in Kubernetes.`,
+      latestRunName: batch.latestRunName,
+      latestRunPhase: latestPhase,
+      latestStartedAt: batch.latestStartedAt,
+      latestFinishedAt: batch.latestFinishedAt,
+      schedule: batch.schedule,
+      activeRuns,
+      retainedRuns,
+      failedRuns,
+      lastScheduledAt: batch.lastScheduledAt,
+      lastSuccessfulAt: batch.lastSuccessfulAt,
+    };
+  }
+  if (activeRuns > 0) {
+    return {
+      workload,
+      tone: "sky",
+      rank: 35,
+      label: `${activeRuns} active ${activeRuns === 1 ? "run" : "runs"}`,
+      detail: `${name} is executing now.`,
+      latestRunName: batch.latestRunName,
+      latestRunPhase: latestPhase,
+      latestStartedAt: batch.latestStartedAt,
+      latestFinishedAt: batch.latestFinishedAt,
+      schedule: batch.schedule,
+      activeRuns,
+      retainedRuns,
+      failedRuns,
+      lastScheduledAt: batch.lastScheduledAt,
+      lastSuccessfulAt: batch.lastSuccessfulAt,
+    };
+  }
+  if (batch.suspended) {
+    return {
+      workload,
+      tone: "sky",
+      rank: 30,
+      label: "Schedule suspended",
+      detail: `${name} will not create new runs until resumed.`,
+      latestRunName: batch.latestRunName,
+      latestRunPhase: latestPhase,
+      latestStartedAt: batch.latestStartedAt,
+      latestFinishedAt: batch.latestFinishedAt,
+      schedule: batch.schedule,
+      activeRuns,
+      retainedRuns,
+      failedRuns,
+      lastScheduledAt: batch.lastScheduledAt,
+      lastSuccessfulAt: batch.lastSuccessfulAt,
+    };
+  }
+  return {
+    workload,
+    tone: "muted",
+    rank: latestPhase === "Succeeded" ? 20 : 10,
+    label:
+      latestPhase === "Succeeded" ? "Latest run succeeded" : "No active runs",
+    detail: `${name} has ${retainedRuns} retained ${retainedRuns === 1 ? "run" : "runs"}.`,
+    latestRunName: batch.latestRunName,
+    latestRunPhase: latestPhase,
+    latestStartedAt: batch.latestStartedAt,
+    latestFinishedAt: batch.latestFinishedAt,
+    schedule: batch.schedule,
+    activeRuns,
+    retainedRuns,
+    failedRuns,
+    lastScheduledAt: batch.lastScheduledAt,
+    lastSuccessfulAt: batch.lastSuccessfulAt,
+  };
+}
+
+function batchSignalRank(signal: BatchSignal): number {
+  switch (signal.tone) {
+    case "rose":
+      return 5;
+    case "amber":
+      return 4;
+    case "sky":
+      return 3;
+    case "emerald":
+      return 2;
+    default:
+      return 1;
+  }
 }
 
 export function workloadClassOf(value?: AppWorkloadClass): AppWorkloadClass {
   switch (value) {
-    case 'service':
-    case 'worker':
-    case 'job':
-    case 'mixed':
-      return value
+    case "service":
+    case "worker":
+    case "job":
+    case "mixed":
+      return value;
     default:
-      return 'unknown'
+      return "unknown";
   }
 }
 
@@ -881,20 +1496,21 @@ export function workloadClassOf(value?: AppWorkloadClass): AppWorkloadClass {
  *  ranks ABOVE healthy — an all-healthy set would never beat it and return
  *  `unknown`. Mirrors pkg/health.WorseOf.) */
 export function worstHealth(hs: string[]): AppHealth {
-  let w: AppHealth = 'neutral'
-  for (const h of hs) if ((HEALTH_RANK[h] ?? 0) > (HEALTH_RANK[w] ?? 0)) w = h as AppHealth
-  return w
+  let w: AppHealth = "neutral";
+  for (const h of hs)
+    if ((HEALTH_RANK[h] ?? 0) > (HEALTH_RANK[w] ?? 0)) w = h as AppHealth;
+  return w;
 }
 
 export function newestTag(versions: string[]): string | undefined {
-  let best: string | undefined
+  let best: string | undefined;
   for (const v of versions) {
-    const t = v?.trim()
-    if (!t) continue
-    if (best === undefined) best = t
-    else if (compareVersions(t, best) === 1) best = t
+    const t = v?.trim();
+    if (!t) continue;
+    if (best === undefined) best = t;
+    else if (compareVersions(t, best) === 1) best = t;
   }
-  return best
+  return best;
 }
 
 // -----------------------------------------------------------------------------
@@ -907,78 +1523,85 @@ export function newestTag(versions: string[]): string | undefined {
 // -----------------------------------------------------------------------------
 
 export interface AppEntryBase {
-  row: AppRow
-  health: AppHealth
-  versions: string[]
-  kinds: Record<string, number>
-  workloadClass: AppWorkloadClass
+  row: AppRow;
+  health: AppHealth;
+  versions: string[];
+  kinds: Record<string, number>;
+  workloadClass: AppWorkloadClass;
   /** Distinct contained classes — the inclusive facet-matching set. */
-  classSet: AppWorkloadClass[]
-  classComposition: { cls: AppWorkloadClass; count: number }[]
-  category: AppCategory
-  ready: number
-  desired: number
+  classSet: AppWorkloadClass[];
+  classComposition: { cls: AppWorkloadClass; count: number }[];
+  category: AppCategory;
+  ready: number;
+  desired: number;
   /** ready/desired as a fraction for sorting; -1 when nothing is desired. */
-  readyRatio: number
-  source: AppSource
+  readyRatio: number;
+  source: AppSource;
 }
 
 export interface SingleAppEntry extends AppEntryBase {
-  variant: 'single'
-  namespace: string
-  namespaces: string[]
-  env: string
-  envInferred: boolean
+  variant: "single";
+  namespace: string;
+  namespaces: string[];
+  env: string;
+  envInferred: boolean;
 }
 
 /** One environment instance within a fleet row (env name + worst health across
  *  its clusters + whether the env was inferred from the namespace). */
 export interface EnvSlice {
-  env: string
-  health: AppHealth
-  inferred: boolean
+  env: string;
+  health: AppHealth;
+  inferred: boolean;
 }
 
 /** A cluster this fleet row's app runs in. */
 export interface AppClusterRef {
-  id: string
-  name: string
-  health: AppHealth
+  id: string;
+  name: string;
+  health: AppHealth;
 }
 
 export interface FleetAppEntry extends AppEntryBase {
-  variant: 'fleet'
-  envs: EnvSlice[]
-  clusters: AppClusterRef[]
+  variant: "fleet";
+  envs: EnvSlice[];
+  clusters: AppClusterRef[];
   /** True when the app runs different versions across its clusters/envs. */
-  versionSkew: boolean
+  versionSkew: boolean;
 }
 
-export type AppEntry = SingleAppEntry | FleetAppEntry
+export type AppEntry = SingleAppEntry | FleetAppEntry;
 
 /** Build a single-cluster list entry from a wire row. The env is resolved via
  *  the server's identity classification (authoritative) with a namespace
  *  heuristic fallback for plain rows. */
-export function buildSingleAppEntry(row: AppRow, discoveredEnvs?: ReadonlySet<string>): SingleAppEntry {
-  const kinds: Record<string, number> = {}
-  let ready = 0
-  let desired = 0
+export function buildSingleAppEntry(
+  row: AppRow,
+  discoveredEnvs?: ReadonlySet<string>,
+): SingleAppEntry {
+  const kinds: Record<string, number> = {};
+  let ready = 0;
+  let desired = 0;
   for (const wl of row.workloads || []) {
-    kinds[wl.kind] = (kinds[wl.kind] ?? 0) + 1
-    ready += wl.ready ?? 0
-    desired += wl.desired ?? 0
+    kinds[wl.kind] = (kinds[wl.kind] ?? 0) + 1;
+    if (workloadClassOf(wl.workload_class) !== "job" && !wl.batch) {
+      ready += wl.ready ?? 0;
+      desired += wl.desired ?? 0;
+    }
   }
-  const namespace = namespaceOf(row)
+  const namespace = namespaceOf(row);
   // The server's identity classification carries the authoritative env (label/
   // declared/discovered); plain rows fall back to the trio + discovered-token
   // namespace heuristic.
-  const resolved = resolveEnv(undefined, namespace, discoveredEnvs)
-  const env = row.identity?.env ?? resolved.env
-  const inferred = row.identity ? identityEnvInferred(row.identity) : resolved.inferred
+  const resolved = resolveEnv(undefined, namespace, discoveredEnvs);
+  const env = row.identity?.env ?? resolved.env;
+  const inferred = row.identity
+    ? identityEnvInferred(row.identity)
+    : resolved.inferred;
   return {
-    variant: 'single',
+    variant: "single",
     row,
-    health: healthOf(row.health),
+    health: applicationDisplayHealth(row),
     versions: Array.from(new Set((row.versions || []).filter(Boolean))),
     namespace,
     namespaces: namespacesOf(row),
@@ -993,16 +1616,25 @@ export function buildSingleAppEntry(row: AppRow, discoveredEnvs?: ReadonlySet<st
     desired,
     readyRatio: desired > 0 ? ready / desired : -1,
     source: sourceOf(row.tier),
-  }
+  };
 }
 
 /** The text an entry matches free-text search against — name, key, namespace,
  *  source/class/category labels, versions, env, workload kinds + identity. Pure
  *  and exported so the list core and tests share one definition. */
 export function searchTextForEntry(e: AppEntry): string {
-  const workloadText = (e.row.workloads || []).flatMap((wl) => [wl.kind, wl.namespace, wl.name, wl.version])
-  const envParts = e.variant === 'single' ? [e.env || 'unlabeled'] : e.envs.map((s) => s.env || 'unlabeled')
-  const nsParts = e.variant === 'single' ? [e.namespace] : e.clusters.map((c) => c.name)
+  const workloadText = (e.row.workloads || []).flatMap((wl) => [
+    wl.kind,
+    wl.namespace,
+    wl.name,
+    wl.version,
+  ]);
+  const envParts =
+    e.variant === "single"
+      ? [e.env || "unlabeled"]
+      : e.envs.map((s) => s.env || "unlabeled");
+  const nsParts =
+    e.variant === "single" ? [e.namespace] : e.clusters.map((c) => c.name);
   return [
     e.row.name,
     e.row.key,
@@ -1017,6 +1649,6 @@ export function searchTextForEntry(e: AppEntry): string {
     ...workloadText,
   ]
     .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
+    .join(" ")
+    .toLowerCase();
 }
