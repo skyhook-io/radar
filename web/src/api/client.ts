@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { AppHistory, AppRow } from '@skyhook-io/k8s-ui'
+import type { AppHistory, AppRow, ArgoSyncOpts } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
@@ -1051,7 +1051,7 @@ export function useGitOpsTree(kind: string, namespace: string, name: string, gro
 
 // Poll fast (2s) while a sync/rollback is in flight so the user sees the
 // outcome quickly; otherwise rely on staleTime + manual refetch. Argo flips
-// operationState.phase from "Running" -> Succeeded/Failed when done, so this
+// operationState.phase from Running/Terminating to a terminal phase, so this
 // auto-quiesces on completion.
 const INSIGHTS_RUNNING_POLL_MS = 2000
 
@@ -1069,7 +1069,7 @@ export function useGitOpsInsights(kind: string, namespace: string, name: string,
     staleTime: 5000,
     refetchInterval: (query) => {
       const phase = query.state.data?.summary?.operationPhase
-      return phase === 'Running' ? INSIGHTS_RUNNING_POLL_MS : false
+      return phase === 'Running' || phase === 'Terminating' ? INSIGHTS_RUNNING_POLL_MS : false
     },
   })
 }
@@ -3305,7 +3305,8 @@ interface GitOpsMutationConfig<TVariables> {
   getPath: (variables: TVariables) => string
   getBody?: (variables: TVariables) => unknown
   errorMessage: string
-  successMessage: string
+  successMessage?: string
+  getSuccessMessage?: (data: GitOpsOperationResponse) => string
   getInvalidateKeys: (variables: TVariables) => (string | undefined)[][]
 }
 
@@ -3333,7 +3334,8 @@ function createGitOpsMutation<TVariables>(config: GitOpsMutationConfig<TVariable
         errorMessage: config.errorMessage,
         successMessage: config.successMessage,
       },
-      onSuccess: (_, variables) => {
+      onSuccess: (data, variables) => {
+        if (config.getSuccessMessage) showApiSuccess(config.getSuccessMessage(data))
         config.getInvalidateKeys(variables).forEach(key =>
           queryClient.invalidateQueries({ queryKey: key })
         )
@@ -3350,7 +3352,7 @@ type ArgoAppVars = { namespace: string; name: string }
 // ArgoSyncVars extends ArgoAppVars with the sync request body fields. Only
 // useArgoSync sends these — splitting the type prevents callers from passing
 // resources/revision/prune to mutations that would silently drop them.
-type ArgoSyncVars = ArgoAppVars & {
+export type ArgoSyncVars = ArgoAppVars & {
   resources?: Array<{ group?: string; kind: string; namespace?: string; name: string }>
   revision?: string
   prune?: boolean
@@ -3361,6 +3363,31 @@ type ArgoSyncVars = ArgoAppVars & {
   // "ServerSideApply=true", "PruneLast=true". Caller is responsible for
   // spelling.
   syncOptions?: string[]
+}
+
+export interface ArgoResourceValidationResult {
+  outcome: 'succeeded' | 'failed' | 'inconclusive'
+  message: string
+  resource?: {
+    group?: string
+    kind: string
+    namespace?: string
+    name: string
+    status?: string
+    message?: string
+  }
+}
+
+export function buildArgoResourceSyncVars(namespace: string, name: string, resource: GitOpsInsightRef, opts: ArgoSyncOpts): ArgoSyncVars {
+  return {
+    namespace,
+    name,
+    ...opts,
+    resources: [{ group: resource.group, kind: resource.kind, namespace: resource.namespace, name: resource.name }],
+    revision: undefined,
+    prune: false,
+    applyOnly: false,
+  }
 }
 
 // ArgoRollbackVars targets a specific Argo history entry by ID. Prune and
@@ -3444,6 +3471,31 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars>({
   getInvalidateKeys: argoInvalidateKeys,
 })
 
+export function useArgoResourceValidation() {
+  const queryClient = useQueryClient()
+  return useMutation<ArgoResourceValidationResult, Error, ArgoSyncVars>({
+    mutationFn: async (variables) => {
+      const response = await apiFetch(`${getApiBase()}/argo/applications/${variables.namespace}/${variables.name}/validate-resource`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resources: variables.resources,
+          force: variables.force,
+          syncOptions: variables.syncOptions,
+        }),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json() as Promise<ArgoResourceValidationResult>
+    },
+    onSettled: (_, __, variables) => {
+      argoInvalidateKeys(variables).forEach(key => queryClient.invalidateQueries({ queryKey: key }))
+    },
+  })
+}
+
 export const useArgoRollback = createGitOpsMutation<ArgoRollbackVars>({
   getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/rollback`,
   getBody: (v) => ({ id: v.id, prune: v.prune, dryRun: v.dryRun }),
@@ -3455,7 +3507,7 @@ export const useArgoRollback = createGitOpsMutation<ArgoRollbackVars>({
 export const useArgoTerminate = createGitOpsMutation<ArgoAppVars>({
   getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/terminate`,
   errorMessage: 'Failed to terminate sync',
-  successMessage: 'Sync terminated',
+  getSuccessMessage: (data) => data.message,
   getInvalidateKeys: argoInvalidateKeys,
 })
 

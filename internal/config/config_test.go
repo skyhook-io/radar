@@ -33,6 +33,7 @@ func TestSaveAndLoad(t *testing.T) {
 		Kubeconfig:      "/tmp/kubeconfig",
 		KubeconfigDirs:  []string{"/dir1", "/dir2"},
 		Namespace:       "prod",
+		Namespaces:      []string{"dev", "staging"},
 		Port:            9999,
 		NoBrowser:       true,
 		Browser:         "firefox",
@@ -74,6 +75,9 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 	if got.Namespace != want.Namespace {
 		t.Errorf("Namespace = %q, want %q", got.Namespace, want.Namespace)
+	}
+	if len(got.Namespaces) != 2 || got.Namespaces[0] != "dev" || got.Namespaces[1] != "staging" {
+		t.Errorf("Namespaces = %v, want %v", got.Namespaces, want.Namespaces)
 	}
 	if got.NoBrowser != want.NoBrowser {
 		t.Errorf("NoBrowser = %v, want %v", got.NoBrowser, want.NoBrowser)
@@ -272,6 +276,16 @@ func TestHelpers(t *testing.T) {
 		c := Config{KubeconfigDirs: []string{"/a", "/b"}}
 		if c.KubeconfigDirsFlag() != "/a,/b" {
 			t.Errorf("got %q, want %q", c.KubeconfigDirsFlag(), "/a,/b")
+		}
+	})
+
+	t.Run("NamespacesFlag", func(t *testing.T) {
+		if (Config{}).NamespacesFlag() != "" {
+			t.Error("nil namespaces should return empty string")
+		}
+		c := Config{Namespaces: []string{"dev", "prod"}}
+		if c.NamespacesFlag() != "dev,prod" {
+			t.Errorf("got %q, want %q", c.NamespacesFlag(), "dev,prod")
 		}
 	})
 }

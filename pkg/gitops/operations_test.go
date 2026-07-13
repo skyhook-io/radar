@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -292,9 +293,8 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 
 // TestOperationsRefuseTerminatingResource pins that mutating ops refuse a
 // resource with metadata.deletionTimestamp set, returning ErrResourceTerminating.
-// Refresh and Terminate are intentionally excluded: Refresh re-reads from
-// Git (read-only against the cluster) and Terminate clears an in-flight
-// op record — both useful when an operation is what's blocking deletion.
+// Refresh and Terminate are intentionally excluded because both remain useful
+// when an in-flight operation is blocking deletion.
 func TestOperationsRefuseTerminatingResource(t *testing.T) {
 	ctx := context.Background()
 	terminatingApp := func() *unstructured.Unstructured {
@@ -440,10 +440,7 @@ func TestOperationsPreserveNotFoundChain(t *testing.T) {
 	}
 }
 
-// TestSyncArgoAppSelectiveResources covers the selective-sync code path: a
-// non-empty Resources slice should produce sync.resources, an all-blank
-// slice should be filtered out and produce no sync.resources field, and
-// mixed entries should drop only the empty rows.
+// TestSyncArgoAppSelectiveResources covers the selective-sync wire shape.
 func TestSyncArgoAppSelectiveResources(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -456,29 +453,9 @@ func TestSyncArgoAppSelectiveResources(t *testing.T) {
 			want:      nil,
 		},
 		{
-			name: "all entries blank → resources field omitted",
-			resources: []ArgoSyncResource{
-				{Kind: "", Name: ""},
-				{Kind: "Deployment", Name: ""}, // missing name
-				{Kind: "", Name: "x"},          // missing kind
-			},
-			want: nil,
-		},
-		{
 			name: "single valid entry survives",
 			resources: []ArgoSyncResource{
 				{Group: "apps", Kind: "Deployment", Namespace: "demo", Name: "web"},
-			},
-			want: []map[string]any{
-				{"group": "apps", "kind": "Deployment", "namespace": "demo", "name": "web"},
-			},
-		},
-		{
-			name: "mixed valid + invalid drops only the invalid",
-			resources: []ArgoSyncResource{
-				{Kind: "Deployment", Name: ""},
-				{Group: "apps", Kind: "Deployment", Namespace: "demo", Name: "web"},
-				{Kind: "", Name: "ghost"},
 			},
 			want: []map[string]any{
 				{"group": "apps", "kind": "Deployment", "namespace": "demo", "name": "web"},
@@ -513,6 +490,193 @@ func TestSyncArgoAppSelectiveResources(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSyncArgoAppRejectsIncompleteSelectiveResource(t *testing.T) {
+	resources := []ArgoSyncResource{
+		{Group: "apps", Kind: "Deployment", Namespace: "demo", Name: "web"},
+		{Kind: "Service"},
+	}
+	client := newFakeArgo(argoAppForTest("argocd", "demo", nil))
+	_, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{Resources: resources})
+	if !errors.Is(err, ErrInvalidResourceSelection) {
+		t.Fatalf("SyncArgoApp error = %v, want ErrInvalidResourceSelection", err)
+	}
+	for _, action := range client.Actions() {
+		if _, ok := action.(clienttesting.PatchAction); ok {
+			t.Fatalf("invalid selective sync issued a patch; actions=%v", client.Actions())
+		}
+	}
+}
+
+func TestSyncArgoAppDryRunDoesNotRequestHardRefresh(t *testing.T) {
+	dryRun := true
+	client := newFakeArgo(argoAppForTest("argocd", "demo", nil))
+	if _, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{DryRun: &dryRun}); err != nil {
+		t.Fatalf("SyncArgoApp: %v", err)
+	}
+	body := captureLastPatch(t, client)
+	if annotations := nestedMap(body, "metadata", "annotations"); annotations != nil {
+		t.Fatalf("dry-run patch must not request a refresh, got annotations %#v", annotations)
+	}
+}
+
+func TestArgoOperationPatchesUseResourceVersion(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		metadata, _ := obj["metadata"].(map[string]any)
+		metadata["resourceVersion"] = "17"
+		status, _ := obj["status"].(map[string]any)
+		status["history"] = []any{map[string]any{"id": int64(1)}}
+	})
+
+	t.Run("sync", func(t *testing.T) {
+		client := newFakeArgo(app.DeepCopy())
+		if _, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{}); err != nil {
+			t.Fatalf("SyncArgoApp: %v", err)
+		}
+		metadata := nestedMap(captureLastPatch(t, client), "metadata")
+		if metadata["resourceVersion"] != "17" {
+			t.Fatalf("sync resourceVersion = %#v, want 17", metadata["resourceVersion"])
+		}
+	})
+
+	t.Run("rollback", func(t *testing.T) {
+		client := newFakeArgo(app.DeepCopy())
+		if _, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 1}); err != nil {
+			t.Fatalf("RollbackArgoApp: %v", err)
+		}
+		metadata := nestedMap(captureLastPatch(t, client), "metadata")
+		if metadata["resourceVersion"] != "17" {
+			t.Fatalf("rollback resourceVersion = %#v, want 17", metadata["resourceVersion"])
+		}
+	})
+}
+
+func TestArgoOperationPatchConflictMapsToOperationInProgress(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		status, _ := obj["status"].(map[string]any)
+		status["history"] = []any{map[string]any{"id": int64(1)}}
+	})
+	cases := []struct {
+		name string
+		run  func(*fake.FakeDynamicClient) error
+	}{
+		{name: "sync", run: func(client *fake.FakeDynamicClient) error {
+			_, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{})
+			return err
+		}},
+		{name: "rollback", run: func(client *fake.FakeDynamicClient) error {
+			_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newFakeArgo(app.DeepCopy())
+			client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewConflict(argoAppGVR.GroupResource(), "demo", errors.New("changed"))
+			})
+			if err := tc.run(client); !errors.Is(err, ErrOperationInProgress) {
+				t.Fatalf("error = %v, want ErrOperationInProgress", err)
+			}
+		})
+	}
+}
+
+func TestValidateArgoResourceRejectsQueuedOperation(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		obj["operation"] = map[string]any{"sync": map[string]any{}}
+	})
+	client := newFakeArgo(app)
+	_, err := ValidateArgoResource(context.Background(), client, "argocd", "demo", ArgoSyncResource{Kind: "Service", Name: "api"}, ArgoSyncOptions{})
+	if !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("ValidateArgoResource error = %v, want ErrOperationInProgress", err)
+	}
+	for _, action := range client.Actions() {
+		if _, ok := action.(clienttesting.PatchAction); ok {
+			t.Fatalf("validation overwrote a queued operation; actions=%v", client.Actions())
+		}
+	}
+}
+
+func TestValidateArgoResourceStartsSafeSelectiveDryRun(t *testing.T) {
+	client := newFakeArgo(argoAppForTest("argocd", "demo", nil))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	target := ArgoSyncResource{Group: "apps", Kind: "Deployment", Namespace: "demo", Name: "api"}
+	_, err := ValidateArgoResource(ctx, client, "argocd", "demo", target, ArgoSyncOptions{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ValidateArgoResource error = %v, want context deadline", err)
+	}
+	body := captureLastPatch(t, client)
+	if annotations := nestedMap(body, "metadata", "annotations"); annotations != nil {
+		t.Fatalf("validation patch must not request a refresh, got annotations %#v", annotations)
+	}
+	sync := nestedMap(body, "operation", "sync")
+	if sync["dryRun"] != true || sync["prune"] != false {
+		t.Fatalf("validation flags = dryRun:%#v prune:%#v", sync["dryRun"], sync["prune"])
+	}
+	resources, ok := sync["resources"].([]any)
+	if !ok || len(resources) != 1 {
+		t.Fatalf("validation resources = %#v, want one exact selector", sync["resources"])
+	}
+	info, ok := nestedMap(body, "operation")["info"].([]any)
+	if !ok || len(info) != 1 {
+		t.Fatalf("validation info = %#v, want one correlation entry", nestedMap(body, "operation")["info"])
+	}
+}
+
+func TestArgoResourceValidationResultCorrelatesAndReturnsTarget(t *testing.T) {
+	target := ArgoSyncResource{Group: "karpenter.sh", Kind: "NodePool", Namespace: "default", Name: "default"}
+	makeApp := func(id, phase string, resources []any) *unstructured.Unstructured {
+		return argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			obj["status"] = map[string]any{
+				"operationState": map[string]any{
+					"phase": phase,
+					"operation": map[string]any{
+						"info": []any{map[string]any{"name": "radar-validation-id", "value": id}},
+					},
+					"syncResult": map[string]any{"resources": resources},
+				},
+			}
+		})
+	}
+	matchingResource := map[string]any{
+		"group": "karpenter.sh", "kind": "NodePool", "namespace": "default", "name": "default",
+		"status": "Synced", "message": "nodepool.karpenter.sh/default configured (dry run)",
+	}
+
+	if _, done := argoResourceValidationResult(makeApp("old", "Succeeded", []any{matchingResource}), "current", target); done {
+		t.Fatal("a terminal result from a previous request must not complete the current validation")
+	}
+	if _, done := argoResourceValidationResult(makeApp("current", "Running", []any{matchingResource}), "current", target); done {
+		t.Fatal("a matching operation that is still running must keep waiting")
+	}
+	result, done := argoResourceValidationResult(makeApp("current", "Succeeded", []any{matchingResource}), "current", target)
+	if !done || result.Outcome != "succeeded" || result.Resource == nil {
+		t.Fatalf("result = %#v, done=%v; want succeeded target result", result, done)
+	}
+	if !strings.Contains(result.Message, "API admission can still reject") {
+		t.Fatalf("success message = %q, want dry-run limitation", result.Message)
+	}
+	if result.Resource.Status != "Synced" || !strings.Contains(result.Resource.Message, "dry run") {
+		t.Fatalf("resource result = %#v, want exact Argo status and message", result.Resource)
+	}
+	targetWithoutNamespace := target
+	targetWithoutNamespace.Namespace = ""
+	result, done = argoResourceValidationResult(makeApp("current", "Succeeded", []any{matchingResource}), "current", targetWithoutNamespace)
+	if !done || result.Outcome != "succeeded" {
+		t.Fatalf("namespace-omitted selector result = %#v, done=%v; want succeeded", result, done)
+	}
+	targetInAnotherNamespace := target
+	targetInAnotherNamespace.Namespace = "other"
+	if argoResourceResultMatches(matchingResource, targetInAnotherNamespace) {
+		t.Fatal("an explicit selector namespace must match the result namespace")
+	}
+	result, done = argoResourceValidationResult(makeApp("current", "Succeeded", nil), "current", target)
+	if !done || result.Outcome != "inconclusive" {
+		t.Fatalf("missing target result = %#v, done=%v; want inconclusive", result, done)
 	}
 }
 
@@ -849,12 +1013,6 @@ func patchActionsByResource(client *fake.FakeDynamicClient) map[string]int {
 	return out
 }
 
-// TestTerminateArgoSyncJSONPatchRace pins the IsInvalid mapping in
-// TerminateArgoSync. When the operation removes itself between the GET
-// and the JSON-Patch (the documented race), K8s returns
-// StatusReasonInvalid because the JSON-Patch path no longer exists. The
-// handler must recognize that as ErrNoOperationInProgress (mapped to 400)
-// rather than letting it surface as a generic 500.
 func TestTerminateArgoSyncJSONPatchRaceMapsToSentinel(t *testing.T) {
 	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
 		status, _ := obj["status"].(map[string]any)
@@ -876,6 +1034,79 @@ func TestTerminateArgoSyncJSONPatchRaceMapsToSentinel(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNoOperationInProgress) {
 		t.Fatalf("expected ErrNoOperationInProgress, got %v", err)
+	}
+}
+
+func TestTerminateArgoSyncRequestsControllerTermination(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		metadata, _ := obj["metadata"].(map[string]any)
+		metadata["resourceVersion"] = "23"
+		obj["operation"] = map[string]any{"sync": map[string]any{"revision": "abc123"}}
+		status, _ := obj["status"].(map[string]any)
+		status["operationState"] = map[string]any{"phase": "Running"}
+	})
+	client := newFakeArgo(app)
+
+	result, err := TerminateArgoSync(context.Background(), client, "argocd", "demo")
+	if err != nil {
+		t.Fatalf("TerminateArgoSync: %v", err)
+	}
+	if result.Message != "Termination requested" {
+		t.Fatalf("message = %q, want termination request", result.Message)
+	}
+	updated, err := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get updated Application: %v", err)
+	}
+	phase, _, _ := unstructured.NestedString(updated.Object, "status", "operationState", "phase")
+	if phase != "Terminating" {
+		t.Fatalf("operation phase = %q, want Terminating", phase)
+	}
+	if operation, found, _ := unstructured.NestedFieldNoCopy(updated.Object, "operation"); !found || operation == nil {
+		t.Fatal("terminate removed spec.operation instead of leaving it for the Argo controller")
+	}
+	for _, action := range client.Actions() {
+		patchAction, ok := action.(clienttesting.PatchAction)
+		if !ok {
+			continue
+		}
+		var operations []map[string]any
+		if err := json.Unmarshal(patchAction.GetPatch(), &operations); err != nil {
+			t.Fatalf("decode terminate patch: %v", err)
+		}
+		for _, operation := range operations {
+			if operation["path"] == "/metadata/resourceVersion" {
+				t.Fatal("terminate must not reject a live operation because unrelated status updates changed resourceVersion")
+			}
+		}
+	}
+}
+
+func TestTerminateArgoSyncRepairsStaleRunningStatus(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		status, _ := obj["status"].(map[string]any)
+		status["operationState"] = map[string]any{"phase": "Running", "message": "waiting for hook"}
+	})
+	client := newFakeArgo(app)
+
+	result, err := TerminateArgoSync(context.Background(), client, "argocd", "demo")
+	if err != nil {
+		t.Fatalf("TerminateArgoSync: %v", err)
+	}
+	if result.Message != "Stale operation status cleared" {
+		t.Fatalf("message = %q, want stale-status recovery", result.Message)
+	}
+	updated, err := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get updated Application: %v", err)
+	}
+	phase, _, _ := unstructured.NestedString(updated.Object, "status", "operationState", "phase")
+	if phase != "Error" {
+		t.Fatalf("operation phase = %q, want Error", phase)
+	}
+	finishedAt, _, _ := unstructured.NestedString(updated.Object, "status", "operationState", "finishedAt")
+	if _, err := time.Parse(time.RFC3339Nano, finishedAt); err != nil {
+		t.Fatalf("finishedAt = %q, want RFC3339 timestamp: %v", finishedAt, err)
 	}
 }
 

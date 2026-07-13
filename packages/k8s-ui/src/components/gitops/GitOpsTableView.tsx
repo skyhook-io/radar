@@ -35,7 +35,7 @@ import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { BoardTableSkeleton, BoardRailSkeleton } from '../ui/BoardSkeleton'
 import { getGitOpsResourceStatus } from './detail-helpers'
-import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
+import { isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
@@ -1358,13 +1358,20 @@ function buildRowActionItems(
   const items: RowActionItem[] = []
 
   if (row.tool === 'argo') {
+    const operationInProgress = isArgoOperationInProgress(row.raw)
     items.push({
       key: 'sync',
       label: 'Sync...',
       icon: ArrowDownUp,
       onClick: () => onAction(row, 'sync'),
-      disabled: suspended || terminating,
-      disabledReason: terminating ? terminatingReason : suspended ? suspendedReason : undefined,
+      disabled: suspended || terminating || operationInProgress,
+      disabledReason: terminating
+        ? terminatingReason
+        : suspended
+          ? suspendedReason
+          : operationInProgress
+            ? 'Wait for the current Argo operation to finish.'
+            : undefined,
       pending: isPending('sync'),
     })
     // Refresh / Hard refresh are read-style verbs — they re-read Git and

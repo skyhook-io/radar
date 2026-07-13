@@ -1,6 +1,10 @@
 package k8s
 
-import "github.com/skyhook-io/radar/pkg/k8score"
+import (
+	"slices"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
+)
 
 // VisibilitySummary explains when Radar is connected but cannot see enough
 // core workload resources to make dashboard/issue results complete.
@@ -36,9 +40,9 @@ func BuildVisibilitySummary(result *PermissionCheckResult, namespace string) *Vi
 	}
 
 	core := map[string]string{
-		"pods":        visibilityStatus(result.Scopes, k8score.Pods, namespace),
-		"deployments": visibilityStatus(result.Scopes, k8score.Deployments, namespace),
-		"services":    visibilityStatus(result.Scopes, k8score.Services, namespace),
+		"pods":        visibilityStatus(result, k8score.Pods, namespace),
+		"deployments": visibilityStatus(result, k8score.Deployments, namespace),
+		"services":    visibilityStatus(result, k8score.Services, namespace),
 	}
 
 	podsVisible := core["pods"] == "allowed" || core["pods"] == "namespace_limited"
@@ -54,7 +58,7 @@ func BuildVisibilitySummary(result *PermissionCheckResult, namespace string) *Vi
 
 	missingOptional := make([]string, 0, len(optionalKinds))
 	for _, kind := range optionalKinds {
-		if visibilityStatus(result.Scopes, kind.key, namespace) == "unavailable" {
+		if visibilityStatus(result, kind.key, namespace) == "unavailable" {
 			missingOptional = append(missingOptional, kind.name)
 		}
 	}
@@ -84,8 +88,8 @@ func BuildVisibilitySummary(result *PermissionCheckResult, namespace string) *Vi
 	return out
 }
 
-func visibilityStatus(scopes map[string]k8score.ResourceScope, key string, namespace string) string {
-	scope, ok := scopes[key]
+func visibilityStatus(result *PermissionCheckResult, key string, namespace string) string {
+	scope, ok := result.Scopes[key]
 	if !ok || !scope.Enabled {
 		return "unavailable"
 	}
@@ -96,6 +100,11 @@ func visibilityStatus(scopes map[string]k8score.ResourceScope, key string, names
 		return "namespace_limited"
 	}
 	if scope.Namespace == namespace {
+		return "allowed"
+	}
+	// Multi-namespace kinds: scope.Namespace is only the first grant; the
+	// full fanout lives in ScopeNamespaces.
+	if slices.Contains(result.ScopeNamespaces[key], namespace) {
 		return "allowed"
 	}
 	return "unavailable"

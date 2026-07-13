@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -945,6 +946,124 @@ func TestNewResourceCache_ResourceScopesMixed(t *testing.T) {
 	// the namespace used by Pods/Deployments.
 	if _, ok := rc.nsFactories[ns]; !ok {
 		t.Errorf("expected nsFactories to contain %q, got keys %v", ns, mapKeys(rc.nsFactories))
+	}
+}
+
+func TestNewResourceCache_ResourceScopeNamespacesUnion(t *testing.T) {
+	const nsA, nsB, nsOther = "team-a", "team-b", "team-c"
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: nsA, UID: "pod-a"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-b", Namespace: nsB, UID: "pod-b"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-c", Namespace: nsOther, UID: "pod-c"}},
+	)
+
+	rc, err := NewResourceCache(CacheConfig{
+		Client: client,
+		ResourceScopes: map[string]ResourceScope{
+			Pods: {Enabled: true, Namespace: nsA},
+		},
+		ResourceScopeNamespaces: map[string][]string{
+			Pods: {nsA, nsB},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache failed: %v", err)
+	}
+	defer rc.Stop()
+
+	lister := rc.Pods()
+	if lister == nil {
+		t.Fatal("Pods lister should exist")
+	}
+	all, err := lister.List(labels.Everything())
+	if err != nil {
+		t.Fatalf("list all pods: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("all pods = %d, want 2 from %s/%s (items=%v)", len(all), nsA, nsB, all)
+	}
+	for _, tc := range []struct {
+		namespace string
+		want      int
+	}{
+		{nsA, 1},
+		{nsB, 1},
+		{nsOther, 0},
+	} {
+		items, err := lister.Pods(tc.namespace).List(labels.Everything())
+		if err != nil {
+			t.Fatalf("list pods in %s: %v", tc.namespace, err)
+		}
+		if len(items) != tc.want {
+			t.Fatalf("pods in %s = %d, want %d", tc.namespace, len(items), tc.want)
+		}
+	}
+	if got := ListCountNamespaced(lister, []string{nsA, nsB}); got != 2 {
+		t.Fatalf("ListCountNamespaced = %d, want 2", got)
+	}
+	if rc.IsKindClusterWide(Pods) {
+		t.Fatal("multi-namespace scoped Pods must not report cluster-wide authority")
+	}
+}
+
+func TestUnionIndexer_ReadFanout(t *testing.T) {
+	const nsA, nsB = "team-a", "team-b"
+	mkIndexer := func(pods ...*corev1.Pod) cache.Indexer {
+		idx := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+		for _, p := range pods {
+			if err := idx.Add(p); err != nil {
+				t.Fatalf("seed indexer: %v", err)
+			}
+		}
+		return idx
+	}
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: nsA, UID: "pod-a"}}
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-b", Namespace: nsB, UID: "pod-b"}}
+	u := &unionIndexer{indexers: []cache.Indexer{mkIndexer(podA), mkIndexer(podB)}}
+
+	if got := len(u.List()); got != 2 {
+		t.Fatalf("List() = %d items, want 2", got)
+	}
+	if got := len(u.ListKeys()); got != 2 {
+		t.Fatalf("ListKeys() = %d, want 2", got)
+	}
+	for key, want := range map[string]bool{nsA + "/pod-a": true, nsB + "/pod-b": true, "other/pod-x": false} {
+		_, exists, err := u.GetByKey(key)
+		if err != nil {
+			t.Fatalf("GetByKey(%s): %v", key, err)
+		}
+		if exists != want {
+			t.Fatalf("GetByKey(%s) exists = %v, want %v", key, exists, want)
+		}
+	}
+	byNs, err := u.ByIndex(cache.NamespaceIndex, nsB)
+	if err != nil {
+		t.Fatalf("ByIndex: %v", err)
+	}
+	if len(byNs) != 1 || byNs[0].(*corev1.Pod).Name != "pod-b" {
+		t.Fatalf("ByIndex(%s) = %v, want [pod-b]", nsB, byNs)
+	}
+	if vals := u.ListIndexFuncValues(cache.NamespaceIndex); len(vals) != 2 {
+		t.Fatalf("ListIndexFuncValues = %v, want two namespaces", vals)
+	}
+}
+
+func TestUnionIndexer_WritesRejected(t *testing.T) {
+	u := &unionIndexer{indexers: []cache.Indexer{cache.NewIndexer(cache.MetaNamespaceKeyFunc, nil)}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"}}
+	for name, err := range map[string]error{
+		"Add":     u.Add(pod),
+		"Update":  u.Update(pod),
+		"Delete":  u.Delete(pod),
+		"Replace": u.Replace(nil, ""),
+		"Resync":  u.Resync(),
+	} {
+		if err == nil {
+			t.Fatalf("%s on read-only union indexer returned nil error", name)
+		}
+	}
+	if got := len(u.List()); got != 0 {
+		t.Fatalf("rejected writes still stored %d items", got)
 	}
 }
 

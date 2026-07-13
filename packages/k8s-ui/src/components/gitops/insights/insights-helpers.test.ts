@@ -8,6 +8,7 @@ import {
   entryTone,
   gitopsToSeverity,
   healthStatusRank,
+  isArgoResourceSyncEligible,
   messageToPhase,
   phaseToTone,
   resourceStatusCounts,
@@ -168,6 +169,21 @@ describe('resourceStatusCounts', () => {
       change({ ref: { kind: 'ConfigMap', name: 'd' }, sync: 'Synced', health: 'Healthy' }),
     ])
     expect(counts).toEqual({ outOfSync: 2, degraded: 1, missing: 1 })
+  })
+})
+
+describe('isArgoResourceSyncEligible', () => {
+  const outOfSync = change({ ref: { group: 'apps', kind: 'Deployment', namespace: 'demo', name: 'web' }, sync: 'OutOfSync' })
+
+  it('allows declared OutOfSync and Missing resources', () => {
+    expect(isArgoResourceSyncEligible(outOfSync, true)).toBe(true)
+    expect(isArgoResourceSyncEligible(change({ ref: { kind: 'Service', name: 'missing' }, health: 'Missing' }), true)).toBe(true)
+  })
+
+  it('excludes generated, hook, and already-synced resources', () => {
+    expect(isArgoResourceSyncEligible(outOfSync, false)).toBe(false)
+    expect(isArgoResourceSyncEligible(outOfSync, true, 'PreSync')).toBe(false)
+    expect(isArgoResourceSyncEligible(change({ ref: { kind: 'Service', name: 'ready' }, sync: 'Synced', health: 'Healthy' }), true)).toBe(false)
   })
 })
 

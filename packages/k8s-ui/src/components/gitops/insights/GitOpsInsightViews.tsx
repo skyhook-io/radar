@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowUpDown, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowUpDown, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -20,6 +20,7 @@ import {
   entryTone,
   gitopsToSeverity,
   healthStatusRank,
+  isArgoResourceSyncEligible,
   messageToPhase,
   normalizeHealthStatus,
   normalizeSyncStatus,
@@ -290,7 +291,7 @@ function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsigh
 
 function isInFlightPhase(phase: string): boolean {
   const p = phase.toLowerCase()
-  return p.includes('running') || p.includes('progress') || p.includes('reconcil')
+  return p.includes('running') || p.includes('terminat') || p.includes('progress') || p.includes('reconcil')
 }
 
 // Show the operation chip only for phases the operator needs to *act on*.
@@ -710,6 +711,8 @@ interface GitOpsChangesViewProps {
   insight?: GitOpsInsight | null
   error?: Error | null
   onOpenResource?: (ref: GitOpsChange['ref']) => void
+  onSyncResource?: (ref: GitOpsChange['ref']) => void
+  syncResourceDisabledReason?: string
   // When set, the matching change row scrolls into view and gets a transient
   // highlight ring. Used when the user clicks "View →" on an issue alert in
   // the band above. Key shape: `${kind}/${namespace||''}/${name}` (group is
@@ -740,7 +743,7 @@ const STATUS_FACETS: { key: ResourceStatusFacet; label: string; tone: FilterPill
   { key: 'missing', label: 'Missing', tone: 'danger' },
 ]
 
-export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tree, renderResourceDiff, onOpenSettings }: GitOpsChangesViewProps) {
+export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResource, syncResourceDisabledReason, focusKey, tree, renderResourceDiff, onOpenSettings }: GitOpsChangesViewProps) {
   // "All resources" toggle: when on, render generated descendants alongside
   // the controller's declared inventory. Argo's UI defaults to "all" — we
   // default to "declared" because the diagnostic data (drift, events) lives
@@ -757,6 +760,9 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
   const [statusFilters, setStatusFilters] = useState<Set<ResourceStatusFacet>>(new Set())
   const [sort, setSort] = useState<{ key: ResourceSortKey; dir: SortDir }>({ key: 'order', dir: 'asc' })
   const changes = insight?.changes ?? []
+  // Keep object identity here: tree extras are newly allocated, while ordered
+  // controller changes retain their original references.
+  const declaredChanges = new Set(changes)
   const plan = insight?.plan ?? []
   // Synthesize Change rows for generated tree nodes that aren't already in
   // the declared inventory. These rows carry less diagnostic data — no
@@ -1113,6 +1119,9 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
                       canFullDiff={canFullDiff}
                       renderResourceDiff={renderResourceDiff}
                       onOpenResource={onOpenResource}
+                      onSyncResource={onSyncResource}
+                      syncResourceDisabledReason={syncResourceDisabledReason}
+                      declared={declaredChanges.has(change)}
                       sourceTreeURL={sourceTreeURL}
                       registerRef={(el) => {
                         if (el) {
@@ -1288,6 +1297,9 @@ function ChangeRow({
   canFullDiff,
   renderResourceDiff,
   onOpenResource,
+  onSyncResource,
+  syncResourceDisabledReason,
+  declared,
   sourceTreeURL,
   registerRef,
 }: {
@@ -1308,6 +1320,9 @@ function ChangeRow({
   canFullDiff: boolean
   renderResourceDiff?: (ref: GitOpsInsightRef) => ReactNode
   onOpenResource?: (ref: GitOpsChange['ref']) => void
+  onSyncResource?: (ref: GitOpsChange['ref']) => void
+  syncResourceDisabledReason?: string
+  declared: boolean
   // Constructed URL pointing at the source directory in the remote Git
   // host (github / gitlab / bitbucket). Used as the "where this would be
   // declared" affordance on Missing rows, since opening the drawer for a
@@ -1344,6 +1359,18 @@ function ChangeRow({
   // intentionally non-interactive — there's nowhere useful to go.
   const rowInteractive = expandable || (!isAbsent && !!onOpenResource)
   const hookLabel = change.hookPhase || hook
+  const canSyncResource = !!onSyncResource && isArgoResourceSyncEligible(change, declared, hookLabel)
+  const syncResourceButton = canSyncResource ? (
+    <button
+      type="button"
+      onClick={() => onSyncResource(change.ref)}
+      disabled={!!syncResourceDisabledReason}
+      className="inline-flex w-full items-center justify-center gap-1.5 rounded border border-theme-border bg-theme-base px-2 py-1 text-[11px] font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <RefreshCw className="h-3 w-3" />
+      Sync resource
+    </button>
+  ) : null
   return (
     <div
       ref={registerRef}
@@ -1417,7 +1444,7 @@ function ChangeRow({
             <div className="ml-[18px] mt-1 text-xs text-theme-text-tertiary">{explanation}</div>
           )}
         </button>
-        <div className="self-center">
+        <div className="self-start">
           {syncUnavailable && normalizeSyncStatus(change.sync ?? change.category) === 'Unknown' ? (
             <Tooltip content="Sync unavailable — Argo CD hasn't compared this app against Git yet." delay={200} wrapperClassName="inline-flex">
               <span className="cursor-help select-none px-1 text-theme-text-tertiary" aria-label="Sync status unavailable">—</span>
@@ -1426,8 +1453,13 @@ function ChangeRow({
             <SyncStatusBadge sync={normalizeSyncStatus(change.sync ?? change.category)} />
           )}
         </div>
-        <div className="self-center"><HealthStatusBadge health={normalizeHealthStatus(change.health)} /></div>
-        <div className="self-center">
+        <div className="self-start"><HealthStatusBadge health={normalizeHealthStatus(change.health)} /></div>
+        <div className="self-start space-y-1.5">
+          {syncResourceButton && syncResourceDisabledReason ? (
+            <Tooltip content={syncResourceDisabledReason} delay={200} wrapperClassName="block">
+              {syncResourceButton}
+            </Tooltip>
+          ) : syncResourceButton}
           {/* Three affordance states:
               - Live resource (not Missing): "Open <kind> <name> →" opens the
                 K8s drawer.

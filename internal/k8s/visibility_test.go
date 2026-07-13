@@ -81,3 +81,39 @@ func TestBuildVisibilitySummaryNamespaceLimited(t *testing.T) {
 		t.Fatalf("expected degraded for different namespace, got %+v", s)
 	}
 }
+
+// Multi-namespace kinds: ResourceScope.Namespace is only the first grant.
+// A namespace present in ScopeNamespaces is served by the union lister and
+// must report allowed, not unavailable.
+func TestBuildVisibilitySummaryMultiNamespace(t *testing.T) {
+	result := &PermissionCheckResult{
+		Scopes: map[string]k8score.ResourceScope{
+			k8score.Pods:        {Enabled: true, Namespace: "team-a"},
+			k8score.Deployments: {Enabled: true, Namespace: "team-a"},
+			k8score.Services:    {Enabled: true, Namespace: "team-a"},
+			k8score.Events:      {Enabled: true, Namespace: "team-a"},
+			k8score.ConfigMaps:  {Enabled: true, Namespace: "team-a"},
+		},
+		ScopeNamespaces: map[string][]string{
+			k8score.Pods:        {"team-a", "team-b"},
+			k8score.Deployments: {"team-a", "team-b"},
+			k8score.Services:    {"team-a", "team-b"},
+			k8score.Events:      {"team-a", "team-b"},
+			k8score.ConfigMaps:  {"team-a", "team-b"},
+		},
+	}
+
+	if s := BuildVisibilitySummary(result, "team-b"); s != nil {
+		t.Fatalf("secondary granted namespace must be fully visible, got %+v", s)
+	}
+	if s := BuildVisibilitySummary(result, "team-a"); s != nil {
+		t.Fatalf("primary namespace must be fully visible, got %+v", s)
+	}
+	s := BuildVisibilitySummary(result, "team-c")
+	if s == nil || s.State != "degraded" {
+		t.Fatalf("ungranted namespace must stay degraded, got %+v", s)
+	}
+	if s.Core["pods"] != "unavailable" {
+		t.Fatalf("pods in ungranted namespace = %q, want unavailable", s.Core["pods"])
+	}
+}

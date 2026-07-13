@@ -149,6 +149,11 @@ func TestWriteGitOpsErrorStatusMapping(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
+			name:       "ErrInvalidResourceSelection → 400",
+			err:        gitops.ErrInvalidResourceSelection,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:       "unrecognized error → 500",
 			err:        errors.New("something else"),
 			wantStatus: http.StatusInternalServerError,

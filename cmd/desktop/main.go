@@ -34,6 +34,7 @@ func main() {
 	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to kubeconfig file (default: ~/.kube/config)")
 	kubeconfigDir := flag.String("kubeconfig-dir", fileCfg.KubeconfigDirsFlag(), "Comma-separated directories containing kubeconfig files (mutually exclusive with --kubeconfig)")
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
+	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	historyLimit := flag.Int("history-limit", fileCfg.HistoryLimitOr(10000), "Maximum number of events to retain in timeline")
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging")
@@ -85,6 +86,16 @@ func main() {
 		log.Printf("ERROR: --kubeconfig and --kubeconfig-dir are mutually exclusive")
 		os.Exit(1)
 	}
+	namespaceFlagSet := false
+	namespacesFlagSet := false
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "namespace":
+			namespaceFlagSet = true
+		case "namespaces":
+			namespacesFlagSet = true
+		}
+	})
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
 	if err != nil {
 		log.Printf("ERROR: invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
@@ -95,11 +106,21 @@ func main() {
 		log.Printf("ERROR: invalid Prometheus header configuration: %v", err)
 		os.Exit(1)
 	}
+	resolvedNamespace, resolvedNamespaces, err := app.ResolveNamespaceSelection(*namespace, *namespaces, namespaceFlagSet, namespacesFlagSet)
+	if err != nil {
+		log.Printf("ERROR: %v", err)
+		os.Exit(1)
+	}
+	if len(resolvedNamespaces) > k8s.MaxScopeCandidates {
+		log.Printf("ERROR: --namespaces lists %d namespaces but the RBAC probe fanout cap is %d", len(resolvedNamespaces), k8s.MaxScopeCandidates)
+		os.Exit(1)
+	}
 
 	cfg := app.AppConfig{
 		Kubeconfig:               *kubeconfig,
 		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
-		Namespace:                *namespace,
+		Namespace:                resolvedNamespace,
+		Namespaces:               resolvedNamespaces,
 		Port:                     fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
 		DevMode:                  false,
 		HistoryLimit:             *historyLimit,
@@ -184,7 +205,7 @@ func main() {
 		WindowStartState: options.Maximised,
 
 		AssetServer: &assetserver.Options{
-			Handler: NewRedirectHandler(srv.ActualAddr(), cfg.Namespace),
+			Handler: NewRedirectHandler(srv.ActualAddr(), cfg.Namespace, cfg.Namespaces),
 		},
 
 		Menu: createMenu(desktopApp, version),

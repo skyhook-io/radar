@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getArgoApplicationStatus } from './resource-utils-argo'
+import { getArgoApplicationStatus, isArgoOperationInProgress } from './resource-utils-argo'
 
 describe('getArgoApplicationStatus', () => {
   // A Suspended Argo app is intentionally paused — neutral (sky), matching the
@@ -19,5 +19,22 @@ describe('getArgoApplicationStatus', () => {
   it('still maps a degraded app to unhealthy', () => {
     const badge = getArgoApplicationStatus({ status: { health: { status: 'Degraded' }, sync: { status: 'Synced' } } })
     expect(badge.level).toBe('unhealthy')
+  })
+
+  it('surfaces an operation being terminated', () => {
+    const badge = getArgoApplicationStatus({ status: { operationState: { phase: 'Terminating' } } })
+    expect(badge.level).toBe('degraded')
+    expect(badge.text).toBe('Terminating')
+  })
+})
+
+describe('isArgoOperationInProgress', () => {
+  it.each([
+    [{ status: { operationState: { phase: 'Running' } } }, true],
+    [{ status: { operationState: { phase: 'Terminating' } } }, true],
+    [{ operation: { sync: {} }, status: { operationState: { phase: 'Succeeded' } } }, true],
+    [{ status: { operationState: { phase: 'Succeeded' } } }, false],
+  ])('maps %o to %s', (app, expected) => {
+    expect(isArgoOperationInProgress(app)).toBe(expected)
   })
 })

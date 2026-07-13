@@ -119,6 +119,13 @@ type CacheConfig struct {
 	// scope it actually has, instead of falling back to all-or-nothing.
 	ResourceScopes map[string]ResourceScope
 
+	// ResourceScopeNamespaces optionally expands a namespace-scoped
+	// ResourceScopes entry to multiple namespaces. It is keyed by the same
+	// resource type strings as ResourceScopes. A kind with cluster-wide scope
+	// ignores this field; a namespaced kind with multiple entries starts one
+	// informer per namespace and exposes a union lister.
+	ResourceScopeNamespaces map[string][]string
+
 	// DeferredTypes lists resource types whose informers sync in the
 	// background after critical informers complete. Their listers return
 	// nil until sync finishes. If nil, no resources are deferred.

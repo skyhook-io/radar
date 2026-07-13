@@ -33,6 +33,9 @@ export function getArgoApplicationStatus(app: any): StatusBadge {
   if (opPhase === 'Running') {
     return { text: 'Syncing', color: healthColors.degraded, level: 'degraded' }
   }
+  if (opPhase === 'Terminating') {
+    return { text: 'Terminating', color: healthColors.degraded, level: 'degraded' }
+  }
 
   // Failed operation
   if (opPhase === 'Failed' || opPhase === 'Error') {
@@ -59,6 +62,11 @@ export function getArgoApplicationStatus(app: any): StatusBadge {
   }
 
   return { text: health || sync || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+}
+
+export function isArgoOperationInProgress(app: any): boolean {
+  const phase = app?.status?.operationState?.phase
+  return app?.operation != null || phase === 'Running' || phase === 'Terminating'
 }
 
 // Radar suspends an Argo Application by clearing spec.syncPolicy.automated and
