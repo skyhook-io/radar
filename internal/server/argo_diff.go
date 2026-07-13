@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/skyhook-io/radar/internal/argocd"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 )
@@ -47,11 +48,18 @@ type argoResourceDiffResponse struct {
 // API server (not the local cache) so it reflects Argo's own normalized and
 // predicted states.
 //
-// Authorization is a dual gate, both enforced BEFORE any Argo API call:
+// Authorization is a layered gate, all enforced BEFORE any Argo API call:
 //  1. the Application root — the caller must have access to the Application's
 //     namespace, mirroring how the insights handler authorizes a GitOps root.
-//  2. the target resource — the per-user preflight (namespace access +
-//     cluster-scoped/Secret SARs) that gates every single-resource read.
+//  2. the target resource — the same per-user preflight every single-resource
+//     read uses: namespace access for namespaced kinds, plus a per-kind `get`
+//     SubjectAccessReview for cluster-scoped kinds and Secrets. (A namespaced
+//     non-Secret kind is gated by namespace access only, matching the resource
+//     drawer's model — not a per-kind `get` on that exact kind.)
+//  3. the destination cluster — Radar's SARs authorize against its OWN cluster,
+//     so a diff is served only when the Application deploys in-cluster
+//     (isInClusterDestination). A remote hub-spoke destination is refused: a
+//     local SAR cannot authorize a read of another cluster's manifests.
 //
 // Secret data is structurally redacted (see redactSecretManifest) before the
 // manifests are diffed or serialized; there is no un-redact option.
@@ -62,7 +70,12 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	appNamespace := normalizeNamespaceParam(chi.URLParam(r, "namespace"))
 	appName := chi.URLParam(r, "name")
 
-	group := r.URL.Query().Get("group")
+	// Lowercase the group so the RBAC scope classifier (ClassifyKindScope →
+	// discovery, keyed on lowercase groups) and the managed-resource matcher
+	// (findManagedResource, case-insensitive) agree. Without this a case-variant
+	// group like "CERT-MANAGER.IO" classifies a cluster-scoped CRD as unknown —
+	// skipping its cluster-scoped SAR — while the matcher still returns it.
+	group := strings.ToLower(r.URL.Query().Get("group"))
 	kind := r.URL.Query().Get("kind")
 	resourceNamespace := r.URL.Query().Get("resourceNamespace")
 	resourceName := r.URL.Query().Get("resourceName")
@@ -92,6 +105,23 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// (a Secret they can't read) is denied here, still before any Argo call.
 	if status, msg, ok := s.preflightResourceGet(r, normalizeKind(kind), resourceNamespace, resourceName, group); !ok {
 		s.writeError(w, status, msg)
+		return
+	}
+
+	// Gate 3: the destination cluster. The two SARs above authorize the caller
+	// against RADAR'S cluster, but Argo's managed-resources reflect the cluster
+	// the Application deploys to. For a hub-spoke Application whose destination is
+	// a remote cluster, a local SAR cannot authorize a remote read — so the
+	// desired/live manifests must not be served. An Application object lives in
+	// the (watched) argocd namespace, so a real remote-destination app is readable
+	// here and refused; when the object can't be read we proceed (the capability
+	// gate that hides the UI affordance already reads the same destination off the
+	// live root, and an unreadable Application means the detail page itself can't
+	// render), logging so the gap is visible.
+	if appObj, appErr := k8s.GetResourceCache().GetDynamicWithGroup(r.Context(), "applications", appNamespace, appName, "argoproj.io"); appErr != nil {
+		log.Printf("[argo] resource-diff: could not read Application %s/%s to verify its destination; proceeding: %v", sanitizeForLog(appNamespace), sanitizeForLog(appName), appErr)
+	} else if !isInClusterDestination(appObj) {
+		s.writeError(w, http.StatusBadRequest, "Per-resource diff is available only for Applications that deploy to the cluster Radar is connected to. This Application targets a different cluster — connect Radar to that cluster to diff its resources.")
 		return
 	}
 
@@ -181,6 +211,51 @@ func findManagedResource(items []argoapi.ResourceDiff, group, kind, namespace, n
 
 func isCoreSecret(kind, group string) bool {
 	return strings.EqualFold(kind, "Secret") && group == ""
+}
+
+// isInClusterDestination reports whether an Argo Application deploys to the
+// cluster Radar is connected to — spec.destination is the local API server or
+// the "in-cluster" name — as opposed to a remote hub-spoke destination. Radar's
+// per-user SARs authorize against the local cluster only, so the desired/live
+// manifests of a remote destination cannot be authorized here. A missing/empty
+// destination is Argo's degenerate local default; an explicit remote server or
+// name is not. Fail closed: a nil Application is treated as not-in-cluster.
+func isInClusterDestination(app *unstructured.Unstructured) bool {
+	if app == nil {
+		return false
+	}
+	name, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "name")
+	server, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "server")
+	name = strings.TrimSpace(name)
+	server = strings.TrimSpace(server)
+	if name == "" && server == "" {
+		return true
+	}
+	if strings.EqualFold(name, "in-cluster") {
+		return true
+	}
+	return isLocalAPIServer(server)
+}
+
+// isLocalAPIServer matches the in-cluster Kubernetes API server URL Argo records
+// for a same-cluster destination (kubernetes.default.svc, with or without a
+// scheme, port, or trailing dot). Any other host is a remote cluster.
+func isLocalAPIServer(server string) bool {
+	if server == "" {
+		return false
+	}
+	h := server
+	if i := strings.Index(h, "://"); i >= 0 {
+		h = h[i+3:]
+	}
+	if i := strings.IndexAny(h, "/?#"); i >= 0 {
+		h = h[:i]
+	}
+	if i := strings.LastIndex(h, ":"); i >= 0 {
+		h = h[:i]
+	}
+	h = strings.TrimSuffix(strings.ToLower(h), ".")
+	return h == "kubernetes.default.svc" || h == "kubernetes.default" || h == "kubernetes"
 }
 
 // redactSecretManifest masks every Secret value on BOTH manifests in place so
@@ -363,7 +438,7 @@ func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name strin
 		// The upstream error can wrap Argo's raw response body (proxy headers,
 		// a render error containing Secret data). Keep it in the server log
 		// only; the client gets a generic message.
-		log.Printf("[argo] resource-diff for %s/%s failed: %s", sanitizeForLog(namespace), sanitizeForLog(name), sanitizeForLog(err.Error()))
+		log.Printf("[argo] resource-diff for %s/%s failed: %s", sanitizeForLog(namespace), sanitizeForLog(name), sanitizeForLog(argocd.RedactToken(err.Error())))
 		s.writeError(w, http.StatusBadGateway, "Failed to fetch the diff from the Argo CD API server.")
 	}
 }
@@ -388,7 +463,11 @@ func (s *Server) enrichArgoRepoHealth(root *unstructured.Unstructured, insight *
 	if project == "" {
 		project = "default"
 	}
+	// Collect every distinct failed source repo first, then fold — so a
+	// multi-source app with more than one unreachable repo lists all of them
+	// instead of the last one silently overwriting the rest.
 	seen := make(map[string]bool, len(urls))
+	var failed []failedRepo
 	for _, u := range urls {
 		norm := normalizeRepoURL(u)
 		if seen[norm] {
@@ -399,44 +478,66 @@ func (s *Server) enrichArgoRepoHealth(root *unstructured.Unstructured, insight *
 		if rp == nil || !strings.EqualFold(rp.ConnectionState.Status, "Failed") {
 			continue
 		}
-		// A failed repo connection is the CAUSE of any ComparisonError Argo
-		// raised for this app: it couldn't load the desired state because it
-		// couldn't read the repo. Rather than stack a second, lower-severity
-		// "RepoUnreachable" alert beside that ComparisonError — one root cause
-		// rendered as two problems — fold the repo diagnosis into the existing
-		// issue so the page points at the one thing that matters. Only when
-		// there is no ComparisonError (repo degraded but the app is still
-		// Synced from Argo's cache) do we surface a standalone warning.
-		if enrichComparisonErrorWithRepo(insight, u, rp.ConnectionState.Message) {
-			continue
-		}
+		failed = append(failed, failedRepo{url: u, connErr: rp.ConnectionState.Message})
+	}
+	if len(failed) == 0 {
+		return
+	}
+	// A failed repo connection is the CAUSE of any ComparisonError Argo raised
+	// for this app: it couldn't load the desired state because it couldn't read
+	// the repo. Rather than stack a second, lower-severity "RepoUnreachable"
+	// alert beside that ComparisonError — one root cause rendered as two problems
+	// — fold the repo diagnosis into the existing issue. Only when there is no
+	// ComparisonError (repo degraded but the app is still Synced from Argo's
+	// cache) do we surface standalone warnings, one per failed repo.
+	if enrichComparisonErrorWithRepos(insight, failed) {
+		return
+	}
+	for _, fr := range failed {
 		insight.Issues = append(insight.Issues, gitopsinsights.Issue{
 			Severity:   gitopsinsights.SeverityWarning,
 			Scope:      gitopsinsights.ScopeCondition,
 			Reason:     "RepoUnreachable",
-			Message:    fmt.Sprintf("Argo CD can't reach the source repository %s", u),
-			RawMessage: rp.ConnectionState.Message,
+			Message:    fmt.Sprintf("Argo CD can't reach the source repository %s", fr.url),
+			RawMessage: fr.connErr,
 			Action:     "Check the repository's credentials and network access in Argo CD (Settings → Repositories).",
 		})
 	}
 }
 
-// enrichComparisonErrorWithRepo folds a failed repo-connection diagnosis into
-// an existing ComparisonError issue — the symptom Argo raised when it couldn't
-// load the desired state — naming the specific repo and giving the fix action
-// while keeping the issue's critical severity. Returns true when it found and
-// enriched one, so the caller skips adding a duplicate standalone
-// RepoUnreachable. The Argo condition's own full text stays in RawMessage; the
-// repo connection error only fills it when the condition didn't carry detail.
-func enrichComparisonErrorWithRepo(insight *gitopsinsights.Insight, repoURL, connErr string) bool {
+type failedRepo struct {
+	url     string
+	connErr string
+}
+
+// enrichComparisonErrorWithRepos folds one or more failed repo-connection
+// diagnoses into an existing ComparisonError issue — the symptom Argo raised
+// when it couldn't load the desired state — naming the repo(s) and giving the
+// fix action while keeping the issue's critical severity. Returns true when it
+// found and enriched one, so the caller skips adding duplicate standalone
+// RepoUnreachable warnings. The Argo condition's own full text stays in
+// RawMessage; the repo connection error(s) only fill it when the condition
+// didn't carry detail.
+func enrichComparisonErrorWithRepos(insight *gitopsinsights.Insight, failed []failedRepo) bool {
+	if len(failed) == 0 {
+		return false
+	}
 	for i := range insight.Issues {
 		if insight.Issues[i].Reason != "ComparisonError" {
 			continue
 		}
-		insight.Issues[i].Message = fmt.Sprintf("Argo CD can't reach the source repository %s, so it can't compare against Git — sync status is unavailable for all resources.", repoURL)
-		insight.Issues[i].Action = "Check the repository's credentials and network access in Argo CD (Settings → Repositories)."
+		if len(failed) == 1 {
+			insight.Issues[i].Message = fmt.Sprintf("Argo CD can't reach the source repository %s, so it can't compare against Git — sync status is unavailable for all resources.", failed[0].url)
+		} else {
+			urls := make([]string, len(failed))
+			for j, fr := range failed {
+				urls[j] = fr.url
+			}
+			insight.Issues[i].Message = fmt.Sprintf("Argo CD can't reach %d source repositories (%s), so it can't compare against Git — sync status is unavailable for all resources.", len(failed), strings.Join(urls, ", "))
+		}
+		insight.Issues[i].Action = "Check the repositories' credentials and network access in Argo CD (Settings → Repositories)."
 		if insight.Issues[i].RawMessage == "" {
-			insight.Issues[i].RawMessage = connErr
+			insight.Issues[i].RawMessage = failed[0].connErr
 		}
 		return true
 	}
@@ -566,7 +667,7 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 		case errors.Is(err, argoapi.ErrNotFound):
 			s.writeError(w, http.StatusNotFound, "Argo CD has no metadata for this revision.")
 		default:
-			log.Printf("[argo] revision-metadata for %s/%s failed: %s", sanitizeForLog(appNamespace), sanitizeForLog(appName), sanitizeForLog(err.Error()))
+			log.Printf("[argo] revision-metadata for %s/%s failed: %s", sanitizeForLog(appNamespace), sanitizeForLog(appName), sanitizeForLog(argocd.RedactToken(err.Error())))
 			s.writeError(w, http.StatusBadGateway, "Failed to fetch revision metadata from the Argo CD API server.")
 		}
 		return

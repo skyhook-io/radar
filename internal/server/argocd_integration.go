@@ -70,6 +70,16 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Adopting a CLI token requires an explicit server URL. TokenFromCLI selects
+	// the token for the CLI's current-context server, but an empty URL then puts
+	// the manager into Kubernetes auto-discovery, which would probe whatever Argo
+	// the current cluster exposes — sending the CLI credential to a possibly
+	// different server. The two meanings of "empty URL" must not cross.
+	if body.UseCLIToken && rawURL == "" {
+		s.writeError(w, http.StatusBadRequest, "Provide the Argo CD server URL when connecting with a CLI session token.")
+		return
+	}
+
 	prev := config.Load()
 
 	token := prev.ArgoCDToken
@@ -114,7 +124,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		// The upstream error can embed the raw response body (proxy headers, a
 		// render error with Secret data). Log it server-side; return only the
 		// mapped guidance so nothing from Argo's body reaches the browser.
-		log.Printf("[argocd] Probe of candidate settings failed: %s", sanitizeForLog(err.Error()))
+		log.Printf("[argocd] Probe of candidate settings failed: %s", sanitizeForLog(argocd.RedactToken(err.Error())))
 		if errors.Is(err, argocd.ErrTokenInvalid) {
 			s.writeError(w, http.StatusBadRequest, "Argo CD rejected the token — check that it is valid and not expired.")
 			return

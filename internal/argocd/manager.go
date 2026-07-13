@@ -511,6 +511,9 @@ func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedR
 			return nil, fmt.Errorf("%w: connection was reset", ErrUnreachable)
 		}
 	}
+	m.mu.Lock()
+	gen := m.generation
+	m.mu.Unlock()
 
 	items, err := client.ManagedResources(ctx, q)
 	if err != nil {
@@ -519,16 +522,22 @@ func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedR
 
 	if !filtered {
 		m.mu.Lock()
-		now := time.Now()
-		for k, e := range m.cache {
-			if now.After(e.expires) {
-				delete(m.cache, k)
+		// A SetConfig/Reset (context switch, reconnect) during the fetch bumps the
+		// generation; the result is for a superseded cluster/config, so it must not
+		// be cached under the app key — a later read for the new target would serve
+		// the old cluster's manifests. Mirrors the probe path's staleLocked guard.
+		if m.generation == gen {
+			now := time.Now()
+			for k, e := range m.cache {
+				if now.After(e.expires) {
+					delete(m.cache, k)
+				}
 			}
+			if m.cache == nil {
+				m.cache = make(map[string]cacheEntry)
+			}
+			m.cache[key] = cacheEntry{items: items, expires: now.Add(managedResourcesTTL)}
 		}
-		if m.cache == nil {
-			m.cache = make(map[string]cacheEntry)
-		}
-		m.cache[key] = cacheEntry{items: items, expires: now.Add(managedResourcesTTL)}
 		m.mu.Unlock()
 	}
 	return items, nil
@@ -559,6 +568,9 @@ func (m *Manager) RevisionMetadataCached(ctx context.Context, q argoapi.Revision
 			return nil, fmt.Errorf("%w: connection was reset", ErrUnreachable)
 		}
 	}
+	m.mu.Lock()
+	gen := m.generation
+	m.mu.Unlock()
 
 	meta, err := client.RevisionMetadata(ctx, q)
 	if err != nil {
@@ -566,6 +578,12 @@ func (m *Manager) RevisionMetadataCached(ctx context.Context, q argoapi.Revision
 	}
 
 	m.mu.Lock()
+	// Don't cache a result whose config was superseded mid-fetch (see the
+	// generation guard in ManagedResourcesCached); still return it to this caller.
+	if m.generation != gen {
+		m.mu.Unlock()
+		return meta, nil
+	}
 	if m.revMetaCache == nil {
 		m.revMetaCache = make(map[string]revMetaEntry)
 	}
@@ -633,7 +651,7 @@ func (m *Manager) refreshRepositoriesAsync() {
 		}
 		repos, err := client.Repositories(ctx)
 		if err != nil {
-			log.Printf("[argocd] repository list failed: %v", err)
+			log.Printf("[argocd] repository list failed: %v", m.redactSelfToken(err.Error()))
 			return
 		}
 		m.mu.Lock()
@@ -704,7 +722,13 @@ func (m *Manager) verifyAuth(ctx context.Context, url string, snap probeSnapshot
 func (m *Manager) probeEndpoint(ctx context.Context, url string, snap probeSnapshot) error {
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, err := newClient(url, snap.token, snap.insecureTLS).Version(probeCtx)
+	// Reachability only — send NO token. /api/version answers 200 (public) or 401
+	// either way, so the bearer token is never needed to prove an endpoint is up.
+	// During auto-discovery this runs against every labeled candidate Service; a
+	// tokenless probe means the configured token is disclosed only to the single
+	// endpoint that verifyAuth later authenticates against, never to a losing (or
+	// attacker-planted) candidate. A 401 still counts as reachable.
+	_, err := newClient(url, "", snap.insecureTLS).Version(probeCtx)
 	if err == nil || errors.Is(err, argoapi.ErrUnauthorized) {
 		return nil
 	}
@@ -751,4 +775,17 @@ func redactToken(s, token string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, token, "<redacted-token>")
+}
+
+// RedactToken masks the default manager's current bearer token if it appears in
+// s. Exposed so the HTTP layer can give its Argo-error logs the same guarantee
+// the manager's own logs have, instead of relying on the token never landing in
+// an upstream error body.
+func RedactToken(s string) string { return defaultManager.redactSelfToken(s) }
+
+func (m *Manager) redactSelfToken(s string) string {
+	m.mu.Lock()
+	tok := m.token
+	m.mu.Unlock()
+	return redactToken(s, tok)
 }

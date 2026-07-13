@@ -198,8 +198,14 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 				AppNamespace: req.Namespace,
 				AppName:      req.Name,
 			}); err == nil {
-				insight.Capabilities.ArgoDiffAvailable = true
+				// Revision metadata is about the Git source, so it's available for
+				// any connected app. The deep diff reads destination-cluster
+				// manifests, which Radar's local SARs can only authorize when the
+				// Application deploys in-cluster — a remote hub-spoke destination is
+				// gated off here (and refused by the diff endpoint) so we never
+				// offer a diff Radar can't authorize.
 				insight.Capabilities.RevisionMetadataAvailable = true
+				insight.Capabilities.ArgoDiffAvailable = isInClusterDestination(root)
 			}
 		}
 		if insight.Capabilities.ArgoConfigured {

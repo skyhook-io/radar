@@ -68,6 +68,23 @@ func New(opts Options) *Client {
 			hc.Transport = transport
 		}
 	}
+	// Refuse redirects that change origin (scheme/host/port). Go's default policy
+	// re-sends the Authorization header to same-domain and subdomain targets, so a
+	// misconfigured or hostile Argo endpoint could redirect to http:// or another
+	// host and capture the bearer token. Same-origin path redirects stay allowed.
+	// Only set when the caller didn't supply its own policy.
+	if hc.CheckRedirect == nil {
+		hc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) == 0 {
+				return nil
+			}
+			orig := via[0].URL
+			if req.URL.Scheme != orig.Scheme || req.URL.Host != orig.Host {
+				return fmt.Errorf("argoapi: refusing cross-origin redirect to %s (token would be exposed)", req.URL.Host)
+			}
+			return nil
+		}
+	}
 	logf := opts.Logger
 	if logf == nil {
 		logf = func(string, ...any) {}

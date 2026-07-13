@@ -602,3 +602,64 @@ func TestArgoRevisionMetadata_UnderscoreNamespaceRejected(t *testing.T) {
 		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
 	}
 }
+
+func TestIsInClusterDestination(t *testing.T) {
+	mk := func(dest map[string]any) *unstructured.Unstructured {
+		spec := map[string]any{}
+		if dest != nil {
+			spec["destination"] = dest
+		}
+		return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	}
+	cases := []struct {
+		name string
+		app  *unstructured.Unstructured
+		want bool
+	}{
+		{"nil app fails closed", nil, false},
+		{"no destination defaults local", mk(nil), true},
+		{"empty destination defaults local", mk(map[string]any{}), true},
+		{"name in-cluster", mk(map[string]any{"name": "in-cluster"}), true},
+		{"local api server url", mk(map[string]any{"server": "https://kubernetes.default.svc"}), true},
+		{"local api server url with port", mk(map[string]any{"server": "https://kubernetes.default.svc:443"}), true},
+		{"remote named cluster", mk(map[string]any{"name": "prod-spoke"}), false},
+		{"remote server url", mk(map[string]any{"server": "https://10.0.0.1:6443"}), false},
+		{"remote eks url", mk(map[string]any{"server": "https://abc123.gr7.us-east-1.eks.amazonaws.com"}), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isInClusterDestination(tc.app); got != tc.want {
+				t.Errorf("isInClusterDestination = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnrichComparisonErrorWithRepos_MultiRepoNoOverwrite(t *testing.T) {
+	// Two failed source repos folding into one ComparisonError: both URLs must
+	// survive (the earlier single-repo fold overwrote the first with the last),
+	// the issue stays critical, and no standalone warnings are added.
+	insight := &gitopsinsights.Insight{Issues: []gitopsinsights.Issue{{
+		Severity: gitopsinsights.SeverityCritical,
+		Scope:    gitopsinsights.ScopeCondition,
+		Reason:   "ComparisonError",
+		Message:  "Failed to load target state",
+	}}}
+	failed := []failedRepo{
+		{url: "https://github.com/org/broken", connErr: "authentication required"},
+		{url: "https://github.com/org/broken2", connErr: "repository not found"},
+	}
+	if !enrichComparisonErrorWithRepos(insight, failed) {
+		t.Fatal("expected the failed repos to fold into the ComparisonError")
+	}
+	if len(insight.Issues) != 1 {
+		t.Fatalf("issues = %d, want 1", len(insight.Issues))
+	}
+	iss := insight.Issues[0]
+	if iss.Severity != gitopsinsights.SeverityCritical {
+		t.Errorf("severity = %v, want critical (unchanged)", iss.Severity)
+	}
+	if !strings.Contains(iss.Message, "github.com/org/broken") || !strings.Contains(iss.Message, "github.com/org/broken2") {
+		t.Errorf("merged message must name BOTH failed repos: %q", iss.Message)
+	}
+}
