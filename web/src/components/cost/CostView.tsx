@@ -356,7 +356,7 @@ function CostOverviewState({ children }: { children: React.ReactNode }) {
         <PageHeader
           icon={DollarSign}
           title="Cost Insights"
-          description="Understand current allocation and find workload requests worth tuning."
+          description="Understand current allocation and find CPU and memory requests worth tuning."
         />
         <CostViewTabs />
         {children}

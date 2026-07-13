@@ -29,7 +29,7 @@ import {
 } from './model'
 
 export const RIGHTSIZING_SCAN_DESCRIPTION =
-  'Find workload requests to increase, reduce, or review. Radar never changes requests.'
+  'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
 export const RIGHTSIZING_SCAN_METHODOLOGY =
   'Based on 7 days of history: CPU P95 and memory maximum, plus 15% headroom. Memory reductions require verifiable restart history.'
 
@@ -195,7 +195,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
         <PageHeader
           icon={DollarSign}
           title="Cost Insights"
-          description="Understand current allocation and find workload requests worth tuning."
+          description="Understand current allocation and find CPU and memory requests worth tuning."
         />
         <CostViewTabs />
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -258,7 +258,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
         ) : surfaceState === 'scanning' ? (
           <CenteredState
             loading
-            title="Analyzing workload requests…"
+            title="Analyzing CPU and memory requests…"
             body="Comparing 7 days of CPU and memory usage with configured requests. Larger clusters can take up to a minute."
           />
         ) : surfaceState === 'fatal_error' ? (
@@ -415,7 +415,7 @@ function FirstRunState({ namespaces, onRun }: { namespaces: string[]; onRun: () 
     <div className="rounded-xl border border-theme-border bg-theme-surface p-8 text-center shadow-theme-sm">
       <Gauge className="mx-auto h-9 w-9 text-theme-text-tertiary" />
       <h2 className="mt-3 text-base font-semibold text-theme-text-primary">
-        Review workload requests
+        Review CPU and memory requests
       </h2>
       <p className="mx-auto mt-1 max-w-xl text-sm text-theme-text-secondary">
         Scan {scope} to find CPU and memory requests to increase, reduce, or review alongside

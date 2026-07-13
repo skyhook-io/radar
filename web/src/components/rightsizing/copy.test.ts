@@ -8,8 +8,9 @@ import {
 describe('rightsizing scan copy', () => {
   it('sets expectations without claiming efficiency or savings', () => {
     const copy = `${RIGHTSIZING_SCAN_DESCRIPTION} ${RIGHTSIZING_SCAN_METHODOLOGY}`
+    expect(copy).toContain('CPU and memory requests')
     expect(copy).toContain('increase, reduce, or review')
-    expect(copy).toContain('Radar never changes requests')
+    expect(copy).toContain('Radar never changes them')
     expect(copy).toContain('CPU P95 and memory maximum')
     expect(copy).toContain('Memory reductions require verifiable restart history')
     expect(copy.toLowerCase()).not.toContain('efficiency')
