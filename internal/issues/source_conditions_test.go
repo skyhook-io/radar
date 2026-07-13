@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -173,6 +174,128 @@ func TestDetectGenericCRDIssues_GatewayRouteParentConditions(t *testing.T) {
 	}
 	if got[0].Message == "" || got[0].Message == "Service prod/api does not exist" {
 		t.Fatalf("route issue should include parent context; got message %q", got[0].Message)
+	}
+}
+
+// routeWithParents builds an HTTPRoute whose status.parents each carry one
+// Accepted=False condition with the given (sectionName, reason, message).
+func routeWithParents(gw string, listeners []struct{ section, reason, message string }) *unstructured.Unstructured {
+	now := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	parents := make([]any, len(listeners))
+	for i, l := range listeners {
+		parents[i] = map[string]any{
+			"parentRef": map[string]any{"name": gw, "namespace": "infra", "sectionName": l.section},
+			"conditions": []any{
+				map[string]any{"type": "Accepted", "status": "False", "reason": l.reason, "message": l.message, "lastTransitionTime": now},
+			},
+		}
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": "web", "namespace": "prod"},
+		"status":   map[string]any{"parents": parents},
+	}}
+}
+
+// A single gateway fault reported on several listeners with the SAME reason and
+// message collapses to one gateway-level issue that NAMES the affected listeners
+// (so an explicit per-listener attachment isn't silently flattened) rather than
+// emitting one near-identical row per listener.
+func TestDetectGatewayRouteParentIssues_CollapsesPerListenerDupes(t *testing.T) {
+	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	route := routeWithParents("primary-gateway", []struct{ section, reason, message string }{
+		{"http", "NoMatchingListenerHostname", "no hostname intersections"},
+		{"https", "NoMatchingListenerHostname", "no hostname intersections"},
+	})
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{routeGVR: {route}},
+		kinds:      map[schema.GroupVersionResource]string{routeGVR: "HTTPRoute"},
+		namespaced: map[schema.GroupVersionResource]bool{routeGVR: true},
+	}
+
+	got := Compose(p, Filters{})
+	if len(got) != 1 {
+		t.Fatalf("per-listener dupes must collapse to 1 issue, got %d: %+v", len(got), got)
+	}
+	if got[0].Reason != "Accepted: NoMatchingListenerHostname" {
+		t.Fatalf("reason = %q, want Accepted: NoMatchingListenerHostname", got[0].Reason)
+	}
+	// Names the gateway and BOTH affected listeners, and the shared detail once.
+	for _, want := range []string{"Gateway infra/primary-gateway", "listeners http, https", "no hostname intersections"} {
+		if !strings.Contains(got[0].Message, want) {
+			t.Fatalf("collapsed message %q must contain %q", got[0].Message, want)
+		}
+	}
+}
+
+// When listeners fail with the same reason but DIFFERENT messages, the collapse
+// must keep all of them (attributed per listener) — never drop the others.
+func TestDetectGatewayRouteParentIssues_DifferentMessagesAggregated(t *testing.T) {
+	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	route := routeWithParents("primary-gateway", []struct{ section, reason, message string }{
+		{"http", "NoMatchingListenerHostname", "no host match for a.example.com"},
+		{"https", "NoMatchingListenerHostname", "no host match for b.example.com"},
+	})
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{routeGVR: {route}},
+		kinds:      map[schema.GroupVersionResource]string{routeGVR: "HTTPRoute"},
+		namespaced: map[schema.GroupVersionResource]bool{routeGVR: true},
+	}
+
+	got := Compose(p, Filters{})
+	if len(got) != 1 {
+		t.Fatalf("same-reason listeners collapse to 1 issue, got %d: %+v", len(got), got)
+	}
+	for _, want := range []string{"a.example.com", "b.example.com", "http", "https"} {
+		if !strings.Contains(got[0].Message, want) {
+			t.Fatalf("aggregated message %q must retain %q", got[0].Message, want)
+		}
+	}
+}
+
+// Listeners on the same gateway failing for DIFFERENT reasons are distinct
+// problems and must stay as separate rows.
+func TestDetectGatewayRouteParentIssues_DistinctReasonsStaySeparate(t *testing.T) {
+	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	route := routeWithParents("primary-gateway", []struct{ section, reason, message string }{
+		{"http", "NoMatchingListenerHostname", "no hostname intersections"},
+		{"https", "NoMatchingParent", "no matching parent"},
+	})
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{routeGVR: {route}},
+		kinds:      map[schema.GroupVersionResource]string{routeGVR: "HTTPRoute"},
+		namespaced: map[schema.GroupVersionResource]bool{routeGVR: true},
+	}
+
+	got := Compose(p, Filters{})
+	if len(got) != 2 {
+		t.Fatalf("distinct reasons must stay separate, got %d issues: %+v", len(got), got)
+	}
+}
+
+// The single-listener issue's identity must not change when a second listener
+// starts failing the same way — otherwise acknowledgement/history is lost. The
+// gateway-level fingerprint keeps the ID stable across the 1↔many boundary.
+func TestDetectGatewayRouteParentIssues_StableIdentityAcrossListenerCount(t *testing.T) {
+	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	mk := func(listeners []struct{ section, reason, message string }) Issue {
+		p := &fakeProvider{
+			dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{routeGVR: {routeWithParents("primary-gateway", listeners)}},
+			kinds:      map[schema.GroupVersionResource]string{routeGVR: "HTTPRoute"},
+			namespaced: map[schema.GroupVersionResource]bool{routeGVR: true},
+		}
+		got := Compose(p, Filters{})
+		if len(got) != 1 {
+			t.Fatalf("want 1 issue, got %d: %+v", len(got), got)
+		}
+		return got[0]
+	}
+	one := mk([]struct{ section, reason, message string }{{"http", "NoMatchingListenerHostname", "x"}})
+	two := mk([]struct{ section, reason, message string }{
+		{"http", "NoMatchingListenerHostname", "x"},
+		{"https", "NoMatchingListenerHostname", "x"},
+	})
+	if one.ID == "" || one.ID != two.ID {
+		t.Fatalf("issue ID must be stable as listeners join the same fault: one=%q two=%q", one.ID, two.ID)
 	}
 }
 

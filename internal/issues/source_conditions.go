@@ -2,6 +2,7 @@ package issues
 
 import (
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -207,18 +208,41 @@ func detectObjectConditionIssues(gvr schema.GroupVersionResource, kind string, u
 	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, condTypeReason(condType, reason), msg, since, "", u.GetCreationTimestamp().Time)}
 }
 
+// gwListenerCond is one listener's failing condition within a gateway group.
+type gwListenerCond struct {
+	section, msg string
+	since        time.Duration
+}
+
 func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
 	parents, found, _ := unstructured.NestedSlice(u.Object, "status", "parents")
 	if !found {
 		return nil
 	}
-	var out []Issue
+
+	// A route can attach to several listeners of one Gateway — an unscoped
+	// parentRef the controller expands per listener, or explicit per-listener
+	// parentRefs (sectionName). The Gateway API reports acceptance PER LISTENER, so
+	// a single fault (e.g. a hostname matching no listener) surfaces as the same
+	// condition on every listener. Collapse those into ONE gateway-level issue
+	// keyed on (condType, reason, gateway); listeners failing for genuinely
+	// different reasons still get their own row. The key deliberately omits the
+	// listener: the row's identity must not flip as listeners join or leave the
+	// same fault, or acknowledgement/history would be lost and duplicate alerts
+	// would fire.
+	type routeGroup struct {
+		condType, reason, gwLabel, gwKey string
+		members                          []gwListenerCond
+	}
+	groups := map[string]*routeGroup{}
+	var order []string
+
 	for _, parent := range parents {
 		pm, ok := parent.(map[string]any)
 		if !ok {
 			continue
 		}
-		parentLabel, parentKey := gatewayParentRefLabel(pm)
+		gwLabel, gwKey, section := gatewayParentRef(pm)
 		conds, _ := pm["conditions"].([]any)
 		for _, c := range conds {
 			cm, ok := c.(map[string]any)
@@ -237,19 +261,90 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 				continue
 			}
 			msg, _ := cm["message"].(string)
-			if parentLabel != "" {
-				if msg != "" {
-					msg = parentLabel + ": " + msg
-				} else {
-					msg = parentLabel
-				}
+			gk := condType + "\x00" + reason + "\x00" + gwKey
+			g := groups[gk]
+			if g == nil {
+				g = &routeGroup{condType: condType, reason: reason, gwLabel: gwLabel, gwKey: gwKey}
+				groups[gk] = g
+				order = append(order, gk)
 			}
-			since := conditionSince(cm)
-			fp := condType + ":" + parentKey
-			out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, condTypeReason(condType, reason), msg, since, fp, u.GetCreationTimestamp().Time))
+			g.members = append(g.members, gwListenerCond{section: section, msg: msg, since: conditionSince(cm)})
 		}
 	}
+
+	ns, name, createdAt := u.GetNamespace(), u.GetName(), u.GetCreationTimestamp().Time
+	var out []Issue
+	for _, gk := range order {
+		g := groups[gk]
+		// Stable output regardless of the order listeners appear in status.parents.
+		sort.SliceStable(g.members, func(i, j int) bool { return g.members[i].section < g.members[j].section })
+		// first_seen anchors on the OLDEST listener transition: the gateway
+		// attachment has been failing since the first listener broke; a later
+		// listener joining the same fault doesn't make it a new problem.
+		oldest := g.members[0].since
+		for _, m := range g.members[1:] {
+			if m.since > oldest {
+				oldest = m.since
+			}
+		}
+		fp := g.condType + ":" + g.gwKey + ":" + g.reason
+		message := gatewayRouteMessage(g.gwLabel, g.members)
+		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning, condTypeReason(g.condType, g.reason), message, oldest, fp, createdAt))
+	}
 	return out
+}
+
+// gatewayRouteMessage renders a collapsed gateway group's message. When every
+// listener carries the same detail it names the affected listeners once; when
+// they differ it lists each listener's detail so none is dropped.
+func gatewayRouteMessage(gwLabel string, members []gwListenerCond) string {
+	allSame := true
+	for _, m := range members[1:] {
+		if m.msg != members[0].msg {
+			allSame = false
+			break
+		}
+	}
+	var sections []string
+	for _, m := range members {
+		if m.section != "" {
+			sections = append(sections, m.section)
+		}
+	}
+	if allSame {
+		label := gwLabel
+		switch len(sections) {
+		case 0:
+		case 1:
+			label += " listener " + sections[0]
+		default:
+			label += " listeners " + strings.Join(sections, ", ")
+		}
+		return composeParentMessage(label, members[0].msg)
+	}
+	var parts []string
+	for _, m := range members {
+		switch {
+		case m.section != "" && m.msg != "":
+			parts = append(parts, m.section+" — "+m.msg)
+		case m.msg != "":
+			parts = append(parts, m.msg)
+		}
+	}
+	return composeParentMessage(gwLabel, strings.Join(parts, "; "))
+}
+
+// composeParentMessage prefixes the detector message with the parent (gateway or
+// listener) context, tolerating either side being empty.
+func composeParentMessage(label, msg string) string {
+	switch {
+	case label == "":
+		return msg
+	case msg == "":
+		return label
+	default:
+		return label + ": " + msg
+	}
 }
 
 func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string, createdAt time.Time) Issue {
@@ -294,19 +389,24 @@ func conditionSince(cond map[string]any) time.Duration {
 	return time.Since(t)
 }
 
-func gatewayParentRefLabel(parent map[string]any) (label, key string) {
+// gatewayParentRef returns the gateway-level display label and identity key
+// (without sectionName/port, so per-listener conditions collapse onto one gateway)
+// plus the listener descriptor — sectionName, or a "port N" fallback — used to
+// name the affected listeners in the collapsed message.
+func gatewayParentRef(parent map[string]any) (gwLabel, gwKey, section string) {
 	ref, _ := parent["parentRef"].(map[string]any)
 	if len(ref) == 0 {
-		return "", "unknown"
+		return "", "unknown", ""
 	}
 	group, _ := ref["group"].(string)
 	kind, _ := ref["kind"].(string)
 	namespace, _ := ref["namespace"].(string)
 	name, _ := ref["name"].(string)
-	sectionName, _ := ref["sectionName"].(string)
-	port := ""
-	if p, ok := ref["port"]; ok {
-		port = toString(p)
+	section, _ = ref["sectionName"].(string)
+	if section == "" {
+		if p, ok := ref["port"]; ok {
+			section = "port " + toString(p)
+		}
 	}
 	if group == "" {
 		group = "gateway.networking.k8s.io"
@@ -314,20 +414,13 @@ func gatewayParentRefLabel(parent map[string]any) (label, key string) {
 	if kind == "" {
 		kind = "Gateway"
 	}
-	parts := []string{group, kind, namespace, name, sectionName, port}
-	key = strings.Join(parts, "/")
+	gwKey = strings.Join([]string{group, kind, namespace, name}, "/")
 	displayName := name
 	if namespace != "" {
 		displayName = namespace + "/" + name
 	}
-	label = kind + " " + displayName
-	if sectionName != "" {
-		label += " listener " + sectionName
-	}
-	if port != "" {
-		label += " port " + port
-	}
-	return label, key
+	gwLabel = kind + " " + displayName
+	return gwLabel, gwKey, section
 }
 
 func toString(v any) string {
