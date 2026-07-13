@@ -77,6 +77,7 @@ export interface ArgoActionHandlers {
   autoSyncEnabled: boolean
   // isRunning: caller derives from status.operationState.phase === 'Running'.
   isRunning: boolean
+  operationInProgress?: boolean
 }
 
 export interface FluxActionHandlers {
@@ -252,6 +253,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
   }, [identity.name, manageDocumentTitle, documentTitleSuffix])
 
   const effectiveSuspended = status?.suspended ?? false
+  const argoOperationInProgress = argo?.operationInProgress ?? argo?.isRunning ?? false
   // graphFullscreen hides everything chrome-side; the body region expands.
   // Mirrors the OSS GitOpsDetailView shell behavior so the visual chrome
   // class set carries through.
@@ -344,8 +346,12 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     icon={ArrowDownUp}
                     loading={argo.syncing}
                     onClick={argo.onSyncRequested}
-                    disabled={effectiveSuspended || terminating}
-                    disabledReason={terminating ? terminatingActionTooltip : undefined}
+                    disabled={effectiveSuspended || terminating || argoOperationInProgress}
+                    disabledReason={terminating
+                      ? terminatingActionTooltip
+                      : argoOperationInProgress
+                        ? 'Wait for the current Argo operation to finish.'
+                        : undefined}
                     primary
                   />
                   <ActionButton

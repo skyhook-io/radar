@@ -1047,7 +1047,7 @@ export function useGitOpsTree(kind: string, namespace: string, name: string, gro
 
 // Poll fast (2s) while a sync/rollback is in flight so the user sees the
 // outcome quickly; otherwise rely on staleTime + manual refetch. Argo flips
-// operationState.phase from "Running" -> Succeeded/Failed when done, so this
+// operationState.phase from Running/Terminating to a terminal phase, so this
 // auto-quiesces on completion.
 const INSIGHTS_RUNNING_POLL_MS = 2000
 
@@ -1065,7 +1065,7 @@ export function useGitOpsInsights(kind: string, namespace: string, name: string,
     staleTime: 5000,
     refetchInterval: (query) => {
       const phase = query.state.data?.summary?.operationPhase
-      return phase === 'Running' ? INSIGHTS_RUNNING_POLL_MS : false
+      return phase === 'Running' || phase === 'Terminating' ? INSIGHTS_RUNNING_POLL_MS : false
     },
   })
 }
@@ -3238,7 +3238,8 @@ interface GitOpsMutationConfig<TVariables> {
   getPath: (variables: TVariables) => string
   getBody?: (variables: TVariables) => unknown
   errorMessage: string
-  successMessage: string
+  successMessage?: string
+  getSuccessMessage?: (data: GitOpsOperationResponse) => string
   getInvalidateKeys: (variables: TVariables) => (string | undefined)[][]
 }
 
@@ -3266,7 +3267,8 @@ function createGitOpsMutation<TVariables>(config: GitOpsMutationConfig<TVariable
         errorMessage: config.errorMessage,
         successMessage: config.successMessage,
       },
-      onSuccess: (_, variables) => {
+      onSuccess: (data, variables) => {
+        if (config.getSuccessMessage) showApiSuccess(config.getSuccessMessage(data))
         config.getInvalidateKeys(variables).forEach(key =>
           queryClient.invalidateQueries({ queryKey: key })
         )
@@ -3438,7 +3440,7 @@ export const useArgoRollback = createGitOpsMutation<ArgoRollbackVars>({
 export const useArgoTerminate = createGitOpsMutation<ArgoAppVars>({
   getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/terminate`,
   errorMessage: 'Failed to terminate sync',
-  successMessage: 'Sync terminated',
+  getSuccessMessage: (data) => data.message,
   getInvalidateKeys: argoInvalidateKeys,
 })
 

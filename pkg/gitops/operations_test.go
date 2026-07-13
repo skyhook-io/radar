@@ -293,9 +293,8 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 
 // TestOperationsRefuseTerminatingResource pins that mutating ops refuse a
 // resource with metadata.deletionTimestamp set, returning ErrResourceTerminating.
-// Refresh and Terminate are intentionally excluded: Refresh re-reads from
-// Git (read-only against the cluster) and Terminate clears an in-flight
-// op record — both useful when an operation is what's blocking deletion.
+// Refresh and Terminate are intentionally excluded because both remain useful
+// when an in-flight operation is blocking deletion.
 func TestOperationsRefuseTerminatingResource(t *testing.T) {
 	ctx := context.Background()
 	terminatingApp := func() *unstructured.Unstructured {
@@ -601,6 +600,9 @@ func TestArgoResourceValidationResultCorrelatesAndReturnsTarget(t *testing.T) {
 	result, done := argoResourceValidationResult(makeApp("current", "Succeeded", []any{matchingResource}), "current", target)
 	if !done || result.Outcome != "succeeded" || result.Resource == nil {
 		t.Fatalf("result = %#v, done=%v; want succeeded target result", result, done)
+	}
+	if !strings.Contains(result.Message, "API admission can still reject") {
+		t.Fatalf("success message = %q, want dry-run limitation", result.Message)
 	}
 	if result.Resource.Status != "Synced" || !strings.Contains(result.Resource.Message, "dry run") {
 		t.Fatalf("resource result = %#v, want exact Argo status and message", result.Resource)
@@ -955,12 +957,6 @@ func patchActionsByResource(client *fake.FakeDynamicClient) map[string]int {
 	return out
 }
 
-// TestTerminateArgoSyncJSONPatchRace pins the IsInvalid mapping in
-// TerminateArgoSync. When the operation removes itself between the GET
-// and the JSON-Patch (the documented race), K8s returns
-// StatusReasonInvalid because the JSON-Patch path no longer exists. The
-// handler must recognize that as ErrNoOperationInProgress (mapped to 400)
-// rather than letting it surface as a generic 500.
 func TestTerminateArgoSyncJSONPatchRaceMapsToSentinel(t *testing.T) {
 	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
 		status, _ := obj["status"].(map[string]any)
@@ -982,6 +978,62 @@ func TestTerminateArgoSyncJSONPatchRaceMapsToSentinel(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNoOperationInProgress) {
 		t.Fatalf("expected ErrNoOperationInProgress, got %v", err)
+	}
+}
+
+func TestTerminateArgoSyncRequestsControllerTermination(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		obj["operation"] = map[string]any{"sync": map[string]any{"revision": "abc123"}}
+		status, _ := obj["status"].(map[string]any)
+		status["operationState"] = map[string]any{"phase": "Running"}
+	})
+	client := newFakeArgo(app)
+
+	result, err := TerminateArgoSync(context.Background(), client, "argocd", "demo")
+	if err != nil {
+		t.Fatalf("TerminateArgoSync: %v", err)
+	}
+	if result.Message != "Termination requested" {
+		t.Fatalf("message = %q, want termination request", result.Message)
+	}
+	updated, err := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get updated Application: %v", err)
+	}
+	phase, _, _ := unstructured.NestedString(updated.Object, "status", "operationState", "phase")
+	if phase != "Terminating" {
+		t.Fatalf("operation phase = %q, want Terminating", phase)
+	}
+	if operation, found, _ := unstructured.NestedFieldNoCopy(updated.Object, "operation"); !found || operation == nil {
+		t.Fatal("terminate removed spec.operation instead of leaving it for the Argo controller")
+	}
+}
+
+func TestTerminateArgoSyncRepairsStaleRunningStatus(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		status, _ := obj["status"].(map[string]any)
+		status["operationState"] = map[string]any{"phase": "Running", "message": "waiting for hook"}
+	})
+	client := newFakeArgo(app)
+
+	result, err := TerminateArgoSync(context.Background(), client, "argocd", "demo")
+	if err != nil {
+		t.Fatalf("TerminateArgoSync: %v", err)
+	}
+	if result.Message != "Stale operation status cleared" {
+		t.Fatalf("message = %q, want stale-status recovery", result.Message)
+	}
+	updated, err := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get updated Application: %v", err)
+	}
+	phase, _, _ := unstructured.NestedString(updated.Object, "status", "operationState", "phase")
+	if phase != "Error" {
+		t.Fatalf("operation phase = %q, want Error", phase)
+	}
+	finishedAt, _, _ := unstructured.NestedString(updated.Object, "status", "operationState", "finishedAt")
+	if _, err := time.Parse(time.RFC3339Nano, finishedAt); err != nil {
+		t.Fatalf("finishedAt = %q, want RFC3339 timestamp: %v", finishedAt, err)
 	}
 }
 

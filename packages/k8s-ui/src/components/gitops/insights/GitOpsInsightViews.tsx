@@ -284,7 +284,7 @@ function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsigh
 
 function isInFlightPhase(phase: string): boolean {
   const p = phase.toLowerCase()
-  return p.includes('running') || p.includes('progress') || p.includes('reconcil')
+  return p.includes('running') || p.includes('terminat') || p.includes('progress') || p.includes('reconcil')
 }
 
 // Show the operation chip only for phases the operator needs to *act on*.

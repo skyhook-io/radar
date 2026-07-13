@@ -19,6 +19,7 @@ import {
   formatGitOpsSourceUrl,
   getGitOpsResourceStatus,
   getGitOpsTool,
+  isArgoOperationInProgress,
   isArgoSuspendedByRadar,
   gitOpsInsightChangeKey,
   initNavigationMap,
@@ -474,6 +475,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   }
 
   const isRunning = resourceQ.data?.status?.operationState?.phase === 'Running'
+  const operationInProgress = isArgoOperationInProgress(resourceQ.data)
   const isFluxWorkload = kind === 'kustomizations' || kind === 'helmreleases'
   const isFlux = tool === 'flux'
   const isArgoApp = kind === 'applications'
@@ -488,11 +490,11 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
     category: 'GitOps',
     scope: 'gitops',
     handler: () => {
-      if (effectiveSuspended || terminating) return
+      if (effectiveSuspended || terminating || operationInProgress) return
       if (isArgoApp) openArgoSyncDialog({ scope: 'application' })
       else if (isFlux) fluxReconcile.mutate({ kind, namespace, name })
     },
-    enabled: shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating,
+    enabled: shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating && !(isArgoApp && operationInProgress),
   })
   useRegisterShortcut({
     id: 'gitops-detail-refresh',
@@ -562,6 +564,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
     resuming: argoResume.isPending,
     autoSyncEnabled: argoAutoSyncEnabled,
     isRunning,
+    operationInProgress,
   } : undefined
 
   const fluxHandlers: FluxActionHandlers | undefined = isFlux ? {
@@ -696,7 +699,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             <GitOpsActivityInsightView
               insight={insightsQ.data}
               error={insightsQ.error as Error | null}
-              onRollback={isArgoApp ? (item) => {
+              onRollback={isArgoApp && !operationInProgress ? (item) => {
                 if (parseArgoRollbackID(item.id) == null) return
                 setRollbackTarget(item)
               } : undefined}
@@ -715,7 +718,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                   ? terminatingActionTooltip
                   : effectiveSuspended
                     ? 'Resume the Application before syncing a resource.'
-                    : isRunning || argoSync.isPending
+                    : operationInProgress || argoSync.isPending
                       ? 'Wait for the current sync operation to finish.'
                       : undefined
               ) : undefined}

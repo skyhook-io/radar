@@ -98,15 +98,15 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncE
     <DialogPortal open={open} onClose={pending ? () => {} : onCancel} className="w-[480px]" closable={!pending}>
       <div className="border-b border-theme-border px-4 py-3">
         <h2 className="text-sm font-semibold text-theme-text-primary">{resource ? 'Sync resource' : 'Sync application'}</h2>
-        <p className="mt-0.5 text-xs text-theme-text-tertiary">{appLabel}</p>
+        <p className="mt-0.5 break-all text-xs text-theme-text-tertiary">{appLabel}</p>
       </div>
       <div className="space-y-4 px-4 py-4 text-sm">
         {resource && (
           <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-              <div>
-                <div className="text-xs font-medium text-theme-text-primary">
+              <div className="min-w-0">
+                <div className="break-all text-xs font-medium text-theme-text-primary">
                   {resource.kind} / {resource.namespace ? `${resource.namespace}/` : ''}{resource.name}
                 </div>
                 <p className="mt-1 text-[11px] leading-relaxed text-theme-text-secondary">
@@ -168,7 +168,7 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncE
           Cancel
         </button>
         {richResourceValidation && (
-          <Tooltip content="Runs an Argo selective dry-run for this resource. Applies nothing." wrapperClassName="inline-flex">
+          <Tooltip content="Runs an Argo selective dry-run. Applies nothing; API admission can still reject the real sync." wrapperClassName="inline-flex">
             <button
               type="button"
               onClick={validate}
@@ -216,7 +216,7 @@ function ValidationResult({ pending, result, error }: { pending: boolean; result
   const succeeded = result.outcome === 'succeeded'
   const inconclusive = result.outcome === 'inconclusive'
   const Icon = succeeded ? CheckCircle2 : inconclusive ? CircleAlert : XCircle
-  const title = succeeded ? 'Validation passed' : inconclusive ? 'Validation was inconclusive' : 'Validation failed'
+  const title = succeeded ? 'Dry-run passed' : inconclusive ? 'Dry-run was inconclusive' : 'Dry-run failed'
   const surface = succeeded
     ? 'border-emerald-500/30 bg-emerald-500/5'
     : inconclusive
@@ -231,7 +231,7 @@ function ValidationResult({ pending, result, error }: { pending: boolean; result
           <div className="text-xs font-medium text-theme-text-primary">{title}</div>
           <p className="mt-0.5 text-[11px] text-theme-text-secondary">{result.message}</p>
           {(result.resource?.status || result.resource?.message) && (
-            <div className="mt-2 font-mono text-[10px] text-theme-text-secondary">
+            <div className="mt-2 break-all font-mono text-[10px] text-theme-text-secondary">
               {result.resource.status}{result.resource.status && result.resource.message ? ' — ' : ''}{result.resource.message}
             </div>
           )}
