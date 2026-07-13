@@ -922,9 +922,10 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
           <div className="flex items-start gap-2 border-b border-theme-border bg-theme-base/40 px-4 py-2 text-xs text-theme-text-secondary">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
             <span>
-              Argo CD couldn't compare against Git (see the error above), so
-              per-resource <span className="font-medium text-theme-text-primary">sync</span> status is unavailable.
-              Resolve the repository error to restore it — <span className="font-medium text-theme-text-primary">health</span> below is still live.
+              Argo CD hasn't compared this app against Git yet, so per-resource
+              <span className="font-medium text-theme-text-primary"> sync</span> status is unavailable
+              (a first refresh may still be in flight; if an error is shown above, resolve it to restore comparison).
+              <span className="font-medium text-theme-text-primary"> Health</span> below is still live.
             </span>
           </div>
         )}
@@ -972,8 +973,11 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
         {/* Honest disclaimer about diff scope. Neither Argo nor Flux exposes
             per-resource desired-vs-live diffs on the CRD — they're computed
             on demand by their respective servers/CLIs, which Radar doesn't
-            call. */}
-        {totalCount > 0 && !argoDiffAvailable && (
+            call. Suppressed for an Argo app that shows the connect/reconnect bar
+            below (which points at Settings), so the two don't stack with subtly
+            different advice — the CLI fallback stays for Flux and for consumers
+            that don't wire Settings. */}
+        {totalCount > 0 && !argoDiffAvailable && !(isArgoRoot && !!onOpenSettings) && (
           <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
             Radar reads each resource's drift status from the controller. For a line-by-line diff, {insight.summary.tool === 'fluxcd' ? (
               insight.summary.kind === 'HelmRelease' ? (
@@ -1413,7 +1417,7 @@ function ChangeRow({
         </button>
         <div className="self-center">
           {syncUnavailable && normalizeSyncStatus(change.sync ?? change.category) === 'Unknown' ? (
-            <Tooltip content="Sync unavailable — Argo CD couldn't load the desired state from Git (see the error above)." delay={200} wrapperClassName="inline-flex">
+            <Tooltip content="Sync unavailable — Argo CD hasn't compared this app against Git yet." delay={200} wrapperClassName="inline-flex">
               <span className="cursor-help select-none px-1 text-theme-text-tertiary" aria-label="Sync status unavailable">—</span>
             </Tooltip>
           ) : (

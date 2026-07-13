@@ -2,6 +2,7 @@ package argoapi
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,15 +173,32 @@ func CLISessionFromConfig(configPath string) (*CLISession, error) {
 // 127.x — i.e. a transient port-forward rather than a stable endpoint.
 func isLoopbackHost(server string) bool {
 	h := hostPort(server)
-	if strings.Count(h, ":") == 1 { // strip a trailing :port on a plain host:port
+	// Strip the port. IPv6 literals are bracketed ("[::1]:8080"); a plain host or
+	// IPv4 uses a single trailing colon. A bare IPv6 ("::1") has 2+ colons and no
+	// brackets, so it's left intact for ParseIP.
+	switch {
+	case strings.HasPrefix(h, "["):
+		if end := strings.Index(h, "]"); end >= 0 {
+			h = h[1:end]
+		}
+	case strings.Count(h, ":") == 1:
 		h = h[:strings.LastIndex(h, ":")]
 	}
-	return h == "localhost" || strings.HasPrefix(h, "127.")
+	if h == "localhost" {
+		return true
+	}
+	// net.ParseIP covers IPv4 loopback (127.0.0.0/8), IPv6 ::1, and mapped forms.
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // hostPort reduces a server reference to lowercase host[:port]. The CLI
 // config stores servers without a scheme while callers usually pass full
-// URLs, so both sides are normalized before comparing.
+// URLs, so both sides are normalized before comparing. The HTTP(S) default
+// ports are dropped so "argocd.example.com:443" and "argocd.example.com" —
+// the same origin written two ways — compare equal, matching normalizeOrigin.
 func hostPort(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.Index(s, "://"); i >= 0 {
@@ -189,5 +207,8 @@ func hostPort(s string) string {
 	if i := strings.IndexAny(s, "/?#"); i >= 0 {
 		s = s[:i]
 	}
-	return strings.ToLower(s)
+	s = strings.ToLower(s)
+	s = strings.TrimSuffix(s, ":443")
+	s = strings.TrimSuffix(s, ":80")
+	return s
 }

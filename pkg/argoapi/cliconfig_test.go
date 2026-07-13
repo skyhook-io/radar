@@ -196,3 +196,26 @@ users:
 		}
 	})
 }
+
+func TestIsLoopbackHost(t *testing.T) {
+	cases := map[string]bool{
+		"localhost":              true,
+		"localhost:8080":         true,
+		"127.0.0.1":              true,
+		"127.0.0.1:8080":         true,
+		"http://127.0.0.1:8080":  true,
+		"127.5.5.5":              true,
+		"[::1]:8080":             true,
+		"https://[::1]:8080":     true,
+		"::1":                    true,
+		"argocd.example.com":     false,
+		"argocd.example.com:443": false,
+		"10.0.0.1:6443":          false,
+		"[2001:db8::1]:8080":     false,
+	}
+	for server, want := range cases {
+		if got := isLoopbackHost(server); got != want {
+			t.Errorf("isLoopbackHost(%q) = %v, want %v", server, got, want)
+		}
+	}
+}

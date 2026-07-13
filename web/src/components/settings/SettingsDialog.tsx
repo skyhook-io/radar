@@ -271,6 +271,12 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     return () => document.removeEventListener('keydown', handleKeyDown, true)
   }, [open])
 
+  // Post-save feedback ("Saved. Restart Radar to apply.") is scoped to the
+  // section it was saved from. Clear it on navigation so it doesn't linger — with
+  // its disabled footer — on a live-apply section where "Restart to apply" is
+  // wrong. It still stays put while the user remains on the saved section.
+  useEffect(() => { setSaveMessage(null) }, [section])
+
   // Focus trap
   useEffect(() => {
     if (open && dialogRef.current) {
@@ -796,8 +802,10 @@ interface OverviewRow {
 
 // OverviewPanel is the Settings landing: a status-at-a-glance of what Radar is
 // connected to right now. Each row navigates to the section that manages it.
-// Status queries are gated on `active` so opening Settings elsewhere doesn't
-// fetch integration status the user isn't looking at.
+// The Argo status query is gated on `active` (it triggers a background reconnect
+// probe, so we don't want it firing when Settings opens on another section);
+// cluster and Prometheus status are shared app-wide caches, so they're read
+// unconditionally.
 function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s: SectionId) => void }) {
   const { data: cluster } = useClusterInfo()
   const { data: prom } = usePrometheusStatus()
@@ -830,7 +838,10 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     {
       id: 'argocd', icon: GitBranch, label: 'Argo CD',
       tone: argo?.connected ? 'ok' : argo?.configured ? 'warn' : 'off',
-      value: argo?.connected ? 'Connected' : argo?.configured ? 'Reconnecting…' : 'Not connected',
+      // Configured-but-not-connected is often a permanently rejected/expired
+      // token, not a transient reconnect — "Not reachable" matches Prometheus and
+      // doesn't imply it will recover on its own.
+      value: argo?.connected ? 'Connected' : argo?.configured ? 'Not reachable' : 'Not connected',
       detail: argo?.connected ? argo.address : undefined,
     },
     {
@@ -1478,20 +1489,20 @@ function ArgoCDConfigField({
   }
 
   const handleUseCliToken = () => {
-    // The detected session is for its own server, which may differ from the URL
-    // field — connect to that server with its TLS mode (Argo CD is https; the
-    // insecure flag covers self-signed) and reflect it in the form.
-    if (cliSession) {
-      const sessionUrl = /^https?:\/\//i.test(cliSession.server)
-        ? cliSession.server
-        : `https://${cliSession.server}`
-      const insecure = cliSession.insecure ?? false
-      onChangeUrl(sessionUrl)
-      onChangeInsecureTls(insecure)
-      put({ argoCdUrl: sessionUrl, argoCdInsecureTls: insecure, useCliToken: true }, true)
-      return
-    }
-    put({ argoCdUrl: url.trim(), argoCdInsecureTls: insecureTls, useCliToken: true }, true)
+    // Only reachable from the "Use this session" button, which renders solely
+    // when a session was detected. The detected session is for its own server
+    // (which may differ from the URL field) — connect to that server with its TLS
+    // mode (Argo CD is https; the insecure flag covers self-signed) and reflect
+    // it in the form. An explicit URL is required: the server rejects useCliToken
+    // with an empty URL rather than routing the CLI token to a discovered server.
+    if (!cliSession) return
+    const sessionUrl = /^https?:\/\//i.test(cliSession.server)
+      ? cliSession.server
+      : `https://${cliSession.server}`
+    const insecure = cliSession.insecure ?? false
+    onChangeUrl(sessionUrl)
+    onChangeInsecureTls(insecure)
+    put({ argoCdUrl: sessionUrl, argoCdInsecureTls: insecure, useCliToken: true }, true)
   }
 
   const showConfiguredPlaceholder = effectiveTokenSet && !tokenTouched && !tokenCleared

@@ -53,9 +53,10 @@ type RevisionMetadata struct {
 	Date    string   `json:"date,omitempty"`
 	Tags    []string `json:"tags,omitempty"`
 	Message string   `json:"message,omitempty"`
-	// SignatureInfo is the raw GPG verification line. Non-empty means Argo
-	// checked a signature; treat it as opaque — presence, not content, is what
-	// the UI renders (a signed/unverified chip). Empty means no signature check.
+	// SignatureInfo is the raw GPG verification line Argo emits. Empty means no
+	// signature check ran; non-empty means it did, and the UI reads the line to
+	// distinguish a good signature ("good signature" → verified) from a failed
+	// one (any other content → unverified). Not machine-parsed beyond that.
 	SignatureInfo string `json:"signatureInfo,omitempty"`
 }
 

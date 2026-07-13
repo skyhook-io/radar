@@ -1112,7 +1112,7 @@ export function useArgoRevisionMetadata(
   if (opts?.project) params.set('project', opts.project)
 
   return useQuery<ArgoRevisionMetadata>({
-    queryKey: ['argo-revision-metadata', appNamespace, appName, revision, opts?.sourceIndex],
+    queryKey: ['argo-revision-metadata', appNamespace, appName, revision, opts?.sourceIndex, opts?.project],
     queryFn: () => fetchJSON(`/argo/applications/${ns}/${appName}/revision-metadata?${params.toString()}`),
     enabled: Boolean(appName && revision) && (opts?.enabled ?? true),
     staleTime: 5 * 60_000,
