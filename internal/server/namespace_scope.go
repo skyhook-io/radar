@@ -129,9 +129,16 @@ func (s *Server) setActiveNamespaceForUser(r *http.Request, namespaces []string)
 func (s *Server) clearAllNamespacePreferences() {
 	// Under nsPickMu so an in-flight seed can't land between the two map
 	// wipes (a seeded preference without its marker would let a later clear
-	// re-seed). Callers never hold nsPickMu here.
+	// re-seed). The --namespace-scope rescope inside handleSetActiveNamespace
+	// already holds nsPickMu — it must use the Locked variant instead.
 	s.nsPickMu.Lock()
 	defer s.nsPickMu.Unlock()
+	s.clearAllNamespacePreferencesLocked()
+}
+
+// clearAllNamespacePreferencesLocked is the body of
+// clearAllNamespacePreferences; caller must hold nsPickMu.
+func (s *Server) clearAllNamespacePreferencesLocked() {
 	s.nsPreferences.Range(func(k, _ any) bool {
 		s.nsPreferences.Delete(k)
 		return true
@@ -151,6 +158,22 @@ func (s *Server) clearAllNamespacePreferences() {
 // SAR results, and those entries (TTL 2m) then authorize NEW cluster
 // requests.
 func (s *Server) finalizePostContextSwitch() {
+	s.invalidatePostContextSwitchCaches()
+	s.clearAllNamespacePreferences()
+	// AI investigations are cancelled + staled by the BEFORE-switch hook (see
+	// OnBeforeContextSwitch in New) so they can't touch the new cluster.
+}
+
+// finalizePostContextSwitchNsPickHeld is finalizePostContextSwitch for the
+// one caller that already holds nsPickMu (the --namespace-scope rescope in
+// handleSetActiveNamespace) — nsPickMu is not reentrant, so going through
+// clearAllNamespacePreferences there would self-deadlock.
+func (s *Server) finalizePostContextSwitchNsPickHeld() {
+	s.invalidatePostContextSwitchCaches()
+	s.clearAllNamespacePreferencesLocked()
+}
+
+func (s *Server) invalidatePostContextSwitchCaches() {
 	if s.permCache != nil {
 		s.permCache.Invalidate()
 	}
@@ -161,9 +184,6 @@ func (s *Server) finalizePostContextSwitch() {
 	clearPackagesCache()
 	clearApplicationsCache()
 	s.vitalsMetrics.clear()
-	s.clearAllNamespacePreferences()
-	// AI investigations are cancelled + staled by the BEFORE-switch hook (see
-	// OnBeforeContextSwitch in New) so they can't touch the new cluster.
 }
 
 // loadSavedNamespacePreference seeds the per-user map on first reach.
@@ -192,6 +212,12 @@ func (s *Server) loadSavedNamespacePreference(r *http.Request) {
 		saved := settings.Load()
 		if saved.ActiveNamespaces != nil {
 			if picks := saved.ActiveNamespaces[ctxName]; len(picks) > 0 {
+				// A pick from disk is user intent too — burn configured-seed
+				// eligibility first, so if the deleted-namespace prune later
+				// evicts this pick (and its settings entry), reads fall back
+				// to All namespaces per the prune's recovery contract instead
+				// of re-applying --namespaces.
+				s.seededPicks.Store(key, true)
 				// Seed only while the pick is still empty. The Load check
 				// above is racy on its own — a concurrent POST could install
 				// a pick between it and this store — so re-check under the
@@ -612,7 +638,7 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 				s.writeError(w, http.StatusServiceUnavailable, "failed to rescope namespace cache: "+err.Error())
 				return
 			}
-			s.finalizePostContextSwitch()
+			s.finalizePostContextSwitchNsPickHeld()
 		}
 	}
 

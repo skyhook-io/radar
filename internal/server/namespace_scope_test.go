@@ -754,3 +754,63 @@ func TestLoadSavedNamespacePreference_PostBeforeFirstLoadBurnsSeed(t *testing.T)
 		t.Fatalf("explicit clear before first load was overridden by seed: %v", got)
 	}
 }
+
+// The --namespace-scope rescope calls finalize while handleSetActiveNamespace
+// holds nsPickMu; the NsPickHeld variant must complete without trying to
+// re-acquire the non-reentrant lock.
+func TestFinalizePostContextSwitchNsPickHeld_NoDeadlock(t *testing.T) {
+	s := newTestServer(t)
+	s.setActiveNamespaceForUser(reqAs("alice"), []string{"alpha"})
+
+	done := make(chan struct{})
+	go func() {
+		s.nsPickMu.Lock()
+		defer s.nsPickMu.Unlock()
+		s.finalizePostContextSwitchNsPickHeld()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("finalizePostContextSwitchNsPickHeld deadlocked under held nsPickMu")
+	}
+	if got := s.getActiveNamespaceForUser(reqAs("alice")); len(got) != 0 {
+		t.Fatalf("picks survived finalize: %v", got)
+	}
+}
+
+// A settings.json pick burns configured-seed eligibility: once the pick is
+// later evicted (deleted-namespace prune, explicit clear), reads fall back to
+// All namespaces — the configured list must not resurface.
+func TestLoadSavedNamespacePreference_SettingsSeedBurnsConfigured(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	s := newTestServer(t)
+	k8s.SetFallbackNamespaces([]string{"team-a", "team-b"})
+	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
+	if _, err := settings.Update(func(st *settings.Settings) {
+		st.ActiveNamespaces = map[string][]string{"test-ctx": {"team-b"}}
+	}); err != nil {
+		t.Fatalf("settings.Update: %v", err)
+	}
+	req := reqAs("")
+
+	s.loadSavedNamespacePreference(req)
+	if got := s.getActiveNamespaceForUser(req); !slices.Equal(got, []string{"team-b"}) {
+		t.Fatalf("saved pick = %v, want [team-b]", got)
+	}
+
+	// Evict the pick the way the prune does: in-memory + settings entry.
+	s.setActiveNamespaceForUser(req, nil)
+	if _, err := settings.Update(func(st *settings.Settings) {
+		st.ActiveNamespaces = map[string][]string{}
+	}); err != nil {
+		t.Fatalf("settings.Update: %v", err)
+	}
+
+	s.loadSavedNamespacePreference(req)
+	if got := s.getActiveNamespaceForUser(req); len(got) != 0 {
+		t.Fatalf("configured list resurfaced after settings pick eviction: %v", got)
+	}
+}
