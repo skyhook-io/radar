@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/internal/helm"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 func TestCloudConnectStopsBeforeHubAndPointsToSupportedPath(t *testing.T) {
@@ -147,6 +150,91 @@ func TestResolveCloudInstallClusterName(t *testing.T) {
 				t.Fatalf("resolveCloudInstallClusterName() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveCloudInstallContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	cfg := clientcmdapi.NewConfig()
+	cfg.CurrentContext = "current"
+	cfg.Contexts["current"] = &clientcmdapi.Context{Cluster: "cluster-a"}
+	cfg.Contexts["other"] = &clientcmdapi.Context{Cluster: "cluster-b"}
+	if err := clientcmd.WriteToFile(*cfg, path); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := resolveCloudInstallContext(path, ""); err != nil || got != "current" {
+		t.Fatalf("current context = %q, %v; want current", got, err)
+	}
+	if got, err := resolveCloudInstallContext(path, " other "); err != nil || got != "other" {
+		t.Fatalf("explicit context = %q, %v; want other", got, err)
+	}
+	if _, err := resolveCloudInstallContext(path, "missing"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing context error = %v", err)
+	}
+
+	cfg.CurrentContext = ""
+	if err := clientcmd.WriteToFile(*cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveCloudInstallContext(path, ""); err == nil || !strings.Contains(err.Error(), "pass --context") {
+		t.Fatalf("empty current context error = %v", err)
+	}
+}
+
+func TestConfirmCloudInstallTarget(t *testing.T) {
+	target := cloudInstallTarget{Context: "prod-context", Namespace: "radar-prod", Release: "prod-radar"}
+	for _, tc := range []struct {
+		name            string
+		input           string
+		contextExplicit bool
+		yes             bool
+		interactive     bool
+		want            bool
+		wantPrompt      bool
+		wantNoTerminal  bool
+	}{
+		{name: "implicit current accepts y", input: "y\n", interactive: true, want: true, wantPrompt: true},
+		{name: "implicit current accepts yes", input: " YES \n", interactive: true, want: true, wantPrompt: true},
+		{name: "implicit current defaults no", input: "\n", interactive: true, wantPrompt: true},
+		{name: "implicit current rejects EOF", interactive: true, wantPrompt: true},
+		{name: "explicit context skips prompt", contextExplicit: true, want: true},
+		{name: "yes flag skips prompt", yes: true, want: true},
+		{name: "non-interactive current fails fast", wantNoTerminal: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			got := confirmCloudInstallTarget(strings.NewReader(tc.input), &out, target, tc.contextExplicit, tc.yes, tc.interactive)
+			if got != tc.want {
+				t.Fatalf("confirmCloudInstallTarget() = %v, want %v", got, tc.want)
+			}
+			text := out.String()
+			for _, want := range []string{`Kubernetes context: "prod-context"`, `Namespace: "radar-prod"`, `Helm release: "prod-radar"`} {
+				if !strings.Contains(text, want) {
+					t.Errorf("target output missing %q: %q", want, text)
+				}
+			}
+			if gotPrompt := strings.Contains(text, "[y/N]"); gotPrompt != tc.wantPrompt {
+				t.Errorf("prompt presence = %v, want %v: %q", gotPrompt, tc.wantPrompt, text)
+			}
+			if gotNoTerminal := strings.Contains(text, "No interactive terminal"); gotNoTerminal != tc.wantNoTerminal {
+				t.Errorf("non-interactive message presence = %v, want %v: %q", gotNoTerminal, tc.wantNoTerminal, text)
+			}
+		})
+	}
+}
+
+func TestCanceledAfterApprovalPointsToPendingInstallRecovery(t *testing.T) {
+	var out bytes.Buffer
+	printCanceledAfterApproval(&out, "clus_existing")
+	got := out.String()
+	for _, want := range []string{"clus_existing", "Hub cluster is recoverable", "organization owner", "Resume install", "only if you intend to abandon it"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cancellation recovery missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "delete that Hub cluster before") {
+		t.Errorf("cancellation recovery still recommends deleting before recovery: %q", got)
 	}
 }
 

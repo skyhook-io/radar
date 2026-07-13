@@ -11,6 +11,7 @@ package main
 // supported in-cluster paths.
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -29,6 +30,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/contextname"
 	"github.com/skyhook-io/radar/internal/helm"
+	"golang.org/x/term"
 	"helm.sh/helm/v3/pkg/chartutil"
 	k8svalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -76,17 +78,19 @@ func cloudUsage(w *os.File) {
 	fmt.Fprint(w, `Connect this cluster to Radar Cloud with an in-cluster agent.
 
 Usage:
-  radar cloud install [--namespace NS] [--release NAME] [--hub-url URL] [--name NAME] [--dry-run]
+  radar cloud install [--context NAME] [-y|--yes] [--namespace NS] [--release NAME] [--hub-url URL] [--name NAME] [--dry-run]
 
-install  Install Radar INTO the current-context cluster, connected to Cloud
-         (uses your kubeconfig; the in-cluster agent serves with full per-user
-         RBAC).
+install  Install Radar INTO one kubeconfig context, connected to Cloud. An
+         explicit --context is used directly; otherwise the current context
+         must be confirmed unless -y/--yes is set.
 
 Flags (install):
+  --context NAME   Kubernetes context to install into (default: current context)
+  -y, --yes        Skip confirmation when using the current context
   --namespace NS   Namespace to install into (default: radar)
   --release NAME   Helm release name (default: radar)
   --hub-url URL    Radar Cloud hub API (default `+defaultHubBase+`; set for self-hosted)
-  --name NAME      Cluster name shown in Cloud (default: current kubecontext)
+  --name NAME      Cluster name shown in Cloud (default: selected Kubernetes context)
   --chart-version  Chart version to install (default: latest published)
   --dry-run        Run the permission preflight + print the plan; install nothing
   --no-browser     Print the approval URL instead of opening a browser
@@ -134,8 +138,8 @@ func cloudConnect(args []string, w io.Writer) int {
 	return 1
 }
 
-// cloudInstall implements `radar cloud install`: install Radar INTO the
-// current-context cluster with Cloud mode enabled, using the operator's own
+// cloudInstall implements `radar cloud install`: install Radar INTO one
+// kubeconfig context with Cloud mode enabled, using the operator's own
 // kubeconfig — the only identity that can provision the impersonation RBAC.
 // It does not start a local dialer: the in-cluster agent it installs is what
 // dials the tunnel. Terminal (exits after installing).
@@ -145,7 +149,11 @@ func cloudInstall(args []string) {
 	namespace := fs.String("namespace", cloudinstall.DefaultInstallNamespace, "Namespace to install into")
 	release := fs.String("release", cloudinstall.DefaultReleaseName, "Helm release name")
 	chartVersion := fs.String("chart-version", "", "Chart version (default: latest published)")
-	name := fs.String("name", "", "Cluster name shown in Cloud (default: current kubecontext)")
+	name := fs.String("name", "", "Cluster name shown in Cloud (default: selected Kubernetes context)")
+	contextName := fs.String("context", "", "Kubernetes context to install into (default: current context)")
+	yes := false
+	fs.BoolVar(&yes, "y", false, "Skip confirmation when using the current context")
+	fs.BoolVar(&yes, "yes", false, "Skip confirmation when using the current context")
 	noBrowser := fs.Bool("no-browser", false, "Print the approval URL instead of opening a browser")
 	browserPref := fs.String("browser", "", "Browser to open the approval URL with")
 	dryRun := fs.Bool("dry-run", false, "Preflight + print the plan; install nothing")
@@ -182,7 +190,18 @@ func cloudInstall(args []string) {
 		os.Exit(1)
 	}
 	kubeconfig := fileCfg.Kubeconfig
-	ctxName := currentKubeContextName(kubeconfig)
+	requestedContext := strings.TrimSpace(*contextName)
+	ctxName, err := resolveCloudInstallContext(kubeconfig, requestedContext)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud install: %v\n", err)
+		os.Exit(1)
+	}
+	target := cloudInstallTarget{Context: ctxName, Namespace: *namespace, Release: *release}
+	if !confirmCloudInstallTarget(os.Stdin, os.Stderr, target, requestedContext != "", yes, term.IsTerminal(int(os.Stdin.Fd()))) {
+		fmt.Fprintln(os.Stderr, "\nCloud installation canceled. Pass --context NAME or -y/--yes to run without this prompt.")
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr)
 	clusterName := resolveCloudInstallClusterName(*name, ctxName)
 
 	ctx, cancel := signalContext()
@@ -190,7 +209,7 @@ func cloudInstall(args []string) {
 
 	// Build kube + helm clients against the resolved kubecontext — the driver runs
 	// before Radar's normal boot, so we resolve these ourselves.
-	kc, hc, err := buildLocalInstallClients(kubeconfig)
+	kc, hc, err := buildLocalInstallClients(kubeconfig, ctxName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cloud install: %v\n", err)
 		os.Exit(1)
@@ -212,7 +231,12 @@ func cloudInstall(args []string) {
 			fmt.Fprintf(os.Stderr, "  • %s\n", d)
 		}
 		fmt.Fprintln(os.Stderr, "\nEnabling Cloud mode provisions per-user RBAC (impersonation), which needs a cluster admin.")
-		fmt.Fprintln(os.Stderr, "Ask your platform team to run `radar cloud install` against this kubecontext with the same `--hub-url`, `--namespace`, and `--name` options.")
+		fmt.Fprintf(os.Stderr, "Ask your platform team to run `radar cloud install` against this Kubernetes cluster (your context %q; theirs may be named differently).\n", ctxName)
+		fmt.Fprintf(os.Stderr, "Preserve Hub %q, namespace %q, Helm release %q, and Cloud cluster name %q", *hubURL, *namespace, *release, clusterName)
+		if *chartVersion != "" {
+			fmt.Fprintf(os.Stderr, ", using chart version %q", *chartVersion)
+		}
+		fmt.Fprintln(os.Stderr, ".")
 		os.Exit(1)
 	}
 	if len(pf.Advisory) > 0 {
@@ -247,7 +271,7 @@ func cloudInstall(args []string) {
 
 	// 4. Device flow → approve → cluster token (deployment_mode=in-cluster, so the
 	//    hub tags the cluster source=connect_incluster).
-	meta := gatherConnectMetadata(clusterName, kubeconfig)
+	meta := gatherConnectMetadata(clusterName, kubeconfig, ctxName)
 	client := cloud.NewConnectClient(*hubURL)
 	cr, err := client.Create(ctx, meta)
 	if err != nil {
@@ -266,8 +290,7 @@ func cloudInstall(args []string) {
 		os.Exit(1)
 	}
 	if ctx.Err() != nil {
-		fmt.Fprintf(os.Stderr, "\nThe Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", pr.ClusterID)
-		fmt.Fprintln(os.Stderr, "No token Secret was written, so this attempt cannot be resumed by rerunning the installer. Inspect and delete that Hub cluster before starting a fresh flow.")
+		printCanceledAfterApproval(os.Stderr, pr.ClusterID)
 		os.Exit(1)
 	}
 
@@ -385,6 +408,12 @@ func printTokenSecretConflict(w io.Writer, err error) bool {
 	return true
 }
 
+func printCanceledAfterApproval(w io.Writer, clusterID string) {
+	fmt.Fprintf(w, "\nThe Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", clusterID)
+	fmt.Fprintln(w, "No token Secret or Helm release was written. This command's device flow cannot resume after it exits, but the Hub cluster is recoverable.")
+	fmt.Fprintln(w, "Ask an organization owner to open the pending cluster in Radar Cloud, choose Resume install, and generate a fresh install command. Delete the Hub cluster only if you intend to abandon it.")
+}
+
 func printPostApprovalRecoveryGuidance(w io.Writer, clusterID, releaseName, namespace string, deployment helm.DeploymentRef) {
 	fmt.Fprintf(w, "Hub cluster %q already exists. Do not rerun the installer or delete it by default; first inspect the existing attempt.\n", clusterID)
 	fmt.Fprintln(w, "Inspect:")
@@ -418,9 +447,9 @@ func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL 
 // buildLocalInstallClients resolves a kube clientset + Helm client from the
 // resolved kubecontext (honoring a config.json kubeconfig override), so the
 // install targets the operator's configured cluster, not the default context.
-func buildLocalInstallClients(kubeconfig string) (kubernetes.Interface, *helm.Client, error) {
+func buildLocalInstallClients(kubeconfig, contextName string) (kubernetes.Interface, *helm.Client, error) {
 	rules := connectLoadingRules(kubeconfig)
-	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig()
+	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: contextName}).ClientConfig()
 	if err != nil {
 		return nil, nil, fmt.Errorf("no reachable kubeconfig context: %w", err)
 	}
@@ -456,23 +485,53 @@ func connectLoadingRules(kubeconfig string) *clientcmd.ClientConfigLoadingRules 
 	return rules
 }
 
-// currentKubeContextName reads the current kubecontext directly from kubeconfig,
-// without initializing Radar's full client (this runs before that setup).
-// Empty string on any failure (e.g. in-cluster with no kubeconfig). kubeconfig
-// is the config.json override (or "" for default resolution).
-func currentKubeContextName(kubeconfig string) string {
+func resolveCloudInstallContext(kubeconfig, requested string) (string, error) {
 	cfg, err := connectLoadingRules(kubeconfig).Load()
-	if err != nil || cfg == nil {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("load kubeconfig: %w", err)
 	}
-	return cfg.CurrentContext
+	if cfg == nil {
+		return "", errors.New("kubeconfig is empty")
+	}
+	contextName := strings.TrimSpace(requested)
+	if contextName == "" {
+		contextName = cfg.CurrentContext
+	}
+	if strings.TrimSpace(contextName) == "" {
+		return "", errors.New("kubeconfig has no current context; pass --context NAME")
+	}
+	if _, ok := cfg.Contexts[contextName]; !ok {
+		return "", fmt.Errorf("Kubernetes context %q was not found in the resolved kubeconfig", contextName)
+	}
+	return contextName, nil
+}
+
+type cloudInstallTarget struct {
+	Context   string
+	Namespace string
+	Release   string
+}
+
+func confirmCloudInstallTarget(in io.Reader, out io.Writer, target cloudInstallTarget, contextExplicit, yes, interactive bool) bool {
+	fmt.Fprintf(out, "Target:\n  Kubernetes context: %q\n  Namespace: %q\n  Helm release: %q\n", target.Context, target.Namespace, target.Release)
+	if contextExplicit || yes {
+		return true
+	}
+	if !interactive {
+		fmt.Fprintln(out, "No interactive terminal is available for current-context confirmation.")
+		return false
+	}
+	fmt.Fprint(out, "Continue with this target? [y/N] ")
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes"
 }
 
 // gatherConnectMetadata assembles best-effort display context for the consent
 // page. k8s version + node count are looked up under a short timeout and simply
 // omitted on any failure (RBAC, unreachable) — the consent page renders what's
 // present. kubeconfig is the config.json override (or "").
-func gatherConnectMetadata(clusterName, kubeconfig string) cloud.ConnectMetadata {
+func gatherConnectMetadata(clusterName, kubeconfig, contextName string) cloud.ConnectMetadata {
 	meta := cloud.ConnectMetadata{
 		DeploymentMode: "in-cluster",
 		ClusterName:    clusterName,
@@ -482,7 +541,7 @@ func gatherConnectMetadata(clusterName, kubeconfig string) cloud.ConnectMetadata
 
 	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		connectLoadingRules(kubeconfig),
-		&clientcmd.ConfigOverrides{},
+		&clientcmd.ConfigOverrides{CurrentContext: contextName},
 	).ClientConfig()
 	if err != nil {
 		return meta
