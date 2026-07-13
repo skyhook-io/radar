@@ -1,3 +1,5 @@
+import type { ResourceRef } from '../types/core'
+
 // Shared model for the Applications surface — host-agnostic. The OSS single-
 // cluster view and (eventually) the Cloud fleet view both build on these types
 // and helpers. No React, no fetching.
@@ -47,11 +49,20 @@ export interface AppRelationships {
   services?: string[];
   ingresses?: string[];
   /** "Kind/name" — routes are polymorphic (HTTPRoute/GRPCRoute/…). */
-  routes?: string[];
-  configs?: number;
-  scalers?: number;
-  storage?: number;
-  pdbs?: number;
+  routes?: string[]
+  configs?: number
+  scalers?: number
+  storage?: number
+  pdbs?: number
+  networkPolicies?: number
+  serviceRefs?: ResourceRef[]
+  ingressRefs?: ResourceRef[]
+  routeRefs?: ResourceRef[]
+  configRefs?: ResourceRef[]
+  scalerRefs?: ResourceRef[]
+  storageRefs?: ResourceRef[]
+  pdbRefs?: ResourceRef[]
+  networkPolicyRefs?: ResourceRef[]
 }
 
 export interface AppEvent {
@@ -71,6 +82,11 @@ export interface AppSourceRef {
   kind: string;
   namespace: string;
   name: string;
+}
+
+export interface AppSourceStatus {
+  sync?: string
+  health?: string
 }
 
 export interface AppHistorySummary {
@@ -206,11 +222,13 @@ export interface AppRow {
   /** high | medium | low */
   confidence?: string;
   /** app | addon | mixed — classification hint, never identity. */
-  category?: string;
-  addonReason?: string;
-  workload_class?: AppWorkloadClass;
-  /** worst-of across workloads: healthy | degraded | unhealthy | unknown. */
-  health: string;
+  category?: string
+  addonReason?: string
+  workload_class?: AppWorkloadClass
+  /** Worst-of runtime health and exact deployment-source status. */
+  health: string
+  /** Worst-of across workloads, independent of the deployment source. */
+  runtimeHealth?: string
   /** distinct image tags. */
   versions?: string[];
   /** True when the SAME image runs different tags across workloads — real
@@ -221,10 +239,14 @@ export interface AppRow {
   appVersion?: string;
   /** Exact source-system object when the grouping signal names one. Label/name
    *  inferred apps intentionally omit this instead of guessing. */
-  sourceRef?: AppSourceRef;
-  workloads: AppWorkload[];
-  events?: AppEvent[];
-  relationships?: AppRelationships;
+  sourceRef?: AppSourceRef
+  /** Controller-reported delivery state for the exact source. */
+  sourceStatus?: AppSourceStatus
+  /** Workloads resolve to different Helm/GitOps source objects. */
+  sourceConflict?: boolean
+  workloads: AppWorkload[]
+  events?: AppEvent[]
+  relationships?: AppRelationships
   /** Exact grouping-signal evidence keys the server grouped by
    *  ("instance:billing-prod", "part-of:x", "name:x", "app:x", "helm:release",
    *  "argo:appname") plus informational "name-stem:<stem>". The timeline joins
@@ -1284,6 +1306,39 @@ function applicationRuntimeHealth(app: AppRow): AppHealth {
     : healthOf(app.health);
 }
 
+export function sourceSyncHealth(status: string): AppHealth {
+  const normalized = status.toLowerCase();
+  if (normalized === "synced") return "healthy";
+  if (normalized === "outofsync") return "degraded";
+  return "unknown";
+}
+
+export function sourceReportedHealth(status: string): AppHealth {
+  const normalized = status.toLowerCase();
+  if (normalized === "healthy") return "healthy";
+  if (normalized === "progressing") return "neutral";
+  if (normalized === "degraded") return "degraded";
+  if (normalized === "missing") return "unhealthy";
+  if (normalized === "suspended") return "neutral";
+  return "unknown";
+}
+
+function applicationDeliveryHealth(status?: AppSourceStatus): AppHealth {
+  if (!status) return "neutral";
+  const signals = [
+    status.sync ? sourceSyncHealth(status.sync) : null,
+    status.health ? sourceReportedHealth(status.health) : null,
+  ].filter((health): health is AppHealth => health !== null && health !== "unknown");
+  return signals.length > 0 ? worstHealth(signals) : "neutral";
+}
+
+export function applicationDisplayHealth(app: AppRow): AppHealth {
+  return worstHealth([
+    applicationRuntimeHealth(app),
+    applicationDeliveryHealth(app.sourceStatus),
+  ]);
+}
+
 export function servingReadiness(workloads: AppWorkload[]): {
   ready: number;
   desired: number;
@@ -1546,7 +1601,7 @@ export function buildSingleAppEntry(
   return {
     variant: "single",
     row,
-    health: applicationRuntimeHealth(row),
+    health: applicationDisplayHealth(row),
     versions: Array.from(new Set((row.versions || []).filter(Boolean))),
     namespace,
     namespaces: namespacesOf(row),

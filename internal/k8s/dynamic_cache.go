@@ -201,6 +201,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "external-secrets.io", Versions: []string{"v1", "v1beta1"}, Resource: "clusterexternalsecrets", Kind: "ClusterExternalSecret", Namespaced: false},
 	{Group: "external-secrets.io", Versions: []string{"v1", "v1beta1"}, Resource: "secretstores", Kind: "SecretStore", Namespaced: true},
 	{Group: "external-secrets.io", Versions: []string{"v1", "v1beta1"}, Resource: "clustersecretstores", Kind: "ClusterSecretStore", Namespaced: false},
+	{Group: "bitnami.com", Versions: []string{"v1alpha1"}, Resource: "sealedsecrets", Kind: "SealedSecret", Namespaced: true},
 	{Group: "networking.istio.io", Versions: []string{"v1", "v1beta1", "v1alpha3"}, Resource: "virtualservices", Kind: "VirtualService", Namespaced: true},
 	{Group: "networking.istio.io", Versions: []string{"v1", "v1beta1", "v1alpha3"}, Resource: "destinationrules", Kind: "DestinationRule", Namespaced: true},
 	{Group: "networking.istio.io", Versions: []string{"v1", "v1beta1", "v1alpha3"}, Resource: "gateways", Kind: "Gateway", Namespaced: true},

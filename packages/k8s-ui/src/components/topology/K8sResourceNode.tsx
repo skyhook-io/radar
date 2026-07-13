@@ -1,23 +1,24 @@
 import { memo } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { ChevronDown, ChevronUp, TriangleAlert } from "lucide-react";
-import { clsx } from "clsx";
-import type { NodeKind, HealthStatus, PodSummary } from "../../types";
-import { displayKind } from "../../types";
 import {
-  healthToSeverity,
-  SEVERITY_DOT,
-  SEVERITY_TEXT,
-} from "../../utils/badge-colors";
-import { workloadHue } from "../../utils/workload-colors";
-import { ownershipOf } from "../../utils/topology-neighborhood";
-import { midTruncate } from "../../utils/format";
-import { getTopologyIcon } from "../../utils/resource-icons";
-import { Tooltip } from "../ui/Tooltip";
-import {
-  AuditBadgeTooltip,
-  type AuditBadgeMessage,
-} from "../audit/AuditBadgeTooltip";
+  ChevronDown,
+  ChevronUp,
+  Layers,
+  Radio,
+  TriangleAlert,
+} from 'lucide-react'
+import { clsx } from 'clsx'
+import type { NodeKind, HealthStatus, PodSummary } from '../../types'
+import { displayKind } from '../../types'
+import { healthToSeverity, SEVERITY_DOT, SEVERITY_TEXT } from '../../utils/badge-colors'
+import { workloadHue } from '../../utils/workload-colors'
+import { ownershipOf } from '../../utils/topology-neighborhood'
+import { midTruncate } from '../../utils/format'
+import { getTopologyIcon } from '../../utils/resource-icons'
+import { Tooltip } from '../ui/Tooltip'
+import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
+import argoCdLogo from '../../assets/gitops/argocd.png'
+import fluxLogo from '../../assets/gitops/flux.svg'
 
 // Get actionable tooltip content for health issues
 function getIssueTooltip(issue: string | undefined): React.ReactNode {
@@ -194,6 +195,10 @@ export const NODE_DIMENSIONS: Record<
   PodGroup: { width: 200, height: 64 },
   ConfigMap: { width: 180, height: 84 },
   Secret: { width: 180, height: 84 },
+  ServiceAccount: { width: 220, height: 84 },
+  SealedSecret: { width: 220, height: 84 },
+  ServiceMonitor: { width: 240, height: 84 },
+  PodMonitor: { width: 240, height: 84 },
   HorizontalPodAutoscaler: { width: 280, height: 84 },
   Job: { width: 300, height: 84 },
   CronJob: { width: 200, height: 84 },
@@ -300,10 +305,10 @@ const SUMMARY_POD_KINDS = new Set<NodeKind>([
   "Service",
 ]);
 
-function baseSubtitle(
-  kind: NodeKind,
-  nodeData: Record<string, unknown>,
-): string {
+export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
+  if (nodeData.deploymentMembership === 'source-only') {
+    return `Declared by ${nodeData.deploymentSourceLabel ?? 'deployment source'}`
+  }
   switch (kind) {
     case "Deployment":
     case "Rollout":
@@ -375,23 +380,31 @@ function baseSubtitle(
       const current = nodeData.current ?? 0;
       return `${current} (${min}-${max})`;
     }
-    case "ConfigMap":
-      return `${nodeData.keys ?? 0} keys`;
-    case "Secret":
-      return `${nodeData.keys ?? 0} keys`;
-    case "WorkflowTemplate":
-    case "ClusterWorkflowTemplate": {
-      const entrypoint = nodeData.entrypoint as string;
-      const templateCount = nodeData.templateCount as number;
-      if (entrypoint && templateCount)
-        return `${entrypoint} • ${templateCount} templates`;
-      if (entrypoint) return entrypoint;
-      return templateCount ? `${templateCount} templates` : "";
+    case 'ConfigMap':
+      return `${nodeData.keys ?? 0} keys`
+    case 'Secret':
+      return `${nodeData.keys ?? 0} keys`
+    case 'WorkflowTemplate':
+    case 'ClusterWorkflowTemplate': {
+      const entrypoint = nodeData.entrypoint as string
+      const templateCount = nodeData.templateCount as number
+      if (entrypoint && templateCount) return `${entrypoint} • ${templateCount} templates`
+      if (entrypoint) return entrypoint
+      return templateCount ? `${templateCount} templates` : ''
     }
-    case "PersistentVolumeClaim": {
-      const storage = (nodeData.storage as string) || "";
-      const phase = (nodeData.phase as string) || "";
-      return storage ? `${storage} (${phase})` : phase;
+    case 'ServiceAccount':
+      return 'Workload identity'
+    case 'SealedSecret':
+      return nodeData.targetSecret ? `Creates ${nodeData.targetSecret}` : 'Encrypted secret'
+    case 'ServiceMonitor':
+    case 'PodMonitor': {
+      const count = (nodeData.endpointCount as number) || 0
+      return `${count} scrape endpoint${count === 1 ? '' : 's'}`
+    }
+    case 'PersistentVolumeClaim': {
+      const storage = (nodeData.storage as string) || ''
+      const phase = (nodeData.phase as string) || ''
+      return storage ? `${storage} (${phase})` : phase
     }
     case "PodGroup": {
       const count = (nodeData.podCount as number) || 0;
@@ -433,29 +446,20 @@ interface K8sResourceNodeProps {
     nodeData: Record<string, unknown>;
     selected?: boolean;
     /** Hover-focus: when a sibling workload is focused, non-members dim. */
-    dimmed?: boolean;
-    onExpand?: (nodeId: string) => void;
-    onCollapse?: (nodeId: string) => void;
-    isExpanded?: boolean;
-  };
-  id: string;
+    dimmed?: boolean
+    onExpand?: (nodeId: string) => void
+    onCollapse?: (nodeId: string) => void
+    isExpanded?: boolean
+    onToggleReplicaSets?: (ownerID: string) => void
+  }
+  id: string
 }
 
 export const K8sResourceNode = memo(function K8sResourceNode({
   data,
   id,
 }: K8sResourceNodeProps) {
-  const {
-    kind,
-    name,
-    status,
-    nodeData,
-    selected,
-    dimmed,
-    onExpand,
-    onCollapse,
-    isExpanded,
-  } = data;
+  const { kind, name, status, nodeData, selected, dimmed, onExpand, onCollapse, isExpanded, onToggleReplicaSets } = data
   // Cluster Audit findings joined onto this node by the host (web/ enriches each
   // node's data by auditKey). The host only counts "badge-worthy" findings —
   // reference-integrity / lifecycle, "this resource is actually broken" — not the
@@ -471,21 +475,19 @@ export const K8sResourceNode = memo(function K8sResourceNode({
     : [];
   // Workload ownership (application graph): when present, it owns the node fill.
   // Kind is shown by a real icon, not arbitrary color; health remains dot/border.
-  const { ownerColorIndex } = ownershipOf(nodeData);
-  const hue =
-    ownerColorIndex !== null ? workloadHue(ownerColorIndex) : undefined;
-  const subtitle = getSubtitle(kind, nodeData);
-  const isInternet = kind === "Internet";
-  const isPodGroup = kind === "PodGroup";
-  const isSmallNode =
-    kind === "ConfigMap" ||
-    kind === "Secret" ||
-    kind === "HorizontalPodAutoscaler";
-  const canExpand = isPodGroup && onExpand && !isExpanded;
-  const canCollapse = isPodGroup && onCollapse && isExpanded;
-  const statusIssue = nodeData.statusIssue as string | undefined;
-  const issueTooltip = getIssueTooltip(statusIssue);
-  const policyStatus = nodeData.policyStatus as string | undefined;
+  const { ownerColorIndex } = ownershipOf(nodeData)
+  const hue = ownerColorIndex !== null ? workloadHue(ownerColorIndex) : undefined
+  const subtitle = getSubtitle(kind, nodeData)
+  const isInternet = kind === 'Internet'
+  const isPodGroup = kind === 'PodGroup'
+  const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'ServiceAccount' || kind === 'SealedSecret' || kind === 'ServiceMonitor' || kind === 'PodMonitor' || kind === 'HorizontalPodAutoscaler'
+  const canExpand = isPodGroup && onExpand && !isExpanded
+  const canCollapse = isPodGroup && onCollapse && isExpanded
+  const statusIssue = nodeData.statusIssue as string | undefined
+  const issueTooltip = getIssueTooltip(statusIssue)
+  const policyStatus = nodeData.policyStatus as string | undefined
+  const deploymentMembership = nodeData.deploymentMembership as 'runtime-only' | 'source-only' | undefined
+  const deploymentSourceLabel = nodeData.deploymentSourceLabel as string | undefined
 
   const Icon = getTopologyIcon(kind);
 
@@ -557,6 +559,40 @@ export const K8sResourceNode = memo(function K8sResourceNode({
               {isPodGroup ? "Pod Group" : displayKind(kind)}
             </span>
             <div className="ml-auto flex items-center gap-1.5">
+              {deploymentMembership && (
+                <Tooltip
+                  content={deploymentMembership === 'runtime-only'
+                    ? `Observed in runtime but not present in the visible ${deploymentSourceLabel ?? 'deployment'} inventory.`
+                    : `Declared by ${deploymentSourceLabel ?? 'the deployment source'} but not connected to the current runtime neighborhood.`}
+                  position="right"
+                >
+                  <span className="inline-flex cursor-help items-center gap-1 rounded bg-theme-elevated px-1 py-0.5 text-[9px] font-medium normal-case tracking-normal text-theme-text-tertiary">
+                    {deploymentMembership === 'runtime-only'
+                      ? <Radio className="h-2.5 w-2.5" aria-hidden />
+                      : deploymentSourceLabel === 'Argo CD'
+                        ? <img src={argoCdLogo} alt="" className="h-2.5 w-2.5 object-contain" />
+                        : deploymentSourceLabel === 'Flux'
+                          ? <img src={fluxLogo} alt="" className="h-2.5 w-2.5 object-contain" />
+                          : <Layers className="h-2.5 w-2.5" aria-hidden />}
+                    {!isSmallNode && (deploymentMembership === 'runtime-only' ? 'Runtime only' : `${deploymentSourceLabel ?? 'Source'} only`)}
+                  </span>
+                </Tooltip>
+              )}
+              {onToggleReplicaSets && (
+                <Tooltip content={nodeData.replicaSetsCollapsed ? 'Show ReplicaSet' : 'Hide stable ReplicaSet'} position="right">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onToggleReplicaSets(id)
+                    }}
+                    className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[9px] font-medium text-theme-text-tertiary hover:bg-theme-elevated hover:text-theme-text-primary"
+                  >
+                    {nodeData.replicaSetCount as number} RS
+                    {nodeData.replicaSetsCollapsed ? <ChevronDown className="h-3 w-3" aria-hidden /> : <ChevronUp className="h-3 w-3" aria-hidden />}
+                  </button>
+                </Tooltip>
+              )}
               {policyStatus && (
                 <Tooltip
                   content={

@@ -35,6 +35,27 @@ describe('neighborhoodFor', () => {
     expect(new Set(out.nodes.map((n) => n.id))).toEqual(new Set(['dep', 'rs', 'pod', 'svc', 'cm']))
   })
 
+  it('includes the complete upstream serving path without crossing through a shared Service', () => {
+    const topo: Topology = {
+      nodes: [
+        node('route', 'HTTPRoute', 'app', 'web'),
+        node('ingress', 'Ingress', 'app', 'web'),
+        node('svc', 'Service', 'app', 'web'),
+        node('depA', 'Deployment', 'app', 'a'),
+        node('depB', 'Deployment', 'app', 'b'),
+      ],
+      edges: [
+        edge('route', 'svc', 'routes-to'),
+        edge('ingress', 'svc', 'routes-to'),
+        edge('svc', 'depA', 'exposes'),
+        edge('svc', 'depB', 'exposes'),
+      ],
+    }
+
+    const out = neighborhoodFor(topo, [{ kind: 'Deployment', namespace: 'app', name: 'a' }])
+    expect(new Set(out.nodes.map((n) => n.id))).toEqual(new Set(['route', 'ingress', 'svc', 'depA']))
+  })
+
   // The leaf rule: a ConfigMap shared by two unrelated Deployments must NOT
   // bridge the second Deployment into the first's neighborhood.
   it('does not bleed through a shared ConfigMap', () => {
@@ -54,6 +75,29 @@ describe('neighborhoodFor', () => {
     expect(ids.has('depA')).toBe(true)
     expect(ids.has('cm')).toBe(true) // the shared ConfigMap IS shown (context)
     expect(ids.has('depB')).toBe(false) // …but it doesn't drag in the other app
+  })
+
+  it('includes resources that produce a workload Secret without crossing through it', () => {
+    const topo: Topology = {
+      nodes: [
+        node('depA', 'Deployment', 'app', 'a'),
+        node('depB', 'Deployment', 'app', 'b'),
+        node('secret', 'Secret', 'app', 'generated'),
+        node('sealed', 'SealedSecret', 'app', 'encrypted'),
+        node('cert', 'Certificate', 'app', 'tls'),
+      ],
+      edges: [
+        edge('sealed', 'secret', 'manages'),
+        edge('cert', 'secret', 'manages'),
+        edge('secret', 'depA', 'configures'),
+        edge('secret', 'depB', 'configures'),
+      ],
+    }
+
+    const out = neighborhoodFor(topo, [{ kind: 'Deployment', namespace: 'app', name: 'a' }])
+    expect(new Set(out.nodes.map((n) => n.id))).toEqual(new Set(['depA', 'secret', 'sealed', 'cert']))
+    expect(out.edges).toEqual(expect.arrayContaining([expect.objectContaining({ source: 'sealed', target: 'secret' })]))
+    expect(out.edges).toEqual(expect.arrayContaining([expect.objectContaining({ source: 'cert', target: 'secret' })]))
   })
 
   // A GitOps manager reached upward is a leaf: "managed by" is shown, but its
@@ -244,6 +288,17 @@ describe('batchRunParentNodes', () => {
 
     expect(batchRunParentNodes(topology, workflow)).toEqual([cronWorkflow, template])
   })
+
+  it('finds template provenance for a CronWorkflow', () => {
+    const template = crdNode('template', 'WorkflowTemplate', 'app', 'scheduled-migration', 'argoproj.io/v1alpha1')
+    const cronWorkflow = crdNode('cron', 'CronWorkflow', 'app', 'scheduled-migration', 'argoproj.io/v1alpha1')
+    const topology: Topology = {
+      nodes: [template, cronWorkflow],
+      edges: [edge('template', 'cron', 'configures')],
+    }
+
+    expect(batchRunParentNodes(topology, cronWorkflow)).toEqual([template])
+  })
 })
 
 describe('tagWorkloadOwnership', () => {
@@ -257,6 +312,7 @@ describe('tagWorkloadOwnership', () => {
         node('depA', 'Deployment', 'app', 'a'),
         node('podA', 'Pod', 'app', 'a-1'),
         node('svcA', 'Service', 'app', 'a'),
+        node('routeA', 'HTTPRoute', 'app', 'a'),
         node('depB', 'Deployment', 'app', 'b'),
         node('podB', 'Pod', 'app', 'b-1'),
         node('shared', 'ConfigMap', 'app', 'shared'),
@@ -264,6 +320,7 @@ describe('tagWorkloadOwnership', () => {
       edges: [
         edge('depA', 'podA', 'manages'),
         edge('svcA', 'depA', 'exposes'),
+        edge('routeA', 'svcA', 'routes-to'),
         edge('depB', 'podB', 'manages'),
         edge('shared', 'depA', 'configures'),
         edge('shared', 'depB', 'configures'),
@@ -280,6 +337,7 @@ describe('tagWorkloadOwnership', () => {
     expect(dataOf(topology, 'depA').ownerWorkloadId).toBe('Deployment/app/a')
     expect(dataOf(topology, 'podA').ownerColorIndex).toBe(a)
     expect(dataOf(topology, 'svcA').ownerColorIndex).toBe(a)
+    expect(dataOf(topology, 'routeA').ownerColorIndex).toBe(a)
     expect(dataOf(topology, 'podB').ownerColorIndex).toBe(b)
     // the ConfigMap touches both workloads → neutral color…
     expect(dataOf(topology, 'shared').ownerWorkloadId).toBeNull()
@@ -290,6 +348,7 @@ describe('tagWorkloadOwnership', () => {
     )
     // an exclusive satellite's focus set is just its own workload.
     expect(dataOf(topology, 'svcA').focusWorkloadIds).toEqual(['Deployment/app/a'])
+    expect(dataOf(topology, 'routeA').focusWorkloadIds).toEqual(['Deployment/app/a'])
   })
 
   // A GitOps manager is context, not membership — it never claims a color even
@@ -308,28 +367,20 @@ describe('tagWorkloadOwnership', () => {
     expect(dataOf(topology, 'pod').ownerWorkloadId).toBe('Deployment/app/web')
   })
 
-  it('keeps scheduler ownership authoritative over shared template provenance', () => {
+  it('attributes Secret producers through the Secret they produce', () => {
     const topo: Topology = {
       nodes: [
-        crdNode('cron', 'CronWorkflow', 'app', 'migration-schedule', 'argoproj.io/v1alpha1'),
-        crdNode('template', 'WorkflowTemplate', 'app', 'migration', 'argoproj.io/v1alpha1'),
-        crdNode('workflow', 'Workflow', 'app', 'migration-run', 'argoproj.io/v1alpha1'),
-        node('pod', 'Pod', 'app', 'migration-run-step'),
+        node('dep', 'Deployment', 'app', 'web'),
+        node('secret', 'Secret', 'app', 'generated'),
+        node('sealed', 'SealedSecret', 'app', 'encrypted'),
+        node('cert', 'Certificate', 'app', 'tls'),
       ],
-      edges: [
-        edge('cron', 'workflow', 'manages'),
-        edge('template', 'workflow', 'configures'),
-        edge('workflow', 'pod', 'manages'),
-      ],
+      edges: [edge('sealed', 'secret', 'manages'), edge('cert', 'secret', 'manages'), edge('secret', 'dep', 'configures')],
     }
 
-    const { topology } = tagWorkloadOwnership(topo, [
-      { kind: 'CronWorkflow', group: 'argoproj.io', namespace: 'app', name: 'migration-schedule' },
-      { kind: 'WorkflowTemplate', group: 'argoproj.io', namespace: 'app', name: 'migration' },
-    ])
-
-    expect(dataOf(topology, 'workflow').ownerWorkloadId).toBe('CronWorkflow/app/migration-schedule')
-    expect(dataOf(topology, 'pod').ownerWorkloadId).toBe('CronWorkflow/app/migration-schedule')
-    expect(dataOf(topology, 'template').ownerWorkloadId).toBe('WorkflowTemplate/app/migration')
+    const { topology } = tagWorkloadOwnership(topo, [{ kind: 'Deployment', namespace: 'app', name: 'web' }])
+    expect(dataOf(topology, 'secret').ownerWorkloadId).toBe('Deployment/app/web')
+    expect(dataOf(topology, 'sealed').ownerWorkloadId).toBe('Deployment/app/web')
+    expect(dataOf(topology, 'cert').ownerWorkloadId).toBe('Deployment/app/web')
   })
 })

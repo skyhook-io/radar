@@ -866,7 +866,7 @@ const KIND_PRIORITY: Record<string, number> = {
   'CronJob': 4, 'CronWorkflow': 4, 'Job': 5, 'Workflow': 5, 'Service': 6, 'Gateway': 7,
   'HTTPRoute': 6, 'GRPCRoute': 6, 'TCPRoute': 6, 'TLSRoute': 6, 'Ingress': 7,
   'ReplicaSet': 8, 'Pod': 9, 'PodGroup': 9,
-  'ConfigMap': 10, 'Secret': 10, 'WorkflowTemplate': 10, 'ClusterWorkflowTemplate': 10, 'PersistentVolumeClaim': 10, 'HorizontalPodAutoscaler': 10,
+  'ConfigMap': 10, 'Secret': 10, 'ServiceAccount': 10, 'SealedSecret': 10, 'ServiceMonitor': 10, 'PodMonitor': 10, 'WorkflowTemplate': 10, 'ClusterWorkflowTemplate': 10, 'PersistentVolumeClaim': 10, 'HorizontalPodAutoscaler': 10,
   'KnativeService': 1, 'KnativeConfiguration': 3, 'KnativeRevision': 4, 'KnativeRoute': 2,
   'Broker': 2, 'Channel': 2, 'Trigger': 3, 'PingSource': 3, 'ApiServerSource': 3,
   'ContainerSource': 3, 'SinkBinding': 3,

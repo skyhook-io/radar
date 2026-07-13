@@ -389,7 +389,7 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.sealedSecrets }}
-  - apiGroups: ["sealed-secrets.bitnami.com"]
+  - apiGroups: ["bitnami.com"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}

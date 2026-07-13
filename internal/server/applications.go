@@ -95,28 +95,35 @@ type applicationsCacheEntry struct {
 
 // appRow is one logical app in this cluster.
 type appRow struct {
-	Key           string            `json:"key"`                      // overlay key, structural-root key, or "<ns>/<kind>/<name>" raw
-	Name          string            `json:"name"`                     // display name
-	Namespace     string            `json:"namespace,omitempty"`      // the single namespace the WORKLOADS run in (residence, not the GitOps manager's home); empty when they span several — see Namespaces
-	Namespaces    []string          `json:"namespaces,omitempty"`     // all distinct workload namespaces, sorted; the unambiguous form of Namespace
-	Tier          int               `json:"tier,omitempty"`           // pkg/subject overlay tier (0 = raw, no signal)
-	Confidence    string            `json:"confidence,omitempty"`     // high | medium | low
-	Category      string            `json:"category,omitempty"`       // app | addon | mixed; classification hint, never identity
-	AddonReason   string            `json:"addonReason,omitempty"`    // add-on evidence when Category == addon/mixed
-	WorkloadClass string            `json:"workload_class,omitempty"` // service | worker | job | mixed | unknown
-	Health        string            `json:"health"`                   // worst-of across workloads
-	Versions      []string          `json:"versions,omitempty"`       // distinct image tags (the running version)
-	VersionSkew   bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
-	AppVersion    string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
-	Identity      *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
-	MatchKeys     []string          `json:"matchKeys,omitempty"`      // exact grouping-signal evidence keys, namespace-scoped ("instance:ns:x","helm:ns:x",…) + informational "name-stem:x" (unscoped); the client joins timeline events to this app by these, matching on the event's namespace
-	SourceRef     *appSourceRef     `json:"sourceRef,omitempty"`      // exact source system object when known (GitOps / native Helm)
-	Workloads     []appWorkload     `json:"workloads"`
-	Events        []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
-	Relationships *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
+	Key            string            `json:"key"`                      // overlay key, structural-root key, or "<ns>/<kind>/<name>" raw
+	Name           string            `json:"name"`                     // display name
+	Namespace      string            `json:"namespace,omitempty"`      // the single namespace the WORKLOADS run in (residence, not the GitOps manager's home); empty when they span several — see Namespaces
+	Namespaces     []string          `json:"namespaces,omitempty"`     // all distinct workload namespaces, sorted; the unambiguous form of Namespace
+	Tier           int               `json:"tier,omitempty"`           // pkg/subject overlay tier (0 = raw, no signal)
+	Confidence     string            `json:"confidence,omitempty"`     // high | medium | low
+	Category       string            `json:"category,omitempty"`       // app | addon | mixed; classification hint, never identity
+	AddonReason    string            `json:"addonReason,omitempty"`    // add-on evidence when Category == addon/mixed
+	WorkloadClass  string            `json:"workload_class,omitempty"` // service | worker | job | mixed | unknown
+	Health         string            `json:"health"`                   // worst-of runtime + exact deployment-source status
+	RuntimeHealth  string            `json:"runtimeHealth"`            // worst-of across workloads
+	Versions       []string          `json:"versions,omitempty"`       // distinct image tags (the running version)
+	VersionSkew    bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
+	AppVersion     string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
+	Identity       *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
+	MatchKeys      []string          `json:"matchKeys,omitempty"`      // exact grouping-signal evidence keys, namespace-scoped ("instance:ns:x","helm:ns:x",…) + informational "name-stem:x" (unscoped); the client joins timeline events to this app by these, matching on the event's namespace
+	SourceRef      *appSourceRef     `json:"sourceRef,omitempty"`      // exact source system object when known (GitOps / native Helm)
+	SourceStatus   *appSourceStatus  `json:"sourceStatus,omitempty"`   // controller-reported delivery state for the exact source
+	SourceConflict bool              `json:"sourceConflict,omitempty"` // workloads resolve to different source-system objects
+	Workloads      []appWorkload     `json:"workloads"`
+	Events         []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
+	Relationships  *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
 
-	sourceConflict bool
-	sourceStrict   bool
+	sourceStrict bool
+}
+
+type appSourceStatus struct {
+	Sync   string `json:"sync,omitempty"`
+	Health string `json:"health,omitempty"`
 }
 
 // appSourceRef is the source-of-truth object when the grouping signal names one
@@ -169,23 +176,33 @@ type appHistoryIncident struct {
 }
 
 // appRelationships is the structural neighborhood of an app, derived from the
-// topology graph: what fronts it (Services/Ingress/Routes) and what supports it
-// (config, autoscalers, disruption budgets). Counts where names add no value.
+// topology graph: what fronts it (Services/Ingress/Routes) and what supports it.
 type appRelationships struct {
-	Services  []string `json:"services,omitempty"`
-	Ingresses []string `json:"ingresses,omitempty"`
-	// "Kind/name" (routes are polymorphic); Services/Ingresses carry bare names
-	// since their kind is fixed.
-	Routes  []string `json:"routes,omitempty"`
-	Configs int      `json:"configs,omitempty"`
-	Scalers int      `json:"scalers,omitempty"`
-	Storage int      `json:"storage,omitempty"`
-	PDBs    int      `json:"pdbs,omitempty"`
+	Services          []string               `json:"services,omitempty"`
+	Ingresses         []string               `json:"ingresses,omitempty"`
+	Routes            []string               `json:"routes,omitempty"`
+	Configs           int                    `json:"configs,omitempty"`
+	Scalers           int                    `json:"scalers,omitempty"`
+	Storage           int                    `json:"storage,omitempty"`
+	PDBs              int                    `json:"pdbs,omitempty"`
+	NetworkPolicies   int                    `json:"networkPolicies,omitempty"`
+	ServiceRefs       []topology.ResourceRef `json:"serviceRefs,omitempty"`
+	IngressRefs       []topology.ResourceRef `json:"ingressRefs,omitempty"`
+	RouteRefs         []topology.ResourceRef `json:"routeRefs,omitempty"`
+	ConfigRefs        []topology.ResourceRef `json:"configRefs,omitempty"`
+	ScalerRefs        []topology.ResourceRef `json:"scalerRefs,omitempty"`
+	StorageRefs       []topology.ResourceRef `json:"storageRefs,omitempty"`
+	PDBRefs           []topology.ResourceRef `json:"pdbRefs,omitempty"`
+	NetworkPolicyRefs []topology.ResourceRef `json:"networkPolicyRefs,omitempty"`
 
-	configRefs  map[string]struct{}
-	scalerRefs  map[string]struct{}
-	storageRefs map[string]struct{}
-	pdbRefs     map[string]struct{}
+	serviceRefs       map[string]topology.ResourceRef
+	ingressRefs       map[string]topology.ResourceRef
+	routeRefs         map[string]topology.ResourceRef
+	configRefs        map[string]topology.ResourceRef
+	scalerRefs        map[string]topology.ResourceRef
+	storageRefs       map[string]topology.ResourceRef
+	pdbRefs           map[string]topology.ResourceRef
+	networkPolicyRefs map[string]topology.ResourceRef
 }
 
 // appEvent is a recent k8s Warning event correlated to an app's workloads/pods
@@ -552,6 +569,7 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 	sourcePaths, appSetChildren, argoItems := argoApplicationFacts(ctx, cache)
 	appSetByKey := appSetFanouts(appSetChildren)
 	enrichRowsWithManagedSourceRefs(ctx, cache, rows, argoItems)
+	enrichRowsWithArgoStatus(rows, argoItems)
 	resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(ctx, cache))
 	claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
 	applicationsCacheMu.Lock()
@@ -718,28 +736,69 @@ func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
 	if rel == nil {
 		return nil
 	}
-	out := &appRelationships{Configs: len(rel.ConfigRefs), Scalers: len(rel.Scalers), Storage: len(rel.StorageRefs), PDBs: len(rel.PDBs)}
-	out.configRefs = refsSet(rel.ConfigRefs)
-	out.scalerRefs = refsSet(rel.Scalers)
-	out.storageRefs = refsSet(rel.StorageRefs)
-	out.pdbRefs = refsSet(rel.PDBs)
-	for _, s := range rel.Services {
-		out.Services = append(out.Services, s.Name)
+	out := &appRelationships{
+		Configs:           len(rel.ConfigRefs),
+		Scalers:           len(rel.Scalers),
+		Storage:           len(rel.StorageRefs),
+		PDBs:              len(rel.PDBs),
+		NetworkPolicies:   len(rel.NetworkPolicies),
+		serviceRefs:       refsByKey(rel.Services),
+		ingressRefs:       refsByKey(rel.Ingresses),
+		routeRefs:         refsByKey(appRouteRefs(rel.Routes, rel.Gateways)),
+		configRefs:        refsByKey(rel.ConfigRefs),
+		scalerRefs:        refsByKey(rel.Scalers),
+		storageRefs:       refsByKey(rel.StorageRefs),
+		pdbRefs:           refsByKey(rel.PDBs),
+		networkPolicyRefs: refsByKey(rel.NetworkPolicies),
 	}
-	for _, i := range rel.Ingresses {
-		out.Ingresses = append(out.Ingresses, i.Name)
-	}
-	for _, r := range rel.Routes {
-		// Routes are polymorphic (HTTPRoute/GRPCRoute/TCPRoute/TLSRoute), so ship
-		// "Kind/name": the client keys its membership index on the concrete kind
-		// (matching the lane ids), which a bare name can't reconstruct.
-		out.Routes = append(out.Routes, r.Kind+"/"+r.Name)
-	}
+	g.addServiceEntrypoints(out, rel.Services)
+	out.Services = refNames(sortedRefs(out.serviceRefs, 20), 20)
+	out.Ingresses = refNames(sortedRefs(out.ingressRefs, 20), 20)
+	out.Routes = routeRefNames(sortedRefs(out.routeRefs, 20), 20)
 	if len(out.Services) == 0 && len(out.Ingresses) == 0 && len(out.Routes) == 0 &&
-		out.Configs == 0 && out.Scalers == 0 && out.Storage == 0 && out.PDBs == 0 {
+		len(out.serviceRefs) == 0 && len(out.ingressRefs) == 0 && len(out.routeRefs) == 0 &&
+		out.Configs == 0 && out.Scalers == 0 && out.Storage == 0 && out.PDBs == 0 && out.NetworkPolicies == 0 {
 		return nil
 	}
 	return out
+}
+
+func (g *appGraph) addServiceEntrypoints(out *appRelationships, services []topology.ResourceRef) {
+	if g == nil || g.topo == nil || out == nil {
+		return
+	}
+	for _, svc := range services {
+		if !strings.EqualFold(svc.Kind, "Service") {
+			continue
+		}
+		rel := topology.GetRelationshipsWithIndex(svc.Kind, svc.Namespace, svc.Name, g.topo, g.provider, g.dp, g.idx)
+		if rel == nil {
+			continue
+		}
+		out.ingressRefs = mergeRefs(out.ingressRefs, refsByKey(rel.Ingresses))
+		out.routeRefs = mergeRefs(out.routeRefs, refsByKey(appRouteRefs(rel.Routes, rel.Gateways, rel.Services)))
+	}
+}
+
+func appRouteRefs(routes []topology.ResourceRef, routeLikeGroups ...[]topology.ResourceRef) []topology.ResourceRef {
+	out := append([]topology.ResourceRef{}, routes...)
+	for _, group := range routeLikeGroups {
+		for _, ref := range group {
+			if isAppRouteKind(ref.Kind) {
+				out = append(out, ref)
+			}
+		}
+	}
+	return out
+}
+
+func isAppRouteKind(kind string) bool {
+	switch strings.ToLower(kind) {
+	case "httproute", "grpcroute", "tcproute", "tlsroute", "route", "ingressroute", "ingressroutetcp", "ingressrouteudp", "virtualservice", "httpproxy":
+		return true
+	default:
+		return false
+	}
 }
 
 // appWorkloadInput is the pre-grouping shape: one workload plus the signals
@@ -1478,6 +1537,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 		if r.WorkloadClass == "mixed" && servingHealth != "" {
 			r.Health = string(servingHealth)
 		}
+		r.RuntimeHealth = r.Health
 		setStrictSourceRef(r, ins)
 		// The app lives where its WORKLOADS run — a Flux HelmRelease in
 		// flux-system deploying into demo is a demo app, not a flux-system one
@@ -1733,7 +1793,7 @@ func sourceRefFromRoot(rootKind, rootKey string) *appSourceRef {
 }
 
 func mergeSourceRef(r *appRow, ref *appSourceRef) {
-	if ref == nil || r.sourceConflict {
+	if ref == nil || r.SourceConflict {
 		return
 	}
 	if r.SourceRef == nil {
@@ -1746,7 +1806,7 @@ func mergeSourceRef(r *appRow, ref *appSourceRef) {
 			return
 		}
 		r.SourceRef = nil
-		r.sourceConflict = true
+		r.SourceConflict = true
 	}
 }
 
@@ -1837,10 +1897,14 @@ func mergeRelationships(r *appRow, rel *appRelationships) {
 	agg.Services = append(agg.Services, rel.Services...)
 	agg.Ingresses = append(agg.Ingresses, rel.Ingresses...)
 	agg.Routes = append(agg.Routes, rel.Routes...)
-	agg.configRefs = mergeRefSets(agg.configRefs, rel.configRefs)
-	agg.scalerRefs = mergeRefSets(agg.scalerRefs, rel.scalerRefs)
-	agg.storageRefs = mergeRefSets(agg.storageRefs, rel.storageRefs)
-	agg.pdbRefs = mergeRefSets(agg.pdbRefs, rel.pdbRefs)
+	agg.serviceRefs = mergeRefs(agg.serviceRefs, rel.serviceRefs)
+	agg.ingressRefs = mergeRefs(agg.ingressRefs, rel.ingressRefs)
+	agg.routeRefs = mergeRefs(agg.routeRefs, rel.routeRefs)
+	agg.configRefs = mergeRefs(agg.configRefs, rel.configRefs)
+	agg.scalerRefs = mergeRefs(agg.scalerRefs, rel.scalerRefs)
+	agg.storageRefs = mergeRefs(agg.storageRefs, rel.storageRefs)
+	agg.pdbRefs = mergeRefs(agg.pdbRefs, rel.pdbRefs)
+	agg.networkPolicyRefs = mergeRefs(agg.networkPolicyRefs, rel.networkPolicyRefs)
 	if len(rel.configRefs) == 0 {
 		agg.Configs += rel.Configs
 	}
@@ -1853,6 +1917,9 @@ func mergeRelationships(r *appRow, rel *appRelationships) {
 	if len(rel.pdbRefs) == 0 {
 		agg.PDBs += rel.PDBs
 	}
+	if len(rel.networkPolicyRefs) == 0 {
+		agg.NetworkPolicies += rel.NetworkPolicies
+	}
 }
 
 func finalizeRelationships(r *appRow) {
@@ -1862,42 +1929,103 @@ func finalizeRelationships(r *appRow) {
 	r.Relationships.Services = dedupSorted(r.Relationships.Services, 20)
 	r.Relationships.Ingresses = dedupSorted(r.Relationships.Ingresses, 20)
 	r.Relationships.Routes = dedupSorted(r.Relationships.Routes, 20)
+	if len(r.Relationships.serviceRefs) > 0 {
+		r.Relationships.ServiceRefs = sortedRefs(r.Relationships.serviceRefs, 20)
+		r.Relationships.Services = refNames(r.Relationships.ServiceRefs, 20)
+	}
+	if len(r.Relationships.ingressRefs) > 0 {
+		r.Relationships.IngressRefs = sortedRefs(r.Relationships.ingressRefs, 20)
+		r.Relationships.Ingresses = refNames(r.Relationships.IngressRefs, 20)
+	}
+	if len(r.Relationships.routeRefs) > 0 {
+		r.Relationships.RouteRefs = sortedRefs(r.Relationships.routeRefs, 20)
+		r.Relationships.Routes = routeRefNames(r.Relationships.RouteRefs, 20)
+	}
 	if len(r.Relationships.configRefs) > 0 {
 		r.Relationships.Configs = len(r.Relationships.configRefs)
+		r.Relationships.ConfigRefs = sortedRefs(r.Relationships.configRefs, 20)
 	}
 	if len(r.Relationships.scalerRefs) > 0 {
 		r.Relationships.Scalers = len(r.Relationships.scalerRefs)
+		r.Relationships.ScalerRefs = sortedRefs(r.Relationships.scalerRefs, 20)
 	}
 	if len(r.Relationships.storageRefs) > 0 {
 		r.Relationships.Storage = len(r.Relationships.storageRefs)
+		r.Relationships.StorageRefs = sortedRefs(r.Relationships.storageRefs, 20)
 	}
 	if len(r.Relationships.pdbRefs) > 0 {
 		r.Relationships.PDBs = len(r.Relationships.pdbRefs)
+		r.Relationships.PDBRefs = sortedRefs(r.Relationships.pdbRefs, 20)
+	}
+	if len(r.Relationships.networkPolicyRefs) > 0 {
+		r.Relationships.NetworkPolicies = len(r.Relationships.networkPolicyRefs)
+		r.Relationships.NetworkPolicyRefs = sortedRefs(r.Relationships.networkPolicyRefs, 20)
 	}
 }
 
-func refsSet(refs []topology.ResourceRef) map[string]struct{} {
+func refsByKey(refs []topology.ResourceRef) map[string]topology.ResourceRef {
 	if len(refs) == 0 {
 		return nil
 	}
-	out := make(map[string]struct{}, len(refs))
+	out := make(map[string]topology.ResourceRef, len(refs))
 	for _, r := range refs {
-		out[refKey(r)] = struct{}{}
+		out[refKey(r)] = r
 	}
 	return out
 }
 
-func mergeRefSets(dst, src map[string]struct{}) map[string]struct{} {
+func mergeRefs(dst, src map[string]topology.ResourceRef) map[string]topology.ResourceRef {
 	if len(src) == 0 {
 		return dst
 	}
 	if dst == nil {
-		dst = map[string]struct{}{}
+		dst = map[string]topology.ResourceRef{}
 	}
-	for k := range src {
-		dst[k] = struct{}{}
+	for k, ref := range src {
+		dst[k] = ref
 	}
 	return dst
+}
+
+func sortedRefs(refs map[string]topology.ResourceRef, limit int) []topology.ResourceRef {
+	if len(refs) == 0 || limit <= 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(refs))
+	for key := range refs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	out := make([]topology.ResourceRef, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, refs[key])
+	}
+	return out
+}
+
+func refNames(refs []topology.ResourceRef, limit int) []string {
+	if len(refs) == 0 || limit <= 0 {
+		return nil
+	}
+	names := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		names = append(names, ref.Name)
+	}
+	return dedupSorted(names, limit)
+}
+
+func routeRefNames(refs []topology.ResourceRef, limit int) []string {
+	if len(refs) == 0 || limit <= 0 {
+		return nil
+	}
+	names := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		names = append(names, ref.Kind+"/"+ref.Name)
+	}
+	return dedupSorted(names, limit)
 }
 
 func refKey(r topology.ResourceRef) string {
@@ -1909,7 +2037,8 @@ func classifyWorkload(kind string, rels *appRelationships) string {
 	case "Job", "CronJob", "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "ScaledJob":
 		return "job"
 	case "Deployment", "StatefulSet", "DaemonSet":
-		if rels != nil && (len(rels.Services) > 0 || len(rels.Ingresses) > 0 || len(rels.Routes) > 0) {
+		if rels != nil && (len(rels.Services) > 0 || len(rels.Ingresses) > 0 || len(rels.Routes) > 0 ||
+			len(rels.serviceRefs) > 0 || len(rels.ingressRefs) > 0 || len(rels.routeRefs) > 0) {
 			return "service"
 		}
 		return "worker"

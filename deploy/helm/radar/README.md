@@ -198,7 +198,7 @@ This overrides individual settings below. Simpler but broader — some orgs may 
 | `prometheus` | `monitoring.coreos.com` |
 | `reflector` | `reflector.v1.k8s.emberstack.com` |
 | `reloader` | `reloader.stakater.com` |
-| `sealedSecrets` | `sealed-secrets.bitnami.com` |
+| `sealedSecrets` | `bitnami.com` |
 | `strimzi` | `strimzi.io`, `kafka.strimzi.io` |
 | `tekton` | `tekton.dev` |
 | `traefik` | `traefik.io`, `traefik.containo.us` |

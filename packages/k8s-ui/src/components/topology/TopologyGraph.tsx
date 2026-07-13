@@ -14,6 +14,7 @@ import {
   type NodeTypes,
   type NodeChange,
   type Viewport,
+  type FitViewOptions,
   BackgroundVariant,
   MarkerType,
 } from '@xyflow/react'
@@ -202,6 +203,10 @@ interface TopologyGraphProps {
   /** Hover a node → reports its TopologyNode (null on leave). Drives the rail's
    *  reciprocal highlight. */
   onNodeHover?: (node: TopologyNode | null) => void
+  /** Toggle a stable Deployment's normally-collapsed ReplicaSet tier. */
+  onToggleReplicaSets?: (ownerID: string) => void
+  /** Padding reserved around fit-to-view operations for overlaid UI. */
+  fitViewPadding?: FitViewOptions['padding']
 }
 
 export function TopologyGraph({
@@ -222,6 +227,8 @@ export function TopologyGraph({
   focusNonce,
   focusedOwnerId,
   onNodeHover,
+  onToggleReplicaSets,
+  fitViewPadding = 0.15,
 }: TopologyGraphProps) {
   const isTrafficView = viewMode === 'traffic'
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([] as Node[])
@@ -702,6 +709,7 @@ export function TopologyGraph({
             onExpand: isExpandablePodGroup ? handleExpandPodGroup : undefined,
             onCollapse: expandedFromGroup ? handleCollapsePodGroup : undefined,
             isExpanded: isExpandablePodGroup ? expandedPodGroups.has(node.id) : undefined,
+            onToggleReplicaSets: nodeData?.replicaSetsExpandable ? onToggleReplicaSets : undefined,
           },
         }
       })
@@ -737,7 +745,7 @@ export function TopologyGraph({
     // No cleanup function - we use version-based invalidation instead
     // This prevents React's effect re-runs from canceling in-flight layouts
     // when the actual structure hasn't changed
-  }, [workingNodes, workingEdges, structureKey, groupingMode, hideGroupHeader, collapsedGroups, groupLevels, handleSetLevel, handleCardClick, onMaximizeNamespace, isTrafficView, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, setNodes, setEdges, layoutRetryCount])
+  }, [workingNodes, workingEdges, structureKey, groupingMode, hideGroupHeader, collapsedGroups, groupLevels, handleSetLevel, handleCardClick, onMaximizeNamespace, isTrafficView, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, onToggleReplicaSets, setNodes, setEdges, layoutRetryCount])
 
   // Handle node click
   const handleNodeClick = useCallback(
@@ -829,6 +837,55 @@ export function TopologyGraph({
       return changed ? updated : nds
     })
   }, [focusedOwnerId, setNodes, nodes])
+
+  // Data-only topology updates must repaint existing nodes without forcing an
+  // ELK relayout. Structure hashing deliberately ignores status and metadata;
+  // keep the React Flow node payload in sync on that fast path.
+  useEffect(() => {
+    const topologyById = new Map(workingNodes.map(node => [node.id, node]))
+    setNodes(nds => {
+      let changed = false
+      const updated = nds.map(node => {
+        if (node.type === 'group') return node
+        const topologyNode = topologyById.get(node.id)
+        if (!topologyNode) return node
+        const nodeData = topologyNode.data as Record<string, unknown>
+        const pods = nodeData.pods
+        const isExpandablePodGroup = topologyNode.kind === 'PodGroup' && Array.isArray(pods) && pods.length > 0
+        const expandedFromGroup = nodeData.expandedFromGroup as string | undefined
+        const onExpand = isExpandablePodGroup ? handleExpandPodGroup : undefined
+        const onCollapse = expandedFromGroup ? handleCollapsePodGroup : undefined
+        const isExpanded = isExpandablePodGroup ? expandedPodGroups.has(node.id) : undefined
+        const toggleReplicaSets = nodeData.replicaSetsExpandable ? onToggleReplicaSets : undefined
+        if (
+          node.data?.kind === topologyNode.kind &&
+          node.data?.name === topologyNode.name &&
+          node.data?.status === topologyNode.status &&
+          node.data?.nodeData === topologyNode.data &&
+          node.data?.onExpand === onExpand &&
+          node.data?.onCollapse === onCollapse &&
+          node.data?.isExpanded === isExpanded &&
+          node.data?.onToggleReplicaSets === toggleReplicaSets
+        ) return node
+        changed = true
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            kind: topologyNode.kind,
+            name: topologyNode.name,
+            status: topologyNode.status,
+            nodeData: topologyNode.data,
+            onExpand,
+            onCollapse,
+            isExpanded,
+            onToggleReplicaSets: toggleReplicaSets,
+          },
+        }
+      })
+      return changed ? updated : nds
+    })
+  }, [workingNodes, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, onToggleReplicaSets, setNodes])
 
   if (!topology) {
     return <PaneLoader label="Loading topology…" className="absolute inset-0" />
@@ -985,7 +1042,7 @@ export function TopologyGraph({
         onNodeMouseLeave={handleNodeMouseLeave}
         nodeTypes={nodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        fitViewOptions={{ padding: fitViewPadding }}
         minZoom={0.1}
         maxZoom={2}
         proOptions={{ hideAttribution: true }}
@@ -1032,6 +1089,7 @@ export function TopologyGraph({
               paused={paused}
               onTogglePause={onTogglePause}
               onExportingChange={setIsExporting}
+              fitViewPadding={fitViewPadding}
             />
           </div>
           {!isTrafficView && (
@@ -1068,6 +1126,7 @@ export function TopologyGraph({
           focusNodeId={focusNodeId}
           focusNonce={focusNonce}
           onRequestExpandForNode={expandGroupForNode}
+          fitViewPadding={fitViewPadding}
         />
       </ReactFlow>
     </ReactFlowProvider>
@@ -1350,11 +1409,13 @@ function CustomControlButtons({
   paused,
   onTogglePause,
   onExportingChange,
+  fitViewPadding,
 }: {
   showExportButton: boolean
   paused: boolean
   onTogglePause?: () => void
   onExportingChange: (v: boolean) => void
+  fitViewPadding: FitViewOptions['padding']
 }) {
   const { zoomIn, zoomOut, fitView } = useReactFlow()
   const TIP = 100
@@ -1371,7 +1432,7 @@ function CustomControlButtons({
         </button>
       </Tooltip>
       <Tooltip content="Fit view" delay={TIP} position="right">
-        <button className="react-flow__controls-button" onClick={() => fitView({ padding: 0.15, duration: 400 })}>
+        <button className="react-flow__controls-button" onClick={() => fitView({ padding: fitViewPadding, duration: 400 })}>
           <Maximize className="w-3 h-3" />
         </button>
       </Tooltip>
@@ -1404,6 +1465,7 @@ function ViewportController({
   focusNodeId,
   focusNonce = 0,
   onRequestExpandForNode,
+  fitViewPadding,
 }: {
   viewMode: string
   layoutRetryCount: number
@@ -1413,6 +1475,7 @@ function ViewportController({
   focusNodeId?: string
   focusNonce?: number
   onRequestExpandForNode?: (nodeId: string) => void
+  fitViewPadding: FitViewOptions['padding']
 }) {
   const { fitView, zoomIn, zoomOut, setViewport, getViewport, getInternalNode, setCenter } = useReactFlow()
   const nodes = useNodes() // Reactive hook to watch node changes
@@ -1441,7 +1504,7 @@ function ViewportController({
       description: 'Fit graph to screen',
       category: 'Topology',
       scope: 'topology',
-      handler: () => fitView({ padding: 0.15, duration: VIEWPORT_ANIMATION_DURATION }),
+      handler: () => fitView({ padding: fitViewPadding, duration: VIEWPORT_ANIMATION_DURATION }),
     },
     {
       id: 'topology-zoom-in',
@@ -1518,14 +1581,14 @@ function ViewportController({
     if (nodesJustPopulated || viewModeChanged || retryRequested || fitViewRequested) {
       const timeoutId = setTimeout(() => {
         fitView({
-          padding: 0.15,
+          padding: fitViewPadding,
           duration: nodesJustPopulated ? 0 : VIEWPORT_ANIMATION_DURATION,
         })
       }, 10)
 
       return () => clearTimeout(timeoutId)
     }
-  }, [viewMode, layoutRetryCount, fitViewCounter, nodes.length, fitView])
+  }, [viewMode, layoutRetryCount, fitViewCounter, nodes.length, fitView, fitViewPadding])
 
   // Pan/zoom to a single searched node. Gated on focusNonce so the same
   // node can be re-focused, and so this never fires on background updates.
@@ -1573,10 +1636,10 @@ function ViewportController({
     if (!fitAllAfterLayoutRef?.current) return
     const id = setTimeout(() => {
       fitAllAfterLayoutRef.current = false
-      fitView({ padding: 0.15, duration: VIEWPORT_ANIMATION_DURATION })
+      fitView({ padding: fitViewPadding, duration: VIEWPORT_ANIMATION_DURATION })
     }, 250)
     return () => clearTimeout(id)
-  }, [nodes, fitView, fitAllAfterLayoutRef])
+  }, [nodes, fitView, fitAllAfterLayoutRef, fitViewPadding])
 
   return null
 }

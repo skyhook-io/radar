@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/packages"
@@ -510,8 +512,12 @@ func TestSetStrictSourceRefMarksConflictingSources(t *testing.T) {
 		{source: &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}},
 		{source: &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"}},
 	})
-	if row.SourceRef != nil || row.sourceStrict || !row.sourceConflict {
-		t.Fatalf("conflicting strict sources should mark conflict only: ref=%+v strict=%v conflict=%v", row.SourceRef, row.sourceStrict, row.sourceConflict)
+	if row.SourceRef != nil || row.sourceStrict || !row.SourceConflict {
+		t.Fatalf("conflicting strict sources should mark conflict only: ref=%+v strict=%v conflict=%v", row.SourceRef, row.sourceStrict, row.SourceConflict)
+	}
+	payload, err := json.Marshal(row)
+	if err != nil || !strings.Contains(string(payload), `"sourceConflict":true`) {
+		t.Fatalf("conflict must be exposed to clients: payload=%s err=%v", payload, err)
 	}
 	mergeSourceRef(&row, &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"})
 	if row.SourceRef != nil {
@@ -550,7 +556,7 @@ func TestMergeSourceRefPreservesStrictSourceRefOnManagedConflict(t *testing.T) {
 	if row.SourceRef == nil || row.SourceRef.Type != "helm" || row.SourceRef.Name != "checkout" {
 		t.Fatalf("strict source ref should survive managed conflict: %+v", row.SourceRef)
 	}
-	if row.sourceConflict {
+	if row.SourceConflict {
 		t.Fatalf("strict source ref conflict should not mark row conflicted")
 	}
 }
@@ -558,8 +564,8 @@ func TestMergeSourceRefPreservesStrictSourceRefOnManagedConflict(t *testing.T) {
 func TestMergeSourceRefClearsWeakConflict(t *testing.T) {
 	row := appRow{SourceRef: &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}}
 	mergeSourceRef(&row, &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "checkout"})
-	if row.SourceRef != nil || !row.sourceConflict {
-		t.Fatalf("weak source conflict should clear source ref and mark conflict: ref=%+v conflict=%v", row.SourceRef, row.sourceConflict)
+	if row.SourceRef != nil || !row.SourceConflict {
+		t.Fatalf("weak source conflict should clear source ref and mark conflict: ref=%+v conflict=%v", row.SourceRef, row.SourceConflict)
 	}
 }
 
@@ -638,17 +644,19 @@ func TestGroupApplications_RelationshipCountsDeduplicateSharedRefs(t *testing.T)
 	}
 	a := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
 	a.rels = &appRelationships{
-		configRefs:  map[string]struct{}{refKey(ref("ConfigMap", "prod", "shared-config")): {}},
-		scalerRefs:  map[string]struct{}{refKey(ref("HorizontalPodAutoscaler", "prod", "checkout")): {}},
-		storageRefs: map[string]struct{}{refKey(ref("PersistentVolumeClaim", "prod", "checkout-data")): {}},
-		pdbRefs:     map[string]struct{}{refKey(ref("PodDisruptionBudget", "prod", "checkout")): {}},
+		configRefs:        refsByKey([]topology.ResourceRef{ref("ConfigMap", "prod", "shared-config")}),
+		scalerRefs:        refsByKey([]topology.ResourceRef{ref("HorizontalPodAutoscaler", "prod", "checkout")}),
+		storageRefs:       refsByKey([]topology.ResourceRef{ref("PersistentVolumeClaim", "prod", "checkout-data")}),
+		pdbRefs:           refsByKey([]topology.ResourceRef{ref("PodDisruptionBudget", "prod", "checkout")}),
+		networkPolicyRefs: refsByKey([]topology.ResourceRef{ref("NetworkPolicy", "prod", "checkout-net")}),
 	}
 	b := overlayInput("Deployment", "prod", "worker", "1.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
 	b.rels = &appRelationships{
-		configRefs:  map[string]struct{}{refKey(ref("ConfigMap", "prod", "shared-config")): {}},
-		scalerRefs:  map[string]struct{}{refKey(ref("HorizontalPodAutoscaler", "prod", "checkout")): {}},
-		storageRefs: map[string]struct{}{refKey(ref("PersistentVolumeClaim", "prod", "checkout-data")): {}},
-		pdbRefs:     map[string]struct{}{refKey(ref("PodDisruptionBudget", "prod", "checkout")): {}},
+		configRefs:        refsByKey([]topology.ResourceRef{ref("ConfigMap", "prod", "shared-config")}),
+		scalerRefs:        refsByKey([]topology.ResourceRef{ref("HorizontalPodAutoscaler", "prod", "checkout")}),
+		storageRefs:       refsByKey([]topology.ResourceRef{ref("PersistentVolumeClaim", "prod", "checkout-data")}),
+		pdbRefs:           refsByKey([]topology.ResourceRef{ref("PodDisruptionBudget", "prod", "checkout")}),
+		networkPolicyRefs: refsByKey([]topology.ResourceRef{ref("NetworkPolicy", "prod", "checkout-net")}),
 	}
 
 	rows := groupApplications([]appWorkloadInput{a, b})
@@ -656,8 +664,108 @@ func TestGroupApplications_RelationshipCountsDeduplicateSharedRefs(t *testing.T)
 	if r == nil || r.Relationships == nil {
 		t.Fatalf("checkout relationships missing: %+v", rows)
 	}
-	if r.Relationships.Configs != 1 || r.Relationships.Scalers != 1 || r.Relationships.Storage != 1 || r.Relationships.PDBs != 1 {
+	if r.Relationships.Configs != 1 || r.Relationships.Scalers != 1 || r.Relationships.Storage != 1 || r.Relationships.PDBs != 1 || r.Relationships.NetworkPolicies != 1 {
 		t.Fatalf("relationship counts = %+v, want each shared ref counted once", r.Relationships)
+	}
+	if len(r.Relationships.ConfigRefs) != 1 || r.Relationships.ConfigRefs[0].Name != "shared-config" {
+		t.Fatalf("config refs = %+v, want shared-config once", r.Relationships.ConfigRefs)
+	}
+	if len(r.Relationships.NetworkPolicyRefs) != 1 || r.Relationships.NetworkPolicyRefs[0].Name != "checkout-net" {
+		t.Fatalf("network policy refs = %+v, want checkout-net once", r.Relationships.NetworkPolicyRefs)
+	}
+}
+
+func TestGroupApplications_EntrypointRefsDeduplicateAndClassify(t *testing.T) {
+	ref := func(kind, ns, name string) topology.ResourceRef {
+		return topology.ResourceRef{Kind: kind, Namespace: ns, Name: name}
+	}
+	a := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
+	a.rels = &appRelationships{
+		serviceRefs: refsByKey([]topology.ResourceRef{ref("Service", "prod", "checkout-api")}),
+		ingressRefs: refsByKey([]topology.ResourceRef{ref("Ingress", "prod", "checkout")}),
+		routeRefs:   refsByKey([]topology.ResourceRef{ref("HTTPRoute", "prod", "checkout")}),
+	}
+	a.wl.WorkloadClass = classifyWorkload(a.wl.Kind, a.rels)
+	b := overlayInput("Deployment", "prod", "api-canary", "1.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
+	b.rels = &appRelationships{
+		serviceRefs: refsByKey([]topology.ResourceRef{ref("Service", "prod", "checkout-api")}),
+		ingressRefs: refsByKey([]topology.ResourceRef{ref("Ingress", "prod", "checkout")}),
+		routeRefs:   refsByKey([]topology.ResourceRef{ref("HTTPRoute", "prod", "checkout")}),
+	}
+	b.wl.WorkloadClass = classifyWorkload(b.wl.Kind, b.rels)
+
+	rows := groupApplications([]appWorkloadInput{a, b})
+	r := rowByName(rows, "checkout")
+	if r == nil || r.Relationships == nil {
+		t.Fatalf("checkout relationships missing: %+v", rows)
+	}
+	if r.WorkloadClass != "service" {
+		t.Fatalf("workload class = %q, want service", r.WorkloadClass)
+	}
+	if len(r.Relationships.ServiceRefs) != 1 || r.Relationships.ServiceRefs[0].Name != "checkout-api" || r.Relationships.ServiceRefs[0].Namespace != "prod" {
+		t.Fatalf("service refs = %+v, want exact checkout-api ref once", r.Relationships.ServiceRefs)
+	}
+	if len(r.Relationships.IngressRefs) != 1 || r.Relationships.IngressRefs[0].Name != "checkout" {
+		t.Fatalf("ingress refs = %+v, want checkout once", r.Relationships.IngressRefs)
+	}
+	if len(r.Relationships.RouteRefs) != 1 || r.Relationships.RouteRefs[0].Kind != "HTTPRoute" {
+		t.Fatalf("route refs = %+v, want HTTPRoute once", r.Relationships.RouteRefs)
+	}
+}
+
+func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T) {
+	node := func(kind, ns, name string) topology.Node {
+		id := strings.ToLower(kind) + "/" + ns + "/" + name
+		return topology.Node{ID: id, Kind: topology.NodeKind(kind), Name: name, Data: map[string]any{"namespace": ns}}
+	}
+	edge := func(src, dst string, typ topology.EdgeType) topology.Edge {
+		return topology.Edge{ID: src + "->" + dst, Source: src, Target: dst, Type: typ}
+	}
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			node("Deployment", "prod", "api"),
+			node("Service", "prod", "api"),
+			node("Ingress", "prod", "api"),
+			node("HTTPRoute", "prod", "api-route"),
+			node("IngressRoute", "prod", "api-traefik"),
+			node("VirtualService", "prod", "api-istio"),
+			node("HTTPProxy", "prod", "api-contour"),
+		},
+		Edges: []topology.Edge{
+			edge("service/prod/api", "deployment/prod/api", topology.EdgeExposes),
+			edge("ingress/prod/api", "service/prod/api", topology.EdgeRoutesTo),
+			edge("httproute/prod/api-route", "service/prod/api", topology.EdgeRoutesTo),
+			edge("ingressroute/prod/api-traefik", "service/prod/api", topology.EdgeExposes),
+			edge("virtualservice/prod/api-istio", "service/prod/api", topology.EdgeExposes),
+			edge("httpproxy/prod/api-contour", "service/prod/api", topology.EdgeExposes),
+		},
+	}
+	g := &appGraph{topo: topo, idx: topology.IndexByResource(topo)}
+
+	rels := g.relationshipsFor("Deployment", "prod", "api")
+	if rels == nil {
+		t.Fatal("relationshipsFor returned nil")
+	}
+	serviceRefs := sortedRefs(rels.serviceRefs, 10)
+	if len(serviceRefs) != 1 || serviceRefs[0].Kind != "Service" || serviceRefs[0].Namespace != "prod" || serviceRefs[0].Name != "api" {
+		t.Fatalf("service refs = %+v, want prod/api", serviceRefs)
+	}
+	ingressRefs := sortedRefs(rels.ingressRefs, 10)
+	if len(ingressRefs) != 1 || ingressRefs[0].Kind != "Ingress" || ingressRefs[0].Namespace != "prod" || ingressRefs[0].Name != "api" {
+		t.Fatalf("ingress refs = %+v, want prod/api", ingressRefs)
+	}
+	routeRefs := sortedRefs(rels.routeRefs, 10)
+	if len(routeRefs) != 4 {
+		t.Fatalf("route refs = %+v, want HTTPRoute, HTTPProxy, IngressRoute, VirtualService", routeRefs)
+	}
+	gotRoutes := map[string]bool{}
+	for _, ref := range routeRefs {
+		gotRoutes[strings.ToLower(ref.Kind)+"/"+ref.Name] = true
+	}
+	for _, want := range []string{"httproute/api-route", "ingressroute/api-traefik", "virtualservice/api-istio", "httpproxy/api-contour"} {
+		if !gotRoutes[want] {
+			t.Fatalf("route refs = %+v, missing %s", routeRefs, want)
+		}
 	}
 }
 

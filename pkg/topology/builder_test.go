@@ -31,6 +31,7 @@ type mockProvider struct {
 	ingresses       []*networkingv1.Ingress
 	configMaps      []*corev1.ConfigMap
 	secrets         []*corev1.Secret
+	serviceAccounts []*corev1.ServiceAccount
 	pvcs            []*corev1.PersistentVolumeClaim
 	pvs             []*corev1.PersistentVolume
 	hpas            []*autoscalingv2.HorizontalPodAutoscaler
@@ -50,6 +51,9 @@ func (m *mockProvider) CronJobs() ([]*batchv1.CronJob, error)        { return m.
 func (m *mockProvider) Ingresses() ([]*networkingv1.Ingress, error)  { return m.ingresses, nil }
 func (m *mockProvider) ConfigMaps() ([]*corev1.ConfigMap, error)     { return m.configMaps, nil }
 func (m *mockProvider) Secrets() ([]*corev1.Secret, error)           { return m.secrets, nil }
+func (m *mockProvider) ServiceAccounts() ([]*corev1.ServiceAccount, error) {
+	return m.serviceAccounts, nil
+}
 func (m *mockProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
 	return m.pvcs, nil
 }
@@ -73,6 +77,48 @@ type rolloutDynamicProvider struct {
 	rollouts            []*unstructured.Unstructured
 	listCalls           int
 	listNamespacesCalls int
+}
+
+type monitorDynamicProvider struct {
+	gvrs      map[string]schema.GroupVersionResource
+	resources map[schema.GroupVersionResource][]*unstructured.Unstructured
+}
+
+func (m *monitorDynamicProvider) List(gvr schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
+	return m.resources[gvr], nil
+}
+
+func (m *monitorDynamicProvider) ListNamespaces(gvr schema.GroupVersionResource, _ []string) ([]*unstructured.Unstructured, error) {
+	return m.resources[gvr], nil
+}
+
+func (m *monitorDynamicProvider) Get(schema.GroupVersionResource, string, string) (*unstructured.Unstructured, error) {
+	return nil, nil
+}
+
+func (m *monitorDynamicProvider) GetWatchedResources() []schema.GroupVersionResource { return nil }
+func (m *monitorDynamicProvider) GetDiscoveryStatus() k8score.CRDDiscoveryStatus {
+	return k8score.CRDDiscoveryComplete
+}
+func (m *monitorDynamicProvider) GetGVR(kindOrName string) (schema.GroupVersionResource, bool) {
+	gvr, ok := m.gvrs[kindOrName]
+	return gvr, ok
+}
+func (m *monitorDynamicProvider) GetGVRWithGroup(kindOrName, group string) (schema.GroupVersionResource, bool) {
+	gvr, ok := m.GetGVR(kindOrName)
+	return gvr, ok && gvr.Group == group
+}
+func (m *monitorDynamicProvider) GetKindForGVR(gvr schema.GroupVersionResource) string {
+	for kind, candidate := range m.gvrs {
+		if candidate == gvr {
+			return kind
+		}
+	}
+	return ""
+}
+func (m *monitorDynamicProvider) IsCRD(kind string) bool {
+	_, ok := m.gvrs[kind]
+	return ok
 }
 
 func (m *rolloutDynamicProvider) List(_ schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
@@ -349,6 +395,177 @@ func TestBuildResourcesTopology_ReusesListedRolloutsForServiceEdges(t *testing.T
 		if !found {
 			t.Fatalf("expected %s to expose rollout/prod/web; edges=%+v", serviceID, topo.Edges)
 		}
+	}
+}
+
+func TestBuildResourcesTopology_ServiceOnlyExposesActiveJobs(t *testing.T) {
+	selector := map[string]string{"app": "api"}
+	provider := &mockProvider{
+		services: []*corev1.Service{{
+			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+			Spec:       corev1.ServiceSpec{Selector: selector},
+		}},
+		jobs: []*batchv1.Job{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "active", Namespace: "prod"},
+				Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: selector},
+				}},
+				Status: batchv1.JobStatus{Active: 1},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "completed", Namespace: "prod"},
+				Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: selector},
+				}},
+				Status: batchv1.JobStatus{Succeeded: 1},
+			},
+		},
+		cronJobs: []*batchv1.CronJob{{
+			ObjectMeta: metav1.ObjectMeta{Name: "scheduled", Namespace: "prod"},
+			Spec: batchv1.CronJobSpec{JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: selector},
+				}},
+			}},
+		}},
+	}
+
+	topo, err := NewBuilder(provider).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	targets := make(map[string]bool)
+	for _, edge := range topo.Edges {
+		if edge.Source == "service/prod/api" && edge.Type == EdgeExposes {
+			targets[edge.Target] = true
+		}
+	}
+	if !targets["job/prod/active"] {
+		t.Fatalf("expected Service to expose active Job; targets=%v", targets)
+	}
+	if targets["job/prod/completed"] {
+		t.Fatalf("completed Job must not appear as a Service backend; targets=%v", targets)
+	}
+	if targets["cronjob/prod/scheduled"] {
+		t.Fatalf("CronJob template must not appear as a current Service backend; targets=%v", targets)
+	}
+}
+
+func TestBuildResourcesTopology_PrometheusMonitors(t *testing.T) {
+	serviceMonitorGVR := schema.GroupVersionResource{Group: "monitoring.coreos.com", Version: "v1", Resource: "servicemonitors"}
+	podMonitorGVR := schema.GroupVersionResource{Group: "monitoring.coreos.com", Version: "v1", Resource: "podmonitors"}
+	serviceMonitor := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "monitoring.coreos.com/v1",
+		"kind":       "ServiceMonitor",
+		"metadata":   map[string]any{"name": "api", "namespace": "monitoring"},
+		"spec": map[string]any{
+			"namespaceSelector": map[string]any{"matchNames": []any{"prod"}},
+			"selector": map[string]any{"matchExpressions": []any{map[string]any{
+				"key": "monitoring", "operator": "In", "values": []any{"enabled"},
+			}}},
+			"endpoints": []any{map[string]any{"port": "metrics"}},
+		},
+	}}
+	podMonitor := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "monitoring.coreos.com/v1",
+		"kind":       "PodMonitor",
+		"metadata":   map[string]any{"name": "workers", "namespace": "monitoring"},
+		"spec": map[string]any{
+			"namespaceSelector": map[string]any{"any": true},
+			"selector":          map[string]any{"matchLabels": map[string]any{"role": "worker"}},
+			"podMetricsEndpoints": []any{
+				map[string]any{"port": "metrics"},
+				map[string]any{"port": "admin"},
+			},
+		},
+	}}
+	emptyMonitor := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "monitoring.coreos.com/v1",
+		"kind":       "ServiceMonitor",
+		"metadata":   map[string]any{"name": "empty", "namespace": "prod"},
+		"spec":       map[string]any{"selector": map[string]any{}},
+	}}
+	sameNamespaceMonitor := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "monitoring.coreos.com/v1",
+		"kind":       "ServiceMonitor",
+		"metadata":   map[string]any{"name": "local", "namespace": "prod"},
+		"spec":       map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"scope": "local"}}},
+	}}
+	dynamic := &monitorDynamicProvider{
+		gvrs: map[string]schema.GroupVersionResource{
+			"ServiceMonitor": serviceMonitorGVR,
+			"PodMonitor":     podMonitorGVR,
+		},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+			serviceMonitorGVR: {serviceMonitor, emptyMonitor, sameNamespaceMonitor},
+			podMonitorGVR:     {podMonitor},
+		},
+	}
+	provider := &mockProvider{
+		services: []*corev1.Service{
+			{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod", Labels: map[string]string{"monitoring": "enabled", "scope": "local"}}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "monitoring", Labels: map[string]string{"monitoring": "enabled", "scope": "local"}}},
+		},
+		deployments: []*appsv1.Deployment{{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "prod"},
+			Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"role": "worker"}},
+			}},
+		}},
+		daemonSets: []*appsv1.DaemonSet{{
+			ObjectMeta: metav1.ObjectMeta{Name: "excluded", Namespace: "kube-system"},
+			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"role": "worker"}},
+			}},
+		}},
+	}
+
+	opts := DefaultBuildOptions()
+	opts.Namespaces = []string{"monitoring", "prod"}
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	wantEdges := map[string]bool{
+		"servicemonitor/monitoring/api-to-service/prod/api":       false,
+		"servicemonitor/prod/local-to-service/prod/api":           false,
+		"podmonitor/monitoring/workers-to-deployment/prod/worker": false,
+	}
+	for _, edge := range topo.Edges {
+		if _, ok := wantEdges[edge.ID]; ok && edge.Type == EdgeConfigures {
+			wantEdges[edge.ID] = true
+		}
+		if edge.Source == "servicemonitor/prod/empty" {
+			t.Fatalf("empty ServiceMonitor selector must not fan out; edge=%+v", edge)
+		}
+		if edge.Source == "servicemonitor/monitoring/api" && edge.Target == "service/monitoring/other" {
+			t.Fatalf("ServiceMonitor ignored namespaceSelector.matchNames; edge=%+v", edge)
+		}
+		if edge.Source == "servicemonitor/prod/local" && edge.Target == "service/monitoring/other" {
+			t.Fatalf("ServiceMonitor without namespaceSelector matched another namespace; edge=%+v", edge)
+		}
+		if edge.Target == "daemonset/kube-system/excluded" {
+			t.Fatalf("PodMonitor emitted an edge to a namespace-filtered DaemonSet; edge=%+v", edge)
+		}
+	}
+	for edgeID, found := range wantEdges {
+		if !found {
+			t.Fatalf("expected monitor edge %s; edges=%+v", edgeID, topo.Edges)
+		}
+	}
+
+	nodes := make(map[string]Node)
+	for _, node := range topo.Nodes {
+		nodes[node.ID] = node
+	}
+	if got := nodes["podmonitor/monitoring/workers"].Data["endpointCount"]; got != 2 {
+		t.Fatalf("PodMonitor endpointCount = %v, want 2", got)
+	}
+	if got := nodes["servicemonitor/prod/empty"].Data["matchesAllTargets"]; got != true {
+		t.Fatalf("empty ServiceMonitor matchesAllTargets = %v, want true", got)
 	}
 }
 

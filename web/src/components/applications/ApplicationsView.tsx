@@ -15,6 +15,8 @@ import {
   healthOf,
   compareVersions,
   gitOpsRouteForKind,
+  deploymentInventoryFromGitOps,
+  deploymentInventoryFromHelm,
   memberRef,
   subjectRef,
   type AppRow,
@@ -29,7 +31,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { AlertTriangle, Boxes } from 'lucide-react'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
-import { useApplicationHistory, useApplications, useIssues, useTopology, type IssuesResponse } from '../../api/client'
+import { useApplicationHistory, useApplications, useGitOpsTree, useHelmRelease, useIssues, useTopology, type IssuesResponse } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import { buildWorkloadPath, kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
@@ -150,7 +152,11 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
     if (app.sourceRef?.namespace) namespaces.add(app.sourceRef.namespace)
     return Array.from(namespaces).sort()
   }, [app.sourceRef?.namespace, appNamespaces])
-  const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', { enabled: appNamespaces.length > 0, refetchInterval: 10_000 })
+  const { data: topology, isLoading: topologyLoading } = useTopology(appNamespaces, 'resources', {
+    enabled: appNamespaces.length > 0,
+    includeReplicaSets: true,
+    refetchInterval: 10_000,
+  })
   const issuesQuery = useIssues(appNamespaces)
   const appIssues = useMemo(
     () => appIssuesForWorkloads(issuesQuery.data?.issues ?? [], app.workloads ?? []),
@@ -172,6 +178,22 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   const applicationCostAvailable = !singleWorkloadKey && appWorkloads.some((workload) => isOpenCostWorkloadKind(workload.kind))
   const applicationCostSelected = selectedRouteView === 'cost' && applicationCostAvailable
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, { enabled: !selectedWorkloadKey })
+  const sourceInventoryEnabled = !selectedWorkloadKey && selectedView === 'topology'
+  const gitOpsSource = app.sourceRef?.type === 'gitops' ? app.sourceRef : undefined
+  const deploymentTreeQuery = useGitOpsTree(
+    gitOpsSource?.kind ?? '',
+    gitOpsSource?.namespace ?? '',
+    gitOpsSource?.name ?? '',
+    gitOpsSource?.group,
+    appHistoryNamespaces,
+    { enabled: sourceInventoryEnabled },
+  )
+  const helmSource = app.sourceRef?.type === 'helm' ? app.sourceRef : undefined
+  const helmReleaseQuery = useHelmRelease(helmSource?.namespace ?? '', helmSource?.name ?? '', { enabled: sourceInventoryEnabled })
+  const deploymentInventory = useMemo(
+    () => deploymentInventoryFromGitOps(deploymentTreeQuery.data) ?? deploymentInventoryFromHelm(helmReleaseQuery.data?.resources),
+    [deploymentTreeQuery.data, helmReleaseQuery.data?.resources],
+  )
   useEffect(() => {
     if (!singleWorkloadKey) return
     if (selectedWorkloadParam === singleWorkloadKey && !viewParam) return
@@ -358,6 +380,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
         onBack={onBack}
         topology={topology}
         topologyLoading={topologyLoading}
+        deploymentInventory={deploymentInventory}
         identityInstances={identityInstances}
         onSwitchInstance={switchInstance}
         discoveredEnvs={discoveredEnvs}
@@ -390,6 +413,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
             onOpenResource={onOpenResource}
           />
         )}
+        hasOverviewIssues={appIssues.length > 0}
         renderWorkload={(workload: SelectedAppWorkload) => (
           <div className="h-full overflow-hidden">
             <WorkloadView

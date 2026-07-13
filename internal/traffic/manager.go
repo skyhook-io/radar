@@ -499,7 +499,7 @@ func (m *Manager) Close() error {
 // Reset cleans up for context switching
 func Reset() {
 	// Stop any active metrics port-forward first
-	portforward.Stop()
+	portforward.Stop(portforward.OwnerTraffic)
 
 	if manager != nil {
 		manager.Close()
@@ -535,28 +535,27 @@ func (m *Manager) Connect(ctx context.Context) (*portforward.ConnectionInfo, err
 		}, nil
 	}
 
-	// Check if source supports Connect
-	if caretta, ok := source.(*CarettaSource); ok {
-		return caretta.Connect(ctx, contextName)
+	switch s := source.(type) {
+	case *CarettaSource:
+		return s.Connect(ctx, contextName)
+	case *HubbleSource:
+		return s.Connect(ctx, contextName)
+	case *IstioSource:
+		return s.Connect(ctx, contextName)
+	default:
+		// For sources without Connect support, just report connected.
+		return &portforward.ConnectionInfo{Connected: true}, nil
 	}
-
-	if hubble, ok := source.(*HubbleSource); ok {
-		return hubble.Connect(ctx, contextName)
-	}
-
-	if istio, ok := source.(*IstioSource); ok {
-		return istio.Connect(ctx, contextName)
-	}
-
-	// For sources without Connect support, just return connected
-	return &portforward.ConnectionInfo{
-		Connected: true,
-	}, nil
 }
 
-// GetConnectionInfo returns current connection status
+// GetConnectionInfo returns live traffic connection status — traffic's own
+// metrics forward, read from the live registry so a forward that has since been
+// stopped isn't reported as connected. It deliberately does NOT report another
+// owner's forward: traffic's data path always uses its own (Caretta/Hubble bring
+// one up), so a Prometheus forward for the same context means Prometheus is
+// connected, not traffic.
 func (m *Manager) GetConnectionInfo() *portforward.ConnectionInfo {
-	return portforward.GetConnectionInfo()
+	return portforward.GetConnectionInfo(portforward.OwnerTraffic)
 }
 
 // SetContextName updates the current context name

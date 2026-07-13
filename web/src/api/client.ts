@@ -1176,14 +1176,15 @@ export function useNamespaces() {
 }
 
 // Topology (for manual refresh)
-export function useTopology(namespaces: string[], viewMode: string = 'resources', options?: { enabled?: boolean; refetchInterval?: number | false }) {
+export function useTopology(namespaces: string[], viewMode: string = 'resources', options?: { enabled?: boolean; includeReplicaSets?: boolean; refetchInterval?: number | false }) {
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
   if (viewMode) params.set('view', viewMode)
+  if (options?.includeReplicaSets) params.set('includeReplicaSets', 'true')
   const queryString = params.toString()
 
   return useQuery<Topology>({
-    queryKey: ['topology', namespaces, viewMode],
+    queryKey: ['topology', namespaces, viewMode, options?.includeReplicaSets ?? false],
     queryFn: () => fetchJSON(`/topology${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // 5 seconds
     enabled: options?.enabled !== false,
@@ -1223,7 +1224,7 @@ export function useApplicationHistory(appKey: string | undefined, namespaces: st
   })
 }
 
-export function useGitOpsTree(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = []) {
+export function useGitOpsTree(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = [], options?: { enabled?: boolean }) {
   const ns = namespace || '_'
   const params = new URLSearchParams()
   if (group) params.set('group', group)
@@ -1233,7 +1234,7 @@ export function useGitOpsTree(kind: string, namespace: string, name: string, gro
   return useQuery<GitOpsResourceTree>({
     queryKey: ['gitops-tree', kind, namespace, name, group, namespaces],
     queryFn: () => fetchJSON(`/gitops/tree/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
-    enabled: Boolean(kind && name),
+    enabled: Boolean(kind && name) && (options?.enabled ?? true),
     staleTime: 5000,
   })
 }
@@ -2921,11 +2922,11 @@ export function useHelmReleases(namespaces: string[] = []) {
 }
 
 // Get details for a specific Helm release
-export function useHelmRelease(namespace: string, name: string) {
+export function useHelmRelease(namespace: string, name: string, options?: { enabled?: boolean }) {
   return useQuery<HelmReleaseDetail>({
     queryKey: ['helm-release', namespace, name],
     queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}`),
-    enabled: Boolean(namespace && name),
+    enabled: Boolean(namespace && name) && (options?.enabled ?? true),
     staleTime: 5000,
     refetchInterval: 10000, // Poll for live resource status updates (post-upgrade/rollback)
   })

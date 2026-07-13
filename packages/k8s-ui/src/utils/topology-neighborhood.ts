@@ -12,10 +12,10 @@ import type { Topology, TopologyNode, TopologyEdge, EdgeType, NodeKind } from '.
 //   identity (`manages`)            — the ownerRef / controller chain
 //                                     (Deployment→ReplicaSet→Pod). Walk it: a
 //                                     workload's pods ARE the workload.
-//   routing  (`exposes`,`routes-to`)— a Service/Ingress/Route in front of the
-//                                     workload. INCLUDE it, but as a LEAF: a
-//                                     shared Ingress fronts many unrelated apps,
-//                                     so we don't expand THROUGH it.
+//   routing  (`exposes`,`routes-to`)— walk UPSTREAM from workload to Service to
+//                                     Ingress/Route, then stop. Never walk back
+//                                     DOWN through a shared Service into another
+//                                     workload.
 //   context  (`configures`,`uses`,  — a ConfigMap/Secret/HPA/PDB attached to the
 //             `protects`)             workload. INCLUDE as a LEAF: a shared
 //                                     ConfigMap mounted by two apps must not glue
@@ -47,6 +47,7 @@ const GITOPS_MANAGER_KINDS = new Set<NodeKind>([
   'HelmRelease',
   'GitRepository',
 ] as NodeKind[])
+const SECRET_PRODUCER_KINDS = new Set<NodeKind>(['SealedSecret', 'Certificate'])
 
 function nodeNamespace(node: TopologyNode): string {
   const ns = node.data?.namespace
@@ -80,7 +81,7 @@ function isBatchRunFanoutEdge(edge: TopologyEdge, nodeById: Map<string, Topology
     return (source.kind === 'CronJob' || source.kind === 'ScaledJob') && target.kind === 'Job'
       || source.kind === 'CronWorkflow' && target.kind === 'Workflow'
   }
-  return edge.type === 'configures' && isWorkflowTemplateKind(source.kind) && target.kind === 'Workflow'
+  return isTemplateToRunEdge(edge, nodeById)
 }
 
 export function batchRunParentNodes(topology: Topology, run: TopologyNode): TopologyNode[] {
@@ -232,7 +233,15 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
         // every sibling Job its CronJob owns).
         asLeaf = nextId === e.source
       } else if (ROUTING_EDGES.has(e.type)) {
-        asLeaf = true // a Service/Ingress in front of the workload — leaf
+        if (e.type === 'exposes' && id === e.source) {
+          // We reached a Service from one of its workloads. Only continue
+          // upstream to its routes; following the Service's other targets would
+          // pull sibling or unrelated workloads into this neighborhood.
+          continue
+        }
+        // A Service reached from a workload may expand once more to the
+        // Ingress/Route in front of it. The entrypoint itself remains a leaf.
+        asLeaf = e.type === 'routes-to' || nextNode.kind !== 'Service'
       } else if (currentNode && isTemplateToRunEdge(e, nodeById) && e.source === currentNode.id) {
         asLeaf = false
       } else {
@@ -242,6 +251,16 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
         keep.add(nextId)
         if (asLeaf) leaf.add(nextId)
         queue.push(nextId)
+      }
+
+      if (asLeaf && nextNode.kind === 'Secret') {
+        for (const producerEdge of adjacency.get(nextId) ?? []) {
+          if (producerEdge.type !== 'manages' || producerEdge.target !== nextId) continue
+          const producer = nodeById.get(producerEdge.source)
+          if (!producer || !SECRET_PRODUCER_KINDS.has(producer.kind)) continue
+          keep.add(producer.id)
+          leaf.add(producer.id)
+        }
       }
     }
   }
@@ -319,6 +338,7 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
 
   // The seed nodes present in the subgraph, by their workload key.
   const seedKeyById = new Map<string, string>()
+  const subNodeById = new Map(sub.nodes.map((node) => [node.id, node]))
   for (const n of sub.nodes) {
     if (matchSeedNode(n, seeds)) {
       seedKeyById.set(n.id, workloadKey({ kind: n.kind, namespace: nodeNamespace(n), name: n.name }))
@@ -388,6 +408,19 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
       for (const nb of neighbors.get(n.id) ?? []) {
         const o = coreOwner.get(nb)
         if (o) related.add(o)
+        const neighborNode = subNodeById.get(nb)
+        if (neighborNode?.kind === 'Service') {
+          for (const serviceNeighbor of neighbors.get(nb) ?? []) {
+            const serviceOwner = coreOwner.get(serviceNeighbor)
+            if (serviceOwner) related.add(serviceOwner)
+          }
+        }
+        if (SECRET_PRODUCER_KINDS.has(n.kind) && neighborNode?.kind === 'Secret') {
+          for (const secretNeighbor of neighbors.get(nb) ?? []) {
+            const secretOwner = coreOwner.get(secretNeighbor)
+            if (secretOwner) related.add(secretOwner)
+          }
+        }
       }
       focusWorkloadIds = [...related]
       owner = related.size === 1 && !GITOPS_MANAGER_KINDS.has(n.kind) ? [...related][0] : null

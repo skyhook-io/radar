@@ -91,6 +91,10 @@ const (
 	KindPodGroup                       NodeKind = "PodGroup"
 	KindConfigMap                      NodeKind = "ConfigMap"
 	KindSecret                         NodeKind = "Secret"
+	KindServiceAccount                 NodeKind = "ServiceAccount"
+	KindSealedSecret                   NodeKind = "SealedSecret"
+	KindServiceMonitor                 NodeKind = "ServiceMonitor"
+	KindPodMonitor                     NodeKind = "PodMonitor"
 	KindHPA                            NodeKind = "HorizontalPodAutoscaler"
 	KindJob                            NodeKind = "Job"
 	KindCronJob                        NodeKind = "CronJob"
@@ -318,8 +322,7 @@ type Relationships struct {
 	NetworkPolicies []ResourceRef `json:"networkPolicies,omitempty"` // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy / CiliumClusterwideNetworkPolicy selecting this workload
 	Pods            []ResourceRef `json:"pods,omitempty"`            // For Service: pods it routes to
 
-	// ServiceAccount is the ServiceAccount bound to this Pod (Pod-only field,
-	// derived from pod.Spec.ServiceAccountName). Omitted when the SA name is empty.
+	// ServiceAccount is the ServiceAccount selected by this Pod or workload.
 	ServiceAccount *ResourceRef `json:"serviceAccount,omitempty"`
 	// Node is the Node this Pod is scheduled on (Pod-only field, derived from
 	// pod.Spec.NodeName). Omitted when the Pod is unscheduled.
@@ -401,6 +404,11 @@ type ResourceProvider interface {
 	Nodes() ([]*corev1.Node, error)
 	// GetResourceStatus returns health status for a resource; nil if unknown.
 	GetResourceStatus(kind, namespace, name string) *ResourceStatus
+}
+
+// ServiceAccountProvider is implemented by providers that can expose workload identities.
+type ServiceAccountProvider interface {
+	ServiceAccounts() ([]*corev1.ServiceAccount, error)
 }
 
 // DynamicProvider adds CRD/dynamic resource support (pass nil to skip CRD nodes).
