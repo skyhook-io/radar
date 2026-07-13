@@ -54,13 +54,22 @@ const RELATED_RUNTIME_KINDS = new Set([
 ])
 
 const JOB_LIFECYCLE_REASONS = new Set([
-  'Started',
-  'Completed',
-  'Complete',
-  'Failed',
-  'BackoffLimitExceeded',
-  'DeadlineExceeded',
-  'SuccessCriteriaMet',
+  'started',
+  'created',
+  'completed',
+  'complete',
+  'failed',
+  'backofflimitexceeded',
+  'deadlineexceeded',
+  'successcriteriamet',
+])
+
+const NORMAL_JOB_LIFECYCLE_REASONS = new Set([
+  'started',
+  'created',
+  'completed',
+  'complete',
+  'successcriteriamet',
 ])
 
 const PROBLEM_TITLES: Record<string, string> = {
@@ -91,7 +100,7 @@ function anchorItem(anchor: AppHistoryAnchor, sourceRef: AppSourceRef | undefine
     category: 'deployment',
     title: anchor.title,
     timestamp: anchor.timestamp,
-    detail: anchor.message || anchor.source,
+    detail: anchor.source || anchor.message,
     status: anchor.status,
     revision: anchor.revision,
     initiatedBy: anchor.initiatedBy,
@@ -101,14 +110,16 @@ function anchorItem(anchor: AppHistoryAnchor, sourceRef: AppSourceRef | undefine
 
 function eventTitle(event: TimelineEvent, problem: boolean): string {
   const kind = getKindLabel(event.kind)
+  const reason = event.reason?.toLowerCase()
   if (problem) {
     if (event.reason === 'PodScheduled' && event.message?.includes('nodes are available')) return "Can't be scheduled"
     return PROBLEM_TITLES[event.reason ?? ''] ?? event.reason ?? `${kind} needs attention`
   }
-  if (event.kind === 'Job' && event.reason) {
-    if (event.reason === 'Complete' || event.reason === 'Completed' || event.reason === 'SuccessCriteriaMet') return 'Job completed'
-    if (event.reason === 'Started') return 'Job started'
-    if (event.reason === 'Failed' || event.reason === 'BackoffLimitExceeded' || event.reason === 'DeadlineExceeded') return 'Job failed'
+  if (event.kind === 'Job' && reason) {
+    if (reason === 'complete' || reason === 'completed' || reason === 'successcriteriamet') return 'Job completed'
+    if (reason === 'started') return 'Job started'
+    if (reason === 'created') return 'Job created'
+    if (reason === 'failed' || reason === 'backofflimitexceeded' || reason === 'deadlineexceeded') return 'Job failed'
   }
   if (event.eventType === 'add') return `${kind} created`
   if (event.eventType === 'delete') return `${kind} deleted`
@@ -127,11 +138,16 @@ function historyEventItem(event: TimelineEvent): ApplicationHistoryItem | null {
   if (!validTimestamp(event.timestamp)) return null
   const unhealthy = event.healthState === 'degraded' || event.healthState === 'unhealthy'
   const leafRuntimeResource = event.kind === 'Pod' || event.kind === 'ReplicaSet'
-  const problem = isProblematicEvent(event) || (unhealthy && (!leafRuntimeResource || Boolean(event.message?.trim())))
+  const reason = event.reason?.toLowerCase()
+  const normalJobLifecycle = event.kind === 'Job'
+    && event.eventType !== 'Warning'
+    && Boolean(reason && NORMAL_JOB_LIFECYCLE_REASONS.has(reason))
+  const problem = !normalJobLifecycle
+    && (isProblematicEvent(event) || (unhealthy && (!leafRuntimeResource || Boolean(event.message?.trim()))))
   if (event.kind === 'Pod' || event.kind === 'ReplicaSet') {
     if (!problem) return null
   } else if (!problem && event.kind === 'Job' && event.source === 'k8s_event') {
-    if (!event.reason || !JOB_LIFECYCLE_REASONS.has(event.reason)) return null
+    if (!reason || !JOB_LIFECYCLE_REASONS.has(reason)) return null
   } else if (!problem && !ROOT_RUNTIME_KINDS.has(event.kind) && !RELATED_RUNTIME_KINDS.has(event.kind)) {
     return null
   }
@@ -168,7 +184,24 @@ export function buildApplicationHistoryItems(
   history: AppHistory | undefined,
   events: TimelineEvent[],
 ): ApplicationHistoryItem[] {
-  const anchors = (history?.anchors ?? [])
+  const anchorsByChange = new Map<string, AppHistoryAnchor>()
+  for (const anchor of history?.anchors ?? []) {
+    if (!validTimestamp(anchor.timestamp)) continue
+    const key = `${anchor.type}\u0000${anchor.title}\u0000${anchor.timestamp}\u0000${anchor.revision ?? ''}`
+    const existing = anchorsByChange.get(key)
+    if (!existing) {
+      anchorsByChange.set(key, anchor)
+      continue
+    }
+    anchorsByChange.set(key, {
+      ...existing,
+      status: anchor.status ?? existing.status,
+      source: existing.source ?? anchor.source,
+      message: anchor.message ?? existing.message,
+      initiatedBy: anchor.initiatedBy ?? existing.initiatedBy,
+    })
+  }
+  const anchors = [...anchorsByChange.values()]
     .map((anchor, index) => anchorItem(anchor, history?.sourceRef, index))
     .filter((item): item is ApplicationHistoryItem => item !== null)
   const hasAnchors = anchors.length > 0

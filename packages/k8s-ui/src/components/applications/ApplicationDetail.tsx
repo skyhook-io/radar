@@ -2430,6 +2430,11 @@ function ApplicationHistoryLine({
               run: () => onNavigateToResource(item.resource!),
             }
           : null;
+  const revisionAlreadyInTitle = Boolean(
+    item.revision &&
+    item.title.toLowerCase().startsWith("helm revision ") &&
+    item.title.endsWith(item.revision),
+  );
 
   return (
     <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 px-4 py-3">
@@ -2460,7 +2465,7 @@ function ApplicationHistoryLine({
             <span className={`${CHIP} ${CHIP_TONE.muted}`}>{item.count}x</span>
           )}
         </div>
-        {item.revision && (
+        {item.revision && !revisionAlreadyInTitle && (
           <div className="truncate font-mono text-sm text-theme-text-secondary">
             {item.revision}
           </div>

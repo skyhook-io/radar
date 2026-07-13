@@ -111,6 +111,57 @@ describe('buildApplicationHistoryItems', () => {
     expect(items.map((item) => item.category)).toEqual(['deployment', 'runtime', 'runtime'])
   })
 
+  it('coalesces source metadata and operation status for the same deployment change', () => {
+    const items = buildApplicationHistoryItems({
+      ...history,
+      anchors: [
+        {
+          type: 'gitops',
+          title: 'Argo CD sync',
+          revision: 'abc123',
+          source: 'https://github.com/example/shop · deploy/prod',
+          initiatedBy: 'automated',
+          timestamp: '2026-07-13T10:00:00.000Z',
+        },
+        {
+          type: 'gitops',
+          title: 'Argo CD sync',
+          revision: 'abc123',
+          status: 'Succeeded',
+          message: 'successfully synced (all tasks run)',
+          initiatedBy: 'automated',
+          timestamp: '2026-07-13T10:00:00.000Z',
+        },
+      ],
+    }, [])
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      title: 'Argo CD sync',
+      revision: 'abc123',
+      status: 'Succeeded',
+      detail: 'https://github.com/example/shop · deploy/prod',
+    })
+  })
+
+  it('treats historical Job startup as normal lifecycle activity', () => {
+    const items = buildApplicationHistoryItems(undefined, [
+      event({
+        id: 'job-started',
+        kind: 'Job',
+        name: 'shop-migrate',
+        source: 'historical',
+        eventType: 'update',
+        reason: 'started',
+        healthState: 'degraded',
+        diff: undefined,
+      }),
+    ])
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ title: 'Job started', category: 'runtime' })
+  })
+
   it('rolls repeated pod warnings up to the owning workload without summing cumulative counts', () => {
     const first = event({
       id: 'warning-1',
