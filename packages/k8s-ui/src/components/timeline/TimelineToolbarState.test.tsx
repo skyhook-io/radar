@@ -35,6 +35,30 @@ describe('TimelineList controlled vs fallback', () => {
     expect(html).toContain('K8s Events')
     expect(html).toContain('Problems')
   })
+
+  it('shows an explicit truncation message after host-side filtering', () => {
+    const html = renderToString(
+      <TimelineList
+        events={EVENTS}
+        isLoading={false}
+        truncatedAt={10_000}
+        isTruncated
+        truncationMessage="Only the newest source window was searched."
+      />,
+    )
+    expect(html).toContain('Only the newest source window was searched.')
+  })
+
+  it('does not infer truncation when the host explicitly reports a complete source', () => {
+    const events = Array.from({ length: 2 }, (_, index) => ({
+      ...EVENTS[0],
+      id: String(index),
+    }))
+    const html = renderToString(
+      <TimelineList events={events} isLoading={false} truncatedAt={2} isTruncated={false} />,
+    )
+    expect(html).not.toContain('Showing the newest 2 events')
+  })
 })
 
 describe('TimelineSwimlanes controlled vs fallback', () => {

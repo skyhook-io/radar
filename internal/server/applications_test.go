@@ -592,6 +592,28 @@ func TestHistorySummaryPrioritizesCurrentIncidents(t *testing.T) {
 	}
 }
 
+func TestUnavailableSourceHistoryMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		app  *appRow
+		want string
+	}{
+		{name: "label app", app: &appRow{Tier: int(subject.TierInstance)}},
+		{name: "exact source", app: &appRow{Tier: int(subject.TierArgoTrackingID), SourceRef: &appSourceRef{Type: "gitops"}}},
+		{name: "argo hub spoke", app: &appRow{Tier: int(subject.TierArgoTrackingID)}, want: "Argo CD deployment history is unavailable because the source Application could not be resolved in this cluster."},
+		{name: "flux", app: &appRow{Tier: int(subject.TierFluxKustomize)}, want: "Flux deployment history is unavailable because the source object could not be resolved in this cluster."},
+		{name: "helm", app: &appRow{Tier: int(subject.TierHelmRelease)}, want: "Helm deployment history is unavailable because the exact release could not be resolved."},
+		{name: "conflict", app: &appRow{SourceConflict: true}, want: "Deployment-source history is unavailable because workloads resolve to different deployment sources."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := unavailableSourceHistoryMessage(tc.app); got != tc.want {
+				t.Fatalf("unavailableSourceHistoryMessage() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestHistoryIncidentsSortAndTimestampFallbacks(t *testing.T) {
 	events := []appEvent{
 		{Reason: "Older", Object: "Pod/old", Message: "old", Count: 1, LastSeen: "2026-07-08T10:00:00Z"},

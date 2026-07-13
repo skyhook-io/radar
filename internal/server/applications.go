@@ -335,9 +335,30 @@ func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request
 		anchors, partial := s.historyAnchorsForSource(r, app.SourceRef)
 		history.Anchors = anchors
 		history.PartialSources = append(history.PartialSources, partial...)
+	} else if message := unavailableSourceHistoryMessage(app); message != "" {
+		history.PartialSources = append(history.PartialSources, message)
 	}
 	history.Summary = historySummary(history.Anchors, history.Incidents)
 	s.writeJSON(w, history)
+}
+
+func unavailableSourceHistoryMessage(app *appRow) string {
+	if app == nil || app.SourceRef != nil {
+		return ""
+	}
+	if app.SourceConflict {
+		return "Deployment-source history is unavailable because workloads resolve to different deployment sources."
+	}
+	switch subject.Tier(app.Tier) {
+	case subject.TierFluxHelmRelease, subject.TierFluxKustomize:
+		return "Flux deployment history is unavailable because the source object could not be resolved in this cluster."
+	case subject.TierArgoTrackingID, subject.TierArgoInstance:
+		return "Argo CD deployment history is unavailable because the source Application could not be resolved in this cluster."
+	case subject.TierHelmRelease:
+		return "Helm deployment history is unavailable because the exact release could not be resolved."
+	default:
+		return ""
+	}
 }
 
 func (s *Server) historyAnchorsForSource(r *http.Request, source *appSourceRef) ([]appHistoryAnchor, []string) {

@@ -1,15 +1,17 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { ReactNode } from 'react'
-import { Network, AlertTriangle, RefreshCw } from 'lucide-react'
+import { Network, AlertTriangle, RefreshCw, Boxes, X } from 'lucide-react'
 import {
   clampLensToSelection,
   deriveLiveSelection,
   isLensLatched,
   advanceLatchedLens,
   buildAppMembershipIndex,
+  eventsForApplication,
   isPinnedLaneRef,
   LIVE_TICK_MS,
+  SEVERITY_TEXT,
   type ScrubberRange,
   type TimelineLiveState,
   type TimelineGrouping,
@@ -263,10 +265,17 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // URL is the source of truth for every control below (deep-linkable +
   // back/forward-restorable). Read on mount, written on user change.
   const [searchParams, setSearchParams] = useSearchParams()
+  const focusedAppKey = searchParams.get('app')
+  const appScopeNamespaces = useMemo(
+    () => Array.from(new Set((searchParams.get('scopeNamespaces') ?? '').split(',').map((namespace) => namespace.trim()).filter(Boolean))),
+    [searchParams],
+  )
+  const timelineNamespaces = focusedAppKey && appScopeNamespaces.length > 0 ? appScopeNamespaces : namespaces
+  const scopeRequiresNamespaceFilter = Boolean(requiresNamespaceFilter) && appScopeNamespaces.length === 0
 
   // Force list view on large clusters without namespace filter; otherwise the
   // URL `view` (or the home-page seed) decides.
-  const effectiveInitialMode = requiresNamespaceFilter ? 'list' : (parseView(searchParams) ?? initialViewMode ?? DEFAULT_VIEW)
+  const effectiveInitialMode = scopeRequiresNamespaceFilter ? 'list' : (parseView(searchParams) ?? initialViewMode ?? DEFAULT_VIEW)
   const [viewMode, setViewMode] = useState<TimelineViewMode>(effectiveInitialMode)
   // Shared across list + swimlane so the toggle carries across the view switch,
   // and so the swimlane fetch can exclude deletes server-side (before LIMIT)
@@ -330,7 +339,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   }, [navigate])
 
   // Only fetch heavy swimlane data when actually showing swimlanes
-  const showSwimlanes = viewMode === 'swimlane' && !requiresNamespaceFilter
+  const showSwimlanes = viewMode === 'swimlane' && !scopeRequiresNamespaceFilter
 
   const timelineSource = useTimelineSource()
   const isRetained = timelineSource.capabilities.mode === 'retained'
@@ -345,7 +354,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // full-ring load the swimlane gate avoids — and the list then shows its own
   // range dropdown instead (selectionWindow is only passed when a scrubber is
   // on screen to own the range).
-  const showLocalScrubber = isLocal && !requiresNamespaceFilter
+  const showLocalScrubber = isLocal && !scopeRequiresNamespaceFilter
   const showScrubber = isRetained || showLocalScrubber
 
   // Both sources drive a scrubber now: retained fetches a server overview, local
@@ -572,7 +581,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
 
   useEffect(() => {
     const sp = searchParams
-    const nextView = requiresNamespaceFilter ? 'list' : (parseView(sp) ?? DEFAULT_VIEW)
+    const nextView = scopeRequiresNamespaceFilter ? 'list' : (parseView(sp) ?? DEFAULT_VIEW)
     setViewMode((prev) => (prev === nextView ? prev : nextView))
     const nextMode = parseTimeMode(sp, isRetained || isLocal, retainedMaxRangeDays)
     setMode((prev) => (timeModeEqual(prev, nextMode) ? prev : nextMode))
@@ -594,14 +603,14 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     setSort((prev) => (prev === nextSort ? prev : nextSort))
     const nextEvent = sp.get('event')
     setSelectedEventId((prev) => (prev === nextEvent ? prev : nextEvent))
-  }, [searchParams, isRetained, isLocal, requiresNamespaceFilter, pinnedLanes, retainedMaxRangeDays])
+  }, [searchParams, isRetained, isLocal, scopeRequiresNamespaceFilter, pinnedLanes, retainedMaxRangeDays])
 
   useEffect(() => {
     const current = searchParamsRef.current
     const target = writeTimelineParams(
       current,
       { viewMode, mode, showDeleted, pinnedOnly, search, activityFilter, kindFilter, grouping, sort, selectedEventId },
-      { isRetained: isRetained || isLocal, requiresNamespaceFilter },
+      { isRetained: isRetained || isLocal, requiresNamespaceFilter: scopeRequiresNamespaceFilter },
     )
     const targetStr = target.toString()
     const currentStr = current.toString()
@@ -614,13 +623,13 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const replace = !didMountUrlSyncRef.current || onlyHighFreqDiffer(currentStr, targetStr)
     didMountUrlSyncRef.current = true
     setSearchParamsRef.current(target, { replace })
-  }, [viewMode, mode, showDeleted, pinnedOnly, search, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, requiresNamespaceFilter])
+  }, [viewMode, mode, showDeleted, pinnedOnly, search, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, scopeRequiresNamespaceFilter])
 
   // Fetch all activity - zoom controls what's visible in the UI. The heavy 10k
   // ring feeds the swimlanes and the local strip's histogram, so it also runs in
   // list mode when that strip is shown; the list itself fetches its own 2000.
   const { data: activity, isLoading, isError, refetch } = timelineSource.useEvents({
-    namespaces,
+    namespaces: timelineNamespaces,
     timeRange: 'all',
     includeK8sEvents: true,
     includeManaged: true,
@@ -634,19 +643,24 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     sliding: isRetained && mode.kind === 'live',
   })
 
-  // Fetch topology for service stack grouping — skip on large clusters (empty anyway)
-  const { data: rawTopology } = useTopology(namespaces, 'resources', { enabled: showSwimlanes })
+  // Topology powers both swimlane hierarchy and application-scoped attribution.
+  const { data: rawTopology } = useTopology(timelineNamespaces, 'resources', {
+    enabled: showSwimlanes || Boolean(focusedAppKey),
+  })
 
   // Server application grouping — the single grouping authority. Joined to the
   // timeline lanes client-side via the membership index. A failed/absent fetch
   // leaves the index undefined; the swimlane degrades to its legacy label
   // grouping (no crash, events still render).
-  // Only the app-grouping swimlane path consumes the membership index; gate the
-  // fetch (and its background poll) on that so list view / non-app groupings
-  // don't drive an unused /applications poll. Disabled → appsData undefined →
-  // appIndex undefined → the swimlane's legacy owner-label fallback.
-  const { data: appsData, dataUpdatedAt: appsUpdatedAt } = useApplications(namespaces, {
-    enabled: showSwimlanes && grouping === 'app',
+  // App-grouped swimlanes and application-scoped handoffs consume this index.
+  // Other Timeline states avoid the background applications poll.
+  const {
+    data: appsData,
+    dataUpdatedAt: appsUpdatedAt,
+    isLoading: appsLoading,
+    isError: appsError,
+  } = useApplications(timelineNamespaces, {
+    enabled: (showSwimlanes && grouping === 'app') || Boolean(focusedAppKey),
   })
   const appIndex = useMemo(
     () => (appsData?.applications ? buildAppMembershipIndex(appsData.applications) : undefined),
@@ -669,14 +683,96 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     return rawTopology
   }, [rawTopology])
 
-  // Use stable reference for events to prevent unnecessary re-renders
-  const events = activity ?? EMPTY_EVENTS
+  const focusedApp = useMemo(
+    () => appsData?.applications.find((candidate) => candidate.key === focusedAppKey),
+    [appsData?.applications, focusedAppKey],
+  )
+  const focusedAppIndex = useMemo(
+    () => (focusedApp ? buildAppMembershipIndex([focusedApp]) : undefined),
+    [focusedApp],
+  )
+
+  // Application History hands off to Timeline with an explicit app scope. Keep
+  // that scope local to Timeline rather than changing the global namespace
+  // preference, and fail closed while the application cannot be resolved.
+  const unscopedEvents = activity ?? EMPTY_EVENTS
+  const events = useMemo(
+    () => focusedAppKey
+      ? focusedAppIndex
+        ? eventsForApplication(unscopedEvents, stableTopology, focusedAppIndex)
+        : EMPTY_EVENTS
+      : unscopedEvents,
+    [focusedAppIndex, focusedAppKey, stableTopology, unscopedEvents],
+  )
+  const focusedAppLoading = Boolean(focusedAppKey) && appsLoading
+  const focusedAppUnavailable = Boolean(focusedAppKey) && !appsLoading && (appsError || !focusedApp)
+  const focusedAppTimelineLimited = Boolean(focusedAppKey) && unscopedEvents.length >= 10_000
+  const clearFocusedApp = useCallback(() => {
+    const next = new URLSearchParams(searchParamsRef.current)
+    next.delete('app')
+    next.delete('scopeNamespaces')
+    next.delete('grouping')
+    next.delete('window')
+    next.delete('from')
+    next.delete('to')
+    setSearchParamsRef.current(next)
+  }, [])
+
+  const appScopeBar = focusedAppKey ? (
+    <div className="flex items-start justify-between gap-3 border-b border-theme-border bg-theme-surface px-4 py-2">
+      <div className="min-w-0 space-y-1">
+        <div className="flex min-w-0 items-center gap-2 text-sm">
+          <Boxes className="h-4 w-4 shrink-0 text-accent" />
+          <span className="shrink-0 text-theme-text-tertiary">Application</span>
+          {focusedApp ? (
+            <button
+              type="button"
+              onClick={() => handleAppClick(focusedApp.key)}
+              className="truncate font-medium text-accent-text hover:underline"
+            >
+              {focusedApp.name}
+            </button>
+          ) : (
+            <span className="truncate font-medium text-theme-text-secondary">
+              {focusedAppLoading ? 'Resolving scope...' : 'Scope unavailable'}
+            </span>
+          )}
+          {focusedAppUnavailable && (
+            <span className="truncate text-theme-text-tertiary">
+              The application is not available in the current cluster view.
+            </span>
+          )}
+        </div>
+        {showSwimlanes && focusedAppTimelineLimited && (
+          <div className="flex items-center gap-1.5 pl-6 text-xs text-theme-text-tertiary">
+            <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${SEVERITY_TEXT.warning}`} />
+            Showing application activity found in the newest 10,000 events in this range. Narrow the range to see older activity.
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={clearFocusedApp}
+        className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+      >
+        <X className="h-3.5 w-3.5" />
+        Clear scope
+      </button>
+    </div>
+  ) : null
 
   // The scrubber sits above whichever view is active, sharing one selection
   // across list + swimlane. Retained draws its server-overview strip; local
   // derives the strip client-side from the loaded ring and omits the gap band.
   const wrap = (node: ReactNode): ReactNode => {
-    if (!showScrubber) return node
+    if (!showScrubber) {
+      return (
+        <div className="flex-1 flex flex-col min-h-0">
+          {appScopeBar}
+          <div className="flex-1 flex flex-col min-h-0">{node}</div>
+        </div>
+      )
+    }
     // In list mode the lens mirrors the rows visible in the list's scrollport
     // (scrolling moves it) — and dragging the band works the OTHER way too: it
     // scrolls the list to that time (two-way, like the swimlane). In swimlane
@@ -688,6 +784,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       : setLens
     return (
       <div className="flex-1 flex flex-col min-h-0">
+        {appScopeBar}
         {isRetained ? (
           <RetainedTimelineScrubber
             source={timelineSource}
@@ -727,7 +824,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
 
   if (viewMode === 'swimlane') {
     // Large cluster without namespace: show picker instead of swimlanes
-    if (requiresNamespaceFilter) {
+    if (scopeRequiresNamespaceFilter) {
       return wrap(
         <div className="flex-1 flex flex-col">
           {/* Toolbar with view toggle so user can switch back to list */}
@@ -788,12 +885,12 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     return wrap(
       <TimelineSwimlanes
         events={events}
-        isLoading={isLoading}
+        isLoading={isLoading || focusedAppLoading}
         onResourceClick={onResourceClick}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         topology={stableTopology}
-        namespaces={namespaces}
+        namespaces={timelineNamespaces}
         showDeleted={showDeleted}
         onShowDeletedChange={setShowDeleted}
         pinnedOnly={pinnedOnly}
@@ -827,7 +924,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
 
   return wrap(
     <TimelineList
-      namespaces={namespaces}
+      namespaces={timelineNamespaces}
       currentView={viewMode}
       onViewChange={setViewMode}
       onResourceClick={onResourceClick}
@@ -850,6 +947,10 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       // Seeded with the swimlane's window at the switch (see the viewMode
       // effect); afterwards, dragging the strip band retargets the scroll.
       scrollToMs={listScrollToMs}
+      focusedAppIndex={focusedAppIndex}
+      appScoped={Boolean(focusedAppKey)}
+      topology={stableTopology}
+      appScopeLoading={focusedAppLoading}
     />
   )
 }

@@ -227,7 +227,7 @@ describe("ApplicationDetail shell", () => {
         },
         {
           id: 'runtime-change',
-          category: 'runtime',
+          category: 'change',
           title: 'Deployment updated',
           timestamp: '2026-07-13T09:00:00.000Z',
           resource: { kind: 'Deployment', namespace: 'prod', name: 'checkout-api' },
@@ -245,7 +245,7 @@ describe("ApplicationDetail shell", () => {
 
     expect(html).toContain("Application history");
     expect(html).toContain("Deployments");
-    expect(html).toContain("Runtime");
+    expect(html).toContain("Changes");
     expect(html).toContain("Problems");
     expect(html).toContain("Open full Timeline");
     expect(html).toContain("Deployment");
@@ -268,7 +268,7 @@ describe("ApplicationDetail shell", () => {
       historyRuntimeLimited: true,
       historyItems: [{
         id: 'runtime-change',
-        category: 'runtime',
+        category: 'change',
         title: 'Deployment updated',
         timestamp: '2026-07-13T09:00:00.000Z',
       }],
@@ -288,7 +288,7 @@ describe("ApplicationDetail shell", () => {
       historyItems: [],
     })
 
-    expect(html).toContain('Runtime activity could not be loaded.')
+    expect(html).toContain('Application changes could not be loaded.')
     expect(html).not.toContain('Deployment-source history is still shown.')
     expect(html).not.toContain('No application history in this range.')
   })
@@ -302,14 +302,14 @@ describe("ApplicationDetail shell", () => {
       historyRuntimeError: true,
       historyItems: [{
         id: 'runtime-change',
-        category: 'runtime',
+        category: 'change',
         title: 'Deployment updated',
         timestamp: '2026-07-13T09:00:00.000Z',
       }],
     })
 
-    expect(html).toContain('Runtime activity could not be refreshed.')
-    expect(html).toContain('Previously loaded activity may be stale.')
+    expect(html).toContain('Application changes could not be refreshed.')
+    expect(html).toContain('Previously loaded changes may be stale.')
     expect(html).toContain('Deployment updated')
   })
 
@@ -574,7 +574,7 @@ describe("ApplicationDetail shell", () => {
       onSelectWorkload: () => {},
       historyItems: [{
         id: 'prod-change',
-        category: 'runtime',
+        category: 'change',
         title: 'Deployment updated',
         timestamp: '2026-07-13T09:00:00.000Z',
         resource: { kind: 'Deployment', namespace: 'prod', name: 'checkout-api' },

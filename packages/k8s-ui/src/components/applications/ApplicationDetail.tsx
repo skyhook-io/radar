@@ -229,7 +229,6 @@ export type ApplicationDetailProps = {
   historyLoading?: boolean;
   historyItems?: ApplicationHistoryItem[];
   historyRuntimeLoading?: boolean;
-  historyRuntimeUpdating?: boolean;
   historyRuntimeError?: boolean;
   historyMode?: "local" | "retained";
   historyRange?: ApplicationHistoryRange;
@@ -240,7 +239,7 @@ export type ApplicationDetailProps = {
   historyCoverageRecordCount?: number;
   historyRuntimeLimited?: boolean;
   onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
-  onOpenTimeline?: () => void;
+  onOpenTimeline?: (timestamp?: string) => void;
   onOpenSource?: (source: AppSourceRef) => void;
 } & SelectionProps &
   ViewProps;
@@ -325,7 +324,6 @@ export function ApplicationDetail({
   historyLoading,
   historyItems,
   historyRuntimeLoading,
-  historyRuntimeUpdating,
   historyRuntimeError,
   historyMode,
   historyRange,
@@ -746,7 +744,6 @@ export function ApplicationDetail({
             historyLoading={historyLoading}
             historyItems={historyItems}
             historyRuntimeLoading={historyRuntimeLoading}
-            historyRuntimeUpdating={historyRuntimeUpdating}
             historyRuntimeError={historyRuntimeError}
             historyMode={historyMode}
             historyRange={historyRange}
@@ -794,7 +791,6 @@ function ApplicationWorkspace({
   historyLoading,
   historyItems,
   historyRuntimeLoading,
-  historyRuntimeUpdating,
   historyRuntimeError,
   historyMode,
   historyRange,
@@ -843,7 +839,6 @@ function ApplicationWorkspace({
   historyLoading?: boolean;
   historyItems?: ApplicationHistoryItem[];
   historyRuntimeLoading?: boolean;
-  historyRuntimeUpdating?: boolean;
   historyRuntimeError?: boolean;
   historyMode?: "local" | "retained";
   historyRange?: ApplicationHistoryRange;
@@ -854,7 +849,7 @@ function ApplicationWorkspace({
   historyCoverageRecordCount?: number;
   historyRuntimeLimited?: boolean;
   onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
-  onOpenTimeline?: () => void;
+  onOpenTimeline?: (timestamp?: string) => void;
   onOpenSource?: (source: AppSourceRef) => void;
   onToggleReplicaSets: (ownerID: string) => void;
   renderOverviewIssues?: () => ReactNode;
@@ -915,7 +910,6 @@ function ApplicationWorkspace({
           sourceLoading={historyLoading}
           items={historyItems}
           runtimeLoading={historyRuntimeLoading}
-          runtimeUpdating={historyRuntimeUpdating}
           runtimeError={historyRuntimeError}
           mode={historyMode}
           range={historyRange}
@@ -2146,7 +2140,6 @@ function ApplicationHistoryView({
   sourceLoading,
   items: suppliedItems,
   runtimeLoading,
-  runtimeUpdating,
   runtimeError,
   mode,
   range,
@@ -2164,7 +2157,6 @@ function ApplicationHistoryView({
   sourceLoading?: boolean;
   items?: ApplicationHistoryItem[];
   runtimeLoading?: boolean;
-  runtimeUpdating?: boolean;
   runtimeError?: boolean;
   mode?: "local" | "retained";
   range?: ApplicationHistoryRange;
@@ -2175,7 +2167,7 @@ function ApplicationHistoryView({
   onSelectWorkload: (workload: AppWorkload) => void;
   onNavigateToResource?: (resource: ResourceRef) => void;
   onRangeChange?: (range: ApplicationHistoryRange) => void;
-  onOpenTimeline?: () => void;
+  onOpenTimeline?: (timestamp?: string) => void;
   onOpenSource?: (source: AppSourceRef) => void;
 }) {
   const [category, setCategory] = useState<ApplicationHistoryCategory | "all">(
@@ -2223,8 +2215,7 @@ function ApplicationHistoryView({
                 <h2 className="text-sm font-semibold text-theme-text-primary">
                   Application history
                 </h2>
-                {((loading && items.length > 0) ||
-                  (runtimeUpdating && !runtimeLoading)) && (
+                {loading && items.length > 0 && (
                   <RefreshCw
                     className="h-3.5 w-3.5 animate-spin text-theme-text-tertiary"
                     aria-label="Refreshing history"
@@ -2232,7 +2223,8 @@ function ApplicationHistoryView({
                 )}
               </div>
               <p className="mt-1 text-xs text-theme-text-tertiary">
-                Deployment and runtime activity attributed to this application.
+                Deployments, configuration changes, and problems attributed to
+                this application.
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
@@ -2260,7 +2252,7 @@ function ApplicationHistoryView({
               {onOpenTimeline && (
                 <button
                   type="button"
-                  onClick={onOpenTimeline}
+                  onClick={() => onOpenTimeline(visibleItems[0]?.timestamp)}
                   className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-medium text-accent-text hover:underline"
                 >
                   Open full Timeline
@@ -2276,7 +2268,7 @@ function ApplicationHistoryView({
               role="group"
               aria-label="Application history categories"
             >
-              {(["all", "deployment", "runtime", "problem"] as const).map(
+              {(["all", "deployment", "change", "problem"] as const).map(
                 (value) => {
                   if (value !== "all" && !availableCategories.includes(value))
                     return null;
@@ -2311,8 +2303,8 @@ function ApplicationHistoryView({
               {runtimeError && (
                 <div>
                   {hasRuntimeItems
-                    ? "Runtime activity could not be refreshed. Previously loaded activity may be stale."
-                    : "Runtime activity could not be loaded."}
+                    ? "Application changes could not be refreshed. Previously loaded changes may be stale."
+                    : "Application changes could not be loaded."}
                   {!hasRuntimeItems &&
                     items.some((item) => item.category === "deployment") &&
                     " Deployment-source history is still shown."}
@@ -2364,7 +2356,7 @@ function ApplicationHistoryView({
           <div className="space-y-1 border-t border-theme-border px-4 py-2 text-xs text-theme-text-tertiary">
             {mode === "local" && (
               <div>
-                Runtime activity reflects events retained by this Radar
+                Changes and problems reflect events retained by this Radar
                 instance. Deployment-source history may cover a different
                 period.
               </div>
@@ -2517,7 +2509,7 @@ function applicationHistoryCategoryLabel(
   if (category === "all") return "All";
   if (category === "deployment") return "Deployments";
   if (category === "problem") return "Problems";
-  return "Runtime";
+  return "Changes";
 }
 
 function applicationHistoryDateLabel(timestamp: string): string {

@@ -64,6 +64,8 @@ const APPLICATION_HISTORY_WINDOW: Record<
 };
 const APPLICATION_HISTORY_EVENT_LIMIT = 10_000;
 const DEFAULT_RETAINED_HISTORY_DAYS = 7;
+const APPLICATION_TIMELINE_FOCUS_MS = 60 * 60 * 1000;
+const APPLICATION_TIMELINE_AFTER_MS = 45 * 60 * 1000;
 
 const APPLICATION_VIEWS: ReadonlySet<ApplicationRouteView> =
   new Set<ApplicationRouteView>(["overview", "topology", "history", "cost"]);
@@ -500,14 +502,29 @@ function AppDetailRoute({
     },
     [navigate, searchParams],
   );
-  const openApplicationTimeline = useCallback(() => {
-    const params = new URLSearchParams();
-    params.set("grouping", "app");
-    params.set("window", String(APPLICATION_HISTORY_WINDOW[historyRange]));
-    if (appHistoryNamespaces.length > 0)
-      params.set("namespaces", appHistoryNamespaces.join(","));
-    navigate({ pathname: "/timeline", search: params.toString() });
-  }, [appHistoryNamespaces, historyRange, navigate]);
+  const openApplicationTimeline = useCallback(
+    (timestamp?: string) => {
+      const params = new URLSearchParams();
+      params.set("app", app.key);
+      params.set("scopeNamespaces", appHistoryNamespaces.join(","));
+      params.set("grouping", "app");
+      const latestTimestamp = timestamp
+        ? new Date(timestamp).getTime()
+        : Number.NaN;
+      if (Number.isFinite(latestTimestamp)) {
+        const to = Math.min(
+          Date.now(),
+          latestTimestamp + APPLICATION_TIMELINE_AFTER_MS,
+        );
+        params.set("from", String(to - APPLICATION_TIMELINE_FOCUS_MS));
+        params.set("to", String(to));
+      } else {
+        params.set("window", String(APPLICATION_HISTORY_WINDOW[historyRange]));
+      }
+      navigate({ pathname: "/timeline", search: params.toString() });
+    },
+    [app.key, appHistoryNamespaces, historyRange, navigate],
+  );
 
   // App identity switcher data: this instance's siblings (ladder-ordered
   // digests). It switches between REAL instances — ?app= changes, deep links
@@ -622,8 +639,7 @@ function AppDetailRoute({
         history={historyQuery.data}
         historyLoading={historyQuery.isLoading}
         historyItems={historyItems}
-        historyRuntimeLoading={historyTimelineQuery.isLoading}
-        historyRuntimeUpdating={historyTimelineQuery.isFetching}
+        historyRuntimeLoading={historyTimelineQuery.isFetching}
         historyRuntimeError={historyTimelineQuery.isError}
         historyMode={timelineSource.capabilities.mode}
         historyRange={historyRange}

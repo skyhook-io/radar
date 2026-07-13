@@ -98,6 +98,10 @@ export interface TimelineListProps {
   // returned set reaches it, the list surfaces an end-of-list note so the drop of
   // older events isn't silent. Omit when the source isn't capped (e.g. compact).
   truncatedAt?: number
+  // Hosts that filter a capped source after fetching must report truncation
+  // explicitly because the visible row count no longer reflects the source cap.
+  isTruncated?: boolean
+  truncationMessage?: string
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -109,7 +113,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs, compact = false, selectedEventId, onSelectEvent, truncatedAt }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs, compact = false, selectedEventId, onSelectEvent, truncatedAt, isTruncated, truncationMessage }: TimelineListProps) {
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
@@ -510,10 +514,10 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                 </div>
               </div>
             ))}
-            {truncatedAt != null && events.length >= truncatedAt && (
+            {truncatedAt != null && (isTruncated ?? events.length >= truncatedAt) && (
               <div className="flex items-center justify-center gap-2 py-4 text-sm text-theme-text-tertiary">
                 <Clock className="h-4 w-4 opacity-50" />
-                <span>Showing the newest {truncatedAt.toLocaleString()} events in this range — narrow the query to see older ones</span>
+                <span>{truncationMessage ?? `Showing the newest ${truncatedAt.toLocaleString()} events in this range — narrow the query to see older ones`}</span>
               </div>
             )}
           </div>

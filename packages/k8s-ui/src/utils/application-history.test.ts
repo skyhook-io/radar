@@ -42,7 +42,10 @@ function event(overrides: Partial<TimelineEvent> = {}): TimelineEvent {
     namespace: 'prod',
     name: 'shop-api',
     eventType: 'update',
-    diff: { summary: 'Image changed to shop:v2', fields: [] },
+    diff: {
+      summary: 'Image changed to shop:v2',
+      fields: [{ path: 'spec.template.spec.containers[0].image', oldValue: 'shop:v1', newValue: 'shop:v2' }],
+    },
     ...overrides,
   }
 }
@@ -82,7 +85,7 @@ describe('buildApplicationHistoryItems', () => {
     }],
   }
 
-  it('merges source anchors with curated runtime changes in reverse chronology', () => {
+  it('merges source anchors with curated desired-state changes in reverse chronology', () => {
     const items = buildApplicationHistoryItems(history, [
       event(),
       event({
@@ -99,7 +102,10 @@ describe('buildApplicationHistoryItems', () => {
         kind: 'ConfigMap',
         name: 'shop-config',
         timestamp: '2026-07-13T09:45:00.000Z',
-        diff: { summary: 'data.API_URL changed', fields: [] },
+        diff: {
+          summary: 'data.API_URL changed',
+          fields: [{ path: 'data.API_URL', oldValue: 'https://old.example', newValue: 'https://new.example' }],
+        },
       }),
     ])
 
@@ -108,7 +114,7 @@ describe('buildApplicationHistoryItems', () => {
       'Config Map updated',
       'Deployment updated',
     ])
-    expect(items.map((item) => item.category)).toEqual(['deployment', 'runtime', 'runtime'])
+    expect(items.map((item) => item.category)).toEqual(['deployment', 'change', 'change'])
   })
 
   it('coalesces source metadata and operation status for the same deployment change', () => {
@@ -144,7 +150,7 @@ describe('buildApplicationHistoryItems', () => {
     })
   })
 
-  it('treats historical Job startup as normal lifecycle activity', () => {
+  it('omits normal batch run lifecycle activity', () => {
     const items = buildApplicationHistoryItems(undefined, [
       event({
         id: 'job-started',
@@ -158,8 +164,188 @@ describe('buildApplicationHistoryItems', () => {
       }),
     ])
 
+    expect(items).toHaveLength(0)
+  })
+
+  it('omits status-only updates while keeping spec and configuration changes', () => {
+    const items = buildApplicationHistoryItems(undefined, [
+      event({
+        id: 'status-only',
+        diff: {
+          summary: 'readyReplicas changed from 1 to 2',
+          fields: [{ path: 'status.readyReplicas', oldValue: 1, newValue: 2 }],
+        },
+      }),
+      event({
+        id: 'job-suspended',
+        kind: 'Job',
+        name: 'shop-migrate',
+        diff: {
+          summary: 'suspend changed from false to true',
+          fields: [{ path: 'spec.suspend', oldValue: false, newValue: true }],
+        },
+      }),
+      event({
+        id: 'config-updated',
+        kind: 'ConfigMap',
+        name: 'shop-config',
+        diff: {
+          summary: 'Modified keys: FEATURE_FLAG',
+          fields: [{ path: 'data (modified keys)', oldValue: 'off', newValue: 'on' }],
+        },
+      }),
+      event({
+        id: 'config-key-added',
+        kind: 'ConfigMap',
+        name: 'shop-config',
+        diff: {
+          summary: 'Added keys: API_URL',
+          fields: [{ path: 'data (added keys)', newValue: 'API_URL' }],
+        },
+      }),
+      event({
+        id: 'secret-data',
+        kind: 'Secret',
+        name: 'shop-secret',
+        diff: {
+          summary: 'data modified keys: [TOKEN]',
+          fields: [{ path: 'data (modified keys)', oldValue: ['TOKEN'], newValue: ['TOKEN'] }],
+        },
+      }),
+      event({
+        id: 'sealed-secret-data',
+        kind: 'SealedSecret',
+        name: 'shop-sealed-secret',
+        diff: {
+          summary: 'spec.encryptedData modified keys: [TOKEN]',
+          fields: [{ path: 'spec.encryptedData (modified keys)', oldValue: ['TOKEN'], newValue: ['TOKEN'] }],
+        },
+      }),
+      event({
+        id: 'config-immutable',
+        kind: 'ConfigMap',
+        name: 'shop-config',
+        diff: {
+          summary: 'immutable changed',
+          fields: [{ path: 'immutable', oldValue: false, newValue: true }],
+        },
+      }),
+      event({
+        id: 'config-database-status',
+        kind: 'ConfigMap',
+        name: 'shop-config',
+        diff: {
+          summary: 'database status changed',
+          fields: [{ path: 'database.status', oldValue: 'old', newValue: 'new' }],
+        },
+      }),
+    ])
+
+    expect(items.map((item) => item.id).sort()).toEqual([
+      'event:config-immutable',
+      'event:config-key-added',
+      'event:config-updated',
+      'event:job-suspended',
+      'event:sealed-secret-data',
+      'event:secret-data',
+    ])
+    expect(items.every((item) => item.category === 'change')).toBe(true)
+  })
+
+  it('omits owned batch run creation but keeps standalone Job creation', () => {
+    const items = buildApplicationHistoryItems(undefined, [
+      event({
+        id: 'cron-run-created',
+        kind: 'Job',
+        name: 'shop-report-1234',
+        eventType: 'add',
+        diff: undefined,
+        owner: { kind: 'CronJob', name: 'shop-report' },
+      }),
+      event({
+        id: 'standalone-job-created',
+        kind: 'Job',
+        name: 'shop-migrate',
+        eventType: 'add',
+        diff: undefined,
+      }),
+    ])
+
     expect(items).toHaveLength(1)
-    expect(items[0]).toMatchObject({ title: 'Job started', category: 'runtime' })
+    expect(items[0]).toMatchObject({ id: 'event:standalone-job-created', title: 'Job created', category: 'change' })
+  })
+
+  it('keeps failed batch runs as problems', () => {
+    const items = buildApplicationHistoryItems(undefined, [
+      event({
+        id: 'job-failed',
+        kind: 'Job',
+        name: 'shop-migrate',
+        source: 'k8s_event',
+        eventType: 'Warning',
+        reason: 'BackoffLimitExceeded',
+        message: 'Job has reached the specified backoff limit',
+        diff: undefined,
+      }),
+    ])
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ title: 'Job failed after repeated retries', category: 'problem' })
+  })
+
+  it('does not suppress a failed batch signal when its event type is not Warning', () => {
+    const items = buildApplicationHistoryItems(undefined, [
+      event({
+        id: 'job-failed-normal-type',
+        kind: 'Job',
+        name: 'shop-migrate',
+        source: 'historical',
+        eventType: 'Normal',
+        reason: 'Failed',
+        message: 'Job failed',
+        healthState: 'unhealthy',
+        diff: undefined,
+      }),
+    ])
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ title: 'Job failed', category: 'problem' })
+  })
+
+  it('normalizes lowercase batch failure reasons into developer-facing copy', () => {
+    const items = buildApplicationHistoryItems(undefined, [
+      event({
+        id: 'job-failed-lowercase',
+        kind: 'Job',
+        name: 'shop-migrate',
+        source: 'k8s_event',
+        eventType: 'Warning',
+        reason: 'failed',
+        message: 'Job has reached the specified backoff limit',
+        diff: undefined,
+      }),
+    ])
+
+    expect(items[0]).toMatchObject({ title: 'Job failed', category: 'problem' })
+  })
+
+  it.each([
+    ['CronJob', 'Scheduled run could not be created'],
+    ['Deployment', 'Pod could not be created'],
+  ])('translates FailedCreate on %s into developer-facing copy', (kind, title) => {
+    const items = buildApplicationHistoryItems(undefined, [
+      event({
+        id: `failed-create-${kind}`,
+        kind,
+        source: 'k8s_event',
+        eventType: 'Warning',
+        reason: 'FailedCreate',
+        message: 'admission webhook denied the request',
+        diff: undefined,
+      }),
+    ])
+
+    expect(items[0]).toMatchObject({ title, category: 'problem' })
   })
 
   it('rolls repeated pod warnings up to the owning workload without summing cumulative counts', () => {
@@ -215,6 +401,52 @@ describe('buildApplicationHistoryItems', () => {
     const items = buildApplicationHistoryItems(history, [sourceUpdate, sourceWarning])
 
     expect(items.map((item) => item.title)).toEqual(['Argo CD sync', 'SyncError'])
+  })
+
+  it('suppresses non-problem source-object changes even when source history is unavailable', () => {
+    const items = buildApplicationHistoryItems({ ...history, anchors: [] }, [
+      event({
+        id: 'argo-update',
+        kind: 'Application',
+        namespace: 'argocd',
+        name: 'shop',
+      }),
+    ])
+
+    expect(items).toHaveLength(0)
+  })
+
+  it('coalesces a deployment change burst around a source anchor but keeps later drift', () => {
+    const items = buildApplicationHistoryItems(history, [
+      event({ id: 'sync-fanout', timestamp: '2026-07-13T10:01:00.000Z' }),
+      event({ id: 'sync-boundary', timestamp: '2026-07-13T10:02:00.000Z' }),
+      event({ id: 'manual-drift', timestamp: '2026-07-13T10:05:00.000Z' }),
+    ])
+
+    expect(items.map((item) => item.id)).toEqual([
+      'event:manual-drift',
+      'source:gitops:2026-07-13T10:00:00.000Z:abc123',
+    ])
+  })
+
+  it('keeps configuration data changes near a deployment anchor', () => {
+    const items = buildApplicationHistoryItems(history, [
+      event({
+        id: 'nearby-config-edit',
+        kind: 'ConfigMap',
+        name: 'shop-config',
+        timestamp: '2026-07-13T10:01:00.000Z',
+        diff: {
+          summary: 'data.FEATURE_FLAG changed',
+          fields: [{ path: 'data.FEATURE_FLAG', oldValue: 'off', newValue: 'on' }],
+        },
+      }),
+    ])
+
+    expect(items.map((item) => item.id)).toEqual([
+      'event:nearby-config-edit',
+      'source:gitops:2026-07-13T10:00:00.000Z:abc123',
+    ])
   })
 
   it('keeps failed pod signals while omitting ordinary pod and ReplicaSet churn', () => {

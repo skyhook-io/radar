@@ -172,10 +172,17 @@ describe('writeTimelineParams', () => {
     expect(written.has('window')).toBe(false)
   })
 
-  it('preserves foreign params and strips the legacy filter seed', () => {
-    const base = new URLSearchParams({ tab: 'topology', filter: 'warnings' })
+  it('preserves foreign params, including application scope, and strips the legacy filter seed', () => {
+    const base = new URLSearchParams({
+      tab: 'topology',
+      app: 'staging/Deployment/api',
+      scopeNamespaces: 'argocd,staging',
+      filter: 'warnings',
+    })
     const written = writeTimelineParams(base, defaultState, retainedOpts)
     expect(written.get('tab')).toBe('topology')
+    expect(written.get('app')).toBe('staging/Deployment/api')
+    expect(written.get('scopeNamespaces')).toBe('argocd,staging')
     expect(written.has('filter')).toBe(false)
   })
 

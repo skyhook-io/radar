@@ -1,6 +1,13 @@
-import { useState, useCallback } from 'react'
-import { TimelineList as TimelineListUI, type ActivityTypeFilter, type ActivityFilterKey } from '@skyhook-io/k8s-ui'
-import type { TimeRange } from '@skyhook-io/k8s-ui'
+import { useState, useCallback, useMemo } from 'react'
+import {
+  TimelineList as TimelineListUI,
+  eventsForApplication,
+  type ActivityTypeFilter,
+  type ActivityFilterKey,
+  type AppMembershipIndex,
+  type TimeRange,
+  type Topology,
+} from '@skyhook-io/k8s-ui'
 import { useTimelineSource } from '../../context/TimelineSource'
 import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -13,6 +20,7 @@ export type { ActivityTypeFilter, ActivityFilterKey }
 // this only caps pathological bursts. Surfaced to the list as `truncatedAt` so a
 // window that does hit it shows an end-of-list note instead of dropping silently.
 const LIST_FETCH_LIMIT = 2000
+const APP_SCOPED_FETCH_LIMIT = 10000
 
 interface TimelineListProps {
   namespaces: string[]
@@ -44,9 +52,13 @@ interface TimelineListProps {
   onVisibleWindowChange?: (window: { fromMs: number; toMs: number } | null) => void
   // Carries the swimlane's view window into the list on view switch (scroll target).
   scrollToMs?: number
+  focusedAppIndex?: AppMembershipIndex
+  appScoped?: boolean
+  topology?: Topology
+  appScopeLoading?: boolean
 }
 
-export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, sliding, onVisibleWindowChange, scrollToMs }: TimelineListProps) {
+export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, sliding, onVisibleWindowChange, scrollToMs, focusedAppIndex, appScoped = false, topology, appScopeLoading = false }: TimelineListProps) {
   const hasLimitedAccess = useHasLimitedAccess()
   const timelineSource = useTimelineSource()
   const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kinds: string[] }>({
@@ -58,17 +70,28 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     setQueryParams(params)
   }, [])
 
-  const { data: events = [], isLoading, isError, refetch } = timelineSource.useEvents({
+  const fetchLimit = appScoped ? APP_SCOPED_FETCH_LIMIT : LIST_FETCH_LIMIT
+  const { data: unscopedEvents = [], isLoading, isError, refetch } = timelineSource.useEvents({
     namespaces,
     kinds: queryParams.kinds,
     timeRange: queryParams.timeRange,
     includeK8sEvents: true,
+    includeManaged: appScoped,
     includeDeleted: showDeleted,
-    limit: LIST_FETCH_LIMIT,
+    limit: fetchLimit,
     fromMs: selectionWindow?.fromMs,
     toMs: selectionWindow?.toMs,
     sliding,
   })
+  const events = useMemo(
+    () => appScoped
+      ? focusedAppIndex
+        ? eventsForApplication(unscopedEvents, topology, focusedAppIndex)
+        : []
+      : unscopedEvents,
+    [appScoped, focusedAppIndex, topology, unscopedEvents],
+  )
+  const sourceTruncated = unscopedEvents.length >= fetchLimit
 
   if (isError) {
     return (
@@ -89,7 +112,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
   return (
     <TimelineListUI
       events={events}
-      isLoading={isLoading}
+      isLoading={isLoading || appScopeLoading}
       onQueryChange={handleQueryChange}
       hasLimitedAccess={hasLimitedAccess}
       namespaces={namespaces}
@@ -109,7 +132,11 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
       onKindFilterChange={onKindFilterChange}
       onVisibleWindowChange={onVisibleWindowChange}
       scrollToMs={scrollToMs}
-      truncatedAt={LIST_FETCH_LIMIT}
+      truncatedAt={fetchLimit}
+      isTruncated={sourceTruncated}
+      truncationMessage={appScoped && sourceTruncated
+        ? `Showing application activity found in the newest ${fetchLimit.toLocaleString()} events in this range — narrow the query to see older activity`
+        : undefined}
     />
   )
 }

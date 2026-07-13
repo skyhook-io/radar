@@ -3,7 +3,7 @@ import { getKindLabel } from './api-resources'
 import type { AppHistory, AppHistoryAnchor, AppSourceRef } from './applications'
 import { isProblematicEvent } from './resource-hierarchy'
 
-export type ApplicationHistoryCategory = 'deployment' | 'runtime' | 'problem'
+export type ApplicationHistoryCategory = 'deployment' | 'change' | 'problem'
 export type ApplicationHistoryRange = '24h' | '7d' | '30d' | 'all'
 
 export interface ApplicationHistoryItem {
@@ -53,33 +53,27 @@ const RELATED_RUNTIME_KINDS = new Set([
   'PodMonitor',
 ])
 
-const JOB_LIFECYCLE_REASONS = new Set([
+const NORMAL_BATCH_LIFECYCLE_REASONS = new Set([
   'started',
   'created',
   'completed',
   'complete',
-  'failed',
-  'backofflimitexceeded',
-  'deadlineexceeded',
   'successcriteriamet',
 ])
 
-const NORMAL_JOB_LIFECYCLE_REASONS = new Set([
-  'started',
-  'created',
-  'completed',
-  'complete',
-  'successcriteriamet',
-])
+const CONFIG_DATA_KINDS = new Set(['ConfigMap', 'Secret', 'SealedSecret'])
+const CONFIG_DATA_PATH = /^(?:spec\.)?(?:data|stringData|binaryData|encryptedData)(\W|$)/
+const EPHEMERAL_RUN_KINDS = new Set(['Job', 'Workflow'])
+const SOURCE_BURST_WINDOW_MS = 2 * 60 * 1000
 
 const PROBLEM_TITLES: Record<string, string> = {
-  FailedScheduling: "Can't be scheduled",
-  FailedMount: "Volume can't be mounted",
-  FailedAttachVolume: "Volume can't be attached",
-  FailedPull: 'Image pull failed',
-  ErrImagePull: 'Image pull failed',
-  ImagePullBackOff: 'Image pull back-off',
-  Unhealthy: 'Health check failed',
+  failedscheduling: "Can't be scheduled",
+  failedmount: "Volume can't be mounted",
+  failedattachvolume: "Volume can't be attached",
+  failedpull: 'Image pull failed',
+  errimagepull: 'Image pull failed',
+  imagepullbackoff: 'Image pull back-off',
+  unhealthy: 'Health check failed',
 }
 
 function validTimestamp(value: string | undefined): value is string {
@@ -110,16 +104,20 @@ function anchorItem(anchor: AppHistoryAnchor, sourceRef: AppSourceRef | undefine
 
 function eventTitle(event: TimelineEvent, problem: boolean): string {
   const kind = getKindLabel(event.kind)
-  const reason = event.reason?.toLowerCase()
   if (problem) {
-    if (event.reason === 'PodScheduled' && event.message?.includes('nodes are available')) return "Can't be scheduled"
-    return PROBLEM_TITLES[event.reason ?? ''] ?? event.reason ?? `${kind} needs attention`
-  }
-  if (event.kind === 'Job' && reason) {
-    if (reason === 'complete' || reason === 'completed' || reason === 'successcriteriamet') return 'Job completed'
-    if (reason === 'started') return 'Job started'
-    if (reason === 'created') return 'Job created'
-    if (reason === 'failed' || reason === 'backofflimitexceeded' || reason === 'deadlineexceeded') return 'Job failed'
+    const reason = event.reason?.toLowerCase()
+    if (reason === 'podscheduled' && event.message?.includes('nodes are available')) return "Can't be scheduled"
+    if (reason === 'failedcreate') {
+      if (event.kind === 'CronJob' || event.kind === 'CronWorkflow') return 'Scheduled run could not be created'
+      if (ROOT_RUNTIME_KINDS.has(event.kind)) return 'Pod could not be created'
+      return `${kind} could not create a resource`
+    }
+    if (EPHEMERAL_RUN_KINDS.has(event.kind)) {
+      if (reason === 'backofflimitexceeded') return `${kind} failed after repeated retries`
+      if (reason === 'deadlineexceeded') return `${kind} exceeded its deadline`
+      if (reason === 'failed') return `${kind} failed`
+    }
+    return PROBLEM_TITLES[reason ?? ''] ?? event.reason ?? `${kind} needs attention`
   }
   if (event.eventType === 'add') return `${kind} created`
   if (event.eventType === 'delete') return `${kind} deleted`
@@ -134,24 +132,42 @@ function eventDetail(event: TimelineEvent): string | undefined {
   return message || summary || undefined
 }
 
+function hasDesiredStateChange(event: TimelineEvent): boolean {
+  return Boolean(event.diff?.fields.some(({ path }) => {
+    if (path === 'spec' || path.startsWith('spec.')) return true
+    if (!CONFIG_DATA_KINDS.has(event.kind)) return false
+    return path === 'immutable' || (event.kind === 'Secret' && path === 'type') || CONFIG_DATA_PATH.test(path)
+  }))
+}
+
+function hasConfigurationDataChange(event: TimelineEvent): boolean {
+  return CONFIG_DATA_KINDS.has(event.kind) && Boolean(event.diff?.fields.some(({ path }) =>
+    path === 'immutable' || CONFIG_DATA_PATH.test(path),
+  ))
+}
+
+function isEphemeralRun(event: TimelineEvent): boolean {
+  return EPHEMERAL_RUN_KINDS.has(event.kind) && Boolean(event.owner)
+}
+
 function historyEventItem(event: TimelineEvent): ApplicationHistoryItem | null {
   if (!validTimestamp(event.timestamp)) return null
   const unhealthy = event.healthState === 'degraded' || event.healthState === 'unhealthy'
   const leafRuntimeResource = event.kind === 'Pod' || event.kind === 'ReplicaSet'
   const reason = event.reason?.toLowerCase()
-  const normalJobLifecycle = event.kind === 'Job'
+  const normalBatchLifecycle = EPHEMERAL_RUN_KINDS.has(event.kind)
     && event.eventType !== 'Warning'
-    && Boolean(reason && NORMAL_JOB_LIFECYCLE_REASONS.has(reason))
-  const problem = !normalJobLifecycle
+    && Boolean(reason && NORMAL_BATCH_LIFECYCLE_REASONS.has(reason))
+  const problem = !normalBatchLifecycle
     && (isProblematicEvent(event) || (unhealthy && (!leafRuntimeResource || Boolean(event.message?.trim()))))
+  if (!problem && event.source === 'k8s_event') return null
   if (event.kind === 'Pod' || event.kind === 'ReplicaSet') {
     if (!problem) return null
-  } else if (!problem && event.kind === 'Job' && event.source === 'k8s_event') {
-    if (!reason || !JOB_LIFECYCLE_REASONS.has(reason)) return null
   } else if (!problem && !ROOT_RUNTIME_KINDS.has(event.kind) && !RELATED_RUNTIME_KINDS.has(event.kind)) {
     return null
   }
-  if (!problem && event.eventType === 'update' && !event.diff?.summary && !event.reason && !event.message) return null
+  if (!problem && event.eventType === 'update' && !hasDesiredStateChange(event)) return null
+  if (!problem && (event.eventType === 'add' || event.eventType === 'delete') && isEphemeralRun(event)) return null
   const resource = problem && event.owner
     ? {
         kind: event.owner.kind,
@@ -166,7 +182,7 @@ function historyEventItem(event: TimelineEvent): ApplicationHistoryItem | null {
       }
   return {
     id: `event:${event.id}`,
-    category: problem ? 'problem' : 'runtime',
+    category: problem ? 'problem' : 'change',
     title: eventTitle(event, problem),
     timestamp: event.timestamp,
     detail: eventDetail(event),
@@ -205,14 +221,19 @@ export function buildApplicationHistoryItems(
     .map((anchor, index) => anchorItem(anchor, history?.sourceRef, index))
     .filter((item): item is ApplicationHistoryItem => item !== null)
   const hasAnchors = anchors.length > 0
+  const anchorTimes = anchors.map(({ timestamp }) => new Date(timestamp).getTime())
   const warningItems = new Map<string, ApplicationHistoryItem>()
   const runtimeItems: ApplicationHistoryItem[] = []
 
   for (const event of events) {
-    if (hasAnchors && event.source !== 'k8s_event' && sourceMatchesEvent(history?.sourceRef, event)) continue
     const item = historyEventItem(event)
     if (!item) continue
+    if (item.category !== 'problem' && sourceMatchesEvent(history?.sourceRef, event)) continue
     if (item.category !== 'problem') {
+      const eventTime = new Date(item.timestamp).getTime()
+      if (!hasConfigurationDataChange(event)
+        && hasAnchors
+        && anchorTimes.some((anchorTime) => Math.abs(eventTime - anchorTime) <= SOURCE_BURST_WINDOW_MS)) continue
       runtimeItems.push(item)
       continue
     }

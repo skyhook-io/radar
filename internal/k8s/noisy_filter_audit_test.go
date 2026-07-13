@@ -658,6 +658,67 @@ func TestComputeDiff_ConfigMapYAMLRequiresStructuredKey(t *testing.T) {
 	}
 }
 
+func TestComputeDiff_ConfigMapBinaryData_ReportsModifiedKeyOnly(t *testing.T) {
+	old := &corev1.ConfigMap{BinaryData: map[string][]byte{"bundle": []byte("old-binary-value")}}
+	updated := &corev1.ConfigMap{BinaryData: map[string][]byte{"bundle": []byte("new-binary-value")}}
+
+	diff := ComputeDiff("ConfigMap", old, updated)
+	assertKeyOnlyDiff(t, diff, "binaryData (modified keys)", "bundle")
+}
+
+func TestComputeDiff_SecretData_ReportsModifiedKeyOnly(t *testing.T) {
+	old := &corev1.Secret{Data: map[string][]byte{"token": []byte("old-secret-value")}}
+	updated := &corev1.Secret{Data: map[string][]byte{"token": []byte("new-secret-value")}}
+
+	diff := ComputeDiff("Secret", old, updated)
+	assertKeyOnlyDiff(t, diff, "data (modified keys)", "token")
+}
+
+func TestComputeDiff_SealedSecretEncryptedData_ReportsModifiedKeyOnly(t *testing.T) {
+	old := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{"encryptedData": map[string]any{"token": "old-ciphertext"}},
+	}}
+	updated := old.DeepCopy()
+	_ = unstructured.SetNestedField(updated.Object, "new-ciphertext", "spec", "encryptedData", "token")
+
+	diff := ComputeDiff("SealedSecret", old, updated)
+	assertKeyOnlyDiff(t, diff, "spec.encryptedData (modified keys)", "token")
+}
+
+func TestComputeDiff_SealedSecretOtherSpecChange_RemainsVisible(t *testing.T) {
+	old := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"generation": int64(1)},
+		"spec":     map[string]any{"template": map[string]any{"type": "Opaque"}},
+	}}
+	updated := old.DeepCopy()
+	updated.SetGeneration(2)
+	_ = unstructured.SetNestedField(updated.Object, "kubernetes.io/tls", "spec", "template", "type")
+
+	diff := ComputeDiff("SealedSecret", old, updated)
+	if diff == nil || !diffHasPath(diff, "spec") {
+		t.Fatalf("expected generic spec diff, got %+v", diff)
+	}
+}
+
+func assertKeyOnlyDiff(t *testing.T, diff *DiffInfo, path, key string) {
+	t.Helper()
+	if diff == nil {
+		t.Fatal("ComputeDiff returned nil")
+	}
+	for _, field := range diff.Fields {
+		if field.Path != path {
+			continue
+		}
+		oldKeys, oldOK := field.OldValue.([]string)
+		newKeys, newOK := field.NewValue.([]string)
+		if !oldOK || !newOK || len(oldKeys) != 1 || len(newKeys) != 1 || oldKeys[0] != key || newKeys[0] != key {
+			t.Fatalf("expected key-only diff for %q, got %#v", key, field)
+		}
+		return
+	}
+	t.Fatalf("expected %q diff, got %+v", path, diff.Fields)
+}
+
 func diffHasPath(diff *DiffInfo, path string) bool {
 	for _, f := range diff.Fields {
 		if f.Path == path {
