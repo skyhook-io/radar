@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Navigate, useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import {
   COST_DISCOVERY_GRACE_MS,
   useClusterInfo,
@@ -35,19 +35,7 @@ interface CostViewProps {
 const SYSTEM_COST_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node-lease'])
 
 export function CostView(props: CostViewProps) {
-  const { pathname, search, hash } = useLocation()
-  if (pathname.startsWith('/cost/request-fit')) {
-    return (
-      <Navigate
-        replace
-        to={{
-          pathname: pathname.replace('/cost/request-fit', '/cost/rightsizing'),
-          search,
-          hash,
-        }}
-      />
-    )
-  }
+  const { pathname } = useLocation()
   if (pathname.startsWith('/cost/rightsizing')) {
     return <RequestFitScanView namespaces={props.namespaces} />
   }

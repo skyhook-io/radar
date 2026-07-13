@@ -155,8 +155,7 @@ function namespaceFilterDisabled(
 ): { disabled: boolean; tooltip?: string } {
   if (
     view === 'cost' &&
-    !pathname.startsWith('/cost/rightsizing') &&
-    !pathname.startsWith('/cost/request-fit')
+    !pathname.startsWith('/cost/rightsizing')
   ) {
     return {
       disabled: true,
