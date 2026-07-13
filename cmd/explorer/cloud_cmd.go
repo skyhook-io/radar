@@ -290,7 +290,7 @@ func cloudInstall(args []string) {
 		os.Exit(1)
 	}
 	if ctx.Err() != nil {
-		printCanceledAfterApproval(os.Stderr, pr.ClusterID)
+		printCanceledAfterApproval(os.Stderr, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
 		os.Exit(1)
 	}
 
@@ -408,10 +408,11 @@ func printTokenSecretConflict(w io.Writer, err error) bool {
 	return true
 }
 
-func printCanceledAfterApproval(w io.Writer, clusterID string) {
+func printCanceledAfterApproval(w io.Writer, clusterID, clusterURL string) {
 	fmt.Fprintf(w, "\nThe Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", clusterID)
-	fmt.Fprintln(w, "No token Secret or Helm release was written. This command's device flow cannot resume after it exits, but the Hub cluster is recoverable.")
-	fmt.Fprintln(w, "Ask an organization owner to open the pending cluster in Radar Cloud, choose Resume install, and generate a fresh install command. Delete the Hub cluster only if you intend to abandon it.")
+	fmt.Fprintln(w, "No token Secret or Helm release was written. Rerun `radar cloud install` to try again.")
+	fmt.Fprintln(w, "The previous approval may remain as a pending Cloud cluster. An organization owner can delete it later:")
+	fmt.Fprintf(w, "  %s\n", clusterURL)
 }
 
 func printPostApprovalRecoveryGuidance(w io.Writer, clusterID, releaseName, namespace string, deployment helm.DeploymentRef) {

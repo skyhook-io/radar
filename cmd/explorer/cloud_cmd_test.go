@@ -226,15 +226,15 @@ func TestConfirmCloudInstallTarget(t *testing.T) {
 
 func TestCanceledAfterApprovalPointsToPendingInstallRecovery(t *testing.T) {
 	var out bytes.Buffer
-	printCanceledAfterApproval(&out, "clus_existing")
+	printCanceledAfterApproval(&out, "clus_existing", "https://app.radarhq.io/c/clus_existing")
 	got := out.String()
-	for _, want := range []string{"clus_existing", "Hub cluster is recoverable", "organization owner", "Resume install", "only if you intend to abandon it"} {
+	for _, want := range []string{"clus_existing", "No token Secret or Helm release was written", "Rerun `radar cloud install`", "pending Cloud cluster", "organization owner", "https://app.radarhq.io/c/clus_existing"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("cancellation recovery missing %q: %q", want, got)
 		}
 	}
-	if strings.Contains(got, "delete that Hub cluster before") {
-		t.Errorf("cancellation recovery still recommends deleting before recovery: %q", got)
+	if strings.Contains(got, "Resume install") {
+		t.Errorf("cancellation recovery still makes the manual resume path primary: %q", got)
 	}
 }
 
