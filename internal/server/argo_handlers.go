@@ -35,6 +35,7 @@ func (s *Server) handleArgoSync(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	opts = enforceArgoSelectiveSyncSafety(opts)
 	result, err := gitops.SyncArgoApp(r.Context(), client, namespace, name, opts)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "sync", namespace, name)
@@ -42,6 +43,17 @@ func (s *Server) handleArgoSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, toGitOpsResponse(result))
+}
+
+func enforceArgoSelectiveSyncSafety(opts gitops.ArgoSyncOptions) gitops.ArgoSyncOptions {
+	if len(opts.Resources) == 0 {
+		return opts
+	}
+	falseValue := false
+	opts.Revision = ""
+	opts.Prune = &falseValue
+	opts.ApplyOnly = &falseValue
+	return opts
 }
 
 func (s *Server) handleArgoValidateResource(w http.ResponseWriter, r *http.Request) {
