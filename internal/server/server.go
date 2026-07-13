@@ -1980,6 +1980,13 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 		if (kind == "secrets" || kind == "secret") && !s.canRead(r, "", "secrets", namespace, "get") {
 			return http.StatusForbidden, fmt.Sprintf("no access to secrets in namespace %q", namespace), false
 		}
+	default:
+		// Empty namespace and not a recognized cluster-scoped kind: an empty
+		// namespace means the target is cluster-scoped, but ClassifyKindScope
+		// couldn't identify it (an undiscovered CRD), so no SAR ran. Fail closed —
+		// serving such a resource ungated would let the caller read a cluster-
+		// scoped manifest they may lack `get` on (esp. via the Argo diff token).
+		return http.StatusForbidden, fmt.Sprintf("cannot verify access to %q (unrecognized cluster-scoped resource)", kind), false
 	}
 	return 0, "", true
 }

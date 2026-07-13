@@ -56,6 +56,12 @@ const repositoriesTTL = 60 * time.Second
 const (
 	probeTimeout       = 15 * time.Second
 	probeRetryInterval = 30 * time.Second
+
+	// repoErrorBackoff throttles repo-list refetches after a failure (commonly a
+	// token without `repositories, get`), so insights' 2s poll doesn't hammer
+	// argocd-server. Longer than probeRetryInterval since repo-scope denials are
+	// usually persistent until the operator widens the token.
+	repoErrorBackoff = 2 * time.Minute
 )
 
 type cacheEntry struct {
@@ -104,6 +110,10 @@ type Manager struct {
 	repoCache        []argoapi.Repository
 	repoCacheExpires time.Time
 	repoFetchMu      sync.Mutex
+	// repoRetryAfter throttles the background repo-list refetch after a failure,
+	// so a token that lacks `repositories, get` (the documented default) doesn't
+	// re-hit argocd-server on every 2s insights poll. Reset on reconnect/switch.
+	repoRetryAfter time.Time
 
 	// tokenContext is the kubeconfig context the stored token is bound to when
 	// the URL is empty (auto-discovery). Discovery resolves whatever
@@ -285,6 +295,11 @@ func (m *Manager) dropConnectionLocked() *activeForward {
 	m.cache = nil
 	m.revMetaCache = nil
 	m.repoCache = nil
+	// Clear the retry throttles too, so a reconnect or context switch (which is
+	// what dropped the connection) probes and refetches immediately instead of
+	// staying suppressed for up to a retry interval on the PREVIOUS failure.
+	m.nextProbe = time.Time{}
+	m.repoRetryAfter = time.Time{}
 	fwd := m.forward
 	m.forward = nil
 	return fwd
@@ -634,6 +649,13 @@ func (m *Manager) refreshRepositoriesAsync() {
 	}
 	m.mu.Lock()
 	gen := m.generation
+	// Honor the post-failure backoff: a token without `repositories, get` would
+	// otherwise 403 on every 2s insights poll, flooding argocd-server and logs.
+	if time.Now().Before(m.repoRetryAfter) {
+		m.mu.Unlock()
+		m.repoFetchMu.Unlock()
+		return
+	}
 	m.mu.Unlock()
 	go func() {
 		defer m.repoFetchMu.Unlock()
@@ -651,13 +673,19 @@ func (m *Manager) refreshRepositoriesAsync() {
 		}
 		repos, err := client.Repositories(ctx)
 		if err != nil {
-			log.Printf("[argocd] repository list failed: %v", m.redactSelfToken(err.Error()))
+			m.mu.Lock()
+			if m.generation == gen {
+				m.repoRetryAfter = time.Now().Add(repoErrorBackoff)
+			}
+			m.mu.Unlock()
+			log.Printf("[argocd] repository list failed (backing off %s): %v", repoErrorBackoff, m.redactSelfToken(err.Error()))
 			return
 		}
 		m.mu.Lock()
 		if m.generation == gen {
 			m.repoCache = repos
 			m.repoCacheExpires = time.Now().Add(repositoriesTTL)
+			m.repoRetryAfter = time.Time{}
 		}
 		m.mu.Unlock()
 	}()

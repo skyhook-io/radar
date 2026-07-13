@@ -13,12 +13,40 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 )
+
+// seedInClusterArgoApp registers an in-cluster Argo Application in the dynamic
+// resource cache so handleArgoResourceDiff's destination gate (which fails closed
+// if it can't read the app) can confirm the destination and proceed.
+func seedInClusterArgoApp(t *testing.T, namespace, name string) {
+	t.Helper()
+	appGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{appGVR: "ApplicationList"},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Application",
+			"metadata":   map[string]any{"name": name, "namespace": namespace},
+			"spec":       map[string]any{"destination": map[string]any{"name": "in-cluster"}},
+		}},
+	)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application", Name: "applications", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}},
+	}); err != nil {
+		t.Fatalf("seed argo app: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+}
 
 // managedResourcesFunc serves the /managed-resources response for a fake Argo
 // CD API server. It receives the incoming request so tests can vary behavior
@@ -122,6 +150,7 @@ func newRevMetaRequest(appNamespace, appName, query string) *http.Request {
 }
 
 func TestArgoResourceDiff_HappyPath(t *testing.T) {
+	seedInClusterArgoApp(t, "argocd", "guestbook")
 	items := managedResourcesJSON(t, argoapi.ResourceDiff{
 		Group:     "apps",
 		Kind:      "Deployment",
@@ -181,6 +210,7 @@ func TestArgoResourceDiff_HappyPath(t *testing.T) {
 }
 
 func TestArgoResourceDiff_SecretRedacted(t *testing.T) {
+	seedInClusterArgoApp(t, "argocd", "guestbook")
 	newPass := base64.StdEncoding.EncodeToString([]byte("BRAND-NEW-PASSWORD"))
 	oldPass := base64.StdEncoding.EncodeToString([]byte("STALE-OLD-PASSWORD"))
 	shared := base64.StdEncoding.EncodeToString([]byte("SHARED-UNCHANGED"))
@@ -258,6 +288,7 @@ func TestArgoResourceDiff_SecretRedacted(t *testing.T) {
 // a secret smuggled into an annotation value, and a malformed scalar
 // stringData field, must both be masked — not just the well-formed data map.
 func TestArgoResourceDiff_SecretRedactionFailClosed(t *testing.T) {
+	seedInClusterArgoApp(t, "argocd", "guestbook")
 	annoSecret := "super-secret-bootstrap-token"
 	scalarSecret := "raw-scalar-secret"
 
@@ -300,6 +331,7 @@ func TestArgoResourceDiff_SecretRedactionFailClosed(t *testing.T) {
 }
 
 func TestArgoResourceDiff_NotInManagedSet(t *testing.T) {
+	seedInClusterArgoApp(t, "argocd", "guestbook")
 	items := managedResourcesJSON(t, argoapi.ResourceDiff{
 		Group: "apps", Kind: "Deployment", Namespace: "default", Name: "other-workload",
 		PredictedLiveState: jsonManifest(t, map[string]any{"kind": "Deployment"}),
@@ -319,6 +351,7 @@ func TestArgoResourceDiff_NotInManagedSet(t *testing.T) {
 }
 
 func TestArgoResourceDiff_NotConnected(t *testing.T) {
+	seedInClusterArgoApp(t, "argocd", "guestbook")
 	// Ensure the manager is unconfigured/disconnected: Get() returns false.
 	argocd.SetConfig("", "", false, true)
 	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
@@ -352,6 +385,7 @@ func TestArgoResourceDiff_EmptyNamespace(t *testing.T) {
 }
 
 func TestArgoResourceDiff_TokenRejectedUpstream(t *testing.T) {
+	seedInClusterArgoApp(t, "argocd", "guestbook")
 	// Probe succeeds (session valid), but the managed-resources call is rejected
 	// with 401 — exercises the ErrUnauthorized → 403 mapping.
 	srv, _ := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -622,6 +656,8 @@ func TestIsInClusterDestination(t *testing.T) {
 		{"name in-cluster", mk(map[string]any{"name": "in-cluster"}), true},
 		{"local api server url", mk(map[string]any{"server": "https://kubernetes.default.svc"}), true},
 		{"local api server url with port", mk(map[string]any{"server": "https://kubernetes.default.svc:443"}), true},
+		{"local api server FQDN", mk(map[string]any{"server": "https://kubernetes.default.svc.cluster.local"}), true},
+		{"local api server FQDN with port", mk(map[string]any{"server": "https://kubernetes.default.svc.cluster.local:443"}), true},
 		{"remote named cluster", mk(map[string]any{"name": "prod-spoke"}), false},
 		{"remote server url", mk(map[string]any{"server": "https://10.0.0.1:6443"}), false},
 		{"remote eks url", mk(map[string]any{"server": "https://abc123.gr7.us-east-1.eks.amazonaws.com"}), false},
@@ -661,5 +697,41 @@ func TestEnrichComparisonErrorWithRepos_MultiRepoNoOverwrite(t *testing.T) {
 	}
 	if !strings.Contains(iss.Message, "github.com/org/broken") || !strings.Contains(iss.Message, "github.com/org/broken2") {
 		t.Errorf("merged message must name BOTH failed repos: %q", iss.Message)
+	}
+}
+
+func TestArgoResourceDiff_RemoteDestinationRefused(t *testing.T) {
+	// A hub-spoke Application whose destination is a remote cluster: the local
+	// SARs can't authorize that read, so the diff must be refused before any
+	// manifest is served — even though the managed-resources call would succeed.
+	appGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{appGVR: "ApplicationList"},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+			"metadata": map[string]any{"name": "guestbook", "namespace": "argocd"},
+			"spec":     map[string]any{"destination": map[string]any{"server": "https://spoke.example.com:6443"}},
+		}},
+	)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application", Name: "applications", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}},
+	}); err != nil {
+		t.Fatalf("seed argo app: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
+	srv, hits := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(managedResourcesJSON(t)) })
+	connectArgo(t, srv.URL)
+
+	req := newDiffRequest("argocd", "guestbook", "group=apps&kind=Deployment&resourceNamespace=default&resourceName=guestbook-ui")
+	w := httptest.NewRecorder()
+	(&Server{}).handleArgoResourceDiff(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a remote-destination app; body = %s", w.Code, w.Body.String())
+	}
+	if atomic.LoadInt64(hits) != 0 {
+		t.Errorf("remote-destination diff must be refused before any managed-resources call; hits = %d", atomic.LoadInt64(hits))
 	}
 }

@@ -57,6 +57,13 @@ func checkGitOpsCoverage(tr *evalTracker, input *CheckInput) []Finding {
 			// Application IS Argo management, not a generic app label.
 			return
 		case overlay != nil && overlay.Winner.Tier == subject.TierHelmRelease:
+			// An Argo app that deploys a Helm chart carries BOTH the Helm release
+			// label and app.kubernetes.io/instance; the Helm tier wins the overlay,
+			// but if the instance label names a real Application it IS GitOps-managed
+			// (Argo drives the Helm release from Git), not a stray helm-CLI install.
+			if argoAppTracksByLabel(input, obj) {
+				return
+			}
 			checkID = checkGitOpsHelmOnly
 			message = "Managed by Helm but not GitOps — helm-CLI upgrades bypass Git review and the declarative rollback path."
 		default:

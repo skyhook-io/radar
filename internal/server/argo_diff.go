@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
@@ -112,15 +113,21 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// against RADAR'S cluster, but Argo's managed-resources reflect the cluster
 	// the Application deploys to. For a hub-spoke Application whose destination is
 	// a remote cluster, a local SAR cannot authorize a remote read — so the
-	// desired/live manifests must not be served. An Application object lives in
-	// the (watched) argocd namespace, so a real remote-destination app is readable
-	// here and refused; when the object can't be read we proceed (the capability
-	// gate that hides the UI affordance already reads the same destination off the
-	// live root, and an unreadable Application means the detail page itself can't
-	// render), logging so the gap is visible.
-	if appObj, appErr := k8s.GetResourceCache().GetDynamicWithGroup(r.Context(), "applications", appNamespace, appName, "argoproj.io"); appErr != nil {
-		log.Printf("[argo] resource-diff: could not read Application %s/%s to verify its destination; proceeding: %v", sanitizeForLog(appNamespace), sanitizeForLog(appName), appErr)
-	} else if !isInClusterDestination(appObj) {
+	// desired/live manifests must not be served. Fail closed: refuse both a remote
+	// destination AND an Application we can't read to confirm one (its object lives
+	// in the watched argocd namespace, so a real app is readable; an unreadable one
+	// is treated as unauthorizable rather than served ungated).
+	appObj, appErr := k8s.GetResourceCache().GetDynamicWithGroup(r.Context(), "applications", appNamespace, appName, "argoproj.io")
+	if appErr != nil {
+		if apierrors.IsNotFound(appErr) {
+			s.writeError(w, http.StatusNotFound, "Application not found.")
+			return
+		}
+		log.Printf("[argo] resource-diff: could not read Application %s/%s to verify destination: %v", sanitizeForLog(appNamespace), sanitizeForLog(appName), sanitizeForLog(appErr.Error()))
+		s.writeError(w, http.StatusBadGateway, "Couldn't verify the Application's destination cluster.")
+		return
+	}
+	if !isInClusterDestination(appObj) {
 		s.writeError(w, http.StatusBadRequest, "Per-resource diff is available only for Applications that deploy to the cluster Radar is connected to. This Application targets a different cluster — connect Radar to that cluster to diff its resources.")
 		return
 	}
@@ -255,7 +262,10 @@ func isLocalAPIServer(server string) bool {
 		h = h[:i]
 	}
 	h = strings.TrimSuffix(strings.ToLower(h), ".")
-	return h == "kubernetes.default.svc" || h == "kubernetes.default" || h == "kubernetes"
+	// Accept every in-cluster form: the short names and the service FQDN with any
+	// cluster domain (kubernetes.default.svc.cluster.local, or a custom domain).
+	return h == "kubernetes" || h == "kubernetes.default" ||
+		h == "kubernetes.default.svc" || strings.HasPrefix(h, "kubernetes.default.svc.")
 }
 
 // redactSecretManifest masks every Secret value on BOTH manifests in place so
