@@ -132,6 +132,10 @@ export interface IssueRowProps {
   as?: 'li' | 'div';
   className?: string;
   dimmed?: boolean;
+  /** Suppress the "Subject" deep-link in the expanded body — set by hosts that
+   *  embed the row under the very resource that IS the subject (the drawer header
+   *  already names it), so it doesn't echo back redundantly. */
+  hideSubject?: boolean;
   renderBadges?: (ctx: IssueRowSlotContext) => ReactNode;
   renderMeta?: (ctx: IssueRowSlotContext) => ReactNode;
   renderActions?: (ctx: IssueRowSlotContext) => ReactNode;
@@ -148,6 +152,7 @@ export function IssueRow({
   as = 'li',
   className,
   dimmed,
+  hideSubject,
   renderBadges,
   renderMeta,
   renderActions,
@@ -162,6 +167,36 @@ export function IssueRow({
   const SeverityIcon = ISSUE_SEVERITY_ICON[severity];
   const slotCtx = { issue, open };
   const timing = issueTiming(issue);
+
+  // Severity pill + age + timing chip. Rendered in two positions the container
+  // query toggles: inline at the row's right edge on a wide container, and on a
+  // line of its own below the resource line once the row is too narrow to hold
+  // it beside the title — so the title never has to truncate to make room.
+  const metaChips = (wrapperClass: string) => (
+    <div className={`items-center gap-3 ${wrapperClass}`}>
+      <span className={`badge-sm shrink-0 px-2.5 py-0.5 text-xs font-semibold ${open ? ISSUE_SEVERITY_SOLID_CLASS[severity] : ISSUE_SEVERITY_BADGE_CLASS[severity]}`}>
+        {ISSUE_SEVERITY_LABEL[severity]}
+      </span>
+      {issue.first_seen ? (
+        <>
+          <Tooltip content={ageTitle(issue)} delay={200} wrapperClassName="shrink-0">
+            <time
+              dateTime={issue.first_seen}
+              className="flex items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
+            >
+              <Clock className="h-3 w-3" aria-hidden />
+              {formatCompactAge(issue.first_seen)}
+            </time>
+          </Tooltip>
+          {timing ? (
+            <Tooltip content={timing.tooltip} delay={200}>
+              <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
+            </Tooltip>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
 
   useEffect(() => {
     if (open) {
@@ -206,13 +241,13 @@ export function IssueRow({
             onToggle();
           }
         }}
-        className={`group flex cursor-pointer items-center gap-3 border-l-[3px] py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent)]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_RAIL_CLASS[severity]}`}
+        className={`group @container/issue flex cursor-pointer items-center gap-3 border-l-[3px] py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent)]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_RAIL_CLASS[severity]}`}
       >
         <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${ISSUE_SEVERITY_TEXT_CLASS[severity]}`} aria-hidden />
 
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex min-w-0 items-baseline gap-2">
-            <span className="shrink-0 text-sm font-medium text-theme-text-primary">{categoryLabel(issue.category)}</span>
+            <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{categoryLabel(issue.category)}</span>
             <span className={`shrink-0 self-center ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
             {renderBadges?.(slotCtx)}
             {/* The detector reason rides the title row while COLLAPSED so the
@@ -265,32 +300,16 @@ export function IssueRow({
             ) : null}
             {renderMeta?.(slotCtx)}
           </div>
+          {/* Narrow container: the meta chips drop to their own line here rather
+              than stealing width from the title on the row above. Hidden once the
+              row is wide enough to hold them inline in the right cluster. */}
+          {metaChips('flex @2xl/issue:hidden')}
         </div>
 
-        {/* Right cluster — severity pill THEN age, vertically centered as a group. */}
+        {/* Right cluster — the always-visible affordances (per-row action +
+            chevron) plus, on a wide container, the inline meta chips. */}
         <div className="flex shrink-0 items-center gap-3">
-          <span className={`badge-sm shrink-0 px-2.5 py-0.5 text-xs font-semibold ${open ? ISSUE_SEVERITY_SOLID_CLASS[severity] : ISSUE_SEVERITY_BADGE_CLASS[severity]}`}>
-            {ISSUE_SEVERITY_LABEL[severity]}
-          </span>
-          {/* Age chip: keep recency visible; the deployment-start signal rides as a secondary tag. */}
-          {issue.first_seen ? (
-            <>
-              <Tooltip content={ageTitle(issue)} delay={200} wrapperClassName="shrink-0">
-                <time
-                  dateTime={issue.first_seen}
-                  className="flex items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
-                >
-                  <Clock className="h-3 w-3" aria-hidden />
-                  {formatCompactAge(issue.first_seen)}
-                </time>
-              </Tooltip>
-              {timing ? (
-                <Tooltip content={timing.tooltip} delay={200}>
-                  <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
-                </Tooltip>
-              ) : null}
-            </>
-          ) : null}
+          {metaChips('hidden @2xl/issue:flex')}
           {renderActions?.(slotCtx)}
           <ChevronRight className={`h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
         </div>
@@ -329,7 +348,7 @@ export function IssueRow({
                   </section>
                 ) : null}
                 <DiagnosticContext issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
-                <AffectedResources issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+                <AffectedResources issue={issue} hideSubject={hideSubject} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
               </div>
             </div>
           </div>
@@ -519,11 +538,13 @@ function ageTitle(issue: Issue): string {
 
 function AffectedResources({
   issue,
+  hideSubject,
   resourceHref,
   onResourceClick,
   ResourceLinkIcon,
 }: {
   issue: Issue;
+  hideSubject?: boolean;
   resourceHref?: (ref: IssueResourceRef) => string;
   onResourceClick?: (ref: IssueResourceRef) => void;
   ResourceLinkIcon: ComponentType<{ className?: string }>;
@@ -532,14 +553,19 @@ function AffectedResources({
   // count is the backend fan-out size (members, subject excluded — see
   // grouping.go); fall back to the inline member count, not +1.
   const total = issue.count ?? members.length;
+  // With the subject suppressed and no fanned-out members, this section has
+  // nothing to show — return null so the divider row above it doesn't render empty.
+  if (hideSubject && members.length === 0) return null;
   return (
     <section className="flex flex-col gap-3">
       {/* The subject (the grouped thing — e.g. the Deployment) is always the
           first deep-link; members (the folded pods) follow. ResourceLine emits
           an <li>, so it needs a list parent of its own. */}
-      <ul className="flex flex-col gap-px">
-        <ResourceLine label="Subject" compact refForLink={subjectRef(issue)} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
-      </ul>
+      {!hideSubject && (
+        <ul className="flex flex-col gap-px">
+          <ResourceLine label="Subject" compact refForLink={subjectRef(issue)} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+        </ul>
+      )}
       {members.length > 0 && (
         <CardSection icon={Layers} label="Affected resources" labelExtra={`· ${total}`}>
           <ul className="flex flex-col gap-px">

@@ -410,7 +410,7 @@ export function AlertBanner({ variant, icon, title, message, items, children }: 
         {hasBody ? (
           <div className="flex-1 min-w-0">
             <div className={clsx('text-sm font-medium', colors.title, items && 'mb-1')}>{title}</div>
-            {message && <div className={clsx('text-xs mt-1 break-all', colors.message)}>{message}</div>}
+            {message && <div className={clsx('text-xs mt-1 break-words', colors.message)}>{message}</div>}
             {items && items.length > 0 && (
               <ul className={clsx('text-xs space-y-1', colors.list)}>
                 {items.map((item, i) => (

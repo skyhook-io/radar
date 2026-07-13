@@ -968,6 +968,7 @@ export function WorkloadView({
         renderOverviewLead={() => (
           <ResourceIssuesSection
             issues={liveIssues}
+            subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
             onResourceClick={
               rest.onNavigateToResource
                 ? (ref) =>
