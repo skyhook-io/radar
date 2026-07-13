@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,6 +35,7 @@ func (s *Server) handleArgoSync(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	opts = enforceArgoSelectiveSyncSafety(opts)
 	result, err := gitops.SyncArgoApp(r.Context(), client, namespace, name, opts)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "sync", namespace, name)
@@ -40,6 +43,52 @@ func (s *Server) handleArgoSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, toGitOpsResponse(result))
+}
+
+func enforceArgoSelectiveSyncSafety(opts gitops.ArgoSyncOptions) gitops.ArgoSyncOptions {
+	if len(opts.Resources) == 0 {
+		return opts
+	}
+	falseValue := false
+	opts.Revision = ""
+	opts.Prune = &falseValue
+	opts.ApplyOnly = &falseValue
+	return opts
+}
+
+func (s *Server) handleArgoValidateResource(w http.ResponseWriter, r *http.Request) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		log.Printf("[argo] Dynamic client unavailable for validating Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
+		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
+		return
+	}
+	var opts gitops.ArgoSyncOptions
+	if r.Body == nil || r.ContentLength == 0 {
+		s.writeError(w, http.StatusBadRequest, "validation request requires exactly one resource")
+		return
+	}
+	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid validation request: %v", err))
+		return
+	}
+	if len(opts.Resources) != 1 || opts.Resources[0].Kind == "" || opts.Resources[0].Name == "" {
+		s.writeError(w, http.StatusBadRequest, "validation request requires exactly one resource with kind and name")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	result, err := gitops.ValidateArgoResource(ctx, client, namespace, name, opts.Resources[0], opts)
+	if err != nil {
+		s.writeGitOpsError(w, err, "argo", "validate resource", namespace, name)
+		return
+	}
+	s.writeJSON(w, result)
 }
 
 // handleArgoRefresh triggers a refresh (re-read from git) on an ArgoCD Application
@@ -198,6 +247,8 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 	msg := err.Error()
 	var status int
 	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		status = http.StatusGatewayTimeout
 	case apierrors.IsNotFound(err):
 		status = http.StatusNotFound
 	case apierrors.IsForbidden(err):
@@ -213,6 +264,8 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 		// in a state where this verb can run".
 		status = http.StatusConflict
 	case errors.Is(err, gitops.ErrNoOperationInProgress):
+		status = http.StatusBadRequest
+	case errors.Is(err, gitops.ErrInvalidResourceSelection):
 		status = http.StatusBadRequest
 	default:
 		status = http.StatusInternalServerError

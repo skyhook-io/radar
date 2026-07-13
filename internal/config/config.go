@@ -17,6 +17,7 @@ type Config struct {
 	Kubeconfig        string   `json:"kubeconfig,omitempty"`
 	KubeconfigDirs    []string `json:"kubeconfigDirs,omitempty"`
 	Namespace         string   `json:"namespace,omitempty"`
+	Namespaces        []string `json:"namespaces,omitempty"`
 	Port              int      `json:"port,omitempty"`
 	NoBrowser         bool     `json:"noBrowser,omitempty"`
 	Browser           string   `json:"browser,omitempty"`
@@ -266,4 +267,10 @@ func ParseByteSize(raw string) (int64, error) {
 // suitable for use as a flag default value.
 func (c Config) KubeconfigDirsFlag() string {
 	return strings.Join(c.KubeconfigDirs, ",")
+}
+
+// NamespacesFlag returns Namespaces joined as a comma-separated string
+// suitable for use as a flag default value.
+func (c Config) NamespacesFlag() string {
+	return strings.Join(c.Namespaces, ",")
 }

@@ -15,6 +15,7 @@ Persistent defaults for CLI flags. CLI flags always override these values. Manag
   "kubeconfig": "",
   "kubeconfigDirs": [],
   "namespace": "",
+  "namespaces": [],
   "port": 9280,
   "noBrowser": false,
   "browser": "",
@@ -36,6 +37,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `kubeconfig` | Path to kubeconfig file (same as `--kubeconfig`) |
 | `kubeconfigDirs` | Directories containing kubeconfig files (same as `--kubeconfig-dir`) |
 | `namespace` | Initial namespace filter |
+| `namespaces` | Initial namespace filters as a list (same as `--namespaces ns1,ns2,ns3`) |
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
 | `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
@@ -123,6 +125,16 @@ When running in-cluster (using the pod's service account), context switching is 
 The header has a namespace picker on the right. Pick a single namespace to focus the view, or **All namespaces** to see everything you have access to. Cluster-scoped resources (Nodes, Namespaces, PVs, StorageClasses) appear regardless of the pick if your RBAC permits them — they have no namespace to filter on. Namespace-restricted users without their own cluster-scoped RBAC won't see cluster-scoped sections at all.
 
 The pick is a per-user view filter — it doesn't change anything for other users sharing the same Radar instance. Locally, your pick is remembered per kubeconfig context across restarts. In shared (auth-enabled) deployments the pick lives for the session.
+
+If your account can list resources inside several namespaces but cannot list namespaces cluster-wide, start Radar with an explicit list:
+
+```bash
+kubectl radar --namespaces ns1,ns2,ns3
+```
+
+Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. When Radar opens the browser itself, the list is also applied as the initial namespace selection. The picker can then switch between those namespaces or keep several selected at once.
+
+This currently applies to built-in resource types. Custom resources (CRDs — GitOps, Gateway API, etc.) still fall back to the first granted namespace when cluster-wide listing is denied; full multi-namespace CRD coverage is tracked separately. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
 
 When Radar starts with `--namespace-scope`, the picker controls the process-wide cache scope instead of just a view filter. Namespaced informer caches are pinned to one namespace while cluster-scoped resources remain cluster-wide. Local/no-auth sessions can switch the scoped namespace, which rebuilds the cache in place. Auth-enabled and Radar Cloud sessions lock the picker to the startup namespace so one user cannot reshape the shared backend cache for everyone.
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // RedirectHandler serves a minimal HTML page that redirects the Wails webview
@@ -11,17 +12,20 @@ import (
 // real localhost URL — all fetch, SSE, and WebSocket work identically to
 // browser mode.
 type RedirectHandler struct {
-	serverAddr string // e.g. "localhost:54321"
-	namespace  string // initial namespace filter (empty = all)
+	serverAddr string   // e.g. "localhost:54321"
+	namespace  string   // initial namespace filter (empty = all)
+	namespaces []string // initial namespace filters from --namespaces
 }
 
-func NewRedirectHandler(serverAddr, namespace string) *RedirectHandler {
-	return &RedirectHandler{serverAddr: serverAddr, namespace: namespace}
+func NewRedirectHandler(serverAddr, namespace string, namespaces []string) *RedirectHandler {
+	return &RedirectHandler{serverAddr: serverAddr, namespace: namespace, namespaces: append([]string(nil), namespaces...)}
 }
 
 func (h *RedirectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target := "http://" + h.serverAddr
-	if h.namespace != "" {
+	if len(h.namespaces) > 0 {
+		target += "?namespaces=" + url.QueryEscape(strings.Join(h.namespaces, ","))
+	} else if h.namespace != "" {
 		target += "?namespace=" + url.QueryEscape(h.namespace)
 	}
 

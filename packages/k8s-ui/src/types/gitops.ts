@@ -254,7 +254,7 @@ export interface ArgoAppStatus {
  * ArgoCD status patterns:
  * - sync.status: Synced, OutOfSync, Unknown
  * - health.status: Healthy, Progressing, Degraded, Suspended, Missing, Unknown
- * - operationState.phase: Running, Succeeded, Failed, Error
+ * - operationState.phase: Running, Terminating, Succeeded, Failed, Error
  */
 export function argoStatusToGitOpsStatus(status: ArgoAppStatus): GitOpsStatus {
   const syncStatus = status.sync?.status
@@ -267,7 +267,7 @@ export function argoStatusToGitOpsStatus(status: ArgoAppStatus): GitOpsStatus {
     sync = 'Synced'
   } else if (syncStatus === 'OutOfSync') {
     sync = 'OutOfSync'
-  } else if (opPhase === 'Running') {
+  } else if (opPhase === 'Running' || opPhase === 'Terminating') {
     sync = 'Reconciling'
   }
 
@@ -288,7 +288,7 @@ export function argoStatusToGitOpsStatus(status: ArgoAppStatus): GitOpsStatus {
   }
 
   // Override with operation state if active
-  if (opPhase === 'Running') {
+  if (opPhase === 'Running' || opPhase === 'Terminating') {
     health = 'Progressing'
   } else if (opPhase === 'Failed' || opPhase === 'Error') {
     health = 'Degraded'

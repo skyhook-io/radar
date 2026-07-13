@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -34,6 +35,45 @@ func TestValidateNamespaceScopeTarget(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseNamespaces(t *testing.T) {
+	got := ParseNamespaces(" team-a,team-b,,team-a , team-c ")
+	want := []string{"team-a", "team-b", "team-c"}
+	if len(got) != len(want) {
+		t.Fatalf("ParseNamespaces length = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ParseNamespaces[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestResolveNamespaceSelection(t *testing.T) {
+	t.Run("namespaces default wins over namespace config", func(t *testing.T) {
+		ns, nss, err := ResolveNamespaceSelection("legacy", "team-a,team-b", false, false)
+		if err != nil {
+			t.Fatalf("ResolveNamespaceSelection: %v", err)
+		}
+		if ns != "" || len(nss) != 2 || nss[0] != "team-a" || nss[1] != "team-b" {
+			t.Fatalf("got namespace=%q namespaces=%v, want namespaces team-a/team-b", ns, nss)
+		}
+	})
+	t.Run("explicit namespace overrides namespaces config", func(t *testing.T) {
+		ns, nss, err := ResolveNamespaceSelection("prod", "team-a,team-b", true, false)
+		if err != nil {
+			t.Fatalf("ResolveNamespaceSelection: %v", err)
+		}
+		if ns != "prod" || len(nss) != 0 {
+			t.Fatalf("got namespace=%q namespaces=%v, want prod only", ns, nss)
+		}
+	})
+	t.Run("explicit conflict", func(t *testing.T) {
+		if _, _, err := ResolveNamespaceSelection("prod", "team-a,team-b", true, true); err == nil {
+			t.Fatal("ResolveNamespaceSelection conflict returned nil error")
+		}
+	})
 }
 
 func TestConfigureNamespaceScopePreferenceResolverUsesSingleSavedLocalPick(t *testing.T) {
@@ -247,5 +287,24 @@ func TestConfigureNamespaceScopePreferenceResolverAuthDoesNotUseLocalSettings(t 
 	k8s.RestoreNamespaceScopePreference("ctx-a")
 	if got := k8s.GetNamespaceScopeTarget(); got != "" {
 		t.Fatalf("GetNamespaceScopeTarget() = %q, want empty", got)
+	}
+}
+
+func TestValidateNamespaceFanout(t *testing.T) {
+	full := make([]string, 20)
+	for i := range full {
+		full[i] = fmt.Sprintf("ns-%d", i)
+	}
+	if err := validateNamespaceFanout(full, "", 20); err != nil {
+		t.Fatalf("full list without context namespace should fit: %v", err)
+	}
+	if err := validateNamespaceFanout(full, "ns-3", 20); err != nil {
+		t.Fatalf("context namespace inside the list must not consume a slot: %v", err)
+	}
+	if err := validateNamespaceFanout(full, "other", 20); err == nil {
+		t.Fatal("distinct context namespace pushing past the cap must error")
+	}
+	if err := validateNamespaceFanout(full[:19], "other", 20); err != nil {
+		t.Fatalf("cap-1 list with distinct context namespace should fit: %v", err)
 	}
 }
