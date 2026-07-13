@@ -440,10 +440,7 @@ func TestOperationsPreserveNotFoundChain(t *testing.T) {
 	}
 }
 
-// TestSyncArgoAppSelectiveResources covers the selective-sync code path: a
-// non-empty Resources slice should produce sync.resources, an all-blank
-// slice should be filtered out and produce no sync.resources field, and
-// mixed entries should drop only the empty rows.
+// TestSyncArgoAppSelectiveResources covers the selective-sync wire shape.
 func TestSyncArgoAppSelectiveResources(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -456,29 +453,9 @@ func TestSyncArgoAppSelectiveResources(t *testing.T) {
 			want:      nil,
 		},
 		{
-			name: "all entries blank → resources field omitted",
-			resources: []ArgoSyncResource{
-				{Kind: "", Name: ""},
-				{Kind: "Deployment", Name: ""}, // missing name
-				{Kind: "", Name: "x"},          // missing kind
-			},
-			want: nil,
-		},
-		{
 			name: "single valid entry survives",
 			resources: []ArgoSyncResource{
 				{Group: "apps", Kind: "Deployment", Namespace: "demo", Name: "web"},
-			},
-			want: []map[string]any{
-				{"group": "apps", "kind": "Deployment", "namespace": "demo", "name": "web"},
-			},
-		},
-		{
-			name: "mixed valid + invalid drops only the invalid",
-			resources: []ArgoSyncResource{
-				{Kind: "Deployment", Name: ""},
-				{Group: "apps", Kind: "Deployment", Namespace: "demo", Name: "web"},
-				{Kind: "", Name: "ghost"},
 			},
 			want: []map[string]any{
 				{"group": "apps", "kind": "Deployment", "namespace": "demo", "name": "web"},
@@ -516,6 +493,23 @@ func TestSyncArgoAppSelectiveResources(t *testing.T) {
 	}
 }
 
+func TestSyncArgoAppRejectsIncompleteSelectiveResource(t *testing.T) {
+	resources := []ArgoSyncResource{
+		{Group: "apps", Kind: "Deployment", Namespace: "demo", Name: "web"},
+		{Kind: "Service"},
+	}
+	client := newFakeArgo(argoAppForTest("argocd", "demo", nil))
+	_, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{Resources: resources})
+	if !errors.Is(err, ErrInvalidResourceSelection) {
+		t.Fatalf("SyncArgoApp error = %v, want ErrInvalidResourceSelection", err)
+	}
+	for _, action := range client.Actions() {
+		if _, ok := action.(clienttesting.PatchAction); ok {
+			t.Fatalf("invalid selective sync issued a patch; actions=%v", client.Actions())
+		}
+	}
+}
+
 func TestSyncArgoAppDryRunDoesNotRequestHardRefresh(t *testing.T) {
 	dryRun := true
 	client := newFakeArgo(argoAppForTest("argocd", "demo", nil))
@@ -523,8 +517,70 @@ func TestSyncArgoAppDryRunDoesNotRequestHardRefresh(t *testing.T) {
 		t.Fatalf("SyncArgoApp: %v", err)
 	}
 	body := captureLastPatch(t, client)
-	if metadata := nestedMap(body, "metadata"); metadata != nil {
-		t.Fatalf("dry-run patch must not request a refresh, got metadata %#v", metadata)
+	if annotations := nestedMap(body, "metadata", "annotations"); annotations != nil {
+		t.Fatalf("dry-run patch must not request a refresh, got annotations %#v", annotations)
+	}
+}
+
+func TestArgoOperationPatchesUseResourceVersion(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		metadata, _ := obj["metadata"].(map[string]any)
+		metadata["resourceVersion"] = "17"
+		status, _ := obj["status"].(map[string]any)
+		status["history"] = []any{map[string]any{"id": int64(1)}}
+	})
+
+	t.Run("sync", func(t *testing.T) {
+		client := newFakeArgo(app.DeepCopy())
+		if _, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{}); err != nil {
+			t.Fatalf("SyncArgoApp: %v", err)
+		}
+		metadata := nestedMap(captureLastPatch(t, client), "metadata")
+		if metadata["resourceVersion"] != "17" {
+			t.Fatalf("sync resourceVersion = %#v, want 17", metadata["resourceVersion"])
+		}
+	})
+
+	t.Run("rollback", func(t *testing.T) {
+		client := newFakeArgo(app.DeepCopy())
+		if _, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 1}); err != nil {
+			t.Fatalf("RollbackArgoApp: %v", err)
+		}
+		metadata := nestedMap(captureLastPatch(t, client), "metadata")
+		if metadata["resourceVersion"] != "17" {
+			t.Fatalf("rollback resourceVersion = %#v, want 17", metadata["resourceVersion"])
+		}
+	})
+}
+
+func TestArgoOperationPatchConflictMapsToOperationInProgress(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		status, _ := obj["status"].(map[string]any)
+		status["history"] = []any{map[string]any{"id": int64(1)}}
+	})
+	cases := []struct {
+		name string
+		run  func(*fake.FakeDynamicClient) error
+	}{
+		{name: "sync", run: func(client *fake.FakeDynamicClient) error {
+			_, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{})
+			return err
+		}},
+		{name: "rollback", run: func(client *fake.FakeDynamicClient) error {
+			_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newFakeArgo(app.DeepCopy())
+			client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewConflict(argoAppGVR.GroupResource(), "demo", errors.New("changed"))
+			})
+			if err := tc.run(client); !errors.Is(err, ErrOperationInProgress) {
+				t.Fatalf("error = %v, want ErrOperationInProgress", err)
+			}
+		})
 	}
 }
 
@@ -554,8 +610,8 @@ func TestValidateArgoResourceStartsSafeSelectiveDryRun(t *testing.T) {
 		t.Fatalf("ValidateArgoResource error = %v, want context deadline", err)
 	}
 	body := captureLastPatch(t, client)
-	if metadata := nestedMap(body, "metadata"); metadata != nil {
-		t.Fatalf("validation patch must not request a refresh, got metadata %#v", metadata)
+	if annotations := nestedMap(body, "metadata", "annotations"); annotations != nil {
+		t.Fatalf("validation patch must not request a refresh, got annotations %#v", annotations)
 	}
 	sync := nestedMap(body, "operation", "sync")
 	if sync["dryRun"] != true || sync["prune"] != false {
@@ -983,6 +1039,8 @@ func TestTerminateArgoSyncJSONPatchRaceMapsToSentinel(t *testing.T) {
 
 func TestTerminateArgoSyncRequestsControllerTermination(t *testing.T) {
 	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		metadata, _ := obj["metadata"].(map[string]any)
+		metadata["resourceVersion"] = "23"
 		obj["operation"] = map[string]any{"sync": map[string]any{"revision": "abc123"}}
 		status, _ := obj["status"].(map[string]any)
 		status["operationState"] = map[string]any{"phase": "Running"}
@@ -1006,6 +1064,21 @@ func TestTerminateArgoSyncRequestsControllerTermination(t *testing.T) {
 	}
 	if operation, found, _ := unstructured.NestedFieldNoCopy(updated.Object, "operation"); !found || operation == nil {
 		t.Fatal("terminate removed spec.operation instead of leaving it for the Argo controller")
+	}
+	for _, action := range client.Actions() {
+		patchAction, ok := action.(clienttesting.PatchAction)
+		if !ok {
+			continue
+		}
+		var operations []map[string]any
+		if err := json.Unmarshal(patchAction.GetPatch(), &operations); err != nil {
+			t.Fatalf("decode terminate patch: %v", err)
+		}
+		for _, operation := range operations {
+			if operation["path"] == "/metadata/resourceVersion" {
+				t.Fatal("terminate must not reject a live operation because unrelated status updates changed resourceVersion")
+			}
+		}
 	}
 }
 

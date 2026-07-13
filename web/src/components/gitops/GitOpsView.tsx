@@ -775,6 +775,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             pending={argoSync.isPending}
             autoSyncEnabled={argoAutoSyncEnabled}
             validationPending={argoResourceValidation.isPending}
+            operationInProgress={operationInProgress}
             validationResult={argoResourceValidation.data}
             validationError={argoResourceValidation.error?.message}
             onCancel={closeArgoSyncDialog}

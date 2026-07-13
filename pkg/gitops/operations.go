@@ -43,6 +43,9 @@ var (
 	// ErrNoOperationInProgress: a terminate couldn't fire because there
 	// was no active operation. HTTP 400.
 	ErrNoOperationInProgress = errors.New("no operation in progress")
+	// ErrInvalidResourceSelection: a requested selective sync contains an
+	// incomplete resource identity. HTTP 400.
+	ErrInvalidResourceSelection = errors.New("invalid resource selection")
 	// ErrHistoryEntryNotFound: the requested rollback target id isn't in
 	// status.history. HTTP 404.
 	ErrHistoryEntryNotFound = errors.New("history entry not found")
@@ -215,6 +218,12 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 }
 
 func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string, opts ArgoSyncOptions, validationID string) (OperationResult, error) {
+	for i, resource := range opts.Resources {
+		if resource.Kind == "" || resource.Name == "" {
+			return OperationResult{}, fmt.Errorf("sync resource %d requires kind and name: %w", i+1, ErrInvalidResourceSelection)
+		}
+	}
+
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -272,9 +281,6 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	if len(opts.Resources) > 0 {
 		resources := make([]map[string]any, 0, len(opts.Resources))
 		for _, res := range opts.Resources {
-			if res.Kind == "" || res.Name == "" {
-				continue
-			}
 			resources = append(resources, map[string]any{
 				"group":     res.Group,
 				"kind":      res.Kind,
@@ -282,9 +288,7 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 				"name":      res.Name,
 			})
 		}
-		if len(resources) > 0 {
-			sync["resources"] = resources
-		}
+		sync["resources"] = resources
 	}
 	operation := map[string]any{
 		"initiatedBy": map[string]any{
@@ -300,10 +304,14 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	}
 	patch := map[string]any{
 		"operation": operation,
+		"metadata": map[string]any{
+			"resourceVersion": app.GetResourceVersion(),
+		},
 	}
 	dryRun := opts.DryRun != nil && *opts.DryRun
 	if !dryRun {
 		patch["metadata"] = map[string]any{
+			"resourceVersion": app.GetResourceVersion(),
 			"annotations": map[string]string{
 				"argocd.argoproj.io/refresh": "hard",
 			},
@@ -311,6 +319,9 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	}
 
 	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
+		if apierrors.IsConflict(err) {
+			return OperationResult{}, fmt.Errorf("Application changed before sync could start for %s/%s: %w", namespace, name, ErrOperationInProgress)
+		}
 		return OperationResult{}, fmt.Errorf("failed to sync Application %s/%s: %w", namespace, name, err)
 	}
 
@@ -595,9 +606,6 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	timestamp := time.Now().Format(time.RFC3339Nano)
 	message := "Termination requested"
 	patch := make([]map[string]any, 0, 4)
-	if resourceVersion := app.GetResourceVersion(); resourceVersion != "" {
-		patch = append(patch, map[string]any{"op": "test", "path": "/metadata/resourceVersion", "value": resourceVersion})
-	}
 	patch = append(patch, map[string]any{"op": "test", "path": "/status/operationState/phase", "value": "Running"})
 	if operationFound && operation != nil {
 		patch = append(patch,
@@ -695,6 +703,7 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 		rollback["dryRun"] = *opts.DryRun
 	}
 	patch := map[string]any{
+		"metadata": map[string]any{"resourceVersion": app.GetResourceVersion()},
 		"operation": map[string]any{
 			"initiatedBy": map[string]any{"username": "radar"},
 			"rollback":    rollback,
@@ -702,6 +711,9 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 	}
 
 	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
+		if apierrors.IsConflict(err) {
+			return OperationResult{}, fmt.Errorf("Application changed before rollback could start for %s/%s: %w", namespace, name, ErrOperationInProgress)
+		}
 		return OperationResult{}, fmt.Errorf("failed to rollback Application %s/%s: %w", namespace, name, err)
 	}
 
