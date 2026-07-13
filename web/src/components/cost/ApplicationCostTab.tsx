@@ -23,6 +23,7 @@ import {
 } from './format'
 import { isOpenCostWorkloadKind } from './kinds'
 import { CurrentAllocationUse } from './CurrentAllocationUse'
+import { costUnavailableReasonFromError } from './errors'
 
 type ApplicationCostState =
   | 'loading'
@@ -36,8 +37,8 @@ type ApplicationCostState =
 interface ApplicationCostQueryStatus {
   currentLoading?: boolean
   trendLoading?: boolean
-  currentError?: boolean
-  trendError?: boolean
+  currentError?: unknown
+  trendError?: unknown
 }
 
 interface ApplicationCostTabProps {
@@ -46,19 +47,32 @@ interface ApplicationCostTabProps {
   onSelectWorkloadCost?: (workload: AppWorkload) => void
 }
 
-export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: ApplicationCostTabProps) {
+export function ApplicationCostTab({
+  app,
+  workloads,
+  onSelectWorkloadCost,
+}: ApplicationCostTabProps) {
   const [range, setRange] = useState<CostTimeRange>('24h')
   const [noPrometheusSince, setNoPrometheusSince] = useState<number | null>(null)
-  const currentQuery = useOpenCostApplicationCost(workloads)
-  const trendQuery = useOpenCostApplicationCostTrend(workloads, range)
+  const supportedWorkloads = useMemo(() => applicationCostWorkloads(workloads), [workloads])
+  const unsupportedCount = workloads.length - supportedWorkloads.length
+  const queriesEnabled = supportedWorkloads.length > 0
+  const currentQuery = useOpenCostApplicationCost(supportedWorkloads, {
+    enabled: queriesEnabled,
+  })
+  const trendQuery = useOpenCostApplicationCostTrend(supportedWorkloads, range, {
+    enabled: queriesEnabled,
+  })
   const trendMatchesRange = trendQuery.data?.range === range
   const trendData = trendMatchesRange ? trendQuery.data : undefined
-  const trendLoading = trendQuery.isLoading || (trendQuery.isFetching && Boolean(trendQuery.data) && !trendMatchesRange)
+  const trendLoading =
+    trendQuery.isLoading ||
+    (trendQuery.isFetching && Boolean(trendQuery.data) && !trendMatchesRange)
   const state = getApplicationCostState(currentQuery.data, trendData, {
     currentLoading: currentQuery.isLoading,
     trendLoading,
-    currentError: currentQuery.isError,
-    trendError: trendQuery.isError,
+    currentError: currentQuery.error,
+    trendError: trendQuery.error,
   })
 
   useEffect(() => {
@@ -69,7 +83,6 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
     }
   }, [state])
 
-  const supportedCount = workloads.filter((w) => isOpenCostWorkloadKind(w.kind)).length
   const chartSeries = useMemo(() => applicationChartSeries(trendData), [trendData])
   const workloadByKey = useMemo(() => {
     const map = new Map<string, AppWorkload>()
@@ -77,7 +90,7 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
     return map
   }, [workloads])
 
-  if (supportedCount === 0) {
+  if (supportedWorkloads.length === 0) {
     return (
       <ApplicationCostUnavailable
         state="no_metrics"
@@ -128,9 +141,8 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
       ? (trend?.coverage ?? current?.coverage)
       : (current?.coverage ?? trend?.coverage)
   const included = coverage?.included ?? 0
-  const total = coverage?.total ?? workloads.length
+  const total = (coverage?.total ?? supportedWorkloads.length) + unsupportedCount
   const unavailableCount = coverage?.unavailable?.length ?? 0
-  const unsupportedCount = coverage?.unsupported?.length ?? 0
   const hourly = totals?.hourlyCost ?? 0
   const points = trend?.available ? (trend.dataPoints ?? []) : []
   const hasTrend = points.length >= 2 && points.some((p) => p.value > 0)
@@ -142,7 +154,8 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
       {(current?.partial ||
         trend?.partial ||
         state === 'partial_missing_history' ||
-        state === 'partial_missing_current') && (
+        state === 'partial_missing_current' ||
+        unsupportedCount > 0) && (
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-secondary">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
           <span>
@@ -166,11 +179,14 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
             <TrendingUp className="h-4 w-4 text-theme-text-tertiary" />
             <div>
               <div className="flex items-center gap-1.5">
-                <div className="text-sm font-semibold text-theme-text-primary">Application compute cost</div>
+                <div className="text-sm font-semibold text-theme-text-primary">
+                  Application compute cost
+                </div>
                 <CostInfoTooltip content="Dollars are based on OpenCost CPU and memory allocation over time, grouped by the workloads in this application. OpenCost allocation uses the greater of requested or observed resources." />
               </div>
               <div className="text-xs text-theme-text-tertiary">
-                OpenCost CPU and memory allocation rate ($/hr) for Deployment, StatefulSet, and DaemonSet workloads
+                OpenCost CPU and memory allocation rate ($/hr) for Deployment, StatefulSet, and
+                DaemonSet workloads
               </div>
             </div>
           </div>
@@ -195,7 +211,11 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
             <CostMetricBlock
               label="Projected monthly"
               value={totals ? formatProjectedMonthlyCost(hourly) : '—'}
-              subvalue={totals ? `${formatCostPerHour(hourly)} current rate` : 'Current allocation unavailable'}
+              subvalue={
+                totals
+                  ? `${formatCostPerHour(hourly)} current rate`
+                  : 'Current allocation unavailable'
+              }
             />
           </div>
           <div className="min-w-0">
@@ -222,12 +242,20 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
         <CostMetricTile
           label="Tracked workloads"
           value={`${included}/${total}`}
-          subvalue={unsupportedCount > 0 ? `${unsupportedCount} unsupported` : 'All supported workloads included'}
+          subvalue={
+            unsupportedCount > 0
+              ? `${unsupportedCount} unsupported`
+              : 'All supported workloads included'
+          }
         />
         <CostMetricTile
           label="Projected daily"
           value={totals ? formatProjectedDailyRate(hourly) : '—'}
-          subvalue={totals ? `${formatCostPerHour(hourly)} current hourly rate` : 'Current allocation unavailable'}
+          subvalue={
+            totals
+              ? `${formatCostPerHour(hourly)} current hourly rate`
+              : 'Current allocation unavailable'
+          }
         />
       </div>
 
@@ -246,7 +274,9 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
       <section className="rounded-lg border border-theme-border bg-theme-surface/50">
         <div className="flex items-center justify-between border-b border-theme-border px-4 py-3">
           <div>
-            <div className="text-sm font-semibold text-theme-text-primary">Workload contributors</div>
+            <div className="text-sm font-semibold text-theme-text-primary">
+              Workload contributors
+            </div>
             <div className="text-xs text-theme-text-tertiary">
               Projected monthly from current allocation, sorted by spend
             </div>
@@ -266,7 +296,11 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
                   key={applicationCostKey(row)}
                   row={row}
                   maxCost={maxCost}
-                  onOpen={appWorkload && onSelectWorkloadCost ? () => onSelectWorkloadCost(appWorkload) : undefined}
+                  onOpen={
+                    appWorkload && onSelectWorkloadCost
+                      ? () => onSelectWorkloadCost(appWorkload)
+                      : undefined
+                  }
                 />
               )
             })}
@@ -275,9 +309,9 @@ export function ApplicationCostTab({ app, workloads, onSelectWorkloadCost }: App
       </section>
 
       <div className="text-xs text-theme-text-tertiary">
-        Powered by OpenCost via Prometheus. Historical spend uses the selected range; projected monthly values multiply
-        current hourly allocation. Batch/job cost is separate; storage/PVC and network costs remain at namespace and
-        cluster level.
+        Powered by OpenCost via Prometheus. Historical spend uses the selected range; projected
+        monthly values multiply current hourly allocation. Batch/job cost is separate; storage/PVC
+        and network costs remain at namespace and cluster level.
       </div>
     </div>
   )
@@ -291,7 +325,8 @@ export function getApplicationCostState(
   const loading = Boolean(status.currentLoading || status.trendLoading)
   const queryError = Boolean(status.currentError || status.trendError)
   const currentHasData = current?.available === true && (current.coverage?.included ?? 0) > 0
-  const trendHasData = trend?.available === true && (trend.dataPoints ?? []).some((p) => p.value > 0)
+  const trendHasData =
+    trend?.available === true && (trend.dataPoints ?? []).some((p) => p.value > 0)
   if (currentHasData) {
     if (status.trendLoading && !trend) return 'data'
     if (status.trendError || (trend?.available === false && trend.reason !== 'no_metrics'))
@@ -301,13 +336,26 @@ export function getApplicationCostState(
     return 'data'
   }
   if (trendHasData) return 'partial_missing_current'
-  const reason = current?.reason ?? trend?.reason
-  if (reason === 'no_prometheus' || reason === 'query_error' || reason === 'access_denied' || reason === 'not_found')
+  const reason =
+    current?.reason ??
+    trend?.reason ??
+    costUnavailableReasonFromError(status.currentError) ??
+    costUnavailableReasonFromError(status.trendError)
+  if (
+    reason === 'no_prometheus' ||
+    reason === 'query_error' ||
+    reason === 'access_denied' ||
+    reason === 'not_found'
+  )
     return reason
   if (queryError) return 'load_error'
   if (loading) return 'loading'
 
   return 'no_metrics'
+}
+
+export function applicationCostWorkloads(workloads: AppWorkload[]): AppWorkload[] {
+  return workloads.filter((workload) => isOpenCostWorkloadKind(workload.kind))
 }
 
 function ApplicationWorkloadCostRow({
@@ -331,13 +379,17 @@ function ApplicationWorkloadCostRow({
             {row.kind}
           </span>
           <Tooltip content={`${row.kind} ${row.namespace}/${row.name}`} wrapperClassName="min-w-0">
-            <span className="block truncate text-sm font-medium text-theme-text-primary">{row.name}</span>
+            <span className="block truncate text-sm font-medium text-theme-text-primary">
+              {row.name}
+            </span>
           </Tooltip>
           <Tooltip content={row.namespace} wrapperClassName="shrink-0">
             <span className="text-xs text-theme-text-tertiary">{row.namespace}</span>
           </Tooltip>
         </div>
-        {!row.available && <div className="mt-0.5 text-xs text-theme-text-tertiary">{reasonLabel(row.reason)}</div>}
+        {!row.available && (
+          <div className="mt-0.5 text-xs text-theme-text-tertiary">{reasonLabel(row.reason)}</div>
+        )}
       </div>
       <div className="text-right text-sm font-medium tabular-nums text-theme-text-primary">
         {current ? formatProjectedMonthlyRate(hourly) : '—'}
@@ -346,7 +398,10 @@ function ApplicationWorkloadCostRow({
         {current ? formatCostPerHour(hourly) : '—'}
       </div>
       <div className="hidden min-w-0 items-center gap-2 md:flex">
-        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-theme-hover" style={{ maxWidth: `${barWidth}%` }}>
+        <div
+          className="h-1.5 flex-1 overflow-hidden rounded-full bg-theme-hover"
+          style={{ maxWidth: `${barWidth}%` }}
+        >
           <div className="flex h-full">
             <div className="h-full bg-accent" style={{ width: `${cpuPct}%` }} />
             <div className="h-full bg-amber-500" style={{ width: `${100 - cpuPct}%` }} />
@@ -379,7 +434,9 @@ function ApplicationWorkloadCostRow({
   )
 }
 
-function applicationChartSeries(trend: OpenCostApplicationCostTrendResponse | undefined): OpenCostTrendSeries[] {
+function applicationChartSeries(
+  trend: OpenCostApplicationCostTrendResponse | undefined,
+): OpenCostTrendSeries[] {
   return (trend?.series ?? [])
     .filter((series) => (series.dataPoints ?? []).length >= 2)
     .map((series) => ({
@@ -400,15 +457,24 @@ function reasonLabel(reason?: CostUnavailableReason) {
   return 'No workload cost metrics'
 }
 
-function ApplicationCostDiscovering({ isFetching, onRetry }: { isFetching: boolean; onRetry: () => void }) {
+function ApplicationCostDiscovering({
+  isFetching,
+  onRetry,
+}: {
+  isFetching: boolean
+  onRetry: () => void
+}) {
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center">
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
         <Loader2 className="h-8 w-8 animate-spin text-theme-text-tertiary/60" />
         <div>
-          <p className="text-sm font-medium text-theme-text-primary">Looking for Prometheus cost data…</p>
+          <p className="text-sm font-medium text-theme-text-primary">
+            Looking for Prometheus cost data…
+          </p>
           <p className="mt-1 text-xs text-theme-text-tertiary">
-            First discovery can take a few seconds while Radar checks cluster services and opens a local port-forward.
+            First discovery can take a few seconds while Radar checks cluster services and opens a
+            local port-forward.
           </p>
         </div>
         <button
@@ -453,11 +519,21 @@ function ApplicationCostUnavailable({
   )
 }
 
-function CostMetricBlock({ label, value, subvalue }: { label: string; value: string; subvalue?: string }) {
+function CostMetricBlock({
+  label,
+  value,
+  subvalue,
+}: {
+  label: string
+  value: string
+  subvalue?: string
+}) {
   return (
     <div>
       <div className="text-xs font-medium uppercase text-theme-text-tertiary">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-theme-text-primary tabular-nums">{value}</div>
+      <div className="mt-1 text-2xl font-semibold text-theme-text-primary tabular-nums">
+        {value}
+      </div>
       {subvalue && <div className="mt-1 text-xs text-theme-text-tertiary">{subvalue}</div>}
     </div>
   )

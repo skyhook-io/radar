@@ -267,7 +267,7 @@ func promRegexAlternation(values []string) string {
 		if i > 0 && value == prev {
 			continue
 		}
-		unique = append(unique, prom.EscapeRegexMeta(value))
+		unique = append(unique, prom.EscapeRegexMeta(prom.SanitizeLabelValue(value)))
 		prev = value
 	}
 	return strings.Join(unique, "|")

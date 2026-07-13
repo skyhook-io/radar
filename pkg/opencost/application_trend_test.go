@@ -80,6 +80,14 @@ func TestComputeApplicationCostTrendFromProm_PreservesConnectionFailureReason(t 
 	}
 }
 
+func TestPromRegexAlternationEscapesLabelAndRegexCharacters(t *testing.T) {
+	value := `worker"name.test`
+	want := prom.EscapeRegexMeta(prom.SanitizeLabelValue(value))
+	if got := promRegexAlternation([]string{value, value}); got != want {
+		t.Fatalf("promRegexAlternation() = %q, want %q", got, want)
+	}
+}
+
 func applicationTrendProm(t *testing.T, bodyForQuery func(string) string) *prom.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

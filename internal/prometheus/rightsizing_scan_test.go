@@ -106,6 +106,12 @@ func TestComputeRightsizingScanKeepsSameNamedContainersSeparate(t *testing.T) {
 			if query == "count(kube_pod_owner)" || query == "count(kube_replicaset_owner)" {
 				return ksmAvailable(), nil
 			}
+			if strings.Contains(query, "kube_pod_container_status_restarts_total") {
+				return &prom.QueryResult{Series: []prom.Series{
+					scanMatrixSeries("alpha", "Deployment", "api", "app", []float64{0}),
+					scanMatrixSeries("beta", "Deployment", "worker", "app", []float64{0}),
+				}}, nil
+			}
 			return &prom.QueryResult{}, nil
 		},
 		rangeFn: func(query string) (*prom.QueryResult, error) {
@@ -155,8 +161,54 @@ func TestRightsizingScanBatchesAtFiftyWithConstantQueries(t *testing.T) {
 	if got := len(client.rangeQueries); got != 9 {
 		t.Fatalf("range query count = %d, want three queries x three batches", got)
 	}
-	if got := len(client.queries); got != 5 {
-		t.Fatalf("instant query count = %d, want two KSM probes + one OOM query x three batches", got)
+	if got := len(client.queries); got != 8 {
+		t.Fatalf("instant query count = %d, want two KSM probes + two safety queries x three batches", got)
+	}
+}
+
+func TestRightsizingScanSafetyQueriesCoverHistoricalPodsAndReasons(t *testing.T) {
+	queries := buildRightsizingScanQueries([]scanWorkload{
+		scanTestWorkload("Deployment", "prod", "api", "app"),
+	})
+	for _, want := range []string{"increase(", "kube_pod_container_status_restarts_total", "[7d:5m]", "group_left(workload_kind,workload)"} {
+		if !strings.Contains(queries["restart_activity"], want) {
+			t.Errorf("restart query missing %q: %s", want, queries["restart_activity"])
+		}
+	}
+	for _, want := range []string{"max_over_time(", "last_terminated_timestamp", "last_terminated_reason", "reason", "[7d:5m]", "group_left(workload_kind,workload)"} {
+		if !strings.Contains(queries["termination_history"], want) {
+			t.Errorf("termination query missing %q: %s", want, queries["termination_history"])
+		}
+	}
+}
+
+func TestScanMemoryReductionRequiresVerifiedRestartHistory(t *testing.T) {
+	key := scanKey{namespace: "prod", kind: "Deployment", workload: "api", container: "app"}
+	workload := scanTestWorkload("Deployment", "prod", "api", "app")
+	tests := []struct {
+		name         string
+		restarts     map[scanKey]float64
+		terminations map[scanKey]terminationEvidence
+		wantReason   string
+		wantOOM      bool
+		wantRec      bool
+	}{
+		{name: "clean", restarts: map[scanKey]float64{key: 0}, terminations: map[scanKey]terminationEvidence{}, wantRec: true},
+		{name: "non OOM restart", restarts: map[scanKey]float64{key: 1}, terminations: map[scanKey]terminationEvidence{key: {Any: true}}, wantRec: true},
+		{name: "missing reason", restarts: map[scanKey]float64{key: 1}, terminations: map[scanKey]terminationEvidence{}, wantReason: "oom_evidence_unavailable"},
+		{name: "historical OOM", restarts: map[scanKey]float64{key: 2}, terminations: map[scanKey]terminationEvidence{key: {Any: true, OOM: true}}, wantReason: "oom_evidence", wantOOM: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			evidence := scanBatchEvidence{
+				memory:   map[scanKey][]float64{key: repeatedValues(50 * 1024 * 1024)},
+				restarts: tc.restarts, terminations: tc.terminations, errors: map[string]error{},
+			}
+			row := buildScanRow(workload.workload.containers[0], "memory", key, rightsizingMinSamples, workload.workload, evidence)
+			if row.RecommendationReason != tc.wantReason || row.WindowOOMEvidence != tc.wantOOM || (row.RecommendedReq != nil) != tc.wantRec {
+				t.Fatalf("row = %+v", row)
+			}
+		})
 	}
 }
 
@@ -242,13 +294,13 @@ func TestRightsizingScanDoesNotCallRestrictedEmptyScopeComplete(t *testing.T) {
 
 func TestRecommendationSafetySuppressesUnknownHPAAndOOM(t *testing.T) {
 	cpu := RightsizingRow{HPAEvidenceAvailable: false}
-	classifyRequestFit(&cpu, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
+	classifyRightsizingFit(&cpu, 0.05, mustQuantity(t, "200m"), mustQuantity(t, "1"), "cpu")
 	if cpu.RecommendedReq != nil || cpu.RecommendationReason != "hpa_evidence_unavailable" {
 		t.Fatalf("unknown HPA evidence did not suppress CPU recommendation: %+v", cpu)
 	}
 
 	memory := RightsizingRow{HPAEvidenceAvailable: true, OOMEvidenceAvailable: false}
-	classifyRequestFit(&memory, 50*1024*1024, mustQuantity(t, "256Mi"), mustQuantity(t, "1Gi"), "memory")
+	classifyRightsizingFit(&memory, 50*1024*1024, mustQuantity(t, "256Mi"), mustQuantity(t, "1Gi"), "memory")
 	if memory.RecommendedReq != nil || memory.RecommendationReason != "oom_evidence_unavailable" {
 		t.Fatalf("unknown OOM evidence did not suppress memory downsize: %+v", memory)
 	}
@@ -258,14 +310,14 @@ func TestUnknownHPAEvidencePermitsIncreaseGuidance(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		req  *resource.Quantity
-		fit  RequestFit
+		fit  RightsizingFit
 	}{
 		{name: "under-requested", req: mustQuantity(t, "100m"), fit: FitUnderRequested},
 		{name: "missing request", fit: FitMissingRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			row := RightsizingRow{HPAEvidenceAvailable: false}
-			classifyRequestFit(&row, 0.2, test.req, nil, "cpu")
+			classifyRightsizingFit(&row, 0.2, test.req, nil, "cpu")
 			if row.Fit != test.fit || row.RecommendedReq == nil || row.RecommendationReason != "" {
 				t.Fatalf("unknown HPA evidence suppressed increase guidance: %+v", row)
 			}

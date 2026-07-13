@@ -2,8 +2,6 @@ package opencost
 
 import "sort"
 
-// BuildApplicationCostResponse folds namespace workload-cost responses into a
-// single app-scoped current-cost response.
 func BuildApplicationCostResponse(inputs []ApplicationWorkloadCostInput, unavailable []ApplicationWorkloadStatus, unsupported []ApplicationWorkloadRef, namespaceCosts map[string]*WorkloadCostResponse) *ApplicationCostResponse {
 	out := &ApplicationCostResponse{
 		Coverage: ApplicationCostCoverage{
@@ -62,8 +60,6 @@ func BuildApplicationCostResponse(inputs []ApplicationWorkloadCostInput, unavail
 	return out
 }
 
-// UnavailableApplicationCostResponse returns a shaped app response for
-// cluster-wide failures that happen before per-namespace cost can be queried.
 func UnavailableApplicationCostResponse(inputs []ApplicationWorkloadCostInput, unavailable []ApplicationWorkloadStatus, unsupported []ApplicationWorkloadRef, reason string) *ApplicationCostResponse {
 	statuses := make([]ApplicationWorkloadStatus, 0, len(inputs)+len(unavailable))
 	statuses = append(statuses, unavailable...)
@@ -162,8 +158,6 @@ func addApplicationCostTotal(total *ApplicationCostTotals, wl WorkloadCost) {
 }
 
 func finalizeApplicationCostTotals(total *ApplicationCostTotals) {
-	allocCost := total.CPUCost + total.MemoryCost
-	usageCost := total.CPUUsageCost + total.MemoryUsageCost
 	if total.CPUUsageAvailable {
 		total.CPUAllocationUse = efficiencyPct(total.CPUUsageCost, total.CPUCost)
 	}
@@ -175,10 +169,6 @@ func finalizeApplicationCostTotals(total *ApplicationCostTotals) {
 	total.MemoryCost = roundTo(total.MemoryCost, 4)
 	total.CPUUsageCost = roundTo(total.CPUUsageCost, 4)
 	total.MemoryUsageCost = roundTo(total.MemoryUsageCost, 4)
-	if total.CPUUsageAvailable && total.MemoryUsageAvailable {
-		total.Efficiency = efficiencyPct(usageCost, allocCost)
-		total.IdleCost = roundTo(idleFromUsage(usageCost, allocCost), 4)
-	}
 }
 
 func applicationUnavailableReason(statuses []ApplicationWorkloadStatus) string {

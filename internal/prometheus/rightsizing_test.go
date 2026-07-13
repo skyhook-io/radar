@@ -29,13 +29,26 @@ func containerResult(values map[string]float64) *prom.QueryResult {
 	return result
 }
 
+func terminationResult(containerReasons map[string][]string) *prom.QueryResult {
+	result := &prom.QueryResult{ResultType: "vector"}
+	for container, reasons := range containerReasons {
+		for _, reason := range reasons {
+			result.Series = append(result.Series, prom.Series{
+				Labels:     map[string]string{"container": container, "reason": reason},
+				DataPoints: []prom.DataPoint{{Value: 1}},
+			})
+		}
+	}
+	return result
+}
+
 func mustQuantity(t *testing.T, s string) *resource.Quantity {
 	t.Helper()
 	q := resource.MustParse(s)
 	return &q
 }
 
-func TestClassifyRequestFit(t *testing.T) {
+func TestClassifyRightsizingFit(t *testing.T) {
 	q := func(s string) *resource.Quantity { return mustQuantity(t, s) }
 
 	tests := []struct {
@@ -44,7 +57,7 @@ func TestClassifyRequestFit(t *testing.T) {
 		req, lim                   *resource.Quantity
 		resource                   string
 		hpa, oom                   bool
-		wantFit                    RequestFit
+		wantFit                    RightsizingFit
 		wantRec, wantLimitConflict bool
 		wantReason                 string
 	}{
@@ -66,7 +79,7 @@ func TestClassifyRequestFit(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			row := RightsizingRow{HPAManaged: tc.hpa, HPAEvidenceAvailable: true, CurrentPodOOM: tc.oom, OOMEvidenceAvailable: true}
-			classifyRequestFit(&row, tc.observed, tc.req, tc.lim, tc.resource)
+			classifyRightsizingFit(&row, tc.observed, tc.req, tc.lim, tc.resource)
 			if row.Fit != tc.wantFit {
 				t.Errorf("fit = %s, want %s", row.Fit, tc.wantFit)
 			}
@@ -176,8 +189,10 @@ func TestComputeRightsizingUsesGroupedEvidence(t *testing.T) {
 			return containerResult(map[string]float64{"server": 100 * 1024 * 1024}), nil
 		case strings.HasPrefix(query, "max_over_time") && strings.Contains(query, "container_cpu_cfs_throttled"):
 			return containerResult(map[string]float64{"server": 0.2}), nil
+		case strings.Contains(query, "kube_pod_container_status_restarts_total"):
+			return containerResult(map[string]float64{"server": 0}), nil
 		case strings.Contains(query, "last_terminated_timestamp"):
-			return containerResult(nil), nil
+			return terminationResult(nil), nil
 		default:
 			return nil, errors.New("unexpected query")
 		}
@@ -194,12 +209,78 @@ func TestComputeRightsizingUsesGroupedEvidence(t *testing.T) {
 	if cpu.Fit != FitOversized || cpu.Confidence != ConfidenceHigh || cpu.RecommendedReq == nil {
 		t.Errorf("CPU row = %+v", cpu)
 	}
-	if cpu.ThrottleRatio == nil || *cpu.ThrottleRatio != 0.2 || response.Summary.Throttled != 1 {
-		t.Errorf("throttle evidence not preserved: row=%+v summary=%+v", cpu, response.Summary)
+	if cpu.ThrottleRatio == nil || *cpu.ThrottleRatio != 0.2 {
+		t.Errorf("throttle evidence not preserved: row=%+v", cpu)
 	}
 	memory := response.Rows[1]
-	if memory.Observed == nil || memory.Observed.Name != "Max" || memory.Fit != FitOversized {
+	if memory.Observed == nil || memory.Observed.Name != "Max" || memory.Fit != FitOversized || !memory.OOMEvidenceAvailable || memory.RecommendedReq == nil {
 		t.Errorf("memory row = %+v", memory)
+	}
+}
+
+func TestMemoryReductionRequiresVerifiedRestartHistory(t *testing.T) {
+	tests := []struct {
+		name               string
+		restarts           queryOutcome
+		terminations       queryOutcome
+		wantAvailable      bool
+		wantWindowOOM      bool
+		wantReason         string
+		wantRecommendation bool
+	}{
+		{
+			name:          "clean window",
+			restarts:      queryOutcome{values: map[string]float64{"server": 0}},
+			terminations:  queryOutcome{terminations: map[string]terminationEvidence{}},
+			wantAvailable: true, wantRecommendation: true,
+		},
+		{
+			name:          "non OOM restart with reason",
+			restarts:      queryOutcome{values: map[string]float64{"server": 1}},
+			terminations:  queryOutcome{terminations: map[string]terminationEvidence{"server": {Any: true}}},
+			wantAvailable: true, wantRecommendation: true,
+		},
+		{
+			name:         "restart without termination reason",
+			restarts:     queryOutcome{values: map[string]float64{"server": 1}},
+			terminations: queryOutcome{terminations: map[string]terminationEvidence{}},
+			wantReason:   "oom_evidence_unavailable",
+		},
+		{
+			name:          "OOM followed by another termination",
+			restarts:      queryOutcome{values: map[string]float64{"server": 2}},
+			terminations:  queryOutcome{terminations: map[string]terminationEvidence{"server": {Any: true, OOM: true}}},
+			wantAvailable: true, wantWindowOOM: true, wantReason: "oom_evidence",
+		},
+		{
+			name:         "restart query failure",
+			restarts:     queryOutcome{err: errors.New("metric unavailable")},
+			terminations: queryOutcome{terminations: map[string]terminationEvidence{}},
+			wantReason:   "oom_evidence_unavailable",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			results := map[string]queryOutcome{
+				"memory_stat":         {values: map[string]float64{"server": 50 * 1024 * 1024}},
+				"memory_coverage":     {values: map[string]float64{"server": 2016}},
+				"restart_activity":    tc.restarts,
+				"termination_history": tc.terminations,
+			}
+			workload := rightsizingWorkload{hpaAvailable: true, currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}}
+			container := containerSpec{name: "server", memReq: mustQuantity(t, "256Mi")}
+			row := buildRightsizingRow(container, "memory", 2016, OwnerCoverageKSMHistory, workload, results)
+			if row.OOMEvidenceAvailable != tc.wantAvailable || row.WindowOOMEvidence != tc.wantWindowOOM || row.RecommendationReason != tc.wantReason || (row.RecommendedReq != nil) != tc.wantRecommendation {
+				t.Fatalf("row = %+v", row)
+			}
+		})
+	}
+}
+
+func TestTerminationEvidenceKeepsHistoricalOOMReason(t *testing.T) {
+	evidence := terminationEvidenceByContainer(terminationResult(map[string][]string{"server": {"Error", "OOMKilled"}}))
+	if !evidence["server"].Any || !evidence["server"].OOM {
+		t.Fatalf("termination evidence = %+v", evidence)
 	}
 }
 
@@ -229,7 +310,7 @@ func TestWorkloadSelectionFallsBackToExactCurrentPods(t *testing.T) {
 		t.Errorf("sparse current-pod confidence = %q, want low", got)
 	}
 	for key, query := range buildRightsizingQueries("prod", selection) {
-		if key != "oom" && !strings.Contains(query, `pod=~"^(api-6ccf7b8d9-x1)$"`) {
+		if !strings.Contains(query, `pod=~"^(api-6ccf7b8d9-x1)$"`) {
 			t.Errorf("%s does not apply exact pods directly to its metric selector: %s", key, query)
 		}
 		if strings.Contains(query, `and on (namespace,pod) {`) {
@@ -238,14 +319,6 @@ func TestWorkloadSelectionFallsBackToExactCurrentPods(t *testing.T) {
 	}
 	if len(queries) != 1 || !strings.Contains(queries[0], `owner_name="api"`) {
 		t.Errorf("KSM ownership probe must use exact owner identity: %v", queries)
-	}
-}
-
-func TestQueryErrorsHaveTheirOwnSummaryBucket(t *testing.T) {
-	summary := RightsizingSummary{}
-	addFitSummary(&summary, RightsizingRow{Fit: FitInsufficientHistory, QueryError: "usage query failed"})
-	if summary.QueryErrors != 1 || summary.InsufficientHistory != 0 {
-		t.Errorf("summary = %+v, want one query error and no insufficient-history result", summary)
 	}
 }
 

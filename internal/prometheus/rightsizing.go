@@ -32,22 +32,22 @@ var (
 	errWorkloadMissing = errors.New("workload not found")
 )
 
-type RequestFit string
+type RightsizingFit string
 
 const (
-	FitBalanced            RequestFit = "balanced"
-	FitOversized           RequestFit = "oversized"
-	FitUnderRequested      RequestFit = "under_requested"
-	FitMissingRequest      RequestFit = "missing_request"
-	FitInsufficientHistory RequestFit = "insufficient_history"
+	FitBalanced            RightsizingFit = "balanced"
+	FitOversized           RightsizingFit = "oversized"
+	FitUnderRequested      RightsizingFit = "under_requested"
+	FitMissingRequest      RightsizingFit = "missing_request"
+	FitInsufficientHistory RightsizingFit = "insufficient_history"
 )
 
-type RequestFitConfidence string
+type RightsizingConfidence string
 
 const (
-	ConfidenceLow    RequestFitConfidence = "low"
-	ConfidenceMedium RequestFitConfidence = "medium"
-	ConfidenceHigh   RequestFitConfidence = "high"
+	ConfidenceLow    RightsizingConfidence = "low"
+	ConfidenceMedium RightsizingConfidence = "medium"
+	ConfidenceHigh   RightsizingConfidence = "high"
 )
 
 type OwnerCoverage string
@@ -66,8 +66,8 @@ type ObservedStatistic struct {
 type RightsizingRow struct {
 	Container               string               `json:"container"`
 	Resource                string               `json:"resource"`
-	Fit                     RequestFit           `json:"fit"`
-	Confidence              RequestFitConfidence `json:"confidence"`
+	Fit                     RightsizingFit        `json:"fit"`
+	Confidence              RightsizingConfidence `json:"confidence"`
 	CurrentRequest          *string              `json:"currentRequest,omitempty"`
 	CurrentRequestValue     *float64             `json:"currentRequestValue,omitempty"`
 	CurrentLimit            *string              `json:"currentLimit,omitempty"`
@@ -95,29 +95,17 @@ type RightsizingRow struct {
 	QueryError              string               `json:"queryError,omitempty"`
 }
 
-type RightsizingSummary struct {
-	Balanced            int `json:"balanced"`
-	Oversized           int `json:"oversized"`
-	UnderRequested      int `json:"underRequested"`
-	MissingRequest      int `json:"missingRequest"`
-	InsufficientHistory int `json:"insufficientHistory"`
-	QueryErrors         int `json:"queryErrors"`
-	Throttled           int `json:"throttled"`
-	OOMEvidence         int `json:"oomEvidence"`
-}
-
 type RightsizingResponse struct {
-	Kind            string             `json:"kind"`
-	Namespace       string             `json:"namespace"`
-	Name            string             `json:"name"`
-	Window          string             `json:"window"`
-	Source          string             `json:"source"`
-	OwnerCoverage   OwnerCoverage      `json:"ownerCoverage"`
-	ScaledToZero    bool               `json:"scaledToZero"`
-	SampleAvailable bool               `json:"sampleAvailable"`
-	Rows            []RightsizingRow   `json:"rows"`
-	Summary         RightsizingSummary `json:"summary"`
-	Reason          string             `json:"reason,omitempty"`
+	Kind            string           `json:"kind"`
+	Namespace       string           `json:"namespace"`
+	Name            string           `json:"name"`
+	Window          string           `json:"window"`
+	Source          string           `json:"source"`
+	OwnerCoverage   OwnerCoverage    `json:"ownerCoverage"`
+	ScaledToZero    bool             `json:"scaledToZero"`
+	SampleAvailable bool             `json:"sampleAvailable"`
+	Rows            []RightsizingRow `json:"rows"`
+	Reason          string           `json:"reason,omitempty"`
 }
 
 const (
@@ -388,8 +376,14 @@ type rightsizingQuerier interface {
 }
 
 type queryOutcome struct {
-	values map[string]float64
-	err    error
+	values       map[string]float64
+	terminations map[string]terminationEvidence
+	err          error
+}
+
+type terminationEvidence struct {
+	Any bool
+	OOM bool
 }
 
 func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, namespace, name string, workload rightsizingWorkload) RightsizingResponse {
@@ -406,7 +400,6 @@ func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, na
 		for _, resourceName := range []string{"cpu", "memory"} {
 			row := buildRightsizingRow(container, resourceName, expected, coverage, workload, results)
 			resp.Rows = append(resp.Rows, row)
-			addFitSummary(&resp.Summary, row)
 		}
 	}
 	for _, row := range resp.Rows {
@@ -417,7 +410,7 @@ func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, na
 	}
 	if !resp.SampleAvailable {
 		if results["cpu_stat"].err != nil || results["cpu_coverage"].err != nil || results["memory_stat"].err != nil || results["memory_coverage"].err != nil {
-			resp.Reason = "Prometheus request-fit queries failed."
+			resp.Reason = "Prometheus rightsizing queries failed."
 		} else if len(workload.podNames) == 0 && coverage == OwnerCoverageCurrentPods {
 			resp.Reason = "No current or retained workload ownership samples are available."
 		} else {
@@ -476,15 +469,17 @@ func buildRightsizingQueries(namespace string, selection metricSelection) map[st
 	memory := fmt.Sprintf(`max by (container) (container_memory_working_set_bytes{namespace="%s"%s,container!="",container!="POD"} %s)`, ns, podMatcher, selection.join)
 	throttled := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_throttled_periods_total{namespace="%s"%s,container!="",container!="POD"}[5m]) %s)`, ns, podMatcher, selection.join)
 	periods := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_periods_total{namespace="%s"%s,container!="",container!="POD"}[5m]) %s)`, ns, podMatcher, selection.join)
-	oom := fmt.Sprintf(`max by (container) (kube_pod_container_status_last_terminated_timestamp{namespace="%s"%s} * on (namespace,pod,container) group_left() max by (namespace,pod,container) (kube_pod_container_status_last_terminated_reason{namespace="%s"%s,reason="OOMKilled"}) %s) > (time() - 604800)`, ns, podMatcher, ns, podMatcher, selection.join)
+	restarts := fmt.Sprintf(`max by (namespace,pod,container) (kube_pod_container_status_restarts_total{namespace="%s"%s,container!=""} %s)`, ns, podMatcher, selection.join)
+	terminations := fmt.Sprintf(`max by (namespace,pod,container,reason) (kube_pod_container_status_last_terminated_timestamp{namespace="%s"%s,container!=""} * on (namespace,pod,container) group_left(reason) max by (namespace,pod,container,reason) (kube_pod_container_status_last_terminated_reason{namespace="%s"%s,container!=""}) %s)`, ns, podMatcher, ns, podMatcher, selection.join)
 	return map[string]string{
-		"cpu_stat":        fmt.Sprintf(`quantile_over_time(0.95, (%s)[7d:5m])`, cpu),
-		"cpu_peak":        fmt.Sprintf(`quantile_over_time(0.99, (%s)[7d:5m])`, cpu),
-		"cpu_coverage":    fmt.Sprintf(`count_over_time((%s)[7d:5m])`, cpu),
-		"memory_stat":     fmt.Sprintf(`max_over_time((%s)[7d:5m])`, memory),
-		"memory_coverage": fmt.Sprintf(`count_over_time((%s)[7d:5m])`, memory),
-		"throttle":        fmt.Sprintf(`max_over_time(((%s) / (%s))[7d:5m])`, throttled, periods),
-		"oom":             oom,
+		"cpu_stat":            fmt.Sprintf(`quantile_over_time(0.95, (%s)[7d:5m])`, cpu),
+		"cpu_peak":            fmt.Sprintf(`quantile_over_time(0.99, (%s)[7d:5m])`, cpu),
+		"cpu_coverage":        fmt.Sprintf(`count_over_time((%s)[7d:5m])`, cpu),
+		"memory_stat":         fmt.Sprintf(`max_over_time((%s)[7d:5m])`, memory),
+		"memory_coverage":     fmt.Sprintf(`count_over_time((%s)[7d:5m])`, memory),
+		"throttle":            fmt.Sprintf(`max_over_time(((%s) / (%s))[7d:5m])`, throttled, periods),
+		"restart_activity":    fmt.Sprintf(`sum by (container) (increase((%s)[7d:5m]))`, restarts),
+		"termination_history": fmt.Sprintf(`max by (container,reason) (max_over_time((%s)[7d:5m])) > (time() - 604800)`, terminations),
 	}
 }
 
@@ -501,6 +496,9 @@ func runRightsizingQueries(ctx context.Context, client rightsizingQuerier, queri
 			result, err := client.Query(ctx, query)
 			<-sem
 			outcome := queryOutcome{values: resultByContainer(result), err: err}
+			if key == "termination_history" {
+				outcome.terminations = terminationEvidenceByContainer(result)
+			}
 			if err != nil {
 				errorlog.Record("prometheus", "warning", "rightsizing query %s failed: %v", key, err)
 			}
@@ -529,6 +527,27 @@ func resultByContainer(result *prom.QueryResult) map[string]float64 {
 	return values
 }
 
+func terminationEvidenceByContainer(result *prom.QueryResult) map[string]terminationEvidence {
+	values := map[string]terminationEvidence{}
+	if result == nil {
+		return values
+	}
+	for _, series := range result.Series {
+		if len(series.DataPoints) == 0 || series.DataPoints[0].Value <= 0 {
+			continue
+		}
+		container := series.Labels["container"]
+		if container == "" {
+			continue
+		}
+		evidence := values[container]
+		evidence.Any = true
+		evidence.OOM = evidence.OOM || series.Labels["reason"] == "OOMKilled"
+		values[container] = evidence
+	}
+	return values
+}
+
 func buildRightsizingRow(container containerSpec, resourceName string, expected int, ownerCoverage OwnerCoverage, workload rightsizingWorkload, results map[string]queryOutcome) RightsizingRow {
 	row := RightsizingRow{Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow, ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable}
 	var req, lim *resource.Quantity
@@ -539,9 +558,13 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 		req, lim = container.memReq, container.memLim
 		statistic = "Max"
 		row.CurrentPodOOM = workload.currentPodOOM[container.name]
-		if oom := results["oom"]; oom.err == nil {
-			row.OOMEvidenceAvailable = true
-			_, row.WindowOOMEvidence = oom.values[container.name]
+		restarts := results["restart_activity"]
+		terminations := results["termination_history"]
+		if restarts.err == nil && terminations.err == nil {
+			restartActivity, restartAvailable := restarts.values[container.name]
+			termination := terminations.terminations[container.name]
+			row.WindowOOMEvidence = termination.OOM
+			row.OOMEvidenceAvailable = termination.OOM || (restartAvailable && (restartActivity <= 0 || termination.Any))
 		}
 	}
 	setCurrentQuantities(&row, req, lim, resourceName)
@@ -585,7 +608,7 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 		row.RecommendationReason = "insufficient_history"
 		return row
 	}
-	classifyRequestFit(&row, observed, req, lim, resourceName)
+	classifyRightsizingFit(&row, observed, req, lim, resourceName)
 	return row
 }
 
@@ -604,7 +627,7 @@ func setCurrentQuantities(row *RightsizingRow, req, lim *resource.Quantity, reso
 	}
 }
 
-func confidenceFor(samples int, coverage float64, ownerCoverage OwnerCoverage) RequestFitConfidence {
+func confidenceFor(samples int, coverage float64, ownerCoverage OwnerCoverage) RightsizingConfidence {
 	if samples < rightsizingMinSamples {
 		return ConfidenceLow
 	}
@@ -617,7 +640,7 @@ func confidenceFor(samples int, coverage float64, ownerCoverage OwnerCoverage) R
 	return ConfidenceLow
 }
 
-func classifyRequestFit(row *RightsizingRow, observed float64, req, lim *resource.Quantity, resourceName string) {
+func classifyRightsizingFit(row *RightsizingRow, observed float64, req, lim *resource.Quantity, resourceName string) {
 	calculated := calculatedRequest(observed, resourceName)
 	calculatedValue := quantityToFloat(resource.MustParse(calculated), resourceName)
 	minimum := float64(rightsizingMemoryMin)
@@ -679,31 +702,6 @@ func classifyRequestFit(row *RightsizingRow, observed float64, req, lim *resourc
 	row.RecommendedReq = &recommended
 	row.RecommendedRequestValue = &recommendedValue
 	row.ReductionLimited = reductionLimited
-}
-
-func addFitSummary(summary *RightsizingSummary, row RightsizingRow) {
-	if row.QueryError != "" {
-		summary.QueryErrors++
-		return
-	}
-	switch row.Fit {
-	case FitBalanced:
-		summary.Balanced++
-	case FitOversized:
-		summary.Oversized++
-	case FitUnderRequested:
-		summary.UnderRequested++
-	case FitMissingRequest:
-		summary.MissingRequest++
-	case FitInsufficientHistory:
-		summary.InsufficientHistory++
-	}
-	if row.ThrottleRatio != nil && *row.ThrottleRatio >= 0.1 {
-		summary.Throttled++
-	}
-	if row.CurrentPodOOM || row.WindowOOMEvidence {
-		summary.OOMEvidence++
-	}
 }
 
 func calculatedRequest(observed float64, resourceName string) string {

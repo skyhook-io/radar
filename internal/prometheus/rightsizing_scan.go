@@ -48,21 +48,13 @@ type RightsizingScanCoverage struct {
 	UnavailableKinds    []string `json:"unavailableKinds,omitempty"`
 }
 
-type RightsizingScanSummary struct {
-	Workloads           int                `json:"workloads"`
-	ActionableWorkloads int                `json:"actionableWorkloads"`
-	Recommendations     int                `json:"recommendations"`
-	Fit                 RightsizingSummary `json:"fit"`
-}
-
 type RightsizingScanWorkload struct {
-	Kind         string             `json:"kind"`
-	Namespace    string             `json:"namespace"`
-	Name         string             `json:"name"`
-	Replicas     int                `json:"replicas"`
-	ScaledToZero bool               `json:"scaledToZero"`
-	Rows         []RightsizingRow   `json:"rows"`
-	Summary      RightsizingSummary `json:"summary"`
+	Kind         string           `json:"kind"`
+	Namespace    string           `json:"namespace"`
+	Name         string           `json:"name"`
+	Replicas     int              `json:"replicas"`
+	ScaledToZero bool             `json:"scaledToZero"`
+	Rows         []RightsizingRow `json:"rows"`
 }
 
 type RightsizingScanResponse struct {
@@ -70,7 +62,6 @@ type RightsizingScanResponse struct {
 	ScannedAt time.Time                 `json:"scannedAt"`
 	Window    string                    `json:"window"`
 	Source    string                    `json:"source"`
-	Summary   RightsizingScanSummary    `json:"summary"`
 	Coverage  RightsizingScanCoverage   `json:"coverage"`
 	Workloads []RightsizingScanWorkload `json:"workloads"`
 	Warnings  []RightsizingScanWarning  `json:"warnings,omitempty"`
@@ -98,11 +89,12 @@ type scanKey struct {
 }
 
 type scanBatchEvidence struct {
-	cpu      map[scanKey][]float64
-	memory   map[scanKey][]float64
-	throttle map[scanKey][]float64
-	oom      map[scanKey]bool
-	errors   map[string]error
+	cpu          map[scanKey][]float64
+	memory       map[scanKey][]float64
+	throttle     map[scanKey][]float64
+	restarts     map[scanKey]float64
+	terminations map[scanKey]terminationEvidence
+	errors       map[string]error
 }
 
 func ScanRightsizing(ctx context.Context, scope RightsizingScanScope) RightsizingScanResponse {
@@ -200,7 +192,9 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 			if workloadHasData(out) {
 				resp.Coverage.WorkloadsWithData++
 			}
-			addScanSummary(&resp.Summary, out)
+			if workloadHasUnavailableOOMEvidence(out) {
+				appendScanWarning(&resp, "oom_evidence_unavailable", "Restart history was incomplete for some memory recommendations.")
+			}
 		}
 	}
 
@@ -226,7 +220,7 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 	queries := buildRightsizingScanQueries(batch)
 	out := scanBatchEvidence{
 		cpu: map[scanKey][]float64{}, memory: map[scanKey][]float64{}, throttle: map[scanKey][]float64{},
-		oom: map[scanKey]bool{}, errors: map[string]error{},
+		restarts: map[scanKey]float64{}, terminations: map[scanKey]terminationEvidence{}, errors: map[string]error{},
 	}
 	start := now.Add(-rightsizingWindow)
 	var mu sync.Mutex
@@ -265,12 +259,35 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 		}()
 	}
 	wg.Wait()
-	oomResult, err := client.Query(ctx, queries["oom"])
-	if err != nil {
-		out.errors["oom"] = err
-	} else {
-		out.oom = scanOOMValues(oomResult)
+	for _, key := range []string{"restart_activity", "termination_history"} {
+		key := key
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				mu.Lock()
+				out.errors[key] = ctx.Err()
+				mu.Unlock()
+				return
+			}
+			result, err := client.Query(ctx, queries[key])
+			<-sem
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				out.errors[key] = err
+				return
+			}
+			if key == "restart_activity" {
+				out.restarts = scanVectorValues(result)
+			} else {
+				out.terminations = scanTerminationEvidence(result)
+			}
+		}()
 	}
+	wg.Wait()
 	return out
 }
 
@@ -283,8 +300,15 @@ func buildRightsizingScanQueries(batch []scanWorkload) map[string]string {
 	memory := fmt.Sprintf(`max by (%s) (container_memory_working_set_bytes{%s,container!="",container!="POD"} * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, owner)
 	throttled := fmt.Sprintf(`sum by (%s) (rate(container_cpu_cfs_throttled_periods_total{%s,container!="",container!="POD"}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, owner)
 	periods := fmt.Sprintf(`sum by (%s) (rate(container_cpu_cfs_periods_total{%s,container!="",container!="POD"}[5m]) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, owner)
-	oom := fmt.Sprintf(`max by (%s) (kube_pod_container_status_last_terminated_timestamp{%s} * on (namespace,pod,container) group_left() max by (namespace,pod,container) (kube_pod_container_status_last_terminated_reason{%s,reason="OOMKilled"}) * on (namespace,pod) group_left(workload_kind,workload) (%s)) > (time() - 604800)`, group, nsMatcher, nsMatcher, owner)
-	return map[string]string{"cpu": cpu, "memory": memory, "throttle": fmt.Sprintf(`(%s) / (%s)`, throttled, periods), "oom": oom}
+	restarts := fmt.Sprintf(`max by (%s,pod) (kube_pod_container_status_restarts_total{%s,container!=""} * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, owner)
+	terminations := fmt.Sprintf(`max by (%s,pod,reason) (kube_pod_container_status_last_terminated_timestamp{%s,container!=""} * on (namespace,pod,container) group_left(reason) max by (namespace,pod,container,reason) (kube_pod_container_status_last_terminated_reason{%s,container!=""}) * on (namespace,pod) group_left(workload_kind,workload) (%s))`, group, nsMatcher, nsMatcher, owner)
+	return map[string]string{
+		"cpu":                 cpu,
+		"memory":              memory,
+		"throttle":            fmt.Sprintf(`(%s) / (%s)`, throttled, periods),
+		"restart_activity":    fmt.Sprintf(`sum by (%s) (increase((%s)[7d:5m]))`, group, restarts),
+		"termination_history": fmt.Sprintf(`max by (%s,reason) (max_over_time((%s)[7d:5m])) > (time() - 604800)`, group, terminations),
+	}
 }
 
 func rightsizingScanOwnerVector(batch []scanWorkload) string {
@@ -365,16 +389,34 @@ func scanMatrixValues(result *prom.QueryResult) map[scanKey][]float64 {
 	return values
 }
 
-func scanOOMValues(result *prom.QueryResult) map[scanKey]bool {
-	values := map[scanKey]bool{}
+func scanVectorValues(result *prom.QueryResult) map[scanKey]float64 {
+	values := map[scanKey]float64{}
 	if result == nil {
 		return values
 	}
 	for _, series := range result.Series {
 		key, ok := scanSeriesKey(series.Labels)
-		if ok && len(series.DataPoints) > 0 && series.DataPoints[0].Value > 0 {
-			values[key] = true
+		if ok && len(series.DataPoints) > 0 && !math.IsNaN(series.DataPoints[0].Value) && !math.IsInf(series.DataPoints[0].Value, 0) {
+			values[key] = series.DataPoints[0].Value
 		}
+	}
+	return values
+}
+
+func scanTerminationEvidence(result *prom.QueryResult) map[scanKey]terminationEvidence {
+	values := map[scanKey]terminationEvidence{}
+	if result == nil {
+		return values
+	}
+	for _, series := range result.Series {
+		key, ok := scanSeriesKey(series.Labels)
+		if !ok || len(series.DataPoints) == 0 || series.DataPoints[0].Value <= 0 {
+			continue
+		}
+		evidence := values[key]
+		evidence.Any = true
+		evidence.OOM = evidence.OOM || series.Labels["reason"] == "OOMKilled"
+		values[key] = evidence
 	}
 	return values
 }
@@ -392,7 +434,6 @@ func buildScanWorkload(input scanWorkload, evidence scanBatchEvidence) Rightsizi
 		for _, resourceName := range []string{"cpu", "memory"} {
 			row := buildScanRow(container, resourceName, key, expected, input.workload, evidence)
 			out.Rows = append(out.Rows, row)
-			addFitSummary(&out.Summary, row)
 		}
 	}
 	return out
@@ -411,8 +452,12 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		statistic = "Max"
 		series = evidence.memory[key]
 		row.CurrentPodOOM = workload.currentPodOOM[container.name]
-		row.OOMEvidenceAvailable = evidence.errors["oom"] == nil
-		row.WindowOOMEvidence = evidence.oom[key]
+		if evidence.errors["restart_activity"] == nil && evidence.errors["termination_history"] == nil {
+			restartActivity, restartAvailable := evidence.restarts[key]
+			termination := evidence.terminations[key]
+			row.WindowOOMEvidence = termination.OOM
+			row.OOMEvidenceAvailable = termination.OOM || (restartAvailable && (restartActivity <= 0 || termination.Any))
+		}
 	}
 	setCurrentQuantities(&row, request, limit, resourceName)
 	if queryErr := evidence.errors[resourceName]; queryErr != nil {
@@ -445,7 +490,7 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		row.RecommendationReason = "insufficient_history"
 		return row
 	}
-	classifyRequestFit(&row, observed, request, limit, resourceName)
+	classifyRightsizingFit(&row, observed, request, limit, resourceName)
 	return row
 }
 
@@ -490,19 +535,13 @@ func workloadHasData(workload RightsizingScanWorkload) bool {
 	return false
 }
 
-func addScanSummary(summary *RightsizingScanSummary, workload RightsizingScanWorkload) {
-	summary.Workloads++
-	actionable := false
+func workloadHasUnavailableOOMEvidence(workload RightsizingScanWorkload) bool {
 	for _, row := range workload.Rows {
-		addFitSummary(&summary.Fit, row)
-		if row.RecommendedReq != nil {
-			summary.Recommendations++
-			actionable = true
+		if row.Resource == "memory" && row.RecommendationReason == "oom_evidence_unavailable" {
+			return true
 		}
 	}
-	if actionable {
-		summary.ActionableWorkloads++
-	}
+	return false
 }
 
 func appendScanWarning(resp *RightsizingScanResponse, code, message string) {

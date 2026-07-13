@@ -57,12 +57,23 @@ export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   for (const [k, v] of Object.entries(getAuthHeaders())) {
     if (!headers.has(k)) headers.set(k, v)
   }
-  return fetch(input, { credentials: getCredentialsMode(), ...init, headers }).then(async response => {
+  return fetch(input, {
+    credentials: getCredentialsMode(),
+    ...init,
+    headers,
+  }).then(async (response) => {
     const authPrefix = `${getBasename()}/auth`
     if (response.status === 401 && !window.location.pathname.startsWith(authPrefix)) {
       // Save current location so user returns to where they were after re-auth.
       // Editor draft is auto-saved by EditableYamlView via sessionStorage.
-      try { sessionStorage.setItem('radar_return_path', window.location.pathname + window.location.search) } catch { /* best-effort */ }
+      try {
+        sessionStorage.setItem(
+          'radar_return_path',
+          window.location.pathname + window.location.search,
+        )
+      } catch {
+        /* best-effort */
+      }
 
       let authMode: string | undefined
       try {
@@ -81,7 +92,11 @@ export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         const lastReload = sessionStorage.getItem('radar_proxy_reload')
         const now = Date.now()
         if (!lastReload || now - parseInt(lastReload) > 5000) {
-          try { sessionStorage.setItem('radar_proxy_reload', String(now)) } catch { /* best-effort */ }
+          try {
+            sessionStorage.setItem('radar_proxy_reload', String(now))
+          } catch {
+            /* best-effort */
+          }
           window.location.reload()
         }
       }
@@ -110,11 +125,12 @@ const METRICS_API_GROUP_TOKENS = ['metrics', 'k8s', 'io'] as const
 
 function mentionsMetricsAPIGroup(message: string): boolean {
   const tokens = message.split(/[^a-z0-9]+/).filter(Boolean)
-  return tokens.some((token, index) => (
-    token === METRICS_API_GROUP_TOKENS[0] &&
-    tokens[index + 1] === METRICS_API_GROUP_TOKENS[1] &&
-    tokens[index + 2] === METRICS_API_GROUP_TOKENS[2]
-  ))
+  return tokens.some(
+    (token, index) =>
+      token === METRICS_API_GROUP_TOKENS[0] &&
+      tokens[index + 1] === METRICS_API_GROUP_TOKENS[1] &&
+      tokens[index + 2] === METRICS_API_GROUP_TOKENS[2],
+  )
 }
 
 function hasMetricsUnavailablePhrase(message: string): boolean {
@@ -137,12 +153,11 @@ export function isMetricsUnavailableError(error: unknown): boolean {
   return [error.message, error.data?.error].some((message) => {
     if (typeof message !== 'string') return false
     const normalized = message.toLowerCase()
-    const hasMetricsSignal = (
+    const hasMetricsSignal =
       normalized.includes('metrics-server') ||
       mentionsMetricsAPIGroup(normalized) ||
       normalized.includes('pod metrics') ||
       normalized.includes('node metrics')
-    )
     return hasMetricsSignal && hasMetricsUnavailablePhrase(normalized)
   })
 }
@@ -213,7 +228,13 @@ export interface MetricSummary {
 }
 
 export interface DashboardResourceCounts {
-  pods: { total: number; running: number; pending: number; failed: number; succeeded: number }
+  pods: {
+    total: number
+    running: number
+    pending: number
+    failed: number
+    succeeded: number
+  }
   deployments: { total: number; available: number; unavailable: number }
   statefulSets: WorkloadCount
   daemonSets: WorkloadCount
@@ -296,7 +317,15 @@ export interface DashboardCRDCount {
 }
 
 // Re-export shared types from k8s-ui — single source of truth
-import type { AuditCardData, AuditFinding, ResourceGroup, CheckMeta, Check, Issue, IssueRecentChange } from '@skyhook-io/k8s-ui'
+import type {
+  AuditCardData,
+  AuditFinding,
+  ResourceGroup,
+  CheckMeta,
+  Check,
+  Issue,
+  IssueRecentChange,
+} from '@skyhook-io/k8s-ui'
 export type DashboardAudit = AuditCardData
 export type { AuditFinding, ResourceGroup, CheckMeta, Check }
 
@@ -365,7 +394,11 @@ export interface DashboardResponse {
   networkPolicyCoverage: DashboardNetworkPolicyCoverage | null
   audit: DashboardAudit | null
   gitopsControllers: DashboardGitOpsControllers | null
-  nodeVersionSkew: { versions: Record<string, string[]>; minVersion: string; maxVersion: string } | null
+  nodeVersionSkew: {
+    versions: Record<string, string[]>
+    minVersion: string
+    maxVersion: string
+  } | null
   deferredLoading?: boolean // True while deferred informers (secrets, events, etc.) are still syncing
   partialData?: string[] // Critical kinds promoted at first paint that haven't yet finished syncing (live-filtered)
   accessRestricted?: boolean // True when user has no namespace access (RBAC)
@@ -441,7 +474,13 @@ export function useResourceAudit(kind: string, namespace: string, name: string) 
 // the "Operational Issues" section in the resource detail. Cluster-scoped
 // resources pass "_" for namespace; namespaced ones also scope the scan via
 // ?namespaces= for a cheap, bounded Compose.
-export function useResourceIssues(kind: string, group: string | undefined, namespace: string, name: string, enabled = true) {
+export function useResourceIssues(
+  kind: string,
+  group: string | undefined,
+  namespace: string,
+  name: string,
+  enabled = true,
+) {
   const clusterScoped = !namespace
   const pathNs = clusterScoped ? '_' : encodeURIComponent(namespace)
   const params = new URLSearchParams()
@@ -554,7 +593,8 @@ export interface OpenCostNamespaceCost {
   idleCost?: number
 }
 
-export type CostUnavailableReason = 'no_prometheus' | 'no_metrics' | 'query_error' | 'access_denied' | 'not_found'
+export type CostUnavailableReason =
+  'no_prometheus' | 'no_metrics' | 'query_error' | 'access_denied' | 'not_found'
 
 export interface OpenCostSummary {
   available: boolean
@@ -570,7 +610,10 @@ export interface OpenCostSummary {
 
 const noPrometheusFirstSeenAt = new Map<string, number>()
 
-function costRefetchInterval(defaultInterval: number | false = COST_REFRESH_INTERVAL_MS, contextName?: string) {
+function costRefetchInterval(
+  defaultInterval: number | false = COST_REFRESH_INTERVAL_MS,
+  contextName?: string,
+) {
   return (query: {
     queryHash?: string
     queryKey?: unknown
@@ -585,7 +628,9 @@ function costRefetchInterval(defaultInterval: number | false = COST_REFRESH_INTE
       const now = Date.now()
       const firstSeenAt = noPrometheusFirstSeenAt.get(queryID) ?? now
       noPrometheusFirstSeenAt.set(queryID, firstSeenAt)
-      return now - firstSeenAt < COST_DISCOVERY_GRACE_MS ? COST_DISCOVERY_RETRY_INTERVAL_MS : defaultInterval
+      return now - firstSeenAt < COST_DISCOVERY_GRACE_MS
+        ? COST_DISCOVERY_RETRY_INTERVAL_MS
+        : defaultInterval
     }
     noPrometheusFirstSeenAt.delete(queryID)
     return defaultInterval
@@ -648,15 +693,22 @@ export interface OpenCostWorkloadDetailResponse {
   current?: OpenCostWorkloadCost
 }
 
-export function useOpenCostWorkload(kind: string, namespace: string, name: string, options?: { enabled?: boolean }) {
+export function useOpenCostWorkload(
+  kind: string,
+  namespace: string,
+  name: string,
+  options?: { enabled?: boolean },
+) {
   const clusterInfo = useClusterInfo()
   return useQuery<OpenCostWorkloadDetailResponse>({
     queryKey: ['opencost-workload', kind, namespace, name],
-    queryFn: () => fetchJSON(`/opencost/workload/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`),
+    queryFn: () =>
+      fetchJSON(
+        `/opencost/workload/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+      ),
     enabled: (options?.enabled ?? true) && Boolean(kind && namespace && name),
     staleTime: 30000,
     refetchInterval: costRefetchInterval(COST_REFRESH_INTERVAL_MS, clusterInfo.data?.context),
-    placeholderData: (prev) => prev,
   })
 }
 
@@ -702,15 +754,23 @@ export interface OpenCostWorkloadTrendResponse {
   dataPoints?: OpenCostTrendDataPoint[]
 }
 
-export function useOpenCostWorkloadTrend(kind: string, namespace: string, name: string, range_: CostTimeRange = '24h', options?: { enabled?: boolean }) {
+export function useOpenCostWorkloadTrend(
+  kind: string,
+  namespace: string,
+  name: string,
+  range_: CostTimeRange = '24h',
+  options?: { enabled?: boolean },
+) {
   const clusterInfo = useClusterInfo()
   return useQuery<OpenCostWorkloadTrendResponse>({
     queryKey: ['opencost-workload-trend', kind, namespace, name, range_],
-    queryFn: () => fetchJSON(`/opencost/workload/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/trend?range=${range_}`),
+    queryFn: () =>
+      fetchJSON(
+        `/opencost/workload/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/trend?range=${range_}`,
+      ),
     enabled: (options?.enabled ?? true) && Boolean(kind && namespace && name),
     staleTime: 60000,
     refetchInterval: costRefetchInterval(COST_TREND_REFRESH_INTERVAL_MS, clusterInfo.data?.context),
-    placeholderData: (prev) => prev,
   })
 }
 
@@ -743,8 +803,6 @@ export interface OpenCostApplicationCostTotals {
   memoryUsageAvailable: boolean
   cpuAllocationUse: number
   memoryAllocationUse: number
-  efficiency?: number
-  idleCost?: number
 }
 
 export interface OpenCostApplicationWorkloadCost extends OpenCostApplicationWorkloadRef {
@@ -779,49 +837,64 @@ export interface OpenCostApplicationCostTrendResponse {
   coverage: OpenCostApplicationCostCoverage
 }
 
-function stableOpenCostWorkloadRefs(workloads: OpenCostApplicationWorkloadRef[]): OpenCostApplicationWorkloadRef[] {
+function stableOpenCostWorkloadRefs(
+  workloads: OpenCostApplicationWorkloadRef[],
+): OpenCostApplicationWorkloadRef[] {
   const byKey = new Map<string, OpenCostApplicationWorkloadRef>()
   for (const workload of workloads) {
     if (!workload.kind || !workload.namespace || !workload.name) continue
-    const ref = { kind: workload.kind, namespace: workload.namespace, name: workload.name }
+    const ref = {
+      kind: workload.kind,
+      namespace: workload.namespace,
+      name: workload.name,
+    }
     byKey.set(`${ref.namespace}/${ref.kind}/${ref.name}`, ref)
   }
-  return [...byKey.values()].sort((a, b) => `${a.namespace}/${a.kind}/${a.name}`.localeCompare(`${b.namespace}/${b.kind}/${b.name}`))
+  return [...byKey.values()].sort((a, b) =>
+    `${a.namespace}/${a.kind}/${a.name}`.localeCompare(`${b.namespace}/${b.kind}/${b.name}`),
+  )
 }
 
-export function useOpenCostApplicationCost(workloads: OpenCostApplicationWorkloadRef[], options?: { enabled?: boolean }) {
+export function useOpenCostApplicationCost(
+  workloads: OpenCostApplicationWorkloadRef[],
+  options?: { enabled?: boolean },
+) {
   const clusterInfo = useClusterInfo()
   const refs = stableOpenCostWorkloadRefs(workloads)
   return useQuery<OpenCostApplicationCostResponse>({
     queryKey: ['opencost-application', refs],
-    queryFn: ({ signal }) => fetchJSON('/opencost/application', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workloads: refs }),
-      signal,
-    }),
+    queryFn: ({ signal }) =>
+      fetchJSON('/opencost/application', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workloads: refs }),
+        signal,
+      }),
     enabled: (options?.enabled ?? true) && refs.length > 0,
     staleTime: 30000,
     refetchInterval: costRefetchInterval(COST_REFRESH_INTERVAL_MS, clusterInfo.data?.context),
-    placeholderData: (prev) => prev,
   })
 }
 
-export function useOpenCostApplicationCostTrend(workloads: OpenCostApplicationWorkloadRef[], range_: CostTimeRange = '24h', options?: { enabled?: boolean }) {
+export function useOpenCostApplicationCostTrend(
+  workloads: OpenCostApplicationWorkloadRef[],
+  range_: CostTimeRange = '24h',
+  options?: { enabled?: boolean },
+) {
   const clusterInfo = useClusterInfo()
   const refs = stableOpenCostWorkloadRefs(workloads)
   return useQuery<OpenCostApplicationCostTrendResponse>({
     queryKey: ['opencost-application-trend', refs, range_],
-    queryFn: ({ signal }) => fetchJSON('/opencost/application/trend', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workloads: refs, range: range_ }),
-      signal,
-    }),
+    queryFn: ({ signal }) =>
+      fetchJSON('/opencost/application/trend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workloads: refs, range: range_ }),
+        signal,
+      }),
     enabled: (options?.enabled ?? true) && refs.length > 0,
     staleTime: 60000,
     refetchInterval: costRefetchInterval(COST_TREND_REFRESH_INTERVAL_MS, clusterInfo.data?.context),
-    placeholderData: (prev) => prev,
   })
 }
 
@@ -1009,7 +1082,15 @@ const SEARCH_MIN_QUERY = 2
 // health/issueCount per hit (rich rows). React Query's AbortSignal cancels
 // overlapping scans on a new query. keepPreviousData avoids flicker while the
 // next query resolves.
-export function useSearch(query: string, opts?: { limit?: number; context?: 'summary' | 'none'; enabled?: boolean; globalNs?: boolean }) {
+export function useSearch(
+  query: string,
+  opts?: {
+    limit?: number
+    context?: 'summary' | 'none'
+    enabled?: boolean
+    globalNs?: boolean
+  },
+) {
   const trimmed = query.trim()
   const enabled = (opts?.enabled ?? true) && trimmed.length >= SEARCH_MIN_QUERY
   const limit = opts?.limit ?? 20
@@ -1021,7 +1102,10 @@ export function useSearch(query: string, opts?: { limit?: number; context?: 'sum
   return useQuery<SearchResult>({
     queryKey: ['search', trimmed, limit, context, globalNs],
     queryFn: ({ signal }) =>
-      fetchJSON<SearchResult>(`/search?q=${encodeURIComponent(trimmed)}&limit=${limit}&include=none&context=${context}${globalNs ? '&globalNs=1' : ''}`, signal),
+      fetchJSON<SearchResult>(
+        `/search?q=${encodeURIComponent(trimmed)}&limit=${limit}&include=none&context=${context}${globalNs ? '&globalNs=1' : ''}`,
+        signal,
+      ),
     enabled,
     staleTime: 2000,
     placeholderData: (prev) => prev, // keepPreviousData
@@ -1056,7 +1140,10 @@ export function useCapabilities() {
 
 // Namespace-scoped capabilities. Users with namespace-scoped RoleBindings may
 // have these permissions in specific namespaces.
-export function useNamespaceCapabilities(namespace: string | undefined, globalCaps: Capabilities | undefined) {
+export function useNamespaceCapabilities(
+  namespace: string | undefined,
+  globalCaps: Capabilities | undefined,
+) {
   const needsCheck = namespace && globalCaps
   return useQuery<Capabilities>({
     queryKey: ['capabilities', namespace],
@@ -1095,7 +1182,11 @@ export function useAuthMe() {
 // CloudRole.AtLeast — the frontend must agree with the backend on what
 // "member-or-higher" means; otherwise we'd hide a button the
 // backend would happily honor (or vice versa).
-const CLOUD_ROLE_RANK: Record<string, number> = { viewer: 1, member: 2, owner: 3 }
+const CLOUD_ROLE_RANK: Record<string, number> = {
+  viewer: 1,
+  member: 2,
+  owner: 3,
+}
 
 /**
  * useCloudRole returns the caller's Cloud tier (`owner` / `member` /
@@ -1176,7 +1267,15 @@ export function useNamespaces() {
 }
 
 // Topology (for manual refresh)
-export function useTopology(namespaces: string[], viewMode: string = 'resources', options?: { enabled?: boolean; includeReplicaSets?: boolean; refetchInterval?: number | false }) {
+export function useTopology(
+  namespaces: string[],
+  viewMode: string = 'resources',
+  options?: {
+    enabled?: boolean
+    includeReplicaSets?: boolean
+    refetchInterval?: number | false
+  },
+) {
   const params = new URLSearchParams()
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
   if (viewMode) params.set('view', viewMode)
@@ -1209,7 +1308,11 @@ export function useApplications(namespaces: string[], options?: { enabled?: bool
   })
 }
 
-export function useApplicationHistory(appKey: string | undefined, namespaces: string[], options?: { enabled?: boolean }) {
+export function useApplicationHistory(
+  appKey: string | undefined,
+  namespaces: string[],
+  options?: { enabled?: boolean },
+) {
   const params = new URLSearchParams()
   if (appKey) params.set('app', appKey)
   if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
@@ -1224,7 +1327,14 @@ export function useApplicationHistory(appKey: string | undefined, namespaces: st
   })
 }
 
-export function useGitOpsTree(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = [], options?: { enabled?: boolean }) {
+export function useGitOpsTree(
+  kind: string,
+  namespace: string,
+  name: string,
+  group?: string,
+  namespaces: string[] = [],
+  options?: { enabled?: boolean },
+) {
   const ns = namespace || '_'
   const params = new URLSearchParams()
   if (group) params.set('group', group)
@@ -1233,7 +1343,8 @@ export function useGitOpsTree(kind: string, namespace: string, name: string, gro
 
   return useQuery<GitOpsResourceTree>({
     queryKey: ['gitops-tree', kind, namespace, name, group, namespaces],
-    queryFn: () => fetchJSON(`/gitops/tree/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
+    queryFn: () =>
+      fetchJSON(`/gitops/tree/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
     enabled: Boolean(kind && name) && (options?.enabled ?? true),
     staleTime: 5000,
   })
@@ -1245,7 +1356,13 @@ export function useGitOpsTree(kind: string, namespace: string, name: string, gro
 // auto-quiesces on completion.
 const INSIGHTS_RUNNING_POLL_MS = 2000
 
-export function useGitOpsInsights(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = []) {
+export function useGitOpsInsights(
+  kind: string,
+  namespace: string,
+  name: string,
+  group?: string,
+  namespaces: string[] = [],
+) {
   const ns = namespace || '_'
   const params = new URLSearchParams()
   if (group) params.set('group', group)
@@ -1254,7 +1371,8 @@ export function useGitOpsInsights(kind: string, namespace: string, name: string,
 
   return useQuery<GitOpsInsight>({
     queryKey: ['gitops-insights', kind, namespace, name, group, namespaces],
-    queryFn: () => fetchJSON(`/gitops/insights/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
+    queryFn: () =>
+      fetchJSON(`/gitops/insights/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
     enabled: Boolean(kind && name),
     staleTime: 5000,
     refetchInterval: (query) => {
@@ -1266,7 +1384,13 @@ export function useGitOpsInsights(kind: string, namespace: string, name: string,
 
 // Generic resource fetching - returns resource with relationships
 // Uses '_' as placeholder for cluster-scoped resources (empty namespace)
-export function useResource<T>(kind: string, namespace: string, name: string, group?: string, options?: { enabled?: boolean; refetchInterval?: number | false }) {
+export function useResource<T>(
+  kind: string,
+  namespace: string,
+  name: string,
+  group?: string,
+  options?: { enabled?: boolean; refetchInterval?: number | false },
+) {
   // For cluster-scoped resources, use '_' as namespace placeholder
   const ns = namespace || '_'
   const params = new URLSearchParams()
@@ -1275,8 +1399,9 @@ export function useResource<T>(kind: string, namespace: string, name: string, gr
 
   const query = useQuery<ResourceWithRelationships<T>>({
     queryKey: ['resource', kind, namespace, name, group],
-    queryFn: () => fetchJSON(`/resources/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
-    enabled: (options?.enabled ?? true) && Boolean(kind && name),  // namespace can be empty for cluster-scoped resources
+    queryFn: () =>
+      fetchJSON(`/resources/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
+    enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
     refetchInterval: options?.refetchInterval,
   })
 
@@ -1291,7 +1416,12 @@ export function useResource<T>(kind: string, namespace: string, name: string, gr
 }
 
 // Hook that returns full response with relationships explicitly
-export function useResourceWithRelationships<T>(kind: string, namespace: string, name: string, group?: string) {
+export function useResourceWithRelationships<T>(
+  kind: string,
+  namespace: string,
+  name: string,
+  group?: string,
+) {
   const ns = namespace || '_'
   const params = new URLSearchParams()
   if (group) params.set('group', group)
@@ -1299,7 +1429,8 @@ export function useResourceWithRelationships<T>(kind: string, namespace: string,
 
   return useQuery<ResourceWithRelationships<T>>({
     queryKey: ['resource', kind, namespace, name, group],
-    queryFn: () => fetchJSON(`/resources/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
+    queryFn: () =>
+      fetchJSON(`/resources/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
     enabled: Boolean(kind && name),
   })
 }
@@ -1392,7 +1523,11 @@ async function fetchChangesPage(
   // (Rows dropped by content filters inside the store query do not; see the
   // known limitation on the server's handleChanges.)
   const maxSeq = Number(response.headers.get('X-Radar-Timeline-Max-Seq') ?? '0') || 0
-  return { events, epoch: response.headers.get('X-Radar-Timeline-Epoch') ?? '', maxSeq }
+  return {
+    events,
+    epoch: response.headers.get('X-Radar-Timeline-Epoch') ?? '',
+    maxSeq,
+  }
 }
 
 // Highest store-assigned arrival number in the cached page — the delta cursor.
@@ -1443,7 +1578,10 @@ export async function runDeltaSyncFetch(deps: {
   const meta = metaStore.get(metaKey)
   const cursor = deltaFetchCursor(meta, cached, now)
   if (cursor > 0) {
-    const delta = await fetchChangesPage(`${path}${queryString ? '&' : '?'}since_seq=${cursor}`, signal)
+    const delta = await fetchChangesPage(
+      `${path}${queryString ? '&' : '?'}since_seq=${cursor}`,
+      signal,
+    )
     if (delta.epoch && delta.epoch === meta!.epoch) {
       meta!.highWaterSeq = Math.max(meta!.highWaterSeq, delta.maxSeq, maxEventSeq(delta.events))
       // Returning the cached reference on an empty delta skips re-renders.
@@ -1453,7 +1591,11 @@ export async function runDeltaSyncFetch(deps: {
     // cursor is meaningless. Fall through to a full resync.
   }
   const full = await fetchChangesPage(path, signal)
-  metaStore.set(metaKey, { epoch: full.epoch, lastFullMs: now, highWaterSeq: Math.max(full.maxSeq, maxEventSeq(full.events)) })
+  metaStore.set(metaKey, {
+    epoch: full.epoch,
+    lastFullMs: now,
+    highWaterSeq: Math.max(full.maxSeq, maxEventSeq(full.events)),
+  })
   return full.events
 }
 
@@ -1481,7 +1623,18 @@ function getTimeRangeDate(range: TimeRange): Date | null {
 }
 
 export function useChanges(options: UseChangesOptions = {}) {
-  const { namespaces = [], kinds, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, includeDeleted = true, limit = 200, enabled = true, deltaSync = false } = options
+  const {
+    namespaces = [],
+    kinds,
+    timeRange = '1h',
+    filter = 'all',
+    includeK8sEvents = true,
+    includeManaged = false,
+    includeDeleted = true,
+    limit = 200,
+    enabled = true,
+    deltaSync = false,
+  } = options
   const queryClient = useQueryClient()
 
   // Only a single-kind selection narrows the server query; a multi-kind
@@ -1504,7 +1657,17 @@ export function useChanges(options: UseChangesOptions = {}) {
 
   const queryString = params.toString()
   const path = `/changes${queryString ? `?${queryString}` : ''}`
-  const queryKey = ['changes', namespaces, serverKind, timeRange, filter, includeK8sEvents, includeManaged, includeDeleted, limit]
+  const queryKey = [
+    'changes',
+    namespaces,
+    serverKind,
+    timeRange,
+    filter,
+    includeK8sEvents,
+    includeManaged,
+    includeDeleted,
+    limit,
+  ]
 
   return useQuery<TimelineEvent[]>({
     queryKey,
@@ -1513,7 +1676,16 @@ export function useChanges(options: UseChangesOptions = {}) {
 
       const metaKey = JSON.stringify(queryKey)
       const cached = queryClient.getQueryData<TimelineEvent[]>(queryKey)
-      return runDeltaSyncFetch({ path, queryString, limit, metaKey, cached, metaStore: changesDeltaMeta, now: Date.now(), signal })
+      return runDeltaSyncFetch({
+        path,
+        queryString,
+        limit,
+        metaKey,
+        cached,
+        metaStore: changesDeltaMeta,
+        now: Date.now(),
+        signal,
+      })
     },
     staleTime: 5000, // Consider data stale after 5 seconds to ensure fresh data on navigation
     refetchInterval: CHANGES_REFRESH_INTERVAL_MS, // SSE-driven invalidation handles real-time updates; this is the no-SSE fallback
@@ -1522,7 +1694,12 @@ export function useChanges(options: UseChangesOptions = {}) {
 }
 
 // Children changes for a parent workload (e.g., ReplicaSets and Pods under a Deployment)
-export function useResourceChildren(kind: string, namespace: string, name: string, timeRange: TimeRange = '1h') {
+export function useResourceChildren(
+  kind: string,
+  namespace: string,
+  name: string,
+  timeRange: TimeRange = '1h',
+) {
   const sinceDate = getTimeRangeDate(timeRange)
   const params = new URLSearchParams()
   if (sinceDate) {
@@ -1551,7 +1728,11 @@ export interface ResourceEventsResult {
 // K8s events and resource updates are fetched separately so a high-frequency
 // informer update stream (e.g. a CrashLoop status field flapping every few
 // seconds) can never starve out user-meaningful K8s events under a shared limit.
-export function useResourceEvents(kind: string, namespace: string, name: string): ResourceEventsResult {
+export function useResourceEvents(
+  kind: string,
+  namespace: string,
+  name: string,
+): ResourceEventsResult {
   // The timeline store keys events by their K8s Kind (singular PascalCase, e.g. "Pod"),
   // but callers pass the URL-form kind ("pods").
   const singularKind = pluralToKind(kind)
@@ -1617,8 +1798,8 @@ export function useResourceEvents(kind: string, namespace: string, name: string)
 export interface ContainerMetrics {
   name: string
   usage: {
-    cpu: string      // e.g., "10m" (millicores)
-    memory: string   // e.g., "128Mi"
+    cpu: string // e.g., "10m" (millicores)
+    memory: string // e.g., "128Mi"
   }
 }
 
@@ -1693,8 +1874,8 @@ export function useNodeMetrics(nodeName: string, options?: { enabled?: boolean }
 
 export interface MetricsDataPoint {
   timestamp: string
-  cpu: number      // CPU in nanocores
-  memory: number   // Memory in bytes
+  cpu: number // CPU in nanocores
+  memory: number // Memory in bytes
 }
 
 export interface ContainerMetricsHistory {
@@ -1723,7 +1904,9 @@ export interface NodeMetricsHistory {
   metricsUnavailableReason?: string
 }
 
-function withoutCollectionError<T extends { collectionError?: string; rawCollectionError?: string }>(history: T): T {
+function withoutCollectionError<
+  T extends { collectionError?: string; rawCollectionError?: string },
+>(history: T): T {
   const next = { ...history }
   delete next.collectionError
   delete next.rawCollectionError
@@ -1732,15 +1915,26 @@ function withoutCollectionError<T extends { collectionError?: string; rawCollect
 
 export function normalizePodMetricsHistory(history: PodMetricsHistory): PodMetricsHistory {
   if (history.metricsUnavailable !== true) return history
-  return { ...withoutCollectionError(history), metricsUnavailable: true, metricsUnavailableReason: history.rawCollectionError || history.collectionError }
+  return {
+    ...withoutCollectionError(history),
+    metricsUnavailable: true,
+    metricsUnavailableReason: history.rawCollectionError || history.collectionError,
+  }
 }
 
 export function normalizeNodeMetricsHistory(history: NodeMetricsHistory): NodeMetricsHistory {
   if (history.metricsUnavailable !== true) return history
-  return { ...withoutCollectionError(history), metricsUnavailable: true, metricsUnavailableReason: history.rawCollectionError || history.collectionError }
+  return {
+    ...withoutCollectionError(history),
+    metricsUnavailable: true,
+    metricsUnavailableReason: history.rawCollectionError || history.collectionError,
+  }
 }
 
-export function shouldFetchLiveMetrics(historySettled: boolean, metricsUnavailable: boolean): boolean {
+export function shouldFetchLiveMetrics(
+  historySettled: boolean,
+  metricsUnavailable: boolean,
+): boolean {
   return historySettled && !metricsUnavailable
 }
 
@@ -1748,7 +1942,11 @@ export function isLiveMetricsUnavailable(liveMetricsEnabled: boolean, metrics: u
   return liveMetricsEnabled && metrics === null
 }
 
-export function getVisibleLiveMetrics<T>(liveMetricsEnabled: boolean, metricsUnavailable: boolean, metrics: T | null | undefined): T | undefined {
+export function getVisibleLiveMetrics<T>(
+  liveMetricsEnabled: boolean,
+  metricsUnavailable: boolean,
+  metrics: T | null | undefined,
+): T | undefined {
   if (!liveMetricsEnabled || metricsUnavailable) return undefined
   return metrics ?? undefined
 }
@@ -1757,7 +1955,10 @@ export function getVisibleLiveMetrics<T>(liveMetricsEnabled: boolean, metricsUna
 export function usePodMetricsHistory(namespace: string, podName: string) {
   return useQuery<PodMetricsHistory>({
     queryKey: ['pod-metrics-history', namespace, podName],
-    queryFn: async () => normalizePodMetricsHistory(await fetchJSON<PodMetricsHistory>(`/metrics/pods/${namespace}/${podName}/history`)),
+    queryFn: async () =>
+      normalizePodMetricsHistory(
+        await fetchJSON<PodMetricsHistory>(`/metrics/pods/${namespace}/${podName}/history`),
+      ),
     enabled: Boolean(namespace && podName),
     staleTime: 25000, // Slightly less than poll interval
     refetchInterval: 30000, // Match the backend poll interval
@@ -1768,7 +1969,10 @@ export function usePodMetricsHistory(namespace: string, podName: string) {
 export function useNodeMetricsHistory(nodeName: string) {
   return useQuery<NodeMetricsHistory>({
     queryKey: ['node-metrics-history', nodeName],
-    queryFn: async () => normalizeNodeMetricsHistory(await fetchJSON<NodeMetricsHistory>(`/metrics/nodes/${nodeName}/history`)),
+    queryFn: async () =>
+      normalizeNodeMetricsHistory(
+        await fetchJSON<NodeMetricsHistory>(`/metrics/nodes/${nodeName}/history`),
+      ),
     enabled: Boolean(nodeName),
     staleTime: 25000,
     refetchInterval: 30000,
@@ -1779,20 +1983,20 @@ export function useNodeMetricsHistory(nodeName: string) {
 export interface TopPodMetrics {
   namespace: string
   name: string
-  cpu: number           // nanocores (usage)
-  memory: number        // bytes (usage)
-  cpuRequest: number    // nanocores (sum across containers)
-  cpuLimit: number      // nanocores (sum across containers)
+  cpu: number // nanocores (usage)
+  memory: number // bytes (usage)
+  cpuRequest: number // nanocores (sum across containers)
+  cpuLimit: number // nanocores (sum across containers)
   memoryRequest: number // bytes (sum across containers)
-  memoryLimit: number   // bytes (sum across containers)
+  memoryLimit: number // bytes (sum across containers)
 }
 
 export interface TopNodeMetrics {
   name: string
-  cpu: number              // nanocores (usage)
-  memory: number           // bytes (usage)
-  podCount: number         // pods scheduled on this node
-  cpuAllocatable: number   // nanocores
+  cpu: number // nanocores (usage)
+  memory: number // bytes (usage)
+  podCount: number // pods scheduled on this node
+  cpuAllocatable: number // nanocores
   memoryAllocatable: number // bytes
 }
 
@@ -1868,11 +2072,13 @@ export interface PrometheusResourceMetrics {
   range: string
   result: PrometheusQueryResult
   query?: string // PromQL query (included when result is empty, for diagnostics)
-  hint?: string  // Contextual hint when results are empty (e.g. cri-docker label issues)
+  hint?: string // Contextual hint when results are empty (e.g. cri-docker label issues)
 }
 
-export type PrometheusMetricCategory = 'cpu' | 'memory' | 'network_rx' | 'network_tx' | 'filesystem' | 'restarts'
-export type PrometheusTimeRange = '10m' | '30m' | '1h' | '3h' | '6h' | '12h' | '24h' | '48h' | '7d' | '14d'
+export type PrometheusMetricCategory =
+  'cpu' | 'memory' | 'network_rx' | 'network_tx' | 'filesystem' | 'restarts'
+export type PrometheusTimeRange =
+  '10m' | '30m' | '1h' | '3h' | '6h' | '12h' | '24h' | '48h' | '7d' | '14d'
 
 // PVC usage at a moment in time, derived from kubelet_volume_stats_*.
 // HasData=false silently indicates the CSI driver doesn't report or Prom
@@ -1886,15 +2092,16 @@ export interface PrometheusPVCUsage {
   hasData: boolean
 }
 
-export type RequestFit = 'balanced' | 'oversized' | 'under_requested' | 'missing_request' | 'insufficient_history'
-export type RequestFitConfidence = 'low' | 'medium' | 'high'
-export type RequestFitOwnerCoverage = 'ksm_history' | 'current_pods'
+export type RightsizingFit =
+  'balanced' | 'oversized' | 'under_requested' | 'missing_request' | 'insufficient_history'
+export type RightsizingConfidence = 'low' | 'medium' | 'high'
+export type RightsizingOwnerCoverage = 'ksm_history' | 'current_pods'
 
 export interface RightsizingRow {
   container: string
   resource: 'cpu' | 'memory'
-  fit: RequestFit
-  confidence: RequestFitConfidence
+  fit: RightsizingFit
+  confidence: RightsizingConfidence
   currentRequest?: string
   currentRequestValue?: number
   currentLimit?: string
@@ -1936,36 +2143,25 @@ export interface PrometheusRightsizing {
   name: string
   window: string
   source: 'radar'
-  ownerCoverage: RequestFitOwnerCoverage
+  ownerCoverage: RightsizingOwnerCoverage
   scaledToZero: boolean
   sampleAvailable: boolean
   rows: RightsizingRow[]
-  summary: {
-    balanced: number
-    oversized: number
-    underRequested: number
-    missingRequest: number
-    insufficientHistory: number
-    queryErrors: number
-    throttled: number
-    oomEvidence: number
-  }
   reason?: string
 }
 
-export type RequestFitScanState = 'complete' | 'partial' | 'unavailable'
+export type RightsizingScanState = 'complete' | 'partial' | 'unavailable'
 
-export interface RequestFitScanWorkload {
+export interface RightsizingScanWorkload {
   kind: string
   namespace: string
   name: string
   replicas: number
   scaledToZero: boolean
   rows: RightsizingRow[]
-  summary?: PrometheusRightsizing['summary']
 }
 
-export interface RequestFitScanCoverage {
+export interface RightsizingScanCoverage {
   workloadsDiscovered: number
   workloadsEvaluated: number
   workloadsWithData: number
@@ -1975,21 +2171,13 @@ export interface RequestFitScanCoverage {
   unavailableKinds?: string[]
 }
 
-export interface RequestFitScanSummary {
-  workloads: number
-  actionableWorkloads: number
-  recommendations: number
-  fit: PrometheusRightsizing['summary']
-}
-
-export interface RequestFitScanResponse {
-  state: RequestFitScanState
+export interface RightsizingScanResponse {
+  state: RightsizingScanState
   scannedAt: string
   window: string
   source: 'radar'
-  summary: RequestFitScanSummary
-  coverage: RequestFitScanCoverage
-  workloads: RequestFitScanWorkload[]
+  coverage: RightsizingScanCoverage
+  workloads: RightsizingScanWorkload[]
   warnings?: { code: string; message: string }[]
   reason?: string
 }
@@ -2009,7 +2197,9 @@ export function usePrometheusConnect() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async () => {
-      const resp = await apiFetch(`${getApiBase()}/prometheus/connect`, { method: 'POST' })
+      const resp = await apiFetch(`${getApiBase()}/prometheus/connect`, {
+        method: 'POST',
+      })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(body.error || `HTTP ${resp.status}`)
@@ -2070,7 +2260,9 @@ export function useAutoPromConnect(): void {
 
     // Persist the "we've connected here before" signal once a connection lands.
     if (status?.connected) {
-      try { window.localStorage.setItem(promAutoConnectKey(context), '1') } catch {
+      try {
+        window.localStorage.setItem(promAutoConnectKey(context), '1')
+      } catch {
         // localStorage can throw in some restricted browser modes — fail open.
       }
       return
@@ -2078,7 +2270,9 @@ export function useAutoPromConnect(): void {
 
     if (attemptedRef.current === context) return
     let cached: string | null = null
-    try { cached = window.localStorage.getItem(promAutoConnectKey(context)) } catch {
+    try {
+      cached = window.localStorage.getItem(promAutoConnectKey(context))
+    } catch {
       // keep the null fallback
     }
 
@@ -2090,16 +2284,20 @@ export function useAutoPromConnect(): void {
     const timeout = window.setTimeout(() => {
       // Direct apiFetch (not via the usePrometheusConnect mutation) so the
       // meta-driven toast handler stays silent — the user didn't click anything.
-      apiFetch(`${getApiBase()}/prometheus/connect?optional=true`, { method: 'POST' })
-        .then(async resp => {
+      apiFetch(`${getApiBase()}/prometheus/connect?optional=true`, {
+        method: 'POST',
+      })
+        .then(async (resp) => {
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-          const nextStatus = await resp.json() as PrometheusStatus
+          const nextStatus = (await resp.json()) as PrometheusStatus
           queryClient.setQueryData(['prometheus-status'], nextStatus)
           if (!nextStatus.connected) throw new Error(nextStatus.error || 'Prometheus unavailable')
           queryClient.invalidateQueries({ queryKey: ['prometheus-status'] })
         })
         .catch(() => {
-          try { window.localStorage.removeItem(promAutoConnectKey(context)) } catch {
+          try {
+            window.localStorage.removeItem(promAutoConnectKey(context))
+          } catch {
             // ignore — manual CTA will render once status refreshes
           }
           attemptedRef.current = null
@@ -2157,8 +2355,7 @@ export function usePrometheusClusterMetrics(
 ) {
   return useQuery<PrometheusResourceMetrics>({
     queryKey: ['prometheus-cluster-metrics', category, range],
-    queryFn: () =>
-      fetchJSON(`/prometheus/cluster?category=${category}&range=${range}`),
+    queryFn: () => fetchJSON(`/prometheus/cluster?category=${category}&range=${range}`),
     enabled,
     staleTime: 30000,
     refetchInterval: 60000,
@@ -2177,7 +2374,12 @@ export function usePrometheusPVCUsage(namespace: string, name: string, enabled =
 }
 
 // Fetch rightsizing recommendations for a workload (Deployment / StatefulSet / DaemonSet).
-export function usePrometheusRightsizing(kind: string, namespace: string, name: string, enabled = true) {
+export function usePrometheusRightsizing(
+  kind: string,
+  namespace: string,
+  name: string,
+  enabled = true,
+) {
   return useQuery<PrometheusRightsizing>({
     queryKey: ['prometheus-rightsizing', kind, namespace, name],
     queryFn: () => fetchJSON(`/prometheus/rightsizing/${kind}/${namespace}/${name}`),
@@ -2187,18 +2389,21 @@ export function usePrometheusRightsizing(kind: string, namespace: string, name: 
   })
 }
 
-// A fleet request-fit scan is intentionally manual. It can query seven days of
+// A fleet rightsizing scan is intentionally manual. It can query seven days of
 // Prometheus history for many containers, so navigation alone must never run it.
-export function useRequestFitScan(namespaces: string[]) {
+export function useRightsizingScan(namespaces: string[]) {
   const namespaceKey = [...namespaces].sort().join(',')
   return useMutation({
     mutationFn: async () => {
       const params = new URLSearchParams()
       if (namespaceKey) params.set('namespaces', namespaceKey)
       const query = params.toString()
-      return fetchJSON<RequestFitScanResponse>(`/prometheus/rightsizing/scan${query ? `?${query}` : ''}`, {
-        method: 'POST',
-      })
+      return fetchJSON<RightsizingScanResponse>(
+        `/prometheus/rightsizing/scan${query ? `?${query}` : ''}`,
+        {
+          method: 'POST',
+        },
+      )
     },
   })
 }
@@ -2207,8 +2412,7 @@ export function useRequestFitScan(namespaces: string[]) {
 export function usePromQLRange(query: string, range: PrometheusTimeRange = '1h', enabled = true) {
   return useQuery<PrometheusQueryResult>({
     queryKey: ['promql-range', query, range],
-    queryFn: () =>
-      fetchJSON(`/prometheus/query?query=${encodeURIComponent(query)}&range=${range}`),
+    queryFn: () => fetchJSON(`/prometheus/query?query=${encodeURIComponent(query)}&range=${range}`),
     enabled: enabled && Boolean(query),
     staleTime: 30000,
     refetchInterval: 60000,
@@ -2241,12 +2445,16 @@ export interface LogStreamEvent {
 }
 
 // Fetch pod logs (non-streaming)
-export function usePodLogs(namespace: string, podName: string, options?: {
-  container?: string
-  tailLines?: number
-  previous?: boolean
-  sinceSeconds?: number
-}) {
+export function usePodLogs(
+  namespace: string,
+  podName: string,
+  options?: {
+    container?: string
+    tailLines?: number
+    previous?: boolean
+    sinceSeconds?: number
+  },
+) {
   const params = new URLSearchParams()
   if (options?.container) params.set('container', options.container)
   if (options?.tailLines) params.set('tailLines', String(options.tailLines))
@@ -2255,8 +2463,17 @@ export function usePodLogs(namespace: string, podName: string, options?: {
   const queryString = params.toString()
 
   return useQuery<LogsResponse>({
-    queryKey: ['pod-logs', namespace, podName, options?.container, options?.tailLines, options?.previous, options?.sinceSeconds],
-    queryFn: () => fetchJSON(`/pods/${namespace}/${podName}/logs${queryString ? `?${queryString}` : ''}`),
+    queryKey: [
+      'pod-logs',
+      namespace,
+      podName,
+      options?.container,
+      options?.tailLines,
+      options?.previous,
+      options?.sinceSeconds,
+    ],
+    queryFn: () =>
+      fetchJSON(`/pods/${namespace}/${podName}/logs${queryString ? `?${queryString}` : ''}`),
     enabled: Boolean(namespace && podName),
     staleTime: 5000, // Allow refetch after 5 seconds
   })
@@ -2271,7 +2488,7 @@ export function createLogStream(
     tailLines?: number
     previous?: boolean
     sinceSeconds?: number
-  }
+  },
 ): EventSource {
   const params = new URLSearchParams()
   if (options?.container) params.set('container', options.container)
@@ -2280,9 +2497,12 @@ export function createLogStream(
   if (options?.sinceSeconds) params.set('sinceSeconds', String(options.sinceSeconds))
   const queryString = params.toString()
 
-  return new EventSource(`${getApiBase()}/pods/${namespace}/${podName}/logs/stream${queryString ? `?${queryString}` : ''}`, {
-    withCredentials: getCredentialsMode() === 'include',
-  })
+  return new EventSource(
+    `${getApiBase()}/pods/${namespace}/${podName}/logs/stream${queryString ? `?${queryString}` : ''}`,
+    {
+      withCredentials: getCredentialsMode() === 'include',
+    },
+  )
 }
 
 // ============================================================================
@@ -2315,8 +2535,23 @@ export function useUpdateResource() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ kind, namespace, name, yaml, force = true }: { kind: string; namespace: string; name: string; yaml: string; force?: boolean }) => {
-      const url = new URL(`${getApiBase()}/resources/${kind}/${namespace}/${name}`, window.location.origin)
+    mutationFn: async ({
+      kind,
+      namespace,
+      name,
+      yaml,
+      force = true,
+    }: {
+      kind: string
+      namespace: string
+      name: string
+      yaml: string
+      force?: boolean
+    }) => {
+      const url = new URL(
+        `${getApiBase()}/resources/${kind}/${namespace}/${name}`,
+        window.location.origin,
+      )
       if (!force) {
         url.searchParams.set('force', 'false')
       }
@@ -2344,16 +2579,22 @@ export function useUpdateResource() {
       // lagging cache — the change appears not to have taken effect.
       if (updated && typeof updated === 'object' && updated.metadata) {
         queryClient.setQueriesData(
-          { queryKey: ['resource', variables.kind, variables.namespace, variables.name] },
+          {
+            queryKey: ['resource', variables.kind, variables.namespace, variables.name],
+          },
           (old: any) =>
             old && typeof old === 'object' && 'resource' in old
               ? { ...old, resource: updated }
-              : { resource: updated }
+              : { resource: updated },
         )
       } else {
-        queryClient.invalidateQueries({ queryKey: ['resource', variables.kind, variables.namespace, variables.name] })
+        queryClient.invalidateQueries({
+          queryKey: ['resource', variables.kind, variables.namespace, variables.name],
+        })
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
+      queryClient.invalidateQueries({
+        queryKey: ['resources', variables.kind],
+      })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
   })
@@ -2362,13 +2603,24 @@ export function useUpdateResource() {
 // Cascade delete preview — shows resources that will be garbage-collected
 export interface CascadeDeletePreview {
   root: { kind: string; namespace: string; name: string; group?: string }
-  dependents: { kind: string; namespace: string; name: string; group?: string }[]
+  dependents: {
+    kind: string
+    namespace: string
+    name: string
+    group?: string
+  }[]
 }
 
-export function useCascadeDeletePreview(kind: string, namespace: string, name: string, enabled: boolean) {
+export function useCascadeDeletePreview(
+  kind: string,
+  namespace: string,
+  name: string,
+  enabled: boolean,
+) {
   return useQuery<CascadeDeletePreview>({
     queryKey: ['cascade-preview', kind, namespace, name],
-    queryFn: () => fetchJSON<CascadeDeletePreview>(`/resources/${kind}/${namespace}/${name}/cascade-preview`),
+    queryFn: () =>
+      fetchJSON<CascadeDeletePreview>(`/resources/${kind}/${namespace}/${name}/cascade-preview`),
     enabled,
     staleTime: 30_000,
   })
@@ -2379,8 +2631,23 @@ export function useDeleteResource() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ kind, group, namespace, name, force }: { kind: string; group?: string; namespace: string; name: string; force?: boolean }) => {
-      const url = new URL(`${getApiBase()}/resources/${kind}/${namespace}/${name}`, window.location.origin)
+    mutationFn: async ({
+      kind,
+      group,
+      namespace,
+      name,
+      force,
+    }: {
+      kind: string
+      group?: string
+      namespace: string
+      name: string
+      force?: boolean
+    }) => {
+      const url = new URL(
+        `${getApiBase()}/resources/${kind}/${namespace}/${name}`,
+        window.location.origin,
+      )
       if (group) {
         url.searchParams.set('group', group)
       }
@@ -2402,7 +2669,9 @@ export function useDeleteResource() {
       successMessage: 'Resource deleted',
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
+      queryClient.invalidateQueries({
+        queryKey: ['resources', variables.kind],
+      })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
   })
@@ -2412,10 +2681,24 @@ export function useBulkDeleteResources() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ items, force }: { items: Array<{ kind: string; group?: string; namespace: string; name: string }>; force?: boolean }) => {
+    mutationFn: async ({
+      items,
+      force,
+    }: {
+      items: Array<{
+        kind: string
+        group?: string
+        namespace: string
+        name: string
+      }>
+      force?: boolean
+    }) => {
       const results = await Promise.allSettled(
         items.map(async ({ kind, group, namespace, name }) => {
-          const url = new URL(`${getApiBase()}/resources/${kind}/${namespace}/${name}`, window.location.origin)
+          const url = new URL(
+            `${getApiBase()}/resources/${kind}/${namespace}/${name}`,
+            window.location.origin,
+          )
           if (group) url.searchParams.set('group', group)
           if (force) url.searchParams.set('force', 'true')
           const response = await apiFetch(url.toString(), { method: 'DELETE' })
@@ -2424,9 +2707,9 @@ export function useBulkDeleteResources() {
             throw new Error(error.error || `Failed to delete ${namespace}/${name}`)
           }
           return { kind, namespace, name }
-        })
+        }),
       )
-      const failed = results.filter(r => r.status === 'rejected')
+      const failed = results.filter((r) => r.status === 'rejected')
       if (failed.length > 0) {
         throw new Error(`Failed to delete ${failed.length} of ${items.length} resources`)
       }
@@ -2459,13 +2742,19 @@ interface BulkWorkloadMutationResult {
 }
 
 function failedBulkWorkloadMessages(results: PromiseSettledResult<unknown>[]): string[] {
-  return results.flatMap(r => r.status === 'rejected'
-    ? [r.reason instanceof Error ? r.reason.message : String(r.reason)]
-    : []
+  return results.flatMap((r) =>
+    r.status === 'rejected'
+      ? [r.reason instanceof Error ? r.reason.message : String(r.reason)]
+      : [],
   )
 }
 
-function bulkWorkloadFailureMessage(action: string, failed: number, total: number, messages: string[]): string {
+function bulkWorkloadFailureMessage(
+  action: string,
+  failed: number,
+  total: number,
+  messages: string[],
+): string {
   return `Failed to ${action} ${failed} of ${total} workloads:\n${messages.join('\n')}`
 }
 
@@ -2473,27 +2762,45 @@ export function useBulkRestartWorkloads() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ items }: { items: BulkWorkloadItem[] }): Promise<BulkWorkloadMutationResult> => {
+    mutationFn: async ({
+      items,
+    }: {
+      items: BulkWorkloadItem[]
+    }): Promise<BulkWorkloadMutationResult> => {
       if (items.length === 0) {
         return { requested: 0, succeeded: 0, failedMessages: [] }
       }
       const results = await Promise.allSettled(
         items.map(async ({ kind, namespace, name }) => {
-          const response = await apiFetch(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`, {
-            method: 'POST',
-          })
+          const response = await apiFetch(
+            `${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`,
+            {
+              method: 'POST',
+            },
+          )
           if (!response.ok) {
             const error = await response.json().catch(() => ({ error: 'Unknown error' }))
             throw new Error(`${namespace}/${name}: ${error.error || `HTTP ${response.status}`}`)
           }
           return { kind, namespace, name }
-        })
+        }),
       )
       const failedMessages = failedBulkWorkloadMessages(results)
       if (failedMessages.length === items.length) {
-        throw new Error(bulkWorkloadFailureMessage('restart', failedMessages.length, items.length, failedMessages))
+        throw new Error(
+          bulkWorkloadFailureMessage(
+            'restart',
+            failedMessages.length,
+            items.length,
+            failedMessages,
+          ),
+        )
       }
-      return { requested: items.length, succeeded: items.length - failedMessages.length, failedMessages }
+      return {
+        requested: items.length,
+        succeeded: items.length - failedMessages.length,
+        failedMessages,
+      }
     },
     meta: {
       errorMessage: 'Failed to restart some workloads',
@@ -2519,29 +2826,44 @@ export function useBulkScaleWorkloads() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ items, replicas }: { items: BulkWorkloadItem[]; replicas: number }): Promise<BulkWorkloadMutationResult> => {
+    mutationFn: async ({
+      items,
+      replicas,
+    }: {
+      items: BulkWorkloadItem[]
+      replicas: number
+    }): Promise<BulkWorkloadMutationResult> => {
       if (items.length === 0) {
         return { requested: 0, succeeded: 0, failedMessages: [] }
       }
       const results = await Promise.allSettled(
         items.map(async ({ kind, namespace, name }) => {
-          const response = await apiFetch(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ replicas }),
-          })
+          const response = await apiFetch(
+            `${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ replicas }),
+            },
+          )
           if (!response.ok) {
             const error = await response.json().catch(() => ({ error: 'Unknown error' }))
             throw new Error(`${namespace}/${name}: ${error.error || `HTTP ${response.status}`}`)
           }
           return { kind, namespace, name }
-        })
+        }),
       )
       const failedMessages = failedBulkWorkloadMessages(results)
       if (failedMessages.length === items.length) {
-        throw new Error(bulkWorkloadFailureMessage('scale', failedMessages.length, items.length, failedMessages))
+        throw new Error(
+          bulkWorkloadFailureMessage('scale', failedMessages.length, items.length, failedMessages),
+        )
       }
-      return { requested: items.length, succeeded: items.length - failedMessages.length, failedMessages }
+      return {
+        requested: items.length,
+        succeeded: items.length - failedMessages.length,
+        failedMessages,
+      }
     },
     meta: {
       errorMessage: 'Failed to scale some workloads',
@@ -2575,7 +2897,17 @@ export function useApplyResource() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ yaml, mode = 'apply', dryRun = false, force = false }: { yaml: string; mode?: 'apply' | 'create'; dryRun?: boolean; force?: boolean }) => {
+    mutationFn: async ({
+      yaml,
+      mode = 'apply',
+      dryRun = false,
+      force = false,
+    }: {
+      yaml: string
+      mode?: 'apply' | 'create'
+      dryRun?: boolean
+      force?: boolean
+    }) => {
       const url = new URL(`${getApiBase()}/resources/apply`, window.location.origin)
       url.searchParams.set('mode', mode)
       if (dryRun) {
@@ -2608,11 +2940,19 @@ export function useApplyResource() {
 // CronJob operations
 // ============================================================================
 
-function invalidateCronJobOperationQueries(queryClient: ReturnType<typeof useQueryClient>, namespace: string, name: string) {
+function invalidateCronJobOperationQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  namespace: string,
+  name: string,
+) {
   queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
   queryClient.invalidateQueries({ queryKey: ['resources', 'jobs'] })
-  queryClient.invalidateQueries({ queryKey: ['resource', 'cronjobs', namespace, name] })
-  queryClient.invalidateQueries({ queryKey: ['workload-runs', 'cronjobs', namespace, name] })
+  queryClient.invalidateQueries({
+    queryKey: ['resource', 'cronjobs', namespace, name],
+  })
+  queryClient.invalidateQueries({
+    queryKey: ['workload-runs', 'cronjobs', namespace, name],
+  })
   queryClient.invalidateQueries({ queryKey: ['applications'] })
   queryClient.invalidateQueries({ queryKey: ['dashboard'] })
   queryClient.invalidateQueries({ queryKey: ['resource-counts'] })
@@ -2703,10 +3043,21 @@ export function useRestartWorkload() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) => {
-      const response = await apiFetch(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`, {
-        method: 'POST',
-      })
+    mutationFn: async ({
+      kind,
+      namespace,
+      name,
+    }: {
+      kind: string
+      namespace: string
+      name: string
+    }) => {
+      const response = await apiFetch(
+        `${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`,
+        {
+          method: 'POST',
+        },
+      )
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(error.error || `HTTP ${response.status}`)
@@ -2718,7 +3069,9 @@ export function useRestartWorkload() {
       successMessage: 'Workload restarting',
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
+      queryClient.invalidateQueries({
+        queryKey: ['resources', variables.kind],
+      })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
   })
@@ -2729,12 +3082,25 @@ export function useScaleWorkload() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ kind, namespace, name, replicas }: { kind: string; namespace: string; name: string; replicas: number }) => {
-      const response = await apiFetch(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ replicas }),
-      })
+    mutationFn: async ({
+      kind,
+      namespace,
+      name,
+      replicas,
+    }: {
+      kind: string
+      namespace: string
+      name: string
+      replicas: number
+    }) => {
+      const response = await apiFetch(
+        `${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ replicas }),
+        },
+      )
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(error.error || `HTTP ${response.status}`)
@@ -2746,8 +3112,12 @@ export function useScaleWorkload() {
       successMessage: 'Workload scaled',
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
-      queryClient.invalidateQueries({ queryKey: ['resource', variables.kind, variables.namespace, variables.name] })
+      queryClient.invalidateQueries({
+        queryKey: ['resources', variables.kind],
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['resource', variables.kind, variables.namespace, variables.name],
+      })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
   })
@@ -2767,7 +3137,12 @@ export interface WorkloadRevision {
   template?: string // Pod template spec as YAML (for revision diff)
 }
 
-export function useWorkloadRevisions(kind: string, namespace: string, name: string, enabled = true) {
+export function useWorkloadRevisions(
+  kind: string,
+  namespace: string,
+  name: string,
+  enabled = true,
+) {
   return useQuery<WorkloadRevision[]>({
     queryKey: ['workload-revisions', kind, namespace, name],
     queryFn: () => fetchJSON(`/workloads/${kind}/${namespace}/${name}/revisions`),
@@ -2778,12 +3153,25 @@ export function useWorkloadRevisions(kind: string, namespace: string, name: stri
 export function useRollbackWorkload() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ kind, namespace, name, revision }: { kind: string; namespace: string; name: string; revision: number }) => {
-      const response = await apiFetch(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/rollback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ revision }),
-      })
+    mutationFn: async ({
+      kind,
+      namespace,
+      name,
+      revision,
+    }: {
+      kind: string
+      namespace: string
+      name: string
+      revision: number
+    }) => {
+      const response = await apiFetch(
+        `${getApiBase()}/workloads/${kind}/${namespace}/${name}/rollback`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ revision }),
+        },
+      )
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(error.error || `HTTP ${response.status}`)
@@ -2795,9 +3183,15 @@ export function useRollbackWorkload() {
       successMessage: 'Rollback initiated',
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
-      queryClient.invalidateQueries({ queryKey: ['resource', variables.kind, variables.namespace, variables.name] })
-      queryClient.invalidateQueries({ queryKey: ['workload-revisions', variables.kind, variables.namespace, variables.name] })
+      queryClient.invalidateQueries({
+        queryKey: ['resources', variables.kind],
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['resource', variables.kind, variables.namespace, variables.name],
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['workload-revisions', variables.kind, variables.namespace, variables.name],
+      })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
   })
@@ -2827,7 +3221,9 @@ export function useCordonNode() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['resources', 'nodes'] })
-      queryClient.invalidateQueries({ queryKey: ['resource', 'nodes', '', variables.name] })
+      queryClient.invalidateQueries({
+        queryKey: ['resource', 'nodes', '', variables.name],
+      })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
   })
@@ -2853,7 +3249,9 @@ export function useUncordonNode() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['resources', 'nodes'] })
-      queryClient.invalidateQueries({ queryKey: ['resource', 'nodes', '', variables.name] })
+      queryClient.invalidateQueries({
+        queryKey: ['resource', 'nodes', '', variables.name],
+      })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
   })
@@ -2886,7 +3284,9 @@ export function useDrainNode() {
     },
     onSuccess: (data: { evictedPods?: string[]; errors?: string[] }, variables) => {
       queryClient.invalidateQueries({ queryKey: ['resources', 'nodes'] })
-      queryClient.invalidateQueries({ queryKey: ['resource', 'nodes', '', variables.name] })
+      queryClient.invalidateQueries({
+        queryKey: ['resource', 'nodes', '', variables.name],
+      })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
 
       const evicted = data?.evictedPods?.length ?? 0
@@ -2936,12 +3336,19 @@ export function useHelmRelease(namespace: string, name: string, options?: { enab
 // `enabled` lets callers skip the query when the user's Cloud role
 // would 403 the read — saves a round-trip and avoids a transient
 // "error" state that the role-gated empty panel doesn't need.
-export function useHelmManifest(namespace: string, name: string, revision?: number, enabled = true) {
+export function useHelmManifest(
+  namespace: string,
+  name: string,
+  revision?: number,
+  enabled = true,
+) {
   const params = revision ? `?revision=${revision}` : ''
   return useQuery<string>({
     queryKey: ['helm-manifest', namespace, name, revision],
     queryFn: async () => {
-      const response = await apiFetch(`${getApiBase()}/helm/releases/${namespace}/${name}/manifest${params}`)
+      const response = await apiFetch(
+        `${getApiBase()}/helm/releases/${namespace}/${name}/manifest${params}`,
+      )
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(error.error || `HTTP ${response.status}`)
@@ -2954,7 +3361,13 @@ export function useHelmManifest(namespace: string, name: string, revision?: numb
 }
 
 // Get values for a Helm release. `enabled` see useHelmManifest.
-export function useHelmValues(namespace: string, name: string, allValues?: boolean, enabled = true, revision?: number) {
+export function useHelmValues(
+  namespace: string,
+  name: string,
+  allValues?: boolean,
+  enabled = true,
+  revision?: number,
+) {
   const params = new URLSearchParams()
   if (allValues) params.set('all', 'true')
   if (revision && revision > 0) params.set('revision', String(revision))
@@ -2978,8 +3391,12 @@ export function useHelmManifestDiff(
   return useQuery<ManifestDiff>({
     queryKey: ['helm-diff', namespace, name, revision1, revision2],
     queryFn: () =>
-      fetchJSON(`/helm/releases/${namespace}/${name}/diff?revision1=${revision1}&revision2=${revision2}`),
-    enabled: Boolean(namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled),
+      fetchJSON(
+        `/helm/releases/${namespace}/${name}/diff?revision1=${revision1}&revision2=${revision2}`,
+      ),
+    enabled: Boolean(
+      namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled,
+    ),
     staleTime: 60000,
   })
 }
@@ -3002,7 +3419,9 @@ export function useHelmValuesDiff(
       if (allValues) params.set('all', 'true')
       return fetchJSON(`/helm/releases/${namespace}/${name}/values/diff?${params.toString()}`)
     },
-    enabled: Boolean(namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled),
+    enabled: Boolean(
+      namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled,
+    ),
     staleTime: 60000,
   })
 }
@@ -3017,8 +3436,12 @@ export function useHelmNotesDiff(
   return useQuery<NotesDiff>({
     queryKey: ['helm-notes-diff', namespace, name, revision1, revision2],
     queryFn: () =>
-      fetchJSON(`/helm/releases/${namespace}/${name}/notes/diff?revision1=${revision1}&revision2=${revision2}`),
-    enabled: Boolean(namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled),
+      fetchJSON(
+        `/helm/releases/${namespace}/${name}/notes/diff?revision1=${revision1}&revision2=${revision2}`,
+      ),
+    enabled: Boolean(
+      namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled,
+    ),
     staleTime: 60000,
   })
 }
@@ -3033,8 +3456,12 @@ export function useHelmHooksDiff(
   return useQuery<HooksDiff>({
     queryKey: ['helm-hooks-diff', namespace, name, revision1, revision2],
     queryFn: () =>
-      fetchJSON(`/helm/releases/${namespace}/${name}/hooks/diff?revision1=${revision1}&revision2=${revision2}`),
-    enabled: Boolean(namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled),
+      fetchJSON(
+        `/helm/releases/${namespace}/${name}/hooks/diff?revision1=${revision1}&revision2=${revision2}`,
+      ),
+    enabled: Boolean(
+      namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled,
+    ),
     staleTime: 60000,
   })
 }
@@ -3049,8 +3476,12 @@ export function useHelmResourceDiff(
   return useQuery<ResourceDiff>({
     queryKey: ['helm-resource-diff', namespace, name, revision1, revision2],
     queryFn: () =>
-      fetchJSON(`/helm/releases/${namespace}/${name}/resources/diff?revision1=${revision1}&revision2=${revision2}`),
-    enabled: Boolean(namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled),
+      fetchJSON(
+        `/helm/releases/${namespace}/${name}/resources/diff?revision1=${revision1}&revision2=${revision2}`,
+      ),
+    enabled: Boolean(
+      namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled,
+    ),
     staleTime: 60000,
   })
 }
@@ -3100,10 +3531,21 @@ export function useHelmRollback() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ namespace, name, revision }: { namespace: string; name: string; revision: number }) => {
-      const response = await apiFetch(`${getApiBase()}/helm/releases/${namespace}/${name}/rollback?revision=${revision}`, {
-        method: 'POST',
-      })
+    mutationFn: async ({
+      namespace,
+      name,
+      revision,
+    }: {
+      namespace: string
+      name: string
+      revision: number
+    }) => {
+      const response = await apiFetch(
+        `${getApiBase()}/helm/releases/${namespace}/${name}/rollback?revision=${revision}`,
+        {
+          method: 'POST',
+        },
+      )
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(error.error || `HTTP ${response.status}`)
@@ -3116,7 +3558,9 @@ export function useHelmRollback() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
-      queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
+      queryClient.invalidateQueries({
+        queryKey: ['helm-release', variables.namespace, variables.name],
+      })
     },
   })
 }
@@ -3200,7 +3644,9 @@ function streamHelmProgress(
                   return
                 }
               } catch (err) {
-                reject(err instanceof Error ? err : new Error(`${failureLabel}: invalid progress event`))
+                reject(
+                  err instanceof Error ? err : new Error(`${failureLabel}: invalid progress event`),
+                )
                 return
               }
             }
@@ -3221,12 +3667,16 @@ export function upgradeWithProgress(
   version: string,
   repositoryName: string | undefined,
   onProgress: (event: InstallProgressEvent) => void,
-  values?: Record<string, unknown>
+  values?: Record<string, unknown>,
 ): Promise<void> {
   const params = new URLSearchParams({ version })
   if (repositoryName) params.set('repository', repositoryName)
   const options: RequestInit = values
-    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values }) }
+    ? {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values }),
+      }
     : { method: 'POST' }
   return streamHelmProgress(
     `${getApiBase()}/helm/releases/${namespace}/${name}/upgrade-stream?${params.toString()}`,
@@ -3241,7 +3691,7 @@ export function rollbackWithProgress(
   namespace: string,
   name: string,
   revision: number,
-  onProgress: (event: InstallProgressEvent) => void
+  onProgress: (event: InstallProgressEvent) => void,
 ): Promise<void> {
   return streamHelmProgress(
     `${getApiBase()}/helm/releases/${namespace}/${name}/rollback-stream?revision=${revision}`,
@@ -3254,13 +3704,26 @@ export function rollbackWithProgress(
 // When `version` is supplied, preview renders against that target chart version
 // instead of the release's current chart.
 export function useHelmPreviewValues() {
-  return useMutation<ValuesPreviewResponse, Error, { namespace: string; name: string; values: Record<string, unknown>; version?: string; repository?: string }>({
+  return useMutation<
+    ValuesPreviewResponse,
+    Error,
+    {
+      namespace: string
+      name: string
+      values: Record<string, unknown>
+      version?: string
+      repository?: string
+    }
+  >({
     mutationFn: async ({ namespace, name, values, version, repository }) => {
-      const response = await apiFetch(`${getApiBase()}/helm/releases/${namespace}/${name}/values/preview`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values, version, repository }),
-      })
+      const response = await apiFetch(
+        `${getApiBase()}/helm/releases/${namespace}/${name}/values/preview`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ values, version, repository }),
+        },
+      )
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(error.error || `HTTP ${response.status}`)
@@ -3275,7 +3738,15 @@ export function useHelmApplyValues() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ namespace, name, values }: { namespace: string; name: string; values: Record<string, unknown> }) => {
+    mutationFn: async ({
+      namespace,
+      name,
+      values,
+    }: {
+      namespace: string
+      name: string
+      values: Record<string, unknown>
+    }) => {
       const response = await apiFetch(`${getApiBase()}/helm/releases/${namespace}/${name}/values`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -3293,8 +3764,12 @@ export function useHelmApplyValues() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
-      queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
-      queryClient.invalidateQueries({ queryKey: ['helm-values', variables.namespace, variables.name] })
+      queryClient.invalidateQueries({
+        queryKey: ['helm-release', variables.namespace, variables.name],
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['helm-values', variables.namespace, variables.name],
+      })
     },
   })
 }
@@ -3391,7 +3866,10 @@ export function useAddOCISource() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (source: string) => mutateOCISource('POST', source),
-    meta: { errorMessage: 'Failed to add chart source', successMessage: 'Chart source added' },
+    meta: {
+      errorMessage: 'Failed to add chart source',
+      successMessage: 'Chart source added',
+    },
     onSuccess: () => invalidateHelmAfterSourceChange(queryClient),
   })
 }
@@ -3400,7 +3878,10 @@ export function useRemoveOCISource() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (source: string) => mutateOCISource('DELETE', source),
-    meta: { errorMessage: 'Failed to remove chart source', successMessage: 'Chart source removed' },
+    meta: {
+      errorMessage: 'Failed to remove chart source',
+      successMessage: 'Chart source removed',
+    },
     onSuccess: () => invalidateHelmAfterSourceChange(queryClient),
   })
 }
@@ -3472,11 +3953,15 @@ export interface InstallProgressEvent {
 // Install a chart with progress streaming via SSE
 export function installChartWithProgress(
   req: InstallChartRequest,
-  onProgress: (event: InstallProgressEvent) => void
+  onProgress: (event: InstallProgressEvent) => void,
 ): Promise<HelmRelease> {
   return streamHelmProgress(
     `${getApiBase()}/helm/releases/install-stream`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) },
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    },
     onProgress,
     'Install failed',
   ).then((event) => event.release as HelmRelease)
@@ -3492,8 +3977,14 @@ export type ArtifactHubSortOption = 'relevance' | 'stars' | 'last_updated'
 // Search charts on ArtifactHub
 export function useArtifactHubSearch(
   query: string,
-  options?: { offset?: number; limit?: number; official?: boolean; verified?: boolean; sort?: ArtifactHubSortOption },
-  enabled = true
+  options?: {
+    offset?: number
+    limit?: number
+    official?: boolean
+    verified?: boolean
+    sort?: ArtifactHubSortOption
+  },
+  enabled = true,
 ) {
   const params = new URLSearchParams()
   if (query) params.set('query', query)
@@ -3504,7 +3995,15 @@ export function useArtifactHubSearch(
   if (options?.sort && options.sort !== 'relevance') params.set('sort', options.sort)
 
   return useQuery<ArtifactHubSearchResult>({
-    queryKey: ['artifacthub-search', query, options?.offset, options?.limit, options?.official, options?.verified, options?.sort],
+    queryKey: [
+      'artifacthub-search',
+      query,
+      options?.offset,
+      options?.limit,
+      options?.official,
+      options?.verified,
+      options?.sort,
+    ],
     queryFn: () => fetchJSON(`/helm/artifacthub/search?${params.toString()}`),
     enabled: enabled && query.length > 0,
     staleTime: 60000, // 1 minute
@@ -3512,7 +4011,12 @@ export function useArtifactHubSearch(
 }
 
 // Get chart detail from ArtifactHub
-export function useArtifactHubChart(repoName: string, chartName: string, version?: string, enabled = true) {
+export function useArtifactHubChart(
+  repoName: string,
+  chartName: string,
+  version?: string,
+  enabled = true,
+) {
   const path = version
     ? `/helm/artifacthub/charts/${repoName}/${chartName}/${version}`
     : `/helm/artifacthub/charts/${repoName}/${chartName}`
@@ -3562,9 +4066,9 @@ function createGitOpsMutation<TVariables>(config: GitOpsMutationConfig<TVariable
         successMessage: config.successMessage,
       },
       onSuccess: (_, variables) => {
-        config.getInvalidateKeys(variables).forEach(key =>
-          queryClient.invalidateQueries({ queryKey: key })
-        )
+        config
+          .getInvalidateKeys(variables)
+          .forEach((key) => queryClient.invalidateQueries({ queryKey: key }))
       },
     })
   }
@@ -3579,7 +4083,12 @@ type ArgoAppVars = { namespace: string; name: string }
 // useArgoSync sends these — splitting the type prevents callers from passing
 // resources/revision/prune to mutations that would silently drop them.
 type ArgoSyncVars = ArgoAppVars & {
-  resources?: Array<{ group?: string; kind: string; namespace?: string; name: string }>
+  resources?: Array<{
+    group?: string
+    kind: string
+    namespace?: string
+    name: string
+  }>
   revision?: string
   prune?: boolean
   dryRun?: boolean
@@ -3706,11 +4215,22 @@ export function useArgoRefresh() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ namespace, name, hard = false }: { namespace: string; name: string; hard?: boolean }) => {
+    mutationFn: async ({
+      namespace,
+      name,
+      hard = false,
+    }: {
+      namespace: string
+      name: string
+      hard?: boolean
+    }) => {
       const params = hard ? '?type=hard' : ''
-      const response = await apiFetch(`${getApiBase()}/argo/applications/${namespace}/${name}/refresh${params}`, {
-        method: 'POST',
-      })
+      const response = await apiFetch(
+        `${getApiBase()}/argo/applications/${namespace}/${name}/refresh${params}`,
+        {
+          method: 'POST',
+        },
+      )
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(error.error || `HTTP ${response.status}`)
@@ -3727,7 +4247,7 @@ export function useArgoRefresh() {
       // Refresh — without these two extra keys the user clicks Refresh and
       // sees stale insight/tree data until the next staleTime tick.
       argoInvalidateKeys(variables).forEach((key) =>
-        queryClient.invalidateQueries({ queryKey: key })
+        queryClient.invalidateQueries({ queryKey: key }),
       )
     },
   })
@@ -3785,7 +4305,9 @@ export function useSwitchContext() {
       } catch (error) {
         clearTimeout(timeoutId)
         if (error instanceof Error && error.name === 'AbortError') {
-          throw new Error('Context switch timed out. The cluster may be unreachable.', { cause: error })
+          throw new Error('Context switch timed out. The cluster may be unreachable.', {
+            cause: error,
+          })
         }
         throw error
       }
@@ -3903,9 +4425,12 @@ export function useSetActiveNamespace() {
           error: error instanceof Error ? error.message : String(error),
         })
         if (error instanceof Error && error.name === 'AbortError') {
-          throw new Error(isRescope
-            ? 'Namespace rescope timed out. The cluster may still be loading.'
-            : 'Namespace switch timed out. The cluster may be unreachable.', { cause: error })
+          throw new Error(
+            isRescope
+              ? 'Namespace rescope timed out. The cluster may still be loading.'
+              : 'Namespace switch timed out. The cluster may be unreachable.',
+            { cause: error },
+          )
         }
         throw error
       }
@@ -3917,7 +4442,9 @@ export function useSetActiveNamespace() {
         accessibleCount: scope.accessibleNamespaces.length,
       })
       if (scope.cacheScoped) {
-        queryClient.removeQueries({ predicate: query => query.queryKey[0] !== 'namespace-scope' })
+        queryClient.removeQueries({
+          predicate: (query) => query.queryKey[0] !== 'namespace-scope',
+        })
       }
       queryClient.setQueryData<NamespaceScope>(['namespace-scope'], scope)
       if (scope.cacheScoped) {
@@ -3948,7 +4475,7 @@ export function useImageMetadata(
   namespace: string,
   podName: string,
   pullSecrets: string[],
-  enabled = true
+  enabled = true,
 ) {
   const params = new URLSearchParams()
   params.set('image', image)
@@ -3971,7 +4498,7 @@ export function useImageFilesystem(
   namespace: string,
   podName: string,
   pullSecrets: string[],
-  enabled = true
+  enabled = true,
 ) {
   const params = new URLSearchParams()
   params.set('image', image)
@@ -3984,9 +4511,7 @@ export function useImageFilesystem(
   return useQuery<ImageFilesystem>({
     queryKey: ['image-filesystem', image, namespace, podName, pullSecrets.join(',')],
     // Use skipToken to completely prevent the query from running when disabled
-    queryFn: shouldFetch
-      ? () => fetchJSON(`/images/inspect?${params.toString()}`)
-      : skipToken,
+    queryFn: shouldFetch ? () => fetchJSON(`/images/inspect?${params.toString()}`) : skipToken,
     staleTime: 300000, // 5 minutes - image content doesn't change
     retry: false, // Don't retry on auth errors
   })
@@ -4060,7 +4585,13 @@ export function useWorkloadPods(kind: string, namespace: string, name: string) {
   })
 }
 
-export function useWorkloadRuns(kind: string, namespace: string, name: string, enabled = true, options?: { refetchActive?: boolean; clusterScoped?: boolean }) {
+export function useWorkloadRuns(
+  kind: string,
+  namespace: string,
+  name: string,
+  enabled = true,
+  options?: { refetchActive?: boolean; clusterScoped?: boolean },
+) {
   const clusterScoped = options?.clusterScoped ?? false
   const ns = clusterScoped ? '_' : namespace
   const params = new URLSearchParams()
@@ -4069,11 +4600,12 @@ export function useWorkloadRuns(kind: string, namespace: string, name: string, e
 
   return useQuery<WorkloadRunsResponse>({
     queryKey: ['workload-runs', kind, namespace, name, clusterScoped],
-    queryFn: () => fetchJSON(`/workloads/${kind}/${ns}/${name}/runs${queryString ? `?${queryString}` : ''}`),
+    queryFn: () =>
+      fetchJSON(`/workloads/${kind}/${ns}/${name}/runs${queryString ? `?${queryString}` : ''}`),
     enabled: enabled && Boolean(kind && name && (namespace || clusterScoped)),
     staleTime: 10000,
     refetchInterval: options?.refetchActive
-      ? (query) => query.state.data?.runs?.some((run) => run.active) ? 5000 : 30000
+      ? (query) => (query.state.data?.runs?.some((run) => run.active) ? 5000 : 30000)
       : false,
   })
 }
@@ -4087,7 +4619,7 @@ export function useWorkloadLogs(
     container?: string
     tailLines?: number
     sinceSeconds?: number
-  }
+  },
 ) {
   const params = new URLSearchParams()
   if (options?.container) params.set('container', options.container)
@@ -4096,8 +4628,19 @@ export function useWorkloadLogs(
   const queryString = params.toString()
 
   return useQuery<WorkloadLogsResponse>({
-    queryKey: ['workload-logs', kind, namespace, name, options?.container, options?.tailLines, options?.sinceSeconds],
-    queryFn: () => fetchJSON(`/workloads/${kind}/${namespace}/${name}/logs${queryString ? `?${queryString}` : ''}`),
+    queryKey: [
+      'workload-logs',
+      kind,
+      namespace,
+      name,
+      options?.container,
+      options?.tailLines,
+      options?.sinceSeconds,
+    ],
+    queryFn: () =>
+      fetchJSON(
+        `/workloads/${kind}/${namespace}/${name}/logs${queryString ? `?${queryString}` : ''}`,
+      ),
     enabled: Boolean(kind && namespace && name),
     staleTime: 5000,
   })
@@ -4112,7 +4655,7 @@ export function createWorkloadLogStream(
     container?: string
     tailLines?: number
     sinceSeconds?: number
-  }
+  },
 ): EventSource {
   const params = new URLSearchParams()
   if (options?.container) params.set('container', options.container)
@@ -4120,9 +4663,12 @@ export function createWorkloadLogStream(
   if (options?.sinceSeconds) params.set('sinceSeconds', String(options.sinceSeconds))
   const queryString = params.toString()
 
-  return new EventSource(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/logs/stream${queryString ? `?${queryString}` : ''}`, {
-    withCredentials: getCredentialsMode() === 'include',
-  })
+  return new EventSource(
+    `${getApiBase()}/workloads/${kind}/${namespace}/${name}/logs/stream${queryString ? `?${queryString}` : ''}`,
+    {
+      withCredentials: getCredentialsMode() === 'include',
+    },
+  )
 }
 
 // ============================================================================

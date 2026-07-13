@@ -7,8 +7,21 @@ import {
   useOpenCostWorkloads,
   useOpenCostNodes,
 } from '../../api/client'
-import type { OpenCostNamespaceCost, OpenCostWorkloadCost, OpenCostNodeCost } from '../../api/client'
-import { ChevronDown, ChevronRight, DollarSign, ExternalLink, HelpCircle, Loader2, Server, X } from 'lucide-react'
+import type {
+  OpenCostNamespaceCost,
+  OpenCostWorkloadCost,
+  OpenCostNodeCost,
+} from '../../api/client'
+import {
+  ChevronDown,
+  ChevronRight,
+  DollarSign,
+  ExternalLink,
+  HelpCircle,
+  Loader2,
+  Server,
+  X,
+} from 'lucide-react'
 import { PaneLoader, FreshnessControl, PageHeader } from '@skyhook-io/k8s-ui'
 import { CostTrendChart } from './CostTrendChart'
 import {
@@ -23,7 +36,7 @@ import { useConnection } from '../../context/ConnectionContext'
 import type { SelectedResource } from '../../types'
 import { kindToPlural, openExternal } from '../../utils/navigation'
 import { clusterCloudConsoleLink, nodeCloudConsoleLink } from './cloud-console'
-import { RequestFitScanView } from '../request-fit/RequestFitScanView'
+import { RightsizingScanView } from '../rightsizing/RightsizingScanView'
 import { CostViewTabs } from './CostViewTabs'
 
 interface CostViewProps {
@@ -37,7 +50,7 @@ const SYSTEM_COST_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node
 export function CostView(props: CostViewProps) {
   const { pathname } = useLocation()
   if (pathname.startsWith('/cost/rightsizing')) {
-    return <RequestFitScanView namespaces={props.namespaces} />
+    return <RightsizingScanView namespaces={props.namespaces} />
   }
   return <CostOverview {...props} />
 }
@@ -59,7 +72,11 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   }, [data?.available, data?.reason])
 
   if (isLoading) {
-    return <CostOverviewState><PaneLoader label="Loading cost data…" className="min-h-64" /></CostOverviewState>
+    return (
+      <CostOverviewState>
+        <PaneLoader label="Loading cost data…" className="min-h-64" />
+      </CostOverviewState>
+    )
   }
 
   if (!data || !data.available) {
@@ -68,28 +85,30 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
     if (reason === 'no_prometheus' && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
       return (
         <CostOverviewState>
-        <div className="flex min-h-64 items-center justify-center">
-          <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
-            <Loader2 className="w-8 h-8 animate-spin text-theme-text-tertiary/60" />
-            <div>
-              <p className="text-sm font-medium text-theme-text-primary">Looking for Prometheus cost data…</p>
-              <p className="mt-1 text-xs text-theme-text-tertiary">
-                First discovery can take a few seconds while Radar checks cluster services and opens a local
-                port-forward.
-              </p>
+          <div className="flex min-h-64 items-center justify-center">
+            <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
+              <Loader2 className="w-8 h-8 animate-spin text-theme-text-tertiary/60" />
+              <div>
+                <p className="text-sm font-medium text-theme-text-primary">
+                  Looking for Prometheus cost data…
+                </p>
+                <p className="mt-1 text-xs text-theme-text-tertiary">
+                  First discovery can take a few seconds while Radar checks cluster services and
+                  opens a local port-forward.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setNoPrometheusSince(Date.now())
+                  refetch()
+                }}
+                disabled={isFetching}
+                className="text-xs text-accent-text hover:text-theme-text-primary disabled:cursor-not-allowed disabled:text-theme-text-disabled transition-colors"
+              >
+                {isFetching ? 'Checking…' : 'Check again'}
+              </button>
             </div>
-            <button
-              onClick={() => {
-                setNoPrometheusSince(Date.now())
-                refetch()
-              }}
-              disabled={isFetching}
-              className="text-xs text-accent-text hover:text-theme-text-primary disabled:cursor-not-allowed disabled:text-theme-text-disabled transition-colors"
-            >
-              {isFetching ? 'Checking…' : 'Check again'}
-            </button>
           </div>
-        </div>
         </CostOverviewState>
       )
     }
@@ -108,7 +127,10 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
           <div className="flex flex-col items-center gap-3 text-theme-text-secondary">
             <DollarSign className="w-8 h-8 text-theme-text-tertiary/40" />
             <p className="text-sm">{message}</p>
-            <button onClick={onBack} className="text-xs text-skyhook-400 hover:text-skyhook-300 transition-colors">
+            <button
+              onClick={onBack}
+              className="text-xs text-skyhook-400 hover:text-skyhook-300 transition-colors"
+            >
               Back to Dashboard
             </button>
             {reason === 'no_prometheus' && (
@@ -195,11 +217,17 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
                 <span className="text-xs text-theme-text-tertiary">/mo</span>
               </div>
               <div className="mt-0.5 flex items-baseline gap-2 text-theme-text-secondary">
-                <span className="text-sm font-medium tabular-nums">{formatProjectedDailyRate(hourlyCost)}</span>
+                <span className="text-sm font-medium tabular-nums">
+                  {formatProjectedDailyRate(hourlyCost)}
+                </span>
                 <span className="text-[10px] text-theme-text-quaternary">·</span>
-                <span className="text-sm font-medium tabular-nums">{formatCostPerHour(hourlyCost)}</span>
+                <span className="text-sm font-medium tabular-nums">
+                  {formatCostPerHour(hourlyCost)}
+                </span>
               </div>
-              <span className="text-[10px] text-theme-text-quaternary">projected from last 1h average</span>
+              <span className="text-[10px] text-theme-text-quaternary">
+                projected from last 1h average
+              </span>
             </div>
           </div>
         </div>
@@ -209,7 +237,9 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         {/* CPU vs Memory (vs Storage) split bar */}
         <div className="rounded-lg border border-theme-border bg-theme-surface/50 p-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-theme-text-secondary">Cluster Resource Cost</span>
+            <span className="text-xs font-medium text-theme-text-secondary">
+              Cluster Resource Cost
+            </span>
             <div className="flex items-center gap-4 text-xs text-theme-text-tertiary">
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-sm bg-accent" />
@@ -228,10 +258,19 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
             </div>
           </div>
           <div className="h-3 rounded-full overflow-hidden bg-theme-hover flex">
-            <div className="h-full bg-accent transition-all duration-300" style={{ width: `${cpuPct}%` }} />
-            <div className="h-full bg-amber-500 transition-all duration-300" style={{ width: `${memPct}%` }} />
+            <div
+              className="h-full bg-accent transition-all duration-300"
+              style={{ width: `${cpuPct}%` }}
+            />
+            <div
+              className="h-full bg-amber-500 transition-all duration-300"
+              style={{ width: `${memPct}%` }}
+            />
             {hasStorage && (
-              <div className="h-full bg-teal-500 transition-all duration-300" style={{ width: `${storagePct}%` }} />
+              <div
+                className="h-full bg-teal-500 transition-all duration-300"
+                style={{ width: `${storagePct}%` }}
+              />
             )}
           </div>
         </div>
@@ -244,10 +283,16 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
           <div className="px-4 py-3 border-b border-theme-border">
             <div className="flex items-center justify-between">
               <div>
-                <span className="text-sm font-semibold text-theme-text-primary">Namespace Breakdown</span>
-                <span className="text-[10px] text-theme-text-quaternary ml-2">projected monthly from current rate</span>
+                <span className="text-sm font-semibold text-theme-text-primary">
+                  Namespace Breakdown
+                </span>
+                <span className="text-[10px] text-theme-text-quaternary ml-2">
+                  projected monthly from current rate
+                </span>
               </div>
-              <span className="text-xs text-theme-text-tertiary">{namespaces.length} namespaces</span>
+              <span className="text-xs text-theme-text-tertiary">
+                {namespaces.length} namespaces
+              </span>
             </div>
           </div>
           {hasSystemNamespaces && <SystemNamespacesCostNote />}
@@ -291,8 +336,8 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         {/* Footer */}
         <div className="flex items-center justify-between text-xs text-theme-text-tertiary pb-4">
           <span>
-            {data.currency ?? 'USD'} &middot; current rates based on last 1h average &middot; *monthly projections
-            assume {COST_HOURS_PER_MONTH} hrs/mo
+            {data.currency ?? 'USD'} &middot; current rates based on last 1h average &middot;
+            *monthly projections assume {COST_HOURS_PER_MONTH} hrs/mo
           </span>
           <span className="text-indigo-500 font-medium">Powered by OpenCost</span>
         </div>
@@ -308,7 +353,11 @@ function CostOverviewState({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[1920px] flex-col gap-4 px-6 py-6">
-        <PageHeader icon={DollarSign} title="Cost Insights" description="Understand current allocation and find workload requests worth tuning." />
+        <PageHeader
+          icon={DollarSign}
+          title="Cost Insights"
+          description="Understand current allocation and find workload requests worth tuning."
+        />
         <CostViewTabs />
         {children}
       </div>
@@ -345,7 +394,9 @@ function NamespaceCostRow({
             <ChevronRight className="w-3.5 h-3.5 text-theme-text-tertiary shrink-0" />
           )}
           <Tooltip content={`Namespace ${ns.name}`} wrapperClassName="min-w-0">
-            <span className="block truncate text-sm text-theme-text-primary font-medium">{ns.name}</span>
+            <span className="block truncate text-sm text-theme-text-primary font-medium">
+              {ns.name}
+            </span>
           </Tooltip>
           {isSystemCostNamespace(ns.name) && (
             <Tooltip
@@ -378,12 +429,16 @@ function NamespaceCostRow({
         </span>
         <span className="text-[11px] text-theme-text-tertiary tabular-nums text-right">
           {formatProjectedMonthlyCost(ns.cpuCost)} / {formatProjectedMonthlyCost(ns.memoryCost)}
-          {hasStorage && (ns.storageCost ?? 0) > 0 && ` / ${formatProjectedMonthlyCost(ns.storageCost ?? 0)}`}
+          {hasStorage &&
+            (ns.storageCost ?? 0) > 0 &&
+            ` / ${formatProjectedMonthlyCost(ns.storageCost ?? 0)}`}
         </span>
       </button>
 
       {/* Expanded workload rows */}
-      {expanded && isSystemCostNamespace(ns.name) && <SystemNamespaceCostNote namespace={ns.name} />}
+      {expanded && isSystemCostNamespace(ns.name) && (
+        <SystemNamespaceCostNote namespace={ns.name} />
+      )}
       {expanded && <WorkloadRows namespace={ns.name} onOpenResource={onOpenResource} />}
     </div>
   )
@@ -396,9 +451,10 @@ function isSystemCostNamespace(namespace: string): boolean {
 function SystemNamespaceCostNote({ namespace }: { namespace: string }) {
   return (
     <div className="border-t border-theme-border/30 bg-theme-elevated/30 px-10 py-2 text-xs text-theme-text-tertiary">
-      <span className="font-medium text-theme-text-secondary">{namespace}</span> is usually baseline cluster overhead:
-      Kubernetes components, cloud-provider agents, and installed add-ons. Optimize by reviewing add-ons, logging,
-      monitoring, or node count rather than deleting system workloads directly.
+      <span className="font-medium text-theme-text-secondary">{namespace}</span> is usually baseline
+      cluster overhead: Kubernetes components, cloud-provider agents, and installed add-ons.
+      Optimize by reviewing add-ons, logging, monitoring, or node count rather than deleting system
+      workloads directly.
     </div>
   )
 }
@@ -406,9 +462,9 @@ function SystemNamespaceCostNote({ namespace }: { namespace: string }) {
 function SystemNamespacesCostNote() {
   return (
     <div className="border-b border-theme-border/50 bg-theme-elevated/30 px-4 py-2 text-xs text-theme-text-tertiary">
-      Rows marked <span className="font-medium text-theme-text-secondary">system</span> are usually baseline Kubernetes,
-      cloud-provider, or add-on overhead. Optimize by reviewing enabled add-ons, telemetry, or node count before
-      treating them as application optimization targets.
+      Rows marked <span className="font-medium text-theme-text-secondary">system</span> are usually
+      baseline Kubernetes, cloud-provider, or add-on overhead. Optimize by reviewing enabled
+      add-ons, telemetry, or node count before treating them as application optimization targets.
     </div>
   )
 }
@@ -480,7 +536,9 @@ function WorkloadCostRow({
         <Tooltip content={`${kindLabel} ${namespace}/${wl.name}`} wrapperClassName="min-w-0">
           <span className="block truncate text-xs text-theme-text-secondary">{wl.name}</span>
         </Tooltip>
-        {wl.replicas > 1 && <span className="text-[10px] text-theme-text-tertiary shrink-0">{wl.replicas}x</span>}
+        {wl.replicas > 1 && (
+          <span className="text-[10px] text-theme-text-tertiary shrink-0">{wl.replicas}x</span>
+        )}
       </span>
       <span className="text-xs font-medium text-theme-text-secondary tabular-nums text-right">
         {formatProjectedMonthlyCost(wl.hourlyCost)}
@@ -503,7 +561,8 @@ function WorkloadCostRow({
     </>
   )
 
-  const rowClass = 'grid grid-cols-[minmax(180px,1fr)_110px_90px_minmax(160px,1fr)_150px] gap-2 px-4 py-2 text-left'
+  const rowClass =
+    'grid grid-cols-[minmax(180px,1fr)_110px_90px_minmax(160px,1fr)_150px] gap-2 px-4 py-2 text-left'
 
   if (canOpen && resource) {
     return (
@@ -598,7 +657,9 @@ function NodeCostRow({
               {node.name}
             </button>
           ) : (
-            <span className="text-sm text-theme-text-primary truncate font-medium block">{node.name}</span>
+            <span className="text-sm text-theme-text-primary truncate font-medium block">
+              {node.name}
+            </span>
           )}
         </Tooltip>
         {cloudLink && (
@@ -637,7 +698,10 @@ function displayCostWorkloadKind(kind: string): string {
   return kind
 }
 
-function costWorkloadResource(wl: OpenCostWorkloadCost, namespace: string): SelectedResource | null {
+function costWorkloadResource(
+  wl: OpenCostWorkloadCost,
+  namespace: string,
+): SelectedResource | null {
   const kind = resourceKindForCostWorkload(wl.kind)
   if (!kind || !wl.name) return null
   return {
@@ -682,7 +746,9 @@ function CostHelpDialog({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between p-4 border-b border-theme-border sticky top-0 bg-theme-surface rounded-t-lg">
           <div className="flex items-center gap-2">
             <HelpCircle className="w-5 h-5 text-indigo-500" />
-            <h2 className="text-base font-semibold text-theme-text-primary">Understanding Cost Data</h2>
+            <h2 className="text-base font-semibold text-theme-text-primary">
+              Understanding Cost Data
+            </h2>
           </div>
           <button
             onClick={onClose}
@@ -695,11 +761,14 @@ function CostHelpDialog({ onClose }: { onClose: () => void }) {
         <div className="p-4 space-y-5 text-sm text-theme-text-secondary">
           {/* Where costs come from */}
           <section>
-            <h3 className="text-sm font-semibold text-theme-text-primary mb-1.5">Where do these costs come from?</h3>
+            <h3 className="text-sm font-semibold text-theme-text-primary mb-1.5">
+              Where do these costs come from?
+            </h3>
             <p>
-              Cost data comes from <strong>OpenCost</strong>, an open-source tool that combines your cloud provider's
-              pricing (how much each node costs per hour) with Kubernetes resource allocation data. This gives you a
-              dollar value for each workload running on your cluster.
+              Cost data comes from <strong>OpenCost</strong>, an open-source tool that combines your
+              cloud provider's pricing (how much each node costs per hour) with Kubernetes resource
+              allocation data. This gives you a dollar value for each workload running on your
+              cluster.
             </p>
           </section>
 
@@ -709,38 +778,42 @@ function CostHelpDialog({ onClose }: { onClose: () => void }) {
               What do monthly, daily, and hourly cost mean?
             </h3>
             <p>
-              OpenCost assigns CPU and memory allocation using the greater of a workload's request or observed use, then
-              applies the node's cloud pricing. Allocation cost is therefore useful for attribution, but it is not a
-              direct measurement of request headroom.
+              OpenCost assigns CPU and memory allocation using the greater of a workload's request
+              or observed use, then applies the node's cloud pricing. Allocation cost is therefore
+              useful for attribution, but it is not a direct measurement of request headroom.
             </p>
             <p className="mt-1.5">
-              Projected monthly and daily numbers multiply the current hourly allocation rate. They are useful for
-              budget impact, but they are not a historical invoice total. Historical spend on application and workload
-              tabs uses the selected range.
+              Projected monthly and daily numbers multiply the current hourly allocation rate. They
+              are useful for budget impact, but they are not a historical invoice total. Historical
+              spend on application and workload tabs uses the selected range.
             </p>
           </section>
 
           {/* Time context */}
           <section>
-            <h3 className="text-sm font-semibold text-theme-text-primary mb-1.5">How fresh is this data?</h3>
+            <h3 className="text-sm font-semibold text-theme-text-primary mb-1.5">
+              How fresh is this data?
+            </h3>
             <p>
-              Cost rates and breakdowns are <strong>snapshots based on the last 1 hour</strong> of data. They update
-              automatically every minute. The trend chart shows historical hourly allocation rate over the selected time
-              range (6 hours, 24 hours, or 7 days).
+              Cost rates and breakdowns are <strong>snapshots based on the last 1 hour</strong> of
+              data. They update automatically every minute. The trend chart shows historical hourly
+              allocation rate over the selected time range (6 hours, 24 hours, or 7 days).
             </p>
             <p className="mt-1.5">
-              Because costs are based on a 1-hour window, short-lived spikes or dips may not be reflected. The trend
-              chart gives you the longer-term rate picture.
+              Because costs are based on a 1-hour window, short-lived spikes or dips may not be
+              reflected. The trend chart gives you the longer-term rate picture.
             </p>
           </section>
 
           {/* Node costs */}
           <section>
-            <h3 className="text-sm font-semibold text-theme-text-primary mb-1.5">What are node costs?</h3>
+            <h3 className="text-sm font-semibold text-theme-text-primary mb-1.5">
+              What are node costs?
+            </h3>
             <p>
-              Node costs show the hourly price of each machine in your cluster, based on instance type and cloud
-              pricing. This is the total capacity cost — the namespace and workload breakdowns above show how that
-              capacity is allocated across your workloads.
+              Node costs show the hourly price of each machine in your cluster, based on instance
+              type and cloud pricing. This is the total capacity cost — the namespace and workload
+              breakdowns above show how that capacity is allocated across your workloads.
             </p>
           </section>
         </div>

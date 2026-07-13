@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { RightsizingRow } from '../../api/client'
 import {
-  getRequestFitExplanation,
-  getRequestFitPresentation,
-  REQUEST_FIT_METHODOLOGY,
+  getRightsizingExplanation,
+  getRightsizingPresentation,
+  RIGHTSIZING_METHODOLOGY,
   RIGHTSIZING_DOCS_URL,
-  REQUEST_FIT_SUMMARY,
+  RIGHTSIZING_SUMMARY,
 } from './RightsizingStrip'
 
 const row = (overrides: Partial<RightsizingRow> = {}): RightsizingRow => ({
@@ -23,35 +23,64 @@ const row = (overrides: Partial<RightsizingRow> = {}): RightsizingRow => ({
   ...overrides,
 })
 
-describe('request-fit presentation', () => {
+describe('rightsizing presentation', () => {
   it('keeps fit, confidence, and runtime risk as separate concepts', () => {
-    expect(getRequestFitPresentation('oversized')).toEqual({ label: 'Oversized', severity: 'info' })
-    expect(getRequestFitPresentation('under_requested')).toEqual({ label: 'Under-requested', severity: 'warning' })
-    expect(getRequestFitPresentation('insufficient_history')).toEqual({ label: 'Insufficient history', severity: 'neutral' })
+    expect(getRightsizingPresentation('oversized')).toEqual({
+      label: 'Oversized',
+      severity: 'info',
+    })
+    expect(getRightsizingPresentation('under_requested')).toEqual({
+      label: 'Under-requested',
+      severity: 'warning',
+    })
+    expect(getRightsizingPresentation('insufficient_history')).toEqual({
+      label: 'Insufficient history',
+      severity: 'neutral',
+    })
   })
 
   it('labels query failures independently from insufficient history', () => {
-    expect(getRequestFitPresentation('insufficient_history', 'usage query failed')).toEqual({ label: 'Query failed', severity: 'error' })
+    expect(getRightsizingPresentation('insufficient_history', 'usage query failed')).toEqual({
+      label: 'Query failed',
+      severity: 'error',
+    })
   })
 
   it('explains why recommendations are withheld without inventing a zero-risk result', () => {
-    expect(getRequestFitExplanation(row({ recommendationReason: 'hpa_managed' }))).toContain('HPA manages cpu')
-    expect(getRequestFitExplanation(row({ resource: 'memory', recommendationReason: 'oom_evidence' }))).toContain('OOM evidence')
-    expect(getRequestFitExplanation(row({ recommendationReason: 'hpa_evidence_unavailable' }))).toContain('could not verify HPA')
-    expect(getRequestFitExplanation(row({ resource: 'memory', recommendationReason: 'oom_evidence_unavailable' }))).toContain('could not verify recent OOM')
-    expect(getRequestFitExplanation(row({ throttleAvailable: false }))).toContain('throttling metrics are unavailable')
+    expect(getRightsizingExplanation(row({ recommendationReason: 'hpa_managed' }))).toContain(
+      'HPA manages cpu',
+    )
+    expect(
+      getRightsizingExplanation(row({ resource: 'memory', recommendationReason: 'oom_evidence' })),
+    ).toContain('OOM evidence')
+    expect(
+      getRightsizingExplanation(row({ recommendationReason: 'hpa_evidence_unavailable' })),
+    ).toContain('could not verify HPA')
+    expect(
+      getRightsizingExplanation(
+        row({
+          resource: 'memory',
+          recommendationReason: 'oom_evidence_unavailable',
+        }),
+      ),
+    ).toContain('could not verify recent OOM')
+    expect(getRightsizingExplanation(row({ throttleAvailable: false }))).toContain(
+      'throttling metrics are unavailable',
+    )
   })
 
   it('separates the demand target from a conservative reduction step', () => {
-    const explanation = getRequestFitExplanation(row({
-      fit: 'oversized',
-      currentRequest: '1',
-      recommendedRequest: '500m',
-      calculatedRequest: '10m',
-      reductionLimited: true,
-      bursty: true,
-      peak: { name: 'P99', value: 0.2, formatted: '200m' },
-    }))
+    const explanation = getRightsizingExplanation(
+      row({
+        fit: 'oversized',
+        currentRequest: '1',
+        recommendedRequest: '500m',
+        calculatedRequest: '10m',
+        reductionLimited: true,
+        bursty: true,
+        peak: { name: 'P99', value: 0.2, formatted: '200m' },
+      }),
+    )
     expect(explanation).toContain('Demand-based target: 10m')
     expect(explanation).toContain('conservative next step')
     expect(explanation).toContain('CPU P99 reached 200m')
@@ -59,20 +88,22 @@ describe('request-fit presentation', () => {
 
   it('does not revive the misleading efficiency vocabulary', () => {
     const copy = [
-      getRequestFitPresentation('balanced').label,
-      getRequestFitPresentation('oversized').label,
-      getRequestFitExplanation(row({ recommendationReason: 'request_within_fit_range' })),
-    ].join(' ').toLowerCase()
+      getRightsizingPresentation('balanced').label,
+      getRightsizingPresentation('oversized').label,
+      getRightsizingExplanation(row({ recommendationReason: 'request_within_fit_range' })),
+    ]
+      .join(' ')
+      .toLowerCase()
     expect(copy).not.toContain('efficien')
     expect(copy).not.toContain('waste')
   })
 
   it('sets the workload-level scope and methodology without promising savings or changes', () => {
-    expect(REQUEST_FIT_SUMMARY).toContain('this workload')
-    expect(REQUEST_FIT_SUMMARY).toContain('not a savings estimate or automatic change')
-    expect(REQUEST_FIT_METHODOLOGY).toContain('CPU P95 and memory maximum')
-    expect(REQUEST_FIT_METHODOLOGY).toContain('Reductions are staged')
-    expect(REQUEST_FIT_METHODOLOGY).toContain('Radar does not change requests')
+    expect(RIGHTSIZING_SUMMARY).toContain('this workload')
+    expect(RIGHTSIZING_SUMMARY).toContain('not a savings estimate or automatic change')
+    expect(RIGHTSIZING_METHODOLOGY).toContain('CPU P95 and memory maximum')
+    expect(RIGHTSIZING_METHODOLOGY).toContain('Reductions are staged')
+    expect(RIGHTSIZING_METHODOLOGY).toContain('Radar does not change requests')
     expect(RIGHTSIZING_DOCS_URL).toContain('/features/rightsizing')
   })
 })

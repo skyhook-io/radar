@@ -1,15 +1,15 @@
-import type { RequestFitScanResponse, RightsizingRow } from '../../api/client'
+import type { RightsizingScanResponse, RightsizingRow } from '../../api/client'
 
 export type ScanClass = 'increase' | 'reduction' | 'review' | 'in_range' | 'need_data'
 export type ScanSignal = 'hpa' | 'oom' | 'bursty' | 'throttling' | 'query_error' | 'scaled_zero'
 
-export interface RequestFitImpact {
+export interface RightsizingImpact {
   replicas: number
   cpuChange: number
   memoryChange: number
 }
 
-export interface RequestFitScanRow {
+export interface RightsizingScanRow {
   id: string
   kind: string
   namespace: string
@@ -20,7 +20,7 @@ export interface RequestFitScanRow {
   memory?: RightsizingRow
   classification: ScanClass
   signals: Set<ScanSignal>
-  impact: RequestFitImpact
+  impact: RightsizingImpact
   system: boolean
   scaledToZero: boolean
 }
@@ -36,25 +36,48 @@ const CLASS_RANK: Record<ScanClass, number> = {
 const MIN_CPU_REDUCTION = 0.05
 const MIN_MEMORY_REDUCTION = 64 * 1024 * 1024
 
-export function classifyRows(rows: RightsizingRow[], replicas = 1): ScanClass {
-  if (rows.some((row) => (row.fit === 'under_requested' || row.fit === 'missing_request') && row.recommendedRequest)) return 'increase'
+export function classifyRows(
+  rows: RightsizingRow[],
+  replicas = 1,
+  scaledToZero = false,
+): ScanClass {
+  if (rows.some((row) => row.queryError || row.fit === 'insufficient_history')) return 'need_data'
+  if (scaledToZero) return 'review'
+  if (
+    rows.some(
+      (row) =>
+        (row.fit === 'under_requested' || row.fit === 'missing_request') && row.recommendedRequest,
+    )
+  )
+    return 'increase'
   if (rows.some(needsManualReview)) return 'review'
   const impact = calculateImpact(rows, replicas)
-  if (-impact.cpuChange >= MIN_CPU_REDUCTION || -impact.memoryChange >= MIN_MEMORY_REDUCTION) return 'reduction'
-  if (rows.some((row) => row.queryError || row.fit === 'insufficient_history')) return 'need_data'
+  if (-impact.cpuChange >= MIN_CPU_REDUCTION || -impact.memoryChange >= MIN_MEMORY_REDUCTION)
+    return 'reduction'
   return 'in_range'
 }
 
 function needsManualReview(row: RightsizingRow): boolean {
-  return row.hpaManaged
-    || row.currentPodOOM === true
-    || row.windowOomEvidence === true
-    || row.limitConflict === true
-    || row.recommendationReason === 'hpa_evidence_unavailable'
-    || row.recommendationReason === 'oom_evidence_unavailable'
+  return (
+    row.hpaManaged ||
+    row.currentPodOOM === true ||
+    row.windowOomEvidence === true ||
+    row.limitConflict === true ||
+    row.recommendationReason === 'hpa_evidence_unavailable' ||
+    row.recommendationReason === 'oom_evidence_unavailable' ||
+    (isReduction(row) && (row.bursty || (row.throttleRatio ?? 0) >= 0.1))
+  )
 }
 
-export function calculateImpact(rows: RightsizingRow[], replicas: number): RequestFitImpact {
+function isReduction(row: RightsizingRow): boolean {
+  return (
+    row.recommendedRequestValue != null &&
+    row.currentRequestValue != null &&
+    row.recommendedRequestValue < row.currentRequestValue
+  )
+}
+
+export function calculateImpact(rows: RightsizingRow[], replicas: number): RightsizingImpact {
   const count = Math.max(replicas, 0)
   let cpuChange = 0
   let memoryChange = 0
@@ -67,8 +90,8 @@ export function calculateImpact(rows: RightsizingRow[], replicas: number): Reque
   return { replicas: count, cpuChange, memoryChange }
 }
 
-export function flattenScanResults(scan: RequestFitScanResponse): RequestFitScanRow[] {
-  const result: RequestFitScanRow[] = []
+export function flattenScanResults(scan: RightsizingScanResponse): RightsizingScanRow[] {
+  const result: RightsizingScanRow[] = []
   for (const workload of scan.workloads ?? []) {
     const byContainer = new Map<string, RightsizingRow[]>()
     for (const row of workload.rows ?? []) {
@@ -94,7 +117,7 @@ export function flattenScanResults(scan: RequestFitScanResponse): RequestFitScan
         replicas,
         cpu: rows.find((row) => row.resource === 'cpu'),
         memory: rows.find((row) => row.resource === 'memory'),
-        classification: classifyRows(rows, replicas),
+        classification: classifyRows(rows, replicas, workload.scaledToZero),
         signals,
         impact: calculateImpact(rows, replicas),
         system: isSystemNamespace(workload.namespace),
@@ -102,19 +125,31 @@ export function flattenScanResults(scan: RequestFitScanResponse): RequestFitScan
       })
     }
   }
-  return result.sort((a, b) => CLASS_RANK[a.classification] - CLASS_RANK[b.classification]
-    || impactScore(b) - impactScore(a)
-    || a.namespace.localeCompare(b.namespace)
-    || a.name.localeCompare(b.name)
-    || a.container.localeCompare(b.container))
+  return result.sort(
+    (a, b) =>
+      CLASS_RANK[a.classification] - CLASS_RANK[b.classification] ||
+      impactScore(b) - impactScore(a) ||
+      a.namespace.localeCompare(b.namespace) ||
+      a.name.localeCompare(b.name) ||
+      a.container.localeCompare(b.container),
+  )
 }
 
-function impactScore(row: RequestFitScanRow): number {
-  return Math.max(Math.abs(row.impact.cpuChange) / MIN_CPU_REDUCTION, Math.abs(row.impact.memoryChange) / MIN_MEMORY_REDUCTION)
+function impactScore(row: RightsizingScanRow): number {
+  return Math.max(
+    Math.abs(row.impact.cpuChange) / MIN_CPU_REDUCTION,
+    Math.abs(row.impact.memoryChange) / MIN_MEMORY_REDUCTION,
+  )
 }
 
-export function scanClassCounts(rows: RequestFitScanRow[]): Record<ScanClass, number> {
-  const counts: Record<ScanClass, number> = { increase: 0, reduction: 0, review: 0, in_range: 0, need_data: 0 }
+export function scanClassCounts(rows: RightsizingScanRow[]): Record<ScanClass, number> {
+  const counts: Record<ScanClass, number> = {
+    increase: 0,
+    reduction: 0,
+    review: 0,
+    in_range: 0,
+    need_data: 0,
+  }
   for (const row of rows) counts[row.classification]++
   return counts
 }
@@ -124,8 +159,10 @@ export function isActionableClass(value: ScanClass): boolean {
 }
 
 function isSystemNamespace(namespace: string): boolean {
-  return namespace === 'kube-system'
-    || namespace === 'kube-public'
-    || namespace === 'kube-node-lease'
-    || namespace.startsWith('gke-managed-')
+  return (
+    namespace === 'kube-system' ||
+    namespace === 'kube-public' ||
+    namespace === 'kube-node-lease' ||
+    namespace.startsWith('gke-managed-')
+  )
 }

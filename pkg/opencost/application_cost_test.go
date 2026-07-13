@@ -108,9 +108,6 @@ func TestApplicationCostTotals_IncompleteUsageSuppressesAggregatePercentage(t *t
 	if !total.MemoryUsageAvailable || total.MemoryAllocationUse != 50 {
 		t.Fatalf("complete memory aggregate = available:%t use:%v, want true/50", total.MemoryUsageAvailable, total.MemoryAllocationUse)
 	}
-	if total.Efficiency != 0 || total.IdleCost != 0 {
-		t.Fatalf("combined usage values = efficiency:%v idle:%v with incomplete coverage, want 0/0", total.Efficiency, total.IdleCost)
-	}
 }
 
 func TestApplicationCostTotals_UsageAvailabilityAlwaysSerialized(t *testing.T) {

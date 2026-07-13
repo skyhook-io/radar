@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, DollarSign, HelpCircle, Loader2, TrendingUp } from 'lucide-react'
 import {
-  ApiError,
   useOpenCostWorkload,
   useOpenCostWorkloadTrend,
   COST_DISCOVERY_GRACE_MS,
@@ -12,8 +11,14 @@ import {
 } from '../../api/client'
 import { Tooltip } from '../ui/Tooltip'
 import { CostTimeRangeSelector, StackedAreaChart } from './CostTrendChart'
-import { formatCostPerHour, formatHistoricalSpend, formatProjectedDailyRate, formatProjectedMonthlyCost } from './format'
+import {
+  formatCostPerHour,
+  formatHistoricalSpend,
+  formatProjectedDailyRate,
+  formatProjectedMonthlyCost,
+} from './format'
 import { CurrentAllocationUse } from './CurrentAllocationUse'
+import { costUnavailableReasonFromError } from './errors'
 
 type WorkloadCostState =
   | 'loading'
@@ -44,7 +49,9 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
   const trendQuery = useOpenCostWorkloadTrend(kind, namespace, name, range)
   const trendMatchesRange = trendQuery.data?.range === range
   const trendData = trendMatchesRange ? trendQuery.data : undefined
-  const trendLoading = trendQuery.isLoading || (trendQuery.isFetching && Boolean(trendQuery.data) && !trendMatchesRange)
+  const trendLoading =
+    trendQuery.isLoading ||
+    (trendQuery.isFetching && Boolean(trendQuery.data) && !trendMatchesRange)
 
   const state = getWorkloadCostState(currentQuery.data, trendData, {
     currentLoading: currentQuery.isLoading,
@@ -117,7 +124,9 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
             <TrendingUp className="h-4 w-4 text-theme-text-tertiary" />
             <div>
               <div className="flex items-center gap-1.5">
-                <div className="text-sm font-semibold text-theme-text-primary">Historical compute cost</div>
+                <div className="text-sm font-semibold text-theme-text-primary">
+                  Historical compute cost
+                </div>
                 <MetricInfoTooltip content="Dollars are based on OpenCost CPU and memory allocation over time, not raw utilization. OpenCost allocation uses the greater of requested or observed resources." />
               </div>
               <div className="text-xs text-theme-text-tertiary">
@@ -133,12 +142,18 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
             <MetricBlock
               label={`Spend over ${range}`}
               value={windowSpendValue}
-              subvalue={state === 'partial_missing_history' ? 'Historical data unavailable' : undefined}
+              subvalue={
+                state === 'partial_missing_history' ? 'Historical data unavailable' : undefined
+              }
             />
             <MetricBlock
               label="Projected monthly"
               value={hasCurrent ? formatProjectedMonthlyCost(hourly) : '—'}
-              subvalue={hasCurrent ? `${formatCostPerHour(hourly)} current rate` : 'Current allocation unavailable'}
+              subvalue={
+                hasCurrent
+                  ? `${formatCostPerHour(hourly)} current rate`
+                  : 'Current allocation unavailable'
+              }
             />
           </div>
           <div className="min-w-0">
@@ -162,14 +177,17 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-secondary">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
           <span>
-            Current cost is available, but historical workload owner metrics are not available for this range.
+            Current cost is available, but historical workload owner metrics are not available for
+            this range.
           </span>
         </div>
       )}
       {state === 'partial_missing_current' && (
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-secondary">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
-          <span>Historical cost is available, but current workload allocation metrics are not available.</span>
+          <span>
+            Historical cost is available, but current workload allocation metrics are not available.
+          </span>
         </div>
       )}
 
@@ -178,7 +196,11 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         <MetricTile
           label="Projected daily"
           value={hasCurrent ? formatProjectedDailyRate(hourly) : '—'}
-          subvalue={hasCurrent ? `${formatCostPerHour(hourly)} current hourly rate` : 'Current allocation unavailable'}
+          subvalue={
+            hasCurrent
+              ? `${formatCostPerHour(hourly)} current hourly rate`
+              : 'Current allocation unavailable'
+          }
         />
       </div>
 
@@ -194,8 +216,9 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
       />
 
       <div className="text-xs text-theme-text-tertiary">
-        Powered by OpenCost via Prometheus. Historical spend uses the selected range; projected monthly values multiply
-        the current hourly allocation. Storage/PVC attribution remains at namespace and cluster level.
+        Powered by OpenCost via Prometheus. Historical spend uses the selected range; projected
+        monthly values multiply the current hourly allocation. Storage/PVC attribution remains at
+        namespace and cluster level.
       </div>
     </div>
   )
@@ -212,7 +235,8 @@ export function getWorkloadCostState(
   const queryError = Boolean(queryStatus.currentError || queryStatus.trendError)
 
   const currentRow = current?.available ? current.current : undefined
-  const trendHasData = trend?.available === true && (trend.dataPoints ?? []).some((p) => p.value > 0)
+  const trendHasData =
+    trend?.available === true && (trend.dataPoints ?? []).some((p) => p.value > 0)
   if (currentRow) {
     if (queryStatus.trendLoading && !trend) return 'data'
     if (queryStatus.trendError || (trend?.available === false && trend.reason !== 'no_metrics'))
@@ -227,7 +251,12 @@ export function getWorkloadCostState(
     trend?.reason ??
     costUnavailableReasonFromError(queryStatus.currentError) ??
     costUnavailableReasonFromError(queryStatus.trendError)
-  if (reason === 'no_prometheus' || reason === 'query_error' || reason === 'access_denied' || reason === 'not_found')
+  if (
+    reason === 'no_prometheus' ||
+    reason === 'query_error' ||
+    reason === 'access_denied' ||
+    reason === 'not_found'
+  )
     return reason
   if (queryError) return 'load_error'
   if (loading) return 'loading'
@@ -235,22 +264,24 @@ export function getWorkloadCostState(
   return 'no_metrics'
 }
 
-function costUnavailableReasonFromError(error: unknown): CostUnavailableReason | undefined {
-  if (!(error instanceof ApiError)) return undefined
-  if (error.status === 403) return 'access_denied'
-  if (error.status === 404) return 'not_found'
-  return undefined
-}
-
-function WorkloadCostDiscovering({ isFetching, onRetry }: { isFetching: boolean; onRetry: () => void }) {
+function WorkloadCostDiscovering({
+  isFetching,
+  onRetry,
+}: {
+  isFetching: boolean
+  onRetry: () => void
+}) {
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center">
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
         <Loader2 className="h-8 w-8 animate-spin text-theme-text-tertiary/60" />
         <div>
-          <p className="text-sm font-medium text-theme-text-primary">Looking for Prometheus cost data…</p>
+          <p className="text-sm font-medium text-theme-text-primary">
+            Looking for Prometheus cost data…
+          </p>
           <p className="mt-1 text-xs text-theme-text-tertiary">
-            First discovery can take a few seconds while Radar checks cluster services and opens a local port-forward.
+            First discovery can take a few seconds while Radar checks cluster services and opens a
+            local port-forward.
           </p>
         </div>
         <button
@@ -289,11 +320,21 @@ function WorkloadCostUnavailable({ state }: { state: CostUnavailableReason | 'lo
   )
 }
 
-function MetricBlock({ label, value, subvalue }: { label: string; value: string; subvalue?: string }) {
+function MetricBlock({
+  label,
+  value,
+  subvalue,
+}: {
+  label: string
+  value: string
+  subvalue?: string
+}) {
   return (
     <div>
       <div className="text-xs font-medium uppercase text-theme-text-tertiary">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-theme-text-primary tabular-nums">{value}</div>
+      <div className="mt-1 text-2xl font-semibold text-theme-text-primary tabular-nums">
+        {value}
+      </div>
       {subvalue && <div className="mt-1 text-xs text-theme-text-tertiary">{subvalue}</div>}
     </div>
   )
