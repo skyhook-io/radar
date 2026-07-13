@@ -101,6 +101,7 @@ export interface TimelineOverviewResult {
 export interface TimelineEventsResult {
   data: TimelineEvent[] | undefined
   isLoading: boolean
+  isFetching: boolean
   isError: boolean
   refetch: () => void
   // Present only for sources that report coverage (retained).
@@ -142,7 +143,7 @@ function useLocalEvents(query: TimelineQuery): TimelineEventsResult {
   // query and the list's windowed one): SSE-driven refetches then transfer only
   // what arrived since the last full load. Dropdown-ranged (`since`) queries
   // stay plain — they're small and their range moves with the clock.
-  const { data, isLoading, isError, refetch } = useChanges(
+  const { data, isLoading, isFetching, isError, refetch } = useChanges(
     windowed
       ? { ...query, timeRange: 'all', limit: LOCAL_RING_LIMIT, deltaSync: true }
       : { ...query, deltaSync: query.timeRange === 'all' },
@@ -165,7 +166,7 @@ function useLocalEvents(query: TimelineQuery): TimelineEventsResult {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [data, query.fromMs, query.toMs, query.limit, kindsKey, query.includeManaged],
   )
-  return { data: events, isLoading, isError, refetch }
+  return { data: events, isLoading, isFetching, isError, refetch }
 }
 
 export const localSource: TimelineSource = {
@@ -517,6 +518,7 @@ function createRetainedEventsHook(
     return {
       data,
       isLoading: base.isLoading,
+      isFetching: base.isFetching || live.isFetching,
       // Base failure is a real error; a failing live poll must not blank an
       // already-loaded range.
       isError: base.isError,

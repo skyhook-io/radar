@@ -207,19 +207,111 @@ describe("ApplicationDetail shell", () => {
     expect(html).not.toContain("Application views");
   });
 
-  it("renders application incidents in History", () => {
+  it("renders one filtered application chronology with workload and source actions", () => {
     const html = renderDetail({
       selectedView: "history",
       onSelectView: () => {},
       selectedWorkloadKey: null,
       onSelectWorkload: () => {},
+      historyMode: 'local',
+      historyRange: 'all',
+      historyRangeOptions: [{ value: 'all', label: 'All observed' }],
+      onOpenTimeline: () => {},
+      historyItems: [
+        {
+          id: 'source-sync',
+          category: 'deployment',
+          title: 'Argo CD sync',
+          timestamp: '2026-07-13T10:00:00.000Z',
+          sourceRef: { type: 'gitops', tool: 'argocd', kind: 'Application', namespace: 'argocd', name: 'checkout' },
+        },
+        {
+          id: 'runtime-change',
+          category: 'runtime',
+          title: 'Deployment updated',
+          timestamp: '2026-07-13T09:00:00.000Z',
+          resource: { kind: 'Deployment', namespace: 'prod', name: 'checkout-api' },
+        },
+        {
+          id: 'problem',
+          category: 'problem',
+          title: 'BackOff',
+          timestamp: '2026-07-13T08:00:00.000Z',
+          resource: { kind: 'Pod', namespace: 'prod', name: 'checkout-api-abc12' },
+        },
+      ],
+      onOpenSource: () => {},
     });
 
-    expect(html).toContain("Current incidents");
-    expect(html).toContain("BackOff on Deployment/checkout-api");
-    expect(html).toContain("Deployment/checkout-api");
-    expect(html).toContain("Open workload");
+    expect(html).toContain("Application history");
+    expect(html).toContain("Deployments");
+    expect(html).toContain("Runtime");
+    expect(html).toContain("Problems");
+    expect(html).toContain("Open full Timeline");
+    expect(html).toContain("Deployment");
+    expect(html).toContain("prod");
+    expect(html).toContain("checkout-api");
+    expect(html).toContain("View Argo CD application");
+    expect(html).toContain("events retained by this Radar instance");
+    expect(html).not.toContain("Current incidents");
   });
+
+  it('reports retained event limits separately from recording gaps', () => {
+    const html = renderDetail({
+      selectedView: 'history',
+      onSelectView: () => {},
+      selectedWorkloadKey: null,
+      onSelectWorkload: () => {},
+      historyMode: 'retained',
+      historyRange: '7d',
+      historyRangeOptions: [{ value: '7d', label: '7 days' }],
+      historyRuntimeLimited: true,
+      historyItems: [{
+        id: 'runtime-change',
+        category: 'runtime',
+        title: 'Deployment updated',
+        timestamp: '2026-07-13T09:00:00.000Z',
+      }],
+    })
+
+    expect(html).toContain('Showing the 10,000 most recent events in these namespaces')
+    expect(html).not.toContain('Recording coverage is incomplete')
+  })
+
+  it('shows a single honest error state when runtime history fails without source history', () => {
+    const html = renderDetail({
+      selectedView: 'history',
+      onSelectView: () => {},
+      selectedWorkloadKey: null,
+      onSelectWorkload: () => {},
+      historyRuntimeError: true,
+      historyItems: [],
+    })
+
+    expect(html).toContain('Runtime activity could not be loaded.')
+    expect(html).not.toContain('Deployment-source history is still shown.')
+    expect(html).not.toContain('No application history in this range.')
+  })
+
+  it('marks retained runtime rows as stale when a refresh fails', () => {
+    const html = renderDetail({
+      selectedView: 'history',
+      onSelectView: () => {},
+      selectedWorkloadKey: null,
+      onSelectWorkload: () => {},
+      historyRuntimeError: true,
+      historyItems: [{
+        id: 'runtime-change',
+        category: 'runtime',
+        title: 'Deployment updated',
+        timestamp: '2026-07-13T09:00:00.000Z',
+      }],
+    })
+
+    expect(html).toContain('Runtime activity could not be refreshed.')
+    expect(html).toContain('Previously loaded activity may be stale.')
+    expect(html).toContain('Deployment updated')
+  })
 
   it("previews the latest retained deployment change in Overview", () => {
     const healthyApp: AppRow = { ...app, events: [] };
@@ -456,7 +548,7 @@ describe("ApplicationDetail shell", () => {
     expect(html).not.toContain('needs attention')
   })
 
-  it("does not link ambiguous event objects to a workload", () => {
+  it("uses the resource namespace when linking a history item to a workload", () => {
     const ambiguousApp: AppRow = {
       ...app,
       workloads: [
@@ -480,10 +572,19 @@ describe("ApplicationDetail shell", () => {
       onSelectView: () => {},
       selectedWorkloadKey: null,
       onSelectWorkload: () => {},
+      historyItems: [{
+        id: 'prod-change',
+        category: 'runtime',
+        title: 'Deployment updated',
+        timestamp: '2026-07-13T09:00:00.000Z',
+        resource: { kind: 'Deployment', namespace: 'prod', name: 'checkout-api' },
+      }],
     });
 
-    expect(html).toContain("Deployment/checkout-api");
-    expect(html).not.toContain("Open workload");
+    expect(html).toContain("Deployment");
+    expect(html).toContain("prod");
+    expect(html).toContain("checkout-api");
+    expect(html).not.toContain("canary/checkout-api");
   });
 
   it("shows batch activity and injected operational issues on the application overview", () => {

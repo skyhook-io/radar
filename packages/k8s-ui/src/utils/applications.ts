@@ -641,6 +641,31 @@ export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
         setFirst(byResource, `${routeKind}/${ns}/${routeName}`, membership);
       }
     }
+    if (row.relationships) {
+      const explicitRefs = [
+        row.relationships.serviceRefs,
+        row.relationships.ingressRefs,
+        row.relationships.routeRefs,
+        row.relationships.configRefs,
+        row.relationships.scalerRefs,
+        row.relationships.storageRefs,
+        row.relationships.pdbRefs,
+        row.relationships.networkPolicyRefs,
+      ];
+      for (const refs of explicitRefs) {
+        for (const ref of refs ?? []) {
+          if (ref.kind && ref.name)
+            setFirst(byResource, `${ref.kind}/${ref.namespace}/${ref.name}`, membership);
+        }
+      }
+    }
+    if (row.sourceRef?.kind && row.sourceRef.name) {
+      setFirst(
+        byResource,
+        `${row.sourceRef.kind}/${row.sourceRef.namespace}/${row.sourceRef.name}`,
+        membership,
+      );
+    }
     for (const mk of row.matchKeys || []) {
       if (mk.startsWith("name-stem:")) continue;
       setFirst(byEvidence, mk, membership);

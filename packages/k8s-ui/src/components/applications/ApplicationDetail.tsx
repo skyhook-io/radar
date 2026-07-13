@@ -8,13 +8,17 @@ import {
 } from "react";
 import {
   AlertTriangle,
+  Activity,
   ArrowLeft,
   Boxes,
   ChevronDown,
+  Clock3,
   DollarSign,
   ExternalLink,
+  GitCommit,
   Layers,
   Radio,
+  RefreshCw,
   Search,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -42,6 +46,7 @@ import {
   type WorkloadFocus,
 } from "../../utils/workload-colors";
 import { getTopologyIcon } from "../../utils/resource-icons";
+import { getKindLabel } from "../../utils/api-resources";
 import {
   type AppRow,
   type AppHistory,
@@ -90,6 +95,12 @@ import {
   type DeploymentInventory,
   type DeploymentTopologyLayer,
 } from "../../utils/application-topology";
+import {
+  buildApplicationHistoryItems,
+  type ApplicationHistoryCategory,
+  type ApplicationHistoryItem,
+  type ApplicationHistoryRange,
+} from "../../utils/application-history";
 
 // ApplicationDetail owns the application chrome and scope switcher. The selected
 // scope decides the one tab row shown in the detail pane: app scope gets
@@ -216,6 +227,20 @@ export type ApplicationDetailProps = {
   activeInstanceKey?: string;
   history?: AppHistory;
   historyLoading?: boolean;
+  historyItems?: ApplicationHistoryItem[];
+  historyRuntimeLoading?: boolean;
+  historyRuntimeUpdating?: boolean;
+  historyRuntimeError?: boolean;
+  historyMode?: "local" | "retained";
+  historyRange?: ApplicationHistoryRange;
+  historyRangeOptions?: Array<{
+    value: ApplicationHistoryRange;
+    label: string;
+  }>;
+  historyCoverageRecordCount?: number;
+  historyRuntimeLimited?: boolean;
+  onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
+  onOpenTimeline?: () => void;
   onOpenSource?: (source: AppSourceRef) => void;
 } & SelectionProps &
   ViewProps;
@@ -298,6 +323,17 @@ export function ApplicationDetail({
   activeInstanceKey,
   history,
   historyLoading,
+  historyItems,
+  historyRuntimeLoading,
+  historyRuntimeUpdating,
+  historyRuntimeError,
+  historyMode,
+  historyRange,
+  historyRangeOptions,
+  historyCoverageRecordCount,
+  historyRuntimeLimited,
+  onHistoryRangeChange,
+  onOpenTimeline,
   onOpenSource,
   selectedWorkloadKey,
   onSelectWorkload,
@@ -708,6 +744,17 @@ export function ApplicationDetail({
             onNavigateToResource={onNavigateToResource}
             history={history}
             historyLoading={historyLoading}
+            historyItems={historyItems}
+            historyRuntimeLoading={historyRuntimeLoading}
+            historyRuntimeUpdating={historyRuntimeUpdating}
+            historyRuntimeError={historyRuntimeError}
+            historyMode={historyMode}
+            historyRange={historyRange}
+            historyRangeOptions={historyRangeOptions}
+            historyCoverageRecordCount={historyCoverageRecordCount}
+            historyRuntimeLimited={historyRuntimeLimited}
+            onHistoryRangeChange={onHistoryRangeChange}
+            onOpenTimeline={onOpenTimeline}
             onOpenSource={onOpenSource}
             onToggleReplicaSets={toggleReplicaSets}
             renderOverviewIssues={renderOverviewIssues}
@@ -745,6 +792,17 @@ function ApplicationWorkspace({
   onNavigateToResource,
   history,
   historyLoading,
+  historyItems,
+  historyRuntimeLoading,
+  historyRuntimeUpdating,
+  historyRuntimeError,
+  historyMode,
+  historyRange,
+  historyRangeOptions,
+  historyCoverageRecordCount,
+  historyRuntimeLimited,
+  onHistoryRangeChange,
+  onOpenTimeline,
   onOpenSource,
   onToggleReplicaSets,
   renderOverviewIssues,
@@ -783,21 +841,31 @@ function ApplicationWorkspace({
   }) => void;
   history?: AppHistory;
   historyLoading?: boolean;
+  historyItems?: ApplicationHistoryItem[];
+  historyRuntimeLoading?: boolean;
+  historyRuntimeUpdating?: boolean;
+  historyRuntimeError?: boolean;
+  historyMode?: "local" | "retained";
+  historyRange?: ApplicationHistoryRange;
+  historyRangeOptions?: Array<{
+    value: ApplicationHistoryRange;
+    label: string;
+  }>;
+  historyCoverageRecordCount?: number;
+  historyRuntimeLimited?: boolean;
+  onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
+  onOpenTimeline?: () => void;
   onOpenSource?: (source: AppSourceRef) => void;
   onToggleReplicaSets: (ownerID: string) => void;
   renderOverviewIssues?: () => ReactNode;
   hasOverviewIssues?: boolean;
 }) {
-  const historyCount =
-    (history?.anchors?.length ?? 0) +
-    (history?.incidents?.length ?? app.events?.length ?? 0);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ApplicationViewTabs
         activeView={activeView}
         costSelected={costSelected}
         costAvailable={Boolean(renderCostView)}
-        historyCount={historyCount}
         onChange={onViewChange}
         onCostChange={onCostViewChange}
       />
@@ -844,10 +912,21 @@ function ApplicationWorkspace({
       {!costSelected && activeView === "history" && (
         <ApplicationHistoryView
           history={history}
-          loading={historyLoading}
-          fallbackEvents={app.events ?? []}
+          sourceLoading={historyLoading}
+          items={historyItems}
+          runtimeLoading={historyRuntimeLoading}
+          runtimeUpdating={historyRuntimeUpdating}
+          runtimeError={historyRuntimeError}
+          mode={historyMode}
+          range={historyRange}
+          rangeOptions={historyRangeOptions}
+          coverageRecordCount={historyCoverageRecordCount}
+          runtimeLimited={historyRuntimeLimited}
           workloads={workloads}
           onSelectWorkload={onSelectWorkload}
+          onNavigateToResource={onNavigateToResource}
+          onRangeChange={onHistoryRangeChange}
+          onOpenTimeline={onOpenTimeline}
           onOpenSource={onOpenSource}
         />
       )}
@@ -859,14 +938,12 @@ function ApplicationViewTabs({
   activeView,
   costSelected,
   costAvailable,
-  historyCount,
   onChange,
   onCostChange,
 }: {
   activeView: CanonicalApplicationView;
   costSelected: boolean;
   costAvailable: boolean;
-  historyCount: number;
   onChange: (view: CanonicalApplicationView) => void;
   onCostChange: () => void;
 }) {
@@ -879,8 +956,6 @@ function ApplicationViewTabs({
       <div className="flex min-w-0 gap-1 overflow-x-auto">
         {APPLICATION_VIEWS.map((view) => {
           const active = !costSelected && view.id === activeView;
-          const badge =
-            view.id === "history" && historyCount > 0 ? historyCount : null;
           return (
             <button
               key={view.id}
@@ -896,11 +971,6 @@ function ApplicationViewTabs({
               )}
             >
               {view.label}
-              {badge !== null && (
-                <span className="rounded bg-theme-hover px-1.5 py-0.5 text-[10px] font-semibold text-theme-text-tertiary">
-                  {badge}
-                </span>
-              )}
             </button>
           );
         })}
@@ -2073,200 +2143,397 @@ function ApplicationTopology({
 
 function ApplicationHistoryView({
   history,
-  loading,
-  fallbackEvents,
+  sourceLoading,
+  items: suppliedItems,
+  runtimeLoading,
+  runtimeUpdating,
+  runtimeError,
+  mode,
+  range,
+  rangeOptions,
+  coverageRecordCount,
+  runtimeLimited,
   workloads,
   onSelectWorkload,
+  onNavigateToResource,
+  onRangeChange,
+  onOpenTimeline,
   onOpenSource,
 }: {
   history?: AppHistory;
-  loading?: boolean;
-  fallbackEvents: NonNullable<AppRow["events"]>;
+  sourceLoading?: boolean;
+  items?: ApplicationHistoryItem[];
+  runtimeLoading?: boolean;
+  runtimeUpdating?: boolean;
+  runtimeError?: boolean;
+  mode?: "local" | "retained";
+  range?: ApplicationHistoryRange;
+  rangeOptions?: Array<{ value: ApplicationHistoryRange; label: string }>;
+  coverageRecordCount?: number;
+  runtimeLimited?: boolean;
   workloads: AppWorkload[];
   onSelectWorkload: (workload: AppWorkload) => void;
+  onNavigateToResource?: (resource: ResourceRef) => void;
+  onRangeChange?: (range: ApplicationHistoryRange) => void;
+  onOpenTimeline?: () => void;
   onOpenSource?: (source: AppSourceRef) => void;
 }) {
-  const anchors = history?.anchors ?? [];
-  const incidents =
-    history?.incidents ??
-    fallbackEvents.map((event) => ({
-      severity: "warning",
-      title: event.object ? `${event.reason} on ${event.object}` : event.reason,
-      object: event.object,
-      message: event.message,
-      count: event.count,
-      firstSeen: event.firstSeen,
-      lastSeen: event.lastSeen,
-    }));
-  const empty = !loading && anchors.length === 0 && incidents.length === 0;
+  const [category, setCategory] = useState<ApplicationHistoryCategory | "all">(
+    "all",
+  );
+  const items = useMemo(
+    () => suppliedItems ?? buildApplicationHistoryItems(history, []),
+    [history, suppliedItems],
+  );
+  const availableCategories = useMemo(
+    () => Array.from(new Set(items.map((item) => item.category))),
+    [items],
+  );
+  useEffect(() => {
+    if (category !== "all" && !availableCategories.includes(category))
+      setCategory("all");
+  }, [availableCategories, category]);
+  const visibleItems = useMemo(
+    () =>
+      category === "all"
+        ? items
+        : items.filter((item) => item.category === category),
+    [category, items],
+  );
+  const groups = useMemo(() => {
+    const byDate = new Map<string, ApplicationHistoryItem[]>();
+    for (const item of visibleItems) {
+      const label = applicationHistoryDateLabel(item.timestamp);
+      byDate.set(label, [...(byDate.get(label) ?? []), item]);
+    }
+    return [...byDate.entries()];
+  }, [visibleItems]);
+  const loading = sourceLoading || runtimeLoading;
+  const empty = !loading && !runtimeError && items.length === 0;
+  const hasRuntimeItems = items.some((item) => item.category !== "deployment");
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
-      <div className="w-full max-w-[2400px] space-y-4 p-4 sm:p-6">
-        {loading && (
-          <ApplicationPanel title="History">
-            <div className="text-sm text-theme-text-tertiary">
+      <div className="w-full max-w-[2400px] p-4 sm:p-6">
+        <section className="overflow-hidden rounded-lg border border-theme-border bg-theme-surface shadow-theme-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-theme-border px-4 py-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Clock3 className="h-4 w-4 text-theme-text-secondary" />
+                <h2 className="text-sm font-semibold text-theme-text-primary">
+                  Application history
+                </h2>
+                {((loading && items.length > 0) ||
+                  (runtimeUpdating && !runtimeLoading)) && (
+                  <RefreshCw
+                    className="h-3.5 w-3.5 animate-spin text-theme-text-tertiary"
+                    aria-label="Refreshing history"
+                  />
+                )}
+              </div>
+              <p className="mt-1 text-xs text-theme-text-tertiary">
+                Deployment and runtime activity attributed to this application.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {range &&
+                rangeOptions &&
+                rangeOptions.length > 1 &&
+                onRangeChange && (
+                  <select
+                    aria-label="Application history range"
+                    value={range}
+                    onChange={(event) =>
+                      onRangeChange(
+                        event.target.value as ApplicationHistoryRange,
+                      )
+                    }
+                    className="h-8 rounded-md border border-theme-border bg-theme-base px-2 text-xs text-theme-text-primary"
+                  >
+                    {rangeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              {onOpenTimeline && (
+                <button
+                  type="button"
+                  onClick={onOpenTimeline}
+                  className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-medium text-accent-text hover:underline"
+                >
+                  Open full Timeline
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {availableCategories.length > 1 && (
+            <div
+              className="flex flex-wrap gap-1 border-b border-theme-border px-4 py-2"
+              role="group"
+              aria-label="Application history categories"
+            >
+              {(["all", "deployment", "runtime", "problem"] as const).map(
+                (value) => {
+                  if (value !== "all" && !availableCategories.includes(value))
+                    return null;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={category === value}
+                      onClick={() => setCategory(value)}
+                      className={clsx(
+                        "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                        category === value
+                          ? "bg-accent-subtle text-accent-text"
+                          : "text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary",
+                      )}
+                    >
+                      {applicationHistoryCategoryLabel(value)}
+                    </button>
+                  );
+                },
+              )}
+            </div>
+          )}
+
+          {(runtimeError || (history?.partialSources?.length ?? 0) > 0) && (
+            <div
+              className={clsx(
+                "border-b border-theme-border bg-theme-elevated px-4 py-2 text-xs",
+                HEALTH_META.degraded.text,
+              )}
+            >
+              {runtimeError && (
+                <div>
+                  {hasRuntimeItems
+                    ? "Runtime activity could not be refreshed. Previously loaded activity may be stale."
+                    : "Runtime activity could not be loaded."}
+                  {!hasRuntimeItems &&
+                    items.some((item) => item.category === "deployment") &&
+                    " Deployment-source history is still shown."}
+                </div>
+              )}
+              {history?.partialSources?.map((message, index) => (
+                <div key={`${message}-${index}`}>{message}</div>
+              ))}
+            </div>
+          )}
+
+          {loading && items.length === 0 && (
+            <div className="flex items-center gap-2 px-4 py-8 text-sm text-theme-text-tertiary">
+              <RefreshCw className="h-4 w-4 animate-spin" />
               Loading application history...
             </div>
-          </ApplicationPanel>
-        )}
-        {history?.partialSources && history.partialSources.length > 0 && (
-          <ApplicationPanel title="Partial history">
-            <div className="space-y-1 text-sm text-theme-text-secondary">
-              {history.partialSources.map((msg, idx) => (
-                <div key={`${msg}-${idx}`}>{msg}</div>
-              ))}
-            </div>
-          </ApplicationPanel>
-        )}
-        {incidents.length > 0 && (
-          <ApplicationPanel title="Current incidents">
-            <div className="divide-y divide-theme-border">
-              {incidents.map((incident, idx) => {
-                const workload = directWorkloadForEvent(
-                  {
-                    object: incident.object,
-                    reason: "",
-                    count: 1,
-                    type: "Warning",
-                  },
-                  workloads,
-                );
-                return (
-                  <HistoryIncidentLine
-                    key={`${incident.object}-${incident.title}-${idx}`}
-                    incident={incident}
-                    action={
-                      workload ? (
-                        <button
-                          type="button"
-                          onClick={() => onSelectWorkload(workload)}
-                          className="text-xs font-medium text-accent-text hover:underline"
-                        >
-                          Open workload
-                        </button>
-                      ) : undefined
-                    }
+          )}
+
+          {groups.map(([label, dateItems]) => (
+            <div key={label}>
+              <div className="border-b border-theme-border bg-theme-base px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                {label}
+              </div>
+              <div className="divide-y divide-theme-border">
+                {dateItems.map((item) => (
+                  <ApplicationHistoryLine
+                    key={item.id}
+                    item={item}
+                    workloads={workloads}
+                    onSelectWorkload={onSelectWorkload}
+                    onNavigateToResource={onNavigateToResource}
+                    onOpenSource={onOpenSource}
                   />
-                );
-              })}
+                ))}
+              </div>
             </div>
-          </ApplicationPanel>
-        )}
-        {anchors.length > 0 && (
-          <ApplicationPanel
-            title={
-              <span className="flex items-center justify-between gap-3">
-                <span>Deployment history</span>
-                {history?.sourceRef && onOpenSource && (
-                  <button
-                    type="button"
-                    onClick={() => onOpenSource(history.sourceRef!)}
-                    className="text-xs font-medium text-accent-text hover:underline"
-                  >
-                    {sourceLinkLabel(history.sourceRef)}
-                  </button>
-                )}
-              </span>
-            }
-          >
-            <div className="divide-y divide-theme-border">
-              {anchors.map((anchor, idx) => (
-                <HistoryAnchorLine
-                  key={`${anchor.type}-${anchor.timestamp}-${anchor.revision}-${idx}`}
-                  anchor={anchor}
-                />
-              ))}
+          ))}
+
+          {empty && (
+            <div className="px-4 py-8">
+              <EmptyState
+                variant="inline"
+                headline="No application history in this range."
+                body="Overview still shows the current application state."
+              />
             </div>
-          </ApplicationPanel>
-        )}
-        {empty && (
-          <ApplicationPanel title="History">
-            <EmptyState
-              variant="inline"
-              headline="No retained deployment history."
-              body="Current application state is still available in Overview."
-            />
-          </ApplicationPanel>
-        )}
+          )}
+
+          <div className="space-y-1 border-t border-theme-border px-4 py-2 text-xs text-theme-text-tertiary">
+            {mode === "local" && (
+              <div>
+                Runtime activity reflects events retained by this Radar
+                instance. Deployment-source history may cover a different
+                period.
+              </div>
+            )}
+            {mode === "retained" && (coverageRecordCount ?? 0) > 0 && (
+              <div>
+                Recording coverage is incomplete for part of this range.
+              </div>
+            )}
+            {mode === "retained" && runtimeLimited && (
+              <div>
+                Showing the 10,000 most recent events in these namespaces. Older
+                application activity in this range may not be included.
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );
 }
 
-function HistoryAnchorLine({
-  anchor,
+function ApplicationHistoryLine({
+  item,
+  workloads,
+  onSelectWorkload,
+  onNavigateToResource,
+  onOpenSource,
 }: {
-  anchor: NonNullable<AppHistory["anchors"]>[number];
+  item: ApplicationHistoryItem;
+  workloads: AppWorkload[];
+  onSelectWorkload: (workload: AppWorkload) => void;
+  onNavigateToResource?: (resource: ResourceRef) => void;
+  onOpenSource?: (source: AppSourceRef) => void;
 }) {
+  const workload = item.resource
+    ? workloads.find(
+        (candidate) =>
+          candidate.kind.toLowerCase() === item.resource!.kind.toLowerCase() &&
+          candidate.namespace === item.resource!.namespace &&
+          candidate.name === item.resource!.name,
+      )
+    : undefined;
+  const Icon =
+    item.category === "deployment"
+      ? GitCommit
+      : item.category === "problem"
+        ? AlertTriangle
+        : item.resource
+          ? getTopologyIcon(item.resource.kind)
+          : Activity;
+  const action =
+    item.sourceRef && onOpenSource
+      ? {
+          label: sourceLinkLabel(item.sourceRef),
+          run: () => onOpenSource(item.sourceRef!),
+        }
+      : workload
+        ? { label: "Open workload", run: () => onSelectWorkload(workload) }
+        : item.resource && onNavigateToResource
+          ? {
+              label: "Open resource",
+              run: () => onNavigateToResource(item.resource!),
+            }
+          : null;
+
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3 first:pt-0 last:pb-0">
+    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 px-4 py-3">
+      <div
+        className={clsx(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border",
+          item.category === "problem"
+            ? clsx(
+                "border-theme-border bg-theme-elevated",
+                HEALTH_META.degraded.text,
+              )
+            : "border-theme-border bg-theme-elevated text-theme-text-secondary",
+        )}
+      >
+        <Icon className="h-4 w-4" />
+      </div>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium text-theme-text-primary">
-            {anchor.title}
+            {item.title}
           </span>
-          {anchor.status && (
-            <span className={`${CHIP} ${historyStatusTone(anchor.status)}`}>
-              {anchor.status}
+          {item.status && (
+            <span className={`${CHIP} ${historyStatusTone(item.status)}`}>
+              {item.status}
             </span>
           )}
+          {item.count && item.count > 1 && (
+            <span className={`${CHIP} ${CHIP_TONE.muted}`}>{item.count}x</span>
+          )}
         </div>
-        {anchor.revision && (
+        {item.revision && (
           <div className="truncate font-mono text-sm text-theme-text-secondary">
-            {anchor.revision}
+            {item.revision}
           </div>
         )}
-        {anchor.message && (
+        {item.detail && (
           <div className="mt-1 line-clamp-2 text-sm text-theme-text-tertiary">
-            {anchor.message}
+            {item.detail}
           </div>
         )}
-        {anchor.source && (
-          <div className="mt-1 truncate text-xs text-theme-text-tertiary">
-            {anchor.source}
-          </div>
+        {item.resource && (
+          <button
+            type="button"
+            onClick={action?.run}
+            disabled={!action}
+            className={clsx(
+              "mt-1 truncate text-xs",
+              action
+                ? "text-accent-text hover:underline"
+                : "text-theme-text-tertiary",
+            )}
+          >
+            {getKindLabel(item.resource.kind)} · {item.resource.namespace}/
+            {item.resource.name}
+          </button>
         )}
       </div>
       <div className="text-right text-xs text-theme-text-tertiary">
-        {formatAppEventTime(anchor.timestamp)}
-        {anchor.initiatedBy && <div>{anchor.initiatedBy}</div>}
+        <div>{applicationHistoryTimeLabel(item.timestamp)}</div>
+        {item.initiatedBy && (
+          <div className="mt-1 max-w-40 truncate">{item.initiatedBy}</div>
+        )}
+        {action && item.sourceRef && (
+          <button
+            type="button"
+            onClick={action.run}
+            className="mt-1 font-medium text-accent-text hover:underline"
+          >
+            {action.label}
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function HistoryIncidentLine({
-  incident,
-  action,
-}: {
-  incident: NonNullable<AppHistory["incidents"]>[number];
-  action?: ReactNode;
-}) {
-  return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3 first:pt-0 last:pb-0">
-      <div className="min-w-0">
-        <div className="truncate font-medium text-theme-text-primary">
-          {incident.title}
-        </div>
-        {incident.object && (
-          <div className="truncate text-sm text-theme-text-secondary">
-            {incident.object}
-          </div>
-        )}
-        {incident.message && (
-          <div className="mt-1 line-clamp-2 text-sm text-theme-text-tertiary">
-            {incident.message}
-          </div>
-        )}
-      </div>
-      <div className="text-right text-xs text-theme-text-tertiary">
-        {formatAppEventTime(incident.lastSeen)}
-        {incident.count && incident.count > 1 && <div>{incident.count}x</div>}
-        {action && <div className="mt-1">{action}</div>}
-      </div>
-    </div>
-  );
+function applicationHistoryCategoryLabel(
+  category: ApplicationHistoryCategory | "all",
+): string {
+  if (category === "all") return "All";
+  if (category === "deployment") return "Deployments";
+  if (category === "problem") return "Problems";
+  return "Runtime";
+}
+
+function applicationHistoryDateLabel(timestamp: string): string {
+  const date = new Date(timestamp);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return "Today";
+  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
+  }).format(date);
+}
+
+function applicationHistoryTimeLabel(timestamp: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
 }
 
 function buildAppIssues(

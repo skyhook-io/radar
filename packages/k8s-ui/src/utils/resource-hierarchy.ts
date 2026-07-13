@@ -1049,6 +1049,26 @@ export function subtreeEvents(lane: ResourceLane): TimelineEvent[] {
   return sortEventsForRendering(unique)
 }
 
+/** Return every event attributable to one selected application. The caller
+ * supplies an index containing only that app, so singleton apps are retained
+ * even though the global Timeline intentionally avoids one-member app groups. */
+export function eventsForApplication(
+  events: TimelineEvent[],
+  topology: Topology | undefined,
+  appIndex: AppMembershipIndex,
+): TimelineEvent[] {
+  const roots = buildResourceHierarchy({ events, topology, grouping: 'owner' })
+  const matched = roots.filter((lane) => cascadeRootMembership(lane, appIndex) !== null)
+  const unique = new Map<string, TimelineEvent>()
+  for (const lane of matched) {
+    for (const event of subtreeEvents(lane)) unique.set(event.id, event)
+  }
+  return [...unique.values()].sort((a, b) => {
+    const byTime = new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    return byTime || (b.seq ?? 0) - (a.seq ?? 0) || a.id.localeCompare(b.id)
+  })
+}
+
 /** The events a lane paints on its OWN track row, given whether it's expanded.
  *  - collapsed parent → whole-subtree aggregate (the roll-up)
  *  - expanded parent, or a leaf → only the lane's own events

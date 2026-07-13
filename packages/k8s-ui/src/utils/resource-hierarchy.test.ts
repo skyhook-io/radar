@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 import type { TimelineEvent, Topology } from '../types/core'
 
-import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, isPinnedLaneRef, laneTrackEvents, laneHasEventInWindow, isChildVisibleInWindow, subtreeEvents, getAllEventsFromHierarchy, collidingLaneKeys, laneCollisionKey, type ResourceLane } from './resource-hierarchy'
+import { buildResourceHierarchy, eventsForApplication, extractPinnedLanes, removePinnedLanes, isPinnedLaneRef, laneTrackEvents, laneHasEventInWindow, isChildVisibleInWindow, subtreeEvents, getAllEventsFromHierarchy, collidingLaneKeys, laneCollisionKey, type ResourceLane } from './resource-hierarchy'
 import type { AppMembershipIndex, AppMembership } from './applications'
 
 function svcEvent(namespace: string, name: string): TimelineEvent {
@@ -271,6 +271,40 @@ describe('buildResourceHierarchy app-membership cascade (grouping=app)', () => {
     const lanes = buildResourceHierarchy({ events, grouping: 'app', appIndex })
     expect(lanes.every((l) => !l.isAppGroup)).toBe(true)
     expect(lanes.map((l) => l.name).sort()).toEqual(['koala-backend', 'koala-backend-6dc59db657'])
+  })
+})
+
+describe('eventsForApplication', () => {
+  const billing: AppMembership = { appKey: 'team-a/app/billing', appName: 'billing' }
+
+  it('returns a selected singleton app subtree without the global two-member threshold', () => {
+    const deployment = changeEvent('Deployment', 'team-a', 'billing-api', { id: 'deployment' })
+    const pod = changeEvent('Pod', 'team-a', 'billing-api-abc12', {
+      id: 'pod',
+      owner: { kind: 'Deployment', name: 'billing-api' },
+    })
+    const unrelated = changeEvent('Deployment', 'team-a', 'other', { id: 'other' })
+    const appIndex = index({ 'Deployment/team-a/billing-api': billing })
+
+    const events = eventsForApplication([deployment, pod, unrelated], undefined, appIndex)
+
+    expect(events.map((event) => event.id).sort()).toEqual(['deployment', 'pod'])
+  })
+
+  it('includes a relationship root and its owned descendants', () => {
+    const service = changeEvent('Service', 'team-a', 'billing-api', { id: 'service' })
+    const deployment = changeEvent('Deployment', 'team-a', 'billing-api', { id: 'deployment' })
+    const topology = {
+      nodes: [
+        { id: 'service/team-a/billing-api', data: {} },
+        { id: 'deployment/team-a/billing-api', data: {} },
+      ],
+      edges: [{ id: 'edge', source: 'service/team-a/billing-api', target: 'deployment/team-a/billing-api', type: 'exposes' }],
+    } as unknown as Topology
+    const appIndex = index({ 'Service/team-a/billing-api': billing })
+
+    expect(eventsForApplication([service, deployment], topology, appIndex).map((event) => event.id).sort())
+      .toEqual(['deployment', 'service'])
   })
 })
 

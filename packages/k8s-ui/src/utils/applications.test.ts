@@ -412,6 +412,40 @@ describe('buildAppMembershipIndex', () => {
     expect(idx.byResource.has('Route/team-a/HTTPRoute/web-http')).toBe(false)
   })
 
+  it('indexes explicit relationship refs across namespaces', () => {
+    const idx = buildAppMembershipIndex([
+      row({
+        key: 'team-a/app/billing', name: 'billing', namespaces: ['team-a', 'shared'],
+        relationships: {
+          serviceRefs: [{ kind: 'Service', namespace: 'team-a', name: 'billing-api' }],
+          configRefs: [{ kind: 'ConfigMap', namespace: 'shared', name: 'billing-config' }],
+          storageRefs: [{ kind: 'PersistentVolumeClaim', namespace: 'team-a', name: 'billing-data' }],
+        },
+      }),
+    ])
+
+    expect(idx.byResource.get('Service/team-a/billing-api')?.appName).toBe('billing')
+    expect(idx.byResource.get('ConfigMap/shared/billing-config')?.appName).toBe('billing')
+    expect(idx.byResource.get('PersistentVolumeClaim/team-a/billing-data')?.appName).toBe('billing')
+  })
+
+  it('indexes the exact deployment source object', () => {
+    const idx = buildAppMembershipIndex([
+      row({
+        key: 'team-a/app/billing', name: 'billing',
+        sourceRef: {
+          type: 'gitops',
+          tool: 'argocd',
+          kind: 'Application',
+          namespace: 'argocd',
+          name: 'billing',
+        },
+      }),
+    ])
+
+    expect(idx.byResource.get('Application/argocd/billing')?.appName).toBe('billing')
+  })
+
   it('skips satellites for a multi-namespace app (can not place them unambiguously)', () => {
     const idx = buildAppMembershipIndex([
       row({
