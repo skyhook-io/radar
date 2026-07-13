@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -513,6 +514,100 @@ func TestSyncArgoAppSelectiveResources(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSyncArgoAppDryRunDoesNotRequestHardRefresh(t *testing.T) {
+	dryRun := true
+	client := newFakeArgo(argoAppForTest("argocd", "demo", nil))
+	if _, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{DryRun: &dryRun}); err != nil {
+		t.Fatalf("SyncArgoApp: %v", err)
+	}
+	body := captureLastPatch(t, client)
+	if metadata := nestedMap(body, "metadata"); metadata != nil {
+		t.Fatalf("dry-run patch must not request a refresh, got metadata %#v", metadata)
+	}
+}
+
+func TestValidateArgoResourceRejectsQueuedOperation(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		obj["operation"] = map[string]any{"sync": map[string]any{}}
+	})
+	client := newFakeArgo(app)
+	_, err := ValidateArgoResource(context.Background(), client, "argocd", "demo", ArgoSyncResource{Kind: "Service", Name: "api"}, ArgoSyncOptions{})
+	if !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("ValidateArgoResource error = %v, want ErrOperationInProgress", err)
+	}
+	for _, action := range client.Actions() {
+		if _, ok := action.(clienttesting.PatchAction); ok {
+			t.Fatalf("validation overwrote a queued operation; actions=%v", client.Actions())
+		}
+	}
+}
+
+func TestValidateArgoResourceStartsSafeSelectiveDryRun(t *testing.T) {
+	client := newFakeArgo(argoAppForTest("argocd", "demo", nil))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	target := ArgoSyncResource{Group: "apps", Kind: "Deployment", Namespace: "demo", Name: "api"}
+	_, err := ValidateArgoResource(ctx, client, "argocd", "demo", target, ArgoSyncOptions{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ValidateArgoResource error = %v, want context deadline", err)
+	}
+	body := captureLastPatch(t, client)
+	if metadata := nestedMap(body, "metadata"); metadata != nil {
+		t.Fatalf("validation patch must not request a refresh, got metadata %#v", metadata)
+	}
+	sync := nestedMap(body, "operation", "sync")
+	if sync["dryRun"] != true || sync["prune"] != false {
+		t.Fatalf("validation flags = dryRun:%#v prune:%#v", sync["dryRun"], sync["prune"])
+	}
+	resources, ok := sync["resources"].([]any)
+	if !ok || len(resources) != 1 {
+		t.Fatalf("validation resources = %#v, want one exact selector", sync["resources"])
+	}
+	info, ok := nestedMap(body, "operation")["info"].([]any)
+	if !ok || len(info) != 1 {
+		t.Fatalf("validation info = %#v, want one correlation entry", nestedMap(body, "operation")["info"])
+	}
+}
+
+func TestArgoResourceValidationResultCorrelatesAndReturnsTarget(t *testing.T) {
+	target := ArgoSyncResource{Group: "karpenter.sh", Kind: "NodePool", Namespace: "default", Name: "default"}
+	makeApp := func(id, phase string, resources []any) *unstructured.Unstructured {
+		return argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			obj["status"] = map[string]any{
+				"operationState": map[string]any{
+					"phase": phase,
+					"operation": map[string]any{
+						"info": []any{map[string]any{"name": "radar-validation-id", "value": id}},
+					},
+					"syncResult": map[string]any{"resources": resources},
+				},
+			}
+		})
+	}
+	matchingResource := map[string]any{
+		"group": "karpenter.sh", "kind": "NodePool", "namespace": "default", "name": "default",
+		"status": "Synced", "message": "nodepool.karpenter.sh/default configured (dry run)",
+	}
+
+	if _, done := argoResourceValidationResult(makeApp("old", "Succeeded", []any{matchingResource}), "current", target); done {
+		t.Fatal("a terminal result from a previous request must not complete the current validation")
+	}
+	if _, done := argoResourceValidationResult(makeApp("current", "Running", []any{matchingResource}), "current", target); done {
+		t.Fatal("a matching operation that is still running must keep waiting")
+	}
+	result, done := argoResourceValidationResult(makeApp("current", "Succeeded", []any{matchingResource}), "current", target)
+	if !done || result.Outcome != "succeeded" || result.Resource == nil {
+		t.Fatalf("result = %#v, done=%v; want succeeded target result", result, done)
+	}
+	if result.Resource.Status != "Synced" || !strings.Contains(result.Resource.Message, "dry run") {
+		t.Fatalf("resource result = %#v, want exact Argo status and message", result.Resource)
+	}
+	result, done = argoResourceValidationResult(makeApp("current", "Succeeded", nil), "current", target)
+	if !done || result.Outcome != "inconclusive" {
+		t.Fatalf("missing target result = %#v, done=%v; want inconclusive", result, done)
 	}
 }
 

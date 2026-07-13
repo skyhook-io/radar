@@ -1,5 +1,5 @@
 import { useState, useEffect, type ComponentType } from 'react'
-import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, RefreshCw, ShieldCheck, XCircle } from 'lucide-react'
 
 import { DialogPortal } from '../ui/DialogPortal'
 import { Input } from '../ui/Input'
@@ -36,11 +36,26 @@ export interface SyncOptionsDialogProps {
   appLabel: string
   resource?: GitOpsInsightRef
   pending?: boolean
+  autoSyncEnabled?: boolean
+  validationPending?: boolean
+  validationResult?: ResourceValidationResult | null
+  validationError?: string | null
   onCancel: () => void
   onConfirm: (opts: ArgoSyncOpts) => void
+  onValidate?: (opts: ArgoSyncOpts) => void
+  onValidationReset?: () => void
 }
 
-export function SyncOptionsDialog({ open, appLabel, resource, pending, onCancel, onConfirm }: SyncOptionsDialogProps) {
+export interface ResourceValidationResult {
+  outcome: 'succeeded' | 'failed' | 'inconclusive'
+  message: string
+  resource?: {
+    status?: string
+    message?: string
+  }
+}
+
+export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncEnabled, validationPending, validationResult, validationError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
   const [revision, setRevision] = useState('')
   const [prune, setPrune] = useState(true)
   const [dryRun, setDryRun] = useState(false)
@@ -48,6 +63,8 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, onCancel,
   const [applyOnly, setApplyOnly] = useState(false)
   const [replace, setReplace] = useState(false)
   const [serverSideApply, setServerSideApply] = useState(false)
+  const richResourceValidation = !!resource && !!onValidate
+  const optionsDisabled = !!pending || !!validationPending
 
   // Reset on each open so a previous attempt's flags don't leak into the
   // next sync — easy footgun in modal-heavy flows.
@@ -64,7 +81,16 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, onCancel,
   }, [open, resource])
 
   function submit() {
-    onConfirm(buildArgoSyncOpts({ resourceMode: !!resource, revision, prune, dryRun, force, applyOnly, replace, serverSideApply }))
+    onConfirm(buildArgoSyncOpts({ resourceMode: !!resource, revision, prune, dryRun: richResourceValidation ? false : dryRun, force, applyOnly, replace, serverSideApply }))
+  }
+
+  function validate() {
+    onValidate?.(buildArgoSyncOpts({ resourceMode: true, revision, prune, dryRun: true, force, applyOnly, replace, serverSideApply }))
+  }
+
+  function updateValidationOption(setter: (value: boolean) => void, value: boolean) {
+    setter(value)
+    onValidationReset?.()
   }
 
   return (
@@ -85,6 +111,11 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, onCancel,
                 <p className="mt-1 text-[11px] leading-relaxed text-theme-text-secondary">
                   Only this resource will be applied. Selective sync bypasses hooks and normal sync-wave ordering; use a full application sync when this resource depends on them.
                 </p>
+                {autoSyncEnabled && (
+                  <p className="mt-2 border-t border-amber-500/20 pt-2 text-[11px] leading-relaxed text-theme-text-secondary">
+                    Auto-sync is enabled. Argo can reconcile this Application independently while validation runs; Validate does not pause automation.
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -96,7 +127,7 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, onCancel,
               value={revision}
               onChange={(e) => setRevision(e.target.value)}
               placeholder="HEAD"
-              disabled={pending}
+              disabled={optionsDisabled}
               className="mt-1 w-full rounded-md border border-theme-border bg-theme-base px-2 py-1.5 font-mono text-xs text-theme-text-primary outline-none placeholder:text-theme-text-tertiary focus:border-sky-500"
             />
             <span className="mt-0.5 block text-[11px] text-theme-text-tertiary">
@@ -108,18 +139,23 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, onCancel,
         {/* Common (Prune / Dry run) sit above a divider; Advanced toggles
             stay accessible but visually subordinate so the common-case user
             can scan past them without parsing every helper line. */}
-        <fieldset className="space-y-2">
-          <legend className="mb-1 text-xs font-medium text-theme-text-secondary">Sync options</legend>
-          {!resource && <Toggle label="Prune" checked={prune} onChange={setPrune} disabled={pending} hint="Delete resources that are no longer in Git." />}
-          <Toggle label="Dry run" checked={dryRun} onChange={setDryRun} disabled={pending} hint="Preview only — Argo computes the diff but applies nothing." />
-        </fieldset>
+        {!richResourceValidation && (
+          <fieldset className="space-y-2">
+            <legend className="mb-1 text-xs font-medium text-theme-text-secondary">Sync options</legend>
+            {!resource && <Toggle label="Prune" checked={prune} onChange={setPrune} disabled={optionsDisabled} hint="Delete resources that are no longer in Git." />}
+            <Toggle label="Dry run" checked={dryRun} onChange={setDryRun} disabled={optionsDisabled} hint="Preview only — Argo computes the diff but applies nothing." />
+          </fieldset>
+        )}
         <fieldset className="space-y-2 border-t border-theme-border pt-3">
           <legend className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Advanced</legend>
-          {!resource && <Toggle label="Apply only" checked={applyOnly} onChange={setApplyOnly} disabled={pending} hint="Skip PreSync / PostSync / SyncFail hooks." />}
-          <Toggle label="Force" checked={force} onChange={setForce} disabled={pending} hint="Use kubectl --force; required for some immutable-field changes." />
-          <Toggle label="Replace" checked={replace} onChange={setReplace} disabled={pending} hint="kubectl replace instead of apply (drops fields not in source)." />
-          <Toggle label="Server-side apply" checked={serverSideApply} onChange={setServerSideApply} disabled={pending} hint="Use the K8s server-side apply mechanism for ownership tracking." />
+          {!resource && <Toggle label="Apply only" checked={applyOnly} onChange={setApplyOnly} disabled={optionsDisabled} hint="Skip PreSync / PostSync / SyncFail hooks." />}
+          <Toggle label="Force" checked={force} onChange={(value) => updateValidationOption(setForce, value)} disabled={optionsDisabled} hint="Use kubectl --force; required for some immutable-field changes." />
+          <Toggle label="Replace" checked={replace} onChange={(value) => updateValidationOption(setReplace, value)} disabled={optionsDisabled} hint="kubectl replace instead of apply (drops fields not in source)." />
+          <Toggle label="Server-side apply" checked={serverSideApply} onChange={(value) => updateValidationOption(setServerSideApply, value)} disabled={optionsDisabled} hint="Use the K8s server-side apply mechanism for ownership tracking." />
         </fieldset>
+        {richResourceValidation && (validationPending || validationResult || validationError) && (
+          <ValidationResult pending={!!validationPending} result={validationResult} error={validationError} />
+        )}
       </div>
       <div className="flex items-center justify-end gap-2 border-t border-theme-border bg-theme-base px-4 py-3">
         <button
@@ -130,9 +166,75 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, onCancel,
         >
           Cancel
         </button>
-        <PrimaryButton onClick={submit} disabled={pending} icon={pending ? Loader2 : RefreshCw} loading={pending} label={dryRun ? 'Run dry-run' : resource ? 'Sync resource' : 'Sync now'} />
+        {richResourceValidation && (
+          <button
+            type="button"
+            onClick={validate}
+            disabled={optionsDisabled}
+            className="inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-surface px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {validationPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+            {validationPending ? 'Validating…' : 'Validate'}
+          </button>
+        )}
+        <PrimaryButton onClick={submit} disabled={optionsDisabled} icon={pending ? Loader2 : RefreshCw} loading={pending} label={dryRun && !richResourceValidation ? 'Run dry-run' : resource ? 'Sync resource' : 'Sync now'} />
       </div>
     </DialogPortal>
+  )
+}
+
+function ValidationResult({ pending, result, error }: { pending: boolean; result?: ResourceValidationResult | null; error?: string | null }) {
+  if (pending) {
+    return (
+      <div className="card-inner flex items-start gap-2 px-3 py-2.5">
+        <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-theme-text-secondary" />
+        <div>
+          <div className="text-xs font-medium text-theme-text-primary">Validating with Argo</div>
+          <p className="mt-0.5 text-[11px] text-theme-text-secondary">Waiting for the selective dry-run result. No resource changes will be applied.</p>
+        </div>
+      </div>
+    )
+  }
+  if (error) {
+    return (
+      <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2.5">
+        <div className="flex items-start gap-2">
+          <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+          <div>
+            <div className="text-xs font-medium text-theme-text-primary">Validation could not start or complete</div>
+            <p className="mt-0.5 break-words text-[11px] text-theme-text-secondary">{error}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  if (!result) return null
+
+  const succeeded = result.outcome === 'succeeded'
+  const inconclusive = result.outcome === 'inconclusive'
+  const Icon = succeeded ? CheckCircle2 : inconclusive ? CircleAlert : XCircle
+  const title = succeeded ? 'Validation passed' : inconclusive ? 'Validation was inconclusive' : 'Validation failed'
+  const surface = succeeded
+    ? 'border-emerald-500/30 bg-emerald-500/5'
+    : inconclusive
+      ? 'border-amber-500/30 bg-amber-500/5'
+      : 'border-red-500/30 bg-red-500/5'
+  const iconTone = succeeded ? 'text-emerald-500' : inconclusive ? 'text-amber-500' : 'text-red-500'
+  return (
+    <div className={`rounded-md border px-3 py-2.5 ${surface}`}>
+      <div className="flex items-start gap-2">
+        <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${iconTone}`} />
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-theme-text-primary">{title}</div>
+          <p className="mt-0.5 text-[11px] text-theme-text-secondary">{result.message}</p>
+          {(result.resource?.status || result.resource?.message) && (
+            <div className="mt-2 font-mono text-[10px] text-theme-text-secondary">
+              {result.resource.status}{result.resource.status && result.resource.message ? ' — ' : ''}{result.resource.message}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 

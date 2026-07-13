@@ -3296,6 +3296,19 @@ export type ArgoSyncVars = ArgoAppVars & {
   syncOptions?: string[]
 }
 
+export interface ArgoResourceValidationResult {
+  outcome: 'succeeded' | 'failed' | 'inconclusive'
+  message: string
+  resource?: {
+    group?: string
+    kind: string
+    namespace?: string
+    name: string
+    status?: string
+    message?: string
+  }
+}
+
 export function buildArgoResourceSyncVars(namespace: string, name: string, resource: GitOpsInsightRef, opts: ArgoSyncOpts): ArgoSyncVars {
   return {
     namespace,
@@ -3388,6 +3401,31 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars>({
   successMessage: 'Sync initiated',
   getInvalidateKeys: argoInvalidateKeys,
 })
+
+export function useArgoResourceValidation() {
+  const queryClient = useQueryClient()
+  return useMutation<ArgoResourceValidationResult, Error, ArgoSyncVars>({
+    mutationFn: async (variables) => {
+      const response = await apiFetch(`${getApiBase()}/argo/applications/${variables.namespace}/${variables.name}/validate-resource`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resources: variables.resources,
+          force: variables.force,
+          syncOptions: variables.syncOptions,
+        }),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json() as Promise<ArgoResourceValidationResult>
+    },
+    onSettled: (_, __, variables) => {
+      argoInvalidateKeys(variables).forEach(key => queryClient.invalidateQueries({ queryKey: key }))
+    },
+  })
+}
 
 export const useArgoRollback = createGitOpsMutation<ArgoRollbackVars>({
   getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/rollback`,

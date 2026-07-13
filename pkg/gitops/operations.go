@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -172,6 +173,21 @@ type ArgoSyncOptions struct {
 	SyncOptions []string           `json:"syncOptions,omitempty"`
 }
 
+type ArgoResourceValidationResult struct {
+	Outcome  string                        `json:"outcome"`
+	Message  string                        `json:"message"`
+	Resource *ArgoResourceValidationTarget `json:"resource,omitempty"`
+}
+
+type ArgoResourceValidationTarget struct {
+	Group     string `json:"group,omitempty"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Status    string `json:"status,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
 // ArgoRollbackOptions controls an ArgoCD rollback operation. ID is the
 // history entry to roll back to (matches HistoryItem.ID surfaced by the
 // insights builder). Argo's rollback uses the same operation slot as sync
@@ -186,6 +202,10 @@ type ArgoRollbackOptions struct {
 
 // SyncArgoApp triggers a sync operation on an ArgoCD Application.
 func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string, opts ArgoSyncOptions) (OperationResult, error) {
+	return syncArgoApp(ctx, dynClient, namespace, name, opts, "", false)
+}
+
+func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string, opts ArgoSyncOptions, validationID string, rejectQueued bool) (OperationResult, error) {
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -201,6 +221,11 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
 	if found && phase == "Running" {
 		return OperationResult{}, fmt.Errorf("sync operation already in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
+	}
+	if rejectQueued {
+		if operation, found, _ := unstructured.NestedFieldNoCopy(app.Object, "operation"); found && operation != nil {
+			return OperationResult{}, fmt.Errorf("sync operation already queued for %s/%s: %w", namespace, name, ErrOperationInProgress)
+		}
 	}
 
 	timestamp := time.Now().Format(time.RFC3339Nano)
@@ -258,18 +283,28 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 			sync["resources"] = resources
 		}
 	}
+	operation := map[string]any{
+		"initiatedBy": map[string]any{
+			"username": "radar",
+		},
+		"sync": sync,
+	}
+	if validationID != "" {
+		operation["info"] = []any{map[string]any{
+			"name":  "radar-validation-id",
+			"value": validationID,
+		}}
+	}
 	patch := map[string]any{
-		"metadata": map[string]any{
+		"operation": operation,
+	}
+	dryRun := opts.DryRun != nil && *opts.DryRun
+	if !dryRun {
+		patch["metadata"] = map[string]any{
 			"annotations": map[string]string{
 				"argocd.argoproj.io/refresh": "hard",
 			},
-		},
-		"operation": map[string]any{
-			"initiatedBy": map[string]any{
-				"username": "radar",
-			},
-			"sync": sync,
-		},
+		}
 	}
 
 	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
@@ -285,6 +320,115 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 		Name:        name,
 		RequestedAt: timestamp,
 	}, nil
+}
+
+func ValidateArgoResource(ctx context.Context, dynClient dynamic.Interface, namespace, name string, resource ArgoSyncResource, opts ArgoSyncOptions) (ArgoResourceValidationResult, error) {
+	if resource.Kind == "" || resource.Name == "" {
+		return ArgoResourceValidationResult{}, errors.New("validation requires a resource kind and name")
+	}
+	validationID := uuid.NewString()
+	falseValue := false
+	trueValue := true
+	opts.Resources = []ArgoSyncResource{resource}
+	opts.Revision = ""
+	opts.Prune = &falseValue
+	opts.DryRun = &trueValue
+	opts.ApplyOnly = &falseValue
+	if _, err := syncArgoApp(ctx, dynClient, namespace, name, opts, validationID, true); err != nil {
+		return ArgoResourceValidationResult{}, err
+	}
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return ArgoResourceValidationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found while validating: %w", namespace, name, err)
+			}
+			return ArgoResourceValidationResult{}, fmt.Errorf("failed to read Application validation result: %w", err)
+		}
+		if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+			return ArgoResourceValidationResult{}, err
+		}
+		if result, done := argoResourceValidationResult(app, validationID, resource); done {
+			return result, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ArgoResourceValidationResult{}, fmt.Errorf("timed out waiting for ArgoCD validation result: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func argoResourceValidationResult(app *unstructured.Unstructured, validationID string, target ArgoSyncResource) (ArgoResourceValidationResult, bool) {
+	operation, found, _ := unstructured.NestedMap(app.Object, "status", "operationState", "operation")
+	if !found || !argoOperationHasInfo(operation, "radar-validation-id", validationID) {
+		return ArgoResourceValidationResult{}, false
+	}
+	phase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+	if phase == "" || phase == "Running" {
+		return ArgoResourceValidationResult{}, false
+	}
+
+	message, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "message")
+	resources, _, _ := unstructured.NestedSlice(app.Object, "status", "operationState", "syncResult", "resources")
+	for _, item := range resources {
+		entry, ok := item.(map[string]any)
+		if !ok || !argoResourceResultMatches(entry, target) {
+			continue
+		}
+		resource := &ArgoResourceValidationTarget{
+			Group:     stringValue(entry["group"]),
+			Kind:      stringValue(entry["kind"]),
+			Namespace: stringValue(entry["namespace"]),
+			Name:      stringValue(entry["name"]),
+			Status:    stringValue(entry["status"]),
+			Message:   stringValue(entry["message"]),
+		}
+		if phase == "Succeeded" {
+			return ArgoResourceValidationResult{Outcome: "succeeded", Message: "Argo validated the resource without applying changes.", Resource: resource}, true
+		}
+		if message == "" {
+			message = resource.Message
+		}
+		return ArgoResourceValidationResult{Outcome: "failed", Message: message, Resource: resource}, true
+	}
+	if phase == "Succeeded" {
+		return ArgoResourceValidationResult{Outcome: "inconclusive", Message: "Argo completed the dry-run but did not report a result for the selected resource."}, true
+	}
+	if message == "" {
+		message = fmt.Sprintf("Argo validation finished with phase %s.", phase)
+	}
+	return ArgoResourceValidationResult{Outcome: "failed", Message: message}, true
+}
+
+func argoOperationHasInfo(operation map[string]any, name, value string) bool {
+	info, ok := operation["info"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range info {
+		entry, ok := item.(map[string]any)
+		if ok && entry["name"] == name && entry["value"] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func argoResourceResultMatches(entry map[string]any, target ArgoSyncResource) bool {
+	return stringValue(entry["group"]) == target.Group &&
+		stringValue(entry["kind"]) == target.Kind &&
+		stringValue(entry["namespace"]) == target.Namespace &&
+		stringValue(entry["name"]) == target.Name
+}
+
+func stringValue(value any) string {
+	result, _ := value.(string)
+	return result
 }
 
 // SetArgoAutoSync enables or disables automated sync on an ArgoCD Application.

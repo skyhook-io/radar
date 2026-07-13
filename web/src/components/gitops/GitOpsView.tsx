@@ -49,6 +49,7 @@ import {
   buildArgoResourceSyncVars,
   useApplyResource,
   useArgoRefresh,
+  useArgoResourceValidation,
   useArgoResume,
   useArgoRollback,
   useArgoSuspend,
@@ -408,6 +409,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const [helmValuesOpen, setHelmValuesOpen] = useState(false)
 
   const argoSync = useArgoSync()
+  const argoResourceValidation = useArgoResourceValidation()
   const argoRefresh = useArgoRefresh()
   const argoTerminate = useArgoTerminate()
   const argoSuspend = useArgoSuspend()
@@ -425,6 +427,16 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const [rollbackTarget, setRollbackTarget] = useState<GitOpsHistoryItem | null>(null)
   // Disambiguates which refresh button is in flight (both share argoRefresh).
   const [refreshKind, setRefreshKind] = useState<'normal' | 'hard'>('normal')
+
+  function openArgoSyncDialog(target: ArgoSyncDialogTarget) {
+    argoResourceValidation.reset()
+    setSyncDialogTarget(target)
+  }
+
+  function closeArgoSyncDialog() {
+    argoResourceValidation.reset()
+    setSyncDialogTarget(null)
+  }
 
   const detailRow = resourceQ.data ? normalizeDetailResource(kind, group, resourceQ.data) : null
   const tree = treeQ.data ?? null
@@ -477,7 +489,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
     scope: 'gitops',
     handler: () => {
       if (effectiveSuspended || terminating) return
-      if (isArgoApp) setSyncDialogTarget({ scope: 'application' })
+      if (isArgoApp) openArgoSyncDialog({ scope: 'application' })
       else if (isFlux) fluxReconcile.mutate({ kind, namespace, name })
     },
     enabled: shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating,
@@ -534,7 +546,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   }
 
   const argoHandlers: ArgoActionHandlers | undefined = isArgoApp ? {
-    onSyncRequested: () => setSyncDialogTarget({ scope: 'application' }),
+    onSyncRequested: () => openArgoSyncDialog({ scope: 'application' }),
     onRefresh: (refreshType) => {
       setRefreshKind(refreshType)
       argoRefresh.mutate({ namespace, name, hard: refreshType === 'hard' })
@@ -697,7 +709,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
               insight={insightsQ.data}
               error={insightsQ.error as Error | null}
               onOpenResource={openResourceFromTree}
-              onSyncResource={isArgoApp ? (resource) => setSyncDialogTarget({ scope: 'resource', resource }) : undefined}
+              onSyncResource={isArgoApp ? (resource) => openArgoSyncDialog({ scope: 'resource', resource }) : undefined}
               syncResourceDisabledReason={isArgoApp ? (
                 terminating
                   ? terminatingActionTooltip
@@ -758,14 +770,22 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             appLabel={`${namespace}/${name}`}
             resource={syncDialogTarget?.scope === 'resource' ? syncDialogTarget.resource : undefined}
             pending={argoSync.isPending}
-            onCancel={() => setSyncDialogTarget(null)}
+            autoSyncEnabled={argoAutoSyncEnabled}
+            validationPending={argoResourceValidation.isPending}
+            validationResult={argoResourceValidation.data}
+            validationError={argoResourceValidation.error?.message}
+            onCancel={closeArgoSyncDialog}
+            onValidationReset={() => argoResourceValidation.reset()}
+            onValidate={syncDialogTarget?.scope === 'resource' ? (opts) => {
+              argoResourceValidation.mutate(buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts))
+            } : undefined}
             onConfirm={(opts) => {
               if (!syncDialogTarget) return
               const variables = syncDialogTarget.scope === 'resource'
                 ? buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts)
                 : { namespace, name, ...opts }
               argoSync.mutate(variables, {
-                onSettled: () => setSyncDialogTarget(null),
+                onSettled: closeArgoSyncDialog,
               })
             }}
           />
