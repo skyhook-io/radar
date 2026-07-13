@@ -99,6 +99,12 @@ type Server struct {
 	// pick and silently revert it.
 	nsPickMu sync.Mutex
 
+	// seededPicks marks (user, context) keys whose picker was already seeded
+	// from --namespaces, so the configured list applies once per session and
+	// a user's clear back to "All namespaces" is not overridden on later
+	// reads. Cleared alongside nsPreferences on context switch.
+	seededPicks sync.Map
+
 	// Short-TTL cache for topology builds. The Topology graph is a
 	// deterministic projection of the informer cache; rebuilding it walks
 	// every resource of every kind. A 5s TTL absorbs the typical bursts

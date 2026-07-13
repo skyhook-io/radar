@@ -60,6 +60,10 @@ var (
 	contextNamespace   string   // Default namespace from kubeconfig context
 	fallbackNamespace  string   // Explicit namespace from --namespace flag
 	fallbackNamespaces []string // Explicit namespace candidates from --namespaces flag
+	// fallbackNamespacesExplicit distinguishes SetFallbackNamespaces (the
+	// plural --namespaces flag, which also seeds the per-user picker) from
+	// SetFallbackNamespace (--namespace, which only steers RBAC probing).
+	fallbackNamespacesExplicit bool
 	// fallbackNamespaceContext is the context that was active when --namespace was
 	// set at startup. --namespace is an *initial* value, so it only pins the cache
 	// scope for that context — after switching clusters, the scope target comes
@@ -678,6 +682,7 @@ func SetFallbackNamespace(ns string) {
 	defer clientMu.Unlock()
 	fallbackNamespace = ns
 	fallbackNamespaces = dedupeNamespacesLocked([]string{ns})
+	fallbackNamespacesExplicit = false
 	// Record the context this --namespace applies to, so it only pins the cache
 	// scope while we're on that context (see GetNamespaceScopeTarget).
 	fallbackNamespaceContext = contextName
@@ -691,12 +696,26 @@ func SetFallbackNamespaces(namespaces []string) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	fallbackNamespaces = dedupeNamespacesLocked(namespaces)
+	fallbackNamespacesExplicit = len(fallbackNamespaces) > 0
 	if len(fallbackNamespaces) > 0 {
 		fallbackNamespace = fallbackNamespaces[0]
 	} else {
 		fallbackNamespace = ""
 	}
 	fallbackNamespaceContext = contextName
+}
+
+// ConfiguredNamespacesForCurrentContext returns the --namespaces list when
+// the current kubeconfig context is still the one the flag was configured
+// against. --namespaces is an *initial* value: after a context switch the
+// list references the previous cluster's namespaces and must not seed picks.
+func ConfiguredNamespacesForCurrentContext() []string {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if !fallbackNamespacesExplicit || fallbackNamespaceContext != contextName || len(fallbackNamespaces) == 0 {
+		return nil
+	}
+	return append([]string(nil), fallbackNamespaces...)
 }
 
 func dedupeNamespacesLocked(namespaces []string) []string {

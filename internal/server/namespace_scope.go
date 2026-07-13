@@ -127,6 +127,12 @@ func (s *Server) clearAllNamespacePreferences() {
 		s.nsPreferences.Delete(k)
 		return true
 	})
+	// Seed marks reference the previous cluster's keys; dropping them lets a
+	// switch back to the startup context re-apply the configured initial view.
+	s.seededPicks.Range(func(k, _ any) bool {
+		s.seededPicks.Delete(k)
+		return true
+	})
 }
 
 // finalizePostContextSwitch clears all per-user state that referenced the
@@ -151,30 +157,53 @@ func (s *Server) finalizePostContextSwitch() {
 	// OnBeforeContextSwitch in New) so they can't touch the new cluster.
 }
 
-// loadSavedNamespacePreference seeds the per-user map from settings.json on
-// first reach. Only relevant for the no-auth (local single-user) path —
-// auth-enabled deploys don't persist picks across pod restarts.
+// loadSavedNamespacePreference seeds the per-user map on first reach.
+// Sources, in priority order:
+//   - a settings.json pick (no-auth local single-user only) — a remembered
+//     narrower choice survives restarts;
+//   - the --namespaces startup list (any user, auth included) — each user's
+//     session starts on the configured view. Seeded at most once per
+//     (user, context) key, so clearing back to "All namespaces" sticks for
+//     the rest of the session instead of being re-applied on the next read.
 func (s *Server) loadSavedNamespacePreference(r *http.Request) {
-	if auth.UserFromContext(r.Context()) != nil {
-		return // multi-user: no shared persisted pref
-	}
 	ctxName := k8s.GetContextName()
 	if ctxName == "" {
 		return
 	}
-	key := nsPreferenceKey("", ctxName)
+	username := ""
+	if u := auth.UserFromContext(r.Context()); u != nil {
+		username = u.Username
+	}
+	key := nsPreferenceKey(username, ctxName)
 	if _, ok := s.nsPreferences.Load(key); ok {
 		return
 	}
-	saved := settings.Load()
-	if saved.ActiveNamespaces == nil {
-		return
+
+	// Configured-seed eligibility is decided (and burned) before any seeding:
+	// whichever source wins, the configured list must not re-apply after the
+	// user later clears their pick.
+	seedConfigured := false
+	configured := k8s.ConfiguredNamespacesForCurrentContext()
+	if len(configured) > 0 {
+		_, alreadyConsidered := s.seededPicks.LoadOrStore(key, true)
+		seedConfigured = !alreadyConsidered
 	}
-	if picks := saved.ActiveNamespaces[ctxName]; len(picks) > 0 {
-		// Seed only while the pick is still empty. The Load check above is
-		// racy on its own — a concurrent POST could install a pick between it
-		// and this store — so re-check under the lock and skip if one landed.
-		s.commitPickMutation(r, ctxName, nil, picks, false)
+
+	if username == "" {
+		saved := settings.Load()
+		if saved.ActiveNamespaces != nil {
+			if picks := saved.ActiveNamespaces[ctxName]; len(picks) > 0 {
+				// Seed only while the pick is still empty. The Load check
+				// above is racy on its own — a concurrent POST could install
+				// a pick between it and this store — so re-check under the
+				// lock and skip if one landed.
+				s.commitPickMutation(r, ctxName, nil, picks, false)
+				return
+			}
+		}
+	}
+	if seedConfigured {
+		s.commitPickMutation(r, ctxName, nil, configured, false)
 	}
 }
 

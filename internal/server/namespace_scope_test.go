@@ -643,3 +643,96 @@ func TestPruneDeletedNamespacePicks_SkipsAcrossContextSwitch(t *testing.T) {
 		t.Errorf("old-context pick mutated across switch: %v, want %v", picks, snapshot)
 	}
 }
+
+// --namespaces seeds each user's picker once per session; a clear back to
+// "All namespaces" must stick instead of being re-applied on the next read.
+func TestLoadSavedNamespacePreference_SeedsConfiguredNamespacesOnce(t *testing.T) {
+	s := newTestServer(t)
+	k8s.SetFallbackNamespaces([]string{"team-a", "team-b"})
+	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
+	req := reqAs("alice")
+
+	s.loadSavedNamespacePreference(req)
+	if got := s.getActiveNamespaceForUser(req); !slices.Equal(got, []string{"team-a", "team-b"}) {
+		t.Fatalf("configured seed = %v, want [team-a team-b]", got)
+	}
+
+	s.setActiveNamespaceForUser(req, nil) // user clears to All
+	s.loadSavedNamespacePreference(req)
+	if got := s.getActiveNamespaceForUser(req); len(got) != 0 {
+		t.Fatalf("configured list re-seeded after clear: %v", got)
+	}
+
+	// A different user gets their own seed.
+	bob := reqAs("bob")
+	s.loadSavedNamespacePreference(bob)
+	if got := s.getActiveNamespaceForUser(bob); !slices.Equal(got, []string{"team-a", "team-b"}) {
+		t.Fatalf("second user seed = %v, want [team-a team-b]", got)
+	}
+}
+
+// A locally persisted pick outranks the configured startup list, and the
+// seed eligibility burned in that pass keeps the configured list from
+// re-applying after the user clears.
+func TestLoadSavedNamespacePreference_LocalSavedPickBeatsConfigured(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	s := newTestServer(t)
+	k8s.SetFallbackNamespaces([]string{"team-a", "team-b"})
+	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
+	if _, err := settings.Update(func(st *settings.Settings) {
+		st.ActiveNamespaces = map[string][]string{"test-ctx": {"team-b"}}
+	}); err != nil {
+		t.Fatalf("settings.Update: %v", err)
+	}
+
+	req := reqAs("")
+	s.loadSavedNamespacePreference(req)
+	if got := s.getActiveNamespaceForUser(req); !slices.Equal(got, []string{"team-b"}) {
+		t.Fatalf("saved pick = %v, want [team-b]", got)
+	}
+}
+
+// --namespace (singular) steers RBAC probing but must NOT seed the picker;
+// and after a context switch the configured list references the previous
+// cluster, so it must not seed either.
+func TestLoadSavedNamespacePreference_ConfiguredSeedGates(t *testing.T) {
+	s := newTestServer(t)
+	k8s.SetFallbackNamespace("solo-ns")
+	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
+	req := reqAs("alice")
+	s.loadSavedNamespacePreference(req)
+	if got := s.getActiveNamespaceForUser(req); len(got) != 0 {
+		t.Fatalf("--namespace must not seed the picker, got %v", got)
+	}
+
+	// Plural flag set, but context switched afterwards → stale list, no seed.
+	k8s.SetFallbackNamespaces([]string{"team-a"})
+	prev := k8s.SetTestContextName("other-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prev) })
+	req2 := reqAs("bob")
+	s.loadSavedNamespacePreference(req2)
+	if got := s.getActiveNamespaceForUser(req2); len(got) != 0 {
+		t.Fatalf("stale-context configured list must not seed, got %v", got)
+	}
+}
+
+// Context switch drops seed marks: returning to the startup context
+// re-applies the configured initial view to a fresh session.
+func TestClearAllNamespacePreferences_ResetsSeedMarks(t *testing.T) {
+	s := newTestServer(t)
+	k8s.SetFallbackNamespaces([]string{"team-a"})
+	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
+	req := reqAs("alice")
+
+	s.loadSavedNamespacePreference(req)
+	s.setActiveNamespaceForUser(req, nil) // clear → seed mark burned
+
+	s.clearAllNamespacePreferences() // context switch
+
+	s.loadSavedNamespacePreference(req)
+	if got := s.getActiveNamespaceForUser(req); !slices.Equal(got, []string{"team-a"}) {
+		t.Fatalf("seed after context-switch reset = %v, want [team-a]", got)
+	}
+}
