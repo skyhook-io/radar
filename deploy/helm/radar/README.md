@@ -77,6 +77,29 @@ applies to GitOps users: manage the Secret with SealedSecrets / SOPS /
 External Secrets and reference it via `cloud.existingSecret`; Helm never
 touches its contents.
 
+### Connecting to Argo CD (GitOps deep diff)
+
+Radar's GitOps pages show a Git-rendered desired-vs-live diff when connected to
+Argo CD's API. A self-hosted / in-cluster Radar can be given the token
+declaratively so it survives pod restarts and needs no interactive Settings paste:
+
+```bash
+# A read-only Argo CD account token is enough:
+#   argocd account generate-token --account radar
+kubectl create secret generic radar-argocd-token -n radar \
+  --from-literal=token=$ARGOCD_TOKEN \
+  --dry-run=client -o yaml | kubectl apply -f -
+helm upgrade --install radar skyhook/radar -n radar \
+  --set argocd.existingSecret=radar-argocd-token
+```
+
+Leave `argocd.url` unset to auto-discover the in-cluster `argocd-server`, or set
+it to pin an explicit endpoint. Providing a token makes the integration
+**environment-managed**: read-only in the Settings UI, never written to disk.
+Prefer `argocd.existingSecret` over the inline `argocd.token` so the token never
+lands in the Helm release state. Rotation requires a pod restart. See
+[docs/gitops.md](../../../docs/gitops.md#provisioning-the-token-per-deployment-shape).
+
 ## Configuration
 
 | Parameter | Description | Default |
@@ -97,6 +120,11 @@ touches its contents.
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends) | `{}` |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
+| `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |
+| `argocd.existingSecretKey` | Key within `argocd.existingSecret` holding the token | `token` |
+| `argocd.token` | Inline Argo CD API token (dev only — lands in the release state) | `""` |
+| `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
+| `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
 | `resources.limits.memory` | Memory limit | `512Mi` |
 | `resources.requests.memory` | Memory request | `128Mi` |
 

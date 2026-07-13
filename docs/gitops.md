@@ -162,6 +162,58 @@ Behavior and guarantees:
 The gitops-demo cluster mints a ready-to-use token into
 `scripts/gitops-demo/.radar-argocd-token` (see the demo section below).
 
+### Provisioning the token per deployment shape
+
+The Settings paste above is right for a laptop, but not for a headless or hosted
+Radar — pasting in the UI stores the token under `/home/nonroot`, which is an
+`emptyDir` in the default chart and is lost on pod restart. Pick by how Radar runs:
+
+| Deployment | How to provision | Notes |
+|------------|------------------|-------|
+| **Local / desktop** | Settings → Argo CD (paste, or "Use Argo CD CLI session") | Interactive; persists to `~/.radar/config.json`. |
+| **In-cluster (self-hosted)** | Helm `argocd.existingSecret` (or `argocd.token`) → `RADAR_ARGOCD_TOKEN` | Declarative, survives restarts, read-only in the UI. |
+| **Radar Cloud** | The customer's in-cluster Radar carries the token (as above); the token never reaches the hub. | Same env path; the hub proxies to the binary, which holds the credential. |
+
+When a token is provided via the environment, the integration becomes
+**environment-managed**: the Settings card renders read-only and `PUT
+/api/integrations/argocd` returns `409` — the deployment is the source of truth.
+The env token is held in memory only and is never written to `~/.radar/config.json`.
+
+Environment variables (read once at startup):
+
+- `RADAR_ARGOCD_TOKEN` — the API token. `RADAR_ARGOCD_TOKEN_FILE` (a mounted-secret
+  path) takes precedence and is preferred — a file isn't exposed via
+  `/proc/<pid>/environ`.
+- `RADAR_ARGOCD_URL` — explicit `argocd-server` URL; omit for in-cluster
+  auto-discovery. Must be `http(s)`, with no embedded userinfo.
+- `RADAR_ARGOCD_INSECURE_TLS` — `true` to skip TLS verification (self-signed
+  server). Leave unset otherwise; it exposes the token on the path to the server.
+
+Helm (`deploy/helm/radar`), preferring a pre-created Secret so the token never
+lands in the release state:
+
+```yaml
+argocd:
+  existingSecret: radar-argocd-token   # Secret with a `token` key (recommended)
+  # token: argo_xxx                    # or inline (dev only — lands in release values)
+  # url: https://argocd.example.com    # optional; blank auto-discovers in-cluster
+  # insecureTls: false
+```
+
+Scoping and lifecycle:
+
+- **Scope the Secret per cluster.** The token authenticates to *one* `argocd-server`;
+  auto-discovery sends it to whichever server this cluster exposes. Broadcasting one
+  Secret across clusters with a shared GitOps manifest would send the token to each
+  cluster's server. Prefer `RADAR_ARGOCD_URL` to pin the endpoint explicitly.
+- **Rotation requires a pod restart** — env vars and Secret-backed env are read at
+  startup and don't hot-reload. Roll the Deployment to pick up a new token.
+- Env provisioning does not clear a previously UI-set token on disk; on a
+  persistence-enabled deployment, clear both to fully remove a credential.
+- Deep-diff cross-cluster destinations are refused: a Radar SAR can only authorize
+  a read against its own cluster, so Applications targeting a remote
+  `spec.destination` fall back to annotation drift.
+
 ## Cross-linking from the rest of Radar
 
 The GitOps tab isn't the only place Argo/Flux ownership matters. Surfaces across Radar know about GitOps and route into the right detail page when they should:

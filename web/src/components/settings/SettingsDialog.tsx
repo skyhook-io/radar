@@ -45,6 +45,10 @@ interface ConfigResponse {
   // returned — the card shows a "configured" placeholder and omits the token
   // from the PUT unless the user changes or clears it.
   argoCdTokenSet?: boolean
+  // True when the integration is provisioned from the environment
+  // (RADAR_ARGOCD_TOKEN / _TOKEN_FILE) — the card renders read-only because the
+  // server refuses UI edits to a declaratively-configured integration.
+  argoCdEnvManaged?: boolean
   // A detected Argo CD CLI login (server + user + TLS mode, no token), so the UI
   // can offer "use your CLI session" as a one-click when it will actually work.
   argoCdCliSession?: { server: string; user: string; insecure?: boolean }
@@ -486,6 +490,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 url={editedConfig.argoCdUrl ?? ''}
                 insecureTls={editedConfig.argoCdInsecureTls ?? false}
                 tokenSet={configData?.argoCdTokenSet ?? false}
+                envManaged={configData?.argoCdEnvManaged ?? false}
                 cliSession={configData?.argoCdCliSession}
                 onChangeUrl={(v) => updateConfigField('argoCdUrl', v || undefined)}
                 onChangeInsecureTls={(v) => updateConfigField('argoCdInsecureTls', v || undefined)}
@@ -1402,6 +1407,90 @@ type ArgoState =
   | { status: 'error'; error: string }
 
 function ArgoCDConfigField({
+  url,
+  insecureTls,
+  tokenSet,
+  envManaged,
+  cliSession,
+  onChangeUrl,
+  onChangeInsecureTls,
+  onApplied,
+}: {
+  url: string
+  insecureTls: boolean
+  tokenSet: boolean
+  envManaged?: boolean
+  cliSession?: { server: string; user: string; insecure?: boolean }
+  onChangeUrl: (value: string) => void
+  onChangeInsecureTls: (value: boolean) => void
+  onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
+}) {
+  if (envManaged) {
+    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} />
+  }
+  return (
+    <ArgoCDEditableField
+      url={url}
+      insecureTls={insecureTls}
+      tokenSet={tokenSet}
+      cliSession={cliSession}
+      onChangeUrl={onChangeUrl}
+      onChangeInsecureTls={onChangeInsecureTls}
+      onApplied={onApplied}
+    />
+  )
+}
+
+// Read-only card for the environment-managed integration: the token/URL/TLS come
+// from the deployment (RADAR_ARGOCD_TOKEN / _TOKEN_FILE / _URL), so editing here
+// is disabled — the server refuses the PUT. Shows the effective endpoint and points
+// the operator at the deployment for changes.
+function ArgoCDEnvManagedField({ url, insecureTls }: { url: string; insecureTls: boolean }) {
+  return (
+    <div>
+      <p className="text-xs text-theme-text-tertiary mb-3">
+        Powers the full Git-rendered desired-vs-live diff on GitOps Application pages — what Git
+        declares vs what&apos;s actually running.
+      </p>
+      <div className="rounded-md border border-skyhook-500/30 bg-skyhook-500/[0.07] p-3">
+        <p className="flex items-center gap-1.5 text-sm font-medium text-theme-text-primary">
+          <Terminal className="w-3.5 h-3.5 shrink-0 text-skyhook-500" />
+          Configured from the environment
+        </p>
+        <p className="mt-1 text-xs text-theme-text-tertiary">
+          The token is provided by the deployment via{' '}
+          <code className="inline-code">RADAR_ARGOCD_TOKEN</code> (or{' '}
+          <code className="inline-code">RADAR_ARGOCD_TOKEN_FILE</code>), so this integration is
+          read-only here. Edit the deployment&apos;s environment or Secret and restart to change it.
+        </p>
+        <dl className="mt-3 space-y-1 text-xs">
+          <div className="flex gap-2">
+            <dt className="w-24 shrink-0 text-theme-text-tertiary">Server</dt>
+            <dd className="min-w-0 truncate text-theme-text-secondary">
+              {url || 'auto-discovered in this cluster'}
+            </dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-24 shrink-0 text-theme-text-tertiary">Token</dt>
+            <dd className="text-theme-text-secondary">provided via environment</dd>
+          </div>
+          {insecureTls && (
+            <div className="flex gap-2">
+              <dt className="w-24 shrink-0 text-theme-text-tertiary">TLS</dt>
+              <dd className="text-amber-600 dark:text-amber-400/80">verification skipped</dd>
+            </div>
+          )}
+        </dl>
+      </div>
+      <p className="mt-2 text-xs text-theme-text-tertiary">
+        If the diff isn&apos;t loading, verify the token is valid for this cluster&apos;s Argo CD and
+        check the Radar pod logs.
+      </p>
+    </div>
+  )
+}
+
+function ArgoCDEditableField({
   url,
   insecureTls,
   tokenSet,

@@ -47,6 +47,16 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
+	// When the integration is provisioned from the environment, it is the
+	// declarative source of truth: refuse UI edits rather than silently accept a
+	// change the env config would override on the next probe. This is the only
+	// user-facing path that mutates the Argo connection, so gating it here makes
+	// env-managed effectively read-only.
+	if argocd.IsEnvManaged() {
+		s.writeError(w, http.StatusConflict,
+			"Argo CD is configured from the environment (RADAR_ARGOCD_TOKEN) — edit the deployment to change it.")
+		return
+	}
 	var body struct {
 		ArgoCDURL string `json:"argoCdUrl"`
 		// ArgoCDToken is a pointer so "not editing the token" (nil — keep

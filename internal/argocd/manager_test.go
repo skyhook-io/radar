@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -460,4 +461,136 @@ func TestWatchForwardExit_NoOpAfterForwardReplaced(t *testing.T) {
 	if m.forward != newFwd || m.client == nil || m.baseURL != "https://localhost:2" {
 		t.Fatal("a superseded forward's exit must not drop the current connection")
 	}
+}
+
+// TestSeedFromEnvBindsAndMarksManaged pins that an env-provisioned token is bound
+// to the deploy-time context (so the auto-discovery cross-cluster guard accepts it
+// for the cluster it runs in) and is flagged environment-managed.
+func TestSeedFromEnvBindsAndMarksManaged(t *testing.T) {
+	ctx := "in-cluster"
+	m := newTestManager(config.Config{})
+	m.contextName = func() string { return ctx }
+
+	m.SeedFromEnv("", "env-token", false)
+	if !m.envManaged {
+		t.Fatal("SeedFromEnv must mark the manager environment-managed")
+	}
+	if m.tokenContext != "in-cluster" {
+		t.Fatalf("tokenContext = %q, want the deploy-time context", m.tokenContext)
+	}
+	if !m.IsConfigured() {
+		t.Fatal("an env-seeded token must count as configured")
+	}
+	// Same context: the cross-cluster guard must accept it (a context switch would
+	// still refuse it, exactly as a UI-set auto-discovery token).
+	if err := m.Probe(context.Background()); errors.Is(err, errTokenContextMismatch) {
+		t.Fatalf("Probe on the deploy context = %v, must not be a context mismatch", err)
+	}
+}
+
+// TestEnvManagedConfigReflectsEffective pins that EnvManagedConfig returns the
+// effective env URL/TLS (never the token) only when env-managed — the config
+// endpoint uses this so the read-only card shows the real endpoint, not disk.
+func TestEnvManagedConfigReflectsEffective(t *testing.T) {
+	m := newTestManager(config.Config{ArgoCDURL: "https://disk.example.com", ArgoCDToken: "disk-token"})
+	m.contextName = func() string { return "in-cluster" }
+
+	if _, _, ok := m.EnvManagedConfig(); ok {
+		// Before seeding it lazily loads the disk config, which is NOT env-managed.
+		t.Fatal("EnvManagedConfig must report ok=false when not env-managed")
+	}
+
+	m.SeedFromEnv("https://argocd.example.com", "env-token", true)
+	url, insecure, ok := m.EnvManagedConfig()
+	if !ok || url != "https://argocd.example.com" || !insecure {
+		t.Fatalf("EnvManagedConfig = (%q, %v, %v), want the effective env values", url, insecure, ok)
+	}
+}
+
+// TestResolveEnvArgo covers the source-precedence + validation paths without
+// touching the manager (M2): file>inline precedence, no-token no-op, invalid URL,
+// userinfo rejection, and non-boolean TLS.
+func TestResolveEnvArgo(t *testing.T) {
+	env := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+	readOK := func(want string) func(string) ([]byte, error) {
+		return func(p string) ([]byte, error) { return []byte(want), nil }
+	}
+
+	t.Run("no token is a no-op", func(t *testing.T) {
+		_, _, _, ok, err := resolveEnvArgo(env(map[string]string{envArgoURL: "https://x.example.com"}), readOK(""))
+		if ok || err != nil {
+			t.Fatalf("got ok=%v err=%v, want (false, nil) when no token is set", ok, err)
+		}
+	})
+
+	t.Run("inline token", func(t *testing.T) {
+		url, token, insecure, ok, err := resolveEnvArgo(env(map[string]string{envArgoToken: "  inline  "}), readOK(""))
+		if !ok || err != nil || token != "inline" || url != "" || insecure {
+			t.Fatalf("got (%q,%q,%v,%v,%v)", url, token, insecure, ok, err)
+		}
+	})
+
+	t.Run("file takes precedence over inline", func(t *testing.T) {
+		_, token, _, ok, err := resolveEnvArgo(
+			env(map[string]string{envArgoToken: "inline", envArgoTokenFile: "/run/secrets/argo"}),
+			readOK("file-token\n"),
+		)
+		if !ok || err != nil || token != "file-token" {
+			t.Fatalf("got token=%q ok=%v err=%v, want the file token", token, ok, err)
+		}
+	})
+
+	t.Run("empty file errors", func(t *testing.T) {
+		_, _, _, _, err := resolveEnvArgo(env(map[string]string{envArgoTokenFile: "/run/secrets/argo"}), readOK("  \n"))
+		if err == nil {
+			t.Fatal("an empty token file must error, not silently fall through")
+		}
+	})
+
+	t.Run("invalid URL errors", func(t *testing.T) {
+		_, _, _, _, err := resolveEnvArgo(env(map[string]string{envArgoToken: "t", envArgoURL: "ftp://x"}), readOK(""))
+		if err == nil {
+			t.Fatal("a non-http(s) URL must error")
+		}
+	})
+
+	t.Run("userinfo URL errors", func(t *testing.T) {
+		_, _, _, _, err := resolveEnvArgo(env(map[string]string{envArgoToken: "t", envArgoURL: "https://u:p@x.example.com"}), readOK(""))
+		if err == nil {
+			t.Fatal("a URL embedding userinfo credentials must error")
+		}
+	})
+
+	t.Run("malformed URL error does not echo the raw input", func(t *testing.T) {
+		// A bad percent-escape in the userinfo makes url.Parse fail — the error must
+		// not carry the raw credential-bearing string into the logs.
+		secret := "s3cr3t%zz"
+		_, _, _, _, err := resolveEnvArgo(env(map[string]string{envArgoToken: "t", envArgoURL: "https://u:" + secret + "@x.example.com"}), readOK(""))
+		if err == nil {
+			t.Fatal("a malformed URL must error")
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q leaked the raw URL/credential", err)
+		}
+	})
+
+	t.Run("non-boolean TLS errors", func(t *testing.T) {
+		_, _, _, _, err := resolveEnvArgo(env(map[string]string{envArgoToken: "t", envArgoInsecure: "yesplease"}), readOK(""))
+		if err == nil {
+			t.Fatal("a non-boolean insecure flag must error, not silently default")
+		}
+	})
+
+	t.Run("valid full config", func(t *testing.T) {
+		url, token, insecure, ok, err := resolveEnvArgo(env(map[string]string{
+			envArgoToken:    "t",
+			envArgoURL:      "https://argocd.example.com/",
+			envArgoInsecure: "true",
+		}), readOK(""))
+		if !ok || err != nil || token != "t" || url != "https://argocd.example.com/" || !insecure {
+			t.Fatalf("got (%q,%q,%v,%v,%v)", url, token, insecure, ok, err)
+		}
+	})
 }

@@ -183,6 +183,31 @@ spec:
               {{- end }}
             {{- end }}
             {{- end }}
+            {{- /* Argo CD deep-diff: env-provisioned token (independent of cloud
+                   mode — works for plain in-cluster too). URL/TLS ride along only
+                   when a token is set; a URL without a token can't authenticate. */}}
+            {{- if and .Values.argocd.token .Values.argocd.existingSecret }}
+            {{- fail "argocd.token and argocd.existingSecret are mutually exclusive: set only one (prefer existingSecret so the token stays out of the Helm release)" }}
+            {{- end }}
+            {{- if or .Values.argocd.token .Values.argocd.existingSecret }}
+            - name: RADAR_ARGOCD_TOKEN
+              {{- if .Values.argocd.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.argocd.existingSecret }}
+                  key: {{ .Values.argocd.existingSecretKey }}
+              {{- else }}
+              value: {{ .Values.argocd.token | quote }}
+              {{- end }}
+            {{- if .Values.argocd.url }}
+            - name: RADAR_ARGOCD_URL
+              value: {{ .Values.argocd.url | quote }}
+            {{- end }}
+            {{- if .Values.argocd.insecureTls }}
+            - name: RADAR_ARGOCD_INSECURE_TLS
+              value: "true"
+            {{- end }}
+            {{- end }}
             {{- if .Values.rbac.selfUpgrade }}
             - name: MY_POD_NAMESPACE
               valueFrom:

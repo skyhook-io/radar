@@ -9,6 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +85,11 @@ type Manager struct {
 	manualURL   string
 	token       string
 	insecureTLS bool
+	// envManaged is set when the token was provisioned from the environment
+	// (RADAR_ARGOCD_TOKEN[_FILE]) rather than the Settings UI. Such a token is
+	// the declarative source of truth: the UI renders it read-only, the apply
+	// handler refuses to change it, and it is never written to disk.
+	envManaged bool
 
 	// generation bumps on every SetConfig/Reset. A Probe captures it before
 	// its (unlocked) network I/O and commits the resolved connection only if
@@ -164,6 +172,124 @@ func RestoreConfig(url, token string, insecureTLS bool, tokenContext string) {
 	defaultManager.RestoreConfig(url, token, insecureTLS, tokenContext)
 }
 
+// Env var names for declarative (headless / in-cluster / Cloud) provisioning.
+const (
+	envArgoToken     = "RADAR_ARGOCD_TOKEN"
+	envArgoTokenFile = "RADAR_ARGOCD_TOKEN_FILE"
+	envArgoURL       = "RADAR_ARGOCD_URL"
+	envArgoInsecure  = "RADAR_ARGOCD_INSECURE_TLS"
+)
+
+// SeedFromEnvVars provisions the Argo CD integration from environment variables,
+// for deployments with no interactive Settings session (helm/in-cluster, Cloud
+// tunnel). RADAR_ARGOCD_TOKEN_FILE (a mounted-secret path) takes precedence over
+// the inline RADAR_ARGOCD_TOKEN — file mounts don't expose the value via
+// /proc/<pid>/environ. When a token is present the integration becomes
+// environment-managed (read-only in the UI, never persisted). Returns
+// (false, nil) when no token env is set, leaving the interactive path unchanged.
+// Must run before the server serves so the lazy config seed can't clobber it.
+func SeedFromEnvVars() (bool, error) {
+	url, token, insecure, ok, err := resolveEnvArgo(os.Getenv, os.ReadFile)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	defaultManager.SeedFromEnv(url, token, insecure)
+	return true, nil
+}
+
+// resolveEnvArgo parses the Argo CD env config with all precedence + validation
+// rules, without touching the manager — so the source-precedence and validation
+// paths are unit-testable. ok is false (with nil err) when no token is set, which
+// leaves the interactive path untouched. getenv/readFile are injected for tests.
+func resolveEnvArgo(getenv func(string) string, readFile func(string) ([]byte, error)) (url, token string, insecure, ok bool, err error) {
+	if f := strings.TrimSpace(getenv(envArgoTokenFile)); f != "" {
+		// A mounted-secret file takes precedence over the inline env var — the file
+		// value isn't exposed via /proc/<pid>/environ.
+		b, rerr := readFile(f)
+		if rerr != nil {
+			return "", "", false, false, fmt.Errorf("argocd: read %s=%q: %w", envArgoTokenFile, f, rerr)
+		}
+		token = strings.TrimSpace(string(b))
+		if token == "" {
+			return "", "", false, false, fmt.Errorf("argocd: %s=%q is empty", envArgoTokenFile, f)
+		}
+	} else {
+		token = strings.TrimSpace(getenv(envArgoToken))
+	}
+
+	rawURL := strings.TrimSpace(getenv(envArgoURL))
+	rawInsecure := strings.TrimSpace(getenv(envArgoInsecure))
+
+	if token == "" {
+		// A URL or TLS flag without a token can't authenticate the deep-diff — warn
+		// so a half-set env config doesn't silently do nothing.
+		if rawURL != "" || rawInsecure != "" {
+			log.Printf("[argocd] %s/%s is set but no token (%s or %s) — ignoring the environment Argo CD config",
+				envArgoURL, envArgoInsecure, envArgoToken, envArgoTokenFile)
+		}
+		return "", "", false, false, nil
+	}
+
+	// The env URL is a non-UI input that ends up in status/config/logs, so validate
+	// it at least as strictly as the Settings PUT: http(s) scheme, a host, and no
+	// embedded userinfo credentials (which would leak into those surfaces).
+	if rawURL != "" {
+		if verr := validateEnvArgoURL(rawURL); verr != nil {
+			return "", "", false, false, fmt.Errorf("argocd: invalid %s: %w", envArgoURL, verr)
+		}
+	}
+
+	if rawInsecure != "" {
+		v, perr := strconv.ParseBool(rawInsecure)
+		if perr != nil {
+			return "", "", false, false, fmt.Errorf("argocd: %s=%q is not a boolean (use true/false)", envArgoInsecure, rawInsecure)
+		}
+		insecure = v
+	}
+
+	return rawURL, token, insecure, true, nil
+}
+
+// validateEnvArgoURL enforces the same shape the Settings PUT accepts, plus a
+// no-userinfo rule: a URL like https://user:pass@host would embed credentials
+// that then surface in /api/config, the status address, and logs.
+func validateEnvArgoURL(raw string) error {
+	u, err := url.Parse(strings.TrimRight(raw, "/"))
+	if err != nil {
+		// Don't wrap the parse error: url.Parse echoes the raw input, which could
+		// carry embedded credentials (e.g. a malformed userinfo) into the logs.
+		return errors.New("could not be parsed as a URL")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("must be an http(s) URL (got %q)", u.Scheme)
+	}
+	if u.Host == "" {
+		return errors.New("must include a host")
+	}
+	if u.User != nil {
+		return errors.New("must not embed userinfo credentials")
+	}
+	return nil
+}
+
+// SeedFromEnv provisions the default manager from an already-resolved
+// environment token (see SeedFromEnvVars).
+func SeedFromEnv(url, token string, insecureTLS bool) {
+	defaultManager.SeedFromEnv(url, token, insecureTLS)
+}
+
+// IsEnvManaged reports whether the token was provisioned from the environment.
+func IsEnvManaged() bool { return defaultManager.IsEnvManaged() }
+
+// EnvManagedConfig returns the effective env-managed URL + TLS mode (ok=false when
+// not env-managed). The token is never returned.
+func EnvManagedConfig() (url string, insecureTLS bool, ok bool) {
+	return defaultManager.EnvManagedConfig()
+}
+
 // IsConfigured reports whether the default manager has connection settings.
 func IsConfigured() bool { return defaultManager.IsConfigured() }
 
@@ -221,6 +347,11 @@ func CLISession() (*argoapi.CLISession, error) {
 func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bool) {
 	m.mu.Lock()
 	m.seeded = true
+	// An explicit interactive config supersedes environment provisioning. In
+	// practice the apply handler refuses the PUT while env-managed, so this path
+	// isn't reached then; clearing the flag here keeps the "env is source of truth"
+	// invariant inside the manager rather than resting solely on that HTTP gate.
+	m.envManaged = false
 	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
 	m.token = token
 	m.insecureTLS = insecureTLS
@@ -235,6 +366,50 @@ func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bo
 	}
 }
 
+// SeedFromEnv provisions the manager from an environment-provided token. Like a
+// fresh SetConfig it binds the token to the current context (so the
+// auto-discovery cross-cluster guard accepts it for the cluster it's deployed
+// in), and additionally marks the integration environment-managed: the apply
+// handler refuses UI changes and the token is never written to disk. Runs at
+// startup before the first Get, so the lazy config seed won't override it.
+func (m *Manager) SeedFromEnv(url, token string, insecureTLS bool) {
+	m.mu.Lock()
+	m.seeded = true
+	m.envManaged = true
+	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
+	m.token = token
+	m.insecureTLS = insecureTLS
+	m.tokenContext = m.currentContextName()
+	m.generation++
+	fwd := m.dropConnectionLocked()
+	m.mu.Unlock()
+	if fwd != nil {
+		fwd.stop()
+	}
+}
+
+// IsEnvManaged reports whether the token was provisioned from the environment.
+func (m *Manager) IsEnvManaged() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSeededLocked()
+	return m.envManaged
+}
+
+// EnvManagedConfig returns the effective URL + TLS mode when the integration is
+// environment-managed, so callers (e.g. GET /api/config) can present the real
+// endpoint instead of the stale on-disk values, which env-managed mode ignores.
+// ok is false when not env-managed. The token is never returned.
+func (m *Manager) EnvManagedConfig() (url string, insecureTLS bool, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSeededLocked()
+	if !m.envManaged {
+		return "", false, false
+	}
+	return m.manualURL, m.insecureTLS, true
+}
+
 // RestoreConfig rolls the manager back to a previously-captured state, INCLUDING
 // the token's context binding. It exists for the connect-rollback path: the
 // candidate SetConfig may have re-stamped tokenContext for a fresh token, and a
@@ -245,6 +420,11 @@ func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bo
 func (m *Manager) RestoreConfig(url, token string, insecureTLS bool, tokenContext string) {
 	m.mu.Lock()
 	m.seeded = true
+	// A rollback restores a previously-captured state faithfully; it must not
+	// change env-managed-ness. (It's only reached from the apply handler, which
+	// refuses the PUT while env-managed, so this only ever runs with it already
+	// false — but hard-coding false here would be a latent way to drop the
+	// read-only marker if that ever changed.)
 	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
 	m.token = token
 	m.insecureTLS = insecureTLS

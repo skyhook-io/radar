@@ -4252,6 +4252,10 @@ type configResponse struct {
 	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
 	// ArgoCDTokenSet tells the UI a token is configured without exposing it.
 	ArgoCDTokenSet bool `json:"argoCdTokenSet,omitempty"`
+	// ArgoCDEnvManaged marks the integration as provisioned from the environment
+	// (RADAR_ARGOCD_TOKEN / _TOKEN_FILE) — the UI renders it read-only, since the
+	// PUT handler refuses changes to a declaratively-configured integration.
+	ArgoCDEnvManaged bool `json:"argoCdEnvManaged,omitempty"`
 	// ArgoCDCLISession is the detected Argo CD CLI login (server + user, no
 	// token), so the UI can offer "use your CLI session" only when it will work.
 	ArgoCDCLISession *argoapi.CLISession `json:"argoCdCliSession,omitempty"`
@@ -4270,11 +4274,22 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	file.PrometheusHeaders = nil
 	tokenSet := file.ArgoCDToken != ""
 	file.ArgoCDToken = ""
+	// When the integration is environment-managed, the on-disk URL/TLS are ignored;
+	// surface the effective env values (and the token-set signal) so the read-only
+	// Settings card shows the real endpoint rather than stale disk config.
+	envManaged := false
+	if envURL, envInsecure, ok := argocd.EnvManagedConfig(); ok {
+		envManaged = true
+		tokenSet = true
+		file.ArgoCDURL = envURL
+		file.ArgoCDInsecureTLS = envInsecure
+	}
 	resp := configResponse{
 		File:                 file,
 		IsDesktop:            version.IsDesktop(),
 		PrometheusHeaderKeys: headerKeys,
 		ArgoCDTokenSet:       tokenSet,
+		ArgoCDEnvManaged:     envManaged,
 	}
 	// Best-effort: surface a detected Argo CD CLI login so the UI can offer it.
 	// A malformed CLI config just means "no session offered", never a failure.

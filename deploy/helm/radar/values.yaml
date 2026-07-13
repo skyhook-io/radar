@@ -398,6 +398,37 @@ traffic:
   #           key: token
   prometheusHeadersFromEnv: {}
 
+# Argo CD integration (GitOps deep diff)
+# Provisions the Argo CD API connection declaratively so it survives pod
+# restarts and needs no interactive Settings paste — the right shape for
+# in-cluster / Cloud deployments. Powers the full Git-rendered desired-vs-live
+# diff on GitOps Application pages. Leave token/existingSecret empty to configure
+# it interactively in Settings instead (note: that pick is stored under
+# /home/nonroot and is lost on restart unless persistence is enabled).
+#
+# Setting a token here makes the integration environment-managed: read-only in
+# the Settings UI, never written to disk. Mint a token with
+# `argocd account generate-token --account radar` (a read-only account is enough).
+argocd:
+  # Source the token from an existing Secret (recommended — the token never
+  # lands in the Helm release values or `helm get values` output). The Secret
+  # must contain a key matching existingSecretKey.
+  existingSecret: ""
+  existingSecretKey: "token"
+  # Inline token (rendered into the Deployment via RADAR_ARGOCD_TOKEN). Convenient
+  # for dev, but it lands in the Helm release state and shell history — prefer
+  # existingSecret in production. For file-based rotation, mount your own Secret
+  # volume and set RADAR_ARGOCD_TOKEN_FILE via `extraVolumes`/`env` instead.
+  token: ""
+  # Explicit argocd-server URL. Leave blank to auto-discover the argocd-server in
+  # this cluster (the common in-cluster case). Set it to pin the endpoint when
+  # discovery is ambiguous or the server is out-of-cluster.
+  url: ""
+  # Skip TLS verification (self-signed argocd-server). Leave false unless the
+  # server presents a cert Radar can't validate — it exposes the token to
+  # interception on the path to argocd-server.
+  insecureTls: false
+
 # Persistence for SQLite timeline storage
 # Required when timeline.storage is "sqlite" (readOnlyRootFilesystem prevents local writes)
 persistence:

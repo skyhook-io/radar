@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
+	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
@@ -322,6 +323,19 @@ func main() {
 		log.Fatalf("%v", err)
 	}
 	k8s.LogTiming(" K8s client init: %v", time.Since(t))
+
+	// Provision the Argo CD integration from the environment (RADAR_ARGOCD_TOKEN
+	// or RADAR_ARGOCD_TOKEN_FILE) when set — for headless / in-cluster / Cloud
+	// deployments with no interactive Settings session. Runs before the server
+	// serves; inert when no token env is present (the local/UI path is unchanged).
+	// A misconfigured env credential is logged and skipped (fail-closed: no token
+	// is seeded, so the deep diff just falls back to annotation drift) rather than
+	// crashing Radar's core cluster-visibility over an optional integration.
+	if seeded, err := argocd.SeedFromEnvVars(); err != nil {
+		log.Printf("[argocd] ERROR: ignoring the environment Argo CD config: %v", err)
+	} else if seeded {
+		log.Printf("[argocd] integration provisioned from the environment (read-only in Settings)")
+	}
 
 	// Build timeline config and register callbacks
 	t = time.Now()

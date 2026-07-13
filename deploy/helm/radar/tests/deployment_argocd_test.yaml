@@ -1,0 +1,106 @@
+suite: Argo CD env provisioning
+templates:
+  - deployment.yaml
+tests:
+  - it: renders no Argo CD env by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_ARGOCD_TOKEN
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_ARGOCD_URL
+          any: true
+
+  - it: inline token renders RADAR_ARGOCD_TOKEN with a literal value
+    set:
+      argocd:
+        token: argo_deadbeef
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_ARGOCD_TOKEN
+            value: argo_deadbeef
+
+  - it: existingSecret renders a secretKeyRef and never a literal token value
+    set:
+      argocd:
+        existingSecret: my-argo-token
+        existingSecretKey: token
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_ARGOCD_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: my-argo-token
+                key: token
+      # The token must not appear as an inline `value` anywhere in the pod spec.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_ARGOCD_TOKEN
+            value: token
+          any: true
+
+  - it: url and insecureTls ride along only with a token
+    set:
+      argocd:
+        token: argo_deadbeef
+        url: https://argocd.example.com
+        insecureTls: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_ARGOCD_URL
+            value: https://argocd.example.com
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_ARGOCD_INSECURE_TLS
+            value: "true"
+
+  - it: url without a token renders nothing (a URL alone can't authenticate)
+    set:
+      argocd:
+        url: https://argocd.example.com
+        insecureTls: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_ARGOCD_TOKEN
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_ARGOCD_URL
+          any: true
+
+  - it: never renders the Argo CD token into container args
+    set:
+      argocd:
+        token: argo_deadbeef
+        url: https://argocd.example.com
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: argo_deadbeef
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: https://argocd.example.com
+
+  - it: rejects setting both token and existingSecret
+    set:
+      argocd:
+        token: argo_deadbeef
+        existingSecret: my-argo-token
+    asserts:
+      - failedTemplate:
+          errorMessage: "argocd.token and argocd.existingSecret are mutually exclusive: set only one (prefer existingSecret so the token stays out of the Helm release)"

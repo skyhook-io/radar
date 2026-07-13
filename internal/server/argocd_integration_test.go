@@ -242,6 +242,64 @@ func TestApplyArgoCDConfig_InvalidURL(t *testing.T) {
 	}
 }
 
+// TestApplyArgoCDConfig_RefusedWhenEnvManaged pins the read-only invariant: an
+// environment-provisioned integration refuses UI edits with 409, so a Settings
+// change can't silently no-op against the declarative source of truth.
+func TestApplyArgoCDConfig_RefusedWhenEnvManaged(t *testing.T) {
+	s := setupArgoCDTest(t)
+	argocd.SeedFromEnv("https://argocd.example.com", "env-token", false)
+
+	w := putArgoCD(t, s, `{"argoCdUrl": "https://other.example.com", "argoCdToken": "new-token"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 when env-managed; body = %s", w.Code, w.Body.String())
+	}
+}
+
+// TestGetConfigReflectsEnvManaged pins that the config endpoint surfaces the
+// effective env URL/TLS (not stale disk values) and the env-managed + token-set
+// signals, all without leaking the token.
+func TestGetConfigReflectsEnvManaged(t *testing.T) {
+	s := setupArgoCDTest(t)
+
+	// Stale disk config that env-managed mode must override in the response.
+	if _, err := config.Update(func(c *config.Config) {
+		c.ArgoCDURL = "https://disk.example.com"
+		c.ArgoCDInsecureTLS = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	argocd.SeedFromEnv("https://env.example.com", "env-token", true)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	s.handleGetConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "env-token") {
+		t.Error("GET /api/config leaked the env-managed Argo CD token")
+	}
+
+	var resp struct {
+		File             config.Config `json:"file"`
+		ArgoCDTokenSet   bool          `json:"argoCdTokenSet"`
+		ArgoCDEnvManaged bool          `json:"argoCdEnvManaged"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.ArgoCDEnvManaged {
+		t.Error("argoCdEnvManaged should be true when provisioned from the environment")
+	}
+	if !resp.ArgoCDTokenSet {
+		t.Error("argoCdTokenSet should be true when env-managed")
+	}
+	if resp.File.ArgoCDURL != "https://env.example.com" || !resp.File.ArgoCDInsecureTLS {
+		t.Errorf("config should reflect the effective env endpoint, got url=%q insecure=%v",
+			resp.File.ArgoCDURL, resp.File.ArgoCDInsecureTLS)
+	}
+}
+
 func TestGetConfigRedactsArgoCDToken(t *testing.T) {
 	s := setupArgoCDTest(t)
 

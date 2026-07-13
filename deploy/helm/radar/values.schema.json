@@ -265,6 +265,17 @@
         }
       }
     },
+    "argocd": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": { "type": "string", "description": "Inline Argo CD API token (prefer existingSecret in production)." },
+        "existingSecret": { "type": "string", "description": "Name of a Secret holding the Argo CD token." },
+        "existingSecretKey": { "type": "string", "description": "Key within existingSecret holding the token." },
+        "url": { "type": "string", "description": "Explicit argocd-server URL; blank auto-discovers in-cluster." },
+        "insecureTls": { "type": "boolean", "description": "Skip TLS verification for a self-signed argocd-server." }
+      }
+    },
     "persistence": {
       "type": "object",
       "additionalProperties": true,
