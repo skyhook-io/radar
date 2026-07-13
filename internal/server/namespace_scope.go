@@ -111,6 +111,10 @@ func (s *Server) setActiveNamespaceForUser(r *http.Request, namespaces []string)
 		return
 	}
 	key := nsPreferenceKey(username, ctxName)
+	// An explicit set — including a clear — expresses user intent; burn the
+	// configured-seed eligibility so the --namespaces startup list can't
+	// override it on a later read.
+	s.seededPicks.Store(key, true)
 	if len(namespaces) == 0 {
 		s.nsPreferences.Delete(key)
 		return
@@ -123,6 +127,11 @@ func (s *Server) setActiveNamespaceForUser(r *http.Request, namespaces []string)
 // clearAllNamespacePreferences drops every saved pick. Called on context
 // switch — picks against the previous cluster's namespaces are meaningless.
 func (s *Server) clearAllNamespacePreferences() {
+	// Under nsPickMu so an in-flight seed can't land between the two map
+	// wipes (a seeded preference without its marker would let a later clear
+	// re-seed). Callers never hold nsPickMu here.
+	s.nsPickMu.Lock()
+	defer s.nsPickMu.Unlock()
 	s.nsPreferences.Range(func(k, _ any) bool {
 		s.nsPreferences.Delete(k)
 		return true
@@ -179,16 +188,6 @@ func (s *Server) loadSavedNamespacePreference(r *http.Request) {
 		return
 	}
 
-	// Configured-seed eligibility is decided (and burned) before any seeding:
-	// whichever source wins, the configured list must not re-apply after the
-	// user later clears their pick.
-	seedConfigured := false
-	configured := k8s.ConfiguredNamespacesForCurrentContext()
-	if len(configured) > 0 {
-		_, alreadyConsidered := s.seededPicks.LoadOrStore(key, true)
-		seedConfigured = !alreadyConsidered
-	}
-
 	if username == "" {
 		saved := settings.Load()
 		if saved.ActiveNamespaces != nil {
@@ -202,9 +201,32 @@ func (s *Server) loadSavedNamespacePreference(r *http.Request) {
 			}
 		}
 	}
-	if seedConfigured {
-		s.commitPickMutation(r, ctxName, nil, configured, false)
+	if configured := k8s.ConfiguredNamespacesForCurrentContext(); len(configured) > 0 {
+		s.seedConfiguredPick(ctxName, key, configured)
 	}
+}
+
+// seedConfiguredPick installs the --namespaces startup list as key's pick.
+// The whole decision runs under nsPickMu so it cannot interleave with an
+// explicit POST (which burns the seed marker, including on clears) or a
+// context switch (which clears both maps under the same lock): context,
+// marker, and preference are all rechecked inside the critical section. A
+// bare preference CAS is NOT enough here — an absent key means both "never
+// picked" (seed) and "explicitly cleared" (don't); the marker is what tells
+// them apart.
+func (s *Server) seedConfiguredPick(ctxName, key string, configured []string) {
+	s.nsPickMu.Lock()
+	defer s.nsPickMu.Unlock()
+	if k8s.GetContextName() != ctxName {
+		return
+	}
+	if _, considered := s.seededPicks.LoadOrStore(key, true); considered {
+		return
+	}
+	if _, ok := s.nsPreferences.Load(key); ok {
+		return
+	}
+	s.nsPreferences.Store(key, append([]string(nil), configured...))
 }
 
 // pruneToExistingNamespaces returns picks minus namespaces absent from

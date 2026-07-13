@@ -736,3 +736,21 @@ func TestClearAllNamespacePreferences_ResetsSeedMarks(t *testing.T) {
 		t.Fatalf("seed after context-switch reset = %v, want [team-a]", got)
 	}
 }
+
+// The deterministic seed-override case: a user who picked and then cleared
+// BEFORE the first load must not receive the configured list — the explicit
+// set burned seed eligibility even though no load had run yet.
+func TestLoadSavedNamespacePreference_PostBeforeFirstLoadBurnsSeed(t *testing.T) {
+	s := newTestServer(t)
+	k8s.SetFallbackNamespaces([]string{"team-a", "team-b"})
+	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
+	req := reqAs("alice")
+
+	s.setActiveNamespaceForUser(req, []string{"team-b"}) // pick before any load
+	s.setActiveNamespaceForUser(req, nil)                // then clear
+
+	s.loadSavedNamespacePreference(req)
+	if got := s.getActiveNamespaceForUser(req); len(got) != 0 {
+		t.Fatalf("explicit clear before first load was overridden by seed: %v", got)
+	}
+}
