@@ -422,3 +422,42 @@ func TestSeedRestoresTokenContext(t *testing.T) {
 		t.Fatalf("different context must still mismatch, got %v", err)
 	}
 }
+
+func TestWatchForwardExit_DropsWhenCurrentForwardDies(t *testing.T) {
+	m := newTestManager(config.Config{})
+	fwd := &activeForward{localPort: 12345, stopCh: make(chan struct{}), cancel: func() {}}
+	m.forward = fwd
+	m.baseURL = "https://localhost:12345"
+	m.client = newClient(m.baseURL, "tok", false)
+
+	// Pre-loaded errCh makes watchForwardExit return synchronously.
+	errCh := make(chan error, 1)
+	errCh <- errors.New("pod restarted")
+	m.watchForwardExit(fwd, errCh)
+
+	if m.forward != nil || m.client != nil || m.baseURL != "" {
+		t.Fatalf("expected connection dropped after unexpected forward exit; forward=%v client=%v baseURL=%q", m.forward, m.client, m.baseURL)
+	}
+	// Get() must now report not-connected so a reprobe is triggered.
+	if _, ok := m.Get(); ok {
+		t.Error("Get() should report not-connected after the forward was dropped")
+	}
+}
+
+func TestWatchForwardExit_NoOpAfterForwardReplaced(t *testing.T) {
+	m := newTestManager(config.Config{})
+	oldFwd := &activeForward{localPort: 1, stopCh: make(chan struct{}), cancel: func() {}}
+	newFwd := &activeForward{localPort: 2, stopCh: make(chan struct{}), cancel: func() {}}
+	// A deliberate reconnect already replaced oldFwd with newFwd.
+	m.forward = newFwd
+	m.baseURL = "https://localhost:2"
+	m.client = newClient(m.baseURL, "tok", false)
+
+	errCh := make(chan error, 1)
+	errCh <- nil
+	m.watchForwardExit(oldFwd, errCh)
+
+	if m.forward != newFwd || m.client == nil || m.baseURL != "https://localhost:2" {
+		t.Fatal("a superseded forward's exit must not drop the current connection")
+	}
+}

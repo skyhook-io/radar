@@ -208,6 +208,29 @@ func (f *activeForward) stop() {
 	})
 }
 
+// watchForwardExit blocks until a live port-forward's RunPortForward returns
+// (the tunnel died or was deliberately stopped), then drops the connection IFF
+// this forward is still the installed one. A deliberate stop() (reconnect,
+// context switch) already replaced m.forward, so the != guard makes those exits
+// a no-op; only an UNEXPECTED death of the current forward drops the connection,
+// which flips Get() to not-connected and lets maybeProbeInBackgroundLocked
+// re-discover and re-establish it instead of every call failing against a dead
+// local port.
+func (m *Manager) watchForwardExit(fwd *activeForward, errCh <-chan error) {
+	err := <-errCh
+	m.mu.Lock()
+	if m.forward != fwd {
+		m.mu.Unlock()
+		return
+	}
+	dropped := m.dropConnectionLocked()
+	m.mu.Unlock()
+	if dropped != nil {
+		dropped.stop()
+	}
+	log.Printf("[argocd] Port-forward on localhost:%d exited (%v); dropped connection, will reprobe on next use", fwd.localPort, err)
+}
+
 func (m *Manager) startPortForward(ctx context.Context, snap probeSnapshot, namespace, service string, targetPort int) (*activeForward, error) {
 	// Use the snapshot's client/config (frozen at probe start), not the live
 	// ones — otherwise a context switch mid-probe would dial the forward through
@@ -240,6 +263,12 @@ func (m *Manager) startPortForward(ctx context.Context, snap probeSnapshot, name
 	select {
 	case <-readyCh:
 		log.Printf("[argocd] Port-forward ready: localhost:%d -> %s/%s:%d", localPort, namespace, service, targetPort)
+		// The forward is live, but RunPortForward keeps running and will return on
+		// errCh if the tunnel later dies (argocd-server pod restart, network drop).
+		// Consume that so the manager doesn't sit "connected" against a dead local
+		// port until a manual reset — on an unexpected exit, drop the connection so
+		// the next Get() reprobes and re-establishes the forward.
+		go m.watchForwardExit(fwd, errCh)
 		return fwd, nil
 	case err := <-errCh:
 		fwd.stop()
