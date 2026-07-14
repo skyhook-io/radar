@@ -85,11 +85,17 @@ type Manager struct {
 	manualURL   string
 	token       string
 	insecureTLS bool
-	// envManaged is set when the token was provisioned from the environment
-	// (RADAR_ARGOCD_TOKEN[_FILE]) rather than the Settings UI. Such a token is
-	// the declarative source of truth: the UI renders it read-only, the apply
-	// handler refuses to change it, and it is never written to disk.
+	// envManaged is set when the integration was provisioned from the environment
+	// (RADAR_ARGOCD_TOKEN[_FILE]) rather than the Settings UI — including the case
+	// where that provisioning was ATTEMPTED but failed (see envError). Such a
+	// config is the declarative source of truth: the UI renders it read-only, the
+	// apply handler refuses to change it, and it is never written to disk.
 	envManaged bool
+	// envError, when non-empty, is the sanitized reason environment provisioning
+	// failed (bad token file, invalid URL, etc.). It keeps envManaged=true with no
+	// token so the integration fails closed — it must NOT fall back to a stale
+	// on-disk token — while the UI surfaces "the env config is invalid".
+	envError string
 
 	// generation bumps on every SetConfig/Reset. A Probe captures it before
 	// its (unlocked) network I/O and commits the resolved connection only if
@@ -191,13 +197,42 @@ const (
 func SeedFromEnvVars() (bool, error) {
 	url, token, insecure, ok, err := resolveEnvArgo(os.Getenv, os.ReadFile)
 	if err != nil {
+		// The operator set the Argo env vars but they're invalid. Mark the manager
+		// env-managed-but-errored so it fails closed (no stale disk token) and the
+		// UI can show the reason. The error is already sanitized (no token/raw URL).
+		if envArgoAttempted(os.Getenv) {
+			defaultManager.SeedFromEnvFailed(sanitizeEnvErr(err))
+		}
 		return false, err
 	}
 	if !ok {
+		// No token resolved. If env provisioning was clearly attempted (a URL/token
+		// var is set but incomplete), still fail closed rather than fall back to a
+		// stale on-disk token; a truly empty environment leaves the disk path alone.
+		if envArgoAttempted(os.Getenv) {
+			defaultManager.SeedFromEnvFailed("no token provided — set " + envArgoToken + " or " + envArgoTokenFile)
+		}
 		return false, nil
 	}
 	defaultManager.SeedFromEnv(url, token, insecure)
 	return true, nil
+}
+
+// envArgoAttempted reports whether the operator clearly tried to provision Argo CD
+// from the environment — a token, token-file, or URL is set. It gates the
+// fail-closed suppression of the on-disk fallback so a truly empty environment
+// still uses the interactive/disk config unchanged. (Insecure-TLS alone is too
+// weak a signal — it's a modifier, not an intent to configure.)
+func envArgoAttempted(getenv func(string) string) bool {
+	return strings.TrimSpace(getenv(envArgoToken)) != "" ||
+		strings.TrimSpace(getenv(envArgoTokenFile)) != "" ||
+		strings.TrimSpace(getenv(envArgoURL)) != ""
+}
+
+// sanitizeEnvErr strips the "argocd: " prefix for a UI-facing message. The
+// resolveEnvArgo errors are already token- and raw-URL-free.
+func sanitizeEnvErr(err error) string {
+	return strings.TrimPrefix(err.Error(), "argocd: ")
 }
 
 // resolveEnvArgo parses the Argo CD env config with all precedence + validation
@@ -245,7 +280,9 @@ func resolveEnvArgo(getenv func(string) string, readFile func(string) ([]byte, e
 	if rawInsecure != "" {
 		v, perr := strconv.ParseBool(rawInsecure)
 		if perr != nil {
-			return "", "", false, false, fmt.Errorf("argocd: %s=%q is not a boolean (use true/false)", envArgoInsecure, rawInsecure)
+			// Don't echo the value — a miswired Secret key could point this at the
+			// token, which would then land in the logs.
+			return "", "", false, false, fmt.Errorf("argocd: %s is not a boolean (use true/false)", envArgoInsecure)
 		}
 		insecure = v
 	}
@@ -272,6 +309,12 @@ func validateEnvArgoURL(raw string) error {
 	if u.User != nil {
 		return errors.New("must not embed userinfo credentials")
 	}
+	// A query or fragment can carry credentials (e.g. ?token=…) that would then
+	// surface in /api/config and logs — an argocd-server URL has neither. A path
+	// is allowed (ingress prefixes like /argocd are legitimate).
+	if u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("must not include a query or fragment")
+	}
 	return nil
 }
 
@@ -281,6 +324,10 @@ func SeedFromEnv(url, token string, insecureTLS bool) {
 	defaultManager.SeedFromEnv(url, token, insecureTLS)
 }
 
+// SeedFromEnvFailed marks the default manager env-managed-but-errored (see the
+// Manager method) — used when env provisioning was attempted but didn't resolve.
+func SeedFromEnvFailed(reason string) { defaultManager.SeedFromEnvFailed(reason) }
+
 // IsEnvManaged reports whether the token was provisioned from the environment.
 func IsEnvManaged() bool { return defaultManager.IsEnvManaged() }
 
@@ -289,6 +336,10 @@ func IsEnvManaged() bool { return defaultManager.IsEnvManaged() }
 func EnvManagedConfig() (url string, insecureTLS bool, ok bool) {
 	return defaultManager.EnvManagedConfig()
 }
+
+// EnvManagedError returns the sanitized reason environment provisioning failed
+// ("" when it succeeded or isn't env-managed).
+func EnvManagedError() string { return defaultManager.EnvManagedError() }
 
 // IsConfigured reports whether the default manager has connection settings.
 func IsConfigured() bool { return defaultManager.IsConfigured() }
@@ -352,6 +403,7 @@ func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bo
 	// isn't reached then; clearing the flag here keeps the "env is source of truth"
 	// invariant inside the manager rather than resting solely on that HTTP gate.
 	m.envManaged = false
+	m.envError = ""
 	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
 	m.token = token
 	m.insecureTLS = insecureTLS
@@ -376,10 +428,36 @@ func (m *Manager) SeedFromEnv(url, token string, insecureTLS bool) {
 	m.mu.Lock()
 	m.seeded = true
 	m.envManaged = true
+	m.envError = ""
 	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
 	m.token = token
 	m.insecureTLS = insecureTLS
 	m.tokenContext = m.currentContextName()
+	m.generation++
+	fwd := m.dropConnectionLocked()
+	m.mu.Unlock()
+	if fwd != nil {
+		fwd.stop()
+	}
+}
+
+// SeedFromEnvFailed marks the manager environment-managed but errored: the
+// operator set the Argo CD env vars, but they didn't resolve to a usable token
+// (unreadable/empty file, invalid URL, non-boolean TLS, or a URL with no token).
+// It seeds NO credential and sets m.seeded so the lazy config load can't fall
+// back to a stale on-disk token — the operator declared the environment as the
+// source of truth, so honoring old disk creds would be wrong (potentially the
+// wrong Argo, with the UI silently editable). The integration is left unconfigured
+// (fails closed to annotation drift) with the reason surfaced for the UI.
+func (m *Manager) SeedFromEnvFailed(reason string) {
+	m.mu.Lock()
+	m.seeded = true
+	m.envManaged = true
+	m.envError = reason
+	m.manualURL = ""
+	m.token = ""
+	m.insecureTLS = false
+	m.tokenContext = ""
 	m.generation++
 	fwd := m.dropConnectionLocked()
 	m.mu.Unlock()
@@ -408,6 +486,16 @@ func (m *Manager) EnvManagedConfig() (url string, insecureTLS bool, ok bool) {
 		return "", false, false
 	}
 	return m.manualURL, m.insecureTLS, true
+}
+
+// EnvManagedError returns the sanitized reason environment provisioning failed,
+// or "" when it succeeded (or isn't env-managed). The UI surfaces this so a
+// misconfigured declarative credential isn't invisible behind one startup log.
+func (m *Manager) EnvManagedError() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSeededLocked()
+	return m.envError
 }
 
 // RestoreConfig rolls the manager back to a previously-captured state, INCLUDING

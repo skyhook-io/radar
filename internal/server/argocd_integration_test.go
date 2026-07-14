@@ -300,6 +300,61 @@ func TestGetConfigReflectsEnvManaged(t *testing.T) {
 	}
 }
 
+// TestGetConfigSurfacesEnvError pins that a failed env provisioning surfaces the
+// reason (argoCdEnvError) with env-managed=true and tokenSet=false — so the UI
+// shows an error state instead of a phantom "configured", and the stale disk URL
+// is not presented as the effective endpoint.
+func TestGetConfigSurfacesEnvError(t *testing.T) {
+	s := setupArgoCDTest(t)
+
+	if _, err := config.Update(func(c *config.Config) {
+		c.ArgoCDURL = "https://stale.example.com"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	argocd.SeedFromEnvFailed("invalid RADAR_ARGOCD_URL: must include a host")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	s.handleGetConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	var resp struct {
+		File             config.Config `json:"file"`
+		ArgoCDTokenSet   bool          `json:"argoCdTokenSet"`
+		ArgoCDEnvManaged bool          `json:"argoCdEnvManaged"`
+		ArgoCDEnvError   string        `json:"argoCdEnvError"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.ArgoCDEnvManaged || resp.ArgoCDEnvError == "" {
+		t.Errorf("errored env provisioning should surface envManaged=true + a reason, got managed=%v err=%q",
+			resp.ArgoCDEnvManaged, resp.ArgoCDEnvError)
+	}
+	if resp.ArgoCDTokenSet {
+		t.Error("argoCdTokenSet must be false in the errored state (no token)")
+	}
+	if resp.File.ArgoCDURL == "https://stale.example.com" {
+		t.Error("the stale disk URL must not be presented as the effective endpoint")
+	}
+}
+
+// TestApplyArgoCDConfig_RefusedWhenEnvErrored pins that the read-only invariant
+// holds even when env provisioning failed — a UI edit still can't override the
+// declarative (broken) config; the operator must fix the deployment.
+func TestApplyArgoCDConfig_RefusedWhenEnvErrored(t *testing.T) {
+	s := setupArgoCDTest(t)
+	argocd.SeedFromEnvFailed("some reason")
+
+	w := putArgoCD(t, s, `{"argoCdUrl": "https://other.example.com", "argoCdToken": "new-token"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 when env-managed (errored); body = %s", w.Code, w.Body.String())
+	}
+}
+
 func TestGetConfigRedactsArgoCDToken(t *testing.T) {
 	s := setupArgoCDTest(t)
 

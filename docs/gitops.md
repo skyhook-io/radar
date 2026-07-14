@@ -208,8 +208,13 @@ Scoping and lifecycle:
   cluster's server. Prefer `RADAR_ARGOCD_URL` to pin the endpoint explicitly.
 - **Rotation requires a pod restart** — env vars and Secret-backed env are read at
   startup and don't hot-reload. Roll the Deployment to pick up a new token.
-- Env provisioning does not clear a previously UI-set token on disk; on a
-  persistence-enabled deployment, clear both to fully remove a credential.
+- **Invalid env config fails closed.** If the env vars are set but don't resolve to
+  a usable token (unreadable/empty file, invalid URL, non-boolean TLS), Radar does
+  NOT fall back to a previously UI-set on-disk token — it disables the deep diff
+  (annotation-drift fallback) and surfaces the reason on the Settings card. Fix the
+  deployment and restart. Removing the env vars entirely returns control to any
+  on-disk config; on a persistence-enabled deployment, clear both to fully remove a
+  credential.
 - Deep-diff cross-cluster destinations are refused: a Radar SAR can only authorize
   a read against its own cluster, so Applications targeting a remote
   `spec.destination` fall back to annotation drift.

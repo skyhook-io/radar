@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
   Plus, Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
-  LayoutDashboard, ChevronRight, ExternalLink, Download,
+  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -49,6 +49,9 @@ interface ConfigResponse {
   // (RADAR_ARGOCD_TOKEN / _TOKEN_FILE) — the card renders read-only because the
   // server refuses UI edits to a declaratively-configured integration.
   argoCdEnvManaged?: boolean
+  // Set when environment provisioning was attempted but failed (bad token file,
+  // invalid URL, …) — the read-only card surfaces the reason.
+  argoCdEnvError?: string
   // A detected Argo CD CLI login (server + user + TLS mode, no token), so the UI
   // can offer "use your CLI session" as a one-click when it will actually work.
   argoCdCliSession?: { server: string; user: string; insecure?: boolean }
@@ -491,6 +494,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 insecureTls={editedConfig.argoCdInsecureTls ?? false}
                 tokenSet={configData?.argoCdTokenSet ?? false}
                 envManaged={configData?.argoCdEnvManaged ?? false}
+                envError={configData?.argoCdEnvError}
                 cliSession={configData?.argoCdCliSession}
                 onChangeUrl={(v) => updateConfigField('argoCdUrl', v || undefined)}
                 onChangeInsecureTls={(v) => updateConfigField('argoCdInsecureTls', v || undefined)}
@@ -1411,6 +1415,7 @@ function ArgoCDConfigField({
   insecureTls,
   tokenSet,
   envManaged,
+  envError,
   cliSession,
   onChangeUrl,
   onChangeInsecureTls,
@@ -1420,13 +1425,14 @@ function ArgoCDConfigField({
   insecureTls: boolean
   tokenSet: boolean
   envManaged?: boolean
+  envError?: string
   cliSession?: { server: string; user: string; insecure?: boolean }
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
 }) {
   if (envManaged) {
-    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} />
+    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} envError={envError} />
   }
   return (
     <ArgoCDEditableField
@@ -1445,7 +1451,38 @@ function ArgoCDConfigField({
 // from the deployment (RADAR_ARGOCD_TOKEN / _TOKEN_FILE / _URL), so editing here
 // is disabled — the server refuses the PUT. Shows the effective endpoint and points
 // the operator at the deployment for changes.
-function ArgoCDEnvManagedField({ url, insecureTls }: { url: string; insecureTls: boolean }) {
+function ArgoCDEnvManagedField({
+  url,
+  insecureTls,
+  envError,
+}: {
+  url: string
+  insecureTls: boolean
+  envError?: string
+}) {
+  if (envError) {
+    return (
+      <div>
+        <p className="text-xs text-theme-text-tertiary mb-3">
+          Powers the full Git-rendered desired-vs-live diff on GitOps Application pages — what Git
+          declares vs what&apos;s actually running.
+        </p>
+        <div className="rounded-md border border-red-500/30 bg-red-500/[0.07] p-3">
+          <p className="flex items-center gap-1.5 text-sm font-medium text-red-600 dark:text-red-400/90">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            Environment Argo CD configuration is invalid
+          </p>
+          <p className="mt-1 text-xs text-theme-text-secondary break-words">{envError}</p>
+          <p className="mt-2 text-xs text-theme-text-tertiary">
+            The deployment sets <code className="inline-code">RADAR_ARGOCD_TOKEN</code> (or{' '}
+            <code className="inline-code">RADAR_ARGOCD_TOKEN_FILE</code>), but it couldn&apos;t be
+            used, so the deep diff is disabled. Fix the deployment&apos;s environment or Secret and
+            restart; check the Radar pod logs for details.
+          </p>
+        </div>
+      </div>
+    )
+  }
   return (
     <div>
       <p className="text-xs text-theme-text-tertiary mb-3">

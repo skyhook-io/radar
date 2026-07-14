@@ -4256,6 +4256,10 @@ type configResponse struct {
 	// (RADAR_ARGOCD_TOKEN / _TOKEN_FILE) — the UI renders it read-only, since the
 	// PUT handler refuses changes to a declaratively-configured integration.
 	ArgoCDEnvManaged bool `json:"argoCdEnvManaged,omitempty"`
+	// ArgoCDEnvError is set when environment provisioning was attempted but failed
+	// (bad token file, invalid URL, …) — the read-only card shows the reason so a
+	// misconfigured declarative credential isn't invisible behind one startup log.
+	ArgoCDEnvError string `json:"argoCdEnvError,omitempty"`
 	// ArgoCDCLISession is the detected Argo CD CLI login (server + user, no
 	// token), so the UI can offer "use your CLI session" only when it will work.
 	ArgoCDCLISession *argoapi.CLISession `json:"argoCdCliSession,omitempty"`
@@ -4276,13 +4280,20 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	file.ArgoCDToken = ""
 	// When the integration is environment-managed, the on-disk URL/TLS are ignored;
 	// surface the effective env values (and the token-set signal) so the read-only
-	// Settings card shows the real endpoint rather than stale disk config.
+	// Settings card shows the real endpoint rather than stale disk config. When env
+	// provisioning was attempted but failed, surface the reason instead — there is
+	// no token, so the card shows an error state rather than a phantom "configured".
 	envManaged := false
+	envError := ""
 	if envURL, envInsecure, ok := argocd.EnvManagedConfig(); ok {
 		envManaged = true
-		tokenSet = true
+		// Env-managed always ignores the on-disk endpoint — present the effective
+		// env values (both empty in the errored state, so no stale disk URL leaks).
 		file.ArgoCDURL = envURL
 		file.ArgoCDInsecureTLS = envInsecure
+		if envError = argocd.EnvManagedError(); envError == "" {
+			tokenSet = true
+		}
 	}
 	resp := configResponse{
 		File:                 file,
@@ -4290,6 +4301,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		PrometheusHeaderKeys: headerKeys,
 		ArgoCDTokenSet:       tokenSet,
 		ArgoCDEnvManaged:     envManaged,
+		ArgoCDEnvError:       envError,
 	}
 	// Best-effort: surface a detected Argo CD CLI login so the UI can offer it.
 	// A malformed CLI config just means "no session offered", never a failure.

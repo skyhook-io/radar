@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -576,10 +577,46 @@ func TestResolveEnvArgo(t *testing.T) {
 		}
 	})
 
-	t.Run("non-boolean TLS errors", func(t *testing.T) {
-		_, _, _, _, err := resolveEnvArgo(env(map[string]string{envArgoToken: "t", envArgoInsecure: "yesplease"}), readOK(""))
+	t.Run("non-boolean TLS errors without echoing the value", func(t *testing.T) {
+		// A miswired Secret key could point RADAR_ARGOCD_INSECURE_TLS at the token;
+		// the error must not echo the value into the logs.
+		secret := "s3cr3t-token"
+		_, _, _, _, err := resolveEnvArgo(env(map[string]string{envArgoToken: "t", envArgoInsecure: secret}), readOK(""))
 		if err == nil {
 			t.Fatal("a non-boolean insecure flag must error, not silently default")
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q echoed the raw value", err)
+		}
+	})
+
+	t.Run("token-file read error fails closed", func(t *testing.T) {
+		readErr := func(string) ([]byte, error) { return nil, os.ErrNotExist }
+		_, _, _, ok, err := resolveEnvArgo(env(map[string]string{envArgoTokenFile: "/run/secrets/argo"}), readErr)
+		if ok || err == nil {
+			t.Fatalf("an unreadable token file must error (fail closed), got ok=%v err=%v", ok, err)
+		}
+	})
+
+	t.Run("URL with no host errors", func(t *testing.T) {
+		_, _, _, _, err := resolveEnvArgo(env(map[string]string{envArgoToken: "t", envArgoURL: "https:///argocd"}), readOK(""))
+		if err == nil {
+			t.Fatal("a hostless URL must error")
+		}
+	})
+
+	t.Run("URL with query or fragment errors", func(t *testing.T) {
+		for _, u := range []string{"https://argo.example/api?token=secret", "https://argo.example/#frag"} {
+			if _, _, _, _, err := resolveEnvArgo(env(map[string]string{envArgoToken: "t", envArgoURL: u}), readOK("")); err == nil {
+				t.Fatalf("URL %q with a query/fragment must error (can carry credentials)", u)
+			}
+		}
+	})
+
+	t.Run("URL path is allowed (ingress prefix)", func(t *testing.T) {
+		url, _, _, ok, err := resolveEnvArgo(env(map[string]string{envArgoToken: "t", envArgoURL: "https://host/argocd"}), readOK(""))
+		if !ok || err != nil || url != "https://host/argocd" {
+			t.Fatalf("a path prefix must be allowed, got (%q,%v,%v)", url, ok, err)
 		}
 	})
 
@@ -593,4 +630,78 @@ func TestResolveEnvArgo(t *testing.T) {
 			t.Fatalf("got (%q,%q,%v,%v,%v)", url, token, insecure, ok, err)
 		}
 	})
+}
+
+// TestSeedFromEnvFailed_SuppressesDiskFallback pins the fail-closed guarantee: when
+// env provisioning was attempted but failed, the manager must NOT fall back to a
+// stale on-disk token. It stays env-managed (UI read-only) with the error recorded
+// and no credential, so IsConfigured is false and the deep diff degrades cleanly.
+func TestSeedFromEnvFailed_SuppressesDiskFallback(t *testing.T) {
+	// A stale disk token that a naive lazy-seed would resurrect.
+	m := newTestManager(config.Config{ArgoCDURL: "https://stale.example.com", ArgoCDToken: "stale-disk-token"})
+	m.contextName = func() string { return "in-cluster" }
+
+	m.SeedFromEnvFailed("invalid RADAR_ARGOCD_URL: must include a host")
+
+	if !m.IsEnvManaged() {
+		t.Fatal("a failed env provisioning must stay env-managed (UI read-only)")
+	}
+	if got := m.EnvManagedError(); got == "" {
+		t.Fatal("EnvManagedError must surface the failure reason")
+	}
+	if m.IsConfigured() {
+		t.Fatal("a failed env provisioning must leave the integration unconfigured (no stale disk token)")
+	}
+	if _, ok := m.Get(); ok {
+		t.Fatal("Get must not return a client for the suppressed/errored state")
+	}
+	// The disk token must never surface.
+	if url, insecure, ok := m.EnvManagedConfig(); !ok || url != "" || insecure {
+		t.Fatalf("EnvManagedConfig = (%q,%v,%v), want empty effective config in the errored state", url, insecure, ok)
+	}
+}
+
+// TestSeedFromEnvClearsError pins that a subsequent successful seed clears a prior
+// error, and that SetConfig (interactive) clears the env-managed marker + error.
+func TestSeedFromEnvClearsError(t *testing.T) {
+	m := newTestManager(config.Config{})
+	m.contextName = func() string { return "in-cluster" }
+
+	m.SeedFromEnvFailed("some reason")
+	m.SeedFromEnv("", "good-token", false)
+	if m.EnvManagedError() != "" || !m.IsEnvManaged() || !m.IsConfigured() {
+		t.Fatal("a successful seed after a failure must clear the error and configure the token")
+	}
+
+	m.SetConfig("https://ui.example.com", "ui-token", false, true)
+	if m.IsEnvManaged() || m.EnvManagedError() != "" {
+		t.Fatal("an interactive SetConfig must clear env-managed and the env error")
+	}
+}
+
+// TestEnvArgoAttempted pins the fail-closed suppression trigger: a token, token-file,
+// or URL counts as an attempt; insecure-TLS alone or an empty environment does not.
+func TestEnvArgoAttempted(t *testing.T) {
+	env := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+	cases := []struct {
+		name string
+		vars map[string]string
+		want bool
+	}{
+		{"empty", map[string]string{}, false},
+		{"token", map[string]string{envArgoToken: "t"}, true},
+		{"token file", map[string]string{envArgoTokenFile: "/run/secrets/argo"}, true},
+		{"url only", map[string]string{envArgoURL: "https://x"}, true},
+		{"insecure only is not an attempt", map[string]string{envArgoInsecure: "true"}, false},
+		{"whitespace token is not an attempt", map[string]string{envArgoToken: "   "}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := envArgoAttempted(env(c.vars)); got != c.want {
+				t.Fatalf("envArgoAttempted(%v) = %v, want %v", c.vars, got, c.want)
+			}
+		})
+	}
 }
