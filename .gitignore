@@ -38,6 +38,7 @@ web/package.json.md5
 .env
 .env.local
 dist/
+.worktrees/
 
 # Visual-test + scratch artifacts
 .playwright-mcp/
