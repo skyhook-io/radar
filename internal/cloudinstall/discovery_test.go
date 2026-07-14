@@ -324,6 +324,9 @@ func TestDiscoverRadarTargetsClusterWideIsBestEffortAndNeverSelects(t *testing.T
 		radarDeployment("observability", "prod-radar", "prod", nil, nil),
 		radarDeployment("monitoring", "staging-radar", "staging", nil, nil),
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "radar-hub", Name: "radar-hub", Labels: map[string]string{"helm.sh/chart": "radar-hub-0.1.0"},
+		}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 			Namespace: "other", Name: "other", Labels: map[string]string{"helm.sh/chart": "prometheus-1.0.0"},
 		}},
 	)
@@ -461,6 +464,29 @@ func TestDiscoverRadarTargetsAcceptsUnversionedOfficialChartLabel(t *testing.T) 
 	}
 	if len(result.Selected) != 1 || result.Selected[0].Chart != "radar" {
 		t.Fatalf("selected = %#v", result.Selected)
+	}
+}
+
+func TestOfficialRadarChartLabel(t *testing.T) {
+	tests := []struct {
+		label string
+		want  bool
+	}{
+		{label: "radar", want: true},
+		{label: "radar-1.8.1", want: true},
+		{label: "radar-1.9.0-rc.1", want: true},
+		{label: "radar-hub-0.1.0", want: false},
+		{label: "radar-custom", want: false},
+		{label: "radar-1.8", want: false},
+		{label: "radar-", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			if got := isOfficialRadarChartLabel(tt.label); got != tt.want {
+				t.Fatalf("isOfficialRadarChartLabel(%q) = %t, want %t", tt.label, got, tt.want)
+			}
+		})
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -164,7 +165,7 @@ func radarTargets(ctx context.Context, deployments []appsv1.Deployment, dc dynam
 	for i := range deployments {
 		deployment := &deployments[i]
 		chart := deployment.Labels["helm.sh/chart"]
-		if chart != "radar" && (!strings.HasPrefix(chart, "radar-") || len(chart) == len("radar-")) {
+		if !isOfficialRadarChartLabel(chart) {
 			continue
 		}
 		targets = append(targets, RadarTarget{
@@ -183,6 +184,18 @@ func radarTargets(ctx context.Context, deployments []appsv1.Deployment, dc dynam
 		return targets[i].DeploymentName < targets[j].DeploymentName
 	})
 	return targets
+}
+
+func isOfficialRadarChartLabel(label string) bool {
+	if label == chartName {
+		return true
+	}
+	version, ok := strings.CutPrefix(label, chartName+"-")
+	if !ok {
+		return false
+	}
+	_, err := semver.StrictNewVersion(version)
+	return err == nil
 }
 
 func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
