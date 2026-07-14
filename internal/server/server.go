@@ -1340,7 +1340,7 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	if deny := s.deniedClusterScopedTopoKinds(r); len(deny) > 0 {
 		topo.StripNodeKinds(deny)
 	}
-	if r.URL.Query().Get("gitops-managed-only") == "true" {
+	if s.features.GitOpsManagedOnly || r.URL.Query().Get("gitops-managed-only") == "true" {
 		topo.StripUnmanaged()
 	}
 
@@ -1639,7 +1639,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if r.URL.Query().Get("gitops-managed-only") == "true" {
+		if s.features.GitOpsManagedOnly || r.URL.Query().Get("gitops-managed-only") == "true" {
 			result = filterManagedResources(result, kind, s.broadcaster.GetCachedTopology())
 		}
 		if includeSummary {
@@ -1946,7 +1946,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.URL.Query().Get("gitops-managed-only") == "true" {
+	if s.features.GitOpsManagedOnly || r.URL.Query().Get("gitops-managed-only") == "true" {
 		result = filterManagedResources(result, kind, s.broadcaster.GetCachedTopology())
 	}
 	if includeSummary {
@@ -4179,6 +4179,9 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	// Re-encode filtered namespaces back into query params for the broadcaster
 	q := r.URL.Query()
+	if s.features.GitOpsManagedOnly {
+		q.Set("gitops-managed-only", "true")
+	}
 	q.Del("namespace")
 	q.Del("namespaces")
 	if namespaces != nil {
