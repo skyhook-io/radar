@@ -366,14 +366,13 @@ func cloudInstall(args []string) {
 
 	if plan.Mode == cloudInstallGitOps {
 		if err := printApprovedGitOpsHandoff(os.Stdout, plan, gitOpsTarget, pr.WSSURL, pr.ClusterID, pr.Token, *enableCloudFeatures); err != nil {
-			fmt.Fprintf(os.Stderr, "\ncreate GitOps handoff: %v\n", err)
-			printCanceledAfterApproval(os.Stderr, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
+			printGitOpsHandoffFailure(os.Stderr, err, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
 			os.Exit(1)
 		}
 		fmt.Printf("\n  Waiting up to %s for your GitOps-managed agent to connect (you can safely leave this running)…\n", cloudTunnelConfirmationTimeout)
 		if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationTimeout); err != nil {
 			printGitOpsPendingHandoff(os.Stderr, err, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
-			return
+			os.Exit(1)
 		}
 		printInstallSuccess(os.Stdout, clusterName, cloudClusterURL(cr.ConnectURL, pr.ClusterID), helm.DeploymentRef{
 			Name: plan.Target.DeploymentName, Namespace: plan.Target.Namespace,

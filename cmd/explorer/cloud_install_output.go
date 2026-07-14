@@ -182,6 +182,15 @@ func buildGitOpsHandoff(
 	return handoff, nil
 }
 
+func printGitOpsHandoffFailure(w io.Writer, err error, clusterID, clusterURL string) {
+	fmt.Fprintf(w, "\nCould not generate the source-of-truth handoff for Hub cluster %q: %v.\n", clusterID, err)
+	fmt.Fprintln(w, "The Hub approval already created this cluster, but no live Kubernetes resource was changed and no GitOps instructions or token Secret were generated.")
+	fmt.Fprintln(w, "Do not rerun `radar cloud install`, because that would create another pending cluster.")
+	fmt.Fprintln(w, "The credentials from this attempt were not handed off and cannot be recovered after this command exits.")
+	fmt.Fprintln(w, "An organization owner can open this cluster and choose Resume install to rotate credentials and generate a fresh command, or delete it before deliberately starting over:")
+	fmt.Fprintf(w, "  %s\n", clusterURL)
+}
+
 func printGitOpsPendingHandoff(w io.Writer, err error, clusterID, clusterURL string) {
 	reason := err.Error()
 	switch {
@@ -192,8 +201,8 @@ func printGitOpsPendingHandoff(w io.Writer, err error, clusterID, clusterURL str
 	case errors.Is(err, context.Canceled):
 		reason = "the local wait was canceled"
 	}
-	fmt.Fprintf(w, "\nGitOps handoff generated for Hub cluster %q; %s.\n", clusterID, reason)
-	fmt.Fprintln(w, "This is not an install failure. Commit the generated configuration and token Secret through the source of truth; the existing Hub cluster remains the one to connect.")
+	fmt.Fprintf(w, "\nGitOps handoff generated for Hub cluster %q, but its in-cluster connection was not confirmed: %s.\n", clusterID, reason)
+	fmt.Fprintln(w, "The configuration handoff is ready. Commit the generated configuration and token Secret through the source of truth; the existing Hub cluster remains the one to connect.")
 	fmt.Fprintln(w, "Do not rerun `radar cloud install`, because that would create another pending cluster.")
 	fmt.Fprintf(w, "Open or recover this cluster in Radar Cloud: %s\n", clusterURL)
 }

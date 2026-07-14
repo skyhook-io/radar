@@ -160,12 +160,37 @@ func TestExistingInstallConsentIsIndependentOfYes(t *testing.T) {
 	}
 }
 
-func TestGitOpsPendingHandoffIsRecoverable(t *testing.T) {
+func TestGitOpsHandoffGenerationFailureRecoversExistingHubCluster(t *testing.T) {
+	var out bytes.Buffer
+	printGitOpsHandoffFailure(&out, errors.New("render failed"), "clus_pending", "https://app.radarhq.io/c/clus_pending")
+	got := out.String()
+	for _, want := range []string{
+		"render failed", "clus_pending", "no live Kubernetes resource was changed",
+		"no GitOps instructions or token Secret were generated", "Do not rerun",
+		"organization owner", "Resume install", "rotate credentials",
+		"delete it", "https://app.radarhq.io/c/clus_pending",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("guidance missing %q:\n%s", want, got)
+		}
+	}
+	for _, wrong := range []string{"command was canceled", "Rerun `radar cloud install`"} {
+		if strings.Contains(got, wrong) {
+			t.Errorf("guidance contains false recovery claim %q:\n%s", wrong, got)
+		}
+	}
+}
+
+func TestGitOpsUnconfirmedConnectionIsRecoverableFailure(t *testing.T) {
 	var out bytes.Buffer
 	printGitOpsPendingHandoff(&out, cloud.ErrConnectConsumptionTimeout, "clus_pending", "https://app.radarhq.io/c/clus_pending")
-	for _, want := range []string{"not an install failure", "Do not rerun", "clus_pending", "https://app.radarhq.io/c/clus_pending"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("guidance missing %q:\n%s", want, out.String())
+	got := out.String()
+	for _, want := range []string{"connection was not confirmed", "configuration handoff is ready", "Do not rerun", "clus_pending", "https://app.radarhq.io/c/clus_pending"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("guidance missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "not an install failure") {
+		t.Errorf("guidance still reports an unconfirmed connection as success:\n%s", got)
 	}
 }
