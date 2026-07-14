@@ -356,14 +356,19 @@ func main() {
 			discoverCtx, cancel := context.WithTimeout(rootCtx, 3*time.Second)
 			apiServerURL := cloud.DiscoverAPIServerURL(discoverCtx, k8s.GetClient())
 			cancel()
+			namespace := os.Getenv("MY_POD_NAMESPACE")
+			deploymentName := os.Getenv("MY_DEPLOYMENT_NAME")
 			runErr := cloud.Run(rootCtx, cloud.Config{
 				URL:          *cloudURL,
 				Token:        *cloudToken,
 				ClusterID:    *cloudClusterName,
 				ClusterName:  *cloudClusterName,
-				Namespace:    os.Getenv("MY_POD_NAMESPACE"),
+				Namespace:    namespace,
 				APIServerURL: apiServerURL,
-				Handler:      srv.Handler(),
+				// The chart sets both env vars only when rbac.selfUpgrade is
+				// enabled. Match handleSelfUpgrade's configuration gate exactly.
+				SelfUpgradeAvailable: namespace != "" && deploymentName != "",
+				Handler:              srv.Handler(),
 			})
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
 				log.Printf("[cloud] tunnel exited: %v", runErr)

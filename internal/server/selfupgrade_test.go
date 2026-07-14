@@ -2,7 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+
+	"github.com/skyhook-io/radar/internal/auth"
 )
 
 // TestSelfUpgradePatchOptions is a tripwire: handleSelfUpgrade must use
@@ -15,6 +22,87 @@ func TestSelfUpgradePatchOptions(t *testing.T) {
 	}
 	if opts.Force == nil || !*opts.Force {
 		t.Errorf("Force = %v, want non-nil true", opts.Force)
+	}
+}
+
+func TestSelfUpgradeRequiresCloudOwner(t *testing.T) {
+	t.Setenv("MY_POD_NAMESPACE", "")
+	t.Setenv("MY_DEPLOYMENT_NAME", "")
+
+	for _, tier := range []string{"cloud:viewer", "cloud:member", "cloud:unknown", ""} {
+		t.Run(tier, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/agent/self-upgrade", strings.NewReader(`{"image":"ghcr.io/skyhook-io/radar:1.9.0"}`))
+			req = req.WithContext(auth.ContextWithUser(req.Context(), userWithGroups(tier)))
+			rec := httptest.NewRecorder()
+
+			(&Server{}).handleSelfUpgrade(rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body["error_code"] != auth.ErrCodeCloudRoleInsufficient {
+				t.Fatalf("error_code = %q, want %q", body["error_code"], auth.ErrCodeCloudRoleInsufficient)
+			}
+		})
+	}
+}
+
+func TestSelfUpgradeImagePreservesConfiguredRepository(t *testing.T) {
+	tests := []struct {
+		name       string
+		containers []corev1.Container
+		want       string
+		wantErr    bool
+	}{
+		{
+			name:       "official repository",
+			containers: []corev1.Container{{Name: "radar", Image: "ghcr.io/skyhook-io/radar:1.8.0"}},
+			want:       "ghcr.io/skyhook-io/radar:1.9.0",
+		},
+		{
+			name:       "private registry with port",
+			containers: []corev1.Container{{Name: "radar", Image: "registry.example:5000/platform/radar:1.8.0"}},
+			want:       "registry.example:5000/platform/radar:1.9.0",
+		},
+		{
+			name:       "digest pin",
+			containers: []corev1.Container{{Name: "radar", Image: "mirror.example/radar@sha256:abc"}},
+			want:       "mirror.example/radar:1.9.0",
+		},
+		{
+			name:       "missing Radar container",
+			containers: []corev1.Container{{Name: "sidecar", Image: "example.com/sidecar:v1"}},
+			wantErr:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := selfUpgradeImage(tt.containers, "1.9.0")
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Fatalf("selfUpgradeImage() = (%q, %v), want (%q, err=%v)", got, err, tt.want, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSelfUpgradeCloudOwnerPassesRoleGate(t *testing.T) {
+	t.Setenv("MY_POD_NAMESPACE", "")
+	t.Setenv("MY_DEPLOYMENT_NAME", "")
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/self-upgrade", strings.NewReader(`{"image":"ghcr.io/skyhook-io/radar:1.9.0"}`))
+	req = req.WithContext(auth.ContextWithUser(req.Context(), userWithGroups("cloud:owner")))
+	rec := httptest.NewRecorder()
+
+	(&Server{}).handleSelfUpgrade(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 after owner passes role gate; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), auth.ErrCodeCloudRoleInsufficient) {
+		t.Fatalf("owner was rejected by Cloud role gate: %s", rec.Body.String())
 	}
 }
 

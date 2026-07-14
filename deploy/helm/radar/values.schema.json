@@ -50,7 +50,7 @@
         "podExec": { "type": "boolean", "description": "Allow pod exec (terminal feature)." },
         "podLogs": { "type": "boolean" },
         "portForward": { "type": "boolean" },
-        "selfUpgrade": { "type": "boolean", "description": "Allow Radar Cloud to trigger in-app upgrades." },
+        "selfUpgrade": { "type": "boolean", "description": "Allow Radar Cloud organization owners to trigger in-app upgrades." },
         "traffic": { "type": "boolean", "description": "Read access to hubble-relay-client-certs for Hubble TLS." },
         "metrics": { "type": "boolean", "description": "Read metrics.k8s.io for CPU/memory widgets." },
         "crdGroups": {

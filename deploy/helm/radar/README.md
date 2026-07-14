@@ -146,9 +146,9 @@ Disabled by default for security:
 
 ### In-app Agent Upgrades (opt-in, for Radar Cloud users)
 
-`rbac.selfUpgrade: true` lets Radar Cloud trigger one-click upgrades from the web UI — no terminal or cloud credentials needed. Disabled by default; only needed when connecting to Radar Cloud (the install wizard sets this automatically).
+`rbac.selfUpgrade: true` lets a Radar Cloud organization owner trigger one-click upgrades from the web UI — no terminal or cloud credentials needed. It does not upgrade anything automatically. Disabled by default; only needed when connecting to Radar Cloud (the install wizard sets this automatically).
 
-It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on this Deployment only, enforced via `resourceNames`. The endpoint validates that the requested image comes from `ghcr.io/skyhook-io/radar` before issuing any patch.
+It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on this Deployment only, enforced via `resourceNames`. The endpoint requires an explicitly attributed Cloud `owner` role and validates the requested Radar tag. It preserves the repository already configured on the live container, including private mirrors.
 
 ```bash
 --set rbac.selfUpgrade=true

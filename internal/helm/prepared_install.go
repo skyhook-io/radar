@@ -68,12 +68,29 @@ type PreparedInstall struct {
 	request    InstallRequest
 	chart      *chart.Chart
 	version    string
+	manifest   string
 	deployment DeploymentRef
 }
 
 func (p *PreparedInstall) ChartVersion() string { return p.version }
-func (p *PreparedInstall) ReleaseName() string  { return p.request.ReleaseName }
-func (p *PreparedInstall) Namespace() string    { return p.request.Namespace }
+func (p *PreparedInstall) AppVersion() string {
+	if p == nil || p.chart == nil || p.chart.Metadata == nil {
+		return ""
+	}
+	return p.chart.Metadata.AppVersion
+}
+func (p *PreparedInstall) ReleaseName() string { return p.request.ReleaseName }
+func (p *PreparedInstall) Namespace() string   { return p.request.Namespace }
+
+// TargetManifest is the exact chart manifest rendered with the non-secret
+// placeholder Cloud values pinned by PrepareFreshInstall. Callers use it to
+// prove the Kubernetes mutation shape before Hub enrollment.
+func (p *PreparedInstall) TargetManifest() string {
+	if p == nil {
+		return ""
+	}
+	return p.manifest
+}
 func (p *PreparedInstall) Deployment() DeploymentRef {
 	return p.deployment
 }
@@ -107,13 +124,16 @@ func (c *Client) PrepareFreshInstall(ctx context.Context, req *InstallRequest, m
 	if err != nil {
 		return nil, fmt.Errorf("server dry-run: %w", err)
 	}
+	if err := validatePreparedCloudMutationSurface(dryRun); err != nil {
+		return nil, err
+	}
 	deployment, err := cloudDeploymentRef(dryRun.Manifest, request.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("inspect rendered cloud workload: %w", err)
 	}
 	return &PreparedInstall{
 		client: c, request: request, chart: loaded,
-		version: exactVersion, deployment: deployment,
+		version: exactVersion, manifest: dryRun.Manifest, deployment: deployment,
 	}, nil
 }
 
@@ -135,6 +155,9 @@ func (p *PreparedInstall) Validate(ctx context.Context, values map[string]any) e
 	dryRun, err := runServerDryRun(ctx, actionConfig, &request, p.chart)
 	if err != nil {
 		return fmt.Errorf("server dry-run with final values: %w", err)
+	}
+	if err := validatePreparedCloudMutationSurface(dryRun); err != nil {
+		return err
 	}
 	deployment, err := cloudDeploymentRef(dryRun.Manifest, request.Namespace)
 	if err != nil {
@@ -193,6 +216,31 @@ func runServerDryRun(ctx context.Context, actionConfig *action.Configuration, re
 	install.DryRunOption = "server"
 	install.HideSecret = true
 	return install.RunWithContext(ctx, loaded, req.Values)
+}
+
+// validatePreparedCloudMutationSurface fails closed when Helm renders objects
+// that the install permission preflight cannot prove exactly. Hooks live
+// outside release.Manifest, and HideSecret deliberately removes Secret bodies
+// from it, so allowing either would create an unreviewed mutation path.
+func validatePreparedCloudMutationSurface(rel *release.Release) error {
+	if rel == nil {
+		return errors.New("prepared chart returned no release")
+	}
+	for _, hook := range rel.Hooks {
+		if hook == nil {
+			continue
+		}
+		return fmt.Errorf("prepared Radar chart renders Helm hook %q; Cloud install permission preflight does not support chart hooks", hook.Name)
+	}
+	if rel.Chart != nil {
+		if crds := rel.Chart.CRDObjects(); len(crds) > 0 {
+			return fmt.Errorf("prepared Radar chart contains CRD %q; Cloud install permission preflight does not support chart CRDs", crds[0].Name)
+		}
+	}
+	if strings.Contains(rel.Manifest, "# HIDDEN: The Secret output has been suppressed") {
+		return errors.New("prepared Radar chart renders a Secret hidden from Cloud install permission preflight")
+	}
+	return nil
 }
 
 func cloneInstallRequest(req *InstallRequest) (InstallRequest, error) {
@@ -398,6 +446,18 @@ func fetchPreparedBytes(ctx context.Context, target string, maxBytes int64, kind
 }
 
 func cloudDeploymentRef(manifest, defaultNamespace string) (DeploymentRef, error) {
+	return deploymentRef(manifest, defaultNamespace, func(object manifestDeployment) bool {
+		return object.CloudMode
+	}, "Deployment with RADAR_CLOUD_MODE=true")
+}
+
+type manifestDeployment struct {
+	Labels         map[string]string
+	ContainerNames []string
+	CloudMode      bool
+}
+
+func deploymentRef(manifest, defaultNamespace string, match func(manifestDeployment) bool, description string) (DeploymentRef, error) {
 	decoder := k8syaml.NewYAMLOrJSONDecoder(strings.NewReader(manifest), 4096)
 	var matches []DeploymentRef
 	for {
@@ -413,7 +473,14 @@ func cloudDeploymentRef(manifest, defaultNamespace string) (DeploymentRef, error
 			continue
 		}
 		u := &unstructured.Unstructured{Object: object}
-		if u.GetAPIVersion() != "apps/v1" || u.GetKind() != "Deployment" || !hasCloudModeEnv(u) {
+		if u.GetAPIVersion() != "apps/v1" || u.GetKind() != "Deployment" {
+			continue
+		}
+		deployment := manifestDeployment{
+			Labels: u.GetLabels(), CloudMode: hasCloudModeEnv(u),
+			ContainerNames: deploymentContainerNames(u),
+		}
+		if !match(deployment) {
 			continue
 		}
 		selectorMap, found, err := unstructured.NestedMap(object, "spec", "selector")
@@ -435,9 +502,28 @@ func cloudDeploymentRef(manifest, defaultNamespace string) (DeploymentRef, error
 		matches = append(matches, DeploymentRef{Name: u.GetName(), Namespace: namespace, Selector: selector.String()})
 	}
 	if len(matches) != 1 {
-		return DeploymentRef{}, fmt.Errorf("expected exactly one Deployment with RADAR_CLOUD_MODE=true, found %d", len(matches))
+		return DeploymentRef{}, fmt.Errorf("expected exactly one %s, found %d", description, len(matches))
 	}
 	return matches[0], nil
+}
+
+func deploymentContainerNames(deployment *unstructured.Unstructured) []string {
+	containers, found, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+	if !found {
+		return nil
+	}
+	names := make([]string, 0, len(containers))
+	for _, item := range containers {
+		container, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := container["name"].(string)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func hasCloudModeEnv(deployment *unstructured.Unstructured) bool {

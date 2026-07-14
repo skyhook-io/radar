@@ -580,7 +580,8 @@ func (s *Server) setupRoutes() {
 			r.Post("/github/dismiss", s.handleGitHubDismiss)
 
 			// Self-upgrade: Hub calls this over the yamux tunnel to patch this
-			// Deployment's image. Uses the SA client (not user impersonation).
+			// Deployment's image. Cloud-owner-gated; uses the SA client (not user
+			// impersonation).
 			// Requires MY_POD_NAMESPACE + MY_DEPLOYMENT_NAME env vars (set by
 			// the Helm chart when rbac.selfUpgrade=true).
 			r.Post("/agent/self-upgrade", s.handleSelfUpgrade)

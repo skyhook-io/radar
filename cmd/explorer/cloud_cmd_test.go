@@ -26,7 +26,7 @@ func TestCloudConnectStopsBeforeHubAndPointsToSupportedPath(t *testing.T) {
 		"local preview mode is not available yet",
 		"no request was sent to the hub",
 		`radar cloud install --hub-url="https://hub.example" --name="prod"`,
-		"Existing installation",
+		"native Helm adoption or GitOps handoff",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("guidance missing %q:\n%s", want, got)
@@ -36,9 +36,10 @@ func TestCloudConnectStopsBeforeHubAndPointsToSupportedPath(t *testing.T) {
 
 func TestPostApprovalRecoveryGuidanceDoesNotRecommendImmediateRetry(t *testing.T) {
 	var out bytes.Buffer
-	printPostApprovalRecoveryGuidance(&out, "clus_existing", "prod", "radar-prod", helm.DeploymentRef{
-		Name: "prod-radar", Namespace: "radar-prod",
-	})
+	printPostApprovalRecoveryGuidance(&out, "clus_existing", "https://app.radarhq.io/c/clus_existing", cloudProvisionRecovery{
+		Mode: cloudinstall.ProvisionFresh, ReleaseName: "prod", Namespace: "radar-prod",
+		Deployment: helm.DeploymentRef{Name: "prod-radar", Namespace: "radar-prod"},
+	}, errors.New("install failed"), cloudCommandTarget{})
 	got := out.String()
 	for _, want := range []string{
 		"clus_existing", "Do not rerun", "first inspect the existing attempt",
@@ -47,6 +48,58 @@ func TestPostApprovalRecoveryGuidanceDoesNotRecommendImmediateRetry(t *testing.T
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("guidance missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAdoptionPreMutationRecoveryDoesNotInventRollbackOrSecret(t *testing.T) {
+	recovery := cloudProvisionRecovery{
+		Mode: cloudinstall.ProvisionAdopt, ReleaseName: "radar", Namespace: "radar",
+		Deployment: helm.DeploymentRef{Name: "radar", Namespace: "radar"}, CurrentRevision: 4,
+	}
+	var out bytes.Buffer
+	printPostApprovalRecoveryGuidance(&out, "clus_existing", "https://app.radarhq.io/c/clus_existing", recovery,
+		&cloudinstall.ProvisionPreMutationError{Err: errors.New("release changed")}, cloudCommandTarget{})
+	got := out.String()
+	for _, want := range []string{"Helm upgrade did not start", "created no Cloud token Secret", "Resume install"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("guidance missing %q:\n%s", want, got)
+		}
+	}
+	for _, wrong := range []string{"could not prove that the original release was fully restored", "preserved the Cloud token Secret"} {
+		if strings.Contains(got, wrong) {
+			t.Errorf("pre-mutation guidance made false claim %q:\n%s", wrong, got)
+		}
+	}
+}
+
+func TestAdoptionUncertainSecretCreateRecoverySaysInspect(t *testing.T) {
+	var out bytes.Buffer
+	printPostApprovalRecoveryGuidance(&out, "clus_existing", "https://app.radarhq.io/c/clus_existing", cloudProvisionRecovery{
+		Mode: cloudinstall.ProvisionAdopt, ReleaseName: "radar", Namespace: "radar",
+		Deployment: helm.DeploymentRef{Name: "radar", Namespace: "radar"}, CurrentRevision: 4,
+	}, &cloudinstall.ProvisionPreMutationError{Err: errors.New("connection reset"), TokenSecretMayExist: true}, cloudCommandTarget{})
+	got := out.String()
+	if !strings.Contains(got, "did not confirm whether the Cloud token Secret was created") || !strings.Contains(got, "get secret/radar-cloud-config") {
+		t.Fatalf("uncertain Secret guidance is incomplete:\n%s", got)
+	}
+}
+
+func TestAdoptionRollbackGuidanceIncludesHubCleanup(t *testing.T) {
+	var out bytes.Buffer
+	printAdoptionRollbackGuidance(&out, cloudProvisionRecovery{
+		Mode: cloudinstall.ProvisionAdopt, ReleaseName: "prod", Namespace: "observability", CurrentRevision: 7,
+	}, "https://app.radarhq.io/c/clus_existing", cloudCommandTarget{})
+	got := out.String()
+	for _, want := range []string{
+		"helm rollback prod 7 -n observability",
+		"delete secret/radar-cloud-config",
+		"organization owner delete the connected cluster",
+		"https://app.radarhq.io/c/clus_existing",
+		"potentially billable",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rollback guidance missing %q:\n%s", want, got)
 		}
 	}
 }
@@ -182,8 +235,7 @@ func TestResolveCloudInstallContext(t *testing.T) {
 	}
 }
 
-func TestConfirmCloudInstallTarget(t *testing.T) {
-	target := cloudInstallTarget{Context: "prod-context", Namespace: "radar-prod", Release: "prod-radar"}
+func TestConfirmCloudInstallContext(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		input           string
@@ -204,15 +256,13 @@ func TestConfirmCloudInstallTarget(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			got := confirmCloudInstallTarget(strings.NewReader(tc.input), &out, target, tc.contextExplicit, tc.yes, tc.interactive)
+			got := confirmCloudInstallContext(strings.NewReader(tc.input), &out, "prod-context", tc.contextExplicit, tc.yes, tc.interactive)
 			if got != tc.want {
-				t.Fatalf("confirmCloudInstallTarget() = %v, want %v", got, tc.want)
+				t.Fatalf("confirmCloudInstallContext() = %v, want %v", got, tc.want)
 			}
 			text := out.String()
-			for _, want := range []string{`Kubernetes context: "prod-context"`, `Namespace: "radar-prod"`, `Helm release: "prod-radar"`} {
-				if !strings.Contains(text, want) {
-					t.Errorf("target output missing %q: %q", want, text)
-				}
+			if want := `Kubernetes context: "prod-context"`; !strings.Contains(text, want) {
+				t.Errorf("context output missing %q: %q", want, text)
 			}
 			if gotPrompt := strings.Contains(text, "[y/N]"); gotPrompt != tc.wantPrompt {
 				t.Errorf("prompt presence = %v, want %v: %q", gotPrompt, tc.wantPrompt, text)
@@ -240,10 +290,10 @@ func TestCanceledAfterApprovalPointsToPendingInstallRecovery(t *testing.T) {
 
 func TestPrintInstallSuccessUsesRenderedDeploymentName(t *testing.T) {
 	var out bytes.Buffer
-	printInstallSuccess(&out, "production", "https://app.radarhq.io/c/clus_123", helm.DeploymentRef{Name: "prod-radar", Namespace: "radar-prod"})
+	printInstallSuccess(&out, "production", "https://app.radarhq.io/c/clus_123", helm.DeploymentRef{Name: "prod-radar", Namespace: "radar-prod"}, cloudCommandTarget{})
 	got := out.String()
 	for _, want := range []string{
-		`Cluster "production" installed and connected`,
+		`Cluster "production" is connected`,
 		"Open: https://app.radarhq.io/c/clus_123",
 		"kubectl -n radar-prod rollout status deployment/prod-radar",
 	} {
@@ -253,6 +303,30 @@ func TestPrintInstallSuccessUsesRenderedDeploymentName(t *testing.T) {
 	}
 	if strings.Contains(got, "deploy/prod") {
 		t.Fatalf("success guidance assumes the release name is the Deployment name:\n%s", got)
+	}
+}
+
+func TestFollowUpCommandsPinSelectedContextAndKubeconfig(t *testing.T) {
+	target := cloudCommandTarget{Context: "team's prod", Kubeconfig: "/tmp/kube config"}
+
+	var success bytes.Buffer
+	printInstallSuccess(&success, "production", "https://app.radarhq.io/c/clus_123",
+		helm.DeploymentRef{Name: "prod-radar", Namespace: "radar-prod"}, target)
+	if want := `kubectl --kubeconfig '/tmp/kube config' --context 'team'"'"'s prod' -n radar-prod rollout status deployment/prod-radar`; !strings.Contains(success.String(), want) {
+		t.Fatalf("success command did not pin the selected target; want %q in:\n%s", want, success.String())
+	}
+
+	var rollback bytes.Buffer
+	printAdoptionRollbackGuidance(&rollback, cloudProvisionRecovery{
+		Mode: cloudinstall.ProvisionAdopt, ReleaseName: "prod", Namespace: "radar-prod", CurrentRevision: 7,
+	}, "https://app.radarhq.io/c/clus_123", target)
+	for _, want := range []string{
+		`helm --kubeconfig '/tmp/kube config' --kube-context 'team'"'"'s prod' rollback prod 7 -n radar-prod`,
+		`kubectl --kubeconfig '/tmp/kube config' --context 'team'"'"'s prod' -n radar-prod delete secret/radar-cloud-config`,
+	} {
+		if !strings.Contains(rollback.String(), want) {
+			t.Fatalf("rollback command did not pin the selected target; want %q in:\n%s", want, rollback.String())
+		}
 	}
 }
 
@@ -280,10 +354,10 @@ func TestTunnelConfirmationFailurePreservesExistingInstall(t *testing.T) {
 	var out bytes.Buffer
 	printTunnelConfirmationFailure(&out, cloud.ErrConnectConsumptionTimeout, "clus_existing", "wss://api.example/agent", helm.DeploymentRef{
 		Name: "prod-radar", Namespace: "radar-prod",
-	})
+	}, cloudCommandTarget{})
 	got := out.String()
 	for _, want := range []string{
-		"Radar was installed", "clus_existing", "five-minute confirmation window",
+		"Radar was provisioned", "clus_existing", "five-minute confirmation window",
 		"Do not rerun", "deployment/prod-radar", "logs deployment/prod-radar",
 		"outbound WSS/HTTPS access to wss://api.example/agent", "Only if you deliberately abandon",
 	} {
@@ -296,7 +370,7 @@ func TestTunnelConfirmationFailurePreservesExistingInstall(t *testing.T) {
 func TestTunnelConfirmationPickupExpiryDoesNotRepeatDeleteAdvice(t *testing.T) {
 	var out bytes.Buffer
 	err := fmt.Errorf("%w: delete pending cluster", cloud.ErrConnectPickupExpired)
-	printTunnelConfirmationFailure(&out, err, "clus_existing", "wss://api.example/agent", helm.DeploymentRef{Name: "radar", Namespace: "radar"})
+	printTunnelConfirmationFailure(&out, err, "clus_existing", "wss://api.example/agent", helm.DeploymentRef{Name: "radar", Namespace: "radar"}, cloudCommandTarget{})
 	got := out.String()
 	if strings.Contains(got, "delete pending cluster") {
 		t.Fatalf("post-install guidance repeated pre-install deletion advice:\n%s", got)
@@ -315,7 +389,7 @@ func TestPrintFreshInstallConflict(t *testing.T) {
 		{
 			name: "deployed",
 			err:  &helm.ReleaseExistsError{Name: "radar", Namespace: "ops", Revision: 4},
-			want: []string{"already deployed", "Existing installation", "revision 4"},
+			want: []string{"already deployed", "prepared fresh-install plan is stale", "--adopt-existing", "revision 4"},
 		},
 		{
 			name: "pending",
@@ -336,7 +410,7 @@ func TestPrintFreshInstallConflict(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			if !printFreshInstallConflict(&out, fmt.Errorf("wrapped: %w", tc.err)) {
+			if !printFreshInstallConflict(&out, fmt.Errorf("wrapped: %w", tc.err), cloudCommandTarget{}) {
 				t.Fatal("typed conflict was not classified")
 			}
 			for _, want := range tc.want {
@@ -348,7 +422,7 @@ func TestPrintFreshInstallConflict(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if printFreshInstallConflict(&out, errors.New("apiserver unavailable")) {
+	if printFreshInstallConflict(&out, errors.New("apiserver unavailable"), cloudCommandTarget{}) {
 		t.Fatal("untyped error was classified as a release conflict")
 	}
 }

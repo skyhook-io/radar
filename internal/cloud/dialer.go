@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 )
+
+const selfUpgradeAvailableHeader = "X-Radar-Self-Upgrade-Available"
 
 // dial establishes a WebSocket to Radar Cloud, authenticates with the
 // cluster bearer token, and returns a yamux session with this side as the
@@ -24,22 +27,7 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 	q.Set("cluster_name", cfg.ClusterName)
 	u.RawQuery = q.Encode()
 
-	headers := http.Header{}
-	headers.Set("Authorization", "Bearer "+cfg.Token)
-	headers.Set("X-Radar-Version", Version)
-	if cfg.Namespace != "" {
-		headers.Set("X-Radar-Namespace", cfg.Namespace)
-	}
-	// Validate before send — the value comes from a ConfigMap on the
-	// cluster, and a corrupted ConfigMap shouldn't be able to inject
-	// header smuggling. Reject silently on bad shape; hub falls back
-	// to name-based correlation. Local var named `apiURL` (not `u`)
-	// because the outer `u` is the *url.URL we dial through — a future
-	// edit near these lines reusing `u` would otherwise reference the
-	// wrong variable.
-	if apiURL, err := validateAPIServerURL(cfg.APIServerURL); err == nil && apiURL != "" {
-		headers.Set("X-Radar-API-Server-URL", apiURL)
-	}
+	headers := cloudHandshakeHeaders(cfg)
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
@@ -69,6 +57,28 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 		return nil, fmt.Errorf("yamux server setup: %w", err)
 	}
 	return mux, nil
+}
+
+// cloudHandshakeHeaders builds the metadata Radar advertises when opening a
+// Cloud tunnel. The self-upgrade capability is deliberately always present:
+// false is meaningful for GitOps and --no-self-upgrade installations and must
+// not be confused with an older agent that predates the capability contract.
+func cloudHandshakeHeaders(cfg Config) http.Header {
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer "+cfg.Token)
+	headers.Set("X-Radar-Version", Version)
+	headers.Set(selfUpgradeAvailableHeader, strconv.FormatBool(cfg.SelfUpgradeAvailable))
+	if cfg.Namespace != "" {
+		headers.Set("X-Radar-Namespace", cfg.Namespace)
+	}
+	// Validate before send — the value comes from a ConfigMap on the
+	// cluster, and a corrupted ConfigMap shouldn't be able to inject
+	// header smuggling. Reject silently on bad shape; hub falls back
+	// to name-based correlation.
+	if apiURL, err := validateAPIServerURL(cfg.APIServerURL); err == nil && apiURL != "" {
+		headers.Set("X-Radar-API-Server-URL", apiURL)
+	}
+	return headers
 }
 
 // tunnelYamuxConfig is the yamux config for the Cloud tunnel. It differs from

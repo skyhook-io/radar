@@ -63,12 +63,15 @@ type ProvisionConfig struct {
 	ChartVersion string // "" / "latest" → newest published
 }
 
-// PrepareConfig is the non-secret portion of a fresh Cloud install. Prepare
-// runs before any Hub request or token mint.
+// PrepareConfig is the non-secret portion of a fresh install or native Helm
+// adoption. Prepare runs before any Hub request or token mint.
 type PrepareConfig struct {
-	Namespace    string
-	ReleaseName  string
-	ChartVersion string
+	Namespace           string
+	ReleaseName         string
+	ChartVersion        string
+	AdoptExisting       bool
+	EnableCloudFeatures bool
+	DisableSelfUpgrade  bool
 }
 
 func (c PrepareConfig) namespace() string {
@@ -85,39 +88,157 @@ func (c PrepareConfig) releaseName() string {
 	return DefaultReleaseName
 }
 
+// ResolveCloudChartSummary resolves the same verified stable chart used by
+// fresh installs and native Helm adoption without inspecting a Helm release.
+// GitOps handoff uses it to pin an exact target in the user's source of truth.
+func ResolveCloudChartSummary(ctx context.Context, hc *helm.Client, chartVersion string) (helm.PreparedChartSummary, error) {
+	if hc == nil {
+		return helm.PreparedChartSummary{}, errors.New("resolve cloud chart: nil helm client")
+	}
+	return hc.ResolvePreparedChartSummary(ctx, &helm.InstallRequest{
+		ReleaseName: DefaultReleaseName,
+		Namespace:   DefaultInstallNamespace,
+		ChartName:   chartName,
+		Version:     chartVersion,
+		Repository:  chartRepo,
+	}, MinimumCloudChartVersion)
+}
+
 // PreparedProvision pins the exact chart and rendered workload across the Hub
 // approval flow. Runtime Cloud URL/cluster ID values are supplied only after
 // approval; they are server-dry-run again before the token Secret is created.
 type PreparedProvision struct {
-	install *helm.PreparedInstall
+	install             *helm.PreparedInstall
+	upgrade             *helm.PreparedUpgrade
+	enableCloudFeatures bool
+	disableSelfUpgrade  bool
+}
+
+type ProvisionMode string
+
+const (
+	ProvisionFresh ProvisionMode = "fresh"
+	ProvisionAdopt ProvisionMode = "adopt"
+)
+
+func (p *PreparedProvision) Mode() ProvisionMode {
+	if p != nil && p.upgrade != nil {
+		return ProvisionAdopt
+	}
+	return ProvisionFresh
 }
 
 func (p *PreparedProvision) ChartVersion() string {
-	if p == nil || p.install == nil {
+	if p == nil {
+		return ""
+	}
+	if p.upgrade != nil {
+		return p.upgrade.ChartVersion()
+	}
+	if p.install == nil {
 		return ""
 	}
 	return p.install.ChartVersion()
 }
 
+func (p *PreparedProvision) AppVersion() string {
+	if p == nil {
+		return ""
+	}
+	if p.upgrade == nil {
+		if p.install == nil {
+			return ""
+		}
+		return p.install.AppVersion()
+	}
+	return p.upgrade.AppVersion()
+}
+
+func (p *PreparedProvision) CurrentChartVersion() string {
+	if p == nil || p.upgrade == nil {
+		return ""
+	}
+	return p.upgrade.CurrentChartVersion()
+}
+
+func (p *PreparedProvision) CurrentRevision() int {
+	if p == nil || p.upgrade == nil {
+		return 0
+	}
+	return p.upgrade.CurrentRevision()
+}
+
+func (p *PreparedProvision) CurrentValues() helm.CloudUpgradeValuesSummary {
+	if p == nil || p.upgrade == nil {
+		return helm.CloudUpgradeValuesSummary{}
+	}
+	return p.upgrade.CurrentValues()
+}
+
+func (p *PreparedProvision) CurrentManifest() string {
+	if p == nil || p.upgrade == nil {
+		return ""
+	}
+	return p.upgrade.CurrentManifest()
+}
+
+func (p *PreparedProvision) TargetManifest() string {
+	if p == nil {
+		return ""
+	}
+	if p.upgrade == nil {
+		if p.install == nil {
+			return ""
+		}
+		return p.install.TargetManifest()
+	}
+	return p.upgrade.TargetManifest()
+}
+
 func (p *PreparedProvision) Deployment() helm.DeploymentRef {
-	if p == nil || p.install == nil {
+	if p == nil {
+		return helm.DeploymentRef{}
+	}
+	if p.upgrade != nil {
+		return p.upgrade.Deployment()
+	}
+	if p.install == nil {
 		return helm.DeploymentRef{}
 	}
 	return p.install.Deployment()
 }
 
 func (p *PreparedProvision) Namespace() string {
-	if p == nil || p.install == nil {
+	if p == nil {
+		return ""
+	}
+	if p.upgrade != nil {
+		return p.upgrade.Namespace()
+	}
+	if p.install == nil {
 		return ""
 	}
 	return p.install.Namespace()
 }
 
 func (p *PreparedProvision) ReleaseName() string {
-	if p == nil || p.install == nil {
+	if p == nil {
+		return ""
+	}
+	if p.upgrade != nil {
+		return p.upgrade.ReleaseName()
+	}
+	if p.install == nil {
 		return ""
 	}
 	return p.install.ReleaseName()
+}
+
+func (p *PreparedProvision) values(cloudURL, clusterID string) map[string]any {
+	if p.Mode() == ProvisionAdopt {
+		return cloudAdoptionValues(cloudURL, clusterID, p.enableCloudFeatures, p.disableSelfUpgrade)
+	}
+	return cloudInstallValues(cloudURL, clusterID, p.disableSelfUpgrade)
 }
 
 func (c ProvisionConfig) namespace() string {
@@ -143,6 +264,41 @@ type TokenSecretExistsError struct {
 	ResourceVersion string
 }
 
+// ExistingReleaseIncompatibleError reports an existing Radar configuration
+// that Cloud adoption cannot safely reinterpret automatically.
+type ExistingReleaseIncompatibleError struct {
+	Namespace string
+	Release   string
+	Reason    string
+}
+
+func (e *ExistingReleaseIncompatibleError) Error() string {
+	return fmt.Sprintf("Helm release %q in namespace %q cannot be adopted: %s", e.Release, e.Namespace, e.Reason)
+}
+
+// AdoptionUpgradeError preserves whether the one-time token Secret remains
+// after a failed atomic upgrade so CLI recovery copy never guesses.
+type AdoptionUpgradeError struct {
+	Err                  error
+	TokenSecretPreserved bool
+	RollbackVerified     bool
+}
+
+func (e *AdoptionUpgradeError) Error() string { return e.Err.Error() }
+func (e *AdoptionUpgradeError) Unwrap() error { return e.Err }
+
+// ProvisionPreMutationError identifies an adoption failure before Helm's
+// upgrade mutation began. TokenSecretMayExist is true only when Kubernetes did
+// not conclusively answer the Secret create request; callers must inspect the
+// fixed Secret name rather than claiming it was either created or absent.
+type ProvisionPreMutationError struct {
+	Err                 error
+	TokenSecretMayExist bool
+}
+
+func (e *ProvisionPreMutationError) Error() string { return e.Err.Error() }
+func (e *ProvisionPreMutationError) Unwrap() error { return e.Err }
+
 func (e *TokenSecretExistsError) Error() string {
 	return fmt.Sprintf("Secret %q already exists in namespace %q; inspect and remove or recover that installation before retrying",
 		e.Name, e.Namespace)
@@ -158,19 +314,53 @@ func Prepare(ctx context.Context, hc *helm.Client, kc kubernetes.Interface, cfg 
 	if err := CheckTokenSecretAvailable(ctx, kc, namespace); err != nil {
 		return nil, err
 	}
+	values := cloudInstallValues(preflightCloudURL, preflightClusterID, cfg.DisableSelfUpgrade)
+	if cfg.AdoptExisting {
+		values = cloudAdoptionValues(preflightCloudURL, preflightClusterID, cfg.EnableCloudFeatures, cfg.DisableSelfUpgrade)
+		prepared, err := hc.PrepareCloudUpgrade(ctx, &helm.InstallRequest{
+			ReleaseName: cfg.releaseName(), Namespace: namespace,
+			ChartName: chartName, Version: cfg.ChartVersion, Repository: chartRepo,
+			Values: values,
+		}, MinimumCloudChartVersion)
+		if err != nil {
+			return nil, err
+		}
+		current := prepared.CurrentValues()
+		if current.CloudEnabled || current.CloudTokenSet || current.CloudExistingSecret != "" {
+			return nil, &ExistingReleaseIncompatibleError{
+				Namespace: namespace, Release: cfg.releaseName(),
+				Reason: "Cloud connection values are already configured; recover or disconnect the existing pairing instead of replacing it",
+			}
+		}
+		if current.AuthMode != "none" && current.AuthMode != "proxy" {
+			return nil, &ExistingReleaseIncompatibleError{
+				Namespace: namespace, Release: cfg.releaseName(),
+				Reason: fmt.Sprintf("auth.mode=%q is incompatible with Cloud proxy authentication", current.AuthMode),
+			}
+		}
+		return &PreparedProvision{
+			upgrade: prepared, enableCloudFeatures: cfg.EnableCloudFeatures,
+			disableSelfUpgrade: cfg.DisableSelfUpgrade,
+		}, nil
+	}
+
 	prepared, err := hc.PrepareFreshInstall(ctx, &helm.InstallRequest{
-		ReleaseName:     cfg.releaseName(),
-		Namespace:       namespace,
-		ChartName:       chartName,
-		Version:         cfg.ChartVersion,
-		Repository:      chartRepo,
-		CreateNamespace: true,
-		Values:          cloudInstallValues(preflightCloudURL, preflightClusterID),
+		ReleaseName: cfg.releaseName(),
+		Namespace:   namespace,
+		ChartName:   chartName,
+		Version:     cfg.ChartVersion,
+		Repository:  chartRepo,
+		// ProvisionPrepared creates the namespace first because the token
+		// Secret must exist before Helm creates the Radar Deployment. Leaving
+		// Helm's duplicate CreateNamespace mutation disabled keeps the prepared
+		// permission plan identical to the real install.
+		CreateNamespace: false,
+		Values:          values,
 	}, MinimumCloudChartVersion)
 	if err != nil {
 		return nil, err
 	}
-	return &PreparedProvision{install: prepared}, nil
+	return &PreparedProvision{install: prepared, disableSelfUpgrade: cfg.DisableSelfUpgrade}, nil
 }
 
 // ProvisionPrepared validates final Hub values, creates the token Secret once,
@@ -178,45 +368,86 @@ func Prepare(ctx context.Context, hc *helm.Client, kc kubernetes.Interface, cfg 
 // the Secret only if its UID and resourceVersion still identify the exact
 // object created by this attempt.
 func ProvisionPrepared(ctx context.Context, kc kubernetes.Interface, prepared *PreparedProvision, cfg ProvisionConfig) error {
-	if kc == nil || prepared == nil || prepared.install == nil {
+	if kc == nil || prepared == nil || (prepared.install == nil && prepared.upgrade == nil) {
 		return fmt.Errorf("provision prepared install: nil kubernetes client or plan")
 	}
+	preMutationError := func(err error, tokenSecretMayExist bool) error {
+		if prepared.Mode() != ProvisionAdopt {
+			return err
+		}
+		return &ProvisionPreMutationError{Err: err, TokenSecretMayExist: tokenSecretMayExist}
+	}
 	if err := validateProvisionConfig(cfg); err != nil {
-		return err
+		return preMutationError(err, false)
 	}
 	if cfg.namespace() != prepared.Namespace() || cfg.releaseName() != prepared.ReleaseName() {
-		return fmt.Errorf("provision target %q/%q does not match prepared target %q/%q",
-			cfg.namespace(), cfg.releaseName(), prepared.Namespace(), prepared.ReleaseName())
+		return preMutationError(fmt.Errorf("provision target %q/%q does not match prepared target %q/%q",
+			cfg.namespace(), cfg.releaseName(), prepared.Namespace(), prepared.ReleaseName()), false)
 	}
 	if cfg.ChartVersion != "" && cfg.ChartVersion != "latest" && cfg.ChartVersion != prepared.ChartVersion() {
-		return fmt.Errorf("provision chart version %q does not match prepared version %q", cfg.ChartVersion, prepared.ChartVersion())
+		return preMutationError(fmt.Errorf("provision chart version %q does not match prepared version %q", cfg.ChartVersion, prepared.ChartVersion()), false)
 	}
 	if err := CheckTokenSecretAvailable(ctx, kc, prepared.Namespace()); err != nil {
-		return err
+		return preMutationError(err, false)
 	}
-	values := cloudInstallValues(cfg.CloudURL, cfg.ClusterID)
-	if err := prepared.install.Validate(ctx, values); err != nil {
-		return err
-	}
-	if err := ensureNamespace(ctx, kc, prepared.Namespace()); err != nil {
-		return fmt.Errorf("ensure namespace %q: %w", prepared.Namespace(), err)
+	values := prepared.values(cfg.CloudURL, cfg.ClusterID)
+	if prepared.Mode() == ProvisionAdopt {
+		if err := prepared.upgrade.Validate(ctx, values); err != nil {
+			return preMutationError(err, false)
+		}
+	} else {
+		if err := prepared.install.Validate(ctx, values); err != nil {
+			return err
+		}
+		if err := ensureNamespace(ctx, kc, prepared.Namespace()); err != nil {
+			return fmt.Errorf("ensure namespace %q: %w", prepared.Namespace(), err)
+		}
 	}
 	created, err := createTokenSecret(ctx, kc, prepared.Namespace(), cfg.Token)
 	if err != nil {
-		return fmt.Errorf("create token Secret: %w", err)
+		mayExist := true
+		var exists *TokenSecretExistsError
+		var status apierrors.APIStatus
+		if errors.As(err, &exists) || (errors.As(err, &status) && status.Status().Code >= 400 && status.Status().Code < 500) {
+			mayExist = false
+		}
+		return preMutationError(fmt.Errorf("create token Secret: %w", err), mayExist)
 	}
-	if _, err := prepared.install.Install(ctx, values); err != nil {
+	var provisionErr error
+	if prepared.Mode() == ProvisionAdopt {
+		_, provisionErr = prepared.upgrade.Upgrade(ctx, values)
+	} else {
+		_, provisionErr = prepared.install.Install(ctx, values)
+	}
+	if provisionErr != nil {
 		// The Helm mutation is an intentional non-cancelable critical section.
 		// Cleanup must likewise survive the signal that may have arrived while it
 		// ran; otherwise an unchanged live credential is left behind solely because
 		// the caller context was canceled.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), secretCleanupLimit)
-		cleanupErr := deleteTokenSecretIfUnchanged(cleanupCtx, kc, *created)
-		cleanupCancel()
-		if cleanupErr != nil {
-			return errors.Join(err, fmt.Errorf("clean up token Secret after failed install: %w", cleanupErr))
+		defer cleanupCancel()
+		if prepared.Mode() == ProvisionAdopt {
+			rolledBack, verifyErr := prepared.upgrade.VerifyRolledBack(cleanupCtx)
+			if verifyErr != nil || !rolledBack {
+				if verifyErr != nil {
+					provisionErr = errors.Join(provisionErr, fmt.Errorf("verify atomic rollback: %w", verifyErr))
+				}
+				return &AdoptionUpgradeError{Err: provisionErr, TokenSecretPreserved: true}
+			}
+			cleanupErr := deleteTokenSecretIfUnchanged(cleanupCtx, kc, *created)
+			if cleanupErr != nil {
+				return &AdoptionUpgradeError{
+					Err:                  errors.Join(provisionErr, fmt.Errorf("clean up token Secret after verified rollback: %w", cleanupErr)),
+					TokenSecretPreserved: true, RollbackVerified: true,
+				}
+			}
+			return &AdoptionUpgradeError{Err: provisionErr, RollbackVerified: true}
 		}
-		return err
+		cleanupErr := deleteTokenSecretIfUnchanged(cleanupCtx, kc, *created)
+		if cleanupErr != nil {
+			return errors.Join(provisionErr, fmt.Errorf("clean up token Secret after failed install: %w", cleanupErr))
+		}
+		return provisionErr
 	}
 	return nil
 }
@@ -233,7 +464,7 @@ func validateProvisionConfig(cfg ProvisionConfig) error {
 
 // cloudInstallValues mirrors the wizard's fresh-install --set flags
 // (installCommand.ts): cloud.* + the rbac.* surface a cloud install needs.
-func cloudInstallValues(cloudURL, clusterID string) map[string]any {
+func cloudInstallValues(cloudURL, clusterID string, disableSelfUpgrade bool) map[string]any {
 	return map[string]any{
 		"cloud": map[string]any{
 			"enabled":        true,
@@ -248,8 +479,30 @@ func cloudInstallValues(cloudURL, clusterID string) map[string]any {
 			"podExec":     true,
 			"portForward": true,
 			"metrics":     true,
-			"selfUpgrade": true,
+			"selfUpgrade": !disableSelfUpgrade,
 		},
+	}
+}
+
+// cloudAdoptionValues preserves an existing release's values and overlays only
+// the Cloud connection plus explicitly consented capability changes. image.tag
+// is cleared inside helm.PreparedUpgrade so the selected chart's AppVersion is
+// always the resulting Radar version.
+func cloudAdoptionValues(cloudURL, clusterID string, enableCloudFeatures, disableSelfUpgrade bool) map[string]any {
+	rbac := map[string]any{"selfUpgrade": !disableSelfUpgrade}
+	if enableCloudFeatures {
+		rbac["helm"] = true
+		rbac["secrets"] = true
+		rbac["podExec"] = true
+		rbac["portForward"] = true
+		rbac["metrics"] = true
+	}
+	return map[string]any{
+		"cloud": map[string]any{
+			"enabled": true, "url": cloudURL,
+			"clusterName": clusterID, "existingSecret": CloudTokenSecretName,
+		},
+		"rbac": rbac,
 	}
 }
 

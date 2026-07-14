@@ -103,6 +103,10 @@ func TestServerDryRunFindsActualCloudDeployment(t *testing.T) {
 	if !strings.Contains(ref.Selector, "app.kubernetes.io/instance=custom") || !strings.Contains(ref.Selector, "app.kubernetes.io/name=radar") {
 		t.Fatalf("selector = %q", ref.Selector)
 	}
+	prepared := &PreparedInstall{manifest: rel.Manifest}
+	if prepared.TargetManifest() != rel.Manifest {
+		t.Fatal("prepared install did not expose the pinned rendered manifest")
+	}
 }
 
 func TestCloudDeploymentRefRejectsAmbiguousManifest(t *testing.T) {

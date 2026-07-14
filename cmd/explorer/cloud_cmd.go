@@ -34,6 +34,8 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 	k8svalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -78,20 +80,26 @@ func cloudUsage(w *os.File) {
 	fmt.Fprint(w, `Connect this cluster to Radar Cloud with an in-cluster agent.
 
 Usage:
-  radar cloud install [--context NAME] [-y|--yes] [--namespace NS] [--release NAME] [--hub-url URL] [--name NAME] [--dry-run]
+  radar cloud install [--context NAME] [-y|--yes] [--namespace NS] [--release NAME] [--adopt-existing] [--hub-url URL] [--name NAME] [--dry-run]
 
-install  Install Radar INTO one kubeconfig context, connected to Cloud. An
-         explicit --context is used directly; otherwise the current context
+install  Connect one kubeconfig cluster to Cloud. Installs Radar when absent,
+         or offers a safe native-Helm adoption / GitOps handoff when detected.
+         An explicit --context is used directly; otherwise the current context
          must be confirmed unless -y/--yes is set.
 
 Flags (install):
   --context NAME   Kubernetes context to install into (default: current context)
-  -y, --yes        Skip confirmation when using the current context
-  --namespace NS   Namespace to install into (default: radar)
-  --release NAME   Helm release name (default: radar)
+  -y, --yes        Skip current-context confirmation (never adoption consent)
+  --namespace NS   Exact target namespace (default/auto-discovery seed: radar)
+  --release NAME   Exact Helm release (default/auto-discovery seed: radar)
+  --adopt-existing Confirm automation may connect a detected existing installation
+  --enable-cloud-features
+                   During adoption, also enable Helm/Secrets/exec/forward/metrics RBAC
+  --no-self-upgrade
+                   Do not install Radar's in-app self-upgrade Role/RoleBinding
   --hub-url URL    Radar Cloud hub API (default `+defaultHubBase+`; set for self-hosted)
   --name NAME      Cluster name shown in Cloud (default: selected Kubernetes context)
-  --chart-version  Chart version to install (default: latest published)
+  --chart-version  Stable chart target (default: latest published, including adoption)
   --dry-run        Run the permission preflight + print the plan; install nothing
   --no-browser     Print the approval URL instead of opening a browser
   --browser NAME   Browser to use for approval (default: Radar config / OS default)
@@ -134,7 +142,7 @@ func cloudConnect(args []string, w io.Writer) int {
 	fmt.Fprintln(w, "Radar Cloud currently accepts in-cluster agents only; no request was sent to the hub.")
 	fmt.Fprintln(w, "\nInstall the supported agent into your current kubeconfig cluster:")
 	fmt.Fprintf(w, "  %s\n", installCommand)
-	fmt.Fprintln(w, "\nIf Radar is already installed, open your Hub's installation wizard, choose \"Existing installation\", and run the generated Helm upgrade.")
+	fmt.Fprintln(w, "\nIf Radar is already installed, the same command detects it and offers a native Helm adoption or GitOps handoff. Non-interactive adoption also requires --adopt-existing.")
 	return 1
 }
 
@@ -151,6 +159,9 @@ func cloudInstall(args []string) {
 	chartVersion := fs.String("chart-version", "", "Chart version (default: latest published)")
 	name := fs.String("name", "", "Cluster name shown in Cloud (default: selected Kubernetes context)")
 	contextName := fs.String("context", "", "Kubernetes context to install into (default: current context)")
+	adoptExisting := fs.Bool("adopt-existing", false, "Confirm automation may connect a detected existing installation")
+	enableCloudFeatures := fs.Bool("enable-cloud-features", false, "Enable optional Cloud feature RBAC while adopting")
+	noSelfUpgrade := fs.Bool("no-self-upgrade", false, "Disable Radar's in-app self-upgrade capability")
 	yes := false
 	fs.BoolVar(&yes, "y", false, "Skip confirmation when using the current context")
 	fs.BoolVar(&yes, "yes", false, "Skip confirmation when using the current context")
@@ -162,6 +173,15 @@ func cloudInstall(args []string) {
 		fmt.Fprintf(os.Stderr, "cloud install: unexpected argument %q\n", fs.Arg(0))
 		os.Exit(2)
 	}
+	explicitNamespace, explicitRelease := false, false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "namespace":
+			explicitNamespace = true
+		case "release":
+			explicitRelease = true
+		}
+	})
 	*chartVersion = strings.TrimSpace(*chartVersion)
 
 	normalizedNamespace, normalizedRelease, err := normalizeCloudInstallNames(*namespace, *release)
@@ -196,8 +216,8 @@ func cloudInstall(args []string) {
 		fmt.Fprintf(os.Stderr, "cloud install: %v\n", err)
 		os.Exit(1)
 	}
-	target := cloudInstallTarget{Context: ctxName, Namespace: *namespace, Release: *release}
-	if !confirmCloudInstallTarget(os.Stdin, os.Stderr, target, requestedContext != "", yes, term.IsTerminal(int(os.Stdin.Fd()))) {
+	commandTarget := cloudCommandTarget{Context: ctxName, Kubeconfig: kubeconfig}
+	if !confirmCloudInstallContext(os.Stdin, os.Stderr, ctxName, requestedContext != "", yes, term.IsTerminal(int(os.Stdin.Fd()))) {
 		fmt.Fprintln(os.Stderr, "\nCloud installation canceled. Pass --context NAME or -y/--yes to run without this prompt.")
 		os.Exit(1)
 	}
@@ -209,68 +229,118 @@ func cloudInstall(args []string) {
 
 	// Build kube + helm clients against the resolved kubecontext — the driver runs
 	// before Radar's normal boot, so we resolve these ourselves.
-	kc, hc, err := buildLocalInstallClients(kubeconfig, ctxName)
+	clients, err := buildLocalInstallClients(kubeconfig, ctxName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cloud install: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Preparing a Radar Cloud installation for cluster %q (namespace %q)…\n\n", clusterName, *namespace)
-
-	// 1. Preflight BEFORE minting a token — a permission failure after approval
-	//    would orphan a Cloud cluster + a live token.
-	pf, err := cloudinstall.InstallPreflight(ctx, kc, *namespace)
+	fmt.Printf("Inspecting Kubernetes context %q for an existing Radar installation…\n\n", ctxName)
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	plan, err := inspectCloudInstallPlan(ctx, clients, *namespace, *release, explicitNamespace || explicitRelease)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "permission preflight failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "cloud install: %v\n", err)
+		fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
 		os.Exit(1)
 	}
-	if !pf.OK() {
-		fmt.Fprintln(os.Stderr, "You don't have the permissions to install cloud-enabled Radar into this cluster.")
-		fmt.Fprintln(os.Stderr, "Missing:")
-		for _, d := range pf.Blocking {
-			fmt.Fprintf(os.Stderr, "  • %s\n", d)
-		}
-		fmt.Fprintln(os.Stderr, "\nEnabling Cloud mode provisions per-user RBAC (impersonation), which needs a cluster admin.")
-		fmt.Fprintf(os.Stderr, "Ask your platform team to run `radar cloud install` against this Kubernetes cluster (your context %q; theirs may be named differently).\n", ctxName)
-		fmt.Fprintf(os.Stderr, "Preserve Hub %q, namespace %q, Helm release %q, and Cloud cluster name %q", *hubURL, *namespace, *release, clusterName)
-		if *chartVersion != "" {
-			fmt.Fprintf(os.Stderr, ", using chart version %q", *chartVersion)
-		}
-		fmt.Fprintln(os.Stderr, ".")
+	*namespace, *release = plan.Namespace, plan.Release
+	if !confirmDiscoveryUncertainty(os.Stdin, os.Stderr, plan.ClusterWideScanError, interactive, plan.Namespace, plan.Release) {
+		fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
 		os.Exit(1)
 	}
-	if len(pf.Advisory) > 0 {
-		fmt.Println("Note: couldn't confirm these up front (the server dry-run or install will report a denial if they're truly missing):")
-		for _, d := range pf.Advisory {
-			fmt.Printf("  • %s\n", d)
-		}
-		fmt.Println()
+	if *adoptExisting && plan.Mode == cloudInstallFresh {
+		fmt.Fprintln(os.Stderr, "--adopt-existing was set, but no existing Radar release was found at the selected target; refusing to turn an adoption assertion into a fresh install.")
+		os.Exit(1)
+	}
+	if *enableCloudFeatures && plan.Mode == cloudInstallFresh {
+		fmt.Fprintln(os.Stderr, "--enable-cloud-features applies only when connecting an existing installation; fresh Cloud installs already enable those capabilities.")
+		os.Exit(2)
 	}
 
-	// 2. Resolve and server-dry-run one exact chart after checking that both the
-	//    release name and fixed token Secret are unused. No Hub request exists yet.
-	prepared, err := cloudinstall.Prepare(ctx, hc, kc, cloudinstall.PrepareConfig{
-		Namespace: *namespace, ReleaseName: *release, ChartVersion: *chartVersion,
-	})
+	// Resolve one exact stable target before approval. Native Helm adoption pins
+	// both the current release identity and target chart bytes; GitOps only
+	// resolves the target version and never prepares an imperative mutation.
+	var prepared *cloudinstall.PreparedProvision
+	var gitOpsTarget helm.PreparedChartSummary
+	if plan.Mode == cloudInstallGitOps {
+		gitOpsTarget, err = cloudinstall.ResolveCloudChartSummary(ctx, clients.Helm, *chartVersion)
+		if err == nil {
+			_, err = buildGitOpsHandoff(plan, gitOpsTarget, "wss://preflight.invalid/agent", "preflight-cluster-id", *enableCloudFeatures)
+		}
+		if err == nil {
+			printGitOpsInstallPlan(os.Stdout, plan, gitOpsTarget, *enableCloudFeatures)
+		}
+	} else {
+		prepared, err = cloudinstall.Prepare(ctx, clients.Helm, clients.Kubernetes, cloudinstall.PrepareConfig{
+			Namespace:           plan.Namespace,
+			ReleaseName:         plan.Release,
+			ChartVersion:        *chartVersion,
+			AdoptExisting:       plan.Mode == cloudInstallAdopt,
+			EnableCloudFeatures: *enableCloudFeatures,
+			DisableSelfUpgrade:  *noSelfUpgrade,
+		})
+		if err == nil {
+			printPreparedInstallPlan(os.Stdout, prepared, *enableCloudFeatures, *noSelfUpgrade)
+		}
+	}
 	if err != nil {
-		if !printFreshInstallConflict(os.Stderr, err) && !printTokenSecretConflict(os.Stderr, err) {
-			fmt.Fprintf(os.Stderr, "installation preflight failed: %v\n", err)
+		if !printFreshInstallConflict(os.Stderr, err, commandTarget) && !printTokenSecretConflict(os.Stderr, err) {
+			fmt.Fprintf(os.Stderr, "installation preparation failed: %v\n", err)
 		}
 		fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
 		os.Exit(1)
 	}
 
-	// 3. Dry-run stops here — before any token mint or browser.
+	if plan.Mode != cloudInstallFresh && !*dryRun && !confirmExistingInstall(os.Stdin, os.Stderr, plan, *adoptExisting, interactive) {
+		fmt.Fprintln(os.Stderr, "Cloud connection canceled. No Hub request or Kubernetes change was made.")
+		os.Exit(1)
+	}
+
+	// Prove the caller can perform the planned Kubernetes mutations before the
+	// Hub creates a cluster or mints a token. GitOps handoff performs no live
+	// mutation, so discovery/read access is its complete local gate.
+	if plan.Mode != cloudInstallGitOps {
+		var pf cloudinstall.PreflightResult
+		if plan.Mode == cloudInstallAdopt {
+			pf, err = cloudinstall.AdoptionPreflight(ctx, clients.Kubernetes, clients.Dynamic, clients.Discovery, cloudinstall.AdoptionPreflightOptions{
+				Namespace:       prepared.Namespace(),
+				ReleaseName:     prepared.ReleaseName(),
+				CurrentRevision: prepared.CurrentRevision(),
+				CurrentManifest: prepared.CurrentManifest(),
+				TargetManifest:  prepared.TargetManifest(),
+			})
+		} else {
+			pf, err = cloudinstall.FreshInstallPreflight(ctx, clients.Kubernetes, clients.Dynamic, clients.Discovery, cloudinstall.FreshInstallPreflightOptions{
+				Namespace:      prepared.Namespace(),
+				ReleaseName:    prepared.ReleaseName(),
+				TargetManifest: prepared.TargetManifest(),
+			})
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "permission preflight failed: %v\n", err)
+			fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
+			os.Exit(1)
+		}
+		if !pf.OK() {
+			printCloudPermissionFailure(os.Stderr, pf, ctxName, *hubURL, prepared, clusterName)
+			fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
+			os.Exit(1)
+		}
+		printCloudPermissionAdvisories(os.Stdout, pf)
+	}
+
+	// Dry-run stops before device approval and token minting.
 	if *dryRun {
-		deployment := prepared.Deployment()
-		fmt.Printf("Dry run — chart skyhook/radar version %s rendered against the target API server without conflicts as release %q in namespace %q (Deployment %q).\n",
-			prepared.ChartVersion(), prepared.ReleaseName(), prepared.Namespace(), deployment.Name)
-		fmt.Println("Blocking permission checks and installation preflight passed. Re-run without --dry-run to install.")
+		if plan.Mode == cloudInstallGitOps {
+			fmt.Println("Dry run complete. The verified GitOps controller and exact stable target are shown above; no Hub request or live Kubernetes change was made.")
+		} else {
+			fmt.Println("Dry run complete. Blocking permission checks and chart preparation passed; no Hub request or Kubernetes change was made.")
+		}
 		return
 	}
 
-	// 4. Device flow → approve → cluster token (deployment_mode=in-cluster, so the
-	//    hub tags the cluster source=connect_incluster).
+	// Device flow → approve → cluster token (deployment_mode=in-cluster, so the
+	// Hub tags the cluster source=connect_incluster).
 	meta := gatherConnectMetadata(clusterName, kubeconfig, ctxName)
 	client := cloud.NewConnectClient(*hubURL)
 	cr, err := client.Create(ctx, meta)
@@ -289,34 +359,57 @@ func cloudInstall(args []string) {
 		fmt.Fprintf(os.Stderr, "\nconnect failed: %v\n", err)
 		os.Exit(1)
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && plan.Mode != cloudInstallGitOps {
 		printCanceledAfterApproval(os.Stderr, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
 		os.Exit(1)
 	}
 
-	// 5. Provision the exact prepared chart with the approved runtime values.
-	fmt.Printf("\n  Approved. Installing Radar into %q…\n", *namespace)
-	perr := cloudinstall.ProvisionPrepared(ctx, kc, prepared, cloudinstall.ProvisionConfig{
-		Namespace:    *namespace,
-		ReleaseName:  *release,
+	if plan.Mode == cloudInstallGitOps {
+		if err := printApprovedGitOpsHandoff(os.Stdout, plan, gitOpsTarget, pr.WSSURL, pr.ClusterID, pr.Token, *enableCloudFeatures); err != nil {
+			fmt.Fprintf(os.Stderr, "\ncreate GitOps handoff: %v\n", err)
+			printCanceledAfterApproval(os.Stderr, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
+			os.Exit(1)
+		}
+		fmt.Printf("\n  Waiting up to %s for your GitOps-managed agent to connect (you can safely leave this running)…\n", cloudTunnelConfirmationTimeout)
+		if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationTimeout); err != nil {
+			printGitOpsPendingHandoff(os.Stderr, err, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
+			return
+		}
+		printInstallSuccess(os.Stdout, clusterName, cloudClusterURL(cr.ConnectURL, pr.ClusterID), helm.DeploymentRef{
+			Name: plan.Target.DeploymentName, Namespace: plan.Target.Namespace,
+		}, commandTarget)
+		return
+	}
+
+	action := "Installing"
+	if plan.Mode == cloudInstallAdopt {
+		action = "Upgrading and connecting"
+	}
+	fmt.Printf("\n  Approved. %s Radar in namespace %q…\n", action, prepared.Namespace())
+	perr := cloudinstall.ProvisionPrepared(ctx, clients.Kubernetes, prepared, cloudinstall.ProvisionConfig{
+		Namespace:    prepared.Namespace(),
+		ReleaseName:  prepared.ReleaseName(),
 		ChartVersion: prepared.ChartVersion(),
 		CloudURL:     pr.WSSURL,
 		ClusterID:    pr.ClusterID,
 		Token:        pr.Token,
 	})
 	if perr != nil {
-		fmt.Fprintf(os.Stderr, "\ninstall failed: %v\n", perr)
-		printPostApprovalRecoveryGuidance(os.Stderr, pr.ClusterID, prepared.ReleaseName(), prepared.Namespace(), prepared.Deployment())
+		fmt.Fprintf(os.Stderr, "\nprovisioning failed: %v\n", perr)
+		printPostApprovalRecoveryGuidance(os.Stderr, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID), provisionRecoveryFrom(prepared), perr, commandTarget)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n  Installed. Waiting up to %s for the in-cluster agent to connect…\n", cloudTunnelConfirmationTimeout)
+	fmt.Printf("\n  Kubernetes provisioning complete. Waiting up to %s for the in-cluster agent to connect…\n", cloudTunnelConfirmationTimeout)
 	if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationTimeout); err != nil {
-		printTunnelConfirmationFailure(os.Stderr, err, pr.ClusterID, pr.WSSURL, prepared.Deployment())
+		printTunnelConfirmationFailure(os.Stderr, err, pr.ClusterID, pr.WSSURL, prepared.Deployment(), commandTarget)
 		os.Exit(1)
 	}
 
-	printInstallSuccess(os.Stdout, clusterName, cloudClusterURL(cr.ConnectURL, pr.ClusterID), prepared.Deployment())
+	printInstallSuccess(os.Stdout, clusterName, cloudClusterURL(cr.ConnectURL, pr.ClusterID), prepared.Deployment(), commandTarget)
+	if plan.Mode == cloudInstallAdopt {
+		printAdoptionRollbackGuidance(os.Stdout, provisionRecoveryFrom(prepared), cloudClusterURL(cr.ConnectURL, pr.ClusterID), commandTarget)
+	}
 }
 
 func normalizeCloudInstallNames(namespace, release string) (string, string, error) {
@@ -358,17 +451,17 @@ func cloudClusterURL(connectURL, clusterID string) string {
 	return origin + "/c/" + url.PathEscape(clusterID)
 }
 
-func printInstallSuccess(w io.Writer, clusterName, clusterURL string, deployment helm.DeploymentRef) {
-	fmt.Fprintf(w, "\n  ✓ Cluster %q installed and connected to Radar Cloud.\n", clusterName)
+func printInstallSuccess(w io.Writer, clusterName, clusterURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
+	fmt.Fprintf(w, "\n  ✓ Cluster %q is connected to Radar Cloud.\n", clusterName)
 	fmt.Fprintf(w, "    Open: %s\n", clusterURL)
-	fmt.Fprintf(w, "    Track it: kubectl -n %s rollout status deployment/%s\n\n", deployment.Namespace, deployment.Name)
+	fmt.Fprintf(w, "    Track it: %s -n %s rollout status deployment/%s\n\n", target.kubectl(), deployment.Namespace, deployment.Name)
 }
 
-func printFreshInstallConflict(w io.Writer, err error) bool {
+func printFreshInstallConflict(w io.Writer, err error, target cloudCommandTarget) bool {
 	var exists *helm.ReleaseExistsError
 	if errors.As(err, &exists) {
 		fmt.Fprintf(w, "Radar is already deployed as Helm release %q in namespace %q (revision %d).\n", exists.Name, exists.Namespace, exists.Revision)
-		fmt.Fprintln(w, "`radar cloud install` only creates fresh installations. In the Hub installation wizard, choose \"Existing installation\" and apply its generated Helm upgrade instead.")
+		fmt.Fprintln(w, "The release appeared after this command inspected the cluster, so the prepared fresh-install plan is stale. Rerun the command to classify it; approve the offered adoption interactively or pass --adopt-existing in automation.")
 		return true
 	}
 
@@ -380,7 +473,7 @@ func printFreshInstallConflict(w io.Writer, err error) bool {
 		} else {
 			fmt.Fprintln(w, "Radar cannot safely determine how to continue this Helm release. Inspect its state with:")
 		}
-		fmt.Fprintf(w, "  helm status %s -n %s\n", pending.Name, pending.Namespace)
+		fmt.Fprintf(w, "  %s status %s -n %s\n", target.helm(), pending.Name, pending.Namespace)
 		fmt.Fprintln(w, "Resolve that release before retrying; Cloud installation will not overwrite it.")
 		return true
 	}
@@ -389,7 +482,7 @@ func printFreshInstallConflict(w io.Writer, err error) bool {
 	if errors.As(err, &history) {
 		fmt.Fprintf(w, "Helm release %q in namespace %q has retained %q history (revision %d).\n", history.Name, history.Namespace, history.Status, history.Revision)
 		fmt.Fprintln(w, "Cloud installation will not adopt or replace prior Helm history. Inspect it with:")
-		fmt.Fprintf(w, "  helm history %s -n %s\n", history.Name, history.Namespace)
+		fmt.Fprintf(w, "  %s history %s -n %s\n", target.helm(), history.Name, history.Namespace)
 		fmt.Fprintln(w, "Then choose a new --release name, or deliberately remove the old release history before retrying.")
 		return true
 	}
@@ -415,17 +508,67 @@ func printCanceledAfterApproval(w io.Writer, clusterID, clusterURL string) {
 	fmt.Fprintf(w, "  %s\n", clusterURL)
 }
 
-func printPostApprovalRecoveryGuidance(w io.Writer, clusterID, releaseName, namespace string, deployment helm.DeploymentRef) {
-	fmt.Fprintf(w, "Hub cluster %q already exists. Do not rerun the installer or delete it by default; first inspect the existing attempt.\n", clusterID)
+type cloudProvisionRecovery struct {
+	Mode            cloudinstall.ProvisionMode
+	ReleaseName     string
+	Namespace       string
+	Deployment      helm.DeploymentRef
+	CurrentRevision int
+}
+
+func provisionRecoveryFrom(prepared *cloudinstall.PreparedProvision) cloudProvisionRecovery {
+	return cloudProvisionRecovery{
+		Mode:            prepared.Mode(),
+		ReleaseName:     prepared.ReleaseName(),
+		Namespace:       prepared.Namespace(),
+		Deployment:      prepared.Deployment(),
+		CurrentRevision: prepared.CurrentRevision(),
+	}
+}
+
+func printPostApprovalRecoveryGuidance(w io.Writer, clusterID, clusterURL string, recovery cloudProvisionRecovery, provisionErr error, target cloudCommandTarget) {
+	fmt.Fprintf(w, "Hub cluster %q already exists. Do not rerun the installer; first inspect the existing attempt.\n", clusterID)
+	fmt.Fprintf(w, "Open: %s\n", clusterURL)
+	if recovery.Mode == cloudinstall.ProvisionAdopt {
+		var adoptionErr *cloudinstall.AdoptionUpgradeError
+		var preMutationErr *cloudinstall.ProvisionPreMutationError
+		switch {
+		case errors.As(provisionErr, &preMutationErr):
+			fmt.Fprintln(w, "The Helm upgrade did not start, so there was no rollback to verify.")
+			if preMutationErr.TokenSecretMayExist {
+				fmt.Fprintln(w, "Kubernetes did not confirm whether the Cloud token Secret was created. Inspect the fixed Secret name before deciding how to recover this Hub cluster.")
+			} else {
+				fmt.Fprintln(w, "This attempt created no Cloud token Secret and made no change to the existing Helm release.")
+				fmt.Fprintln(w, "Use this Hub cluster's owner-only Resume install flow to generate fresh credentials, or delete it before deliberately starting over.")
+			}
+		case errors.As(provisionErr, &adoptionErr) && adoptionErr.RollbackVerified:
+			fmt.Fprintf(w, "Helm's atomic rollback restored the original release after the failed adoption (the pre-adoption revision was %d).\n", recovery.CurrentRevision)
+			if adoptionErr.TokenSecretPreserved {
+				fmt.Fprintln(w, "The Cloud token Secret could not be safely removed; keep it while you inspect the release and recover this same Hub cluster.")
+			} else {
+				fmt.Fprintln(w, "The unchanged Cloud token Secret created by this attempt was removed after rollback verification.")
+			}
+		default:
+			fmt.Fprintln(w, "Radar could not prove that the original release was fully restored, so it preserved the Cloud token Secret. Inspect and recover this same Hub cluster before any cleanup.")
+		}
+		fmt.Fprintln(w, "Inspect:")
+		fmt.Fprintf(w, "  %s status %s -n %s\n", target.helm(), recovery.ReleaseName, recovery.Namespace)
+		fmt.Fprintf(w, "  %s history %s -n %s\n", target.helm(), recovery.ReleaseName, recovery.Namespace)
+		fmt.Fprintf(w, "  %s -n %s get secret/%s\n", target.kubectl(), recovery.Namespace, cloudinstall.CloudTokenSecretName)
+		fmt.Fprintf(w, "  %s -n %s get deployment/%s\n", target.kubectl(), recovery.Deployment.Namespace, recovery.Deployment.Name)
+		return
+	}
+
+	releaseName, namespace, deployment := recovery.ReleaseName, recovery.Namespace, recovery.Deployment
 	fmt.Fprintln(w, "Inspect:")
-	fmt.Fprintf(w, "  helm status %s -n %s\n", releaseName, namespace)
-	fmt.Fprintf(w, "  kubectl -n %s get secret/%s\n", namespace, cloudinstall.CloudTokenSecretName)
-	fmt.Fprintf(w, "  kubectl -n %s get deployment/%s\n", deployment.Namespace, deployment.Name)
+	fmt.Fprintf(w, "  %s status %s -n %s\n", target.helm(), releaseName, namespace)
+	fmt.Fprintf(w, "  %s -n %s get secret/%s\n", target.kubectl(), namespace, cloudinstall.CloudTokenSecretName)
+	fmt.Fprintf(w, "  %s -n %s get deployment/%s\n", target.kubectl(), deployment.Namespace, deployment.Name)
 	fmt.Fprintln(w, "The installer removes only the unchanged token Secret it created when a Helm failure can be cleaned up safely; verify the actual release and Secret state.")
 	fmt.Fprintln(w, "If the token Secret remains, recover the partial install with this Hub cluster. If the Secret was cleaned up, the token is no longer recoverable: clean up any partial Helm release, then delete this Hub cluster before starting a fresh flow.")
 }
 
-func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL string, deployment helm.DeploymentRef) {
+func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
 	reason := err.Error()
 	switch {
 	case errors.Is(err, cloud.ErrConnectConsumptionTimeout):
@@ -436,11 +579,11 @@ func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL 
 		reason = "confirmation was canceled"
 	}
 
-	fmt.Fprintf(w, "\nRadar was installed and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.\n", clusterID, reason)
+	fmt.Fprintf(w, "\nRadar was provisioned and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.\n", clusterID, reason)
 	fmt.Fprintln(w, "Do not rerun the installer or delete the cluster by default; the existing agent can still connect after you resolve its startup or egress issue.")
 	fmt.Fprintln(w, "Inspect:")
-	fmt.Fprintf(w, "  kubectl -n %s rollout status deployment/%s\n", deployment.Namespace, deployment.Name)
-	fmt.Fprintf(w, "  kubectl -n %s logs deployment/%s --all-containers=true --tail=200\n", deployment.Namespace, deployment.Name)
+	fmt.Fprintf(w, "  %s -n %s rollout status deployment/%s\n", target.kubectl(), deployment.Namespace, deployment.Name)
+	fmt.Fprintf(w, "  %s -n %s logs deployment/%s --all-containers=true --tail=200\n", target.kubectl(), deployment.Namespace, deployment.Name)
 	fmt.Fprintf(w, "Verify cluster DNS and outbound WSS/HTTPS access to %s.\n", cloudURL)
 	fmt.Fprintln(w, "Keep using this Hub cluster and token Secret for recovery. Only if you deliberately abandon the installation should you clean up Helm and the Secret, then delete the Hub cluster before starting a fresh flow.")
 }
@@ -448,11 +591,19 @@ func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL 
 // buildLocalInstallClients resolves a kube clientset + Helm client from the
 // resolved kubecontext (honoring a config.json kubeconfig override), so the
 // install targets the operator's configured cluster, not the default context.
-func buildLocalInstallClients(kubeconfig, contextName string) (kubernetes.Interface, *helm.Client, error) {
+type localInstallClients struct {
+	Kubernetes kubernetes.Interface
+	Dynamic    dynamic.Interface
+	Discovery  discovery.DiscoveryInterface
+	Helm       *helm.Client
+	Releases   cloudReleaseInspector
+}
+
+func buildLocalInstallClients(kubeconfig, contextName string) (localInstallClients, error) {
 	rules := connectLoadingRules(kubeconfig)
 	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: contextName}).ClientConfig()
 	if err != nil {
-		return nil, nil, fmt.Errorf("no reachable kubeconfig context: %w", err)
+		return localInstallClients{}, fmt.Errorf("no reachable kubeconfig context: %w", err)
 	}
 	// Helm's non-cancelable mutation avoids returning while its background apply
 	// is still running. Bound each Kubernetes request so that critical section
@@ -462,15 +613,25 @@ func buildLocalInstallClients(kubeconfig, contextName string) (kubernetes.Interf
 	}
 	kc, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("kube client: %w", err)
+		return localInstallClients{}, fmt.Errorf("kube client: %w", err)
+	}
+	dc, err := dynamic.NewForConfig(restCfg)
+	if err != nil {
+		return localInstallClients{}, fmt.Errorf("dynamic kube client: %w", err)
 	}
 	// Hand Helm the SAME resolved rest.Config, not a kubeconfig path — otherwise
 	// a multi-file KUBECONFIG could leave Helm on a different current-context
 	// (cluster B) than the preflight/Secret client (cluster A).
 	if err := helm.InitializeWithRESTConfig(restCfg); err != nil {
-		return nil, nil, fmt.Errorf("helm init: %w", err)
+		return localInstallClients{}, fmt.Errorf("helm init: %w", err)
 	}
-	return kc, helm.GetClient(), nil
+	return localInstallClients{
+		Kubernetes: kc,
+		Dynamic:    dc,
+		Discovery:  kc.Discovery(),
+		Helm:       helm.GetClient(),
+		Releases:   helm.GetClient(),
+	}, nil
 }
 
 // connectLoadingRules builds kubeconfig loading rules that honor a config.json
@@ -507,14 +668,8 @@ func resolveCloudInstallContext(kubeconfig, requested string) (string, error) {
 	return contextName, nil
 }
 
-type cloudInstallTarget struct {
-	Context   string
-	Namespace string
-	Release   string
-}
-
-func confirmCloudInstallTarget(in io.Reader, out io.Writer, target cloudInstallTarget, contextExplicit, yes, interactive bool) bool {
-	fmt.Fprintf(out, "Target:\n  Kubernetes context: %q\n  Namespace: %q\n  Helm release: %q\n", target.Context, target.Namespace, target.Release)
+func confirmCloudInstallContext(in io.Reader, out io.Writer, contextName string, contextExplicit, yes, interactive bool) bool {
+	fmt.Fprintf(out, "Kubernetes context: %q\n", contextName)
 	if contextExplicit || yes {
 		return true
 	}
@@ -522,7 +677,7 @@ func confirmCloudInstallTarget(in io.Reader, out io.Writer, target cloudInstallT
 		fmt.Fprintln(out, "No interactive terminal is available for current-context confirmation.")
 		return false
 	}
-	fmt.Fprint(out, "Continue with this target? [y/N] ")
+	fmt.Fprint(out, "Use this current context? [y/N] ")
 	line, _ := bufio.NewReader(in).ReadString('\n')
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes"

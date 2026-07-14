@@ -106,8 +106,9 @@ rbac:
   # installs — those have direct kubectl/Helm access anyway.
   # Security scope: namespace-scoped Role (not ClusterRole), restricted to this
   # Deployment only via resourceNames, get+patch verbs only (no delete/create).
-  # The endpoint validates that the requested image comes from
-  # ghcr.io/skyhook-io/radar before issuing any patch.
+  # The endpoint requires an explicitly attributed Radar Cloud organization
+  # owner, validates the requested Radar tag, and preserves the repository
+  # already configured on the live container (including private mirrors).
   selfUpgrade: false
 
   # Traffic visibility (Hubble/Cilium integration)

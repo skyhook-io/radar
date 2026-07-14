@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,11 +11,13 @@ import (
 	"strings"
 
 	"helm.sh/helm/v3/pkg/releaseutil"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/logsafe"
@@ -41,13 +44,27 @@ func selfUpgradePatchOptions() metav1.PatchOptions {
 // pod restarts on a new version. Called by Radar Cloud's upgrade-agent endpoint
 // over the yamux tunnel — no user terminal or cloud credentials needed.
 //
-// Security: only images under ghcr.io/skyhook-io/radar: are accepted. The
-// apply body is the Helm release's rendered Deployment with only that image
-// swapped, so the SA must also be able to read Helm release storage and patch
-// its own Deployment (Helm rbac.selfUpgrade: true). MY_POD_NAMESPACE and
-// MY_DEPLOYMENT_NAME must be set by the chart (downward API + static template
-// value respectively) or the endpoint returns 503.
+// Security: Cloud callers must be explicitly attributed organization owners,
+// and Hub's requested target must be an allowlisted Radar tag. The live Radar
+// container's repository is preserved so private mirrors are never silently
+// replaced with GHCR. The apply body is the Helm release's rendered Deployment
+// with only that image swapped, so the SA must also be able to read Helm release
+// storage and patch its own Deployment (Helm rbac.selfUpgrade: true).
+// MY_POD_NAMESPACE and MY_DEPLOYMENT_NAME must be set by the chart (downward API
+// + static template value respectively) or the endpoint returns 503.
 func (s *Server) handleSelfUpgrade(w http.ResponseWriter, r *http.Request) {
+	// This endpoint exists only for Hub's tunnel control path, unlike the
+	// generic settings gates that deliberately let non-Cloud OSS requests use
+	// Kubernetes RBAC alone. Missing or unknown Cloud role attribution must
+	// therefore fail closed.
+	role := auth.CloudRoleFromContext(r.Context())
+	if role != auth.RoleOwner {
+		log.Printf("[self-upgrade] Cloud role %q denied agent upgrade: %q", role, r.URL.Path)
+		s.writeErrorCode(w, http.StatusForbidden, auth.ErrCodeCloudRoleInsufficient,
+			"Your Radar Cloud role ("+role.String()+") cannot upgrade the Radar agent. Requires owner.")
+		return
+	}
+
 	ns := os.Getenv("MY_POD_NAMESPACE")
 	deployment := os.Getenv("MY_DEPLOYMENT_NAME")
 	if ns == "" || deployment == "" {
@@ -102,8 +119,14 @@ func (s *Server) handleSelfUpgrade(w http.ResponseWriter, r *http.Request) {
 	if releaseName == "" {
 		releaseName = deployment
 	}
+	targetImage, err := selfUpgradeImage(deploy.Spec.Template.Spec.Containers, tag)
+	if err != nil {
+		log.Printf("[self-upgrade] resolve current Radar image failed: ns=%s deploy=%s tag=%s err=%v", ns, deployment, logsafe.Sanitize(tag), err)
+		s.writeError(w, http.StatusServiceUnavailable, "current Radar image is not available")
+		return
+	}
 
-	patch, err := selfUpgradeApplyPatch(ns, releaseName, deployment, req.Image)
+	patch, err := selfUpgradeApplyPatch(ns, releaseName, deployment, targetImage)
 	if err != nil {
 		log.Printf("[self-upgrade] failed to build apply patch: ns=%s deploy=%s tag=%s err=%v", ns, deployment, logsafe.Sanitize(tag), err)
 		s.writeError(w, http.StatusServiceUnavailable, "helm release manifest not available")
@@ -139,11 +162,29 @@ func (s *Server) handleSelfUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[self-upgrade] initiated: ns=%s deploy=%s tag=%s", ns, deployment, logsafe.Sanitize(tag))
-	s.writeJSON(w, map[string]string{"status": "upgrade initiated", "image": req.Image})
+	s.writeJSON(w, map[string]string{"status": "upgrade initiated", "image": targetImage})
 }
 
 func isValidRadarImageTag(tag string) bool {
 	return radarImageTagPattern.MatchString(tag)
+}
+
+// selfUpgradeImage keeps the repository already configured on the live Radar
+// container and changes only its tag. Hub still supplies an allowlisted Radar
+// tag, but installations using a private mirror must not be silently switched
+// back to GHCR by the convenience action.
+func selfUpgradeImage(containers []corev1.Container, tag string) (string, error) {
+	for _, container := range containers {
+		if container.Name != "radar" {
+			continue
+		}
+		repository := imageRepo(container.Image)
+		if repository == "" {
+			return "", errors.New("Radar container image repository is empty")
+		}
+		return repository + ":" + tag, nil
+	}
+	return "", errors.New("Radar container not found")
 }
 
 func selfUpgradeApplyPatch(namespace, releaseName, deployment, image string) ([]byte, error) {

@@ -15,7 +15,7 @@ import (
 )
 
 func TestCloudInstallValues(t *testing.T) {
-	v := cloudInstallValues("wss://api.radarhq.io/agent", "k3Fg-9pA")
+	v := cloudInstallValues("wss://api.radarhq.io/agent", "k3Fg-9pA", false)
 	cloud, _ := v["cloud"].(map[string]any)
 	if cloud["enabled"] != true {
 		t.Error("cloud.enabled must be true")
@@ -35,6 +35,39 @@ func TestCloudInstallValues(t *testing.T) {
 	}
 	if auth, _ := v["auth"].(map[string]any); auth["mode"] != "proxy" {
 		t.Errorf("auth.mode must be proxy, got %v", v["auth"])
+	}
+	if rbac, _ := v["rbac"].(map[string]any); rbac["selfUpgrade"] != true {
+		t.Errorf("rbac.selfUpgrade must default on, got %v", v["rbac"])
+	}
+}
+
+func TestCloudInstallValuesCanDisableSelfUpgrade(t *testing.T) {
+	v := cloudInstallValues("wss://api.radarhq.io/agent", "cluster", true)
+	rbac, _ := v["rbac"].(map[string]any)
+	if rbac["selfUpgrade"] != false {
+		t.Fatalf("rbac.selfUpgrade = %v, want false", rbac["selfUpgrade"])
+	}
+}
+
+func TestCloudAdoptionValuesPreserveFeatureRBACUnlessEnabled(t *testing.T) {
+	preserved := cloudAdoptionValues("wss://api.radarhq.io/agent", "cluster", false, false)
+	if _, ok := preserved["auth"]; ok {
+		t.Fatal("adoption must preserve the existing auth value")
+	}
+	rbac, _ := preserved["rbac"].(map[string]any)
+	if len(rbac) != 1 || rbac["selfUpgrade"] != true {
+		t.Fatalf("default adoption RBAC = %#v, want only selfUpgrade=true", rbac)
+	}
+
+	enabled := cloudAdoptionValues("wss://api.radarhq.io/agent", "cluster", true, true)
+	rbac, _ = enabled["rbac"].(map[string]any)
+	for _, key := range []string{"helm", "secrets", "podExec", "portForward", "metrics"} {
+		if rbac[key] != true {
+			t.Errorf("rbac.%s = %v, want true", key, rbac[key])
+		}
+	}
+	if rbac["selfUpgrade"] != false {
+		t.Errorf("rbac.selfUpgrade = %v, want explicit opt-out", rbac["selfUpgrade"])
 	}
 }
 
