@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -23,6 +23,7 @@ import { toCanvas } from 'html-to-image'
 
 import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Info, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield } from 'lucide-react'
 import { PaneLoader } from '../ui/PaneLoader'
+import { TopologyOverlayBar } from './TopologyOverlayBar'
 import { Input } from '../ui/Input'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
@@ -186,10 +187,6 @@ interface TopologyGraphProps {
   onTogglePause?: () => void
   /** Called when user clicks "maximize" on a namespace group — sets namespace filter to just that namespace */
   onMaximizeNamespace?: (namespace: string) => void
-  /** Shown as a breadcrumb label when viewing a single namespace */
-  namespaceBreadcrumb?: string
-  /** Called when breadcrumb "back" is clicked to return to all-namespace view */
-  onClearNamespace?: () => void
   /** Serialized namespace filter — when this changes, reset groupLevels for fresh smart default */
   namespacesKey?: string
   /** Node to pan/zoom the canvas to. Bump focusNonce to re-trigger for the same id. */
@@ -207,6 +204,9 @@ interface TopologyGraphProps {
   onToggleReplicaSets?: (ownerID: string) => void
   /** Padding reserved around fit-to-view operations for overlaid UI. */
   fitViewPadding?: FitViewOptions['padding']
+  /** Host overlay content (e.g. a search + controls row), stacked above the
+   *  topology's own status banners in the overlay bar. */
+  children?: ReactNode
 }
 
 export function TopologyGraph({
@@ -220,8 +220,6 @@ export function TopologyGraph({
   paused = false,
   onTogglePause,
   onMaximizeNamespace,
-  namespaceBreadcrumb,
-  onClearNamespace,
   namespacesKey = '',
   focusNodeId,
   focusNonce,
@@ -229,6 +227,7 @@ export function TopologyGraph({
   onNodeHover,
   onToggleReplicaSets,
   fitViewPadding = 0.15,
+  children,
 }: TopologyGraphProps) {
   const isTrafficView = viewMode === 'traffic'
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([] as Node[])
@@ -933,96 +932,83 @@ export function TopologyGraph({
 
   return (
     <ReactFlowProvider>
-      {/* Namespace breadcrumb — shown when viewing a single namespace */}
-      {namespaceBreadcrumb && (
-        <div className="absolute top-3 left-3 z-10 flex items-center gap-1.5">
-          {onClearNamespace && (
-            <button
-              onClick={onClearNamespace}
-              className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-            >
-              All Namespaces
-            </button>
-          )}
-          {onClearNamespace && (
-            <span className="text-xs text-theme-text-tertiary">/</span>
-          )}
-          <span className="text-xs font-medium text-theme-text-secondary bg-theme-surface/80 backdrop-blur-sm border border-theme-border/50 rounded-md px-2 py-0.5">
-            {namespaceBreadcrumb}
-          </span>
-        </div>
-      )}
-      {/* Warning banner for partial topology data */}
-      {topology?.warnings && topology.warnings.length > 0 && (() => {
-        const rbacWarnings = topology.warnings.filter(w => w.includes('RBAC not granted'))
-        const viewWarnings = topology.warnings.filter(w => w.startsWith('Topology view:'))
-        const otherWarnings = topology.warnings.filter(w => !w.includes('RBAC not granted') && !w.startsWith('Topology view:'))
-        const isAllRbac = otherWarnings.length === 0 && viewWarnings.length === 0
-        const isViewLimited = otherWarnings.length === 0 && rbacWarnings.length === 0 && viewWarnings.length > 0
-        return (
-          <div className={`absolute top-2 z-10 ${isViewLimited ? 'left-2 max-w-xl' : 'left-2 right-2'} ${isAllRbac ? 'bg-amber-500/10 border-amber-500/20' : 'bg-amber-500/10 border-amber-500/30'} border rounded-lg p-2 backdrop-blur-sm`}>
+      {/* Overlay bar: status banners lead (a partial-data/RBAC warning must read
+          before the user trusts the graph), host children stack below. Flex
+          column so nothing overlaps. Banners de-absoluted — the bar owns position/z. */}
+      <TopologyOverlayBar>
+        {/* Warning banner for partial topology data */}
+        {topology?.warnings && topology.warnings.length > 0 && (() => {
+          const rbacWarnings = topology.warnings.filter(w => w.includes('RBAC not granted'))
+          const viewWarnings = topology.warnings.filter(w => w.startsWith('Topology view:'))
+          const otherWarnings = topology.warnings.filter(w => !w.includes('RBAC not granted') && !w.startsWith('Topology view:'))
+          const isAllRbac = otherWarnings.length === 0 && viewWarnings.length === 0
+          const isViewLimited = otherWarnings.length === 0 && rbacWarnings.length === 0 && viewWarnings.length > 0
+          return (
+            <div className={`pointer-events-auto ${isViewLimited ? 'max-w-xl' : 'w-full'} ${isAllRbac ? 'bg-amber-500/10 border-amber-500/20' : 'bg-amber-500/10 border-amber-500/30'} border rounded-lg p-2 backdrop-blur-sm`}>
+              <div className="flex items-start gap-2">
+                {isAllRbac ? (
+                  <Shield className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                )}
+                <div className="text-sm">
+                  <span className="font-medium text-amber-400">
+                    {isAllRbac ? 'Limited Access:' : isViewLimited ? 'View limited:' : 'Warning:'}
+                  </span>
+                  <span className="text-theme-text-secondary ml-1">
+                    {isAllRbac
+                      ? `${pluralize(rbacWarnings.length, 'resource type')} not accessible due to RBAC restrictions.`
+                      : isViewLimited
+                        ? 'Large retained run history is summarized to keep the graph readable.'
+                        : 'Some resources failed to load. Data may be incomplete.'}
+                  </span>
+                  <details className="mt-1">
+                    <summary className="text-xs text-amber-400/80 hover:text-amber-400">
+                      Show details ({topology.warnings.length})
+                    </summary>
+                    <ul className="mt-1 text-xs text-theme-text-tertiary space-y-0.5">
+                      {rbacWarnings.length > 0 && otherWarnings.length > 0 && (
+                        <li className="text-amber-400/60 font-medium mt-1">RBAC restrictions:</li>
+                      )}
+                      {rbacWarnings.map((w, i) => (
+                        <li key={`rbac-${i}`} className="font-mono">{w}</li>
+                      ))}
+                      {viewWarnings.length > 0 && (rbacWarnings.length > 0 || otherWarnings.length > 0) && (
+                        <li className="text-amber-400/60 font-medium mt-1">View limits:</li>
+                      )}
+                      {viewWarnings.map((w, i) => (
+                        <li key={`view-${i}`} className="font-mono">{w}</li>
+                      ))}
+                      {otherWarnings.length > 0 && (rbacWarnings.length > 0 || viewWarnings.length > 0) && (
+                        <li className="text-amber-400/60 font-medium mt-1">Other warnings:</li>
+                      )}
+                      {otherWarnings.map((w, i) => (
+                        <li key={`other-${i}`} className="font-mono">{w}</li>
+                      ))}
+                    </ul>
+                  </details>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+        {/* Layout error banner - shown even when stale nodes exist */}
+        {layoutError && nodes.length > 0 && (
+          <div className="w-full pointer-events-auto bg-red-500/10 border border-red-500/30 rounded-lg p-2 backdrop-blur-sm">
             <div className="flex items-start gap-2">
-              {isAllRbac ? (
-                <Shield className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-              ) : (
-                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-              )}
+              <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
               <div className="text-sm">
-                <span className="font-medium text-amber-400">
-                  {isAllRbac ? 'Limited Access:' : isViewLimited ? 'View limited:' : 'Warning:'}
-                </span>
+                <span className="font-medium text-red-400">Layout Error:</span>
                 <span className="text-theme-text-secondary ml-1">
-                  {isAllRbac
-                    ? `${pluralize(rbacWarnings.length, 'resource type')} not accessible due to RBAC restrictions.`
-                    : isViewLimited
-                      ? 'Large retained run history is summarized to keep the graph readable.'
-                      : 'Some resources failed to load. Data may be incomplete.'}
+                  Failed to update layout. Showing previous view.
                 </span>
-                <details className="mt-1">
-                  <summary className="text-xs text-amber-400/80 hover:text-amber-400">
-                    Show details ({topology.warnings.length})
-                  </summary>
-                  <ul className="mt-1 text-xs text-theme-text-tertiary space-y-0.5">
-                    {rbacWarnings.length > 0 && otherWarnings.length > 0 && (
-                      <li className="text-amber-400/60 font-medium mt-1">RBAC restrictions:</li>
-                    )}
-                    {rbacWarnings.map((w, i) => (
-                      <li key={`rbac-${i}`} className="font-mono">{w}</li>
-                    ))}
-                    {viewWarnings.length > 0 && (rbacWarnings.length > 0 || otherWarnings.length > 0) && (
-                      <li className="text-amber-400/60 font-medium mt-1">View limits:</li>
-                    )}
-                    {viewWarnings.map((w, i) => (
-                      <li key={`view-${i}`} className="font-mono">{w}</li>
-                    ))}
-                    {otherWarnings.length > 0 && (rbacWarnings.length > 0 || viewWarnings.length > 0) && (
-                      <li className="text-amber-400/60 font-medium mt-1">Other warnings:</li>
-                    )}
-                    {otherWarnings.map((w, i) => (
-                      <li key={`other-${i}`} className="font-mono">{w}</li>
-                    ))}
-                  </ul>
-                </details>
+                <p className="mt-1 text-xs text-theme-text-tertiary font-mono">{layoutError}</p>
               </div>
             </div>
           </div>
-        )
-      })()}
-      {/* Layout error banner - shown even when stale nodes exist */}
-      {layoutError && nodes.length > 0 && (
-        <div className="absolute top-2 left-2 right-2 z-10 bg-red-500/10 border border-red-500/30 rounded-lg p-2 backdrop-blur-sm">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-            <div className="text-sm">
-              <span className="font-medium text-red-400">Layout Error:</span>
-              <span className="text-theme-text-secondary ml-1">
-                Failed to update layout. Showing previous view.
-              </span>
-              <p className="mt-1 text-xs text-theme-text-tertiary font-mono">{layoutError}</p>
-            </div>
-          </div>
-        </div>
-      )}
+        )}
+        {children}
+      </TopologyOverlayBar>
       {/* Summary-mode pill — pod tier collapsed to per-workload/service counts */}
       {topology?.summaryMode && (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 bg-blue-500/10 border border-blue-500/30 rounded-full px-3 py-1 backdrop-blur-sm">

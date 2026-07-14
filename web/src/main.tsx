@@ -159,7 +159,7 @@ window.addEventListener('mouseup', (e: MouseEvent) => {
 // tab, so it opts into per-view document.title. Library consumers (e.g.
 // radar-hub-web) render <RadarApp apiBase="..." basename="..." /> WITHOUT this
 // flag, keeping their own tab title.
-ReactDOM.createRoot(document.getElementById('root')!).render(
+ReactDOM.createRoot(document.getElementById('radar')!).render(
   <React.StrictMode>
     <RadarApp manageDocumentTitle />
   </React.StrictMode>

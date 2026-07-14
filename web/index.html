@@ -18,7 +18,9 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- #radar (not #root): keeps the app-shell layout rule in index.css from
+         matching a host app's #root when this ships as a library stylesheet. -->
+    <div id="radar"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

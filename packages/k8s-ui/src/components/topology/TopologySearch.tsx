@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { Search, X, ChevronRight } from 'lucide-react'
 import { Input } from '../ui/Input'
 import { getTopologyIcon } from '../../utils/resource-icons'
@@ -24,12 +25,12 @@ interface TopologySearchProps {
    * empty-state hint above. Defaults to "current view".
    */
   viewModeLabel?: string
-  /**
-   * Position utilities for the trigger button (default "top-4 left-4").
-   * The host overrides this to avoid colliding with other canvas overlays
-   * (e.g. stacking below the namespace breadcrumb).
-   */
-  triggerClassName?: string
+  /** Element the search overlay portals into — typically the topology pane. Set
+   *  it when the trigger lives inside a `pointer-events-none` overlay bar: the
+   *  overlay then renders OUTSIDE that bar (so its backdrop is clickable) and is
+   *  `absolute inset-0` scoped to this container (dims only the pane). Omit to
+   *  fall back to a viewport-level `fixed` overlay on document.body. */
+  overlayContainer?: HTMLElement | null
 }
 
 // Icon mapping for different resource kinds
@@ -71,7 +72,7 @@ function getKindColor(kind: string): string {
   }
 }
 
-export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, viewModeLabel, triggerClassName }: TopologySearchProps) {
+export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, viewModeLabel, overlayContainer }: TopologySearchProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -195,15 +196,20 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, vi
     setTimeout(() => inputRef.current?.focus(), 0)
   }, [])
 
+  // Portal the overlay OUT of the (pointer-events-none) overlay bar the trigger
+  // sits in. With a container → `absolute inset-0` scoped to it (the pane);
+  // without → a viewport `fixed` overlay on document.body.
+  const portalTarget = overlayContainer ?? (typeof document !== 'undefined' ? document.body : null)
+  const overlayPositionClass = overlayContainer ? 'absolute' : 'fixed'
+
   return (
     <>
       {/* Search trigger button */}
       <button
         onClick={handleOpen}
-        className={clsx(
-          'absolute z-10 flex items-center gap-2 px-3 py-2 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg text-theme-text-secondary hover:text-theme-text-primary hover:border-theme-border-light transition-colors',
-          triggerClassName ?? 'top-4 left-4'
-        )}
+        // Layout-neutral (positioned by the host's overlay bar); pointer-events-
+        // auto inside the pointer-events-none bar.
+        className="pointer-events-auto flex items-center gap-2 px-3 py-2 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg text-theme-text-secondary hover:text-theme-text-primary hover:border-theme-border-light transition-colors"
       >
         <Search className="w-4 h-4" />
         <span className="text-sm">Search</span>
@@ -212,9 +218,10 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, vi
         </kbd>
       </button>
 
-      {/* Search modal */}
-      {isOpen && (
-        <div className="absolute inset-0 z-50 flex items-start justify-center pt-[10vh]">
+      {/* Portaled out of the overlay bar (see portalTarget above) so the
+          backdrop is clickable and the dim covers only the pane, not the app. */}
+      {isOpen && portalTarget && createPortal(
+        <div className={`${overlayPositionClass} inset-0 z-50 flex items-start justify-center pt-[10vh]`}>
           {/* Backdrop */}
           <div
             className="absolute inset-0 bg-theme-base/60 backdrop-blur-sm"
@@ -339,7 +346,8 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, vi
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        portalTarget,
       )}
     </>
   )

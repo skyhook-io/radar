@@ -80,7 +80,9 @@ export function TopologyControls({
   }
 
   return (
-    <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+    // Layout-neutral (positioned by the host's overlay bar): `relative` anchors
+    // its own dropdowns; `pointer-events-auto` inside the pointer-events-none bar.
+    <div className="relative flex items-center gap-2 pointer-events-auto">
       {/* Freshness/liveness status — backed for legibility over the canvas but
           borderless + divided off, so it reads as a status, not another control. */}
       {leadingSlot && (

@@ -81,7 +81,11 @@ body {
   color: var(--text-primary);
 }
 
-#root {
+/* App-shell layout for standalone Radar (mounts into #radar — see index.html).
+   Keyed off #radar, NOT #root: this file ships as the published library
+   stylesheet, so a #root rule here would match a host app's own #root and
+   reshape its document. A unique id can't collide — host apps have no #radar. */
+#radar {
   height: 100vh;
   display: flex;
   flex-direction: column;

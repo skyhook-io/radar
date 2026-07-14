@@ -9,7 +9,7 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useAPIResources, CORE_RESOURCES } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -488,6 +488,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(false)
   // Topology node-search → canvas focus request (nonce lets the same node re-focus)
   const [topologyFocus, setTopologyFocus] = useState<{ id: string; nonce: number } | null>(null)
+  // The topology pane element — the search overlay portals into it so its
+  // backdrop dims only the pane (not the app) and stays clickable. Callback-ref
+  // state so it updates once the pane mounts.
+  const [topologyPane, setTopologyPane] = useState<HTMLDivElement | null>(null)
   // Track CRD kinds that have been auto-added to visibleKinds so we don't override user toggles
   const seededCRDKindsRef = useRef<Set<string>>(new Set())
 
@@ -2060,7 +2064,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                   }}
                 />
 
-                <div className="flex-1 relative">
+                <div ref={setTopologyPane} className="flex-1 relative">
                   <TopologyGraph
                     topology={topologyWithAudit}
                     viewMode={topologyMode}
@@ -2071,48 +2075,55 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                     paused={topologyPaused}
                     onTogglePause={handleTogglePause}
                     onMaximizeNamespace={(ns) => setActiveNamespace.mutate({ namespaces: [ns] })}
-                    namespaceBreadcrumb={namespaces.length === 1 ? namespaces[0] : undefined}
-                    onClearNamespace={namespaces.length >= 1 ? () => setActiveNamespace.mutate({ namespaces: [] }) : undefined}
                     namespacesKey={namespaces.join(',')}
                     focusNodeId={topologyFocus?.id}
                     focusNonce={topologyFocus?.nonce}
-                  />
-
-                  {/* Topology node search overlay - top left */}
-                  <TopologySearch
-                    nodes={filteredTopology?.nodes ?? []}
-                    allNodes={topology?.nodes}
-                    viewModeLabel={topologyMode === 'fleet' ? 'Fleet' : topologyMode === 'traffic' ? 'Network Flow' : 'Resources'}
-                    onNodeSelect={handleNodeClick}
-                    onZoomToNode={(id) => setTopologyFocus((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }))}
-                    // Stack below the namespace breadcrumb (shown only for a single
-                    // namespace) so the two don't overlap in the top-left corner.
-                    triggerClassName={namespaces.length === 1 ? 'top-12 left-3' : 'top-3 left-3'}
-                  />
-
-                  {/* Topology controls overlay - top right */}
-                  <TopologyControls
-                    viewMode={topologyMode}
-                    onViewModeChange={(mode) => {
-                      setTopologyMode(mode)
-                      // Fleet mode: namespace grouping for structure, but expanded (not collapsed chips)
-                      if (mode === 'fleet') setGroupingMode('namespace')
-                    }}
-                    groupingMode={groupingMode}
-                    onGroupingModeChange={setGroupingMode}
-                    showNoGrouping={hasNamespaceFilter}
-                    showPolicyEffect={showPolicyEffect}
-                    onShowPolicyEffectChange={setShowPolicyEffect}
-                    showFleetMode={displayedTopology?.nodes?.some(n => FLEET_MODE_KINDS.has(n.kind as NodeKind)) ?? false}
-                    onNavigateToTraffic={() => setMainView('traffic')}
-                    leadingSlot={
-                      <FreshnessControl
-                        mode="auto"
-                        paused={topologyPaused}
-                        connectionState={connection.state}
+                  >
+                    {/* Overlay row: left column (namespace breadcrumb over search)
+                        + controls. items-start pins the controls to the top even
+                        when the breadcrumb grows the left column; w-full so
+                        justify-between spans the canvas. */}
+                    <div className="flex w-full items-start justify-between gap-2">
+                      <div className="flex flex-col items-start gap-2">
+                        {namespaces.length === 1 && (
+                          <TopologyBreadcrumb
+                            namespace={namespaces[0]}
+                            onClear={() => setActiveNamespace.mutate({ namespaces: [] })}
+                          />
+                        )}
+                        <TopologySearch
+                          nodes={filteredTopology?.nodes ?? []}
+                          allNodes={topology?.nodes}
+                          viewModeLabel={topologyMode === 'fleet' ? 'Fleet' : topologyMode === 'traffic' ? 'Network Flow' : 'Resources'}
+                          onNodeSelect={handleNodeClick}
+                          onZoomToNode={(id) => setTopologyFocus((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }))}
+                          overlayContainer={topologyPane}
+                        />
+                      </div>
+                      <TopologyControls
+                        viewMode={topologyMode}
+                        onViewModeChange={(mode) => {
+                          setTopologyMode(mode)
+                          // Fleet mode: namespace grouping for structure, but expanded (not collapsed chips)
+                          if (mode === 'fleet') setGroupingMode('namespace')
+                        }}
+                        groupingMode={groupingMode}
+                        onGroupingModeChange={setGroupingMode}
+                        showNoGrouping={hasNamespaceFilter}
+                        showPolicyEffect={showPolicyEffect}
+                        onShowPolicyEffectChange={setShowPolicyEffect}
+                        showFleetMode={displayedTopology?.nodes?.some(n => FLEET_MODE_KINDS.has(n.kind as NodeKind)) ?? false}
+                        onNavigateToTraffic={() => setMainView('traffic')}
+                        leadingSlot={
+                          <FreshnessControl
+                            mode="auto"
+                            paused={topologyPaused}
+                            connectionState={connection.state}
+                          />
+                        }
                       />
-                    }
-                  />
+                    </div>
+                  </TopologyGraph>
                 </div>
               </>
             )}
