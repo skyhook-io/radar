@@ -157,6 +157,26 @@ func TestNormalizeCloudInstallNames(t *testing.T) {
 	}
 }
 
+func TestCloudInstallExactTargetRequiresNamespaceAndRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		explicitNamespace bool
+		explicitRelease   bool
+		want              bool
+	}{
+		{name: "neither"},
+		{name: "namespace only", explicitNamespace: true},
+		{name: "release only", explicitRelease: true},
+		{name: "both", explicitNamespace: true, explicitRelease: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cloudInstallUsesExactTarget(tc.explicitNamespace, tc.explicitRelease); got != tc.want {
+				t.Fatalf("cloudInstallUsesExactTarget(%t, %t) = %t, want %t", tc.explicitNamespace, tc.explicitRelease, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeCloudInstallNamesRejectsInvalidNamespace(t *testing.T) {
 	_, _, err := normalizeCloudInstallNames("Prod.Cluster", "radar")
 	if err == nil || !strings.Contains(err.Error(), "invalid --namespace") {

@@ -90,8 +90,9 @@ install  Connect one kubeconfig cluster to Radar. Installs Radar when absent,
 Flags (install):
   --context NAME   Kubernetes context to install into (default: current context)
   -y, --yes        Skip current-context confirmation (never adoption consent)
-  --namespace NS   Exact target namespace (default/auto-discovery seed: radar)
-  --release NAME   Exact Helm release (default/auto-discovery seed: radar)
+  --namespace NS   Preferred fresh-install namespace / discovery seed (default: radar)
+  --release NAME   Preferred fresh-install Helm release / discovery seed (default: radar)
+                   Pass both to select an exact target instead of auto-discovery
   --adopt-existing Confirm automation may connect a detected existing installation
   --enable-cloud-features
                    During adoption, also enable Helm/Secrets/exec/forward/metrics RBAC
@@ -154,8 +155,8 @@ func cloudConnect(args []string, w io.Writer) int {
 func cloudInstall(args []string) {
 	fs := flag.NewFlagSet("cloud install", flag.ExitOnError)
 	hubURL := fs.String("hub-url", defaultHubBase, "Radar Hub API origin")
-	namespace := fs.String("namespace", cloudinstall.DefaultInstallNamespace, "Namespace to install into")
-	release := fs.String("release", cloudinstall.DefaultReleaseName, "Helm release name")
+	namespace := fs.String("namespace", cloudinstall.DefaultInstallNamespace, "Preferred fresh-install namespace (with --release, selects an exact target)")
+	release := fs.String("release", cloudinstall.DefaultReleaseName, "Preferred fresh-install Helm release (with --namespace, selects an exact target)")
 	chartVersion := fs.String("chart-version", "", "Chart version (default: latest published)")
 	name := fs.String("name", "", "Cluster name shown in Radar (default: selected Kubernetes context)")
 	contextName := fs.String("context", "", "Kubernetes context to install into (default: current context)")
@@ -237,7 +238,7 @@ func cloudInstall(args []string) {
 
 	fmt.Printf("Inspecting Kubernetes context %q for an existing Radar installation…\n\n", ctxName)
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
-	plan, err := inspectCloudInstallPlan(ctx, clients, *namespace, *release, explicitNamespace || explicitRelease)
+	plan, err := inspectCloudInstallPlan(ctx, clients, *namespace, *release, cloudInstallUsesExactTarget(explicitNamespace, explicitRelease))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cloud install: %v\n", err)
 		fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
@@ -432,6 +433,10 @@ func normalizeHubOrigin(raw string) (string, error) {
 	u.Path = ""
 	u.RawPath = ""
 	return u.String(), nil
+}
+
+func cloudInstallUsesExactTarget(explicitNamespace, explicitRelease bool) bool {
+	return explicitNamespace && explicitRelease
 }
 
 func resolveCloudInstallClusterName(explicit, contextName string) string {

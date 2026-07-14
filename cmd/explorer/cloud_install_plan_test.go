@@ -44,6 +44,14 @@ func TestClassifyCloudInstallPlanFreshAdoptAndGitOps(t *testing.T) {
 		}
 	})
 
+	t.Run("auto-discovery miss preserves requested fresh target", func(t *testing.T) {
+		releases := &fakeCloudReleaseInspector{inspection: helm.CloudReleaseInspection{State: helm.CloudReleaseNone}}
+		plan, err := classifyCloudInstallPlan(cloudinstall.DiscoveryResult{}, releases, "observability", "prod", false)
+		if err != nil || plan.Mode != cloudInstallFresh || plan.Namespace != "observability" || plan.Release != "prod" {
+			t.Fatalf("plan = %#v, err = %v", plan, err)
+		}
+	})
+
 	t.Run("auto-select native Helm", func(t *testing.T) {
 		target := nativeRadarTarget("observability", "prod")
 		releases := &fakeCloudReleaseInspector{inspection: helm.CloudReleaseInspection{State: helm.CloudReleaseDeployed, Revision: 3}}
