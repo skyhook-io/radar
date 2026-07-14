@@ -290,9 +290,11 @@ func resolveEnvArgo(getenv func(string) string, readFile func(string) ([]byte, e
 	return rawURL, token, insecure, true, nil
 }
 
-// validateEnvArgoURL enforces the same shape the Settings PUT accepts, plus a
-// no-userinfo rule: a URL like https://user:pass@host would embed credentials
-// that then surface in /api/config, the status address, and logs.
+// validateEnvArgoURL strictly validates an argocd-server URL: http(s) scheme, a
+// host, and no embedded userinfo / query / fragment. The env URL flows into
+// /api/config, the status address, and logs, so credentials in userinfo or a
+// query (e.g. ?token=…) must be rejected. This is stricter than the Settings PUT
+// (which checks only the scheme); see the divergence note in argocd_integration.go.
 func validateEnvArgoURL(raw string) error {
 	u, err := url.Parse(strings.TrimRight(raw, "/"))
 	if err != nil {
@@ -410,12 +412,7 @@ func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bo
 	if tokenIsFresh {
 		m.tokenContext = m.currentContextName()
 	}
-	m.generation++
-	fwd := m.dropConnectionLocked()
-	m.mu.Unlock()
-	if fwd != nil {
-		fwd.stop()
-	}
+	m.bumpAndReset()
 }
 
 // SeedFromEnv provisions the manager from an environment-provided token. Like a
@@ -433,12 +430,7 @@ func (m *Manager) SeedFromEnv(url, token string, insecureTLS bool) {
 	m.token = token
 	m.insecureTLS = insecureTLS
 	m.tokenContext = m.currentContextName()
-	m.generation++
-	fwd := m.dropConnectionLocked()
-	m.mu.Unlock()
-	if fwd != nil {
-		fwd.stop()
-	}
+	m.bumpAndReset()
 }
 
 // SeedFromEnvFailed marks the manager environment-managed but errored: the
@@ -458,12 +450,7 @@ func (m *Manager) SeedFromEnvFailed(reason string) {
 	m.token = ""
 	m.insecureTLS = false
 	m.tokenContext = ""
-	m.generation++
-	fwd := m.dropConnectionLocked()
-	m.mu.Unlock()
-	if fwd != nil {
-		fwd.stop()
-	}
+	m.bumpAndReset()
 }
 
 // IsEnvManaged reports whether the token was provisioned from the environment.
@@ -517,12 +504,7 @@ func (m *Manager) RestoreConfig(url, token string, insecureTLS bool, tokenContex
 	m.token = token
 	m.insecureTLS = insecureTLS
 	m.tokenContext = tokenContext
-	m.generation++
-	fwd := m.dropConnectionLocked()
-	m.mu.Unlock()
-	if fwd != nil {
-		fwd.stop()
-	}
+	m.bumpAndReset()
 }
 
 // IsConfigured reports whether the Argo CD integration has connection settings
@@ -544,17 +526,26 @@ func (m *Manager) currentContextName() string {
 	return m.contextName()
 }
 
-// Reset drops connection state and cache but keeps the configured
-// URL/token — after a kubeconfig context switch the next Probe rediscovers
-// against the new cluster.
-func (m *Manager) Reset() {
-	m.mu.Lock()
+// bumpAndReset invalidates in-flight probes (generation++), drops the live
+// connection, releases m.mu, and stops any freed port-forward OUTSIDE the lock
+// (fwd.stop must never run under m.mu). The caller must hold m.mu; it is released
+// on return. Centralizing the epilogue keeps every config mutator's lock ordering
+// identical — the stop-outside-lock invariant is expressed once, not five times.
+func (m *Manager) bumpAndReset() {
 	m.generation++
 	fwd := m.dropConnectionLocked()
 	m.mu.Unlock()
 	if fwd != nil {
 		fwd.stop()
 	}
+}
+
+// Reset drops connection state and cache but keeps the configured
+// URL/token — after a kubeconfig context switch the next Probe rediscovers
+// against the new cluster.
+func (m *Manager) Reset() {
+	m.mu.Lock()
+	m.bumpAndReset()
 }
 
 func (m *Manager) dropConnectionLocked() *activeForward {
@@ -767,6 +758,24 @@ var errStaleProbe = errors.New("argocd: probe superseded by a config change")
 // as a re-authenticate prompt instead of a misleading 502/"unreachable".
 var errTokenContextMismatch = fmt.Errorf("argocd: token not valid for the current cluster context: %w", ErrTokenInvalid)
 
+// connectedClient returns a live client, probing on demand. Get() is called
+// first (so its background-reprobe nudge still fires); on a miss it probes
+// synchronously and re-fetches, surfacing "connection was reset" if a config
+// change raced the probe.
+func (m *Manager) connectedClient(ctx context.Context) (*argoapi.Client, error) {
+	if client, ok := m.Get(); ok {
+		return client, nil
+	}
+	if err := m.Probe(ctx); err != nil {
+		return nil, err
+	}
+	client, ok := m.Get()
+	if !ok {
+		return nil, fmt.Errorf("%w: connection was reset", ErrUnreachable)
+	}
+	return client, nil
+}
+
 // ManagedResourcesCached returns the app's managed-resource diffs, serving
 // from a 15s TTL cache keyed by (appNamespace, appName). Queries carrying
 // per-resource filters bypass the cache — mixing filtered results into the
@@ -785,14 +794,9 @@ func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedR
 		m.mu.Unlock()
 	}
 
-	client, ok := m.Get()
-	if !ok {
-		if err := m.Probe(ctx); err != nil {
-			return nil, err
-		}
-		if client, ok = m.Get(); !ok {
-			return nil, fmt.Errorf("%w: connection was reset", ErrUnreachable)
-		}
+	client, err := m.connectedClient(ctx)
+	if err != nil {
+		return nil, err
 	}
 	m.mu.Lock()
 	gen := m.generation
@@ -842,14 +846,9 @@ func (m *Manager) RevisionMetadataCached(ctx context.Context, q argoapi.Revision
 	}
 	m.mu.Unlock()
 
-	client, ok := m.Get()
-	if !ok {
-		if err := m.Probe(ctx); err != nil {
-			return nil, err
-		}
-		if client, ok = m.Get(); !ok {
-			return nil, fmt.Errorf("%w: connection was reset", ErrUnreachable)
-		}
+	client, err := m.connectedClient(ctx)
+	if err != nil {
+		return nil, err
 	}
 	m.mu.Lock()
 	gen := m.generation
@@ -930,14 +929,9 @@ func (m *Manager) refreshRepositoriesAsync() {
 		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 		defer cancel()
 
-		client, ok := m.Get()
-		if !ok {
-			if err := m.Probe(ctx); err != nil {
-				return
-			}
-			if client, ok = m.Get(); !ok {
-				return
-			}
+		client, err := m.connectedClient(ctx)
+		if err != nil {
+			return
 		}
 		repos, err := client.Repositories(ctx)
 		if err != nil {

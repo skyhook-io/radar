@@ -146,8 +146,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   // Merged-pane dirty for the flat nav (Connection = cluster+server, Advanced = mcp+timeline).
   const connectionDirty = clusterDirty || serverDirty
   const advancedDirty = mcpDirty || timelineDirty
-  const startupDirty =
-    configData != null && (clusterDirty || serverDirty || mcpDirty || timelineDirty)
+  const startupDirty = configData != null && (connectionDirty || advancedDirty)
 
   // Load config on open + snapshot AI prefs + pick a default section that's
   // actually accessible to the current identity.
@@ -303,15 +302,14 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   // would only add visual weight. AI diagnose is always shown (the section
   // explains how to enable it when no agent CLI is installed).
   const navItems: NavItemDef[] = [
-    { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, visible: true, dirty: false },
-    { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, visible: true, dirty: false },
-    { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, visible: true, dirty: connectionDirty },
-    { id: 'prometheus', label: 'Prometheus', icon: Activity, ownerOnly: true, visible: true, dirty: false },
-    { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, visible: true, dirty: false },
-    { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, visible: true, dirty: aiDirty },
-    { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, visible: true, dirty: advancedDirty },
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, dirty: false },
+    { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
+    { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
+    { id: 'prometheus', label: 'Prometheus', icon: Activity, ownerOnly: true, dirty: false },
+    { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
+    { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
+    { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
-  const flatVisible = navItems.filter((i) => i.visible)
 
   const showFooter = canEditConfig && (confirmingClose || startupDirty || !!saveMessage)
 
@@ -370,7 +368,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             aria-orientation="vertical"
             className="hidden sm:flex sm:flex-col gap-0.5 w-[200px] shrink-0 overflow-y-auto border-r border-theme-border p-3"
           >
-            {flatVisible.map((i) => (
+            {navItems.map((i) => (
               <NavItem
                 key={i.id}
                 item={i}
@@ -383,7 +381,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
 
           {/* Tab strip (below sm) */}
           <div role="tablist" className="sm:hidden flex gap-1 overflow-x-auto border-b border-theme-border p-2 shrink-0">
-            {flatVisible.map((i) => (
+            {navItems.map((i) => (
               <NavItem
                 key={i.id}
                 item={i}
@@ -668,7 +666,6 @@ interface NavItemDef {
   label: string
   icon: LucideIcon
   ownerOnly: boolean
-  visible: boolean
   dirty: boolean
 }
 

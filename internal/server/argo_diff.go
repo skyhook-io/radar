@@ -309,18 +309,26 @@ func maskSecretField(desired, live map[string]any, field string) {
 		}
 		return
 	}
-	for k := range unionMapKeys(desiredData, liveData) {
-		dv, dok := desiredData[k]
-		lv, lok := liveData[k]
+	maskMapValuesInPlace(desiredData, liveData)
+}
+
+// maskMapValuesInPlace replaces every value across the union of keys with a
+// redaction marker, using the unchanged marker only when both sides are present
+// and deep-equal. This is the shared Secret-redaction primitive — keeping it in
+// one place stops the data-field and annotation maskers from silently diverging.
+func maskMapValuesInPlace(desired, live map[string]any) {
+	for k := range unionMapKeys(desired, live) {
+		dv, dok := desired[k]
+		lv, lok := live[k]
 		marker := redactedChanged
 		if dok && lok && reflect.DeepEqual(dv, lv) {
 			marker = redactedUnchanged
 		}
 		if dok {
-			desiredData[k] = marker
+			desired[k] = marker
 		}
 		if lok {
-			liveData[k] = marker
+			live[k] = marker
 		}
 	}
 }
@@ -329,22 +337,7 @@ func maskSecretField(desired, live map[string]any, field string) {
 // preserved) so nothing sensitive stashed in an annotation — including the
 // last-applied dump that embeds the full data — survives into the response.
 func maskSecretAnnotations(desired, live map[string]any) {
-	dAnno := nestedAnnotations(desired)
-	lAnno := nestedAnnotations(live)
-	for k := range unionMapKeys(dAnno, lAnno) {
-		dv, dok := dAnno[k]
-		lv, lok := lAnno[k]
-		marker := redactedChanged
-		if dok && lok && reflect.DeepEqual(dv, lv) {
-			marker = redactedUnchanged
-		}
-		if dok {
-			dAnno[k] = marker
-		}
-		if lok {
-			lAnno[k] = marker
-		}
-	}
+	maskMapValuesInPlace(nestedAnnotations(desired), nestedAnnotations(live))
 }
 
 // nestedAnnotations returns metadata.annotations as a map, or nil when absent

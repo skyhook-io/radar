@@ -1524,6 +1524,7 @@ function ChangeRow({
 // inline as "old → new". Path is monospace; values are JSON-encoded and
 // pre-wrapped so structured values (objects, arrays) render readably.
 function DriftPanel({ drift }: { drift: NonNullable<GitOpsChange['drift']> }) {
+  const sourceLabel = driftSourceLabel(drift.source)
   return (
     <div>
       <div className="mb-2 flex items-baseline justify-between gap-2">
@@ -1531,7 +1532,7 @@ function DriftPanel({ drift }: { drift: NonNullable<GitOpsChange['drift']> }) {
         <span className="text-[10px] text-theme-text-tertiary">
           desired (Git) → live ·
           {drift.truncated ? ' showing first 50 entries' : ` ${drift.entries.length} field${drift.entries.length === 1 ? '' : 's'}`}
-          {driftSourceLabel(drift.source) && ` · ${driftSourceLabel(drift.source)}`}
+          {sourceLabel && ` · ${sourceLabel}`}
         </span>
       </div>
       <div className="space-y-1 font-mono text-[11px]">

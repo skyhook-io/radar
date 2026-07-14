@@ -611,7 +611,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       renderRevisionMeta={
         isArgoApp && insightsQ.data?.capabilities?.revisionMetadataAvailable
           ? (revision) => (
-              <RevisionMetaChip appNamespace={namespace} appName={name} revision={revision} enabled />
+              <RevisionMetaChip appNamespace={namespace} appName={name} revision={revision} />
             )
           : undefined
       }

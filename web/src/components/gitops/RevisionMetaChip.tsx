@@ -25,15 +25,15 @@ export function RevisionMetaChip({
   appNamespace,
   appName,
   revision,
-  enabled,
 }: {
   appNamespace: string
   appName: string
   revision: string
-  enabled: boolean
 }): ReactNode {
-  const { data } = useArgoRevisionMetadata(appNamespace, appName, revision, { enabled })
-  if (!enabled || !data) return null
+  // The host only renders this chip when revision metadata is available, so no
+  // extra enabled gate is needed — the hook's own appName/revision guard suffices.
+  const { data } = useArgoRevisionMetadata(appNamespace, appName, revision)
+  if (!data) return null
 
   const author = authorName(data.author)
   const sig = signatureState(data.signatureInfo)
