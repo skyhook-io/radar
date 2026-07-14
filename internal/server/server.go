@@ -75,6 +75,7 @@ type Server struct {
 	diagConfig         *DiagConfig
 	effectiveConfig    *config.Config // running config for GET /api/config
 	authConfig         auth.Config
+	features           FeaturesConfig
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
 	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
@@ -135,6 +136,16 @@ type Config struct {
 	EffectiveConfig    *config.Config // Running startup config for GET /api/config
 	AuthConfig         auth.Config    // Authentication configuration
 	AIHistoryDB        string         // AI run-history SQLite path ("" = memory-only runs)
+	Features           FeaturesConfig // Presentation and subsystem feature gates
+}
+
+// FeaturesConfig controls optional Radar surfaces exposed by this instance.
+// These flags are presentation/configuration controls; RBAC remains enforced
+// independently by the Kubernetes capability checks.
+type FeaturesConfig struct {
+	Cost              bool `json:"cost"`
+	Helm              bool `json:"helm"`
+	GitOpsManagedOnly bool `json:"gitOpsManagedOnly"`
 }
 
 // New creates a new server instance
@@ -152,6 +163,7 @@ func New(cfg Config) *Server {
 		diagConfig:         cfg.DiagConfig,
 		effectiveConfig:    cfg.EffectiveConfig,
 		authConfig:         cfg.AuthConfig,
+		features:           cfg.Features,
 		topoMemo:           topology.NewMemoizer(5 * time.Second),
 		rbacMemo:           rbac.NewMemoizer(5 * time.Second),
 	}
@@ -860,6 +872,11 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caps.MCPEnabled = s.mcpHandler != nil
+	caps.Features = k8s.FeatureCapabilities{
+		Cost:              s.features.Cost,
+		Helm:              s.features.Helm,
+		GitOpsManagedOnly: s.features.GitOpsManagedOnly,
+	}
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	if user := auth.UserFromContext(r.Context()); user != nil {

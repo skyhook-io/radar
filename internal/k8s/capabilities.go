@@ -76,6 +76,7 @@ type PermissionCheckResult struct {
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
+	Features       FeatureCapabilities      `json:"features"`              // Server-configured optional surfaces
 	Exec           bool                     `json:"exec"`                  // Can create pods/exec (terminal feature)
 	LocalTerminal  bool                     `json:"localTerminal"`         // Local terminal available (not in-cluster, not disabled)
 	Logs           bool                     `json:"logs"`                  // Can get pods/log (log viewer)
@@ -91,6 +92,14 @@ type Capabilities struct {
 	Username       string                   `json:"username,omitempty"`    // Authenticated username (when auth enabled)
 	Resources      *ResourcePermissions     `json:"resources,omitempty"`   // Per-resource-type permissions
 	Visibility     *VisibilitySummary       `json:"visibility,omitempty"`  // Present when resource visibility is limited enough to make diagnostics incomplete
+}
+
+// FeatureCapabilities describes optional surfaces enabled for this Radar
+// instance. It is additive to RBAC capabilities and does not grant access.
+type FeatureCapabilities struct {
+	Cost              bool `json:"cost"`
+	Helm              bool `json:"helm"`
+	GitOpsManagedOnly bool `json:"gitOpsManagedOnly"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

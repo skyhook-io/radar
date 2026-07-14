@@ -70,6 +70,9 @@ func main() {
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging (logs all event drops)")
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)")
 	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)")
+	disableCost := flag.Bool("disable-cost", false, "Disable cost, OpenCost, and rightsizing surfaces")
+	disableHelm := flag.Bool("disable-helm", false, "Disable native Helm surfaces and client initialization")
+	gitOpsManagedOnly := flag.Bool("gitops-managed-only", false, "Show only resources managed by GitOps controllers in topology and resource views")
 	disableExec := flag.Bool("disable-exec", false, "Simulate restricted exec permissions (disables terminal, debug shell)")
 	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable local terminal feature")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
@@ -244,6 +247,9 @@ func main() {
 		DebugEvents:              *debugEvents,
 		FakeInCluster:            *fakeInCluster,
 		DisableHelmWrite:         *disableHelmWrite,
+		DisableCost:              *disableCost,
+		DisableHelm:              *disableHelm,
+		GitOpsManagedOnly:        *gitOpsManagedOnly,
 		DisableExec:              *disableExec,
 		DisableLocalTerminal:     *disableLocalTerminal,
 		PodShellDefault:          *podShellDefault,

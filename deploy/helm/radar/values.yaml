@@ -41,6 +41,14 @@ debug:
 # 0 = off (single LIST). Try 2000 if a large cluster fails to sync.
 listPageSize: 0
 
+# Optional Radar surfaces. Cost and native Helm are enabled by default for
+# backwards compatibility; GitOps managed-only scopes topology/resource views
+# to controller-managed resources when enabled.
+features:
+  cost: true
+  helm: true
+  gitOpsManagedOnly: false
+
 serviceAccount:
   # Specifies whether a service account should be created
   create: true

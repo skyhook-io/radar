@@ -77,6 +77,15 @@ spec:
             {{- if .Values.listPageSize }}
             - --list-page-size={{ .Values.listPageSize }}
             {{- end }}
+            {{- if not .Values.features.cost }}
+            - --disable-cost
+            {{- end }}
+            {{- if not .Values.features.helm }}
+            - --disable-helm
+            {{- end }}
+            {{- if .Values.features.gitOpsManagedOnly }}
+            - --gitops-managed-only
+            {{- end }}
             {{- if ne .Values.auth.mode "none" }}
             - {{ printf "--auth-mode=%s" .Values.auth.mode | quote }}
             - {{ printf "--auth-cookie-ttl=%s" .Values.auth.cookieTTL | quote }}

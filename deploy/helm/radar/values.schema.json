@@ -30,6 +30,15 @@
     },
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cost": { "type": "boolean" },
+        "helm": { "type": "boolean" },
+        "gitOpsManagedOnly": { "type": "boolean" }
+      }
+    },
     "serviceAccount": {
       "type": "object",
       "additionalProperties": false,

@@ -44,6 +44,9 @@ type AppConfig struct {
 	DebugEvents              bool
 	FakeInCluster            bool
 	DisableHelmWrite         bool
+	DisableCost              bool
+	DisableHelm              bool
+	GitOpsManagedOnly        bool
 	DisableExec              bool
 	DisableLocalTerminal     bool
 	PodShellDefault          string
@@ -289,6 +292,11 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
 		AuthConfig: cfg.AuthConfig,
+		Features: server.FeaturesConfig{
+			Cost:              !cfg.DisableCost,
+			Helm:              !cfg.DisableHelm,
+			GitOpsManagedOnly: cfg.GitOpsManagedOnly,
+		},
 	}
 
 	// AI-history DB path: resolved here (like the timeline DB) so the server
