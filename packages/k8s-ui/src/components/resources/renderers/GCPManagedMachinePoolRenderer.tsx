@@ -1,5 +1,5 @@
 import { Server, Settings } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getGCPMMPStatus, getGCPMMPNodePoolName, getGCPMMPMachineType, getGCPMMPDiskInfo, getGCPMMPScaling, getGCPMMPImageType } from '../resource-utils-gcp-capi'
 
@@ -14,6 +14,7 @@ export function GCPManagedMachinePoolRenderer({ data }: Props) {
   const conditions = getCAPIConditions(data)
   const mmpStatus = getGCPMMPStatus(data)
   const isFailed = mmpStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const scaling = getGCPMMPScaling(data)
   const management = spec.management || {}
@@ -23,7 +24,7 @@ export function GCPManagedMachinePoolRenderer({ data }: Props) {
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner variant="error" title="GKE Node Pool Not Ready" message={readyCond?.message || 'GCPManagedMachinePool is not ready.'} />
       )}
 

@@ -1,5 +1,5 @@
 import { Server, Shield, Settings } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
 import { formatAge } from '../resource-utils'
 import { getKCPStatus, getKCPVersion, getKCPInitialized, getMachineClusterName } from '../resource-utils-capi'
@@ -16,6 +16,7 @@ export function CAPIKubeadmControlPlaneRenderer({ data, onNavigate }: Props) {
 
   const kcpStatus = getKCPStatus(data)
   const isFailed = kcpStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
 
   const clusterName = getMachineClusterName(data)
@@ -33,7 +34,7 @@ export function CAPIKubeadmControlPlaneRenderer({ data, onNavigate }: Props) {
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="Control Plane Not Ready"

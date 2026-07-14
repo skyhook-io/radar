@@ -1,5 +1,5 @@
 import { Globe, Shield, Settings } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getAzureMCPStatus, getAzureMCPLocation, getAzureMCPVersion, getAzureMCPResourceGroup, getAzureMCPSKUTier, getAzureMCPNetworkPlugin, getAzureMCPNetworkPolicy, getAzureMCPDNSPrefix, getAzureMCPUpgradeChannel, getAzureMCPPrivateCluster } from '../resource-utils-azure-capi'
 
@@ -13,13 +13,14 @@ export function AzureManagedControlPlaneRenderer({ data }: Props) {
   const conditions = getCAPIConditions(data)
   const mcpStatus = getAzureMCPStatus(data)
   const isFailed = mcpStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const apiAccess = spec.apiServerAccessProfile || {}
   const authorizedRanges = apiAccess.authorizedIPRanges || []
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner variant="error" title="AKS Control Plane Not Ready" message={readyCond?.message || 'AzureManagedControlPlane is not ready.'} />
       )}
 

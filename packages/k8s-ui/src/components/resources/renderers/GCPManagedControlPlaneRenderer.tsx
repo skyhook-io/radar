@@ -1,5 +1,5 @@
 import { Globe, Shield, Settings } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getGCPMCPStatus, getGCPMCPClusterName, getGCPMCPProject, getGCPMCPLocation, getGCPMCPVersion, getGCPMCPReleaseChannel, getGCPMCPAutopilot, getGCPMCPEndpoint } from '../resource-utils-gcp-capi'
 
@@ -13,13 +13,14 @@ export function GCPManagedControlPlaneRenderer({ data }: Props) {
   const conditions = getCAPIConditions(data)
   const mcpStatus = getGCPMCPStatus(data)
   const isFailed = mcpStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const endpoint = getGCPMCPEndpoint(data)
   const masterAuth = spec.master_authorized_networks_config
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner variant="error" title="GKE Control Plane Not Ready" message={readyCond?.message || 'GCPManagedControlPlane is not ready.'} />
       )}
 

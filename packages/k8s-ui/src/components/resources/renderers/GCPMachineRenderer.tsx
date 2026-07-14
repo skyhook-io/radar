@@ -1,5 +1,5 @@
 import { Cpu, Cloud } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getGCPMachineStatus, getGCPMachineInstanceType, getGCPMachineZone, getGCPMachineInstanceID } from '../resource-utils-gcp-capi'
 
@@ -13,11 +13,12 @@ export function GCPMachineRenderer({ data }: Props) {
   const conditions = getCAPIConditions(data)
   const machineStatus = getGCPMachineStatus(data)
   const isFailed = machineStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner variant="error" title="GCP Machine Not Ready" message={readyCond?.message || 'GCPMachine is not ready.'} />
       )}
 

@@ -1,5 +1,5 @@
 import { Server, Settings } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
 import { formatAge } from '../resource-utils'
 import { getMachineSetStatus, getMachineClusterName } from '../resource-utils-capi'
@@ -16,6 +16,7 @@ export function CAPIMachineSetRenderer({ data, onNavigate }: Props) {
 
   const msStatus = getMachineSetStatus(data)
   const isFailed = msStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
 
   const clusterName = getMachineClusterName(data)
@@ -29,7 +30,7 @@ export function CAPIMachineSetRenderer({ data, onNavigate }: Props) {
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="MachineSet Not Ready"

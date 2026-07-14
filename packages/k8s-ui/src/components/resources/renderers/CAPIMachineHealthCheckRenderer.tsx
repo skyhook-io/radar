@@ -1,5 +1,5 @@
 import { HeartPulse, Settings, Shield } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, LabelSelectorDisplay } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, LabelSelectorDisplay, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getMachineHealthCheckStatus, getMachineHealthCheckClusterName } from '../resource-utils-capi'
 
 interface Props {
@@ -14,6 +14,7 @@ export function CAPIMachineHealthCheckRenderer({ data }: Props) {
 
   const mhcStatus = getMachineHealthCheckStatus(data)
   const isFailed = mhcStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
 
   const clusterName = getMachineHealthCheckClusterName(data)
@@ -31,7 +32,7 @@ export function CAPIMachineHealthCheckRenderer({ data }: Props) {
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="MachineHealthCheck Issue"

@@ -1,5 +1,5 @@
 import { Cpu, Server, Network, Cloud } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
 import { formatAge } from '../resource-utils'
 import { getMachineStatus, getMachineRole, getMachineClusterName, getMachineNodeRef, getMachineVersion, getMachineProviderID, parseProviderID, getProviderFromInfraKind, parseCAPIConditionMessage } from '../resource-utils-capi'
@@ -16,6 +16,7 @@ export function CAPIMachineRenderer({ data, onNavigate }: Props) {
 
   const machineStatus = getMachineStatus(data)
   const isFailed = machineStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   // Find the most informative False condition for the alert message
   const falseCond = conditions.find((c: any) =>
@@ -38,7 +39,7 @@ export function CAPIMachineRenderer({ data, onNavigate }: Props) {
 
   return (
     <>
-      {isFailed && (() => {
+      {isFailed && !operationalIssuesShown && (() => {
         const msg = falseCond?.message || readyCond?.message || `Machine is in ${phase} state.`
         const items = parseCAPIConditionMessage(msg)
         return <AlertBanner variant="error" title="Machine Not Ready" items={items || undefined} message={items ? undefined : msg} />

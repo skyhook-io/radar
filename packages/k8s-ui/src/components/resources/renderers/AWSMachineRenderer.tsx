@@ -1,6 +1,6 @@
 import { Cpu, Network, Cloud } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getAWSMachineStatus, getAWSMachineInstanceType, getAWSMachineInstanceState, getAWSMachineInstanceID } from '../resource-utils-aws-capi'
 
@@ -16,6 +16,7 @@ export function AWSMachineRenderer({ data }: Props) {
 
   const machineStatus = getAWSMachineStatus(data)
   const isFailed = machineStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
 
   const instanceState = getAWSMachineInstanceState(data)
@@ -23,7 +24,7 @@ export function AWSMachineRenderer({ data }: Props) {
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="AWS Machine Not Ready"

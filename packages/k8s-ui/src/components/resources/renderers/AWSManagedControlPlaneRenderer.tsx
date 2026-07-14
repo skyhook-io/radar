@@ -1,5 +1,5 @@
 import { Globe, Network, Shield, Server, Package } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import {
   getAWSMCPStatus, getAWSMCPEKSClusterName, getAWSMCPRegion, getAWSMCPVersion,
@@ -18,6 +18,7 @@ export function AWSManagedControlPlaneRenderer({ data }: Props) {
 
   const mcpStatus = getAWSMCPStatus(data)
   const isFailed = mcpStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
 
   const vpc = getAWSMCPVPC(data)
@@ -29,7 +30,7 @@ export function AWSManagedControlPlaneRenderer({ data }: Props) {
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="EKS Control Plane Not Ready"

@@ -1,5 +1,5 @@
 import { Server, Settings } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
 import { formatAge } from '../resource-utils'
 import { getMachinePoolStatus } from '../resource-utils-capi'
@@ -16,6 +16,7 @@ export function CAPIMachinePoolRenderer({ data, onNavigate }: Props) {
 
   const mpStatus = getMachinePoolStatus(data)
   const isFailed = mpStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
 
   const clusterName = spec.clusterName || data.metadata?.labels?.['cluster.x-k8s.io/cluster-name'] || '-'
@@ -27,7 +28,7 @@ export function CAPIMachinePoolRenderer({ data, onNavigate }: Props) {
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="MachinePool Not Ready"

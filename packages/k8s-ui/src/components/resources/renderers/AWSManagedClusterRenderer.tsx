@@ -1,5 +1,5 @@
 import { Globe, Server } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getAWSManagedClusterStatus, getAWSManagedClusterEndpoint, getAWSManagedClusterFailureDomains } from '../resource-utils-aws-capi'
 
@@ -11,13 +11,14 @@ export function AWSManagedClusterRenderer({ data }: Props) {
   const conditions = getCAPIConditions(data)
   const clusterStatus = getAWSManagedClusterStatus(data)
   const isFailed = clusterStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const failureDomains = getAWSManagedClusterFailureDomains(data)
   const endpoint = getAWSManagedClusterEndpoint(data)
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="Managed Cluster Not Ready"

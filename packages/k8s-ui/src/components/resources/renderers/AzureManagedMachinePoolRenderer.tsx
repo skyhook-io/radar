@@ -1,6 +1,6 @@
 import { Server, Settings } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getAzureMMPStatus, getAzureMMPSKU, getAzureMMPMode, getAzureMMPOSDiskInfo, getAzureMMPScaling, getAzureMMPScaleSetPriority, getAzureMMPOSType } from '../resource-utils-azure-capi'
 import { CAPACITY_TYPE_BADGE, NODEPOOL_MODE_BADGE } from '../../../utils/badge-colors'
@@ -16,6 +16,7 @@ export function AzureManagedMachinePoolRenderer({ data }: Props) {
   const conditions = getCAPIConditions(data)
   const mmpStatus = getAzureMMPStatus(data)
   const isFailed = mmpStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const scaling = getAzureMMPScaling(data)
   const mode = getAzureMMPMode(data)
@@ -26,7 +27,7 @@ export function AzureManagedMachinePoolRenderer({ data }: Props) {
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner variant="error" title="AKS Node Pool Not Ready" message={readyCond?.message || 'AzureManagedMachinePool is not ready.'} />
       )}
 

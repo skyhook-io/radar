@@ -1,6 +1,6 @@
 import { Server, Settings } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getAWSMMPStatus, getAWSMMPInstanceType, getAWSMMPCapacityType, getAWSMMPAMIType, getAWSMMPNodegroupName, getAWSMMPScaling } from '../resource-utils-aws-capi'
 import { CAPACITY_TYPE_BADGE } from '../../../utils/badge-colors'
@@ -17,6 +17,7 @@ export function AWSManagedMachinePoolRenderer({ data }: Props) {
 
   const mmpStatus = getAWSMMPStatus(data)
   const isFailed = mmpStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
 
   const scaling = getAWSMMPScaling(data)
@@ -26,7 +27,7 @@ export function AWSManagedMachinePoolRenderer({ data }: Props) {
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="Managed Machine Pool Not Ready"

@@ -1,5 +1,5 @@
 import { Cloud } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getAzureMachineStatus, getAzureMachineVMSize, getAzureMachineProviderID } from '../resource-utils-azure-capi'
 
@@ -13,12 +13,13 @@ export function AzureMachineRenderer({ data }: Props) {
   const conditions = getCAPIConditions(data)
   const machineStatus = getAzureMachineStatus(data)
   const isFailed = machineStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const providerID = getAzureMachineProviderID(data)
 
   return (
     <>
-      {isFailed && (
+      {isFailed && !operationalIssuesShown && (
         <AlertBanner variant="error" title="Azure Machine Not Ready" message={readyCond?.message || 'AzureMachine is not ready.'} />
       )}
 

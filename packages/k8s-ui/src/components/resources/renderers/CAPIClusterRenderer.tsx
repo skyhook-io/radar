@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Server, Globe, Network, Layers, Download, CheckCircle, AlertCircle } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
 import { formatAge } from '../resource-utils'
 import { getClusterStatus, getClusterClass, getClusterVersion, getClusterEndpoint, getProviderFromInfraKind, parseCAPIConditionMessage } from '../resource-utils-capi'
@@ -18,6 +18,7 @@ export function CAPIClusterRenderer({ data, onNavigate, apiBase = '' }: Props) {
 
   const clusterStatus = getClusterStatus(data)
   const isFailed = clusterStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready' || c.type === 'Available')
 
   const phase = status.phase || 'Unknown'
@@ -102,7 +103,7 @@ export function CAPIClusterRenderer({ data, onNavigate, apiBase = '' }: Props) {
         />
       )}
 
-      {isFailed && (() => {
+      {isFailed && !operationalIssuesShown && (() => {
         const msg = readyCond?.message || `Cluster is in ${phase} state.`
         const items = parseCAPIConditionMessage(msg)
         return <AlertBanner variant="error" title="Cluster Not Ready" items={items || undefined} message={items ? undefined : msg} />
