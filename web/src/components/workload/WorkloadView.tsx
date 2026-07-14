@@ -739,7 +739,7 @@ export function WorkloadView({
   // would flip the query key when the manifest arrives, drop liveIssues, and flash
   // the renderer banners. The backend canonicalizes a plural kind via discovery,
   // so using the normalized API kind resolves direct links and app navigation alike.
-  const { data: liveIssues } = useResourceIssues(apiKind, rest.group, namespace, name)
+  const { data: liveIssues, isPending: issuesPending } = useResourceIssues(apiKind, rest.group, namespace, name)
   const { data: auditFindings } = useResourceAudit(apiKind, namespace, name)
   const hasOperationalIssues = Boolean(liveIssues?.length)
   const {
@@ -983,6 +983,7 @@ export function WorkloadView({
           />
         )}
         hasOperationalIssues={hasOperationalIssues}
+        operationalIssuesPending={issuesPending}
         onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
         resolvedGitOpsOwner={gitopsOwner}
         gitOpsOwnerVerified={gitOpsOwnerVerified}

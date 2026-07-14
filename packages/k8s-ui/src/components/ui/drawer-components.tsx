@@ -446,11 +446,14 @@ export interface Problem {
 }
 
 /** Displays a list of problem alerts (warnings and errors) */
-// True when the resource detail is already rendering a dedicated, authoritative
-// "Operational Issues" section (the Issues pipeline — richer cause/action). Only
-// renderers whose problems the pipeline COMPREHENSIVELY covers read this and drop
-// their own problem array so the same failure isn't shown twice — today that's
-// PodRenderer and WorkloadRenderer (workload + pod runtime). It is deliberately
+// True when the resource detail is rendering (or still fetching) a dedicated,
+// authoritative "Operational Issues" section (the Issues pipeline — richer
+// cause/action). Renderers whose problems the pipeline COMPREHENSIVELY covers read
+// this and drop their own condition banner so the same failure isn't shown twice.
+// It stays true WHILE the live-issues fetch is pending: a banner the pipeline will
+// cover would otherwise flash on first paint before the issues arrive and hide it;
+// once the fetch settles with no issues (e.g. a CRD the pipeline doesn't watch),
+// it flips false and the renderer's banner appears cleanly. It is deliberately
 // NOT wired into ProblemAlerts: that component is used only by GitOps renderers
 // (Argo/Flux), whose Degraded/OutOfSync/revision-mismatch banners the pipeline
 // does not fully emit (e.g. OutOfSync only for automated Argo apps) — suppressing

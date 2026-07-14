@@ -285,6 +285,10 @@ interface WorkloadViewProps {
    *  live issues for this resource). Avoids showing the same failure twice.
    *  Also gates the `renderOverviewLead` wrapper (see above). */
   hasOperationalIssues?: boolean
+  /** True while the live-issues fetch is still pending. Renderers suppress their
+   *  banners during this window too — a banner whose failure the pipeline covers
+   *  would otherwise flash on first paint before the issues arrive and hide it. */
+  operationalIssuesPending?: boolean
 
   // ── Duplicate ────────────────────────────────────────────────────────────
   /** Duplicate handler — opens create dialog with this resource's YAML */
@@ -374,6 +378,7 @@ export function WorkloadView({
   renderOverviewIntro,
   renderOverviewLead,
   hasOperationalIssues,
+  operationalIssuesPending,
   // Actions bar
   actionsBarProps,
   // Renderer overrides
@@ -805,7 +810,7 @@ export function WorkloadView({
               onDownload={onDownload}
             />
           ) : (
-            <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues}>
+            <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues || !!operationalIssuesPending}>
               {renderOverviewLead && hasOperationalIssues && (
                 <div className="px-4 pt-4">
                   {renderOverviewLead({ kind, namespace, name })}
@@ -842,7 +847,7 @@ export function WorkloadView({
 
   // ── Expanded (full) mode ─────────────────────────────────────────────────
   return (
-    <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues}>
+    <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues || !!operationalIssuesPending}>
     <DetailShell
       breadcrumb={breadcrumb}
       nav={
