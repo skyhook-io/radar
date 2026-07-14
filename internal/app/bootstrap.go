@@ -218,7 +218,9 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 // functions used for both initial cluster initialization and context switching.
 // Must be called before InitializeCluster.
 func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
-	k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
+	if !cfg.DisableHelm {
+		k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
+	}
 
 	k8s.RegisterTimelineFuncs(timeline.ResetStore, func() error {
 		return timeline.ReinitStore(timelineStoreCfg)

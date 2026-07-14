@@ -388,7 +388,9 @@ func (s *Server) setupRoutes() {
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/vitals", s.handleVitals)
 			r.Get("/dashboard/crds", s.handleDashboardCRDs)
-			r.Get("/dashboard/helm", s.handleDashboardHelm)
+			if s.features.Helm {
+				r.Get("/dashboard/helm", s.handleDashboardHelm)
+			}
 			r.Get("/cluster-info", s.handleClusterInfo)
 			r.Get("/capabilities", s.handleCapabilities)
 			r.Get("/topology", s.handleTopology)
@@ -507,8 +509,10 @@ func (s *Server) setupRoutes() {
 			r.Get("/workloads/{kind}/{namespace}/{name}/pods", s.handleWorkloadPods)
 
 			// Helm routes
-			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
-			helmHandlers.RegisterRoutes(r)
+			if s.features.Helm {
+				helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
+				helmHandlers.RegisterRoutes(r)
+			}
 
 			// Image inspection routes
 			imageHandlers := images.NewHandlers()
@@ -536,15 +540,19 @@ func (s *Server) setupRoutes() {
 				}
 				return true
 			})
-			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
-			prometheuspkg.RegisterRoutes(r)
+			if s.features.Cost {
+				r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
+				prometheuspkg.RegisterRoutes(r)
+			}
 
 			// OpenCost routes
-			r.Post("/opencost/application", s.handleOpenCostApplication)
-			r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
-			r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)
-			r.Get("/opencost/workload/{kind}/{namespace}/{name}/trend", s.handleOpenCostWorkloadTrend)
-			opencost.RegisterRoutes(r)
+			if s.features.Cost {
+				r.Post("/opencost/application", s.handleOpenCostApplication)
+				r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
+				r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)
+				r.Get("/opencost/workload/{kind}/{namespace}/{name}/trend", s.handleOpenCostWorkloadTrend)
+				opencost.RegisterRoutes(r)
+			}
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)
