@@ -307,8 +307,11 @@ func TestGetConfigReflectsEnvManaged(t *testing.T) {
 func TestGetConfigSurfacesEnvError(t *testing.T) {
 	s := setupArgoCDTest(t)
 
+	// Stale disk config with BOTH a URL and a token — neither may surface in the
+	// errored state (the token must not even flip argoCdTokenSet).
 	if _, err := config.Update(func(c *config.Config) {
 		c.ArgoCDURL = "https://stale.example.com"
+		c.ArgoCDToken = "stale-disk-token"
 	}); err != nil {
 		t.Fatal(err)
 	}

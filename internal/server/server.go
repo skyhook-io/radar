@@ -4287,10 +4287,13 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	envError := ""
 	if envURL, envInsecure, ok := argocd.EnvManagedConfig(); ok {
 		envManaged = true
-		// Env-managed always ignores the on-disk endpoint — present the effective
-		// env values (both empty in the errored state, so no stale disk URL leaks).
+		// Env-managed ignores the on-disk config entirely — present the effective env
+		// values (all empty in the errored state, so neither a stale disk URL nor a
+		// stale disk token-set signal leaks). Only a successfully-seeded env token
+		// counts as set.
 		file.ArgoCDURL = envURL
 		file.ArgoCDInsecureTLS = envInsecure
+		tokenSet = false
 		if envError = argocd.EnvManagedError(); envError == "" {
 			tokenSet = true
 		}
