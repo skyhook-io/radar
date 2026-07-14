@@ -146,11 +146,18 @@ type FeaturesConfig struct {
 	Cost              bool `json:"cost"`
 	Helm              bool `json:"helm"`
 	GitOpsManagedOnly bool `json:"gitOpsManagedOnly"`
+	Configured        bool `json:"-"`
 }
 
 // New creates a new server instance
 func New(cfg Config) *Server {
 	cfg.AuthConfig.Defaults()
+	if !cfg.Features.Configured {
+		// Preserve the historical server.New behavior for embedders and tests
+		// that do not provide feature configuration.
+		cfg.Features.Cost = true
+		cfg.Features.Helm = true
+	}
 
 	s := &Server{
 		router:             chi.NewRouter(),

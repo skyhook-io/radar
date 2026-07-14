@@ -298,6 +298,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 			Cost:              !cfg.DisableCost,
 			Helm:              !cfg.DisableHelm,
 			GitOpsManagedOnly: cfg.GitOpsManagedOnly,
+			Configured:        true,
 		},
 	}
 
