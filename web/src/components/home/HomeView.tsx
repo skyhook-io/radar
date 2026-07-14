@@ -27,6 +27,7 @@ import { formatCompactAge } from '@skyhook-io/k8s-ui/utils/format'
 import { ClusterHealthCard } from './ClusterHealthCard'
 import { AlertTriangle, CheckCircle, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 
 interface HomeViewProps {
   namespaces: string[]
@@ -47,6 +48,7 @@ interface HomeViewProps {
 export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts }: HomeViewProps) {
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
   const { connection } = useConnection()
+  const capabilities = useCapabilitiesContext()
   const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError } = useIssues(namespaces)
   const issues = issuesData?.issues ?? []
   const issueCount = issuesData?.total_matched ?? issuesData?.total ?? issues.length
@@ -68,7 +70,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   }, [topology, namespaces])
   // CRDs and Helm load lazily after main dashboard to keep initial load fast
   const { data: crdsData } = useDashboardCRDs(namespaces)
-  const { data: helmData } = useDashboardHelm(namespaces)
+  const { data: helmData } = useDashboardHelm(namespaces, { enabled: capabilities.features?.helm !== false })
 
   if (isLoading) {
     return <PaneLoader label="Loading dashboard…" className="flex-1 min-h-0" />
@@ -161,15 +163,13 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
                   onNavigate={() => onNavigateToView('traffic')}
                 />
               </BandItem>
-              <BandItem>
+              {capabilities.features?.helm !== false && <BandItem>
                 <HelmSummary
                   data={helmData}
                   onNavigate={() => onNavigateToView('helm')}
                 />
-              </BandItem>
-              <BandItem>
-                <CostCard onNavigate={() => onNavigateToView('cost')} />
-              </BandItem>
+              </BandItem>}
+              {capabilities.features?.cost !== false && <BandItem><CostCard onNavigate={() => onNavigateToView('cost')} /></BandItem>}
             </div>
 
             {/* Posture band — same flex-grow wrap so any subset of compliance cards

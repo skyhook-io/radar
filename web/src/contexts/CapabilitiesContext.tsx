@@ -19,6 +19,7 @@ const defaultCapabilities: Capabilities = {
     rollouts: true,
   },
   mcpEnabled: true,
+  features: { cost: true, helm: true, gitOpsManagedOnly: false },
   // Default to 'local' for the loading window so the UI renders the
   // OSS standalone shape until /api/capabilities resolves. Both
   // alternatives ('in-cluster', 'cloud') would cause OSS users to
@@ -43,6 +44,7 @@ const restrictedCapabilities: Capabilities = {
     rollouts: false,
   },
   mcpEnabled: false,
+  features: { cost: false, helm: false, gitOpsManagedOnly: false },
   deployment: { mode: 'local' },
 }
 
@@ -109,6 +111,14 @@ export function useCanUpdateSecrets(): boolean {
 
 export function useCanHelmWrite(): boolean {
   return useContext(CapabilitiesContext).helmWrite
+}
+
+export function useFeatureEnabled(feature: 'cost' | 'helm'): boolean {
+  return useContext(CapabilitiesContext).features?.[feature] ?? true
+}
+
+export function useGitOpsManagedOnly(): boolean {
+  return useContext(CapabilitiesContext).features?.gitOpsManagedOnly ?? false
 }
 
 export function useCanNodeWrite(): boolean {

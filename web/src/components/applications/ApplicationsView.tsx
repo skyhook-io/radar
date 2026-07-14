@@ -37,6 +37,7 @@ import { buildWorkloadPath, kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
 import { ApplicationCostTab } from '../cost/ApplicationCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
+import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 
 type ApplicationRouteView = ApplicationView | 'cost'
 
@@ -55,6 +56,7 @@ interface ApplicationsViewProps {
 export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsViewProps) {
   const query = useApplications(namespaces)
   const { connection } = useConnection()
+  const capabilities = useCapabilitiesContext()
   const apps = useMemo(() => query.data?.applications ?? [], [query.data])
 
   const freshness = (
@@ -175,7 +177,7 @@ function AppDetailRoute({ app, apps, onBack, onOpenResource }: { app: AppRow; ap
   const appWorkloads = app.workloads ?? []
   const singleWorkloadKey = appWorkloads.length === 1 ? workloadKey(appWorkloads[0]) : null
   const selectedWorkloadKey = singleWorkloadKey ?? selectedWorkloadParam
-  const applicationCostAvailable = !singleWorkloadKey && appWorkloads.some((workload) => isOpenCostWorkloadKind(workload.kind))
+  const applicationCostAvailable = capabilities.features?.cost !== false && !singleWorkloadKey && appWorkloads.some((workload) => isOpenCostWorkloadKind(workload.kind))
   const applicationCostSelected = selectedRouteView === 'cost' && applicationCostAvailable
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, { enabled: !selectedWorkloadKey })
   const sourceInventoryEnabled = !selectedWorkloadKey && selectedView === 'topology'

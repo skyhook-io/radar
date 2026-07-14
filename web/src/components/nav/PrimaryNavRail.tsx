@@ -69,9 +69,10 @@ interface PrimaryNavRailProps {
   // which self-nulls without auth so the row vanishes in no-auth OSS).
   onOpenSettings?: () => void
   accountSlot?: ReactNode
+  enabledViews?: Set<string>
 }
 
-export function PrimaryNavRail({ activeView, onNavigate, pinned, onTogglePinned, showPinToggle = true, onOpenSettings, accountSlot }: PrimaryNavRailProps) {
+export function PrimaryNavRail({ activeView, onNavigate, pinned, onTogglePinned, showPinToggle = true, onOpenSettings, accountSlot, enabledViews }: PrimaryNavRailProps) {
   return (
     <aside
       aria-label="Primary navigation"
@@ -103,7 +104,7 @@ export function PrimaryNavRail({ activeView, onNavigate, pinned, onTogglePinned,
           pinned && 'flex-1 min-h-0 overflow-y-auto',
         )}
       >
-        {NAV_ITEMS.map((item) => (
+        {NAV_ITEMS.filter((item) => !enabledViews || enabledViews.has(item.view)).map((item) => (
           <NavRailItem
             key={item.view}
             item={item}

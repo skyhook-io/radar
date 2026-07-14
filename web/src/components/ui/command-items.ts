@@ -4,6 +4,7 @@ import { useNamespaces, useContexts } from '../../api/client'
 import { CORE_RESOURCES, useAPIResources } from '../../api/apiResources'
 import { getResourceIcon } from '../../utils/resource-icons'
 import { parseContextName } from '../../utils/context-name'
+import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 
 // Drop the disambiguating " (source)" suffix the context list appends, so the
 // GKE/EKS/AKS parser sees the bare context name (mirrors the cluster picker).
@@ -100,6 +101,7 @@ const VIEW_ENTRIES: { view: MainView; label: string; icon: React.ComponentType<{
 // Namespaces, Actions) — shared by the centered modal (embedded) and the
 // standalone omnibar so the two never drift.
 export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
+  const capabilities = useCapabilitiesContext()
   const { data: namespacesData } = useNamespaces()
   const { data: contexts } = useContexts()
   const { data: apiResources } = useAPIResources()
@@ -108,6 +110,7 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
     const result: CommandItem[] = []
 
     for (const v of VIEW_ENTRIES) {
+      if ((v.view === 'cost' && capabilities.features?.cost === false) || (v.view === 'helm' && capabilities.features?.helm === false)) continue
       result.push({ id: `view-${v.view}`, label: `Go to ${v.label}`, category: 'Views', icon: v.icon, shortcut: v.shortcut, action: () => cb.onNavigateView(v.view) })
     }
 
@@ -174,5 +177,5 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
 
     return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiResources, contexts, namespacesData, cb.onNavigateView, cb.onNavigateKind, cb.onSwitchContext, cb.onSetNamespaces, cb.onToggleTheme, cb.onShowDiagnostics])
+  }, [apiResources, contexts, namespacesData, cb.onNavigateView, cb.onNavigateKind, cb.onSwitchContext, cb.onSetNamespaces, cb.onToggleTheme, cb.onShowDiagnostics, capabilities.features?.cost, capabilities.features?.helm])
 }

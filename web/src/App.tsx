@@ -416,6 +416,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Set mainView by navigating to the path
   const setMainView = useCallback((view: ExtendedMainView, params?: Record<string, string>) => {
+    if ((view === 'cost' && capabilities.features?.cost === false) || (view === 'helm' && capabilities.features?.helm === false) || (view === 'helmCompare' && capabilities.features?.helm === false)) {
+      view = 'home'
+    }
     // Host takeover: fleet-shaped views (issues/gitops/checks) are owned by the
     // host's fleet pages. Hand straight to the host instead of navigating to
     // our own /<view> first — that intermediate hop mounts the view machinery
@@ -447,7 +450,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     navigate({ pathname: path, search: newParams.toString() })
-  }, [navigate, searchParams, takeover, goHost])
+  }, [navigate, searchParams, takeover, goHost, capabilities.features?.cost, capabilities.features?.helm])
+
+  // Deep links must obey the same surface controls as in-app navigation.
+  useEffect(() => {
+    const view = getViewFromPath(location.pathname)
+    if ((view === 'cost' && capabilities.features?.cost === false) || ((view === 'helm' || view === 'helmCompare') && capabilities.features?.helm === false)) {
+      navigate('/', { replace: true })
+    }
+  }, [location.pathname, navigate, capabilities.features?.cost, capabilities.features?.helm])
 
   // Cloud (embedded) takes over the "fleet-shaped" per-cluster views with its
   // own fleet pages scoped to this cluster — owned by the host's left rail — so
@@ -681,6 +692,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }, [searchParams, navigate])
 
   const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string) => {
+    if (capabilities.features?.helm === false) return
     const newParams = new URLSearchParams()
     const globalNamespaces = searchParams.get('namespaces')
     if (globalNamespaces) {
@@ -696,7 +708,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       return
     }
     navigate({ pathname: '/helm', search: newParams.toString() })
-  }, [mainView, searchParams, navigate, setSearchParams])
+  }, [mainView, searchParams, navigate, setSearchParams, capabilities.features?.helm])
 
   // From the Issues queue: special controller/manager subjects route to their
   // rich detail pages, not the generic resource drawer that's a dead-end for
@@ -774,7 +786,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     workload: '', compare: '', helmCompare: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
-    (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
+    (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '' && !(v === 'cost' && capabilities.features?.cost === false) && !(v === 'helm' && capabilities.features?.helm === false),
   )
   useRegisterShortcuts([
     ...views.map((view) => ({
@@ -1598,6 +1610,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           showPinToggle={!railForcedSlim}
           onOpenSettings={() => setShowSettings(true)}
           accountSlot={<UserMenu variant="rail" pinned={navRailEffectivePinned} />}
+          enabledViews={new Set(['home', 'resources', 'issues', 'topology', 'applications', 'timeline', 'traffic', 'gitops', 'checks', ...(capabilities.features?.helm === false ? [] : ['helm']), ...(capabilities.features?.cost === false ? [] : ['cost'])])}
         />
       )}
       {/* `relative` makes this column the containing block for the absolute
@@ -1649,6 +1662,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                   disabledTooltip={namespaceFilter.tooltip}
                 />
               </ScopePill>
+              {capabilities.features?.gitOpsManagedOnly && (mainView === 'topology' || mainView === 'resources') && (
+                <span className="text-[10px] text-skyhook-600 dark:text-skyhook-400 whitespace-nowrap" title="Showing resources managed by GitOps controllers">GitOps managed</span>
+              )}
             )}
             {/* Connection status — a fixed-size dot (state in the tooltip), an
                 optional reconnect button, and when the header is wide enough
@@ -1710,7 +1726,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             { view: 'topology' as const, icon: Network, label: 'Topology' },
             { view: 'resources' as const, icon: List, label: 'Resources' },
             { view: 'timeline' as const, icon: Clock, label: 'Timeline' },
-            { view: 'helm' as const, icon: Package, label: 'Helm' },
+            ...(capabilities.features?.helm === false ? [] : [{ view: 'helm' as const, icon: Package, label: 'Helm' }]),
             { view: 'gitops' as const, icon: GitBranch, label: 'GitOps' },
             // Applications is intentionally hidden from the pill bar for now —
             // the bar is full, and the view's primary home is Cloud's fleet
@@ -1729,7 +1745,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             // Drop any pill the host took over — cluster-scoped access stays
             // available via the Home cards (redirected by the takeover effect
             // above), ⌘K, and bookmarks. Standalone OSS keeps every pill.
-            .filter(({ view }) => !isViewTakenOver(view))
+            .filter(({ view }) => !isViewTakenOver(view) && !(view === 'cost' && capabilities.features?.cost === false))
             .map(({ view, icon: Icon, label }) => (
             <Tooltip key={view} content={label} delay={100} position="bottom">
               <button

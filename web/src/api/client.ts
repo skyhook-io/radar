@@ -570,13 +570,14 @@ export function useDashboardCRDs(namespaces: string[] = []) {
 }
 
 // Helm summary - loaded lazily after main dashboard (Helm SDK lists K8s secrets, ~2-3s)
-export function useDashboardHelm(namespaces: string[] = []) {
+export function useDashboardHelm(namespaces: string[] = [], options?: { enabled?: boolean }) {
   const params = namespaces.length > 0 ? `?namespaces=${namespaces.join(',')}` : ''
   return useQuery<DashboardHelmSummary>({
     queryKey: ['dashboard-helm', namespaces],
     queryFn: () => fetchJSON(`/dashboard/helm${params}`),
     staleTime: 30000,
     refetchInterval: 60000,
+    enabled: options?.enabled ?? true,
   })
 }
 
