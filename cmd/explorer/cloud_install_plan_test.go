@@ -193,4 +193,7 @@ func TestGitOpsUnconfirmedConnectionIsRecoverableFailure(t *testing.T) {
 	if strings.Contains(got, "not an install failure") {
 		t.Errorf("guidance still reports an unconfirmed connection as success:\n%s", got)
 	}
+	if strings.Contains(got, "Radar Cloud") {
+		t.Errorf("recovery guidance hard-codes the hosted product name:\n%s", got)
+	}
 }

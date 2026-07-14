@@ -32,6 +32,9 @@ func TestCloudConnectStopsBeforeHubAndPointsToSupportedPath(t *testing.T) {
 			t.Errorf("guidance missing %q:\n%s", want, got)
 		}
 	}
+	if strings.Contains(got, "Radar Cloud") {
+		t.Fatalf("custom-Hub guidance hard-codes the hosted product name:\n%s", got)
+	}
 }
 
 func TestPostApprovalRecoveryGuidanceDoesNotRecommendImmediateRetry(t *testing.T) {
@@ -96,11 +99,28 @@ func TestAdoptionRollbackGuidanceIncludesHubCleanup(t *testing.T) {
 		"delete secret/radar-cloud-config",
 		"organization owner delete the connected cluster",
 		"https://app.radarhq.io/c/clus_existing",
-		"potentially billable",
+		"fleet row would remain disconnected",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rollback guidance missing %q:\n%s", want, got)
 		}
+	}
+	for _, wrong := range []string{"Radar Cloud", "potentially billable"} {
+		if strings.Contains(got, wrong) {
+			t.Errorf("self-host-compatible rollback guidance contains %q:\n%s", wrong, got)
+		}
+	}
+}
+
+func TestPreparedInstallPlanUsesDeploymentNeutralOwnerCopy(t *testing.T) {
+	var out bytes.Buffer
+	printPreparedInstallPlan(&out, &cloudinstall.PreparedProvision{}, false, false)
+	got := out.String()
+	if !strings.Contains(got, "enabled for organization owners") {
+		t.Fatalf("install plan omitted the self-upgrade authorization boundary:\n%s", got)
+	}
+	if strings.Contains(got, "Radar Cloud") {
+		t.Fatalf("install plan hard-codes the hosted product name:\n%s", got)
 	}
 }
 
@@ -111,6 +131,9 @@ func TestCloudConnectHelpDoesNotAdvertisePreviewAsAvailable(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "preview mode is not available yet") || !strings.Contains(out.String(), "radar cloud install") {
 		t.Fatalf("help omitted availability guidance:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Radar Cloud") {
+		t.Fatalf("custom-Hub help hard-codes the hosted product name:\n%s", out.String())
 	}
 }
 
@@ -278,7 +301,7 @@ func TestCanceledAfterApprovalPointsToPendingInstallRecovery(t *testing.T) {
 	var out bytes.Buffer
 	printCanceledAfterApproval(&out, "clus_existing", "https://app.radarhq.io/c/clus_existing")
 	got := out.String()
-	for _, want := range []string{"clus_existing", "No token Secret or Helm release was written", "Rerun `radar cloud install`", "pending Cloud cluster", "organization owner", "https://app.radarhq.io/c/clus_existing"} {
+	for _, want := range []string{"clus_existing", "No token Secret or Helm release was written", "Rerun `radar cloud install`", "pending cluster in Radar", "organization owner", "https://app.radarhq.io/c/clus_existing"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("cancellation recovery missing %q: %q", want, got)
 		}
@@ -293,7 +316,7 @@ func TestPrintInstallSuccessUsesRenderedDeploymentName(t *testing.T) {
 	printInstallSuccess(&out, "production", "https://app.radarhq.io/c/clus_123", helm.DeploymentRef{Name: "prod-radar", Namespace: "radar-prod"}, cloudCommandTarget{})
 	got := out.String()
 	for _, want := range []string{
-		`Cluster "production" is connected`,
+		`Cluster "production" is connected to Radar`,
 		"Open: https://app.radarhq.io/c/clus_123",
 		"kubectl -n radar-prod rollout status deployment/prod-radar",
 	} {
@@ -303,6 +326,9 @@ func TestPrintInstallSuccessUsesRenderedDeploymentName(t *testing.T) {
 	}
 	if strings.Contains(got, "deploy/prod") {
 		t.Fatalf("success guidance assumes the release name is the Deployment name:\n%s", got)
+	}
+	if strings.Contains(got, "Radar Cloud") {
+		t.Fatalf("success guidance hard-codes the hosted product name:\n%s", got)
 	}
 }
 

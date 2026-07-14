@@ -119,13 +119,13 @@ func main() {
 	authOIDCInsecureSkipVerify := flag.Bool("auth-oidc-insecure-skip-verify", false, "Skip TLS certificate verification for OIDC provider (insecure, dev/test only)")
 	authOIDCCACert := flag.String("auth-oidc-ca-cert", "", "Path to CA certificate file for OIDC provider TLS verification")
 	authOIDCBackchannelLogout := flag.Bool("auth-oidc-backchannel-logout", false, "Enable OIDC Back-Channel Logout endpoint (single-replica only)")
-	// Radar Cloud flags — enable hosted mode when --cloud-url is set.
+	// Radar Hub flags — enable connected mode when --cloud-url is set.
 	// Local-binary behavior is unchanged when these flags are empty. Each
 	// flag falls back to an env var so Kubernetes deployments can source
 	// the token from a Secret without exposing it in `ps` output.
-	cloudURL := flag.String("cloud-url", os.Getenv("RADAR_CLOUD_URL"), "Radar Cloud WebSocket URL (e.g. wss://api.radarhq.io/agent) — empty = local-only. Env: RADAR_CLOUD_URL")
-	cloudToken := flag.String("cloud-token", os.Getenv("RADAR_CLOUD_TOKEN"), "Cluster token from the Radar Cloud install wizard (rhc_<random>). Env: RADAR_CLOUD_TOKEN")
-	cloudClusterName := flag.String("cluster-name", os.Getenv("RADAR_CLOUD_CLUSTER_NAME"), "Human-readable cluster name for Radar Cloud (required with --cloud-url). Env: RADAR_CLOUD_CLUSTER_NAME")
+	cloudURL := flag.String("cloud-url", os.Getenv("RADAR_CLOUD_URL"), "Radar Hub WebSocket URL (e.g. wss://api.radarhq.io/agent) — empty = local-only. Env: RADAR_CLOUD_URL")
+	cloudToken := flag.String("cloud-token", os.Getenv("RADAR_CLOUD_TOKEN"), "Connection token from the Radar install flow (rhc_<random>). Env: RADAR_CLOUD_TOKEN")
+	cloudClusterName := flag.String("cluster-name", os.Getenv("RADAR_CLOUD_CLUSTER_NAME"), "Human-readable cluster name shown in Radar (required with --cloud-url). Env: RADAR_CLOUD_CLUSTER_NAME")
 	// Tunable deadlines for slow / high-latency / SSH-tunneled clusters.
 	// Defaults preserve the original behavior. Each flag falls back to an
 	// environment variable so Kubernetes deployments can source values from
@@ -137,7 +137,7 @@ func main() {
 	maxScopeCandidates := flag.Int("max-scope-candidates", k8s.EnvIntOr("RADAR_MAX_SCOPE_CANDIDATES", 20), "Cap on the namespace-fallback probe fanout for users who can list namespaces cluster-wide but not list a specific kind cluster-wide (default: 20). Raise for clusters with more than 20 namespaces to avoid silently marking kinds as denied in dropped namespaces. Env: RADAR_MAX_SCOPE_CANDIDATES")
 	flag.Parse()
 
-	// Cloud-mode: Radar runs inside a customer cluster and fronts Radar Cloud.
+	// Cloud-mode: Radar runs inside a customer cluster and connects to Radar Hub.
 	// The ordinary TCP listener is health-only; the full handler is served over
 	// the authenticated tunnel, which marks requests in-process before proxy
 	// identity headers are accepted.
@@ -334,7 +334,7 @@ func main() {
 	app.InitializeCluster()
 	k8s.LogTiming(" Total startup (to connected): %v", time.Since(startupStart))
 
-	// When --cloud-url is set, dial out to Radar Cloud and serve the
+	// When --cloud-url is set, dial out to Radar Hub and serve the
 	// existing router over yamux-tunneled streams. No behavior change
 	// when empty.
 	if *cloudURL != "" {

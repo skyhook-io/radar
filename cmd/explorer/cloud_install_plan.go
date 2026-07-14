@@ -135,12 +135,12 @@ func classifyCloudInstallPlan(
 		return plan, nil
 	case helm.CloudReleasePending:
 		return cloudInstallPlan{}, fmt.Errorf(
-			"Helm release %q in namespace %q is %q at revision %d; wait for or resolve that operation before connecting it to Cloud",
+			"Helm release %q in namespace %q is %q at revision %d; wait for or resolve that operation before connecting it to Radar",
 			plan.Release, plan.Namespace, inspection.Status, inspection.Revision,
 		)
 	case helm.CloudReleaseHistory:
 		return cloudInstallPlan{}, fmt.Errorf(
-			"Helm release %q in namespace %q has retained %q history at revision %d but is not deployed; resolve or remove that history before connecting it to Cloud",
+			"Helm release %q in namespace %q has retained %q history at revision %d but is not deployed; resolve or remove that history before connecting it to Radar",
 			plan.Release, plan.Namespace, inspection.Status, inspection.Revision,
 		)
 	default:

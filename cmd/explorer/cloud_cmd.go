@@ -77,12 +77,12 @@ func runCloudSubcommand() {
 }
 
 func cloudUsage(w *os.File) {
-	fmt.Fprint(w, `Connect this cluster to Radar Cloud with an in-cluster agent.
+	fmt.Fprint(w, `Connect this cluster to Radar with an in-cluster agent.
 
 Usage:
   radar cloud install [--context NAME] [-y|--yes] [--namespace NS] [--release NAME] [--adopt-existing] [--hub-url URL] [--name NAME] [--dry-run]
 
-install  Connect one kubeconfig cluster to Cloud. Installs Radar when absent,
+install  Connect one kubeconfig cluster to Radar. Installs Radar when absent,
          or offers a safe native-Helm adoption / GitOps handoff when detected.
          An explicit --context is used directly; otherwise the current context
          must be confirmed unless -y/--yes is set.
@@ -97,8 +97,8 @@ Flags (install):
                    During adoption, also enable Helm/Secrets/exec/forward/metrics RBAC
   --no-self-upgrade
                    Do not install Radar's in-app self-upgrade Role/RoleBinding
-  --hub-url URL    Radar Cloud hub API (default `+defaultHubBase+`; set for self-hosted)
-  --name NAME      Cluster name shown in Cloud (default: selected Kubernetes context)
+  --hub-url URL    Radar Hub API (default `+defaultHubBase+`; set for self-hosted)
+  --name NAME      Cluster name shown in Radar (default: selected Kubernetes context)
   --chart-version  Stable chart target (default: latest published, including adoption)
   --dry-run        Run the permission preflight + print the plan; install nothing
   --no-browser     Print the approval URL instead of opening a browser
@@ -109,8 +109,8 @@ Flags (install):
 func cloudConnect(args []string, w io.Writer) int {
 	fs := flag.NewFlagSet("cloud connect", flag.ContinueOnError)
 	fs.SetOutput(w)
-	hubURL := fs.String("hub-url", defaultHubBase, "Radar Cloud hub API origin")
-	name := fs.String("name", "", "Cluster name shown in Cloud (default: current kubecontext)")
+	hubURL := fs.String("hub-url", defaultHubBase, "Radar Hub API origin")
+	name := fs.String("name", "", "Cluster name shown in Radar (default: current kubecontext)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(w, "\nLocal-process preview mode is not available yet; use `radar cloud install` for the supported in-cluster path.")
@@ -139,7 +139,7 @@ func cloudConnect(args []string, w io.Writer) int {
 		installCommand += fmt.Sprintf(" --name=%q", *name)
 	}
 	fmt.Fprintln(w, "`radar cloud connect` local preview mode is not available yet.")
-	fmt.Fprintln(w, "Radar Cloud currently accepts in-cluster agents only; no request was sent to the hub.")
+	fmt.Fprintln(w, "Radar currently accepts in-cluster agents only; no request was sent to the hub.")
 	fmt.Fprintln(w, "\nInstall the supported agent into your current kubeconfig cluster:")
 	fmt.Fprintf(w, "  %s\n", installCommand)
 	fmt.Fprintln(w, "\nIf Radar is already installed, the same command detects it and offers a native Helm adoption or GitOps handoff. Non-interactive adoption also requires --adopt-existing.")
@@ -153,11 +153,11 @@ func cloudConnect(args []string, w io.Writer) int {
 // dials the tunnel. Terminal (exits after installing).
 func cloudInstall(args []string) {
 	fs := flag.NewFlagSet("cloud install", flag.ExitOnError)
-	hubURL := fs.String("hub-url", defaultHubBase, "Radar Cloud hub API origin")
+	hubURL := fs.String("hub-url", defaultHubBase, "Radar Hub API origin")
 	namespace := fs.String("namespace", cloudinstall.DefaultInstallNamespace, "Namespace to install into")
 	release := fs.String("release", cloudinstall.DefaultReleaseName, "Helm release name")
 	chartVersion := fs.String("chart-version", "", "Chart version (default: latest published)")
-	name := fs.String("name", "", "Cluster name shown in Cloud (default: selected Kubernetes context)")
+	name := fs.String("name", "", "Cluster name shown in Radar (default: selected Kubernetes context)")
 	contextName := fs.String("context", "", "Kubernetes context to install into (default: current context)")
 	adoptExisting := fs.Bool("adopt-existing", false, "Confirm automation may connect a detected existing installation")
 	enableCloudFeatures := fs.Bool("enable-cloud-features", false, "Enable optional Cloud feature RBAC while adopting")
@@ -218,7 +218,7 @@ func cloudInstall(args []string) {
 	}
 	commandTarget := cloudCommandTarget{Context: ctxName, Kubeconfig: kubeconfig}
 	if !confirmCloudInstallContext(os.Stdin, os.Stderr, ctxName, requestedContext != "", yes, term.IsTerminal(int(os.Stdin.Fd()))) {
-		fmt.Fprintln(os.Stderr, "\nCloud installation canceled. Pass --context NAME or -y/--yes to run without this prompt.")
+		fmt.Fprintln(os.Stderr, "\nRadar installation canceled. Pass --context NAME or -y/--yes to run without this prompt.")
 		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr)
@@ -253,7 +253,7 @@ func cloudInstall(args []string) {
 		os.Exit(1)
 	}
 	if *enableCloudFeatures && plan.Mode == cloudInstallFresh {
-		fmt.Fprintln(os.Stderr, "--enable-cloud-features applies only when connecting an existing installation; fresh Cloud installs already enable those capabilities.")
+		fmt.Fprintln(os.Stderr, "--enable-cloud-features applies only when connecting an existing installation; fresh installs already enable those capabilities.")
 		os.Exit(2)
 	}
 
@@ -292,7 +292,7 @@ func cloudInstall(args []string) {
 	}
 
 	if plan.Mode != cloudInstallFresh && !*dryRun && !confirmExistingInstall(os.Stdin, os.Stderr, plan, *adoptExisting, interactive) {
-		fmt.Fprintln(os.Stderr, "Cloud connection canceled. No Hub request or Kubernetes change was made.")
+		fmt.Fprintln(os.Stderr, "Radar connection canceled. No Hub request or Kubernetes change was made.")
 		os.Exit(1)
 	}
 
@@ -451,7 +451,7 @@ func cloudClusterURL(connectURL, clusterID string) string {
 }
 
 func printInstallSuccess(w io.Writer, clusterName, clusterURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
-	fmt.Fprintf(w, "\n  ✓ Cluster %q is connected to Radar Cloud.\n", clusterName)
+	fmt.Fprintf(w, "\n  ✓ Cluster %q is connected to Radar.\n", clusterName)
 	fmt.Fprintf(w, "    Open: %s\n", clusterURL)
 	fmt.Fprintf(w, "    Track it: %s -n %s rollout status deployment/%s\n\n", target.kubectl(), deployment.Namespace, deployment.Name)
 }
@@ -473,14 +473,14 @@ func printFreshInstallConflict(w io.Writer, err error, target cloudCommandTarget
 			fmt.Fprintln(w, "Radar cannot safely determine how to continue this Helm release. Inspect its state with:")
 		}
 		fmt.Fprintf(w, "  %s status %s -n %s\n", target.helm(), pending.Name, pending.Namespace)
-		fmt.Fprintln(w, "Resolve that release before retrying; Cloud installation will not overwrite it.")
+		fmt.Fprintln(w, "Resolve that release before retrying; Radar installation will not overwrite it.")
 		return true
 	}
 
 	var history *helm.ReleaseHistoryError
 	if errors.As(err, &history) {
 		fmt.Fprintf(w, "Helm release %q in namespace %q has retained %q history (revision %d).\n", history.Name, history.Namespace, history.Status, history.Revision)
-		fmt.Fprintln(w, "Cloud installation will not adopt or replace prior Helm history. Inspect it with:")
+		fmt.Fprintln(w, "Radar installation will not adopt or replace prior Helm history. Inspect it with:")
 		fmt.Fprintf(w, "  %s history %s -n %s\n", target.helm(), history.Name, history.Namespace)
 		fmt.Fprintln(w, "Then choose a new --release name, or deliberately remove the old release history before retrying.")
 		return true
@@ -503,7 +503,7 @@ func printTokenSecretConflict(w io.Writer, err error) bool {
 func printCanceledAfterApproval(w io.Writer, clusterID, clusterURL string) {
 	fmt.Fprintf(w, "\nThe Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", clusterID)
 	fmt.Fprintln(w, "No token Secret or Helm release was written. Rerun `radar cloud install` to try again.")
-	fmt.Fprintln(w, "The previous approval may remain as a pending Cloud cluster. An organization owner can delete it later:")
+	fmt.Fprintln(w, "The previous approval may remain as a pending cluster in Radar. An organization owner can delete it later:")
 	fmt.Fprintf(w, "  %s\n", clusterURL)
 }
 

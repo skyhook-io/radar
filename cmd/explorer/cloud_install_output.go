@@ -50,7 +50,7 @@ func printPreparedInstallPlan(w io.Writer, prepared *cloudinstall.PreparedProvis
 	fmt.Fprintln(w, "Plan:")
 	fmt.Fprintf(w, "  Kubernetes target: namespace %q, Helm release %q\n", prepared.Namespace(), prepared.ReleaseName())
 	if prepared.Mode() == cloudinstall.ProvisionFresh {
-		fmt.Fprintln(w, "  Action: install a new Cloud-connected Radar release")
+		fmt.Fprintln(w, "  Action: install a new connected Radar release")
 		fmt.Fprintf(w, "  Stable target: chart %s, Radar %s\n", prepared.ChartVersion(), prepared.AppVersion())
 		fmt.Fprintln(w, "  Cloud feature RBAC: enabled for Helm, Secrets, terminal, port-forward, and metrics")
 	} else {
@@ -75,7 +75,7 @@ func printPreparedInstallPlan(w io.Writer, prepared *cloudinstall.PreparedProvis
 	if noSelfUpgrade {
 		fmt.Fprintln(w, "  Future one-click agent upgrades: disabled by --no-self-upgrade")
 	} else {
-		fmt.Fprintln(w, "  Future one-click agent upgrades: enabled for Radar Cloud organization owners; no upgrade runs automatically (opt out with --no-self-upgrade)")
+		fmt.Fprintln(w, "  Future one-click agent upgrades: enabled for organization owners; no upgrade runs automatically (opt out with --no-self-upgrade)")
 	}
 	fmt.Fprintln(w)
 }
@@ -116,9 +116,9 @@ func printCloudPermissionFailure(
 	for _, detail := range pf.Blocking {
 		fmt.Fprintf(w, "  • %s\n", detail)
 	}
-	fmt.Fprintln(w, "\nCloud mode provisions Kubernetes impersonation RBAC, so a sufficiently privileged platform operator must run this step.")
+	fmt.Fprintln(w, "\nRadar's connected mode provisions Kubernetes impersonation RBAC, so a sufficiently privileged platform operator must run this step.")
 	fmt.Fprintf(w, "Ask them to run `radar cloud install` against this Kubernetes cluster (your context %q; theirs may be named differently).\n", contextName)
-	fmt.Fprintf(w, "Preserve Hub %q, namespace %q, Helm release %q, Cloud cluster name %q, and chart target %q.\n",
+	fmt.Fprintf(w, "Preserve Hub %q, namespace %q, Helm release %q, Radar cluster name %q, and chart target %q.\n",
 		hubURL, prepared.Namespace(), prepared.ReleaseName(), clusterName, prepared.ChartVersion())
 }
 
@@ -147,7 +147,7 @@ func printApprovedGitOpsHandoff(
 	fmt.Fprintln(w, "\n  Approved. No live Kubernetes resource was changed.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, handoff.Guidance)
-	fmt.Fprintln(w, "\nOne-time Cloud token (store it through your existing secret-management workflow; never place it in Helm values or Git):")
+	fmt.Fprintln(w, "\nOne-time connection token (store it through your existing secret-management workflow; never place it in Helm values or Git):")
 	fmt.Fprintf(w, "  %s\n", token)
 	fmt.Fprintln(w, "Set RADAR_CLOUD_TOKEN in your shell without putting it in shell history, then run the manifest-generation command shown above.")
 	return nil
@@ -204,13 +204,13 @@ func printGitOpsPendingHandoff(w io.Writer, err error, clusterID, clusterURL str
 	fmt.Fprintf(w, "\nGitOps handoff generated for Hub cluster %q, but its in-cluster connection was not confirmed: %s.\n", clusterID, reason)
 	fmt.Fprintln(w, "The configuration handoff is ready. Commit the generated configuration and token Secret through the source of truth; the existing Hub cluster remains the one to connect.")
 	fmt.Fprintln(w, "Do not rerun `radar cloud install`, because that would create another pending cluster.")
-	fmt.Fprintf(w, "Open or recover this cluster in Radar Cloud: %s\n", clusterURL)
+	fmt.Fprintf(w, "Open or recover this cluster in Radar: %s\n", clusterURL)
 }
 
 func printAdoptionRollbackGuidance(w io.Writer, recovery cloudProvisionRecovery, clusterURL string, target cloudCommandTarget) {
 	fmt.Fprintln(w, "  To deliberately undo this adoption later:")
 	fmt.Fprintf(w, "    1. %s rollback %s %d -n %s\n", target.helm(), recovery.ReleaseName, recovery.CurrentRevision, recovery.Namespace)
 	fmt.Fprintf(w, "    2. %s -n %s delete secret/%s\n", target.kubectl(), recovery.Namespace, cloudinstall.CloudTokenSecretName)
-	fmt.Fprintf(w, "    3. Have a Radar Cloud organization owner delete the connected cluster at %s\n", clusterURL)
-	fmt.Fprintln(w, "  The Helm rollback restores the exact pre-adoption chart, image pin, values, and RBAC. Delete the Secret and Cloud cluster only after that rollback succeeds; otherwise the fleet row would remain disconnected and potentially billable.")
+	fmt.Fprintf(w, "    3. Have an organization owner delete the connected cluster at %s\n", clusterURL)
+	fmt.Fprintln(w, "  The Helm rollback restores the exact pre-adoption chart, image pin, values, and RBAC. Delete the Secret and connected cluster only after that rollback succeeds; otherwise the fleet row would remain disconnected.")
 }
