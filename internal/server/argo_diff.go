@@ -117,7 +117,15 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// destination AND an Application we can't read to confirm one (its object lives
 	// in the watched argocd namespace, so a real app is readable; an unreadable one
 	// is treated as unauthorizable rather than served ungated).
-	appObj, appErr := k8s.GetResourceCache().GetDynamicWithGroup(r.Context(), "applications", appNamespace, appName, "argoproj.io")
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		// A context switch can clear the cache while IsConnected() (and so
+		// requireConnected) still reports true; guard like the other cache-reading
+		// handlers rather than nil-panic into a recovered 500.
+		s.writeError(w, http.StatusServiceUnavailable, "Resource cache is not available.")
+		return
+	}
+	appObj, appErr := cache.GetDynamicWithGroup(r.Context(), "applications", appNamespace, appName, "argoproj.io")
 	if appErr != nil {
 		if apierrors.IsNotFound(appErr) {
 			s.writeError(w, http.StatusNotFound, "Application not found.")

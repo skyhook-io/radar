@@ -736,6 +736,12 @@ func TestDetectArgoStale(t *testing.T) {
 		if got[0].Kind != "StatefulSet" || got[0].Name != "argocd-application-controller" || got[0].Group != "apps" {
 			t.Errorf("rollup subject = %s.%s/%s, want the controller workload", got[0].Group, got[0].Kind, got[0].Name)
 		}
+		// The rollup must carry the freeze age (anchored to the oldest reconcile),
+		// not 0 — otherwise the issues layer resets FirstSeen to now every poll and a
+		// chronic outage keeps sorting as brand new.
+		if got[0].DurationSeconds == 0 {
+			t.Errorf("controller-down rollup DurationSeconds = 0, want the ~2h staleness so FirstSeen is stable")
+		}
 	})
 
 	t.Run("healthy controller, 1 of 5 stale, one per-app row", func(t *testing.T) {
@@ -765,6 +771,9 @@ func TestDetectArgoStale(t *testing.T) {
 		got := detectArgoStale(apps, ctrlUp, threshold, now)
 		if len(got) != 1 || got[0].Reason != "GitOpsComparisonsStale" || got[0].Severity != "warning" {
 			t.Fatalf("want one GitOpsComparisonsStale rollup, got %+v", got)
+		}
+		if got[0].DurationSeconds == 0 {
+			t.Errorf("comparisons-stale rollup DurationSeconds = 0, want the freeze age so FirstSeen is stable")
 		}
 	})
 

@@ -242,6 +242,25 @@ func TestApplyArgoCDConfig_InvalidURL(t *testing.T) {
 	}
 }
 
+// TestApplyArgoCDConfig_RejectsCredentialBearingURL pins that the PUT applies the
+// same strict validation as the env input — a URL embedding userinfo (or a query)
+// is rejected, so it can't be persisted and later surfaced in GET /api/config.
+func TestApplyArgoCDConfig_RejectsCredentialBearingURL(t *testing.T) {
+	s := setupArgoCDTest(t)
+	for _, bad := range []string{
+		`{"argoCdUrl": "https://user:pass@argocd.example.com"}`,
+		`{"argoCdUrl": "https://argocd.example.com/api?token=secret"}`,
+	} {
+		w := putArgoCD(t, s, bad)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want 400", bad, w.Code)
+		}
+		if saved := config.Load(); saved.ArgoCDURL != "" {
+			t.Fatalf("a rejected URL must not be persisted, got %q", saved.ArgoCDURL)
+		}
+	}
+}
+
 // TestApplyArgoCDConfig_RefusedWhenEnvManaged pins the read-only invariant: an
 // environment-provisioned integration refuses UI edits with 409, so a Settings
 // change can't silently no-op against the declarative source of truth.

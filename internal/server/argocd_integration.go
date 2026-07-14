@@ -74,13 +74,11 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 
 	rawURL := strings.TrimSpace(body.ArgoCDURL)
 	if rawURL != "" {
-		// Scheme-only check here: this URL is entered interactively by an owner and
-		// probed before commit, so it's less exposed than the non-interactive env
-		// URL, which gets the stricter argocd.validateEnvArgoURL (host, no userinfo/
-		// query/fragment). Reconciling both onto the strict validator is a possible
-		// follow-up.
-		if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			s.writeError(w, http.StatusBadRequest, "Argo CD URL must be a valid HTTP(S) URL (e.g., https://argocd.example.com)")
+		// Same strict validation as the env input: a persisted URL is returned by
+		// GET /api/config (only the token is redacted), so a credential-bearing URL
+		// (userinfo or ?token=…) must be rejected here too, not just http(s).
+		if err := argocd.ValidateServerURL(rawURL); err != nil {
+			s.writeError(w, http.StatusBadRequest, "Argo CD URL is invalid — it "+err.Error()+" (e.g. https://argocd.example.com)")
 			return
 		}
 	}

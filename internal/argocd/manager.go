@@ -343,6 +343,13 @@ func EnvManagedConfig() (url string, insecureTLS bool, ok bool) {
 // ("" when it succeeded or isn't env-managed).
 func EnvManagedError() string { return defaultManager.EnvManagedError() }
 
+// ValidateServerURL strictly validates an argocd-server URL: http(s) scheme, a
+// host, and no embedded userinfo / query / fragment. Used for BOTH the env input
+// and the Settings PUT so a credential-bearing URL (e.g. https://user:pass@host
+// or ?token=…) can't be persisted and then surfaced in /api/config, the status
+// address, or logs. Returns a UI-safe error (never echoes the raw input).
+func ValidateServerURL(raw string) error { return validateEnvArgoURL(raw) }
+
 // IsConfigured reports whether the default manager has connection settings.
 func IsConfigured() bool { return defaultManager.IsConfigured() }
 

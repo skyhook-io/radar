@@ -544,6 +544,21 @@ func detectArgoStaleFromCache(cache *ResourceCache, apps []*unstructured.Unstruc
 	return detectArgoStale(apps, ctrl, threshold, now)
 }
 
+// maxReconcileStaleness returns the largest now-lastReconcile across apps (0 when
+// none carry a timestamp). It's stamped as the rollup's Age so the issues layer
+// anchors FirstSeen to the oldest reconcile — when the freeze began — instead of
+// resetting it to the compose time on every poll (which makes a chronic outage
+// keep sorting as brand new). See resourceAge in detect.go for the same pattern.
+func maxReconcileStaleness(now time.Time, apps []*unstructured.Unstructured) time.Duration {
+	var max time.Duration
+	for _, app := range apps {
+		if since, ok := durationFromTimestamp(now, argoReconciledAt(app)); ok && since > max {
+			max = since
+		}
+	}
+	return max
+}
+
 // detectArgoStale applies the two-level staleness verdict. Level one: if the
 // controller is visible but has no Ready replica, every Application's verdict is
 // frozen — one critical rollup on the controller, the individual stale apps
@@ -557,7 +572,7 @@ func detectArgoStale(apps []*unstructured.Unstructured, ctrl argoControllerHealt
 	if ctrl.visible && !ctrl.healthy() {
 		d := gitopsProblem(ctrl.subjectKind, argoControllerGroup(ctrl.subjectKind), ctrl.subjectNamespace, ctrl.subjectName,
 			"critical", "GitOpsControllerStalled",
-			fmt.Sprintf("Argo CD application-controller is not running — sync status and drift detection are frozen for %s", countApps(len(apps))), 0)
+			fmt.Sprintf("Argo CD application-controller is not running — sync status and drift detection are frozen for %s", countApps(len(apps))), maxReconcileStaleness(now, apps))
 		d.Stuck = true
 		d.Action = "Inspect the application-controller pods (logs, restarts, resource limits) — no Application will sync or re-compare until it is running again."
 		return []Detection{d}
@@ -583,7 +598,7 @@ func detectArgoStale(apps []*unstructured.Unstructured, ctrl argoControllerHealt
 	if ctrl.healthy() && len(eligible) >= 3 && len(stale)*2 > len(eligible) {
 		d := gitopsProblem(ctrl.subjectKind, argoControllerGroup(ctrl.subjectKind), ctrl.subjectNamespace, ctrl.subjectName,
 			"warning", "GitOpsComparisonsStale",
-			fmt.Sprintf("%d of %d Applications have stale sync/drift comparisons — the application-controller may be overloaded or wedged", len(stale), len(eligible)), 0)
+			fmt.Sprintf("%d of %d Applications have stale sync/drift comparisons — the application-controller may be overloaded or wedged", len(stale), len(eligible)), maxReconcileStaleness(now, stale))
 		d.Action = "Check the application-controller for reconcile backlog or throttling; individual Applications' verdicts are older than expected."
 		return []Detection{d}
 	}
