@@ -1,5 +1,5 @@
 import { Cpu } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown } from '../../ui/drawer-components'
 import {
   getScaledJobStatus,
   getScaledJobTarget,
@@ -18,13 +18,14 @@ export function KedaScaledJobRenderer({ data }: KedaScaledJobRendererProps) {
 
   const jobStatus = getScaledJobStatus(data)
   const isNotReady = jobStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const triggers = getScaledJobTriggers(data)
 
   return (
     <>
       {/* Problem alert */}
-      {isNotReady && (
+      {isNotReady && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="ScaledJob Not Ready"

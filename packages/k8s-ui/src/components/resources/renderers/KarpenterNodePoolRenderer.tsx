@@ -1,5 +1,5 @@
 import { Server, Settings, Shield, Cpu, Tag, BarChart3 } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
 import {
   getNodePoolStatus,
@@ -31,6 +31,7 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
 
   const poolStatus = getNodePoolStatus(data)
   const isNotReady = poolStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const requirements = getNodePoolRequirements(data)
   const weight = getNodePoolWeight(data)
@@ -45,7 +46,7 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
   return (
     <>
       {/* Problem alert */}
-      {isNotReady && (
+      {isNotReady && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="NodePool Not Ready"

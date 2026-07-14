@@ -1,5 +1,5 @@
 import { Server, HardDrive, Shield, Network, Tag, Image } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, KeyValueBadgeList } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, KeyValueBadgeList, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { getEC2NodeClassStatus } from '../resource-utils-karpenter'
 
 interface KarpenterEC2NodeClassRendererProps {
@@ -13,6 +13,7 @@ export function KarpenterEC2NodeClassRenderer({ data }: KarpenterEC2NodeClassRen
 
   const nodeClassStatus = getEC2NodeClassStatus(data)
   const isNotReady = nodeClassStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
 
   const amiTerms = spec.amiSelectorTerms || []
@@ -28,7 +29,7 @@ export function KarpenterEC2NodeClassRenderer({ data }: KarpenterEC2NodeClassRen
 
   return (
     <>
-      {isNotReady && (
+      {isNotReady && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="EC2NodeClass Not Ready"

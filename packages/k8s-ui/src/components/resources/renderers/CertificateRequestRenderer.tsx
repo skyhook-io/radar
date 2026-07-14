@@ -1,6 +1,6 @@
 import { Shield, FileText, Info } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 
 interface CertificateRequestRendererProps {
   data: any
@@ -20,6 +20,7 @@ export function CertificateRequestRenderer({ data }: CertificateRequestRendererP
 
   const isReady = readyCond?.status === 'True'
   const isNotReady = readyCond?.status === 'False'
+  const operationalIssuesShown = useOperationalIssuesShown()
   const isApproved = approvedCond?.status === 'True'
   const isDenied = deniedCond?.status === 'True'
 
@@ -28,7 +29,7 @@ export function CertificateRequestRenderer({ data }: CertificateRequestRendererP
   return (
     <>
       {/* Problem detection alerts */}
-      {isNotReady && (
+      {isNotReady && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="Certificate Request Not Ready"

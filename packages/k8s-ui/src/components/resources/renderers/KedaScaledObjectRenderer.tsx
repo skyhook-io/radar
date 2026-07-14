@@ -1,5 +1,5 @@
 import { Cpu, Settings } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
 import {
   getScaledObjectStatus,
@@ -39,6 +39,7 @@ export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectR
   const isPaused = soStatus.text === 'Paused'
   const isFallback = soStatus.text === 'Fallback'
   const isNotReady = soStatus.level === 'unhealthy'
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const fallbackCond = conditions.find((c: any) => c.type === 'Fallback')
@@ -53,7 +54,7 @@ export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectR
           message={fallbackCond?.message || 'KEDA is using fallback replicas because triggers are failing.'}
         />
       )}
-      {isNotReady && !isFallback && (
+      {isNotReady && !isFallback && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="ScaledObject Not Ready"

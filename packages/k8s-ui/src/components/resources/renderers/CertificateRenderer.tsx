@@ -1,6 +1,6 @@
 import { Shield, Clock, Globe, Key } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { pluralize } from '../../../utils/pluralize'
 
 interface CertificateRendererProps {
@@ -34,6 +34,7 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const isReady = readyCond?.status === 'True'
   const isNotReady = readyCond?.status === 'False'
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   const notAfter = status.notAfter
   const notBefore = status.notBefore
@@ -69,7 +70,7 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
   return (
     <>
       {/* Problem detection alerts */}
-      {isNotReady && (
+      {isNotReady && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="Certificate Not Ready"

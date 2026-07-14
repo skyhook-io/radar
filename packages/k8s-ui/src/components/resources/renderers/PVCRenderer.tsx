@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { HardDrive } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 
 interface PVCRendererProps {
   data: any
@@ -38,11 +38,12 @@ export function PVCRenderer({ data, onNavigate, extraSections }: PVCRendererProp
   const selectedNode = annotations['volume.kubernetes.io/selected-node']
   const bindCompleted = annotations['pv.kubernetes.io/bind-completed']
   const hasProvisionerInfo = provisioner || selectedNode || bindCompleted
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   return (
     <>
       {/* Problem alerts */}
-      {isLost && (
+      {isLost && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="Issues Detected"

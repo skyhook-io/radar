@@ -1,6 +1,6 @@
 import { clsx } from 'clsx'
 import { Layers, GitBranch, Box, ChevronRight, Pause } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { Tooltip } from '../../ui/Tooltip'
 import {
   getCrossplaneStatus,
@@ -78,6 +78,7 @@ export function CompositeRenderer({ data, onNavigate, composedRefStatuses }: Com
   const boundXR = claim ? getBoundXRRef(data) : null
   const paused = isCrossplanePaused(data)
   const alertVariant = status.level === 'unhealthy' || status.level === 'alert' ? status.level : null
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   return (
     <>
@@ -90,7 +91,7 @@ export function CompositeRenderer({ data, onNavigate, composedRefStatuses }: Com
         />
       )}
 
-      {alertVariant && reason && (
+      {alertVariant && reason && !operationalIssuesShown && (
         <AlertBanner
           variant={alertVariant === 'unhealthy' ? 'error' : 'warning'}
           title={status.text}

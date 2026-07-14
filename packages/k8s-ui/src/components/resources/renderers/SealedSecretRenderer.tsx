@@ -1,6 +1,6 @@
 import { Lock, Key, FileText } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, KeyValueBadgeList, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, KeyValueBadgeList, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 
 interface SealedSecretRendererProps {
   data: any
@@ -32,6 +32,7 @@ export function SealedSecretRenderer({ data, onNavigate }: SealedSecretRendererP
   const syncedCond = conditions.find((c: any) => c.type === 'Synced')
   const isSynced = syncedCond?.status === 'True'
   const isNotSynced = syncedCond?.status === 'False'
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   const hasTemplateMetadata =
     (templateLabels && Object.keys(templateLabels).length > 0) ||
@@ -40,7 +41,7 @@ export function SealedSecretRenderer({ data, onNavigate }: SealedSecretRendererP
   return (
     <>
       {/* Problem detection alert */}
-      {isNotSynced && (
+      {isNotSynced && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="Secret is not synced"

@@ -1,5 +1,5 @@
 import { Globe, ArrowRight, Network, Filter } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceRefBadge } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceRefBadge, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
 
@@ -23,6 +23,10 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
   const unresolvedRefsParents = parentStatuses.filter((p: any) =>
     (p.conditions || []).some((c: any) => c.type === 'ResolvedRefs' && c.status === 'False')
   )
+  // The Operational Issues section (when the host shows it) already reports these
+  // Accepted/ResolvedRefs failures with richer cause + next-step context, so drop
+  // the renderer's own banners to avoid showing the same failure twice.
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   const firstParentConditions = parentStatuses.length > 0
     ? parentStatuses[0].conditions
@@ -47,7 +51,7 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
 
   return (
     <>
-      {notAcceptedParents.length > 0 && (
+      {notAcceptedParents.length > 0 && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="Route Not Accepted"
@@ -61,7 +65,7 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
         />
       )}
 
-      {unresolvedRefsParents.length > 0 && (
+      {unresolvedRefsParents.length > 0 && !operationalIssuesShown && (
         <AlertBanner
           variant="warning"
           title="Unresolved References"

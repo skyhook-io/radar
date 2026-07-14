@@ -1,5 +1,5 @@
 import { Cpu } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
 
 interface GatewayClassRendererProps {
@@ -14,11 +14,12 @@ export function GatewayClassRenderer({ data }: GatewayClassRendererProps) {
   const acceptedCond = conditions.find((c: any) => c.type === 'Accepted')
   const isAccepted = acceptedCond?.status === 'True'
   const isNotAccepted = acceptedCond?.status === 'False'
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   return (
     <>
       {/* Problem detection alert */}
-      {isNotAccepted && (
+      {isNotAccepted && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="GatewayClass Not Accepted"

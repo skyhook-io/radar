@@ -1,5 +1,5 @@
 import { ShieldCheck } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown } from '../../ui/drawer-components'
 import {
   getSecretStoreStatus,
   getSecretStoreProviderType,
@@ -41,11 +41,12 @@ export function SecretStoreRenderer({ data }: SecretStoreRendererProps) {
   // Problem detection
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const isNotReady = readyCond?.status === 'False'
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   return (
     <>
       {/* Alert if not ready */}
-      {isNotReady && (
+      {isNotReady && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="Store Not Ready"

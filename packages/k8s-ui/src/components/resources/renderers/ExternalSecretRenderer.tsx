@@ -1,5 +1,5 @@
 import { KeyRound, RefreshCw, CloudCog } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import {
   getExternalSecretStatus,
   getExternalSecretStore,
@@ -30,11 +30,12 @@ export function ExternalSecretRenderer({ data, onNavigate }: ExternalSecretRende
   // Problem detection
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const isNotReady = readyCond?.status === 'False'
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   return (
     <>
       {/* Alert if not synced */}
-      {isNotReady && (
+      {isNotReady && !operationalIssuesShown && (
         <AlertBanner
           variant="error"
           title="ExternalSecret Not Synced"

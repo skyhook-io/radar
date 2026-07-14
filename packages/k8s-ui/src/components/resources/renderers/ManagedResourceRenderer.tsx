@@ -1,5 +1,5 @@
 import { Box, Settings, Cloud, ScrollText, Pause, Layers } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { CodeViewer } from '../../ui/CodeViewer'
 import {
   getCrossplaneStatus,
@@ -41,6 +41,7 @@ export function ManagedResourceRenderer({ data, onNavigate }: ManagedResourceRen
   const atProvider = data?.status?.atProvider
 
   const alertVariant = status.level === 'unhealthy' || status.level === 'alert' ? status.level : null
+  const operationalIssuesShown = useOperationalIssuesShown()
 
   return (
     <>
@@ -53,7 +54,7 @@ export function ManagedResourceRenderer({ data, onNavigate }: ManagedResourceRen
         />
       )}
 
-      {alertVariant && statusReason && (
+      {alertVariant && statusReason && !operationalIssuesShown && (
         <AlertBanner
           variant={alertVariant === 'unhealthy' ? 'error' : 'warning'}
           title={status.text}
