@@ -17,7 +17,7 @@ import {
   Package,
   Settings,
 } from 'lucide-react'
-import { PaneLoader } from '@skyhook-io/k8s-ui'
+import { PaneLoader, DiffLine, hasDiffBodyChange } from '@skyhook-io/k8s-ui'
 import {
   useCloudRole,
   useHelmHooksDiff,
@@ -30,7 +30,6 @@ import {
 import type { HelmHook, HelmRevision, HooksDiff, ResourceDiff } from '../../types'
 import { getHelmStatusColor, getKindBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { formatDate } from './helm-utils'
-import { DiffLine, hasDiffBodyChange } from './ManifestDiffViewer'
 import { RoleGatedPanel } from './RoleGatedPanel'
 import { Tooltip } from '../ui/Tooltip'
 

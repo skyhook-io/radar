@@ -1,6 +1,5 @@
 import { X, GitCompare } from 'lucide-react'
-import { PaneLoader } from '@skyhook-io/k8s-ui'
-import { clsx } from 'clsx'
+import { PaneLoader, DiffLine, hasDiffBodyChange } from '@skyhook-io/k8s-ui'
 
 interface ManifestDiffViewerProps {
   diff: string
@@ -65,35 +64,6 @@ export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onCl
           <span>Added</span>
         </div>
       </div>
-    </div>
-  )
-}
-
-export function hasDiffBodyChange(diff: string): boolean {
-  return diff.split('\n').some((line) => {
-    if (!line || line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')) {
-      return false
-    }
-    return line.startsWith('+') || line.startsWith('-')
-  })
-}
-
-export function DiffLine({ line }: { line: string }) {
-  const isAddition = line.startsWith('+') && !line.startsWith('+++')
-  const isRemoval = line.startsWith('-') && !line.startsWith('---')
-  const isHeader = line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')
-
-  return (
-    <div
-      className={clsx(
-        'whitespace-pre',
-        isAddition && 'bg-green-500/10 text-green-700 dark:text-green-400',
-        isRemoval && 'bg-red-500/10 text-red-700 dark:text-red-400',
-        isHeader && 'text-theme-text-tertiary font-bold',
-        !isAddition && !isRemoval && !isHeader && 'text-theme-text-secondary'
-      )}
-    >
-      {line || ' '}
     </div>
   )
 }

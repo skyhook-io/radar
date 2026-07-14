@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
+import { classifyDiffLine } from './UnifiedDiff'
 import { Tooltip } from '../ui/Tooltip'
 import { ForceDeleteConfirmDialog, type CascadeDependent } from '../ui/ForceDeleteConfirmDialog'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -1124,9 +1125,7 @@ function RevisionDiffView({ currentTemplate, selectedTemplate, currentRevision, 
         {hasChanges ? (
           <pre className="text-xs font-mono p-0 m-0">
             {diffLines.map((line, index) => {
-              const isAddition = line.startsWith('+') && !line.startsWith('+++')
-              const isDeletion = line.startsWith('-') && !line.startsWith('---')
-              const isHeader = line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')
+              const { isAddition, isRemoval: isDeletion, isHeader } = classifyDiffLine(line)
 
               return (
                 <div

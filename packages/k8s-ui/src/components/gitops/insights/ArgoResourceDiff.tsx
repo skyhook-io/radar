@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createTwoFilesPatch } from 'diff'
 import { GitCompare, Maximize2, ShieldOff, X } from 'lucide-react'
-import { clsx } from 'clsx'
 import type { GitOpsResourceDiff } from '../../../types'
+import { DiffLine, hasDiffBodyChange } from '../../shared/UnifiedDiff'
 
 interface ArgoResourceDiffProps {
   diff?: GitOpsResourceDiff | null
@@ -47,7 +47,7 @@ export function ArgoResourceDiff({ diff, loading, error }: ArgoResourceDiffProps
   }
   if (!diff) return null
 
-  const unchanged = !hasDiffBodyChange(diff.desired, diff.live)
+  const unchanged = !docsDiffer(diff.desired, diff.live)
 
   return (
     <div>
@@ -105,7 +105,7 @@ function ArgoResourceDiffOverlay({ diff, onClose }: { diff: GitOpsResourceDiff; 
     return () => document.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
-  const unchanged = !hasDiffBodyChange(diff.desired, diff.live)
+  const unchanged = !docsDiffer(diff.desired, diff.live)
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -148,9 +148,8 @@ function ArgoResourceDiffOverlay({ diff, onClose }: { diff: GitOpsResourceDiff; 
 }
 
 
-// Renders a unified diff of two YAML documents using the `diff` package. Line
-// coloring mirrors the Helm ManifestDiffViewer so the two diff surfaces read
-// the same.
+// Renders a unified diff of two YAML documents using the `diff` package, via the
+// shared DiffLine so this reads identically to the Helm manifest diff.
 function UnifiedDiffBody({ desired, live }: { desired: string; live: string }) {
   const patch = createTwoFilesPatch('desired', 'live', desired, live, '', '', { context: 3 })
   const lines = patch.split('\n').filter((line) => !line.startsWith('===') && !line.startsWith('Index:'))
@@ -163,33 +162,11 @@ function UnifiedDiffBody({ desired, live }: { desired: string; live: string }) {
   )
 }
 
-function DiffLine({ line }: { line: string }) {
-  const isAddition = line.startsWith('+') && !line.startsWith('+++')
-  const isRemoval = line.startsWith('-') && !line.startsWith('---')
-  const isHeader = line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')
-  return (
-    <div
-      className={clsx(
-        'whitespace-pre',
-        isAddition && 'bg-green-500/10 text-green-700 dark:text-green-400',
-        isRemoval && 'bg-red-500/10 text-red-700 dark:text-red-400',
-        isHeader && 'text-theme-text-tertiary font-bold',
-        !isAddition && !isRemoval && !isHeader && 'text-theme-text-secondary',
-      )}
-    >
-      {line || ' '}
-    </div>
-  )
-}
-
 // True when the desired and live documents differ in a body line (ignoring the
-// patch's own file headers). Cheaper than diffing for the "no differences"
-// short-circuit and mirrors ManifestDiffViewer.hasDiffBodyChange.
-function hasDiffBodyChange(desired: string, live: string): boolean {
+// patch's own file headers). Cheaper than rendering for the "no differences"
+// short-circuit.
+function docsDiffer(desired: string, live: string): boolean {
   if (desired === live) return false
   const patch = createTwoFilesPatch('desired', 'live', desired, live, '', '', { context: 0 })
-  return patch.split('\n').some((line) => {
-    if (!line || line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')) return false
-    return line.startsWith('+') || line.startsWith('-')
-  })
+  return hasDiffBodyChange(patch)
 }

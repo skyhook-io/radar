@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Play, Loader2, FileText, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
+import { classifyDiffLine } from '@skyhook-io/k8s-ui'
 import type { ValuesPreviewResponse } from '../../types'
 
 interface ValuesDiffPreviewProps {
@@ -169,9 +170,7 @@ interface DiffLineProps {
 }
 
 function DiffLine({ line, lineNumber }: DiffLineProps) {
-  const isAddition = line.startsWith('+') && !line.startsWith('+++')
-  const isDeletion = line.startsWith('-') && !line.startsWith('---')
-  const isHeader = line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')
+  const { isAddition, isRemoval: isDeletion, isHeader } = classifyDiffLine(line)
 
   return (
     <div
