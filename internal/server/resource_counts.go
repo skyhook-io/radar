@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/topology"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -225,6 +227,30 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	countEndpointSlices()
+	if r.URL.Query().Get("gitops-managed-only") == "true" {
+		if topo := s.broadcaster.GetCachedTopology(); topo != nil {
+			managed := topology.ManagedResourceSet(topo)
+			filtered := map[string]int{}
+			for _, n := range topo.Nodes {
+				if !managed[topology.ManagedResourceKey(string(n.Kind), topology.NodeNamespace(n), n.Name)] {
+					continue
+				}
+				group := ""
+				if apiVersion, ok := n.Data["apiVersion"].(string); ok {
+					if i := strings.IndexByte(apiVersion, '/'); i >= 0 {
+						group = apiVersion[:i]
+					}
+				}
+				key := n.Kind
+				if group != "" {
+					key = topology.NodeKind(group + "/" + string(n.Kind))
+				}
+				filtered[string(key)]++
+			}
+			counts = filtered
+			forbidden, unavailable, reasons = nil, nil, nil
+		}
+	}
 
 	s.writeJSON(w, ResourceCountsResponse{
 		Counts:      counts,

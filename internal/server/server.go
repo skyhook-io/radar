@@ -1340,6 +1340,9 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	if deny := s.deniedClusterScopedTopoKinds(r); len(deny) > 0 {
 		topo.StripNodeKinds(deny)
 	}
+	if r.URL.Query().Get("gitops-managed-only") == "true" {
+		topo.StripUnmanaged()
+	}
 
 	// Marshal once so we can record the exact wire size in perfstats.
 	// (writeJSON streams, which would force a counting-writer wrapper.)
@@ -1636,6 +1639,9 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if r.URL.Query().Get("gitops-managed-only") == "true" {
+			result = filterManagedResources(result, kind, s.broadcaster.GetCachedTopology())
+		}
 		if includeSummary {
 			result = applySummaryStrip(result)
 		}
@@ -1940,6 +1946,9 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Query().Get("gitops-managed-only") == "true" {
+		result = filterManagedResources(result, kind, s.broadcaster.GetCachedTopology())
+	}
 	if includeSummary {
 		result = applySummaryStrip(result)
 	}

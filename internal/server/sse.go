@@ -64,6 +64,7 @@ type ClientInfo struct {
 	Namespaces       []string // Filter to specific namespaces (empty = all)
 	ViewMode         string   // "full" or "traffic"
 	ShowPolicyEffect bool     // Evaluate NetworkPolicies on edges
+	ManagedOnly      bool     // Restrict topology to Argo CD/Flux-managed resources
 	// DeniedKinds are cluster-scoped topology kinds (Nodes, PV, StorageClass,
 	// NodePool, …) this user can't list, stripped from every topology frame.
 	// Resolved once at subscribe time (the request is available there) so the
@@ -76,6 +77,7 @@ type clientRegistration struct {
 	namespaces       []string
 	viewMode         string
 	showPolicyEffect bool
+	managedOnly      bool
 	deniedKinds      map[topology.NodeKind]bool
 }
 
@@ -388,7 +390,7 @@ func (b *SSEBroadcaster) run() {
 				close(reg.ch) // Signal rejection by closing the channel
 				continue
 			}
-			b.clients[reg.ch] = ClientInfo{Namespaces: reg.namespaces, ViewMode: reg.viewMode, ShowPolicyEffect: reg.showPolicyEffect, DeniedKinds: reg.deniedKinds}
+			b.clients[reg.ch] = ClientInfo{Namespaces: reg.namespaces, ViewMode: reg.viewMode, ShowPolicyEffect: reg.showPolicyEffect, ManagedOnly: reg.managedOnly, DeniedKinds: reg.deniedKinds}
 			b.mu.Unlock()
 			log.Printf("SSE client connected (namespaces=%v, view=%s), total clients: %d", reg.namespaces, reg.viewMode, len(b.clients))
 
@@ -624,10 +626,12 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 		deniedKindsKey   string // comma-separated sorted denied cluster-scoped kinds
 		viewMode         string
 		showPolicyEffect bool
+		managedOnly      bool
 	}
 	type clientGroup struct {
 		namespaces       []string
 		showPolicyEffect bool
+		managedOnly      bool
 		deniedKinds      map[topology.NodeKind]bool
 		channels         []chan SSEEvent
 	}
@@ -637,9 +641,9 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 		// Users with identical namespace + cluster-scoped RBAC share one frame;
 		// a user denied cluster-scoped kinds gets a distinct, stripped frame
 		// rather than the unfiltered bytes of a more-privileged peer.
-		key := clientKey{namespacesKey: nsKey, deniedKindsKey: deniedKindsKey(info.DeniedKinds), viewMode: info.ViewMode, showPolicyEffect: info.ShowPolicyEffect}
+		key := clientKey{namespacesKey: nsKey, deniedKindsKey: deniedKindsKey(info.DeniedKinds), viewMode: info.ViewMode, showPolicyEffect: info.ShowPolicyEffect, managedOnly: info.ManagedOnly}
 		if clientGroups[key] == nil {
-			clientGroups[key] = &clientGroup{namespaces: info.Namespaces, showPolicyEffect: info.ShowPolicyEffect, deniedKinds: info.DeniedKinds}
+			clientGroups[key] = &clientGroup{namespaces: info.Namespaces, showPolicyEffect: info.ShowPolicyEffect, deniedKinds: info.DeniedKinds, managedOnly: info.ManagedOnly}
 		}
 		clientGroups[key].channels = append(clientGroups[key].channels, ch)
 	}
@@ -665,6 +669,9 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 			continue
 		}
 		topo.StripNodeKinds(group.deniedKinds)
+		if group.managedOnly {
+			topo.StripUnmanaged()
+		}
 
 		if int64(topo.EstimatedNodes) > maxEstimated {
 			maxEstimated = int64(topo.EstimatedNodes)
@@ -824,8 +831,9 @@ func (b *SSEBroadcaster) Subscribe(namespaces []string, viewMode string, deniedK
 	}
 
 	policyEffect := len(showPolicyEffect) > 0 && showPolicyEffect[0]
+	managedOnly := len(showPolicyEffect) > 1 && showPolicyEffect[1]
 	ch := make(chan SSEEvent, 10)
-	b.register <- clientRegistration{ch: ch, namespaces: sortedNs, viewMode: viewMode, showPolicyEffect: policyEffect, deniedKinds: deniedKinds}
+	b.register <- clientRegistration{ch: ch, namespaces: sortedNs, viewMode: viewMode, showPolicyEffect: policyEffect, managedOnly: managedOnly, deniedKinds: deniedKinds}
 	return ch
 }
 
@@ -959,6 +967,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 		viewMode = "full"
 	}
 	policyEffect := r.URL.Query().Get("policyEffect") == "true"
+	managedOnly := r.URL.Query().Get("gitops-managed-only") == "true"
 
 	// Ensure we can flush
 	flusher, ok := w.(http.Flusher)
@@ -968,7 +977,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 	}
 
 	// Subscribe to events
-	eventCh := b.Subscribe(namespaces, viewMode, deniedKinds, policyEffect)
+	eventCh := b.Subscribe(namespaces, viewMode, deniedKinds, policyEffect, managedOnly)
 	if eventCh == nil {
 		http.Error(w, "Too many SSE connections", http.StatusServiceUnavailable)
 		return
