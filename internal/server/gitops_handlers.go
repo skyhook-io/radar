@@ -756,30 +756,51 @@ func (r *insightsResolver) prefetchLive(rows []gitopsinsights.ManagedResourceRow
 		return
 	}
 
+	// Fixed worker pool, not goroutine-per-ref, so a huge app costs at most
+	// gitopsLiveGETConcurrency goroutines per request. Each unit of work
+	// still acquires the process-wide semaphore (shared across requests),
+	// respecting request cancellation while it waits.
+	workers := gitopsLiveGETConcurrency
+	if len(targets) < workers {
+		workers = len(targets)
+	}
+	work := make(chan gitopsinsights.Ref)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for _, ref := range targets {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func(ref gitopsinsights.Ref) {
+		go func() {
 			defer wg.Done()
-			gitopsLiveGETSem <- struct{}{}
-			defer func() { <-gitopsLiveGETSem }()
-
-			obj, err := r.cache.GetDynamicWithGroupPreserveLastApplied(r.ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
-			if err != nil {
-				// Unknown-kind misses were already surfaced by the tree
-				// build's response warning; NotFound is a normal state for
-				// Missing resources. Everything else is worth one line.
-				if !apierrors.IsNotFound(err) && !errors.Is(err, k8s.ErrUnknownDynamicKind) {
-					log.Printf("[gitops] insights live prefetch %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
+			for ref := range work {
+				select {
+				case gitopsLiveGETSem <- struct{}{}:
+				case <-r.ctx.Done():
+					return
 				}
-				return
+				obj, err := r.cache.GetDynamicWithGroupPreserveLastApplied(r.ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+				<-gitopsLiveGETSem
+				if err != nil {
+					// Unknown-kind misses were already surfaced by the tree
+					// build's response warning; NotFound is a normal state for
+					// Missing resources. Everything else is worth one line.
+					if !apierrors.IsNotFound(err) && !errors.Is(err, k8s.ErrUnknownDynamicKind) {
+						log.Printf("[gitops] insights live prefetch %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
+					}
+					continue
+				}
+				mu.Lock()
+				r.liveObjects[liveObjectKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)] = obj
+				mu.Unlock()
 			}
-			mu.Lock()
-			r.liveObjects[liveObjectKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)] = obj
-			mu.Unlock()
-		}(ref)
+		}()
 	}
+	for _, ref := range targets {
+		select {
+		case work <- ref:
+		case <-r.ctx.Done():
+		}
+	}
+	close(work)
 	wg.Wait()
 }
 

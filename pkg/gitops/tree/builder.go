@@ -298,9 +298,10 @@ func ResetUnknownKindLogDedup() {
 
 // prefetchObjects resolves the live object for every enrichable ref with
 // bounded parallelism, returning them keyed by refKey. Kinds the matcher
-// classifies as unknown-to-discovery are negative-cached so one absent CRD
-// costs one lookup instead of one per resource, and are returned (sorted)
-// for the caller's response warning.
+// classifies as unknown-to-discovery are negative-cached (best-effort — see
+// the worker loop) so an absent CRD skips the bulk of its refs instead of
+// paying one lookup per resource, and are returned (sorted) for the
+// caller's response warning.
 //
 // Enrichment stays best-effort: per-ref failures nil out that ref's entry
 // exactly like the serial loop did. Determinism of the final tree is owned
@@ -330,39 +331,54 @@ func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[
 	)
 	kindKey := func(ref ResourceRef) string { return ref.Kind + "|" + ref.Group }
 
-	sem := make(chan struct{}, enrichConcurrency)
-	var wg sync.WaitGroup
-	for _, ref := range targets {
-		wg.Add(1)
-		go func(ref ResourceRef) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			mu.Lock()
-			_, skip := unknownKinds[kindKey(ref)]
-			mu.Unlock()
-			if skip {
-				return
-			}
-
-			obj, err := b.dynamic.GetDynamicWithGroup(ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
-			if err != nil {
-				if b.isUnknownKind != nil && b.isUnknownKind(err) {
-					mu.Lock()
-					unknownKinds[kindKey(ref)] = struct{}{}
-					mu.Unlock()
-					logUnknownKindOnce(ref.Kind, ref.Group)
-				} else if !apierrors.IsNotFound(err) {
-					log.Printf("[gitops/tree] enrich %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
-				}
-				return
-			}
-			mu.Lock()
-			objects[refKey(ref)] = obj
-			mu.Unlock()
-		}(ref)
+	// Fixed worker pool, not goroutine-per-ref: a 10k-resource app must cost
+	// enrichConcurrency goroutines, not 10k queued behind a semaphore.
+	workers := enrichConcurrency
+	if len(targets) < workers {
+		workers = len(targets)
 	}
+	work := make(chan ResourceRef)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ref := range work {
+				mu.Lock()
+				_, skip := unknownKinds[kindKey(ref)]
+				mu.Unlock()
+				if skip {
+					continue
+				}
+
+				obj, err := b.dynamic.GetDynamicWithGroup(ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+				if err != nil {
+					if b.isUnknownKind != nil && b.isUnknownKind(err) {
+						// Best-effort collapse: in-flight workers on the same
+						// kind may still complete their lookup, but an
+						// unknown-kind miss is a local discovery-map lookup —
+						// no API round-trip — so the cache's job is skipping
+						// the remaining queue and deduping the log, not
+						// enforcing exactly-once.
+						mu.Lock()
+						unknownKinds[kindKey(ref)] = struct{}{}
+						mu.Unlock()
+						logUnknownKindOnce(ref.Kind, ref.Group)
+					} else if !apierrors.IsNotFound(err) {
+						log.Printf("[gitops/tree] enrich %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
+					}
+					continue
+				}
+				mu.Lock()
+				objects[refKey(ref)] = obj
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, ref := range targets {
+		work <- ref
+	}
+	close(work)
 	wg.Wait()
 
 	if len(unknownKinds) == 0 {

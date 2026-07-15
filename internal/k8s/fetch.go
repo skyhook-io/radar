@@ -98,22 +98,22 @@ var builtinGVRs, typedBuiltinGVRs, builtinKindByResource = func() (map[string]sc
 	return m, typed, kinds
 }()
 
-// TypedBuiltinGVR returns the canonical GVR for a built-in kind (or alias)
+// lookupTypedBuiltinGVR returns the canonical GVR for a built-in kind (or alias)
 // that is served by the typed cache, regardless of group. Callers that must
 // be CRD-collision-safe should pair this with a group check (see
 // TypedKindOwnsGroup); an empty group in the caller's hands conventionally
 // means "the built-in resource" across the server (the REST/MCP handlers
 // dispatch the same way).
-func TypedBuiltinGVR(kind string) (schema.GroupVersionResource, bool) {
+func lookupTypedBuiltinGVR(kind string) (schema.GroupVersionResource, bool) {
 	gvr, ok := typedBuiltinGVRs[strings.ToLower(kind)]
 	return gvr, ok
 }
 
-// BuiltinKindForResource returns the canonical CamelCase Kind for a built-in
+// builtinKindForResource returns the canonical CamelCase Kind for a built-in
 // plural resource name ("deployments" → "Deployment"). Used to stamp
 // apiVersion/kind on unstructured conversions of typed lister objects, which
 // carry no TypeMeta.
-func BuiltinKindForResource(resource string) (string, bool) {
+func builtinKindForResource(resource string) (string, bool) {
 	k, ok := builtinKindByResource[resource]
 	return k, ok
 }

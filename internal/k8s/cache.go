@@ -895,7 +895,7 @@ func typedRouteGVR(kind, group string) (schema.GroupVersionResource, bool) {
 	if group != "" && !TypedKindOwnsGroup(kind, group) {
 		return schema.GroupVersionResource{}, false
 	}
-	return TypedBuiltinGVR(kind)
+	return lookupTypedBuiltinGVR(kind)
 }
 
 // typedObjectToUnstructured converts a typed lister object to unstructured
@@ -931,7 +931,7 @@ func typedObjectToUnstructured(obj runtime.Object, gvr schema.GroupVersionResour
 			apiVersion = gvr.Group + "/" + gvr.Version
 		}
 		u.SetAPIVersion(apiVersion)
-		if kindName, ok := BuiltinKindForResource(gvr.Resource); ok {
+		if kindName, ok := builtinKindForResource(gvr.Resource); ok {
 			u.SetKind(kindName)
 		}
 	}
@@ -945,25 +945,28 @@ func isForbiddenTypedFetch(err error) bool {
 }
 
 // getTypedAsUnstructured serves a single-object read for a typed built-in
-// kind from the typed cache. Tri-state on a nil lister: a kind the RBAC
-// probe disabled stays forbidden, while a deferred informer that simply
-// hasn't synced yet (Secrets/ConfigMaps during the phase-2 warmup window)
-// falls back to a one-off direct GET — never to starting a dynamic informer.
+// kind from the typed cache. Tri-state: a kind whose deferred informer
+// hasn't synced yet falls back to a one-off direct GET — never to starting
+// a dynamic informer; a kind the RBAC probe disabled stays forbidden.
 // handled=false means the typed path can't answer and the caller should fall
 // through to the dynamic cache.
+//
+// The deferred check runs BEFORE the lister read, not on the "forbidden"
+// nil-lister error: several deferred kinds (ServiceAccounts, ReplicaSets,
+// HPAs, LimitRanges, ResourceQuotas) expose a non-nil lister as soon as
+// they're enabled, so during the warmup window they'd otherwise serve
+// empty stores as confident NotFound/empty results.
 func (c *ResourceCache) getTypedAsUnstructured(ctx context.Context, gvr schema.GroupVersionResource, kind, namespace, name string) (*unstructured.Unstructured, bool, error) {
+	if c.IsDeferredPending(gvr.Resource) {
+		return c.typedDirectGet(ctx, gvr, namespace, name)
+	}
 	obj, err := FetchResource(c, kind, namespace, name)
 	if err != nil {
 		if errors.Is(err, ErrUnknownKind) {
 			return nil, false, nil
 		}
 		if isForbiddenTypedFetch(err) && c.IsDeferredPending(gvr.Resource) {
-			dynamicCache := GetDynamicResourceCache()
-			if dynamicCache == nil {
-				return nil, true, fmt.Errorf("dynamic resource cache not initialized")
-			}
-			u, derr := dynamicCache.GetDirect(ctx, gvr, namespace, name)
-			return u, true, derr
+			return c.typedDirectGet(ctx, gvr, namespace, name)
 		}
 		return nil, true, err
 	}
@@ -971,16 +974,37 @@ func (c *ResourceCache) getTypedAsUnstructured(ctx context.Context, gvr schema.G
 	return u, true, cerr
 }
 
+func (c *ResourceCache) typedDirectGet(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, bool, error) {
+	dynamicCache := GetDynamicResourceCache()
+	if dynamicCache == nil {
+		return nil, true, fmt.Errorf("dynamic resource cache not initialized")
+	}
+	u, err := dynamicCache.GetDirect(ctx, gvr, namespace, name)
+	return u, true, err
+}
+
+func (c *ResourceCache) typedDirectList(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, bool, error) {
+	dynamicCache := GetDynamicResourceCache()
+	if dynamicCache == nil {
+		return nil, true, fmt.Errorf("dynamic resource cache not initialized")
+	}
+	us, err := dynamicCache.ListDirect(ctx, gvr, namespace)
+	return us, true, err
+}
+
 // listTypedAsUnstructured is the list counterpart of getTypedAsUnstructured,
-// with the same tri-state nil-lister semantics. A namespace filter on a
-// cluster-only kind returns empty to match the dynamic cache's
-// namespace-index behavior (FetchResourceList would ignore the filter and
-// return everything).
+// with the same tri-state semantics (see there for why the deferred check
+// precedes the lister read). A namespace filter on a cluster-only kind
+// returns empty to match the dynamic cache's namespace-index behavior
+// (FetchResourceList would ignore the filter and return everything).
 func (c *ResourceCache) listTypedAsUnstructured(ctx context.Context, gvr schema.GroupVersionResource, kind, namespace string) ([]*unstructured.Unstructured, bool, error) {
 	if namespace != "" {
 		if _, _, clusterOnly := ClusterOnlyKindGVR(kind); clusterOnly {
 			return []*unstructured.Unstructured{}, true, nil
 		}
+	}
+	if c.IsDeferredPending(gvr.Resource) {
+		return c.typedDirectList(ctx, gvr, namespace)
 	}
 	var namespaces []string
 	if namespace != "" {
@@ -992,12 +1016,7 @@ func (c *ResourceCache) listTypedAsUnstructured(ctx context.Context, gvr schema.
 			return nil, false, nil
 		}
 		if isForbiddenTypedFetch(err) && c.IsDeferredPending(gvr.Resource) {
-			dynamicCache := GetDynamicResourceCache()
-			if dynamicCache == nil {
-				return nil, true, fmt.Errorf("dynamic resource cache not initialized")
-			}
-			us, derr := dynamicCache.ListDirect(ctx, gvr, namespace)
-			return us, true, derr
+			return c.typedDirectList(ctx, gvr, namespace)
 		}
 		return nil, true, err
 	}
