@@ -938,12 +938,6 @@ func typedObjectToUnstructured(obj runtime.Object, gvr schema.GroupVersionResour
 	return u, nil
 }
 
-// isForbiddenTypedFetch matches the "forbidden: <resource>" sentinel errors
-// FetchResource/FetchResourceList return when a typed lister is nil.
-func isForbiddenTypedFetch(err error) bool {
-	return err != nil && strings.HasPrefix(err.Error(), "forbidden:")
-}
-
 // getTypedAsUnstructured serves a single-object read for a typed built-in
 // kind from the typed cache. Tri-state: a kind whose deferred informer
 // hasn't synced yet falls back to a one-off direct GET — never to starting
@@ -951,11 +945,12 @@ func isForbiddenTypedFetch(err error) bool {
 // handled=false means the typed path can't answer and the caller should fall
 // through to the dynamic cache.
 //
-// The deferred check runs BEFORE the lister read, not on the "forbidden"
-// nil-lister error: several deferred kinds (ServiceAccounts, ReplicaSets,
-// HPAs, LimitRanges, ResourceQuotas) expose a non-nil lister as soon as
-// they're enabled, so during the warmup window they'd otherwise serve
-// empty stores as confident NotFound/empty results.
+// The deferred check runs BEFORE the lister read: several deferred kinds
+// (ServiceAccounts, ReplicaSets, HPAs, LimitRanges, ResourceQuotas) expose
+// a non-nil lister as soon as they're enabled, so during the warmup window
+// they'd otherwise serve empty stores as confident NotFound/empty results.
+// After it, a nil-lister "forbidden" error can only mean the RBAC probe
+// disabled the kind — returned as-is.
 func (c *ResourceCache) getTypedAsUnstructured(ctx context.Context, gvr schema.GroupVersionResource, kind, namespace, name string) (*unstructured.Unstructured, bool, error) {
 	if c.IsDeferredPending(gvr.Resource) {
 		return c.typedDirectGet(ctx, gvr, namespace, name)
@@ -964,9 +959,6 @@ func (c *ResourceCache) getTypedAsUnstructured(ctx context.Context, gvr schema.G
 	if err != nil {
 		if errors.Is(err, ErrUnknownKind) {
 			return nil, false, nil
-		}
-		if isForbiddenTypedFetch(err) && c.IsDeferredPending(gvr.Resource) {
-			return c.typedDirectGet(ctx, gvr, namespace, name)
 		}
 		return nil, true, err
 	}
@@ -1014,9 +1006,6 @@ func (c *ResourceCache) listTypedAsUnstructured(ctx context.Context, gvr schema.
 	if err != nil {
 		if errors.Is(err, ErrUnknownKind) {
 			return nil, false, nil
-		}
-		if isForbiddenTypedFetch(err) && c.IsDeferredPending(gvr.Resource) {
-			return c.typedDirectList(ctx, gvr, namespace)
 		}
 		return nil, true, err
 	}
