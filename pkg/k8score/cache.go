@@ -57,6 +57,12 @@ type ResourceCache struct {
 	informerMu        sync.RWMutex
 	promotedKinds     []string // set when SyncTimeout fires; empty on normal sync
 	syncStartTime     time.Time
+
+	// backgroundKeys marks kinds that sync independently with no deadline
+	// (Events). They share deferredSynced tracking but must never classify
+	// as failed off the deferred-timeout flag — a late Events LIST on a big
+	// cluster is normal, not terminal.
+	backgroundKeys map[string]bool
 }
 
 // InformerSyncStatus tracks the sync state of a single informer.
@@ -616,6 +622,10 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			// and shouldn't block topology completion or warmup transition.
 			backgroundSyncFuncs = append(backgroundSyncFuncs, synced)
 			backgroundKeys = append(backgroundKeys, s.key)
+			if rc.backgroundKeys == nil {
+				rc.backgroundKeys = map[string]bool{}
+			}
+			rc.backgroundKeys[s.key] = true
 		} else if isDeferred {
 			deferredSyncFuncs = append(deferredSyncFuncs, synced)
 			deferredKeys = append(deferredKeys, s.key)
@@ -1884,11 +1894,12 @@ func (rc *ResourceCache) KindReadinessFor(key string) KindReadiness {
 	if synced {
 		return KindReady
 	}
-	if rc.deferredFailed.Load() {
+	if rc.deferredFailed.Load() && !rc.backgroundKeys[key] {
 		// The give-up deadline only covers kinds in the deferred tracking set
 		// (statically deferred + promoted criticals). A kind mid-Phase-1 is
 		// still pending even if a previous generation's flag lingers — the
-		// tracking map tells them apart.
+		// tracking map tells them apart. Background kinds (Events) share the
+		// tracking map but have no deadline: they stay pending, not failed.
 		rc.deferredMu.RLock()
 		_, tracked := rc.deferredSynced[key]
 		rc.deferredMu.RUnlock()

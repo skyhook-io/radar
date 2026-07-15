@@ -467,7 +467,6 @@ func InitResourceCache(ctx context.Context) error {
 			return
 		}
 
-		initialSyncComplete = core.IsSyncComplete()
 		// Only the no-enabled-resources path (OnInformersStarted never ran)
 		// reaches here with a nil embedded pointer; when the callback did run
 		// it already set the same core, and rewriting it would race with
@@ -481,6 +480,7 @@ func InitResourceCache(ctx context.Context) error {
 			initErr = fmt.Errorf("cluster changed during cache initialization")
 			return
 		}
+		initialSyncComplete = core.IsSyncComplete()
 	})
 	return initErr
 }
