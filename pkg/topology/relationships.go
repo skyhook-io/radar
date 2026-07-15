@@ -175,6 +175,17 @@ func isRouteKind(kindLower string) bool {
 	return false
 }
 
+func isServiceEntrypointRouteKind(kindLower string) bool {
+	if isRouteKind(kindLower) {
+		return true
+	}
+	switch kindLower {
+	case "route", "ingressroute", "ingressroutetcp", "ingressrouteudp", "virtualservice", "httpproxy":
+		return true
+	}
+	return false
+}
+
 // GetRelationships computes relationships for a specific resource by finding
 // all edges in the topology that involve this resource. The topology should be
 // pre-built and cached for performance. Builds a per-call inline index for
@@ -302,8 +313,11 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			// Something manages/owns this resource
 			rel.Owner = ref
 		case EdgeExposes:
-			// A Service exposes this resource
-			rel.Services = append(rel.Services, *ref)
+			if isServiceEntrypointRouteKind(strings.ToLower(ref.Kind)) {
+				rel.Routes = appendResourceRef(rel.Routes, *ref)
+			} else {
+				rel.Services = appendResourceRef(rel.Services, *ref)
+			}
 		case EdgeRoutesTo:
 			// An Ingress, Gateway, route, or Service routes to this resource
 			sourceKind := strings.ToLower(ref.Kind)
@@ -343,6 +357,8 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			}
 		}
 	}
+
+	addServiceEntrypoints(rel, topo, idx, dp)
 
 	// Convenience shortcuts: bridge the Deployment↔ReplicaSet↔Pod gap
 	// so users see Pods directly under Deployments and vice versa.
@@ -549,6 +565,46 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	return rel
+}
+
+func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *RelationshipsIndex, dp DynamicProvider) {
+	for _, service := range rel.Services {
+		if !strings.EqualFold(service.Kind, "Service") {
+			continue
+		}
+		serviceID := buildNodeID(service.Kind, service.Namespace, service.Name, dp)
+		incoming, _ := edgesForNode(topo, idx, serviceID)
+		for _, edge := range incoming {
+			if edge.Type != EdgeRoutesTo && edge.Type != EdgeExposes {
+				continue
+			}
+			ref := parseNodeID(edge.Source, dp)
+			if ref == nil {
+				continue
+			}
+			enrichRef(ref, dp)
+			kind := strings.ToLower(ref.Kind)
+			switch kind {
+			case "ingress":
+				rel.Ingresses = appendResourceRef(rel.Ingresses, *ref)
+			case "gateway":
+				rel.Gateways = appendResourceRef(rel.Gateways, *ref)
+			default:
+				if isServiceEntrypointRouteKind(kind) {
+					rel.Routes = appendResourceRef(rel.Routes, *ref)
+				}
+			}
+		}
+	}
+}
+
+func appendResourceRef(refs []ResourceRef, candidate ResourceRef) []ResourceRef {
+	for _, ref := range refs {
+		if strings.EqualFold(ref.Kind, candidate.Kind) && ref.Namespace == candidate.Namespace && ref.Name == candidate.Name && ref.Group == candidate.Group {
+			return refs
+		}
+	}
+	return append(refs, candidate)
 }
 
 func isStorageRefKind(kind string) bool {

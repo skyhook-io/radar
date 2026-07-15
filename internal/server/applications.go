@@ -756,7 +756,6 @@ func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
 		pdbRefs:           refsByKey(rel.PDBs),
 		networkPolicyRefs: refsByKey(rel.NetworkPolicies),
 	}
-	g.addServiceEntrypoints(out, rel.Services)
 	out.Services = refNames(sortedRefs(out.serviceRefs, 20), 20)
 	out.Ingresses = refNames(sortedRefs(out.ingressRefs, 20), 20)
 	out.Routes = routeRefNames(sortedRefs(out.routeRefs, 20), 20)
@@ -766,23 +765,6 @@ func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
 		return nil
 	}
 	return out
-}
-
-func (g *appGraph) addServiceEntrypoints(out *appRelationships, services []topology.ResourceRef) {
-	if g == nil || g.topo == nil || out == nil {
-		return
-	}
-	for _, svc := range services {
-		if !strings.EqualFold(svc.Kind, "Service") {
-			continue
-		}
-		rel := topology.GetRelationshipsWithIndex(svc.Kind, svc.Namespace, svc.Name, g.topo, g.provider, g.dp, g.idx)
-		if rel == nil {
-			continue
-		}
-		out.ingressRefs = mergeRefs(out.ingressRefs, refsByKey(rel.Ingresses))
-		out.routeRefs = mergeRefs(out.routeRefs, refsByKey(appRouteRefs(rel.Routes, rel.Gateways, rel.Services)))
-	}
 }
 
 func appRouteRefs(routes []topology.ResourceRef, routeLikeGroups ...[]topology.ResourceRef) []topology.ResourceRef {
