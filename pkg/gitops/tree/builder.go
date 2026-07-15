@@ -6,11 +6,25 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/skyhook-io/radar/pkg/topology"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
+
+// enrichConcurrency bounds the parallel live-object enrichment fan-out per
+// build. Most lookups are informer-cache hits (microseconds); the bound
+// exists for the slow minority — first-touch informer warmup for CRD kinds
+// and the CustomResourceDefinition/APIService direct-GET bypass — so a large
+// app can't open unbounded apiserver connections.
+const enrichConcurrency = 8
+
+// ErrUnknownKindMatcher lets the builder classify provider errors without
+// importing internal packages: hosts inject the sentinel their DynamicGetter
+// returns for kinds missing from API discovery. Nil means no classification
+// (every error is treated as ordinary).
+type ErrUnknownKindMatcher func(error) bool
 
 // DynamicGetter is the small dynamic-cache surface needed by the tree builder.
 type DynamicGetter interface {
@@ -22,6 +36,7 @@ type Builder struct {
 	dynamic           DynamicGetter
 	topo              *topology.Topology
 	allowedNamespaces []string
+	isUnknownKind     ErrUnknownKindMatcher
 }
 
 func NewBuilder(dynamic DynamicGetter, topo *topology.Topology) *Builder {
@@ -32,6 +47,16 @@ func NewBuilder(dynamic DynamicGetter, topo *topology.Topology) *Builder {
 // is allowed to inspect. nil means all namespaces; an empty slice means none.
 func (b *Builder) WithAllowedNamespaces(namespaces []string) *Builder {
 	b.allowedNamespaces = namespaces
+	return b
+}
+
+// WithUnknownKindMatcher wires the host's unknown-kind sentinel classifier
+// (typically errors.Is against the dynamic cache's ErrUnknownDynamicKind).
+// When set, refs whose kind is missing from API discovery are fetched once
+// per kind instead of once per resource, logged once per kind per process,
+// and surfaced as a single response warning.
+func (b *Builder) WithUnknownKindMatcher(m ErrUnknownKindMatcher) *Builder {
+	b.isUnknownKind = m
 	return b
 }
 
@@ -97,10 +122,23 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		nodes[rootNode.ID] = mergeData(rootNode, liveRoot.Data)
 	}
 
+	var fluxRelated []relatedResource
+	if tool == ToolFluxCD {
+		fluxRelated = fluxRelatedResources(root)
+	}
+	enrichRefs := make([]ResourceRef, 0, len(managed)+len(fluxRelated))
+	for _, res := range managed {
+		enrichRefs = append(enrichRefs, res.Ref)
+	}
+	for _, res := range fluxRelated {
+		enrichRefs = append(enrichRefs, res.Ref)
+	}
+	objects, unknownKinds := b.prefetchObjects(ctx, enrichRefs)
+
 	for _, res := range managed {
 		id := nodeID(res.Ref)
 		declaredIDs[id] = true
-		obj := b.getAllowedObject(ctx, res.Ref)
+		obj := objects[refKey(res.Ref)]
 		if live, ok := findTopoNode(topoByRef, res.Ref); ok {
 			nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, res.Sync, res.Health), obj), res.Data)
 			topoIDByTreeID[id] = live.ID
@@ -111,12 +149,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	}
 
 	if tool == ToolFluxCD {
-		for _, res := range fluxRelatedResources(root) {
+		for _, res := range fluxRelated {
 			id := nodeID(res.Ref)
 			if id == rootNode.ID {
 				continue
 			}
-			obj := b.getAllowedObject(ctx, res.Ref)
+			obj := objects[refKey(res.Ref)]
 			// Derive sync/health from the related CR's own Ready/Reconciling/
 			// Stalled conditions. Without this, source CRs render with empty
 			// Health and the frontend falls back to the generic topology
@@ -214,27 +252,148 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	if r, ok := nodes[rootNode.ID]; ok {
 		mergedRoot = r
 	}
+	warnings := b.topoWarnings()
+	if w := unknownKindsWarning(unknownKinds); w != "" {
+		warnings = append(append([]string{}, warnings...), w)
+	}
 	return &ResourceTree{
 		Root:     mergedRoot,
 		Nodes:    nodeList,
 		Edges:    edgeList,
-		Warnings: b.topoWarnings(),
+		Warnings: warnings,
 		Summary:  summary,
 	}, root, nil
 }
 
-func (b *Builder) getAllowedObject(ctx context.Context, ref ResourceRef) *unstructured.Unstructured {
-	if ref.Name == "" || !b.canEnrich(ref) {
-		return nil
+// unknownKindLog dedupes the "kind unavailable in discovery" log line
+// process-wide: the GitOps detail page rebuilds the tree on every poll tick,
+// so per-build logging still floods at 30 lines/min per absent kind. The
+// response Warning (per build) is the user-facing signal; the log is for
+// operators. Reset on kubeconfig context switch — a kind absent in one
+// cluster may be absent in the next for a different reason, and that is
+// worth one fresh line.
+var unknownKindLog = struct {
+	mu   sync.Mutex
+	seen map[string]struct{}
+}{seen: map[string]struct{}{}}
+
+func logUnknownKindOnce(kind, group string) {
+	key := kind + "|" + group
+	unknownKindLog.mu.Lock()
+	defer unknownKindLog.mu.Unlock()
+	if _, ok := unknownKindLog.seen[key]; ok {
+		return
 	}
-	obj, err := b.dynamic.GetDynamicWithGroup(ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			log.Printf("[gitops/tree] enrich %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
+	unknownKindLog.seen[key] = struct{}{}
+	log.Printf("[gitops/tree] kind %s (group %q) is unavailable in this cluster's API discovery; skipping live enrichment for its resources", kind, group)
+}
+
+// ResetUnknownKindLogDedup clears the process-wide unknown-kind log dedup.
+// Hosts call it when the connected cluster changes.
+func ResetUnknownKindLogDedup() {
+	unknownKindLog.mu.Lock()
+	defer unknownKindLog.mu.Unlock()
+	unknownKindLog.seen = map[string]struct{}{}
+}
+
+// prefetchObjects resolves the live object for every enrichable ref with
+// bounded parallelism, returning them keyed by refKey. Kinds the matcher
+// classifies as unknown-to-discovery are negative-cached so one absent CRD
+// costs one lookup instead of one per resource, and are returned (sorted)
+// for the caller's response warning.
+//
+// Enrichment stays best-effort: per-ref failures nil out that ref's entry
+// exactly like the serial loop did. Determinism of the final tree is owned
+// by materialize's sort, so fetch-completion order is irrelevant.
+func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[string]*unstructured.Unstructured, []string) {
+	targets := make([]ResourceRef, 0, len(refs))
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref.Name == "" || !b.canEnrich(ref) {
+			continue
 		}
-		return nil
+		key := refKey(ref)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, ref)
 	}
-	return obj
+	if len(targets) == 0 {
+		return map[string]*unstructured.Unstructured{}, nil
+	}
+
+	var (
+		mu           sync.Mutex
+		objects      = make(map[string]*unstructured.Unstructured, len(targets))
+		unknownKinds = map[string]struct{}{}
+	)
+	kindKey := func(ref ResourceRef) string { return ref.Kind + "|" + ref.Group }
+
+	sem := make(chan struct{}, enrichConcurrency)
+	var wg sync.WaitGroup
+	for _, ref := range targets {
+		wg.Add(1)
+		go func(ref ResourceRef) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			mu.Lock()
+			_, skip := unknownKinds[kindKey(ref)]
+			mu.Unlock()
+			if skip {
+				return
+			}
+
+			obj, err := b.dynamic.GetDynamicWithGroup(ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+			if err != nil {
+				if b.isUnknownKind != nil && b.isUnknownKind(err) {
+					mu.Lock()
+					unknownKinds[kindKey(ref)] = struct{}{}
+					mu.Unlock()
+					logUnknownKindOnce(ref.Kind, ref.Group)
+				} else if !apierrors.IsNotFound(err) {
+					log.Printf("[gitops/tree] enrich %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
+				}
+				return
+			}
+			mu.Lock()
+			objects[refKey(ref)] = obj
+			mu.Unlock()
+		}(ref)
+	}
+	wg.Wait()
+
+	if len(unknownKinds) == 0 {
+		return objects, nil
+	}
+	labels := make([]string, 0, len(unknownKinds))
+	for k := range unknownKinds {
+		parts := strings.SplitN(k, "|", 2)
+		label := parts[0]
+		if len(parts) == 2 && parts[1] != "" {
+			label = parts[0] + " (" + parts[1] + ")"
+		}
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	return objects, labels
+}
+
+// unknownKindsWarning renders the response warning for kinds that are absent
+// from the cluster's API discovery. Deliberately says "unavailable" rather
+// than "not installed": incomplete discovery, RBAC-limited discovery, and a
+// remote-cluster Argo destination all produce the same miss.
+func unknownKindsWarning(kinds []string) string {
+	if len(kinds) == 0 {
+		return ""
+	}
+	noun := "kind is"
+	if len(kinds) > 1 {
+		noun = "kinds are"
+	}
+	return fmt.Sprintf("%d resource %s unavailable in this cluster's API discovery (%s); those nodes reflect controller status only.", len(kinds), noun, strings.Join(kinds, ", "))
 }
 
 func (b *Builder) canEnrich(ref ResourceRef) bool {

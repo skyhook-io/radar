@@ -36,55 +36,58 @@ var ErrUnknownKind = fmt.Errorf("unknown typed kind")
 //     would silently return nil and drop drift for built-in managed resources.
 //
 // Keep typed=true in sync with the typed switches in this file and internal/server.
-var builtinGVRs, typedBuiltinGVRs = func() (map[string]schema.GroupVersionResource, map[string]schema.GroupVersionResource) {
+var builtinGVRs, typedBuiltinGVRs, builtinKindByResource = func() (map[string]schema.GroupVersionResource, map[string]schema.GroupVersionResource, map[string]string) {
 	defs := []struct {
 		forms    []string
 		group    string
 		version  string
 		resource string
+		kind     string
 		typed    bool
 	}{
-		{[]string{"pod", "pods", "po"}, "", "v1", "pods", true},
-		{[]string{"service", "services", "svc"}, "", "v1", "services", true},
-		{[]string{"configmap", "configmaps", "cm"}, "", "v1", "configmaps", true},
-		{[]string{"secret", "secrets"}, "", "v1", "secrets", true},
-		{[]string{"event", "events"}, "", "v1", "events", true},
-		{[]string{"endpoint", "endpoints", "ep"}, "", "v1", "endpoints", false},
-		{[]string{"persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs"}, "", "v1", "persistentvolumeclaims", true},
-		{[]string{"node", "nodes", "no"}, "", "v1", "nodes", true},
-		{[]string{"namespace", "namespaces", "ns"}, "", "v1", "namespaces", true},
-		{[]string{"persistentvolume", "persistentvolumes", "pv", "pvs"}, "", "v1", "persistentvolumes", true},
-		{[]string{"serviceaccount", "serviceaccounts", "sa"}, "", "v1", "serviceaccounts", true},
-		{[]string{"limitrange", "limitranges"}, "", "v1", "limitranges", true},
-		{[]string{"resourcequota", "resourcequotas"}, "", "v1", "resourcequotas", true},
-		{[]string{"deployment", "deployments", "deploy", "deploys"}, "apps", "v1", "deployments", true},
-		{[]string{"daemonset", "daemonsets", "ds"}, "apps", "v1", "daemonsets", true},
-		{[]string{"statefulset", "statefulsets", "sts"}, "apps", "v1", "statefulsets", true},
-		{[]string{"replicaset", "replicasets", "rs"}, "apps", "v1", "replicasets", true},
-		{[]string{"job", "jobs"}, "batch", "v1", "jobs", true},
-		{[]string{"cronjob", "cronjobs", "cj"}, "batch", "v1", "cronjobs", true},
-		{[]string{"hpa", "hpas", "horizontalpodautoscaler", "horizontalpodautoscalers"}, "autoscaling", "v2", "horizontalpodautoscalers", true},
-		{[]string{"ingress", "ingresses"}, "networking.k8s.io", "v1", "ingresses", true},
-		{[]string{"networkpolicy", "networkpolicies", "netpol", "netpols"}, "networking.k8s.io", "v1", "networkpolicies", true},
-		{[]string{"ingressclass", "ingressclasses"}, "networking.k8s.io", "v1", "ingressclasses", true},
-		{[]string{"endpointslice", "endpointslices"}, "discovery.k8s.io", "v1", "endpointslices", false},
-		{[]string{"lease", "leases"}, "coordination.k8s.io", "v1", "leases", false},
-		{[]string{"priorityclass", "priorityclasses", "pc"}, "scheduling.k8s.io", "v1", "priorityclasses", false},
-		{[]string{"runtimeclass", "runtimeclasses"}, "node.k8s.io", "v1", "runtimeclasses", false},
-		{[]string{"mutatingwebhookconfiguration", "mutatingwebhookconfigurations"}, "admissionregistration.k8s.io", "v1", "mutatingwebhookconfigurations", false},
-		{[]string{"validatingwebhookconfiguration", "validatingwebhookconfigurations"}, "admissionregistration.k8s.io", "v1", "validatingwebhookconfigurations", false},
-		{[]string{"volumeattachment", "volumeattachments"}, "storage.k8s.io", "v1", "volumeattachments", false},
-		{[]string{"poddisruptionbudget", "poddisruptionbudgets", "pdb", "pdbs"}, "policy", "v1", "poddisruptionbudgets", true},
-		{[]string{"storageclass", "storageclasses", "sc"}, "storage.k8s.io", "v1", "storageclasses", true},
-		{[]string{"role", "roles"}, "rbac.authorization.k8s.io", "v1", "roles", true},
-		{[]string{"clusterrole", "clusterroles"}, "rbac.authorization.k8s.io", "v1", "clusterroles", true},
-		{[]string{"rolebinding", "rolebindings"}, "rbac.authorization.k8s.io", "v1", "rolebindings", true},
-		{[]string{"clusterrolebinding", "clusterrolebindings"}, "rbac.authorization.k8s.io", "v1", "clusterrolebindings", true},
+		{[]string{"pod", "pods", "po"}, "", "v1", "pods", "Pod", true},
+		{[]string{"service", "services", "svc"}, "", "v1", "services", "Service", true},
+		{[]string{"configmap", "configmaps", "cm"}, "", "v1", "configmaps", "ConfigMap", true},
+		{[]string{"secret", "secrets"}, "", "v1", "secrets", "Secret", true},
+		{[]string{"event", "events"}, "", "v1", "events", "Event", true},
+		{[]string{"endpoint", "endpoints", "ep"}, "", "v1", "endpoints", "Endpoints", false},
+		{[]string{"persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs"}, "", "v1", "persistentvolumeclaims", "PersistentVolumeClaim", true},
+		{[]string{"node", "nodes", "no"}, "", "v1", "nodes", "Node", true},
+		{[]string{"namespace", "namespaces", "ns"}, "", "v1", "namespaces", "Namespace", true},
+		{[]string{"persistentvolume", "persistentvolumes", "pv", "pvs"}, "", "v1", "persistentvolumes", "PersistentVolume", true},
+		{[]string{"serviceaccount", "serviceaccounts", "sa"}, "", "v1", "serviceaccounts", "ServiceAccount", true},
+		{[]string{"limitrange", "limitranges"}, "", "v1", "limitranges", "LimitRange", true},
+		{[]string{"resourcequota", "resourcequotas"}, "", "v1", "resourcequotas", "ResourceQuota", true},
+		{[]string{"deployment", "deployments", "deploy", "deploys"}, "apps", "v1", "deployments", "Deployment", true},
+		{[]string{"daemonset", "daemonsets", "ds"}, "apps", "v1", "daemonsets", "DaemonSet", true},
+		{[]string{"statefulset", "statefulsets", "sts"}, "apps", "v1", "statefulsets", "StatefulSet", true},
+		{[]string{"replicaset", "replicasets", "rs"}, "apps", "v1", "replicasets", "ReplicaSet", true},
+		{[]string{"job", "jobs"}, "batch", "v1", "jobs", "Job", true},
+		{[]string{"cronjob", "cronjobs", "cj"}, "batch", "v1", "cronjobs", "CronJob", true},
+		{[]string{"hpa", "hpas", "horizontalpodautoscaler", "horizontalpodautoscalers"}, "autoscaling", "v2", "horizontalpodautoscalers", "HorizontalPodAutoscaler", true},
+		{[]string{"ingress", "ingresses"}, "networking.k8s.io", "v1", "ingresses", "Ingress", true},
+		{[]string{"networkpolicy", "networkpolicies", "netpol", "netpols"}, "networking.k8s.io", "v1", "networkpolicies", "NetworkPolicy", true},
+		{[]string{"ingressclass", "ingressclasses"}, "networking.k8s.io", "v1", "ingressclasses", "IngressClass", true},
+		{[]string{"endpointslice", "endpointslices"}, "discovery.k8s.io", "v1", "endpointslices", "EndpointSlice", false},
+		{[]string{"lease", "leases"}, "coordination.k8s.io", "v1", "leases", "Lease", false},
+		{[]string{"priorityclass", "priorityclasses", "pc"}, "scheduling.k8s.io", "v1", "priorityclasses", "PriorityClass", false},
+		{[]string{"runtimeclass", "runtimeclasses"}, "node.k8s.io", "v1", "runtimeclasses", "RuntimeClass", false},
+		{[]string{"mutatingwebhookconfiguration", "mutatingwebhookconfigurations"}, "admissionregistration.k8s.io", "v1", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", false},
+		{[]string{"validatingwebhookconfiguration", "validatingwebhookconfigurations"}, "admissionregistration.k8s.io", "v1", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", false},
+		{[]string{"volumeattachment", "volumeattachments"}, "storage.k8s.io", "v1", "volumeattachments", "VolumeAttachment", false},
+		{[]string{"poddisruptionbudget", "poddisruptionbudgets", "pdb", "pdbs"}, "policy", "v1", "poddisruptionbudgets", "PodDisruptionBudget", true},
+		{[]string{"storageclass", "storageclasses", "sc"}, "storage.k8s.io", "v1", "storageclasses", "StorageClass", true},
+		{[]string{"role", "roles"}, "rbac.authorization.k8s.io", "v1", "roles", "Role", true},
+		{[]string{"clusterrole", "clusterroles"}, "rbac.authorization.k8s.io", "v1", "clusterroles", "ClusterRole", true},
+		{[]string{"rolebinding", "rolebindings"}, "rbac.authorization.k8s.io", "v1", "rolebindings", "RoleBinding", true},
+		{[]string{"clusterrolebinding", "clusterrolebindings"}, "rbac.authorization.k8s.io", "v1", "clusterrolebindings", "ClusterRoleBinding", true},
 	}
 	m := make(map[string]schema.GroupVersionResource)
 	typed := make(map[string]schema.GroupVersionResource)
+	kinds := make(map[string]string)
 	for _, d := range defs {
 		gvr := schema.GroupVersionResource{Group: d.group, Version: d.version, Resource: d.resource}
+		kinds[d.resource] = d.kind
 		for _, f := range d.forms {
 			m[f] = gvr
 			if d.typed {
@@ -92,8 +95,28 @@ var builtinGVRs, typedBuiltinGVRs = func() (map[string]schema.GroupVersionResour
 			}
 		}
 	}
-	return m, typed
+	return m, typed, kinds
 }()
+
+// TypedBuiltinGVR returns the canonical GVR for a built-in kind (or alias)
+// that is served by the typed cache, regardless of group. Callers that must
+// be CRD-collision-safe should pair this with a group check (see
+// TypedKindOwnsGroup); an empty group in the caller's hands conventionally
+// means "the built-in resource" across the server (the REST/MCP handlers
+// dispatch the same way).
+func TypedBuiltinGVR(kind string) (schema.GroupVersionResource, bool) {
+	gvr, ok := typedBuiltinGVRs[strings.ToLower(kind)]
+	return gvr, ok
+}
+
+// BuiltinKindForResource returns the canonical CamelCase Kind for a built-in
+// plural resource name ("deployments" → "Deployment"). Used to stamp
+// apiVersion/kind on unstructured conversions of typed lister objects, which
+// carry no TypeMeta.
+func BuiltinKindForResource(resource string) (string, bool) {
+	k, ok := builtinKindByResource[resource]
+	return k, ok
+}
 
 // TypedKindOwnsGroup reports whether (kind, group) names a built-in kind
 // addressed by its own API group — i.e. it must resolve via the typed cache,
@@ -653,6 +676,15 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 			return nil, err
 		}
 		return ToRuntimeObjects(items), nil
+	case "ingressclasses":
+		if cache.IngressClasses() == nil {
+			return nil, fmt.Errorf("forbidden: ingressclasses")
+		}
+		items, err := cache.IngressClasses().List(labels.Everything())
+		if err != nil {
+			return nil, err
+		}
+		return ToRuntimeObjects(items), nil
 	default:
 		return nil, ErrUnknownKind
 	}
@@ -799,6 +831,11 @@ func FetchResource(cache *ResourceCache, kind, namespace, name string) (runtime.
 			return nil, fmt.Errorf("forbidden: clusterrolebindings")
 		}
 		return cache.ClusterRoleBindings().Get(name)
+	case "ingressclasses":
+		if cache.IngressClasses() == nil {
+			return nil, fmt.Errorf("forbidden: ingressclasses")
+		}
+		return cache.IngressClasses().Get(name)
 	default:
 		return nil, ErrUnknownKind
 	}
@@ -868,6 +905,9 @@ func SetTypeMeta(resource any) {
 	case *networkingv1.NetworkPolicy:
 		r.APIVersion = "networking.k8s.io/v1"
 		r.Kind = "NetworkPolicy"
+	case *networkingv1.IngressClass:
+		r.APIVersion = "networking.k8s.io/v1"
+		r.Kind = "IngressClass"
 	case *corev1.ServiceAccount:
 		r.APIVersion = "v1"
 		r.Kind = "ServiceAccount"

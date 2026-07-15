@@ -16,7 +16,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
@@ -111,6 +110,7 @@ func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gito
 
 	return gitopstree.NewBuilder(req.Cache, topo).
 		WithAllowedNamespaces(req.AllowedNamespaces).
+		WithUnknownKindMatcher(func(err error) bool { return errors.Is(err, k8s.ErrUnknownDynamicKind) }).
 		Build(ctx, req.Kind, req.Namespace, req.Name, req.Group)
 }
 
@@ -178,6 +178,7 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
 	}
 	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
+	resolver.prefetchLive(gitopsinsights.ManagedResourceRows(root), gitopsinsights.OperationPhase(root))
 	insight := gitopsinsights.Build(root, tree, resolver)
 	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
 	insight = s.filterGitOpsInsightForUser(r, req, insight)
@@ -677,10 +678,109 @@ type insightsResolver struct {
 	composeOnce     sync.Once
 	composedFlat    []issues.Issue
 	composedGrouped []issues.Issue
+
+	// livePrefetched flips GetLive into map-only mode: prefetchLive resolved
+	// (or deliberately skipped) every ref the Changes builder will ask for,
+	// so a map miss means gated-out or failed — never "fetch it now". The
+	// per-call direct-GET path survives only for resolvers that never ran
+	// prefetch (tests, future hosts).
+	livePrefetched bool
+	liveObjects    map[string]*unstructured.Unstructured
+
+	// eventIndex replaces the per-resource namespace scan: one pass over the
+	// event lister per request, buckets keyed kind|ns|name. Group filtering
+	// stays at lookup time (eventMatchesGroup) so colliding kinds (core
+	// Service vs Knative Service) don't cross-contaminate buckets.
+	eventsOnce sync.Once
+	eventIndex map[string][]*corev1.Event
 }
 
 func newInsightsResolver(ctx context.Context, cache *k8s.ResourceCache, allowed []string, canAccess func(group, kind, namespace, name string) bool) *insightsResolver {
 	return &insightsResolver{ctx: ctx, cache: cache, allowedNamespaces: allowed, canAccess: canAccess}
+}
+
+// gitopsLiveGETConcurrency bounds process-wide concurrency of the drift
+// live-state GETs (GetDynamicWithGroupPreserveLastApplied is a direct
+// apiserver round-trip by design — caches strip last-applied). Process-wide
+// rather than per-request so N users on N apps can't multiply the fan-out;
+// the rest client's QPS=50/Burst=100 is the second backstop.
+const gitopsLiveGETConcurrency = 16
+
+var gitopsLiveGETSem = make(chan struct{}, gitopsLiveGETConcurrency)
+
+func liveObjectKey(group, kind, namespace, name string) string {
+	return group + "|" + kind + "|" + namespace + "|" + name
+}
+
+// prefetchLive resolves live objects for the rows the Changes builder will
+// request, then flips GetLive to map-only mode. Two gates decide what is
+// fetched at all:
+//
+//   - operation phase: while a sync runs (Running/Terminating — the UI polls
+//     at 2s exactly then), no live state is fetched. Mid-apply drift is
+//     churn, and the poll must stay a pure cache read.
+//   - row state: only rows the controller reports as not cleanly Synced (or
+//     carrying a sync error) are fetched. Drift on a Synced row is the
+//     false-positive class Argo itself suppresses via normalization +
+//     ignoreDifferences.
+//
+// RBAC gates (namespace allowlist + per-ref access) run serially BEFORE any
+// fetch is scheduled — same checks GetLive applied per-call, same caches
+// behind them — so parallelism never widens what a user can read.
+func (r *insightsResolver) prefetchLive(rows []gitopsinsights.ManagedResourceRow, operationPhase string) {
+	r.liveObjects = make(map[string]*unstructured.Unstructured, len(rows))
+	r.livePrefetched = true
+	if operationPhase == "Running" || operationPhase == "Terminating" {
+		return
+	}
+	targets := make([]gitopsinsights.Ref, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if row.Sync == "Synced" && !row.HasSyncError {
+			continue
+		}
+		if !r.namespaceAllowed(row.Ref.Namespace) {
+			continue
+		}
+		if r.canAccess != nil && !r.canAccess(row.Ref.Group, row.Ref.Kind, row.Ref.Namespace, row.Ref.Name) {
+			continue
+		}
+		key := liveObjectKey(row.Ref.Group, row.Ref.Kind, row.Ref.Namespace, row.Ref.Name)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, row.Ref)
+	}
+	if len(targets) == 0 {
+		return
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, ref := range targets {
+		wg.Add(1)
+		go func(ref gitopsinsights.Ref) {
+			defer wg.Done()
+			gitopsLiveGETSem <- struct{}{}
+			defer func() { <-gitopsLiveGETSem }()
+
+			obj, err := r.cache.GetDynamicWithGroupPreserveLastApplied(r.ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+			if err != nil {
+				// Unknown-kind misses were already surfaced by the tree
+				// build's response warning; NotFound is a normal state for
+				// Missing resources. Everything else is worth one line.
+				if !apierrors.IsNotFound(err) && !errors.Is(err, k8s.ErrUnknownDynamicKind) {
+					log.Printf("[gitops] insights live prefetch %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
+				}
+				return
+			}
+			mu.Lock()
+			r.liveObjects[liveObjectKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)] = obj
+			mu.Unlock()
+		}(ref)
+	}
+	wg.Wait()
 }
 
 // recentEventsCap bounds events returned per resource. Beyond ~5 the user
@@ -691,6 +791,13 @@ const recentEventsCap = 5
 func (r *insightsResolver) GetLive(group, kind, namespace, name string) *unstructured.Unstructured {
 	if r == nil || r.cache == nil || name == "" || kind == "" {
 		return nil
+	}
+	if r.livePrefetched {
+		// Map-only: prefetchLive already resolved (or deliberately gated
+		// out) every ref the Changes builder asks for. Falling back to a
+		// direct GET here would silently rebuild the serial per-resource
+		// fan-out this path exists to remove.
+		return r.liveObjects[liveObjectKey(group, kind, namespace, name)]
 	}
 	if !r.namespaceAllowed(namespace) {
 		return nil
@@ -742,6 +849,24 @@ func (r *insightsResolver) ResourceProblems(group, kind, namespace, name string)
 	return out
 }
 
+// buildEventIndex runs once per resolver: a single pass over the event
+// lister into buckets keyed kind|ns|name. The previous shape listed and
+// scanned the namespace's full event set once per managed resource —
+// O(resources × events) per request, which becomes the dominant CPU cost
+// once the live-GET fan-out is gone.
+func (r *insightsResolver) buildEventIndex() {
+	r.eventIndex = map[string][]*corev1.Event{}
+	items, err := r.cache.Events().List(labels.Everything())
+	if err != nil {
+		log.Printf("[gitops] insights event index build failed: %v", err)
+		return
+	}
+	for _, e := range items {
+		key := e.InvolvedObject.Kind + "|" + e.InvolvedObject.Namespace + "|" + e.InvolvedObject.Name
+		r.eventIndex[key] = append(r.eventIndex[key], e)
+	}
+}
+
 func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []gitopsinsights.EventSummary {
 	if r == nil || r.cache == nil || r.cache.Events() == nil {
 		return nil
@@ -752,40 +877,14 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 	if r.canAccess != nil && !r.canAccess(group, kind, namespace, name) {
 		return nil
 	}
-	// Lister scope: namespace-scoped lookup is cheaper than cluster-wide
-	// + filter; cluster-scoped resources (namespace="") fall back to the
-	// cross-namespace lister and are matched only by kind+name.
-	var events []runtime.Object
-	if namespace != "" {
-		items, err := r.cache.Events().Events(namespace).List(labels.Everything())
-		if err != nil {
-			log.Printf("[gitops] insights RecentEvents list ns=%s %s/%s/%s failed: %v", namespace, group, kind, name, err)
-			return nil
-		}
-		events = make([]runtime.Object, 0, len(items))
-		for _, e := range items {
-			events = append(events, e)
-		}
-	} else {
-		items, err := r.cache.Events().List(labels.Everything())
-		if err != nil {
-			log.Printf("[gitops] insights RecentEvents cluster-list %s/%s/%s failed: %v", group, kind, name, err)
-			return nil
-		}
-		events = make([]runtime.Object, 0, len(items))
-		for _, e := range items {
-			events = append(events, e)
-		}
-	}
-	matched := make([]*corev1.Event, 0, recentEventsCap)
-	for _, ro := range events {
-		e, ok := ro.(*corev1.Event)
-		if !ok {
-			continue
-		}
-		if e.InvolvedObject.Kind != kind || e.InvolvedObject.Name != name {
-			continue
-		}
+	r.eventsOnce.Do(r.buildEventIndex)
+	// Group filtering happens inside the bucket: the index key deliberately
+	// omits group so events whose involvedObject.apiVersion is empty (some
+	// informers strip it) still land next to their resource, matching the
+	// old scan's eventMatchesGroup semantics for colliding kinds.
+	bucket := r.eventIndex[kind+"|"+namespace+"|"+name]
+	matched := make([]*corev1.Event, 0, len(bucket))
+	for _, e := range bucket {
 		if !eventMatchesGroup(group, e.InvolvedObject.APIVersion) {
 			continue
 		}

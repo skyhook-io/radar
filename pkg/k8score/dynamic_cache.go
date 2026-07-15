@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -68,6 +69,13 @@ type DynamicResourceCache struct {
 	// — including namespace-scoped informers created lazily after registration
 	// — so derived caches keep receiving events. Guarded by mu.
 	gvrHandlers map[schema.GroupVersionResource][]cache.ResourceEventHandler
+
+	// watchStarts collapses concurrent ensureWatching calls for the same
+	// (gvr, ns) into one probe + informer start. The access probe runs
+	// outside d.mu, so without this a parallel fan-out over N objects of an
+	// unwatched kind would issue N redundant limit=1 list probes before one
+	// caller wins startWatching.
+	watchStarts singleflight.Group
 
 	// CRD discovery completion callbacks
 	crdCallbacks   []func()
@@ -171,27 +179,36 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 
 	// Probe access (cluster-wide first, then fallback namespaces) BEFORE
 	// acquiring the write lock; the result tells us which scopes to watch.
-	scopes, complete, err := d.probeScopes(gvr, preferredNS)
-	if err != nil {
-		return fmt.Errorf("no access to %s.%s/%s: %w", gvr.Resource, gvr.Group, gvr.Version, err)
-	}
-
-	for _, scopeNS := range scopes {
-		if err := d.startWatching(gvr, scopeNS); err != nil {
-			return err
+	// Singleflight per (gvr, preferredNS): concurrent callers — e.g. a
+	// parallel enrichment fan-out over many objects of one unwatched kind —
+	// share one probe fan-out + informer start instead of stampeding the
+	// apiserver with redundant limit=1 lists.
+	_, err, _ := d.watchStarts.Do(gvr.String()+"|"+preferredNS, func() (any, error) {
+		if d.hasCoveringInformer(gvr, preferredNS) {
+			return nil, nil
 		}
-	}
-	if preferredNS == "" && complete {
-		// The all-namespaces scope for this GVR is settled — informers exist
-		// for every granted scope. Mark it so the next all-namespaces read
-		// doesn't re-probe cluster-wide plus every candidate. An incomplete
-		// walk (deadline hit mid-fanout) is deliberately NOT marked, so the
-		// next read finishes the job.
-		d.mu.Lock()
-		d.fallbackResolved[gvr] = true
-		d.mu.Unlock()
-	}
-	return nil
+		scopes, complete, err := d.probeScopes(gvr, preferredNS)
+		if err != nil {
+			return nil, fmt.Errorf("no access to %s.%s/%s: %w", gvr.Resource, gvr.Group, gvr.Version, err)
+		}
+		for _, scopeNS := range scopes {
+			if err := d.startWatching(gvr, scopeNS); err != nil {
+				return nil, err
+			}
+		}
+		if preferredNS == "" && complete {
+			// The all-namespaces scope for this GVR is settled — informers exist
+			// for every granted scope. Mark it so the next all-namespaces read
+			// doesn't re-probe cluster-wide plus every candidate. An incomplete
+			// walk (deadline hit mid-fanout) is deliberately NOT marked, so the
+			// next read finishes the job.
+			d.mu.Lock()
+			d.fallbackResolved[gvr] = true
+			d.mu.Unlock()
+		}
+		return nil, nil
+	})
+	return err
 }
 
 // hasCoveringInformer reports whether an existing informer already serves

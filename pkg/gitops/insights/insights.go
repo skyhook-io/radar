@@ -876,6 +876,63 @@ func ignoreDifferenceKindLabel(group, kind string) string {
 	return group + "/" + kind
 }
 
+// ManagedResourceRow is the minimal projection of one Argo Application
+// status.resources entry — just enough for a host to decide which resources
+// deserve a live-state fetch (drift is only meaningful where the controller
+// reports the row as not cleanly Synced) without building full Changes.
+type ManagedResourceRow struct {
+	Ref          Ref
+	Sync         string
+	HasSyncError bool
+}
+
+// ManagedResourceRows parses status.resources into rows. Same source and
+// filtering as the Changes builder (rows without kind+name are dropped);
+// hosts use it to schedule the Resolver's live-state prefetch before Build.
+func ManagedResourceRows(root *unstructured.Unstructured) []ManagedResourceRow {
+	if root == nil {
+		return nil
+	}
+	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "resources")
+	out := make([]ManagedResourceRow, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref := Ref{
+			Group:     gitops.StringValue(m["group"]),
+			Kind:      gitops.StringValue(m["kind"]),
+			Namespace: gitops.StringValue(m["namespace"]),
+			Name:      gitops.StringValue(m["name"]),
+		}
+		if ref.Kind == "" || ref.Name == "" {
+			continue
+		}
+		row := ManagedResourceRow{Ref: ref, Sync: gitops.StringValue(m["status"])}
+		if sr, ok := m["syncResult"].(map[string]any); ok {
+			status := gitops.StringValue(sr["status"])
+			if status != "Synced" && status != "Pruned" && gitops.StringValue(sr["message"]) != "" {
+				row.HasSyncError = true
+			}
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// OperationPhase returns status.operationState.phase ("" when absent).
+// Hosts use it to skip live-state enrichment while a sync is in flight —
+// the 2s progress poll should be a cache read, not an apiserver fan-out,
+// and mid-apply drift is churn rather than signal.
+func OperationPhase(root *unstructured.Unstructured) string {
+	if root == nil {
+		return ""
+	}
+	phase, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "phase")
+	return phase
+}
+
 func argoResourceChanges(root *unstructured.Unstructured, resolver Resolver) []Change {
 	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "resources")
 	// Pre-parse the Application's spec.ignoreDifferences so each resource's

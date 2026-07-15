@@ -44,6 +44,9 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		"rolebindings":             true,
 		"clusterrolebindings":      true,
 		"serviceaccounts":          true,
+		"ingressclasses":           true,
+		"networkpolicies":          true,
+		"limitranges":              true,
 	}
 
 	cfg := k8score.CacheConfig{
