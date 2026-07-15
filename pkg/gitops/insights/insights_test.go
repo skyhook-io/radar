@@ -742,7 +742,7 @@ func TestBuildHistoryArgo_AutomatedBoolBecomesInitiator(t *testing.T) {
 			},
 		},
 	})
-	hist := buildHistory(root, "argocd")
+	hist := BuildHistory(root)
 	// First entry should be the only history row (no operationState set).
 	if len(hist) != 1 {
 		t.Fatalf("expected 1 history entry, got %d", len(hist))
@@ -776,7 +776,7 @@ func TestBuildHistoryArgo_RunningOpStaysOnTop(t *testing.T) {
 			},
 		},
 	})
-	hist := buildHistory(root, "argocd")
+	hist := BuildHistory(root)
 	if len(hist) < 1 || hist[0].Phase != "Running" {
 		t.Fatalf("expected the running operation to sort to the top; got hist=%+v", hist)
 	}

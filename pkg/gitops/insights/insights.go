@@ -352,7 +352,7 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 		Issues:       buildIssues(root, resourceTree, tool, resolver),
 		Changes:      buildChanges(root, resourceTree, tool, resolver),
 		Plan:         buildPlan(root, resourceTree, tool),
-		History:      buildHistory(root, tool),
+		History:      BuildHistory(root),
 		Capabilities: buildCapabilities(root, tool),
 		Partial:      true,
 	}
@@ -400,6 +400,10 @@ func pluralizeResourcesAre(n int) string {
 		return "resource is"
 	}
 	return "resources are"
+}
+
+func BuildHistory(root *unstructured.Unstructured) []HistoryItem {
+	return buildHistory(root, detectTool(root))
 }
 
 func detectTool(root *unstructured.Unstructured) string {

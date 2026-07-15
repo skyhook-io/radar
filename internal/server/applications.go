@@ -386,32 +386,16 @@ func (s *Server) gitOpsHistoryAnchors(r *http.Request, source *appSourceRef) ([]
 	if cache == nil {
 		return nil, []string{"Resource cache is not available."}
 	}
-	req := &gitopsRequest{
-		Kind:              gitOpsPluralKind(source.Kind),
-		Namespace:         source.Namespace,
-		Name:              source.Name,
-		Group:             source.Group,
-		Cache:             cache,
-		AllowedNamespaces: s.getUserNamespaces(r, nil),
-	}
-	if req.Kind == "" {
+	if gitOpsPluralKind(source.Kind) == "" {
 		return nil, []string{"Unsupported GitOps source kind."}
 	}
-	if !req.HasNamespaceAccess() {
-		return nil, []string{"No namespace access for GitOps history."}
-	}
-	tree, root, err := s.buildGitOpsTree(r.Context(), req)
+	root, err := cache.GetDynamicWithGroup(r.Context(), source.Kind, source.Namespace, source.Name, source.Group)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("GitOps history unavailable: %v", err)}
 	}
-	tree = s.filterGitOpsTreeForUser(r, req, tree)
-	canAccess := func(group, kind, namespace, name string) bool {
-		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
-	}
-	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
-	insight := gitopsinsights.Build(root, tree, resolver)
-	anchors := make([]appHistoryAnchor, 0, len(insight.History))
-	for _, item := range insight.History {
+	history := gitopsinsights.BuildHistory(root)
+	anchors := make([]appHistoryAnchor, 0, len(history))
+	for _, item := range history {
 		title := "GitOps reconcile"
 		if source.Tool == "argocd" {
 			title = "Argo CD sync"
