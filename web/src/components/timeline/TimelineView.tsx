@@ -261,16 +261,31 @@ interface TimelineViewProps {
   onNamespaceSelect?: (ns: string) => void
 }
 
+export function resolveApplicationTimelineScope(searchParams: URLSearchParams, namespaces: string[]) {
+  const appKey = searchParams.get('app')
+  const appNamespaces = Array.from(new Set(
+    (searchParams.get('scopeNamespaces') ?? '')
+      .split(',')
+      .map((namespace) => namespace.trim())
+      .filter(Boolean),
+  ))
+
+  return {
+    appKey,
+    namespaces: appKey ? appNamespaces : namespaces,
+    ready: !appKey || appNamespaces.length > 0,
+  }
+}
+
 export function TimelineView({ namespaces, onResourceClick, initialViewMode, initialFilter, initialTimeRange, requiresNamespaceFilter, availableNamespaces, onNamespaceSelect }: TimelineViewProps) {
   // URL is the source of truth for every control below (deep-linkable +
   // back/forward-restorable). Read on mount, written on user change.
   const [searchParams, setSearchParams] = useSearchParams()
-  const focusedAppKey = searchParams.get('app')
-  const appScopeNamespaces = useMemo(
-    () => Array.from(new Set((searchParams.get('scopeNamespaces') ?? '').split(',').map((namespace) => namespace.trim()).filter(Boolean))),
-    [searchParams],
-  )
-  const timelineNamespaces = focusedAppKey && appScopeNamespaces.length > 0 ? appScopeNamespaces : namespaces
+  const appScope = useMemo(() => resolveApplicationTimelineScope(searchParams, namespaces), [namespaces, searchParams])
+  const focusedAppKey = appScope.appKey
+  const appScopeNamespaces = focusedAppKey ? appScope.namespaces : []
+  const appScopeReady = appScope.ready
+  const timelineNamespaces = appScope.namespaces
   const scopeRequiresNamespaceFilter = Boolean(requiresNamespaceFilter) && appScopeNamespaces.length === 0
 
   // Force list view on large clusters without namespace filter; otherwise the
@@ -339,7 +354,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   }, [navigate])
 
   // Only fetch heavy swimlane data when actually showing swimlanes
-  const showSwimlanes = viewMode === 'swimlane' && !scopeRequiresNamespaceFilter
+  const showSwimlanes = viewMode === 'swimlane' && !scopeRequiresNamespaceFilter && appScopeReady
 
   const timelineSource = useTimelineSource()
   const isRetained = timelineSource.capabilities.mode === 'retained'
@@ -354,8 +369,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // full-ring load the swimlane gate avoids — and the list then shows its own
   // range dropdown instead (selectionWindow is only passed when a scrubber is
   // on screen to own the range).
-  const showLocalScrubber = isLocal && !scopeRequiresNamespaceFilter
-  const showScrubber = isRetained || showLocalScrubber
+  const showLocalScrubber = isLocal && !scopeRequiresNamespaceFilter && appScopeReady
+  const showScrubber = appScopeReady && (isRetained || showLocalScrubber)
 
   // Both sources drive a scrubber now: retained fetches a server overview, local
   // derives one client-side from the loaded ring. The time-selection machinery
@@ -637,7 +652,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     limit: 10000,
     // The local strip derives its histogram from this ring fetch, so it must
     // run in list mode too whenever the strip is shown.
-    enabled: showSwimlanes || showLocalScrubber,
+    enabled: appScopeReady && (showSwimlanes || showLocalScrubber),
     fromMs: isRetained ? selection.fromMs : undefined,
     toMs: isRetained ? selection.toMs : undefined,
     sliding: isRetained && mode.kind === 'live',
@@ -645,7 +660,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
 
   // Topology powers both swimlane hierarchy and application-scoped attribution.
   const { data: rawTopology } = useTopology(timelineNamespaces, 'resources', {
-    enabled: showSwimlanes || Boolean(focusedAppKey),
+    enabled: appScopeReady && (showSwimlanes || Boolean(focusedAppKey)),
   })
 
   // Server application grouping — the single grouping authority. Joined to the
@@ -660,7 +675,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     isLoading: appsLoading,
     isError: appsError,
   } = useApplications(timelineNamespaces, {
-    enabled: (showSwimlanes && grouping === 'app') || Boolean(focusedAppKey),
+    enabled: appScopeReady && ((showSwimlanes && grouping === 'app') || Boolean(focusedAppKey)),
   })
   const appIndex = useMemo(
     () => (appsData?.applications ? buildAppMembershipIndex(appsData.applications) : undefined),
@@ -705,7 +720,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     [focusedAppIndex, focusedAppKey, stableTopology, unscopedEvents],
   )
   const focusedAppLoading = Boolean(focusedAppKey) && appsLoading
-  const focusedAppUnavailable = Boolean(focusedAppKey) && !appsLoading && (appsError || !focusedApp)
+  const focusedAppUnavailable = Boolean(focusedAppKey) && (!appScopeReady || (!appsLoading && (appsError || !focusedApp)))
   const focusedAppTimelineLimited = Boolean(focusedAppKey) && unscopedEvents.length >= 10_000
   const clearFocusedApp = useCallback(() => {
     const next = new URLSearchParams(searchParamsRef.current)
@@ -739,7 +754,9 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
           )}
           {focusedAppUnavailable && (
             <span className="truncate text-theme-text-tertiary">
-              The application is not available in the current cluster view.
+              {appScopeReady
+                ? 'The application is not available in the current cluster view.'
+                : 'This link is missing the namespaces needed to resolve the application.'}
             </span>
           )}
         </div>
@@ -819,6 +836,18 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
         )}
         <div className="flex-1 flex flex-col min-h-0">{node}</div>
       </div>
+    )
+  }
+
+  if (!appScopeReady) {
+    return wrap(
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+        <AlertTriangle className="h-8 w-8 text-theme-text-tertiary" />
+        <h2 className="text-base font-semibold text-theme-text-primary">Application scope is incomplete</h2>
+        <p className="max-w-lg text-sm text-theme-text-secondary">
+          Reopen Timeline from the application&apos;s History tab so its runtime and deployment-source namespaces are included.
+        </p>
+      </div>,
     )
   }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ActivityFilterKey, TimelineGrouping, TimelineSort } from '@skyhook-io/k8s-ui'
 import {
   parseTimeMode,
+  resolveApplicationTimelineScope,
   writeTimelineParams,
   onlyHighFreqDiffer,
   timeModeEqual,
@@ -192,6 +193,39 @@ describe('writeTimelineParams', () => {
       requiresNamespaceFilter: true,
     })
     expect(written.has('view')).toBe(false)
+  })
+})
+
+describe('resolveApplicationTimelineScope', () => {
+  it('uses the current namespace selection outside application scope', () => {
+    expect(resolveApplicationTimelineScope(new URLSearchParams(), ['default', 'staging'])).toEqual({
+      appKey: null,
+      namespaces: ['default', 'staging'],
+      ready: true,
+    })
+  })
+
+  it('uses the application scope namespaces and removes duplicates', () => {
+    const params = sp({
+      app: '/Application/radar-hub-staging',
+      scopeNamespaces: 'argocd, staging,argocd',
+    })
+
+    expect(resolveApplicationTimelineScope(params, ['default'])).toEqual({
+      appKey: '/Application/radar-hub-staging',
+      namespaces: ['argocd', 'staging'],
+      ready: true,
+    })
+  })
+
+  it('fails closed when an application link omits its namespace scope', () => {
+    const params = sp({ app: '/Application/radar-hub-staging' })
+
+    expect(resolveApplicationTimelineScope(params, ['default'])).toEqual({
+      appKey: '/Application/radar-hub-staging',
+      namespaces: [],
+      ready: false,
+    })
   })
 })
 
