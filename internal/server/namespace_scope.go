@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -129,16 +128,10 @@ func (s *Server) setActiveNamespaceForUser(r *http.Request, namespaces []string)
 func (s *Server) clearAllNamespacePreferences() {
 	// Under nsPickMu so an in-flight seed can't land between the two map
 	// wipes (a seeded preference without its marker would let a later clear
-	// re-seed). The --namespace-scope rescope inside handleSetActiveNamespace
-	// already holds nsPickMu — it must use the Locked variant instead.
+	// re-seed). No caller holds nsPickMu: handleSetActiveNamespace releases
+	// it before any k8s operation whose callbacks reach this function.
 	s.nsPickMu.Lock()
 	defer s.nsPickMu.Unlock()
-	s.clearAllNamespacePreferencesLocked()
-}
-
-// clearAllNamespacePreferencesLocked is the body of
-// clearAllNamespacePreferences; caller must hold nsPickMu.
-func (s *Server) clearAllNamespacePreferencesLocked() {
 	s.nsPreferences.Range(func(k, _ any) bool {
 		s.nsPreferences.Delete(k)
 		return true
@@ -162,15 +155,6 @@ func (s *Server) finalizePostContextSwitch() {
 	s.clearAllNamespacePreferences()
 	// AI investigations are cancelled + staled by the BEFORE-switch hook (see
 	// OnBeforeContextSwitch in New) so they can't touch the new cluster.
-}
-
-// finalizePostContextSwitchNsPickHeld is finalizePostContextSwitch for the
-// one caller that already holds nsPickMu (the --namespace-scope rescope in
-// handleSetActiveNamespace) — nsPickMu is not reentrant, so going through
-// clearAllNamespacePreferences there would self-deadlock.
-func (s *Server) finalizePostContextSwitchNsPickHeld() {
-	s.invalidatePostContextSwitchCaches()
-	s.clearAllNamespacePreferencesLocked()
 }
 
 func (s *Server) invalidatePostContextSwitchCaches() {
@@ -212,35 +196,32 @@ func (s *Server) loadSavedNamespacePreference(r *http.Request) {
 		saved := settings.Load()
 		if saved.ActiveNamespaces != nil {
 			if picks := saved.ActiveNamespaces[ctxName]; len(picks) > 0 {
-				// A pick from disk is user intent too — burn configured-seed
-				// eligibility first, so if the deleted-namespace prune later
-				// evicts this pick (and its settings entry), reads fall back
-				// to All namespaces per the prune's recovery contract instead
-				// of re-applying --namespaces.
-				s.seededPicks.Store(key, true)
-				// Seed only while the pick is still empty. The Load check
-				// above is racy on its own — a concurrent POST could install
-				// a pick between it and this store — so re-check under the
-				// lock and skip if one landed.
-				s.commitPickMutation(r, ctxName, nil, picks, false)
+				// A settings snapshot read outside the lock can be stale
+				// against a concurrent POST set+clear; the atomic seed
+				// protocol (marker + absent-preference recheck under the
+				// lock) rejects it in that case, the same way it guards the
+				// configured list. Seeding from disk also burns configured-
+				// seed eligibility, so a later prune eviction falls back to
+				// All namespaces instead of resurfacing --namespaces.
+				s.seedPick(ctxName, key, picks)
 				return
 			}
 		}
 	}
 	if configured := k8s.ConfiguredNamespacesForCurrentContext(); len(configured) > 0 {
-		s.seedConfiguredPick(ctxName, key, configured)
+		s.seedPick(ctxName, key, configured)
 	}
 }
 
-// seedConfiguredPick installs the --namespaces startup list as key's pick.
-// The whole decision runs under nsPickMu so it cannot interleave with an
-// explicit POST (which burns the seed marker, including on clears) or a
-// context switch (which clears both maps under the same lock): context,
-// marker, and preference are all rechecked inside the critical section. A
-// bare preference CAS is NOT enough here — an absent key means both "never
-// picked" (seed) and "explicitly cleared" (don't); the marker is what tells
-// them apart.
-func (s *Server) seedConfiguredPick(ctxName, key string, configured []string) {
+// seedPick installs picks (from settings.json or the --namespaces startup
+// list) as key's initial pick. The whole decision runs under nsPickMu so it
+// cannot interleave with an explicit POST (which burns the seed marker,
+// including on clears) or a context switch (which clears both maps under the
+// same lock): context, marker, and preference are all rechecked inside the
+// critical section. A bare preference CAS is NOT enough here — an absent key
+// means both "never picked" (seed) and "explicitly cleared" (don't); the
+// marker is what tells them apart.
+func (s *Server) seedPick(ctxName, key string, picks []string) {
 	s.nsPickMu.Lock()
 	defer s.nsPickMu.Unlock()
 	if k8s.GetContextName() != ctxName {
@@ -252,7 +233,7 @@ func (s *Server) seedConfiguredPick(ctxName, key string, configured []string) {
 	if _, ok := s.nsPreferences.Load(key); ok {
 		return
 	}
-	s.nsPreferences.Store(key, append([]string(nil), configured...))
+	s.nsPreferences.Store(key, append([]string(nil), picks...))
 }
 
 // pruneToExistingNamespaces returns picks minus namespaces absent from
@@ -578,12 +559,26 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 	// so it can't revert a pick set here from a stale snapshot. Lock order is
 	// scopeMutationMu → nsPickMu; the prune takes only nsPickMu.
 	//
+	// nsPickMu MUST NOT be held across k8s operations: PerformNamespaceRescope
+	// waits on the k8s operation lock, and a concurrent context switch holding
+	// that lock fires callbacks that take nsPickMu (finalizePostContextSwitch)
+	// — holding it there closes an AB/BA deadlock. The rescope branch releases
+	// and re-acquires around the k8s call; commitPickMutation's CAS keeps the
+	// unlocked window safe against read-path mutations.
+	//
 	// Released explicitly before the closing handleGetNamespaceScope render:
 	// that path runs the prune, which takes nsPickMu itself — holding it
 	// across the render would self-deadlock (the mutex is not reentrant).
-	// OnceFunc keeps every early error return covered by the defer.
+	// The held-flag closure keeps every early error return covered by the
+	// defer across the release/re-acquire cycle.
 	s.nsPickMu.Lock()
-	unlockNsPick := sync.OnceFunc(s.nsPickMu.Unlock)
+	nsPickHeld := true
+	unlockNsPick := func() {
+		if nsPickHeld {
+			nsPickHeld = false
+			s.nsPickMu.Unlock()
+		}
+	}
 	defer unlockNsPick()
 
 	// Persist the no-auth (single-user) pick across restarts before acting on it.
@@ -618,6 +613,7 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 			// namespace. PerformNamespaceRescope stops active sessions itself, but
 			// only once it commits to the teardown (after its connectivity check),
 			// so a failed rescope doesn't kill port-forwards / exec for nothing.
+			unlockNsPick()
 			if err := k8s.PerformNamespaceRescope(cleaned[0]); err != nil {
 				// We persisted the requested pick above, but the rescope didn't take
 				// (rolled back to the previous namespace, or superseded by a newer op).
@@ -638,7 +634,9 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 				s.writeError(w, http.StatusServiceUnavailable, "failed to rescope namespace cache: "+err.Error())
 				return
 			}
-			s.finalizePostContextSwitchNsPickHeld()
+			s.finalizePostContextSwitch()
+			s.nsPickMu.Lock()
+			nsPickHeld = true
 		}
 	}
 

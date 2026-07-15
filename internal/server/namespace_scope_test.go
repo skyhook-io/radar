@@ -755,27 +755,52 @@ func TestLoadSavedNamespacePreference_PostBeforeFirstLoadBurnsSeed(t *testing.T)
 	}
 }
 
-// The --namespace-scope rescope calls finalize while handleSetActiveNamespace
-// holds nsPickMu; the NsPickHeld variant must complete without trying to
-// re-acquire the non-reentrant lock.
-func TestFinalizePostContextSwitchNsPickHeld_NoDeadlock(t *testing.T) {
+// finalizePostContextSwitch takes nsPickMu itself; no caller may hold it.
+// This pins the lock discipline: it must complete promptly when nothing
+// holds the lock, and the rescope path in handleSetActiveNamespace releases
+// the lock before any k8s operation whose callbacks reach finalize.
+func TestFinalizePostContextSwitch_TakesNsPickMuItself(t *testing.T) {
 	s := newTestServer(t)
 	s.setActiveNamespaceForUser(reqAs("alice"), []string{"alpha"})
 
 	done := make(chan struct{})
 	go func() {
-		s.nsPickMu.Lock()
-		defer s.nsPickMu.Unlock()
-		s.finalizePostContextSwitchNsPickHeld()
+		s.finalizePostContextSwitch()
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("finalizePostContextSwitchNsPickHeld deadlocked under held nsPickMu")
+		t.Fatal("finalizePostContextSwitch blocked with no lock holders")
 	}
 	if got := s.getActiveNamespaceForUser(reqAs("alice")); len(got) != 0 {
 		t.Fatalf("picks survived finalize: %v", got)
+	}
+}
+
+// A stale settings snapshot must not resurrect a pick the user explicitly
+// cleared: the settings seed goes through the same marker-gated protocol as
+// the configured seed, and an explicit set/clear burns the marker.
+func TestLoadSavedNamespacePreference_StaleSettingsCannotOverrideClear(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	s := newTestServer(t)
+	if _, err := settings.Update(func(st *settings.Settings) {
+		st.ActiveNamespaces = map[string][]string{"test-ctx": {"stale-ns"}}
+	}); err != nil {
+		t.Fatalf("settings.Update: %v", err)
+	}
+	req := reqAs("")
+
+	// User expressed intent (set then clear) before/while a load's settings
+	// snapshot was in flight; the disk entry still says stale-ns.
+	s.setActiveNamespaceForUser(req, []string{"fresh-ns"})
+	s.setActiveNamespaceForUser(req, nil)
+
+	s.loadSavedNamespacePreference(req)
+	if got := s.getActiveNamespaceForUser(req); len(got) != 0 {
+		t.Fatalf("stale settings snapshot overrode explicit clear: %v", got)
 	}
 }
 
