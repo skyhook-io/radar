@@ -24,6 +24,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -783,7 +784,7 @@ func (r *insightsResolver) prefetchLive(rows []gitopsinsights.ManagedResourceRow
 					// Unknown-kind misses were already surfaced by the tree
 					// build's response warning; NotFound is a normal state for
 					// Missing resources. Everything else is worth one line.
-					if !apierrors.IsNotFound(err) && !errors.Is(err, k8s.ErrUnknownDynamicKind) {
+					if !apierrors.IsNotFound(err) && !errors.Is(err, k8score.ErrResourceNotFound) && !errors.Is(err, k8s.ErrUnknownDynamicKind) {
 						log.Printf("[gitops] insights live prefetch %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
 					}
 					continue

@@ -2,16 +2,27 @@ package tree
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/topology"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
+
+// isEnrichNotFound treats both miss shapes as "resource absent": typed-cache
+// reads return apierrors NotFound, dynamic informer reads return the plain
+// k8score sentinel. Absence is a normal state for tree enrichment — Missing
+// resources and hub-spoke apps whose workloads live on a remote cluster —
+// so neither deserves a log line.
+func isEnrichNotFound(err error) bool {
+	return apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound)
+}
 
 // enrichConcurrency bounds the parallel live-object enrichment fan-out per
 // build. Most lookups are informer-cache hits (microseconds); the bound
@@ -364,7 +375,7 @@ func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[
 						unknownKinds[kindKey(ref)] = struct{}{}
 						mu.Unlock()
 						logUnknownKindOnce(ref.Kind, ref.Group)
-					} else if !apierrors.IsNotFound(err) {
+					} else if !isEnrichNotFound(err) {
 						log.Printf("[gitops/tree] enrich %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
 					}
 					continue
