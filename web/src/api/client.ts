@@ -227,6 +227,45 @@ export function shouldRetryCapacityQuery(
   return failureCount < 3;
 }
 
+// isKindSyncPending matches the 503 the resource read handlers return while a
+// kind's informer is still completing its initial sync — the caller should
+// keep polling, not surface an error.
+export function isKindSyncPending(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.data?.error_code === "kind_sync_pending"
+  );
+}
+
+// isKindSyncFailed matches the terminal variant: the kind never synced within
+// the deadline for this connection. Retrying won't help — show the error.
+export function isKindSyncFailed(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.data?.error_code === "kind_sync_failed"
+  );
+}
+
+// SyncKindState / SyncStatusSnapshot mirror k8score's SyncSnapshot — attached
+// to the connection-status payload while the initial informer sync is running.
+export interface SyncKindState {
+  kind: string;
+  key: string;
+  synced: boolean;
+  deferred: boolean;
+}
+
+export interface SyncStatusSnapshot {
+  phase: string;
+  criticalTotal: number;
+  criticalSynced: number;
+  deferredTotal: number;
+  deferredSynced: number;
+  kinds: SyncKindState[];
+}
+
 const METRICS_API_GROUP_TOKENS = ["metrics", "k8s", "io"] as const;
 
 function mentionsMetricsAPIGroup(message: string): boolean {
@@ -2352,6 +2391,12 @@ export function useResource<T>(
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
     refetchInterval: options?.refetchInterval,
+    // Kind still completing its initial sync: stay in loading and poll until
+    // it becomes readable instead of erroring out (deep links during startup).
+    retry: (failureCount, error) =>
+      isKindSyncPending(error) ? true : failureCount < 3,
+    retryDelay: (failureCount, error) =>
+      isKindSyncPending(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
 
   // Extract resource and relationships from the response

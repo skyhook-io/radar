@@ -43,6 +43,7 @@ import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
+import { SyncProgressPanel } from './components/SyncProgressPanel'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
 import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
@@ -992,6 +993,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const contentReady = !isSwitching && !authMePending &&
     !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
 
+  // Progressive shell during the initial informer sync: once the server
+  // publishes per-kind sync progress, render the app instead of the splash.
+  // Resource views serve kinds as they become ready; everything else shows
+  // the sync progress panel until 'connected'.
+  const shellDuringSync = !isSwitching && !authMePending &&
+    !(authMe?.authEnabled && !authMe?.username) &&
+    connection.state === 'connecting' && !!connection.syncStatus?.kinds?.length
+  const viewsSyncGated = shellDuringSync && mainView !== 'resources'
+
   const { clusterLoadState, showHomeClusterLoadFallback, clusterLoadInitial } = useClusterLoadState({
     namespaces,
     mainView,
@@ -1245,16 +1255,22 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const clusterConnectionState = connection.state
   const clusterConnected = clusterConnectionState === 'connected'
   const liveUpdatesDisconnected = clusterConnected && !eventStreamConnected && !eventStreamConnecting
+  // During the progressive shell, the header label carries the global sync
+  // progress — the one place that explains why some views are open and
+  // others still loading.
+  const syncProgressLabel = connection.syncStatus
+    ? `Loading cluster data — ${connection.syncStatus.criticalSynced + connection.syncStatus.deferredSynced} of ${connection.syncStatus.criticalTotal + connection.syncStatus.deferredTotal} ready`
+    : 'Connecting'
   const headerConnectionLabel =
     clusterConnectionState === 'disconnected' ? 'Disconnected' :
-    clusterConnectionState === 'connecting' ? 'Connecting' :
+    clusterConnectionState === 'connecting' ? syncProgressLabel :
     liveUpdatesDisconnected ? 'Live updates disconnected' :
     clusterLoadState.loading ? `Connected — ${clusterLoadState.message}` :
     crdDiscoveryStatus === 'discovering' ? 'Connected — discovering Custom Resources...' :
     'Connected'
   const headerConnectionDisplayLabel =
     clusterConnectionState === 'disconnected' ? 'Disconnected' :
-    clusterConnectionState === 'connecting' ? 'Connecting' :
+    clusterConnectionState === 'connecting' ? syncProgressLabel :
     liveUpdatesDisconnected ? 'Live updates disconnected' :
     showClusterWarmupLabel ? clusterLoadState.message :
     crdDiscoveryStatus === 'discovering' ? 'Discovering Custom Resources…' :
@@ -2021,7 +2037,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Connecting view — shown during initial connection or retry.
           Icon is pane-anchored so its screen position matches the
           host hub splash across cross-document transitions. */}
-      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && !shellDuringSync && (
         <PaneLoader
           label="Connecting to cluster"
           className="flex-1 min-h-0 bg-theme-base"
@@ -2082,13 +2098,21 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* inert while a fullscreen detail overlay covers the views — keeps the
           retained background list out of the focus order + a11y tree (the visual
           cover already blocks pointer events). */}
-      {contentReady && <div className="flex-1 flex overflow-hidden" inert={expandedView}>
+      {(contentReady || shellDuringSync) && <div className="flex-1 flex overflow-hidden" inert={expandedView}>
         {/* Search included, not just the path: selection inside a view rides in
             the query (?resource=, ?release=), so a path-only key would still
             strand a crash on the view that produced it. */}
         <ErrorBoundary resetKey={location.pathname + location.search}>
+        {/* Initial sync in progress: views that need the full cluster dataset
+            show per-kind progress instead; resource views work as kinds sync. */}
+        {viewsSyncGated && connection.syncStatus && (
+          <SyncProgressPanel
+            syncStatus={connection.syncStatus}
+            onNavigateToKind={(key) => navigate({ pathname: `/resources/${key}` })}
+          />
+        )}
         {/* Home dashboard */}
-        {mainView === 'home' && (
+        {!viewsSyncGated && mainView === 'home' && (
           <HomeView
             namespaces={namespaces}
             topology={topology}
@@ -2147,7 +2171,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Topology view */}
-        {mainView === 'topology' && (
+        {!viewsSyncGated && mainView === 'topology' && (
           <>
             {topology?.requiresNamespaceFilter && namespaces.length === 0 ? (
               /* Large cluster: prompt user to select a namespace */
@@ -2275,7 +2299,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Timeline view */}
-        {mainView === 'timeline' && (
+        {!viewsSyncGated && mainView === 'timeline' && (
           <TimelineView
             namespaces={namespaces}
             onResourceClick={(resource) => {
@@ -2293,7 +2317,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           />
         )}
 
-        {mainView === 'helm' && (
+        {!viewsSyncGated && mainView === 'helm' && (
           <HelmView
             namespaces={namespaces}
             selectedRelease={selectedHelmRelease}
@@ -2301,13 +2325,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           />
         )}
 
-        {mainView === 'helmCompare' && (
+        {!viewsSyncGated && mainView === 'helmCompare' && (
           <HelmCompareRoute />
         )}
 
         {/* GitOps view (inline only when the host hasn't taken it over — see
             the takeover splash below). */}
-        {mainView === 'gitops' && !isViewTakenOver('gitops') && (
+        {!viewsSyncGated && mainView === 'gitops' && !isViewTakenOver('gitops') && (
           <GitOpsView
             namespaces={namespaces}
             onOpenResource={(resource) => {
@@ -2322,7 +2346,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Applications view — deployable software grouped by app/release evidence */}
-        {mainView === 'applications' && (
+        {!viewsSyncGated && mainView === 'applications' && (
           <ApplicationsView
             namespaces={namespaces}
             onOpenResource={(resource) => {
@@ -2343,12 +2367,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Traffic view */}
-        {mainView === 'traffic' && (
+        {!viewsSyncGated && mainView === 'traffic' && (
           <TrafficView namespaces={namespaces} />
         )}
 
         {/* Cost detail view */}
-        {mainView === 'cost' && (
+        {!viewsSyncGated && mainView === 'cost' && (
           <CostView namespaces={namespaces} onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
         )}
 
@@ -2370,7 +2394,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {/* Checks detail view. Cloud can take over fleet best practices while
             the target-specific upgrade route continues to render locally. */}
-        {mainView === 'checks' && (!isViewTakenOver('checks') || upgradeReadinessRoute) && (
+        {!viewsSyncGated && mainView === 'checks' && (!isViewTakenOver('checks') || upgradeReadinessRoute) && (
           <AuditView
             namespaces={namespaces}
             onNavigateToResource={navigateToResourceList}
@@ -2382,7 +2406,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             Hub fleet uses; a GitOps reconciler subject routes to its detail page,
             other resources open the standard resource view. Inline only when the
             host hasn't taken it over. */}
-        {mainView === 'issues' && !isViewTakenOver('issues') && (
+        {!viewsSyncGated && mainView === 'issues' && !isViewTakenOver('issues') && (
           <IssuesPane
             namespaces={namespaces}
             onNavigateToResource={navigateFromIssue}
@@ -2392,7 +2416,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         {/* Workload full view — the standalone fullscreen route for non-list
             surfaces and deep links. Expand-from-drawer is the ?full=1 overlay on
             /resources instead, so it never routes here. */}
-        {mainView === 'workload' && (
+        {!viewsSyncGated && mainView === 'workload' && (
           <WorkloadViewRoute
             onNavigateToResource={(resource) => {
               navigate(relatedResourcePath(resource))
@@ -2401,7 +2425,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Compare two resources of the same kind side-by-side */}
-        {mainView === 'compare' && <CompareViewRoute />}
+        {!viewsSyncGated && mainView === 'compare' && <CompareViewRoute />}
 
         </ErrorBoundary>
       </div>}
@@ -2410,7 +2434,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Resource detail drawer — stays mounted, expands to full-screen WorkloadView.
           Gated on contentReady so it never renders over the connecting/switching
           splash (which would push the centered logo off-center). */}
-      {contentReady && resourceDrawer.shouldRender && drawerResource && (
+      {(contentReady || shellDuringSync) && resourceDrawer.shouldRender && drawerResource && (
         <ResourceDetailDrawer
           resource={drawerResource}
           initialTab={drawerInitialTab}
