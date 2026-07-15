@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -185,5 +187,42 @@ func TestManagedResourceRowsAndOperationPhase(t *testing.T) {
 	}
 	if phase := gitopsinsights.OperationPhase(app); phase != "Running" {
 		t.Fatalf("OperationPhase = %q, want Running", phase)
+	}
+}
+
+// The index must reproduce the old per-resource scan exactly: events are
+// matched by involvedObject kind+name within the EVENT's own namespace —
+// involvedObject.namespace is deliberately not consulted (controllers can
+// leave it empty), and a cluster-scoped ref (namespace "") matches across
+// all namespaces.
+func TestMatchIndexedEventsNamespaceSemantics(t *testing.T) {
+	ev := func(ns, kind, name, involvedNS, reason string) *corev1.Event {
+		return &corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Namespace: ns, Name: reason + "-ev"},
+			InvolvedObject: corev1.ObjectReference{Kind: kind, Name: name, Namespace: involvedNS},
+			Reason:         reason,
+		}
+	}
+	idx := indexEventsByInvolvedObject([]*corev1.Event{
+		ev("prod", "Deployment", "billing", "prod", "InNS"),
+		ev("prod", "Deployment", "billing", "", "EmptyInvolvedNS"),
+		ev("staging", "Deployment", "billing", "staging", "OtherNS"),
+		ev("", "ClusterRole", "reader", "", "ClusterScoped"),
+	})
+
+	got := matchIndexedEvents(idx, "apps", "Deployment", "prod", "billing")
+	reasons := map[string]bool{}
+	for _, e := range got {
+		reasons[e.Reason] = true
+	}
+	if !reasons["InNS"] || !reasons["EmptyInvolvedNS"] {
+		t.Fatalf("events in the ref's namespace must match regardless of involvedObject.namespace: %v", reasons)
+	}
+	if reasons["OtherNS"] {
+		t.Fatal("event living in another namespace must not match a namespaced ref")
+	}
+
+	if got := matchIndexedEvents(idx, "", "ClusterRole", "", "reader"); len(got) != 1 {
+		t.Fatalf("cluster-scoped ref should match across namespaces, got %d", len(got))
 	}
 }

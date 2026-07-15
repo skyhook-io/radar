@@ -872,21 +872,53 @@ func (r *insightsResolver) ResourceProblems(group, kind, namespace, name string)
 }
 
 // buildEventIndex runs once per resolver: a single pass over the event
-// lister into buckets keyed kind|ns|name. The previous shape listed and
-// scanned the namespace's full event set once per managed resource —
-// O(resources × events) per request, which becomes the dominant CPU cost
-// once the live-GET fan-out is gone.
+// lister into buckets. The previous shape listed and scanned the
+// namespace's full event set once per managed resource — O(resources ×
+// events) per request, which becomes the dominant CPU cost once the
+// live-GET fan-out is gone.
 func (r *insightsResolver) buildEventIndex() {
-	r.eventIndex = map[string][]*corev1.Event{}
 	items, err := r.cache.Events().List(labels.Everything())
 	if err != nil {
 		log.Printf("[gitops] insights event index build failed: %v", err)
+		r.eventIndex = map[string][]*corev1.Event{}
 		return
 	}
+	r.eventIndex = indexEventsByInvolvedObject(items)
+}
+
+// indexEventsByInvolvedObject buckets events by involvedObject kind|name
+// ONLY. Namespace filtering happens at lookup time against the EVENT's own
+// namespace — matching the old per-resource scan, which listed the
+// resource's namespace (event.Namespace scoping) and matched involvedObject
+// by kind+name alone. Keying on involvedObject.Namespace instead would drop
+// events from controllers that leave it empty; the group stays out of the
+// key for the same reason (some informers strip apiVersion).
+func indexEventsByInvolvedObject(items []*corev1.Event) map[string][]*corev1.Event {
+	idx := make(map[string][]*corev1.Event, len(items))
 	for _, e := range items {
-		key := e.InvolvedObject.Kind + "|" + e.InvolvedObject.Namespace + "|" + e.InvolvedObject.Name
-		r.eventIndex[key] = append(r.eventIndex[key], e)
+		key := e.InvolvedObject.Kind + "|" + e.InvolvedObject.Name
+		idx[key] = append(idx[key], e)
 	}
+	return idx
+}
+
+// matchIndexedEvents reproduces the old scan's semantics over a bucket:
+// namespace != "" keeps only events living in that namespace (the old code
+// used a namespace-scoped lister); namespace == "" (cluster-scoped ref)
+// matches across all namespaces; group filters via eventMatchesGroup.
+func matchIndexedEvents(index map[string][]*corev1.Event, group, kind, namespace, name string) []*corev1.Event {
+	bucket := index[kind+"|"+name]
+	matched := make([]*corev1.Event, 0, len(bucket))
+	for _, e := range bucket {
+		if namespace != "" && e.Namespace != namespace {
+			continue
+		}
+		if !eventMatchesGroup(group, e.InvolvedObject.APIVersion) {
+			continue
+		}
+		matched = append(matched, e)
+	}
+	return matched
 }
 
 func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []gitopsinsights.EventSummary {
@@ -900,18 +932,7 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 		return nil
 	}
 	r.eventsOnce.Do(r.buildEventIndex)
-	// Group filtering happens inside the bucket: the index key deliberately
-	// omits group so events whose involvedObject.apiVersion is empty (some
-	// informers strip it) still land next to their resource, matching the
-	// old scan's eventMatchesGroup semantics for colliding kinds.
-	bucket := r.eventIndex[kind+"|"+namespace+"|"+name]
-	matched := make([]*corev1.Event, 0, len(bucket))
-	for _, e := range bucket {
-		if !eventMatchesGroup(group, e.InvolvedObject.APIVersion) {
-			continue
-		}
-		matched = append(matched, e)
-	}
+	matched := matchIndexedEvents(r.eventIndex, group, kind, namespace, name)
 	// Newest-first by lastTimestamp (falls back to eventTime / firstTimestamp
 	// for events that don't fill it). Cap to recentEventsCap after sort so
 	// we always return the most recent ones.
