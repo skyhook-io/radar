@@ -55,13 +55,7 @@ func classifyCloudInstallPlan(
 	namespace, release string,
 	explicitTarget bool,
 ) (cloudInstallPlan, error) {
-	var candidates []cloudinstall.RadarTarget
-	if explicitTarget {
-		candidates = result.Selected
-	} else {
-		candidates = append(candidates, result.Namespace...)
-		candidates = append(candidates, result.ClusterWide...)
-	}
+	candidates := discoveredRadarTargets(result, explicitTarget)
 	if len(candidates) > 1 {
 		return cloudInstallPlan{}, fmt.Errorf(
 			"found multiple Radar installations; choose one explicitly with --namespace and --release:\n%s",
@@ -146,6 +140,14 @@ func classifyCloudInstallPlan(
 	default:
 		return cloudInstallPlan{}, fmt.Errorf("unrecognized Helm release state %q", inspection.State)
 	}
+}
+
+func discoveredRadarTargets(result cloudinstall.DiscoveryResult, exactTarget bool) []cloudinstall.RadarTarget {
+	if exactTarget {
+		return result.Selected
+	}
+	targets := append([]cloudinstall.RadarTarget{}, result.Namespace...)
+	return append(targets, result.ClusterWide...)
 }
 
 func formatRadarTargets(targets []cloudinstall.RadarTarget) string {

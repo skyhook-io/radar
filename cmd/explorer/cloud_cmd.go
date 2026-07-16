@@ -5,6 +5,7 @@ package main
 // os.Args[1]=="cloud" check there).
 //
 //	radar cloud install     install an in-cluster agent connected to Cloud
+//	radar cloud status      inspect an in-cluster Cloud installation
 //
 // Local-process preview connections are not available yet. The reserved
 // `connect` command exits before contacting the hub and points users to the
@@ -37,6 +38,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -66,6 +68,8 @@ func runCloudSubcommand() {
 	case "install":
 		cloudInstall(rest)
 		os.Exit(0)
+	case "status":
+		os.Exit(cloudStatus(rest, os.Stdout, os.Stderr))
 	case "-h", "--help", "help":
 		cloudUsage(os.Stdout)
 		os.Exit(0)
@@ -81,11 +85,16 @@ func cloudUsage(w *os.File) {
 
 Usage:
   radar cloud install [--context NAME] [-y|--yes] [--namespace NS] [--release NAME] [--adopt-existing] [--hub-url URL] [--name NAME] [--dry-run]
+  radar cloud status [--context NAME] [--namespace NS --release NAME]
 
 install  Connect one kubeconfig cluster to Radar. Installs Radar when absent,
          or offers a safe native-Helm adoption / GitOps handoff when detected.
          An explicit --context is used directly; otherwise the current context
          must be confirmed unless -y/--yes is set.
+
+status   Inspect the Radar installation in one kubeconfig cluster. Reports
+         ownership, Cloud configuration, agent readiness, and Hub-reported
+         tunnel health without changing Kubernetes.
 
 Flags (install):
   --context NAME   Kubernetes context to install into (default: current context)
@@ -104,6 +113,11 @@ Flags (install):
   --dry-run        Run the permission preflight + print the plan; install nothing
   --no-browser     Print the approval URL instead of opening a browser
   --browser NAME   Browser to use for approval (default: Radar config / OS default)
+
+Flags (status):
+  --context NAME   Kubernetes context to inspect (default: current context)
+  --namespace NS   Exact namespace (requires --release)
+  --release NAME   Exact Helm release (requires --namespace)
 `)
 }
 
@@ -603,36 +617,51 @@ type localInstallClients struct {
 	Releases   cloudReleaseInspector
 }
 
-func buildLocalInstallClients(kubeconfig, contextName string) (localInstallClients, error) {
+type localKubernetesClients struct {
+	Kubernetes kubernetes.Interface
+	Dynamic    dynamic.Interface
+	Discovery  discovery.DiscoveryInterface
+	RESTConfig *rest.Config
+}
+
+func buildLocalKubernetesClients(kubeconfig, contextName string) (localKubernetesClients, error) {
 	rules := connectLoadingRules(kubeconfig)
 	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: contextName}).ClientConfig()
 	if err != nil {
-		return localInstallClients{}, fmt.Errorf("no reachable kubeconfig context: %w", err)
+		return localKubernetesClients{}, fmt.Errorf("no reachable kubeconfig context: %w", err)
 	}
-	// Helm's non-cancelable mutation avoids returning while its background apply
-	// is still running. Bound each Kubernetes request so that critical section
-	// cannot hang forever on a dead apiserver connection.
+	// Bound each Kubernetes request so status and install cannot hang forever on
+	// a dead apiserver connection. This also bounds Helm's non-cancelable apply
+	// critical section when the caller initializes Helm with this config.
 	if restCfg.Timeout <= 0 || restCfg.Timeout > cloudKubernetesRequestTimeout {
 		restCfg.Timeout = cloudKubernetesRequestTimeout
 	}
 	kc, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return localInstallClients{}, fmt.Errorf("kube client: %w", err)
+		return localKubernetesClients{}, fmt.Errorf("kube client: %w", err)
 	}
 	dc, err := dynamic.NewForConfig(restCfg)
 	if err != nil {
-		return localInstallClients{}, fmt.Errorf("dynamic kube client: %w", err)
+		return localKubernetesClients{}, fmt.Errorf("dynamic kube client: %w", err)
+	}
+	return localKubernetesClients{Kubernetes: kc, Dynamic: dc, Discovery: kc.Discovery(), RESTConfig: restCfg}, nil
+}
+
+func buildLocalInstallClients(kubeconfig, contextName string) (localInstallClients, error) {
+	clients, err := buildLocalKubernetesClients(kubeconfig, contextName)
+	if err != nil {
+		return localInstallClients{}, err
 	}
 	// Hand Helm the SAME resolved rest.Config, not a kubeconfig path — otherwise
 	// a multi-file KUBECONFIG could leave Helm on a different current-context
 	// (cluster B) than the preflight/Secret client (cluster A).
-	if err := helm.InitializeWithRESTConfig(restCfg); err != nil {
+	if err := helm.InitializeWithRESTConfig(clients.RESTConfig); err != nil {
 		return localInstallClients{}, fmt.Errorf("helm init: %w", err)
 	}
 	return localInstallClients{
-		Kubernetes: kc,
-		Dynamic:    dc,
-		Discovery:  kc.Discovery(),
+		Kubernetes: clients.Kubernetes,
+		Dynamic:    clients.Dynamic,
+		Discovery:  clients.Discovery,
 		Helm:       helm.GetClient(),
 		Releases:   helm.GetClient(),
 	}, nil

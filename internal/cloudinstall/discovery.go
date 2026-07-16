@@ -70,14 +70,25 @@ type RadarTarget struct {
 
 type DeploymentRuntime struct {
 	Image                 string
+	DesiredReplicas       int32
+	TotalReplicas         int32
+	UpdatedReplicas       int32
+	ReadyReplicas         int32
+	AvailableReplicas     int32
+	StatusObserved        bool
 	AuthMode              string
 	CloudModeConfigured   bool
 	CloudMode             bool
+	CloudModeUnresolved   bool
 	CloudURL              string
 	CloudURLConfigured    bool
+	CloudURLUnresolved    bool
 	ClusterName           string
 	ClusterNameConfigured bool
+	ClusterNameUnresolved bool
 	CloudTokenConfigured  bool
+	CloudTokenSecretName  string
+	CloudTokenSecretKey   string
 	AlreadyCloud          bool
 }
 
@@ -200,10 +211,18 @@ func isOfficialRadarChartLabel(label string) bool {
 
 func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 	runtime := DeploymentRuntime{AuthMode: "none"}
-	cloudModeUnresolved := false
 	if deployment == nil {
 		return runtime
 	}
+	runtime.DesiredReplicas = 1
+	if deployment.Spec.Replicas != nil {
+		runtime.DesiredReplicas = *deployment.Spec.Replicas
+	}
+	runtime.TotalReplicas = deployment.Status.Replicas
+	runtime.UpdatedReplicas = deployment.Status.UpdatedReplicas
+	runtime.ReadyReplicas = deployment.Status.ReadyReplicas
+	runtime.AvailableReplicas = deployment.Status.AvailableReplicas
+	runtime.StatusObserved = deployment.Status.ObservedGeneration >= deployment.Generation
 	var container *corev1.Container
 	for i := range deployment.Spec.Template.Spec.Containers {
 		if deployment.Spec.Template.Spec.Containers[i].Name == chartName {
@@ -221,14 +240,14 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 	}
 	runtime.CloudURL, runtime.CloudURLConfigured = argumentValue(container.Args, "--cloud-url")
 	runtime.ClusterName, runtime.ClusterNameConfigured = argumentValue(container.Args, "--cluster-name")
-	_, cloudTokenArg := argumentValue(container.Args, "--cloud-token")
+	cloudTokenValue, cloudTokenArg := argumentValue(container.Args, "--cloud-token")
 
 	for _, env := range container.Env {
 		switch env.Name {
 		case "RADAR_CLOUD_MODE":
 			runtime.CloudModeConfigured = true
 			if env.ValueFrom != nil {
-				cloudModeUnresolved = true
+				runtime.CloudModeUnresolved = true
 			} else {
 				runtime.CloudMode, _ = strconv.ParseBool(env.Value)
 			}
@@ -236,18 +255,24 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 			if !runtime.CloudURLConfigured {
 				runtime.CloudURL = env.Value
 				runtime.CloudURLConfigured = env.Value != "" || env.ValueFrom != nil
+				runtime.CloudURLUnresolved = env.ValueFrom != nil
 			}
 		case "RADAR_CLOUD_CLUSTER_NAME":
 			if !runtime.ClusterNameConfigured {
 				runtime.ClusterName = env.Value
 				runtime.ClusterNameConfigured = env.Value != "" || env.ValueFrom != nil
+				runtime.ClusterNameUnresolved = env.ValueFrom != nil
 			}
 		case "RADAR_CLOUD_TOKEN":
 			runtime.CloudTokenConfigured = env.Value != "" || env.ValueFrom != nil
+			if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
+				runtime.CloudTokenSecretName = env.ValueFrom.SecretKeyRef.Name
+				runtime.CloudTokenSecretKey = env.ValueFrom.SecretKeyRef.Key
+			}
 		}
 	}
-	runtime.CloudTokenConfigured = runtime.CloudTokenConfigured || cloudTokenArg
-	runtime.AlreadyCloud = runtime.CloudMode || cloudModeUnresolved || runtime.CloudURLConfigured || runtime.ClusterNameConfigured || runtime.CloudTokenConfigured
+	runtime.CloudTokenConfigured = runtime.CloudTokenConfigured || (cloudTokenArg && cloudTokenValue != "")
+	runtime.AlreadyCloud = runtime.CloudMode || runtime.CloudModeUnresolved || runtime.CloudURLConfigured || runtime.ClusterNameConfigured || runtime.CloudTokenConfigured
 	return runtime
 }
 

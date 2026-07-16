@@ -145,6 +145,20 @@ kubectl radar
 radar
 ```
 
+To inspect an in-cluster Radar Cloud installation without changing it:
+
+```bash
+radar cloud status
+radar cloud status --context my-cluster
+radar cloud status --context my-cluster --namespace radar --release radar
+```
+
+The command reports installation ownership, chart and image, agent readiness,
+and Cloud configuration without printing the connection token. Passing both
+`--namespace` and `--release` selects an exact installation. Live tunnel status
+is reported by Radar Cloud using the token in the referenced Kubernetes Secret.
+If the Secret or Hub is unavailable, local installation diagnostics still run.
+
 **CLI Flags**
 
 | Flag | Default | Description |

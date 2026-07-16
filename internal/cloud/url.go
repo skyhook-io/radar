@@ -93,6 +93,30 @@ func ValidateWebSocketURL(raw string) error {
 	return nil
 }
 
+// HubOriginFromWebSocketURL derives the Hub API origin from an agent endpoint.
+// Agent URLs are issued as ws(s)://host/agent; status calls use the same
+// authority over http(s) and never carry path/query data across protocols.
+func HubOriginFromWebSocketURL(raw string) (string, error) {
+	if err := ValidateWebSocketURL(raw); err != nil {
+		return "", err
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", errors.New("cloud WebSocket URL is invalid")
+	}
+	if u.Scheme == "wss" {
+		u.Scheme = "https"
+	} else {
+		u.Scheme = "http"
+	}
+	u.Path = ""
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	return u.String(), nil
+}
+
 func validateURLPort(u *url.URL) error {
 	port := u.Port()
 	if port == "" {
