@@ -130,7 +130,22 @@ func scanUpgradePath(current, target *utilversion.Version) Check {
 		Scope:      "Kubernetes control plane version policy",
 		References: append([]Reference(nil), versionSkewReferences...),
 	}
-	if target.Minor() <= current.Minor()+1 {
+	if target.Major() == current.Major() && target.Minor() <= current.Minor()+1 {
+		return check
+	}
+	if target.Major() != current.Major() {
+		sequence := minorString(current) + " → " + minorString(target)
+		check.Summary = "This target skips required Kubernetes version upgrades."
+		check.Findings = []Finding{{
+			RuleID:      check.ID,
+			Title:       "Unsupported control plane version jump",
+			Level:       LevelBlocker,
+			Evidence:    Evidence{Source: "version policy", Path: "controlPlane", Detail: sequence},
+			AppliesFrom: minorString(target),
+			Impact:      "Kubernetes control planes must follow the supported one-minor upgrade sequence; a direct major-version jump is unsupported.",
+			Remediation: fmt.Sprintf("Choose Kubernetes %d.%d as the next target, then re-run upgrade impact for each subsequent step.", current.Major(), current.Minor()+1),
+			References:  append([]Reference(nil), versionSkewReferences...),
+		}}
 		return check
 	}
 	path := make([]string, 0, target.Minor()-current.Minor()+1)

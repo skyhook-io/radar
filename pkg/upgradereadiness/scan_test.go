@@ -163,6 +163,17 @@ func TestScanMultiMinorControlPlaneJumpIsBlocked(t *testing.T) {
 	}
 }
 
+func TestScanMajorControlPlaneJumpIsBlocked(t *testing.T) {
+	got, err := Scan(completeInput(), "1.35", "2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := checkByID(t, got, "control-plane-upgrade-path")
+	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Evidence.Detail != "1.35 → 2.0" || !strings.Contains(check.Findings[0].Remediation, "1.36") {
+		t.Fatalf("unexpected major-version path result: %+v", check)
+	}
+}
+
 func TestScanManifestCompatibilityFromHelmAndLastApplied(t *testing.T) {
 	input := completeInput()
 	input.ManifestResources = []ManifestResource{{APIVersion: "extensions/v1beta1", Kind: "Ingress", Namespace: "web", Name: "api", Source: "Helm", SourceNamespace: "web", SourceName: "api"}}
