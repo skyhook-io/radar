@@ -193,6 +193,15 @@ type OwnedResource struct {
 	Issue      string `json:"issue,omitempty"`   // Primary issue if unhealthy
 }
 
+// ReleaseManifestResource is a resource declaration preserved in the latest
+// stored manifest for a Helm release. Unlike a live object, APIVersion is the
+// version Helm will submit again on the next upgrade or rollback.
+type ReleaseManifestResource struct {
+	ReleaseName      string
+	ReleaseNamespace string
+	Resource         OwnedResource
+}
+
 // HelmValues represents the values for a release
 type HelmValues struct {
 	UserSupplied map[string]any `json:"userSupplied"`

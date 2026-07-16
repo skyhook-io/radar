@@ -17,7 +17,7 @@ export function ChecksViewTabs() {
         Best practices
       </ChecksTab>
       <ChecksTab to={{ pathname: '/checks/upgrade', search: shared.toString() }} active={upgrade}>
-        Upgrade readiness
+        Upgrade impact
       </ChecksTab>
     </div>
   )

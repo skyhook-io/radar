@@ -1,23 +1,105 @@
 package audit
 
 import (
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
-func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string, currentVersion, targetVersion string) (*upgradereadiness.ScanResults, error) {
+// UpgradeReadinessOptions carries evidence that is not available from the
+// typed informer cache. A nil slice means the collector could not read that
+// source; an empty non-nil slice means it was inspected and had no matches.
+type UpgradeReadinessOptions struct {
+	CurrentVersion                      string
+	TargetVersion                       string
+	Platform                            string
+	ManifestResources                   []upgradereadiness.ManifestResource
+	HelmUnavailableNamespaces           []string
+	DeprecatedAPIRequests               []upgradereadiness.DeprecatedAPIRequest
+	PrometheusRules                     []*unstructured.Unstructured
+	PrometheusRulesInstalled            bool
+	PrometheusRulesDiscoveryAvailable   bool
+	PrometheusRuleUnavailableNamespaces []string
+	CanReadNodes                        bool
+	CanReadPersistentVolumes            bool
+}
+
+func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string, opts UpgradeReadinessOptions) (*upgradereadiness.ScanResults, error) {
 	if cache == nil {
-		return upgradereadiness.Scan(nil, currentVersion, targetVersion)
+		return upgradereadiness.Scan(nil, opts.CurrentVersion, opts.TargetVersion)
 	}
 
-	input := collectWorkloadInput(cache, namespaces)
+	typed := collectTypedInput(cache, namespaces)
+	replicaSets := listNamespaced(cache.ReplicaSets(), namespaces)
+	var persistentVolumes []*corev1.PersistentVolume
+	if opts.CanReadPersistentVolumes {
+		persistentVolumes = listNamespaced(cache.PersistentVolumes(), namespaces)
+	}
+	var nodes []*corev1.Node
+	if opts.CanReadNodes {
+		nodes = listNamespaced(cache.Nodes(), namespaces)
+	}
+	sourceObjects := make([]metav1.Object, 0,
+		len(typed.Pods)+len(typed.Deployments)+len(replicaSets)+len(typed.StatefulSets)+
+			len(typed.DaemonSets)+len(typed.Jobs)+len(typed.CronJobs)+len(typed.Services)+
+			len(typed.Ingresses)+len(typed.HorizontalPodAutoscalers)+len(typed.PodDisruptionBudgets))
+	for _, object := range typed.Pods {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range typed.Deployments {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range replicaSets {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range typed.StatefulSets {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range typed.DaemonSets {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range typed.Jobs {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range typed.CronJobs {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range typed.Services {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range typed.Ingresses {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range typed.HorizontalPodAutoscalers {
+		sourceObjects = append(sourceObjects, object)
+	}
+	for _, object := range typed.PodDisruptionBudgets {
+		sourceObjects = append(sourceObjects, object)
+	}
+
 	return upgradereadiness.Scan(&upgradereadiness.Input{
-		Pods:         input.Pods,
-		Deployments:  input.Deployments,
-		ReplicaSets:  listNamespaced(cache.ReplicaSets(), namespaces),
-		StatefulSets: input.StatefulSets,
-		DaemonSets:   input.DaemonSets,
-		Jobs:         input.Jobs,
-		CronJobs:     input.CronJobs,
-	}, currentVersion, targetVersion)
+		Namespaces:                          append([]string(nil), namespaces...),
+		Pods:                                typed.Pods,
+		Deployments:                         typed.Deployments,
+		ReplicaSets:                         replicaSets,
+		StatefulSets:                        typed.StatefulSets,
+		DaemonSets:                          typed.DaemonSets,
+		Jobs:                                typed.Jobs,
+		CronJobs:                            typed.CronJobs,
+		Services:                            typed.Services,
+		PersistentVolumes:                   persistentVolumes,
+		Nodes:                               nodes,
+		SourceObjects:                       sourceObjects,
+		ManifestResources:                   opts.ManifestResources,
+		HelmUnavailableNamespaces:           opts.HelmUnavailableNamespaces,
+		DeprecatedAPIRequests:               opts.DeprecatedAPIRequests,
+		PrometheusRules:                     opts.PrometheusRules,
+		PrometheusRulesInstalled:            opts.PrometheusRulesInstalled,
+		PrometheusRulesDiscoveryAvailable:   opts.PrometheusRulesDiscoveryAvailable,
+		PrometheusRuleUnavailableNamespaces: opts.PrometheusRuleUnavailableNamespaces,
+		Platform:                            opts.Platform,
+	}, opts.CurrentVersion, opts.TargetVersion)
 }

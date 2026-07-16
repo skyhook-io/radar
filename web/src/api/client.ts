@@ -393,6 +393,7 @@ export interface AuditResponse {
 
 export type UpgradeReadinessVerdict = 'blocked' | 'review' | 'no_known_blockers' | 'unknown'
 export type UpgradeReadinessLevel = 'blocker' | 'warning'
+export type UpgradeReadinessCheckStatus = 'passed' | 'blocked' | 'warning' | 'unknown' | 'not_applicable'
 
 export interface UpgradeReadinessResourceRef {
   group?: string
@@ -405,13 +406,27 @@ export interface UpgradeReadinessFinding {
   ruleID: string
   title: string
   level: UpgradeReadinessLevel
-  resource: UpgradeReadinessResourceRef
+  resource?: UpgradeReadinessResourceRef
   managedBy?: UpgradeReadinessResourceRef
-  evidence: { source: 'live'; path: string }
-  appliesFrom: string
+  evidence: { source: string; path: string; detail?: string }
+  appliesFrom?: string
   impact: string
   remediation: string
   references: { title: string; url: string }[]
+}
+
+export interface UpgradeReadinessCheck {
+  id: string
+  category: string
+  title: string
+  status: UpgradeReadinessCheckStatus
+  summary: string
+  caveat?: string
+  scope: string
+  inspected?: number
+  appliesFrom?: string
+  findings: UpgradeReadinessFinding[]
+  references?: { title: string; url: string }[]
 }
 
 export interface UpgradeReadinessResponse {
@@ -419,10 +434,14 @@ export interface UpgradeReadinessResponse {
   targetVersion: string
   reviewedThrough: string
   verdict: UpgradeReadinessVerdict
-  summary: { blockers: number; warnings: number; scanned: number }
-  findings: UpgradeReadinessFinding[]
-  coverage: { source: 'live'; state: 'complete' | 'partial' | 'no_access'; unavailableKinds?: string[] }
-  rulesEvaluated: { id: string; title: string; appliesFrom: string }[]
+  summary: { blocked: number; warnings: number; passed: number; unknown: number; notApplicable: number; findings: number }
+  checks: UpgradeReadinessCheck[]
+  coverage: {
+    source: 'live'
+    state: 'complete' | 'partial' | 'no_access'
+    unavailableKinds?: string[]
+    scopedNamespaces?: string[]
+  }
 }
 
 export interface DashboardCertificateHealth {

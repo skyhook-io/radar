@@ -1,6 +1,7 @@
 package upgradereadiness
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 
+	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -39,83 +41,963 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 	if !target.GreaterThan(current) {
 		return nil, ErrNonForwardTarget
 	}
-	reviewed := utilversion.MustParseGeneric(ReviewedThrough)
-
 	if input == nil {
 		input = &Input{}
 	}
-	index := newWorkloadIndex(input)
+
 	result := &ScanResults{
 		CurrentVersion:  minorString(current),
 		TargetVersion:   minorString(target),
 		ReviewedThrough: ReviewedThrough,
-		Findings:        []Finding{},
+		Checks:          []Check{},
 		Coverage: Coverage{
 			Source: "live",
 			State:  "complete",
 		},
-		RulesEvaluated: []RuleSummary{},
 	}
-
+	if input.Namespaces != nil {
+		result.Coverage.State = "partial"
+		result.Coverage.ScopedNamespaces = append([]string(nil), input.Namespaces...)
+		sort.Strings(result.Coverage.ScopedNamespaces)
+	}
 	result.Coverage.UnavailableKinds = unavailableKinds(input)
 	if len(result.Coverage.UnavailableKinds) > 0 {
 		result.Coverage.State = "partial"
 	}
 
-	for _, r := range catalog {
-		deprecatedIn := utilversion.MustParseGeneric(r.deprecatedIn)
-		appliesFrom := utilversion.MustParseGeneric(r.appliesFrom)
-		if target.LessThan(deprecatedIn) {
-			continue
-		}
-		result.RulesEvaluated = append(result.RulesEvaluated, RuleSummary{ID: r.id, Title: r.title, AppliesFrom: r.appliesFrom})
-		level := LevelWarning
-		if target.AtLeast(appliesFrom) {
-			level = LevelBlocker
-		}
-		result.Findings = append(result.Findings, r.scan(input, index, r, level)...)
+	index := newWorkloadIndex(input)
+	result.Checks = append(result.Checks,
+		scanUpgradePath(current, target),
+		scanDeprecatedAPIRequests(input, target),
+		scanManifestCompatibility(input, target),
+		scanNodeHealth(input),
+		scanKubeletSkew(input, target),
+		scanKubeProxySkew(input, target),
+	)
+
+	if target.AtLeast(utilversion.MustParseGeneric("1.36")) {
+		result.Checks = append(result.Checks,
+			scanGitRepo(input, index),
+			scanFlexVolume(input, index),
+			scanServiceExternalIPs(input),
+			scanRenamedMetrics(input),
+		)
 	}
 
-	sort.Slice(result.Findings, func(i, j int) bool {
-		if result.Findings[i].Level != result.Findings[j].Level {
-			return result.Findings[i].Level == LevelBlocker
+	for i := range result.Checks {
+		finalizeCheck(&result.Checks[i])
+		check := &result.Checks[i]
+		if check.Caveat != "" {
+			result.Coverage.State = "partial"
 		}
-		a, b := result.Findings[i].Resource, result.Findings[j].Resource
+		result.Summary.Findings += len(check.Findings)
+		switch check.Status {
+		case CheckBlocked:
+			result.Summary.Blocked++
+		case CheckWarning:
+			result.Summary.Warnings++
+		case CheckPassed:
+			result.Summary.Passed++
+		case CheckUnknown:
+			result.Summary.Unknown++
+		case CheckNotApplicable:
+			result.Summary.NotApplicable++
+		}
+	}
+
+	reviewed := utilversion.MustParseGeneric(ReviewedThrough)
+	switch {
+	case result.Summary.Blocked > 0:
+		result.Verdict = VerdictBlocked
+	case result.Summary.Warnings > 0:
+		result.Verdict = VerdictReview
+	case result.Summary.Unknown > 0 || target.GreaterThan(reviewed) || result.Coverage.State != "complete":
+		result.Verdict = VerdictUnknown
+	default:
+		result.Verdict = VerdictNoKnownBlockers
+	}
+
+	return result, nil
+}
+
+func scanUpgradePath(current, target *utilversion.Version) Check {
+	check := Check{
+		ID:         "control-plane-upgrade-path",
+		Category:   "Upgrade path",
+		Title:      "Control plane version sequence",
+		Status:     CheckPassed,
+		Summary:    "The target is the next Kubernetes minor version.",
+		Scope:      "Kubernetes control plane version policy",
+		References: append([]Reference(nil), versionSkewReferences...),
+	}
+	if target.Minor() <= current.Minor()+1 {
+		return check
+	}
+	path := make([]string, 0, target.Minor()-current.Minor()+1)
+	for minor := current.Minor(); minor <= target.Minor(); minor++ {
+		path = append(path, fmt.Sprintf("%d.%d", current.Major(), minor))
+	}
+	sequence := strings.Join(path, " → ")
+	check.Summary = "This target skips required Kubernetes minor-version upgrades."
+	check.Findings = []Finding{{
+		RuleID:      check.ID,
+		Title:       "Unsupported control plane version jump",
+		Level:       LevelBlocker,
+		Evidence:    Evidence{Source: "version policy", Path: "controlPlane", Detail: sequence},
+		AppliesFrom: minorString(target),
+		Impact:      "Kubernetes control planes must be upgraded one minor version at a time; skipping minors is unsupported.",
+		Remediation: "Plan the control plane upgrades in sequence: " + sequence + ". Re-run upgrade impact for each step.",
+		References:  append([]Reference(nil), versionSkewReferences...),
+	}}
+	return check
+}
+
+func finalizeCheck(check *Check) {
+	if check.Findings == nil {
+		check.Findings = []Finding{}
+	}
+	sort.Slice(check.Findings, func(i, j int) bool {
+		if check.Findings[i].Level != check.Findings[j].Level {
+			return check.Findings[i].Level == LevelBlocker
+		}
+		a, b := check.Findings[i].Resource, check.Findings[j].Resource
+		if a == nil || b == nil {
+			return check.Findings[i].Evidence.Path < check.Findings[j].Evidence.Path
+		}
 		if a.Namespace != b.Namespace {
 			return a.Namespace < b.Namespace
 		}
 		if a.Kind != b.Kind {
 			return a.Kind < b.Kind
 		}
-		if a.Name != b.Name {
-			return a.Name < b.Name
-		}
-		return result.Findings[i].Evidence.Path < result.Findings[j].Evidence.Path
+		return a.Name < b.Name
 	})
-
-	result.Summary.Scanned = countScanned(input, index)
-	for _, finding := range result.Findings {
+	for _, finding := range check.Findings {
 		if finding.Level == LevelBlocker {
-			result.Summary.Blockers++
-		} else {
-			result.Summary.Warnings++
+			check.Status = CheckBlocked
+			return
 		}
 	}
+	if len(check.Findings) > 0 {
+		check.Status = CheckWarning
+	}
+}
 
-	switch {
-	case result.Summary.Blockers > 0:
-		result.Verdict = VerdictBlocked
-	case target.GreaterThan(reviewed):
-		result.Verdict = VerdictUnknown
-	case result.Coverage.State != "complete":
-		result.Verdict = VerdictUnknown
-	case result.Summary.Warnings > 0:
-		result.Verdict = VerdictReview
-	default:
-		result.Verdict = VerdictNoKnownBlockers
+func scanDeprecatedAPIRequests(input *Input, target *utilversion.Version) Check {
+	check := Check{
+		ID:         "deprecated-api-requests",
+		Category:   "API compatibility",
+		Title:      "Removed API usage",
+		Status:     CheckUnknown,
+		Summary:    "No removed API requests were observed on the sampled API server replica, but this is not cluster-wide history.",
+		Scope:      "Kubernetes API server usage metrics",
+		Caveat:     "API usage metrics cover one API server replica since that process last restarted.",
+		References: append([]Reference(nil), manifestAPIReferences...),
+	}
+	if input.DeprecatedAPIRequests == nil {
+		check.Status = CheckUnknown
+		check.Summary = "API usage metrics are unavailable; Radar could not inspect deprecated API requests."
+		check.Caveat = ""
+		return check
+	}
+	check.Inspected = len(input.DeprecatedAPIRequests)
+	for _, request := range input.DeprecatedAPIRequests {
+		removed, err := parseMinor(request.RemovedRelease)
+		if err != nil || target.LessThan(removed) || request.Requests <= 0 {
+			continue
+		}
+		gv := request.Version
+		if request.Group != "" {
+			gv = request.Group + "/" + request.Version
+		}
+		path := gv + "/" + request.Resource
+		if request.Subresource != "" {
+			path += "/" + request.Subresource
+		}
+		check.Findings = append(check.Findings, Finding{
+			RuleID:      check.ID,
+			Title:       "API removed in Kubernetes " + minorString(removed),
+			Level:       LevelBlocker,
+			Evidence:    Evidence{Source: "apiserver metrics", Path: path, Detail: "observed on the sampled API server replica since its last restart"},
+			AppliesFrom: minorString(removed),
+			Impact:      "A client is still requesting an API that the target Kubernetes version no longer serves.",
+			Remediation: "Identify the client from audit logs or user-agent metrics, then migrate it to the replacement API before upgrading.",
+			References:  append([]Reference(nil), manifestAPIReferences...),
+		})
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d removed API request %s observed on the sampled API server replica.", len(check.Findings), plural(len(check.Findings), "series", "series"))
+	}
+	return check
+}
+
+func scanManifestCompatibility(input *Input, target *utilversion.Version) Check {
+	check := Check{
+		ID:         "manifest-api-compatibility",
+		Category:   "API compatibility",
+		Title:      "Deployment manifest APIs",
+		Status:     CheckPassed,
+		Summary:    "No incompatible API versions were found in readable source manifests.",
+		Scope:      "Helm release manifests and kubectl last-applied configuration",
+		References: append([]Reference(nil), manifestAPIReferences...),
+	}
+	if input.Namespaces != nil {
+		check.Caveat = scopedCoverageNote(input.Namespaces, "source manifests")
+		check.Summary = "No incompatible API versions were found in readable source manifests in the selected namespace scope."
+	}
+	helmManifestsAvailable := input.ManifestResources != nil
+	helmUnavailable := len(input.HelmUnavailableNamespaces) > 0
+	lastApplied := lastAppliedResources(input.SourceObjects)
+	resources := append([]ManifestResource(nil), input.ManifestResources...)
+	resources = append(resources, lastApplied...)
+	resources = dedupeManifestResources(resources)
+	check.Inspected = len(resources)
+	if len(resources) == 0 {
+		check.Status = CheckUnknown
+		switch {
+		case helmUnavailable:
+			check.Summary = "Stored Helm manifests were unavailable in some namespaces, and no other original manifests were available."
+		case !helmManifestsAvailable:
+			check.Summary = "Helm manifests were unavailable, and no kubectl last-applied manifests were available."
+		default:
+			check.Summary = "No original Helm or kubectl last-applied manifests were available to inspect."
+		}
+		return check
 	}
 
-	return result, nil
+	deprecations := bp.DeprecationsByGroupVersion()
+	for _, resource := range resources {
+		entries := deprecations[resource.APIVersion]
+		for _, entry := range entries {
+			if entry.Kind != "" && entry.Kind != resource.Kind {
+				continue
+			}
+			deprecated, depErr := parseMinor(entry.DeprecatedIn)
+			removed, remErr := parseMinor(entry.RemovedIn)
+			level := LevelWarning
+			appliesFrom := ""
+			impact := "This manifest uses an API deprecated by the target Kubernetes version."
+			if remErr == nil && target.AtLeast(removed) {
+				level = LevelBlocker
+				appliesFrom = minorString(removed)
+				impact = "A future Helm upgrade or GitOps reconciliation will fail because the target Kubernetes version no longer serves this API."
+			} else if depErr != nil || target.LessThan(deprecated) {
+				continue
+			} else {
+				appliesFrom = minorString(deprecated)
+			}
+
+			group := groupForAPIVersion(resource.APIVersion)
+			ref := &ResourceRef{Group: group, Kind: resource.Kind, Namespace: resource.Namespace, Name: resource.Name}
+			var managedBy *ResourceRef
+			if resource.Source == "Helm" {
+				managedBy = &ResourceRef{Kind: "HelmRelease", Namespace: resource.SourceNamespace, Name: resource.SourceName}
+			}
+			check.Findings = append(check.Findings, Finding{
+				RuleID:      check.ID,
+				Title:       resource.APIVersion + " " + resource.Kind,
+				Level:       level,
+				Resource:    ref,
+				ManagedBy:   managedBy,
+				Evidence:    Evidence{Source: resource.Source, Path: "apiVersion", Detail: resource.APIVersion},
+				AppliesFrom: appliesFrom,
+				Impact:      impact,
+				Remediation: "Update the source manifest to " + entry.Replacement + " and apply it before upgrading.",
+				References:  append([]Reference(nil), manifestAPIReferences...),
+			})
+		}
+	}
+	if !helmManifestsAvailable {
+		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests were unavailable; only kubectl last-applied configuration was inspected.")
+	} else if helmUnavailable {
+		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests could not be read in: "+strings.Join(input.HelmUnavailableNamespaces, ", ")+".")
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d source manifest %s an API affected by the target version.", len(check.Findings), plural(len(check.Findings), "uses", "use"))
+	} else if check.Caveat != "" {
+		check.Status = CheckUnknown
+		if input.Namespaces != nil {
+			check.Summary = fmt.Sprintf("No incompatible APIs were found in %d readable source %s in the selected namespace scope, but manifest coverage is incomplete.", len(resources), plural(len(resources), "manifest", "manifests"))
+		} else {
+			check.Summary = fmt.Sprintf("No incompatible APIs were found in %d readable source %s, but manifest coverage is incomplete.", len(resources), plural(len(resources), "manifest", "manifests"))
+		}
+	}
+	return check
+}
+
+func scanNodeHealth(input *Input) Check {
+	check := Check{
+		ID:       "node-health",
+		Category: "Cluster health",
+		Title:    "Node readiness",
+		Status:   CheckPassed,
+		Summary:  "All inspected nodes are Ready.",
+		Scope:    "Live Node Ready conditions",
+	}
+	if input.Nodes == nil || len(input.Nodes) == 0 {
+		check.Status = CheckUnknown
+		check.Summary = "Nodes are unavailable; Radar could not verify cluster health before the upgrade."
+		return check
+	}
+	check.Inspected = len(input.Nodes)
+	for _, node := range input.Nodes {
+		if node == nil || nodeReady(node) {
+			continue
+		}
+		ref := &ResourceRef{Kind: "Node", Name: node.Name}
+		check.Findings = append(check.Findings, Finding{
+			RuleID:      check.ID,
+			Title:       "Node is not Ready",
+			Level:       LevelWarning,
+			Resource:    ref,
+			Evidence:    Evidence{Source: "live", Path: "status.conditions[Ready]"},
+			Impact:      "Starting an upgrade while a node is unhealthy reduces capacity and makes disruption harder to distinguish from an existing failure.",
+			Remediation: "Restore the node to Ready or remove it from the cluster before starting the upgrade.",
+		})
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d node %s not Ready.", len(check.Findings), plural(len(check.Findings), "is", "are"))
+	}
+	return check
+}
+
+func scanKubeletSkew(input *Input, target *utilversion.Version) Check {
+	check := Check{
+		ID:         "kubelet-version-skew",
+		Category:   "Component compatibility",
+		Title:      "Kubelet version skew",
+		Status:     CheckPassed,
+		Summary:    "All inspected kubelets are supported by the target control plane.",
+		Scope:      "Node status kubelet versions",
+		References: append([]Reference(nil), versionSkewReferences...),
+	}
+	if input.Nodes == nil || len(input.Nodes) == 0 {
+		check.Status = CheckUnknown
+		check.Summary = "Nodes are unavailable; Radar could not validate kubelet version skew."
+		return check
+	}
+	check.Inspected = len(input.Nodes)
+	minimum := minimumComponentVersion(target)
+	unparsed := 0
+	for _, node := range input.Nodes {
+		if node == nil {
+			continue
+		}
+		version, err := parseMinor(node.Status.NodeInfo.KubeletVersion)
+		if err != nil {
+			unparsed++
+			continue
+		}
+		if version.LessThan(minimum) || version.GreaterThan(target) {
+			ref := &ResourceRef{Kind: "Node", Name: node.Name}
+			check.Findings = append(check.Findings, Finding{
+				RuleID:      check.ID,
+				Title:       "Unsupported kubelet " + minorString(version),
+				Level:       LevelBlocker,
+				Resource:    ref,
+				Evidence:    Evidence{Source: "live", Path: "status.nodeInfo.kubeletVersion", Detail: node.Status.NodeInfo.KubeletVersion},
+				AppliesFrom: minorString(target),
+				Impact:      fmt.Sprintf("Kubernetes %s supports kubelets from %s through %s.", minorString(target), minorString(minimum), minorString(target)),
+				Remediation: fmt.Sprintf("Upgrade this node's kubelet to at least Kubernetes %s before upgrading the control plane.", minorString(minimum)),
+				References:  append([]Reference(nil), versionSkewReferences...),
+			})
+		}
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d kubelet %s outside the supported skew for Kubernetes %s.", len(check.Findings), plural(len(check.Findings), "is", "are"), minorString(target))
+	}
+	if unparsed > 0 {
+		check.Caveat = fmt.Sprintf("The kubelet version could not be parsed on %d %s.", unparsed, plural(unparsed, "node", "nodes"))
+	}
+	if len(check.Findings) == 0 && unparsed > 0 {
+		check.Status = CheckUnknown
+		check.Summary = fmt.Sprintf("Radar could not parse the kubelet version on %d %s.", unparsed, plural(unparsed, "node", "nodes"))
+	}
+	return check
+}
+
+func scanKubeProxySkew(input *Input, target *utilversion.Version) Check {
+	check := Check{
+		ID:         "kube-proxy-version-skew",
+		Category:   "Component compatibility",
+		Title:      "kube-proxy version skew",
+		Status:     CheckPassed,
+		Summary:    "The detected kube-proxy version is supported by the target control plane.",
+		Scope:      "kube-proxy DaemonSet images",
+		References: append([]Reference(nil), versionSkewReferences...),
+	}
+	if input.DaemonSets == nil {
+		check.Status = CheckUnknown
+		check.Summary = "DaemonSets are unavailable; Radar could not inspect kube-proxy."
+		return check
+	}
+	if input.Namespaces != nil && !containsString(input.Namespaces, "kube-system") {
+		check.Status = CheckUnknown
+		check.Summary = "kube-proxy could not be inspected because kube-system is outside the current namespace scope."
+		return check
+	}
+	var proxies []*appsv1.DaemonSet
+	for _, daemonSet := range input.DaemonSets {
+		if daemonSet != nil && isKubeProxy(daemonSet) {
+			proxies = append(proxies, daemonSet)
+		}
+	}
+	if len(proxies) == 0 {
+		check.Status = CheckNotApplicable
+		check.Summary = "kube-proxy is provider-managed, replaced, or not exposed as a DaemonSet."
+		return check
+	}
+	check.Inspected = len(proxies)
+	minimum := minimumComponentVersion(target)
+	unparsed := 0
+	for _, daemonSet := range proxies {
+		version, image := kubeProxyVersion(daemonSet)
+		if version == nil {
+			unparsed++
+			continue
+		}
+		if version.LessThan(minimum) || version.GreaterThan(target) {
+			ref := &ResourceRef{Group: "apps", Kind: "DaemonSet", Namespace: daemonSet.Namespace, Name: daemonSet.Name}
+			check.Findings = append(check.Findings, Finding{
+				RuleID:      check.ID,
+				Title:       "Unsupported kube-proxy " + minorString(version),
+				Level:       LevelBlocker,
+				Resource:    ref,
+				Evidence:    Evidence{Source: "live", Path: "spec.template.spec.containers[].image", Detail: image},
+				AppliesFrom: minorString(target),
+				Impact:      fmt.Sprintf("Kubernetes %s supports kube-proxy versions from %s through %s.", minorString(target), minorString(minimum), minorString(target)),
+				Remediation: "Upgrade kube-proxy to a supported version as part of the cluster upgrade sequence.",
+				References:  append([]Reference(nil), versionSkewReferences...),
+			})
+		}
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d kube-proxy installation %s outside the supported skew.", len(check.Findings), plural(len(check.Findings), "is", "is"))
+	}
+	if unparsed > 0 {
+		check.Caveat = "The kube-proxy image version could not be determined for one or more installations."
+	}
+	if len(check.Findings) == 0 && unparsed > 0 {
+		check.Status = CheckUnknown
+		check.Summary = "Radar found kube-proxy but could not determine its Kubernetes version from the image."
+	}
+	return check
+}
+
+func scanGitRepo(input *Input, index *workloadIndex) Check {
+	check := Check{
+		ID:          "gitrepo-volume-removed",
+		Category:    "Workload configuration",
+		Title:       "gitRepo volume driver removal",
+		Status:      CheckPassed,
+		Summary:     "No live workload uses a gitRepo volume.",
+		Scope:       "Pod specs across seven workload kinds",
+		AppliesFrom: "1.36",
+		References:  append([]Reference(nil), gitRepoReferences...),
+	}
+	if input.Namespaces != nil {
+		check.Caveat = scopedCoverageNote(input.Namespaces, "live workloads")
+		check.Summary = "No inspected workload in the selected namespace scope uses a gitRepo volume."
+	}
+	subjects := workloadSubjects(input, index)
+	check.Inspected = len(subjects)
+	for _, subject := range subjects {
+		for i, volume := range subject.spec.Volumes {
+			if volume.GitRepo == nil {
+				continue
+			}
+			check.Findings = append(check.Findings, workloadFinding(subject, check, LevelBlocker,
+				fmt.Sprintf("%s.volumes[%d].gitRepo", subject.pathPrefix, i),
+				"Pods that reference a gitRepo volume cannot start because Kubernetes 1.36 no longer includes the driver.",
+				"Clone the repository into an emptyDir from an init container, then mount that emptyDir into the workload containers."))
+		}
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d workload %s the removed gitRepo volume driver.", len(check.Findings), plural(len(check.Findings), "uses", "use"))
+	}
+	if workloadsUnavailable(input) {
+		check.Caveat = appendCaveat(check.Caveat, "One or more workload kinds were unavailable, so additional gitRepo usage may exist.")
+	}
+	if len(check.Findings) == 0 && workloadsUnavailable(input) {
+		check.Status = CheckUnknown
+		check.Summary = "Workload coverage is incomplete; gitRepo volume usage could not be ruled out."
+	}
+	return check
+}
+
+func scanFlexVolume(input *Input, index *workloadIndex) Check {
+	check := Check{
+		ID:          "flexvolume-kubeadm-support",
+		Category:    "Storage",
+		Title:       "FlexVolume upgrade exposure",
+		Status:      CheckPassed,
+		Summary:     "No FlexVolume usage was found in inspected workloads or PersistentVolumes.",
+		Scope:       "Pod specs and PersistentVolume sources",
+		AppliesFrom: "1.36",
+		References:  append([]Reference(nil), changelog136References...),
+	}
+	if managedControlPlane(input) {
+		check.Status = CheckNotApplicable
+		check.Summary = "The Kubernetes 1.36 FlexVolume change is specific to kubeadm-managed control planes."
+		return check
+	}
+	if input.Namespaces != nil {
+		check.Caveat = scopedCoverageNote(input.Namespaces, "live workloads")
+		check.Summary = "No FlexVolume usage was found in workloads in the selected namespace scope or inspected PersistentVolumes."
+	}
+	subjects := workloadSubjects(input, index)
+	check.Inspected = len(subjects) + countNonNil(input.PersistentVolumes)
+	for _, subject := range subjects {
+		for i, volume := range subject.spec.Volumes {
+			if volume.FlexVolume == nil {
+				continue
+			}
+			check.Findings = append(check.Findings, workloadFinding(subject, check, LevelWarning,
+				fmt.Sprintf("%s.volumes[%d].flexVolume", subject.pathPrefix, i),
+				"Kubernetes 1.36 removes kubeadm's integrated FlexVolume setup; kubeadm-managed clusters need explicit controller-manager configuration.",
+				"Migrate the volume to a CSI driver, or verify the required custom kube-controller-manager image, flag, and mount before upgrading."))
+		}
+	}
+	for _, volume := range input.PersistentVolumes {
+		if volume == nil || volume.Spec.FlexVolume == nil {
+			continue
+		}
+		ref := &ResourceRef{Kind: "PersistentVolume", Name: volume.Name}
+		check.Findings = append(check.Findings, Finding{
+			RuleID:      check.ID,
+			Title:       check.Title,
+			Level:       LevelWarning,
+			Resource:    ref,
+			Evidence:    Evidence{Source: "live", Path: "spec.flexVolume"},
+			AppliesFrom: check.AppliesFrom,
+			Impact:      "Kubernetes 1.36 removes kubeadm's integrated FlexVolume setup; kubeadm-managed clusters need explicit controller-manager configuration.",
+			Remediation: "Migrate this volume to CSI, or verify the kubeadm FlexVolume compatibility steps before upgrading.",
+			References:  append([]Reference(nil), check.References...),
+		})
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d FlexVolume reference %s manual review for Kubernetes 1.36.", len(check.Findings), plural(len(check.Findings), "needs", "need"))
+	}
+	if workloadsUnavailable(input) || input.PersistentVolumes == nil {
+		check.Caveat = appendCaveat(check.Caveat, "Workload or PersistentVolume coverage is incomplete, so additional FlexVolume usage may exist.")
+	}
+	if len(check.Findings) == 0 && (workloadsUnavailable(input) || input.PersistentVolumes == nil) {
+		check.Status = CheckUnknown
+		check.Summary = "Workload or PersistentVolume coverage is incomplete; FlexVolume usage could not be ruled out."
+	}
+	return check
+}
+
+func managedControlPlane(input *Input) bool {
+	if strings.EqualFold(input.Platform, "gke-autopilot") {
+		return true
+	}
+	for _, node := range input.Nodes {
+		if node == nil {
+			continue
+		}
+		labels := node.GetLabels()
+		if _, ok := labels["cloud.google.com/gke-nodepool"]; ok {
+			return true
+		}
+		if _, ok := labels["cloud.google.com/gke-os-distribution"]; ok {
+			return true
+		}
+		if _, ok := labels["eks.amazonaws.com/nodegroup"]; ok {
+			return true
+		}
+		if _, ok := labels["eks.amazonaws.com/capacityType"]; ok {
+			return true
+		}
+		for label := range labels {
+			if strings.HasPrefix(label, "kubernetes.azure.com/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func scanServiceExternalIPs(input *Input) Check {
+	check := Check{
+		ID:          "service-externalips-deprecated",
+		Category:    "Networking",
+		Title:       "Service externalIPs deprecation",
+		Status:      CheckPassed,
+		Summary:     "No Service uses spec.externalIPs.",
+		Scope:       "Live Services",
+		AppliesFrom: "1.36",
+		References:  append([]Reference(nil), externalIPReferences...),
+	}
+	if input.Namespaces != nil {
+		check.Caveat = scopedCoverageNote(input.Namespaces, "Services")
+		check.Summary = "No inspected Service in the selected namespace scope uses spec.externalIPs."
+	}
+	if input.Services == nil {
+		check.Status = CheckUnknown
+		check.Summary = "Services are unavailable; Radar could not inspect spec.externalIPs."
+		return check
+	}
+	check.Inspected = countNonNil(input.Services)
+	for _, service := range input.Services {
+		if service == nil || len(service.Spec.ExternalIPs) == 0 {
+			continue
+		}
+		ref := &ResourceRef{Kind: "Service", Namespace: service.Namespace, Name: service.Name}
+		check.Findings = append(check.Findings, Finding{
+			RuleID:      check.ID,
+			Title:       check.Title,
+			Level:       LevelWarning,
+			Resource:    ref,
+			ManagedBy:   managedByRef(service, *ref),
+			Evidence:    Evidence{Source: "live", Path: "spec.externalIPs", Detail: strings.Join(service.Spec.ExternalIPs, ", ")},
+			AppliesFrom: check.AppliesFrom,
+			Impact:      "Kubernetes 1.36 deprecates this insecure Service field and plans to disable its behavior in a future release.",
+			Remediation: "Move this exposure to a LoadBalancer Service, Gateway API, or another implementation with explicit administrative control.",
+			References:  append([]Reference(nil), externalIPReferences...),
+		})
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d Service %s deprecated spec.externalIPs.", len(check.Findings), plural(len(check.Findings), "uses", "use"))
+	}
+	return check
+}
+
+func scanRenamedMetrics(input *Input) Check {
+	check := Check{
+		ID:          "renamed-control-plane-metrics",
+		Category:    "Observability",
+		Title:       "Renamed Kubernetes metrics",
+		Status:      CheckPassed,
+		Summary:     "No inspected PrometheusRule references a metric renamed in Kubernetes 1.36.",
+		Scope:       "Prometheus Operator rule expressions",
+		AppliesFrom: "1.36",
+		References:  append([]Reference(nil), changelog136References...),
+	}
+	if !input.PrometheusRulesDiscoveryAvailable {
+		check.Status = CheckUnknown
+		check.Summary = "API discovery is unavailable; Radar could not determine whether PrometheusRule is installed."
+		return check
+	}
+	if !input.PrometheusRulesInstalled {
+		check.Status = CheckNotApplicable
+		check.Summary = "PrometheusRule is not installed in this cluster."
+		return check
+	}
+	if input.Namespaces != nil {
+		check.Caveat = scopedCoverageNote(input.Namespaces, "PrometheusRules")
+		check.Summary = "No inspected PrometheusRule in the selected namespace scope references a metric renamed in Kubernetes 1.36."
+	}
+	if len(input.PrometheusRuleUnavailableNamespaces) > 0 {
+		check.Caveat = appendCaveat(check.Caveat, "PrometheusRules could not be read in: "+strings.Join(input.PrometheusRuleUnavailableNamespaces, ", ")+".")
+	}
+	if input.PrometheusRules == nil {
+		check.Status = CheckUnknown
+		if check.Caveat != "" {
+			check.Summary = "PrometheusRules are installed but unavailable in the current namespace scope."
+		} else {
+			check.Summary = "PrometheusRules are installed but unavailable to Radar."
+		}
+		return check
+	}
+	check.Inspected = len(input.PrometheusRules)
+	renamed := map[string]string{
+		"volume_operation_total_errors": "volume_operation_errors_total",
+		"etcd_bookmark_counts":          "etcd_bookmark_total",
+	}
+	for _, rule := range input.PrometheusRules {
+		if rule == nil {
+			continue
+		}
+		expressions := prometheusRuleExpressions(rule.Object)
+		for oldName, newName := range renamed {
+			if !containsMetric(expressions, oldName) {
+				continue
+			}
+			ref := &ResourceRef{Group: "monitoring.coreos.com", Kind: "PrometheusRule", Namespace: rule.GetNamespace(), Name: rule.GetName()}
+			check.Findings = append(check.Findings, Finding{
+				RuleID:      check.ID,
+				Title:       oldName + " was renamed",
+				Level:       LevelWarning,
+				Resource:    ref,
+				Evidence:    Evidence{Source: "live", Path: "spec.groups[].rules[].expr", Detail: oldName},
+				AppliesFrom: check.AppliesFrom,
+				Impact:      "This alert or recording rule will stop receiving data after the metric rename in Kubernetes 1.36.",
+				Remediation: "Replace " + oldName + " with " + newName + " in the rule expression before upgrading.",
+				References:  append([]Reference(nil), changelog136References...),
+			})
+		}
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d PrometheusRule %s a metric renamed in Kubernetes 1.36.", len(check.Findings), plural(len(check.Findings), "references", "references"))
+	} else if check.Caveat != "" {
+		check.Status = CheckUnknown
+		if input.Namespaces != nil {
+			check.Summary = "No renamed metrics were found in readable PrometheusRules in the selected namespace scope, but rule coverage is incomplete."
+		} else {
+			check.Summary = "No renamed metrics were found in readable PrometheusRules, but rule coverage is incomplete."
+		}
+	}
+	return check
+}
+
+type podSpecSubject struct {
+	obj        metav1.Object
+	resource   ResourceRef
+	spec       corev1.PodSpec
+	pathPrefix string
+}
+
+func workloadSubjects(input *Input, index *workloadIndex) []podSpecSubject {
+	var subjects []podSpecSubject
+	for _, pod := range input.Pods {
+		if pod != nil && !index.podCoveredByScannedWorkload(pod) {
+			subjects = append(subjects, podSpecSubject{obj: pod, resource: ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, spec: pod.Spec, pathPrefix: "spec"})
+		}
+	}
+	for _, deployment := range input.Deployments {
+		if deployment != nil {
+			subjects = append(subjects, podSpecSubject{obj: deployment, resource: ResourceRef{Group: "apps", Kind: "Deployment", Namespace: deployment.Namespace, Name: deployment.Name}, spec: deployment.Spec.Template.Spec, pathPrefix: "spec.template.spec"})
+		}
+	}
+	for _, replicaSet := range input.ReplicaSets {
+		if replicaSet != nil && !index.replicaSetCoveredByDeployment(replicaSet) {
+			subjects = append(subjects, podSpecSubject{obj: replicaSet, resource: ResourceRef{Group: "apps", Kind: "ReplicaSet", Namespace: replicaSet.Namespace, Name: replicaSet.Name}, spec: replicaSet.Spec.Template.Spec, pathPrefix: "spec.template.spec"})
+		}
+	}
+	for _, statefulSet := range input.StatefulSets {
+		if statefulSet != nil {
+			subjects = append(subjects, podSpecSubject{obj: statefulSet, resource: ResourceRef{Group: "apps", Kind: "StatefulSet", Namespace: statefulSet.Namespace, Name: statefulSet.Name}, spec: statefulSet.Spec.Template.Spec, pathPrefix: "spec.template.spec"})
+		}
+	}
+	for _, daemonSet := range input.DaemonSets {
+		if daemonSet != nil {
+			subjects = append(subjects, podSpecSubject{obj: daemonSet, resource: ResourceRef{Group: "apps", Kind: "DaemonSet", Namespace: daemonSet.Namespace, Name: daemonSet.Name}, spec: daemonSet.Spec.Template.Spec, pathPrefix: "spec.template.spec"})
+		}
+	}
+	for _, job := range input.Jobs {
+		if job != nil && !index.jobCoveredByCronJob(job) {
+			subjects = append(subjects, podSpecSubject{obj: job, resource: ResourceRef{Group: "batch", Kind: "Job", Namespace: job.Namespace, Name: job.Name}, spec: job.Spec.Template.Spec, pathPrefix: "spec.template.spec"})
+		}
+	}
+	for _, cronJob := range input.CronJobs {
+		if cronJob != nil {
+			subjects = append(subjects, podSpecSubject{obj: cronJob, resource: ResourceRef{Group: "batch", Kind: "CronJob", Namespace: cronJob.Namespace, Name: cronJob.Name}, spec: cronJob.Spec.JobTemplate.Spec.Template.Spec, pathPrefix: "spec.jobTemplate.spec.template.spec"})
+		}
+	}
+	return subjects
+}
+
+func workloadFinding(subject podSpecSubject, check Check, level Level, path, impact, remediation string) Finding {
+	resource := subject.resource
+	return Finding{
+		RuleID:      check.ID,
+		Title:       check.Title,
+		Level:       level,
+		Resource:    &resource,
+		ManagedBy:   managedByRef(subject.obj, resource),
+		Evidence:    Evidence{Source: "live", Path: path},
+		AppliesFrom: check.AppliesFrom,
+		Impact:      impact,
+		Remediation: remediation,
+		References:  append([]Reference(nil), check.References...),
+	}
+}
+
+func managedByRef(obj metav1.Object, resource ResourceRef) *ResourceRef {
+	refs := topology.SynthesizeManagedBy(obj, resource.Kind, resource.Namespace, resource.Name, nil, nil, nil)
+	if len(refs) == 0 {
+		return nil
+	}
+	ref := refs[0]
+	return &ResourceRef{Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
+}
+
+func lastAppliedResources(objects []metav1.Object) []ManifestResource {
+	const annotation = "kubectl.kubernetes.io/last-applied-configuration"
+	var resources []ManifestResource
+	for _, object := range objects {
+		if object == nil {
+			continue
+		}
+		raw := object.GetAnnotations()[annotation]
+		if raw == "" {
+			continue
+		}
+		var manifest struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Metadata   struct {
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			} `json:"metadata"`
+		}
+		if json.Unmarshal([]byte(raw), &manifest) != nil || manifest.APIVersion == "" || manifest.Kind == "" {
+			continue
+		}
+		if manifest.Metadata.Name == "" {
+			manifest.Metadata.Name = object.GetName()
+		}
+		if manifest.Metadata.Namespace == "" {
+			manifest.Metadata.Namespace = object.GetNamespace()
+		}
+		resources = append(resources, ManifestResource{
+			APIVersion: manifest.APIVersion,
+			Kind:       manifest.Kind,
+			Namespace:  manifest.Metadata.Namespace,
+			Name:       manifest.Metadata.Name,
+			Source:     "kubectl last-applied",
+		})
+	}
+	return resources
+}
+
+func dedupeManifestResources(resources []ManifestResource) []ManifestResource {
+	seen := make(map[string]bool)
+	result := make([]ManifestResource, 0, len(resources))
+	for _, resource := range resources {
+		key := strings.Join([]string{resource.APIVersion, resource.Kind, resource.Namespace, resource.Name}, "\x00")
+		if resource.APIVersion == "" || resource.Kind == "" || resource.Name == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, resource)
+	}
+	return result
+}
+
+func nodeReady(node *corev1.Node) bool {
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == corev1.NodeReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+func minimumComponentVersion(target *utilversion.Version) *utilversion.Version {
+	minor := target.Minor()
+	if minor > 3 {
+		minor -= 3
+	} else {
+		minor = 0
+	}
+	return utilversion.MajorMinor(target.Major(), minor)
+}
+
+func isKubeProxy(daemonSet *appsv1.DaemonSet) bool {
+	return daemonSet.Name == "kube-proxy" || daemonSet.Labels["k8s-app"] == "kube-proxy" || daemonSet.Labels["component"] == "kube-proxy"
+}
+
+var imageVersionPattern = regexp.MustCompile(`(?:^|[:@/])v?(\d+\.\d+)(?:\.\d+)?(?:[-+@]|$)`)
+
+func kubeProxyVersion(daemonSet *appsv1.DaemonSet) (*utilversion.Version, string) {
+	for _, container := range daemonSet.Spec.Template.Spec.Containers {
+		if container.Name != "kube-proxy" && len(daemonSet.Spec.Template.Spec.Containers) > 1 {
+			continue
+		}
+		match := imageVersionPattern.FindStringSubmatch(container.Image)
+		if len(match) != 2 {
+			return nil, container.Image
+		}
+		version, err := parseMinor(match[1])
+		if err != nil {
+			return nil, container.Image
+		}
+		return version, container.Image
+	}
+	return nil, ""
+}
+
+func prometheusRuleExpressions(object map[string]any) []string {
+	groups, _, _ := nestedSlice(object, "spec", "groups")
+	var expressions []string
+	for _, group := range groups {
+		groupMap, _ := group.(map[string]any)
+		rules, _ := groupMap["rules"].([]any)
+		for _, rule := range rules {
+			ruleMap, _ := rule.(map[string]any)
+			if expr, ok := ruleMap["expr"].(string); ok {
+				expressions = append(expressions, expr)
+			}
+		}
+	}
+	return expressions
+}
+
+func nestedSlice(object map[string]any, fields ...string) ([]any, bool, error) {
+	current := any(object)
+	for _, field := range fields {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil, false, nil
+		}
+		current, ok = m[field]
+		if !ok {
+			return nil, false, nil
+		}
+	}
+	value, ok := current.([]any)
+	return value, ok, nil
+}
+
+func containsMetric(expressions []string, metric string) bool {
+	pattern := regexp.MustCompile(`(^|[^a-zA-Z0-9_:])` + regexp.QuoteMeta(metric) + `([^a-zA-Z0-9_:]|$)`)
+	for _, expression := range expressions {
+		if pattern.MatchString(expression) {
+			return true
+		}
+	}
+	return false
+}
+
+func workloadsUnavailable(input *Input) bool {
+	return input.Pods == nil || input.Deployments == nil || input.ReplicaSets == nil || input.StatefulSets == nil || input.DaemonSets == nil || input.Jobs == nil || input.CronJobs == nil
+}
+
+func scopedCoverageNote(namespaces []string, subject string) string {
+	names := append([]string(nil), namespaces...)
+	sort.Strings(names)
+	label, verb := "namespace", "was"
+	if len(names) != 1 {
+		label, verb = "namespaces", "were"
+	}
+	return fmt.Sprintf("Only %s %s %s inspected for %s.", label, strings.Join(names, ", "), verb, subject)
+}
+
+func appendCaveat(existing, addition string) string {
+	if existing == "" {
+		return addition
+	}
+	if addition == "" {
+		return existing
+	}
+	return existing + " " + addition
+}
+
+func unavailableKinds(input *Input) []string {
+	var unavailable []string
+	checks := []struct {
+		name      string
+		available bool
+	}{
+		{"pods", input.Pods != nil},
+		{"deployments", input.Deployments != nil},
+		{"replicasets", input.ReplicaSets != nil},
+		{"statefulsets", input.StatefulSets != nil},
+		{"daemonsets", input.DaemonSets != nil},
+		{"jobs", input.Jobs != nil},
+		{"cronjobs", input.CronJobs != nil},
+		{"services", input.Services != nil},
+		{"persistentvolumes", input.PersistentVolumes != nil},
+		{"nodes", input.Nodes != nil},
+	}
+	for _, item := range checks {
+		if !item.available {
+			unavailable = append(unavailable, item.name)
+		}
+	}
+	return unavailable
 }
 
 var targetMinorPattern = regexp.MustCompile(`^v?\d+\.\d+$`)
@@ -141,50 +1023,28 @@ func minorString(v *utilversion.Version) string {
 	return fmt.Sprintf("%d.%d", v.Major(), v.Minor())
 }
 
-func unavailableKinds(input *Input) []string {
-	var unavailable []string
-	if input.Pods == nil {
-		unavailable = append(unavailable, "pods")
+func groupForAPIVersion(apiVersion string) string {
+	group, _, ok := strings.Cut(apiVersion, "/")
+	if !ok {
+		return ""
 	}
-	if input.Deployments == nil {
-		unavailable = append(unavailable, "deployments")
-	}
-	if input.ReplicaSets == nil {
-		unavailable = append(unavailable, "replicasets")
-	}
-	if input.StatefulSets == nil {
-		unavailable = append(unavailable, "statefulsets")
-	}
-	if input.DaemonSets == nil {
-		unavailable = append(unavailable, "daemonsets")
-	}
-	if input.Jobs == nil {
-		unavailable = append(unavailable, "jobs")
-	}
-	if input.CronJobs == nil {
-		unavailable = append(unavailable, "cronjobs")
-	}
-	return unavailable
+	return group
 }
 
-func countScanned(input *Input, index *workloadIndex) int {
-	count := countNonNil(input.Deployments) + countNonNil(input.StatefulSets) + countNonNil(input.DaemonSets) + countNonNil(input.CronJobs)
-	for _, replicaSet := range input.ReplicaSets {
-		if replicaSet != nil && !index.replicaSetCoveredByDeployment(replicaSet) {
-			count++
+func plural(count int, singular, plural string) string {
+	if count == 1 {
+		return singular
+	}
+	return plural
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
 		}
 	}
-	for _, pod := range input.Pods {
-		if pod != nil && !index.podCoveredByScannedWorkload(pod) {
-			count++
-		}
-	}
-	for _, job := range input.Jobs {
-		if job != nil && !index.jobCoveredByCronJob(job) {
-			count++
-		}
-	}
-	return count
+	return false
 }
 
 func countNonNil[T any](items []*T) int {
@@ -195,90 +1055,6 @@ func countNonNil[T any](items []*T) int {
 		}
 	}
 	return count
-}
-
-func scanGitRepo(input *Input, index *workloadIndex, r rule, level Level) []Finding {
-	var findings []Finding
-	for _, pod := range input.Pods {
-		if pod == nil || index.podCoveredByScannedWorkload(pod) {
-			continue
-		}
-		findings = append(findings, gitRepoFindings(pod, "Pod", "", pod.Namespace, pod.Name, pod.Spec, "spec", r, level)...)
-	}
-	for _, deployment := range input.Deployments {
-		if deployment == nil {
-			continue
-		}
-		findings = append(findings, gitRepoFindings(deployment, "Deployment", "apps", deployment.Namespace, deployment.Name, deployment.Spec.Template.Spec, "spec.template.spec", r, level)...)
-	}
-	for _, replicaSet := range input.ReplicaSets {
-		if replicaSet == nil || index.replicaSetCoveredByDeployment(replicaSet) {
-			continue
-		}
-		findings = append(findings, gitRepoFindings(replicaSet, "ReplicaSet", "apps", replicaSet.Namespace, replicaSet.Name, replicaSet.Spec.Template.Spec, "spec.template.spec", r, level)...)
-	}
-	for _, statefulSet := range input.StatefulSets {
-		if statefulSet == nil {
-			continue
-		}
-		findings = append(findings, gitRepoFindings(statefulSet, "StatefulSet", "apps", statefulSet.Namespace, statefulSet.Name, statefulSet.Spec.Template.Spec, "spec.template.spec", r, level)...)
-	}
-	for _, daemonSet := range input.DaemonSets {
-		if daemonSet == nil {
-			continue
-		}
-		findings = append(findings, gitRepoFindings(daemonSet, "DaemonSet", "apps", daemonSet.Namespace, daemonSet.Name, daemonSet.Spec.Template.Spec, "spec.template.spec", r, level)...)
-	}
-	for _, job := range input.Jobs {
-		if job == nil || index.jobCoveredByCronJob(job) {
-			continue
-		}
-		findings = append(findings, gitRepoFindings(job, "Job", "batch", job.Namespace, job.Name, job.Spec.Template.Spec, "spec.template.spec", r, level)...)
-	}
-	for _, cronJob := range input.CronJobs {
-		if cronJob == nil {
-			continue
-		}
-		findings = append(findings, gitRepoFindings(cronJob, "CronJob", "batch", cronJob.Namespace, cronJob.Name, cronJob.Spec.JobTemplate.Spec.Template.Spec, "spec.jobTemplate.spec.template.spec", r, level)...)
-	}
-	return findings
-}
-
-func gitRepoFindings(obj metav1.Object, kind, group, namespace, name string, spec corev1.PodSpec, pathPrefix string, r rule, level Level) []Finding {
-	var findings []Finding
-	resource := ResourceRef{Group: group, Kind: kind, Namespace: namespace, Name: name}
-	managedBy := managedByRef(obj, resource)
-	for i, volume := range spec.Volumes {
-		if volume.GitRepo == nil {
-			continue
-		}
-		impact := r.impact
-		if level == LevelWarning {
-			impact = r.warningImpact
-		}
-		findings = append(findings, Finding{
-			RuleID:      r.id,
-			Title:       r.title,
-			Level:       level,
-			Resource:    resource,
-			ManagedBy:   managedBy,
-			Evidence:    Evidence{Source: "live", Path: fmt.Sprintf("%s.volumes[%d].gitRepo", pathPrefix, i)},
-			AppliesFrom: r.appliesFrom,
-			Impact:      impact,
-			Remediation: r.remediation,
-			References:  append([]Reference(nil), r.references...),
-		})
-	}
-	return findings
-}
-
-func managedByRef(obj metav1.Object, resource ResourceRef) *ResourceRef {
-	refs := topology.SynthesizeManagedBy(obj, resource.Kind, resource.Namespace, resource.Name, nil, nil, nil)
-	if len(refs) == 0 {
-		return nil
-	}
-	ref := refs[0]
-	return &ResourceRef{Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
 }
 
 type workloadKey struct {
@@ -381,9 +1157,9 @@ func ownerKey(owner *metav1.OwnerReference, namespace string) (workloadKey, bool
 }
 
 func controllerOwner(refs []metav1.OwnerReference) *metav1.OwnerReference {
-	for _, ref := range refs {
-		if ref.Controller != nil && *ref.Controller {
-			return &ref
+	for i := range refs {
+		if refs[i].Controller != nil && *refs[i].Controller {
+			return &refs[i]
 		}
 	}
 	return nil
