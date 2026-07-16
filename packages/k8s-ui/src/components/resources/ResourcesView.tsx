@@ -131,6 +131,7 @@ import {
   serializeColumnFilters,
   parseColumnFilterInverts,
   serializeColumnFilterInverts,
+  reconcileColumnFilterInverts,
   podMatchesProblemCategory,
   SEVERITY_DOT_COLOR,
 } from './resource-utils'
@@ -2103,7 +2104,10 @@ function getInitialFiltersFromURL() {
   const params = new URLSearchParams(window.location.search)
   // Parse generic column filters
   const columnFilters = parseColumnFilters(params.get('filters'))
-  const columnFilterInverts = parseColumnFilterInverts(params.get('filterInvert'))
+  const columnFilterInverts = reconcileColumnFilterInverts(
+    parseColumnFilterInverts(params.get('filterInvert')),
+    columnFilters,
+  )
   const result = {
     search: params.get('search') || '',
     regex: params.get('regex') === 'true',

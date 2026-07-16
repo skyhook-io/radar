@@ -1886,6 +1886,22 @@ export function serializeColumnFilterInverts(inverts: Record<string, boolean>): 
     .join(',')
 }
 
+// An invert flag is only meaningful for a column that has selected values.
+// Drop lone flags (e.g. from a hand-edited or stale URL) so they can't lie
+// dormant and flip matching to negated the moment values are added.
+export function reconcileColumnFilterInverts(
+  inverts: Record<string, boolean>,
+  filters: Record<string, string[]>,
+): Record<string, boolean> {
+  const result: Record<string, boolean> = {}
+  for (const key of Object.keys(inverts)) {
+    if (inverts[key] && filters[key]?.length) {
+      result[key] = true
+    }
+  }
+  return result
+}
+
 export function getCellFilterValue(resource: any, column: string, kind: string): string {
   try {
   const kindLower = kind.toLowerCase()

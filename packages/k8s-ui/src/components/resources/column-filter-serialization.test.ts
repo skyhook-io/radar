@@ -4,6 +4,7 @@ import {
   serializeColumnFilters,
   parseColumnFilterInverts,
   serializeColumnFilterInverts,
+  reconcileColumnFilterInverts,
 } from './resource-utils'
 
 describe('column filter serialization round-trip', () => {
@@ -51,5 +52,27 @@ describe('column filter invert serialization round-trip', () => {
     expect(parseColumnFilterInverts('')).toEqual({})
     expect(parseColumnFilterInverts(null)).toEqual({})
     expect(serializeColumnFilterInverts({})).toBe('')
+  })
+})
+
+describe('reconcileColumnFilterInverts', () => {
+  it('keeps invert flags for columns that have selected values', () => {
+    const inverts = { status: true, namespace: true }
+    const filters = { status: ['Running'], namespace: ['default'] }
+    expect(reconcileColumnFilterInverts(inverts, filters)).toEqual(inverts)
+  })
+
+  it('drops orphan flags for columns with no selected values', () => {
+    const inverts = { status: true, namespace: true }
+    const filters = { status: ['Running'] }
+    expect(reconcileColumnFilterInverts(inverts, filters)).toEqual({ status: true })
+  })
+
+  it('drops a flag whose column has an empty values array', () => {
+    expect(reconcileColumnFilterInverts({ status: true }, { status: [] })).toEqual({})
+  })
+
+  it('returns an empty object when there are no filters', () => {
+    expect(reconcileColumnFilterInverts({ status: true }, {})).toEqual({})
   })
 })
