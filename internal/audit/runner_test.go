@@ -3,6 +3,7 @@ package audit
 import (
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -31,5 +32,20 @@ func TestListNamespacedFiltersBatchResources(t *testing.T) {
 	}}, []string{"target"})
 	if len(cronJobs) != 1 || cronJobs[0].Name != "keep-cronjob" {
 		t.Fatalf("expected only target namespace CronJob, got %#v", cronJobs)
+	}
+}
+
+func TestListNamespacedFiltersReplicaSetsAndUnknownTypesFailClosed(t *testing.T) {
+	replicaSets := listNamespaced(&testLister[appsv1.ReplicaSet]{items: []*appsv1.ReplicaSet{
+		{ObjectMeta: metav1.ObjectMeta{Name: "keep", Namespace: "target"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "drop", Namespace: "other"}},
+	}}, []string{"target"})
+	if len(replicaSets) != 1 || replicaSets[0].Name != "keep" {
+		t.Fatalf("expected only target namespace ReplicaSet, got %#v", replicaSets)
+	}
+
+	unknown := listNamespaced(&testLister[string]{items: []*string{new(string)}}, []string{"target"})
+	if len(unknown) != 0 {
+		t.Fatalf("unknown object type must fail closed, got %#v", unknown)
 	}
 }

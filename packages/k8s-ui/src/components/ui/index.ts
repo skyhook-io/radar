@@ -1,4 +1,6 @@
 export { Tooltip, WithTooltip } from './Tooltip'
+export { Badge } from './Badge'
+export type { BadgeSeverity, BadgeSize, BadgeTone } from './Badge'
 export { FreshnessControl } from './FreshnessControl'
 export type { FreshnessMode, FreshnessConnection } from './FreshnessControl'
 export { PaneLoader } from './PaneLoader'

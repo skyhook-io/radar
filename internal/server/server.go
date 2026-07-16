@@ -448,6 +448,7 @@ func (s *Server) setupRoutes() {
 			// Cluster audit
 			r.Get("/audit", s.handleAudit)
 			r.Get("/audit/resource/{kind}/{namespace}/{name}", s.handleAuditResource)
+			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
 
 			// Packages — merged "what's installed" view across Helm
 			// releases, workload labels, CRD registrations, and GitOps

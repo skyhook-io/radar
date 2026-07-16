@@ -18,9 +18,9 @@ var (
 	serverVersionMu     sync.Mutex
 )
 
-// getServerVersion returns the cached Kubernetes server version.
+// GetServerVersion returns the cached Kubernetes server version.
 // The version is fetched once and cached for the lifetime of the context.
-func getServerVersion() string {
+func GetServerVersion() string {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
 	serverVersionOnce.Do(func() {
@@ -67,7 +67,7 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	}
 
 	// Get version info (cached — only fetched once per context)
-	info.KubernetesVersion = getServerVersion()
+	info.KubernetesVersion = GetServerVersion()
 
 	// Get counts from cache (listers may be nil when RBAC restricts access)
 	cache := GetResourceCache()

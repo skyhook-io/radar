@@ -3,13 +3,8 @@ package audit
 import (
 	"log"
 
-	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
-	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,23 +27,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
 	}
 
-	input := &bp.CheckInput{
-		Pods:                     listNamespaced(cache.Pods(), namespaces),
-		Deployments:              listNamespaced(cache.Deployments(), namespaces),
-		StatefulSets:             listNamespaced(cache.StatefulSets(), namespaces),
-		DaemonSets:               listNamespaced(cache.DaemonSets(), namespaces),
-		Jobs:                     listNamespaced(cache.Jobs(), namespaces),
-		CronJobs:                 listNamespaced(cache.CronJobs(), namespaces),
-		Services:                 listNamespaced(cache.Services(), namespaces),
-		Ingresses:                listNamespaced(cache.Ingresses(), namespaces),
-		HorizontalPodAutoscalers: listNamespaced(cache.HorizontalPodAutoscalers(), namespaces),
-		PodDisruptionBudgets:     listNamespaced(cache.PodDisruptionBudgets(), namespaces),
-		ConfigMaps:               listNamespaced(cache.ConfigMaps(), namespaces),
-		Secrets:                  listNamespaced(cache.Secrets(), namespaces),
-		ServiceAccounts:          listNamespaced(cache.ServiceAccounts(), namespaces),
-		ServiceAccountsNamespace: serviceAccountScopeNamespace(),
-		LimitRanges:              listNamespaced(cache.LimitRanges(), namespaces),
-	}
+	input := collectTypedInput(cache, namespaces)
 	input.GitOpsToolsPresent, input.ArgoAppNames = gitOpsRoots()
 
 	if opts != nil {
@@ -87,6 +66,31 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	}
 
 	return bp.RunChecks(input)
+}
+
+func collectTypedInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {
+	input := collectWorkloadInput(cache, namespaces)
+	input.Services = listNamespaced(cache.Services(), namespaces)
+	input.Ingresses = listNamespaced(cache.Ingresses(), namespaces)
+	input.HorizontalPodAutoscalers = listNamespaced(cache.HorizontalPodAutoscalers(), namespaces)
+	input.PodDisruptionBudgets = listNamespaced(cache.PodDisruptionBudgets(), namespaces)
+	input.ConfigMaps = listNamespaced(cache.ConfigMaps(), namespaces)
+	input.Secrets = listNamespaced(cache.Secrets(), namespaces)
+	input.ServiceAccounts = listNamespaced(cache.ServiceAccounts(), namespaces)
+	input.ServiceAccountsNamespace = serviceAccountScopeNamespace()
+	input.LimitRanges = listNamespaced(cache.LimitRanges(), namespaces)
+	return input
+}
+
+func collectWorkloadInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {
+	return &bp.CheckInput{
+		Pods:         listNamespaced(cache.Pods(), namespaces),
+		Deployments:  listNamespaced(cache.Deployments(), namespaces),
+		StatefulSets: listNamespaced(cache.StatefulSets(), namespaces),
+		DaemonSets:   listNamespaced(cache.DaemonSets(), namespaces),
+		Jobs:         listNamespaced(cache.Jobs(), namespaces),
+		CronJobs:     listNamespaced(cache.CronJobs(), namespaces),
+	}
 }
 
 // listCrossplaneDynamic enumerates the dynamic cache's already-watching
@@ -349,46 +353,23 @@ func listNamespaced[T any, L lister[T]](l L, namespaces []string) []*T {
 	}
 	filtered := []*T{}
 	for _, item := range all {
-		if ns := extractNamespace(item); ns == "" || nsSet[ns] {
+		ns, ok := extractNamespace(item)
+		if !ok {
+			continue
+		}
+		if ns == "" || nsSet[ns] {
 			filtered = append(filtered, item)
 		}
 	}
 	return filtered
 }
 
-// extractNamespace uses type assertions for known types to get namespace.
-func extractNamespace(obj any) string {
-	switch v := obj.(type) {
-	case *corev1.Pod:
-		return v.Namespace
-	case *appsv1.Deployment:
-		return v.Namespace
-	case *appsv1.StatefulSet:
-		return v.Namespace
-	case *appsv1.DaemonSet:
-		return v.Namespace
-	case *batchv1.Job:
-		return v.Namespace
-	case *batchv1.CronJob:
-		return v.Namespace
-	case *corev1.Service:
-		return v.Namespace
-	case *networkingv1.Ingress:
-		return v.Namespace
-	case *autoscalingv2.HorizontalPodAutoscaler:
-		return v.Namespace
-	case *policyv1.PodDisruptionBudget:
-		return v.Namespace
-	case *corev1.ConfigMap:
-		return v.Namespace
-	case *corev1.Secret:
-		return v.Namespace
-	case *corev1.ServiceAccount:
-		return v.Namespace
-	case *corev1.LimitRange:
-		return v.Namespace
+func extractNamespace(obj any) (string, bool) {
+	metadata, ok := obj.(metav1.Object)
+	if !ok {
+		return "", false
 	}
-	return ""
+	return metadata.GetNamespace(), true
 }
 
 // gitOpsRoots reports whether the cluster actually does GitOps — at least one
