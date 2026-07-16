@@ -1837,7 +1837,11 @@ export function parseColumnFilters(filtersParam: string | null): Record<string, 
   const filters: Record<string, string[]> = {}
   for (const pair of filtersParam.split('|')) {
     const parsed = parseColumnFilterPair(pair)
-    if (parsed) filters[parsed.key] = parsed.values
+    // Guard the dynamic write: the key comes from the URL, so reject the
+    // prototype-polluting names right at the assignment (js/remote-property-injection).
+    if (parsed && parsed.key !== '__proto__' && parsed.key !== 'prototype' && parsed.key !== 'constructor') {
+      filters[parsed.key] = parsed.values
+    }
   }
   return filters
 }
@@ -1868,7 +1872,14 @@ export function parseColumnFilterExcludes(filtersParam: string | null): Record<s
   const excludes: Record<string, boolean> = {}
   for (const pair of filtersParam.split('|')) {
     const parsed = parseColumnFilterPair(pair)
-    if (parsed && parsed.exclude && parsed.values.length) excludes[parsed.key] = true
+    // Guard the dynamic write against prototype-polluting keys from the URL
+    // right at the assignment (js/remote-property-injection).
+    if (
+      parsed && parsed.exclude && parsed.values.length &&
+      parsed.key !== '__proto__' && parsed.key !== 'prototype' && parsed.key !== 'constructor'
+    ) {
+      excludes[parsed.key] = true
+    }
   }
   return excludes
 }
