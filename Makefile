@@ -48,7 +48,7 @@ backend:
 # Build frontend (auto-installs deps if needed)
 frontend:
 	@echo "Building frontend..."
-	@test -d web/node_modules || (echo "Installing npm dependencies..." && cd web && npm install)
+	@test -f node_modules/typescript-7/bin/tsc || (echo "Installing npm dependencies..." && npm install)
 	cd web && npm run build
 
 # Copy built frontend to embed directory
@@ -115,12 +115,12 @@ kill:
 deps:
 	go mod download
 	go mod tidy
-	cd web && npm install
+	npm install
 
 # Install dev tools
 install-tools:
 	go install github.com/air-verse/air@latest
-	cd web && npm install
+	npm install
 
 # Clean build artifacts
 clean:

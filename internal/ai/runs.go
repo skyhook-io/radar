@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -281,17 +280,6 @@ func (m *RunManager) loadPersisted() {
 		m.order = append(m.order, r.ID)
 	}
 	m.evictLocked() // the retention cap may have shrunk since the DB was written
-}
-
-// pidAlive reports whether a process exists (signal 0; EPERM still means
-// alive). PID reuse is theoretically possible but irrelevant at this scale —
-// a false "alive" only delays crash repair until the next boot.
-func pidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // newRunID mints a process-independent id. Random (not a counter) because

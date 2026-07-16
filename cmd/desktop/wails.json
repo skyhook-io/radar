@@ -3,7 +3,7 @@
   "name": "radar-desktop",
   "outputfilename": "Radar",
   "frontend:dir": "../../web",
-  "frontend:install": "npm install",
+  "frontend:install": "npm --prefix .. install",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",

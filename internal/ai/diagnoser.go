@@ -28,7 +28,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -389,15 +388,9 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	}
 	defer cleanup()
 
-	// Process-group lifecycle is agent-agnostic: kill the whole group on cancel so
-	// no child agent process outlives the run.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return nil
-	}
+	// Process lifecycle is agent-agnostic. The platform helper kills the whole
+	// process group/tree on cancel so no child agent process outlives the run.
+	configureProcessLifecycle(cmd)
 	cmd.WaitDelay = 5 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

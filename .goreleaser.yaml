@@ -6,7 +6,7 @@ version: 2
 before:
   hooks:
     # Build frontend before Go compilation (gets embedded)
-    - sh -c "cd web && npm install && npm run build"
+    - sh -c "npm ci && npm --workspace web run build"
     # Clean stale files from previous builds before copying fresh output
     - sh -c "rm -rf internal/static/dist && mkdir -p internal/static/dist"
     - sh -c "cp -r web/dist/* internal/static/dist/"
