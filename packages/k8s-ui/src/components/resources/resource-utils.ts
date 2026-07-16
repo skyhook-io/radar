@@ -1863,6 +1863,29 @@ export function serializeColumnFilters(filters: Record<string, string[]>): strin
   return result
 }
 
+// Which columns have their filter inverted (show non-matching rows). Serialized
+// as a comma-separated list of URI-encoded column keys; keys are encoded so a
+// custom-column key's own comma or colon (e.g. "label:tier") survives.
+export function parseColumnFilterInverts(param: string | null): Record<string, boolean> {
+  if (!param) return {}
+  const inverts: Record<string, boolean> = {}
+  for (const raw of param.split(',')) {
+    const trimmed = raw.trim()
+    if (!trimmed) continue
+    let key: string
+    try { key = decodeURIComponent(trimmed) } catch { key = trimmed }
+    if (key) inverts[key] = true
+  }
+  return inverts
+}
+
+export function serializeColumnFilterInverts(inverts: Record<string, boolean>): string {
+  return Object.entries(inverts)
+    .filter(([, on]) => on)
+    .map(([k]) => encodeURIComponent(k))
+    .join(',')
+}
+
 export function getCellFilterValue(resource: any, column: string, kind: string): string {
   try {
   const kindLower = kind.toLowerCase()
