@@ -29,6 +29,8 @@ interface TooltipProps {
   className?: string
   /** Whether tooltip is disabled */
   disabled?: boolean
+  /** Keep the wrapper mounted while disabled when child layout measurement requires stable DOM ancestry. */
+  preserveWrapperWhenDisabled?: boolean
   /** Additional class for the wrapper span (useful for positioning) */
   wrapperClassName?: string
   /** Inline styles for the wrapper span (useful for absolute positioning) */
@@ -42,6 +44,7 @@ export function Tooltip({
   position = 'top',
   className,
   disabled = false,
+  preserveWrapperWhenDisabled = false,
   wrapperClassName,
   wrapperStyle,
 }: TooltipProps) {
@@ -98,6 +101,9 @@ export function Tooltip({
     if (hideTimeoutRef.current) {
       clearTimeout(hideTimeoutRef.current)
       hideTimeoutRef.current = null
+    }
+    if (activeHide === hideRef.current) {
+      activeHide = null
     }
     setIsVisible(false)
     setCoords(null)
@@ -194,16 +200,7 @@ export function Tooltip({
   // pointer-events-none and never fires mouseleave.
   useEffect(() => {
     if (disabled) {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current)
-        timeoutRef.current = null
-      }
-      if (hideTimeoutRef.current) {
-        clearTimeout(hideTimeoutRef.current)
-        hideTimeoutRef.current = null
-      }
-      setIsVisible(false)
-      setCoords(null)
+      hideRef.current()
     }
   }, [disabled])
 
@@ -224,7 +221,7 @@ export function Tooltip({
     }
   }, [isVisible])
 
-  if (disabled || !content) {
+  if ((disabled && !preserveWrapperWhenDisabled) || !content) {
     return <>{children}</>
   }
 
@@ -245,7 +242,7 @@ export function Tooltip({
       >
         {children}
       </span>
-      {isVisible &&
+      {isVisible && !disabled &&
         createPortal(
           <span
             ref={tooltipRef}

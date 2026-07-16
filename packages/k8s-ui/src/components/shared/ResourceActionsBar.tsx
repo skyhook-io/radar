@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   RefreshCw,
   Terminal,
@@ -848,6 +848,35 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
 // REVISION HISTORY DIALOG
 // ============================================================================
 
+function RevisionImage({ image, displayImage }: { image: string; displayImage: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [isTruncated, setIsTruncated] = useState(false)
+
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+
+    const measure = () => setIsTruncated(element.scrollWidth > element.clientWidth)
+    measure()
+
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [displayImage])
+
+  return (
+    <Tooltip
+      content={image}
+      delay={300}
+      disabled={!isTruncated}
+      preserveWrapperWhenDisabled
+      wrapperClassName="w-full min-w-0"
+    >
+      <span ref={ref} className="block truncate">{displayImage}</span>
+    </Tooltip>
+  )
+}
+
 export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, revisions, isLoading, error, onRollback, isRollingBack }: {
   kind: string
   namespace: string
@@ -908,10 +937,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
       open={open}
       onClose={handleClose}
       closable={!isRollingBack}
-      className={clsx(
-        "flex flex-col",
-        diffRevision ? "max-w-5xl w-full max-h-[85vh]" : "max-w-lg w-full"
-      )}
+      className="flex max-h-[85vh] w-[calc(100vw-2rem)] max-w-5xl flex-col"
     >
       <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
         <div className="flex items-center gap-2">
@@ -924,17 +950,20 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
             </span>
           )}
         </div>
-        <button
-          onClick={handleClose}
-          disabled={isRollingBack}
-          className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
-        >
-          <X className="w-5 h-5" />
-        </button>
+        <Tooltip content="Close" delay={150}>
+          <button
+            onClick={handleClose}
+            disabled={isRollingBack}
+            aria-label="Close revision history"
+            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </Tooltip>
       </div>
 
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <div className={clsx("p-4 overflow-y-auto", diffRevision ? "max-h-48 shrink-0" : "max-h-80")}>
+        <div className={clsx("min-h-0 overflow-x-hidden overflow-y-auto p-4", diffRevision ? "max-h-48 shrink-0" : "max-h-[65vh]")}>
           {isLoading && (
             <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
               Loading revisions…
@@ -954,7 +983,13 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
           )}
 
           {revisions && revisions.length > 0 && (
-            <table className="w-full text-sm">
+            <table className="w-full table-fixed text-sm">
+              <colgroup>
+                <col className="w-16" />
+                <col />
+                <col className="w-24" />
+                <col className="w-44" />
+              </colgroup>
               <thead>
                 <tr className="text-theme-text-secondary text-left text-xs uppercase tracking-wider">
                   <th className="pb-2 pr-3 font-medium">Rev</th>
@@ -975,17 +1010,15 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                     <td className="py-2 pr-3 text-theme-text-primary font-mono">
                       #{rev.number}
                     </td>
-                    <td className="py-2 pr-3 text-theme-text-secondary font-mono max-w-[180px]">
-                      <Tooltip content={rev.image} delay={300} wrapperClassName="min-w-0">
-                        <span className="truncate">{getImageTag(rev.image)}</span>
-                      </Tooltip>
+                    <td className="min-w-0 py-2 pr-3 text-theme-text-secondary font-mono">
+                      <RevisionImage image={rev.image} displayImage={getImageTag(rev.image)} />
                     </td>
                     <td className="py-2 pr-3 text-theme-text-secondary whitespace-nowrap">
                       {formatTimeAgo(rev.createdAt)}
                     </td>
                     <td className="py-2 text-right">
                       <div className="flex items-center gap-1 justify-end">
-                        {!rev.isCurrent && rev.template && currentRevision?.template && (
+                        {!rev.isCurrent && confirmRevision !== rev.number && rev.template && currentRevision?.template && (
                           <Tooltip content="Compare with current revision" delay={150}>
                             <button
                               onClick={() => setDiffRevision(diffRevision === rev.number ? null : rev.number)}
