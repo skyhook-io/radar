@@ -47,8 +47,24 @@ export const CORE_RESOURCES: APIResource[] = [
   { group: 'scheduling.k8s.io', version: 'v1', kind: 'PriorityClass', name: 'priorityclasses', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'node.k8s.io', version: 'v1', kind: 'RuntimeClass', name: 'runtimeclasses', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'coordination.k8s.io', version: 'v1', kind: 'Lease', name: 'leases', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'storage.k8s.io', version: 'v1', kind: 'StorageClass', name: 'storageclasses', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'storage.k8s.io', version: 'v1', kind: 'VolumeAttachment', name: 'volumeattachments', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
 ]
+
+export function findAPIResourceForRoute(
+  resources: APIResource[] | undefined,
+  routeSlug: string,
+  group = '',
+): APIResource | undefined {
+  const matchesRoute = (resource: APIResource) =>
+    resource.name === routeSlug || resource.kind === routeSlug
+  if (group) {
+    return resources?.find(r => matchesRoute(r) && r.group === group)
+      ?? CORE_RESOURCES.find(r => matchesRoute(r) && r.group === group)
+  }
+  return CORE_RESOURCES.find(matchesRoute)
+    ?? resources?.find(matchesRoute)
+}
 
 // Resources that should be hidden from the sidebar
 const HIDDEN_KINDS = ['PodMetrics', 'NodeMetrics']

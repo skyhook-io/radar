@@ -1,5 +1,40 @@
 import { describe, expect, it } from 'vitest'
-import { categorizeResources, formatGroupName, shortenGroupName } from './api-resources'
+import { categorizeResources, findAPIResourceForRoute, formatGroupName, shortenGroupName } from './api-resources'
+
+describe('findAPIResourceForRoute', () => {
+  const resources = [
+    { group: 'metrics.k8s.io', version: 'v1beta1', kind: 'PodMetrics', name: 'pods', namespaced: true, isCrd: false, verbs: ['get'] },
+  ]
+
+  it('prefers the canonical core resource when a discovered API has the same plural name', () => {
+    expect(findAPIResourceForRoute(resources, 'pods')?.kind).toBe('Pod')
+  })
+
+  it('respects an explicit API group for a colliding resource', () => {
+    expect(findAPIResourceForRoute(resources, 'pods', 'metrics.k8s.io')?.kind).toBe('PodMetrics')
+  })
+
+  it('resolves a discovered resource without a core collision', () => {
+    const crd = { group: 'example.io', version: 'v1', kind: 'Widget', name: 'widgets', namespaced: true, isCrd: true, verbs: ['list'] }
+    expect(findAPIResourceForRoute([crd], 'widgets')).toBe(crd)
+  })
+
+  it('resolves core resources before discovery loads', () => {
+    expect(findAPIResourceForRoute(undefined, 'pods')?.kind).toBe('Pod')
+  })
+
+  it('falls back to an exact built-in API group before discovery loads', () => {
+    expect(findAPIResourceForRoute(undefined, 'storageclasses', 'storage.k8s.io')).toMatchObject({
+      kind: 'StorageClass',
+      namespaced: false,
+    })
+  })
+
+  it('supports the legacy Kind route form without weakening group matching', () => {
+    expect(findAPIResourceForRoute(undefined, 'Pod')?.name).toBe('pods')
+    expect(findAPIResourceForRoute(undefined, 'Pod', 'metrics.k8s.io')).toBeUndefined()
+  })
+})
 
 describe('formatGroupName', () => {
   it('uses friendly names for common CRD groups seen in clusters', () => {

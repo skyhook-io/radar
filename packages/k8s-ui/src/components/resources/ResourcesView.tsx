@@ -33,7 +33,7 @@ import { ResourceBar } from '../ui/ResourceBar'
 import type { SelectedResource, APIResource } from '../../types'
 import { isForbiddenError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
-import { categorizeResources, CORE_RESOURCES } from '../../utils/api-resources'
+import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute } from '../../utils/api-resources'
 import {
   getPodStatus,
   getPodRestarts,
@@ -2036,13 +2036,9 @@ function getInitialKindFromURL(
   }
   const group = new URLSearchParams(search).get('apiGroup') || ''
   if (kind) {
-    // Find matching resource from CORE_RESOURCES or use as-is
-    // Only match core resources when no apiGroup is specified (avoids collisions like KNative Service)
-    if (!group) {
-      const coreMatch = CORE_RESOURCES.find(r => r.kind === kind || r.name === kind)
-      if (coreMatch) {
-        return { name: coreMatch.name, kind: coreMatch.kind, group: coreMatch.group }
-      }
+    const coreMatch = findAPIResourceForRoute(undefined, kind, group)
+    if (coreMatch) {
+      return { name: coreMatch.name, kind: coreMatch.kind, group: coreMatch.group }
     }
     return { name: kind, kind: kind, group }
   }

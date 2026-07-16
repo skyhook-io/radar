@@ -3,7 +3,7 @@ import type { APIResource } from '../types'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from './config'
 
 // Re-export pure functions from package
-export { categorizeResources, CORE_RESOURCES, formatGroupName, shortenGroupName, getKindLabel, getKindPlural } from '@skyhook-io/k8s-ui'
+export { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute, formatGroupName, shortenGroupName, getKindLabel, getKindPlural } from '@skyhook-io/k8s-ui'
 export type { ResourceCategory } from '@skyhook-io/k8s-ui'
 
 async function fetchJSON<T>(path: string): Promise<T> {

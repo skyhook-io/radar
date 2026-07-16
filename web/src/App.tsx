@@ -11,7 +11,7 @@ import { useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useAPIResources, CORE_RESOURCES } from './api/apiResources'
+import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
 import { ResourcesView } from './components/resources/ResourcesView'
 import { serializeColumnFilters } from './components/resources/resource-utils'
@@ -61,7 +61,7 @@ import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog } from './components/settings/SettingsDialog'
-import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
+import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { kindToPlural, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource } from './utils/navigation'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -150,7 +150,8 @@ function getViewFromPath(pathname: string): ExtendedMainView {
 function namespaceFilterDisabled(
   view: ExtendedMainView,
   pathname: string,
-  apiResources?: { name: string; kind: string; namespaced: boolean }[],
+  search = '',
+  apiResources?: APIResource[],
 ): { disabled: boolean; tooltip?: string } {
   if (
     view === 'cost' &&
@@ -170,7 +171,8 @@ function namespaceFilterDisabled(
   }
   if (view === 'resources') {
     const kindSlug = segments[1]
-    const match = kindSlug ? apiResources?.find(r => r.name === kindSlug) : undefined
+    const group = new URLSearchParams(search).get('apiGroup') || ''
+    const match = kindSlug ? findAPIResourceForRoute(apiResources, kindSlug, group) : undefined
     if (match && !match.namespaced) {
       return {
         disabled: true,
@@ -185,7 +187,7 @@ function namespaceFilterDisabled(
 // correct regardless of which component renders it. A detail drawer that opens
 // over a list (?resource=…) is deliberately NOT titled — it's the same page, so
 // it keeps the list's title.
-function radarPageTitle(pathname: string, search = '', apiResources?: { name: string; kind: string; group?: string }[]): string | null {
+function radarPageTitle(pathname: string, search = '', apiResources?: APIResource[]): string | null {
   const decode = (s: string) => {
     try {
       return decodeURIComponent(s)
@@ -196,7 +198,7 @@ function radarPageTitle(pathname: string, search = '', apiResources?: { name: st
   const capitalize = (text: string) =>
     text ? text.charAt(0).toUpperCase() + text.slice(1) : text
   const pluralKindTitle = (kind: string, resourceName: string) =>
-    kind.toLowerCase() === resourceName.toLowerCase() ? kind : englishPlural(kind)
+    kind.toLowerCase() === resourceName.toLowerCase() || /Metrics$/.test(kind) ? kind : englishPlural(kind)
   const pathSegments = pathname.replace(/^\//, '').split('/').filter(Boolean)
   const view = getViewFromPath(pathname)
 
@@ -207,7 +209,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: { name: st
   if (view === 'resources') {
     const resourceName = decode(pathSegments[1] ?? '')
     if (!resourceName) return 'Resources'
-    const match = apiResources?.find((r) => r.name === resourceName)
+    const group = new URLSearchParams(search).get('apiGroup') || ''
+    const match = findAPIResourceForRoute(apiResources, resourceName, group)
     return pluralKindTitle(match?.kind ?? pluralToKind(resourceName), resourceName)
   }
   // GitOps detail is /gitops/detail/<kind>/<ns>/<name> → the resource name;
@@ -387,10 +390,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // View-aware namespace scope: disabled on cluster-scoped surfaces so the
   // chip isn't a dead control next to the cluster switcher.
-  // Fall back to the static core-resource list before discovery loads, so the
-  // chip disables immediately on a cluster-scoped core kind (Nodes, PVs, …)
-  // instead of flickering enabled until /api-resources resolves.
-  const namespaceFilter = namespaceFilterDisabled(mainView, location.pathname, navApiResources ?? CORE_RESOURCES)
+  const namespaceFilter = namespaceFilterDisabled(mainView, location.pathname, location.search, navApiResources)
 
   // One URL-derived tab title for every view (see radarPageTitle). Driving it
   // from the URL — not the mounted component. Off unless the host opts in
