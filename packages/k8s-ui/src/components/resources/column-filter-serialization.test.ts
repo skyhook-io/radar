@@ -85,4 +85,12 @@ describe('column filter include/exclude operator', () => {
     expect(parseColumnFilterExcludes(null)).toEqual({})
     expect(serializeColumnFilters({})).toBe('')
   })
+
+  it('ignores prototype-polluting keys from a crafted param', () => {
+    const parsed = parseColumnFilters('__proto__:Running|constructor:x|status:Running')
+    expect(parsed).toEqual({ status: ['Running'] })
+    expect(Object.prototype.hasOwnProperty.call(parsed, '__proto__')).toBe(false)
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    expect(parseColumnFilterExcludes('__proto__:exclude:Running')).toEqual({})
+  })
 })

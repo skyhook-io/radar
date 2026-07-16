@@ -1889,6 +1889,10 @@ function parseColumnFilterPair(
   let key: string
   try { key = decodeURIComponent(rawKey) } catch { key = rawKey }
   if (!key) return null
+  // Guard against prototype-pollution: the key becomes an object property name
+  // downstream, and it comes straight from the URL. Reject the well-known
+  // dangerous names so a crafted `filters` param can't touch the prototype.
+  if (key === '__proto__' || key === 'prototype' || key === 'constructor') return null
 
   let exclude = false
   const opIdx = rest.indexOf(':')

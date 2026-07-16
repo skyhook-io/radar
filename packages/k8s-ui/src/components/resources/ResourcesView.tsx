@@ -2582,6 +2582,12 @@ export function ResourcesView({
       delete next[key]
       return next
     })
+    setColumnFilterExcludes(prev => {
+      if (!(key in prev)) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
     if (sortColumn === key) {
       setSortColumn(null)
       setSortDirection(null)
@@ -5997,11 +6003,13 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
           <button
             onClick={(e) => {
               e.stopPropagation()
-              // Merge node filter into existing column filters via URL
+              // Merge node filter into existing column filters via URL,
+              // preserving any exclude operators already set on other columns.
               const params = new URLSearchParams(window.location.search)
               const existing = parseColumnFilters(params.get('filters'))
+              const existingExcludes = parseColumnFilterExcludes(params.get('filters'))
               existing['node'] = [nodeVal]
-              params.set('filters', serializeColumnFilters(existing))
+              params.set('filters', serializeColumnFilters(existing, existingExcludes))
               navigate?.(`/resources/pods?${params.toString()}`)
             }}
             className="text-sm text-blue-400 hover:text-blue-300 hover:underline truncate block text-left"
