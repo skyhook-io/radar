@@ -2,9 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseColumnFilters,
   serializeColumnFilters,
-  parseColumnFilterInverts,
-  serializeColumnFilterInverts,
-  reconcileColumnFilterInverts,
+  parseColumnFilterExcludes,
 } from './resource-utils'
 
 describe('column filter serialization round-trip', () => {
@@ -29,50 +27,62 @@ describe('column filter serialization round-trip', () => {
   it('parses legacy unencoded built-in keys', () => {
     expect(parseColumnFilters('status:Running')).toEqual({ status: ['Running'] })
   })
-})
 
-describe('column filter invert serialization round-trip', () => {
-  it('round-trips inverted built-in keys', () => {
-    const inverts = { status: true, namespace: true }
-    expect(parseColumnFilterInverts(serializeColumnFilterInverts(inverts))).toEqual(inverts)
-  })
-
-  it('drops false entries', () => {
-    expect(serializeColumnFilterInverts({ status: true, namespace: false })).toBe('status')
-  })
-
-  it('encodes custom-column keys whose comma would collide with the delimiter', () => {
-    const inverts = { 'label:tier,zone': true }
-    const serialized = serializeColumnFilterInverts(inverts)
-    expect(serialized).toBe('label%3Atier%2Czone')
-    expect(parseColumnFilterInverts(serialized)).toEqual(inverts)
-  })
-
-  it('returns an empty object for empty/absent params', () => {
-    expect(parseColumnFilterInverts('')).toEqual({})
-    expect(parseColumnFilterInverts(null)).toEqual({})
-    expect(serializeColumnFilterInverts({})).toBe('')
+  it('treats a two-part filter as implicit include (no excludes)', () => {
+    expect(parseColumnFilterExcludes('status:Running')).toEqual({})
   })
 })
 
-describe('reconcileColumnFilterInverts', () => {
-  it('keeps invert flags for columns that have selected values', () => {
-    const inverts = { status: true, namespace: true }
-    const filters = { status: ['Running'], namespace: ['default'] }
-    expect(reconcileColumnFilterInverts(inverts, filters)).toEqual(inverts)
+describe('column filter include/exclude operator', () => {
+  it('serializes excluded columns with the explicit exclude operator', () => {
+    const filters = { status: ['Running', 'Completed'], namespace: ['default'] }
+    const excludes = { status: true }
+    expect(serializeColumnFilters(filters, excludes)).toBe(
+      'status:exclude:Running,Completed|namespace:default'
+    )
   })
 
-  it('drops orphan flags for columns with no selected values', () => {
-    const inverts = { status: true, namespace: true }
-    const filters = { status: ['Running'] }
-    expect(reconcileColumnFilterInverts(inverts, filters)).toEqual({ status: true })
+  it('round-trips values through an excluded column', () => {
+    const filters = { status: ['Running', 'Completed'] }
+    const serialized = serializeColumnFilters(filters, { status: true })
+    expect(parseColumnFilters(serialized)).toEqual(filters)
+    expect(parseColumnFilterExcludes(serialized)).toEqual({ status: true })
   })
 
-  it('drops a flag whose column has an empty values array', () => {
-    expect(reconcileColumnFilterInverts({ status: true }, { status: [] })).toEqual({})
+  it('parses the explicit include operator as non-excluded', () => {
+    expect(parseColumnFilters('namespace:include:default')).toEqual({ namespace: ['default'] })
+    expect(parseColumnFilterExcludes('namespace:include:default')).toEqual({})
   })
 
-  it('returns an empty object when there are no filters', () => {
-    expect(reconcileColumnFilterInverts({ status: true }, {})).toEqual({})
+  it('keeps a value literally named "exclude" in the two-part form', () => {
+    expect(parseColumnFilters('reason:exclude')).toEqual({ reason: ['exclude'] })
+    expect(parseColumnFilterExcludes('reason:exclude')).toEqual({})
+  })
+
+  it('handles a value literally named "exclude" under the exclude operator', () => {
+    const serialized = serializeColumnFilters({ reason: ['exclude'] }, { reason: true })
+    expect(serialized).toBe('reason:exclude:exclude')
+    expect(parseColumnFilters(serialized)).toEqual({ reason: ['exclude'] })
+    expect(parseColumnFilterExcludes(serialized)).toEqual({ reason: true })
+  })
+
+  it('does not emit an operator for an excluded column with no values', () => {
+    expect(serializeColumnFilters({ status: [] }, { status: true })).toBe('')
+    expect(parseColumnFilterExcludes('')).toEqual({})
+  })
+
+  it('preserves the exclude operator for custom-column keys', () => {
+    const filters = { 'label:tier': ['control-plane'] }
+    const serialized = serializeColumnFilters(filters, { 'label:tier': true })
+    expect(serialized).toBe('label%3Atier:exclude:control-plane')
+    expect(parseColumnFilters(serialized)).toEqual(filters)
+    expect(parseColumnFilterExcludes(serialized)).toEqual({ 'label:tier': true })
+  })
+
+  it('returns empty structures for empty/absent params', () => {
+    expect(parseColumnFilters('')).toEqual({})
+    expect(parseColumnFilters(null)).toEqual({})
+    expect(parseColumnFilterExcludes(null)).toEqual({})
+    expect(serializeColumnFilters({})).toBe('')
   })
 })

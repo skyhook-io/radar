@@ -129,9 +129,7 @@ import {
   getCellFilterValue,
   parseColumnFilters,
   serializeColumnFilters,
-  parseColumnFilterInverts,
-  serializeColumnFilterInverts,
-  reconcileColumnFilterInverts,
+  parseColumnFilterExcludes,
   podMatchesProblemCategory,
   SEVERITY_DOT_COLOR,
 } from './resource-utils'
@@ -2103,16 +2101,14 @@ export function deriveSidebarResourceCounts(
 function getInitialFiltersFromURL() {
   const params = new URLSearchParams(window.location.search)
   // Parse generic column filters
-  const columnFilters = parseColumnFilters(params.get('filters'))
-  const columnFilterInverts = reconcileColumnFilterInverts(
-    parseColumnFilterInverts(params.get('filterInvert')),
-    columnFilters,
-  )
+  const filtersParam = params.get('filters')
+  const columnFilters = parseColumnFilters(filtersParam)
+  const columnFilterExcludes = parseColumnFilterExcludes(filtersParam)
   const result = {
     search: params.get('search') || '',
     regex: params.get('regex') === 'true',
     columnFilters,
-    columnFilterInverts,
+    columnFilterExcludes,
     problemFilters: params.get('problems')?.split(',').filter(Boolean) || [],
     showInactive: params.get('showInactive') === 'true',
     labelSelector: params.get('labels') || '', // e.g., "app=caretta,version=v1"
@@ -2196,7 +2192,7 @@ export function ResourcesView({
   const [sortDirection, setSortDirection] = useState<SortDirection>(null)
   // Filter state
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
-  const [columnFilterInverts, setColumnFilterInverts] = useState<Record<string, boolean>>(initialFilters.columnFilterInverts)
+  const [columnFilterExcludes, setColumnFilterExcludes] = useState<Record<string, boolean>>(initialFilters.columnFilterExcludes)
   const [problemFilters, setProblemFilters] = useState<string[]>(initialFilters.problemFilters)
   const [openColumnFilter, setOpenColumnFilter] = useState<string | null>(null)
   const [columnFilterSearch, setColumnFilterSearch] = useState('')
@@ -2246,7 +2242,7 @@ export function ResourcesView({
       delete next[key]
       return next
     })
-    setColumnFilterInverts(prev => {
+    setColumnFilterExcludes(prev => {
       if (!prev[key]) return prev
       const next = { ...prev }
       delete next[key]
@@ -2254,13 +2250,14 @@ export function ResourcesView({
     })
   }, [])
 
-  const toggleColumnFilterInvert = useCallback((key: string) => {
-    setColumnFilterInverts(prev => {
+  const setColumnFilterMode = useCallback((key: string, exclude: boolean) => {
+    setColumnFilterExcludes(prev => {
+      if (Boolean(prev[key]) === exclude) return prev
       const next = { ...prev }
-      if (next[key]) {
-        delete next[key]
-      } else {
+      if (exclude) {
         next[key] = true
+      } else {
+        delete next[key]
       }
       return next
     })
@@ -2275,9 +2272,9 @@ export function ResourcesView({
         const updated = current.filter(v => v !== value)
         if (updated.length === 0) {
           delete next[key]
-          // Inversion is meaningless with no selected values — drop it so a
-          // stale invert flag doesn't linger in the URL or re-arm on reselect.
-          setColumnFilterInverts(inv => {
+          // The operator is meaningless with no selected values — drop it so a
+          // stale exclude flag doesn't linger in state or re-arm on reselect.
+          setColumnFilterExcludes(inv => {
             if (!inv[key]) return inv
             const nextInv = { ...inv }
             delete nextInv[key]
@@ -2979,11 +2976,10 @@ export function ResourcesView({
       setColumnFilters(newFilters.columnFilters)
     }
 
-    // Update column filter inverts if changed
-    const newInvertStr = serializeColumnFilterInverts(newFilters.columnFilterInverts)
-    const currentInvertStr = serializeColumnFilterInverts(columnFilterInverts)
-    if (newInvertStr !== currentInvertStr) {
-      setColumnFilterInverts(newFilters.columnFilterInverts)
+    // Update column filter operators (include/exclude) if changed
+    const excludeKeys = (m: Record<string, boolean>) => Object.keys(m).filter(k => m[k]).sort().join(',')
+    if (excludeKeys(newFilters.columnFilterExcludes) !== excludeKeys(columnFilterExcludes)) {
+      setColumnFilterExcludes(newFilters.columnFilterExcludes)
     }
 
     // Reset the flag after a tick to allow normal URL updates
@@ -3011,7 +3007,7 @@ export function ResourcesView({
     search: string,
     regex: boolean,
     colFilters: Record<string, string[]>,
-    colInverts: Record<string, boolean>,
+    colExcludes: Record<string, boolean>,
     problems: string[],
     showInactive: boolean,
     resourceNs?: string,
@@ -3038,22 +3034,17 @@ export function ResourcesView({
     } else {
       params.delete('regex')
     }
-    // Write column filters as `filters` param; remove legacy `status` param
-    const filtersStr = serializeColumnFilters(colFilters)
+    // Write column filters as `filters` param; the exclude operator is folded
+    // into each column entry, so it can never drift from the values it negates.
+    // Guard against a stale exclude flag on a column with no active values.
+    const activeExcludes = Object.fromEntries(
+      Object.entries(colExcludes).filter(([k, on]) => on && (colFilters[k]?.length ?? 0) > 0)
+    )
+    const filtersStr = serializeColumnFilters(colFilters, activeExcludes)
     if (filtersStr) {
       params.set('filters', filtersStr)
     } else {
       params.delete('filters')
-    }
-    // Only persist inverts for columns that still have active values — a bare
-    // invert flag filters nothing and would just be URL noise.
-    const invertStr = serializeColumnFilterInverts(
-      Object.fromEntries(Object.entries(colInverts).filter(([k, on]) => on && (colFilters[k]?.length ?? 0) > 0))
-    )
-    if (invertStr) {
-      params.set('filterInvert', invertStr)
-    } else {
-      params.delete('filterInvert')
     }
     if (problems.length > 0) {
       params.set('problems', problems.join(','))
@@ -3111,7 +3102,7 @@ export function ResourcesView({
     setSearchTerm('')
     setRegexMode(false)
     setColumnFilters({})
-    setColumnFilterInverts({})
+    setColumnFilterExcludes({})
     setProblemFilters([])
     setLabelSelector('')
     setOwnerKind('')
@@ -3121,7 +3112,7 @@ export function ResourcesView({
     // params are out of scope here; the host's onClearNamespaces (and its
     // own state→URL sync) owns namespace cleanup.
     const params = new URLSearchParams(window.location.search)
-    for (const key of ['search', 'regex', 'filters', 'filterInvert', 'problems', 'labels', 'ownerKind', 'ownerName', 'showInactive']) {
+    for (const key of ['search', 'regex', 'filters', 'problems', 'labels', 'ownerKind', 'ownerName', 'showInactive']) {
       params.delete(key)
     }
     navigate({ pathname: window.location.pathname, search: params.toString() }, { replace: true })
@@ -3178,8 +3169,8 @@ export function ResourcesView({
     shouldPushHistory.current = false
     prevSelectedResourceRef.current = current
 
-    updateURL(selectedKind, searchTerm, regexMode, columnFilters, columnFilterInverts, problemFilters, showInactiveReplicaSets, selectedResource?.namespace, selectedResource?.name, pushHistory)
-  }, [selectedKind, searchTerm, regexMode, columnFilters, columnFilterInverts, problemFilters, showInactiveReplicaSets, selectedResource, updateURL, basePath, locationPathname])
+    updateURL(selectedKind, searchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource?.namespace, selectedResource?.name, pushHistory)
+  }, [selectedKind, searchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource, updateURL, basePath, locationPathname])
 
   // Handle resource click from URL on mount
   useEffect(() => {
@@ -3479,7 +3470,7 @@ export function ResourcesView({
     setOpenColumnFilter(null)
     if (!isSyncingFromURL.current) {
       setColumnFilters({})
-      setColumnFilterInverts({})
+      setColumnFilterExcludes({})
     }
     setProblemFilters([])
   }, [selectedKind.name])
@@ -3654,7 +3645,7 @@ export function ResourcesView({
           const extra = extraColumnsByKey.get(col)
           const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col, kindLower)
           const match = vals.includes(cellVal)
-          return columnFilterInverts[col] ? !match : match
+          return columnFilterExcludes[col] ? !match : match
         })
       )
     }
@@ -3797,7 +3788,7 @@ export function ResourcesView({
     }
 
     return result
-  }, [resources, searchTerm, regexMode, searchRegex, columnFilters, columnFilterInverts, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, extraColumnsByKey, podMatchesProblemFilter])
+  }, [resources, searchTerm, regexMode, searchRegex, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, extraColumnsByKey, podMatchesProblemFilter])
 
   // For nodes table: compute the majority minor version so outliers can be highlighted
   const majorityNodeMinorVersion = useMemo(() => {
@@ -4749,7 +4740,7 @@ export function ResourcesView({
                         className="flex items-center gap-1 px-2 py-1 text-xs selection selection-text rounded-md hover:selection-strong transition-colors"
                       >
                         <ListFilter className="w-3 h-3" />
-                        <span>{key}: {columnFilterInverts[key] ? 'not ' : ''}{vals.join(', ')}</span>
+                        <span>{key}: {columnFilterExcludes[key] ? 'not ' : ''}{vals.join(', ')}</span>
                         <X className="w-3 h-3" />
                       </button>
                     ))}
@@ -4921,6 +4912,34 @@ export function ResourcesView({
                               )}
                               onClick={(e) => e.stopPropagation()}
                             >
+                              <div className="flex items-center gap-1 p-1.5 border-b border-theme-border" role="group" aria-label={`${col.label} filter mode`}>
+                                <button
+                                  onClick={() => setColumnFilterMode(col.key, false)}
+                                  aria-pressed={!columnFilterExcludes[col.key]}
+                                  className={clsx(
+                                    'flex-1 px-2 py-1 text-xs rounded transition-colors',
+                                    !columnFilterExcludes[col.key]
+                                      ? 'selection-strong selection-text'
+                                      : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                                  )}
+                                  title="Show rows matching the selected values"
+                                >
+                                  Include
+                                </button>
+                                <button
+                                  onClick={() => setColumnFilterMode(col.key, true)}
+                                  aria-pressed={Boolean(columnFilterExcludes[col.key])}
+                                  className={clsx(
+                                    'flex-1 px-2 py-1 text-xs rounded transition-colors',
+                                    columnFilterExcludes[col.key]
+                                      ? 'selection-strong selection-text'
+                                      : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                                  )}
+                                  title="Show rows that do NOT match the selected values"
+                                >
+                                  Exclude
+                                </button>
+                              </div>
                               {values.length > 5 ? (
                                 <div className="flex items-center gap-2 p-2 border-b border-theme-border">
                                   <div className="relative flex-1">
@@ -4969,18 +4988,6 @@ export function ResourcesView({
                                   <div className="px-3 py-2 text-xs text-theme-text-disabled">No matches</div>
                                 )}
                               </div>
-                              {activeFilterValues.length > 0 && (
-                                <button
-                                  onClick={() => toggleColumnFilterInvert(col.key)}
-                                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs border-t border-theme-border text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary transition-colors"
-                                  title="Show rows that do NOT match the selected values"
-                                >
-                                  <span className={clsx('w-3 h-3 shrink-0 rounded-sm border flex items-center justify-center', columnFilterInverts[col.key] ? 'bg-skyhook-500 border-skyhook-500' : 'border-theme-border')}>
-                                    {columnFilterInverts[col.key] && <Check className="w-2 h-2 text-white" />}
-                                  </span>
-                                  <span>Invert (show non-matching)</span>
-                                </button>
-                              )}
                             </div>
                           )
                         })()}

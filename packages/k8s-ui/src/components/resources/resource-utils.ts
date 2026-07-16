@@ -1827,79 +1827,84 @@ export function formatResources(resources: any): string {
  * Used by the generic column filter system to match resources against filter values.
  * Reuses existing utility functions for kind-specific columns.
  */
-// Parse column filters from URL `filters` param (format: "col:val1,val2|col2:val3")
-// Uses `|` as pair separator between columns, `,` between values within a column.
-// Multi-select: each column key maps to an array of selected values.
+// Parse column filters from URL `filters` param. Each column is either
+// "col:val1,val2" (implicit include) or "col:exclude:val1,val2" (explicit
+// operator). `|` separates columns, `,` separates values within a column.
+// Keys and values are URI-encoded so their own delimiters survive; the operator,
+// when present, is the literal token "include" or "exclude".
 export function parseColumnFilters(filtersParam: string | null): Record<string, string[]> {
   if (!filtersParam) return {}
   const filters: Record<string, string[]> = {}
   for (const pair of filtersParam.split('|')) {
-    const colonIdx = pair.indexOf(':')
-    if (colonIdx > 0) {
-      const rawKey = pair.slice(0, colonIdx).trim()
-      const valStr = pair.slice(colonIdx + 1).trim()
-      // Keys are URI-encoded so a custom-column key's own colon (e.g.
-      // "label:tier") doesn't collide with the key:value delimiter.
-      let key: string
-      try { key = decodeURIComponent(rawKey) } catch { key = rawKey }
-      if (key && valStr) {
-        filters[key] = valStr.split(',').map(v => {
-          try { return decodeURIComponent(v.trim()) } catch { return v.trim() }
-        }).filter(Boolean)
-      }
-    }
+    const parsed = parseColumnFilterPair(pair)
+    if (parsed) filters[parsed.key] = parsed.values
   }
   return filters
 }
 
-// Serialize column filters to URL param format. Keys and values are both
-// URI-encoded so a colon inside a custom-column key (e.g. "label:tier") or a
-// comma inside a value (e.g. "Ready,SchedulingDisabled") survives the round-trip.
-export function serializeColumnFilters(filters: Record<string, string[]>): string {
-  const result = Object.entries(filters)
-    .filter(([, v]) => v.length > 0)
-    .map(([k, vals]) => `${encodeURIComponent(k)}:${vals.map(v => encodeURIComponent(v)).join(',')}`)
-    .join('|')
-  return result
-}
-
-// Which columns have their filter inverted (show non-matching rows). Serialized
-// as a comma-separated list of URI-encoded column keys; keys are encoded so a
-// custom-column key's own comma or colon (e.g. "label:tier") survives.
-export function parseColumnFilterInverts(param: string | null): Record<string, boolean> {
-  if (!param) return {}
-  const inverts: Record<string, boolean> = {}
-  for (const raw of param.split(',')) {
-    const trimmed = raw.trim()
-    if (!trimmed) continue
-    let key: string
-    try { key = decodeURIComponent(trimmed) } catch { key = trimmed }
-    if (key) inverts[key] = true
-  }
-  return inverts
-}
-
-export function serializeColumnFilterInverts(inverts: Record<string, boolean>): string {
-  return Object.entries(inverts)
-    .filter(([, on]) => on)
-    .map(([k]) => encodeURIComponent(k))
-    .join(',')
-}
-
-// An invert flag is only meaningful for a column that has selected values.
-// Drop lone flags (e.g. from a hand-edited or stale URL) so they can't lie
-// dormant and flip matching to negated the moment values are added.
-export function reconcileColumnFilterInverts(
-  inverts: Record<string, boolean>,
+// Serialize column filters to URL param format. Columns listed in `excludes`
+// emit the explicit "exclude" operator; all others keep the backwards-compatible
+// two-part shape. Keys and values are both URI-encoded so a colon inside a
+// custom-column key (e.g. "label:tier") or a comma inside a value (e.g.
+// "Ready,SchedulingDisabled") survives the round-trip.
+export function serializeColumnFilters(
   filters: Record<string, string[]>,
-): Record<string, boolean> {
-  const result: Record<string, boolean> = {}
-  for (const key of Object.keys(inverts)) {
-    if (inverts[key] && filters[key]?.length) {
-      result[key] = true
+  excludes?: Record<string, boolean>,
+): string {
+  return Object.entries(filters)
+    .filter(([, v]) => v.length > 0)
+    .map(([k, vals]) => {
+      const op = excludes?.[k] ? 'exclude:' : ''
+      return `${encodeURIComponent(k)}:${op}${vals.map(v => encodeURIComponent(v)).join(',')}`
+    })
+    .join('|')
+}
+
+// Which columns are in exclude mode (show non-matching rows). Read from the same
+// `filters` param so the operator can't drift out of sync with the values it
+// negates — a lone exclude operator with no values is structurally impossible.
+export function parseColumnFilterExcludes(filtersParam: string | null): Record<string, boolean> {
+  if (!filtersParam) return {}
+  const excludes: Record<string, boolean> = {}
+  for (const pair of filtersParam.split('|')) {
+    const parsed = parseColumnFilterPair(pair)
+    if (parsed && parsed.exclude && parsed.values.length) excludes[parsed.key] = true
+  }
+  return excludes
+}
+
+// Split a single "col[:operator]:values" pair into its decoded key, values, and
+// whether the explicit exclude operator was present. The first literal colon
+// delimits key from the rest (keys are encoded, so their own colons don't
+// count); an optional leading "include"/"exclude" token in the remainder is the
+// operator. Any other leading token is treated as a value (two-part form), so a
+// value literally named "exclude" without a following colon round-trips.
+function parseColumnFilterPair(
+  pair: string,
+): { key: string; values: string[]; exclude: boolean } | null {
+  const colonIdx = pair.indexOf(':')
+  if (colonIdx <= 0) return null
+  const rawKey = pair.slice(0, colonIdx).trim()
+  let rest = pair.slice(colonIdx + 1).trim()
+  let key: string
+  try { key = decodeURIComponent(rawKey) } catch { key = rawKey }
+  if (!key) return null
+
+  let exclude = false
+  const opIdx = rest.indexOf(':')
+  if (opIdx >= 0) {
+    const op = rest.slice(0, opIdx).trim().toLowerCase()
+    if (op === 'exclude' || op === 'include') {
+      exclude = op === 'exclude'
+      rest = rest.slice(opIdx + 1).trim()
     }
   }
-  return result
+  if (!rest) return null
+  const values = rest.split(',').map(v => {
+    try { return decodeURIComponent(v.trim()) } catch { return v.trim() }
+  }).filter(Boolean)
+  if (!values.length) return null
+  return { key, values, exclude }
 }
 
 export function getCellFilterValue(resource: any, column: string, kind: string): string {
