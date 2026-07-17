@@ -131,6 +131,9 @@ type Diagnosis struct {
 	// SessionID is the CLI session this turn ran in — pass it back as
 	// Request.SessionID to continue the conversation.
 	SessionID string `json:"sessionId"`
+	// cliErrText preserves failures reported in a stream-json result instead of stderr.
+	cliErrText string
+	cliErrored bool
 }
 
 // StreamEvent is one normalized event emitted during an investigation.
@@ -406,17 +409,18 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	onEvent(StreamEvent{Type: "phase", Phase: "investigating"})
 	diag := agent.parseStream(stdout, onEvent)
 
-	if err := cmd.Wait(); err != nil {
+	waitErr := cmd.Wait()
+	if waitErr != nil {
 		if ctx.Err() != nil {
 			return Diagnosis{}, ctx.Err()
 		}
-		// A nonzero exit is forgiven ONLY when the agent completed a structured
-		// verdict (the trailing JSON block parsed) — then the exit noise is
-		// incidental. Free-text alone means the process died mid-stream; showing
-		// that as a calm "done" would pass a failure off as a finished analysis.
-		if !diag.structured() {
-			return Diagnosis{}, agentExitError(agent.Name(), stderr.String())
-		}
+	}
+	// A structured verdict wins over trailing process noise. Without one, either a
+	// nonzero exit or an explicit stream error must remain a failed investigation.
+	if !diag.structured() && (waitErr != nil || diag.cliErrored) {
+		return Diagnosis{}, agentExitError(
+			agent.Name(), agent.SigninCmd(), diag.cliErrText, stderr.String(),
+		)
 	}
 	return diag, nil
 }
@@ -639,7 +643,7 @@ func (c *cappedBuffer) String() string {
 	return c.buf.String()
 }
 
-func formatStderr(s string) string {
+func formatExitDetails(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return ""
@@ -650,13 +654,18 @@ func formatStderr(s string) string {
 	return ": " + s
 }
 
-// agentExitError turns a non-zero agent exit into a user-legible message. Best
-// effort: the common, actionable failures (the CLI isn't signed in; rate-limited)
-// get a plain-language lead; everything else gets a generic line. The raw stderr
-// tail is kept appended so power users can still debug. stderr is the CLI's own
-// diagnostics (the model's output is on stdout), so matching it here is sound.
-func agentExitError(name, stderr string) error {
-	low := strings.ToLower(stderr)
+// agentExitError classifies known failures and preserves both output channels for
+// unknown ones, since CLIs disagree about where terminal errors are written.
+func agentExitError(name, signinCmd, cliErrText, stderr string) error {
+	details := strings.TrimSpace(cliErrText)
+	cleanStderr := strings.TrimSpace(stderr)
+	if cleanStderr != "" && cleanStderr != details {
+		if details != "" {
+			details += "\n"
+		}
+		details += cleanStderr
+	}
+	low := strings.ToLower(details)
 	contains := func(subs ...string) bool {
 		for _, s := range subs {
 			if strings.Contains(low, s) {
@@ -666,18 +675,17 @@ func agentExitError(name, stderr string) error {
 		return false
 	}
 	switch {
-	case contains("not logged in", "logged out", "not authenticated", "unauthorized",
-		"401", "invalid api key", "no api key", "please log in", "please run", "/login", "authenticate"):
-		return fmt.Errorf("%s isn't signed in — run `%s` in a terminal to log in, then try again%s",
-			name, name, formatStderr(stderr))
+	case contains("not logged in", "logged out", "not authenticated", "authentication required",
+		"sign in required", "login required", "please log in", "/login"):
+		return fmt.Errorf("%s isn't signed in. Run `%s` in a terminal to sign in, then try again%s", name, signinCmd, formatExitDetails(details))
+	case contains("invalid api key", "no api key"):
+		return fmt.Errorf("%s couldn't authenticate. Run `%s` to sign in, or check its API credentials, then try again%s", name, signinCmd, formatExitDetails(details))
 	case contains("rate limit", "rate-limit", "429", "529", "quota", "overloaded", "too many requests"):
-		return fmt.Errorf("%s is rate-limited or over quota right now — wait a moment and try again%s",
-			name, formatStderr(stderr))
-	case contains("max turns", "maximum turns", "turn limit"):
-		return fmt.Errorf("%s hit its step limit before finishing — try a more specific follow-up%s",
-			name, formatStderr(stderr))
+		return fmt.Errorf("%s is rate-limited or over quota. Wait a moment, then try again%s", name, formatExitDetails(details))
+	case contains("max turns", "maximum turns", "turn limit", "error_max_turns"):
+		return fmt.Errorf("%s hit its step limit before finishing. Try again, or ask a narrower follow-up%s", name, formatExitDetails(details))
 	default:
-		return fmt.Errorf("%s stopped unexpectedly%s", name, formatStderr(stderr))
+		return fmt.Errorf("%s stopped unexpectedly%s", name, formatExitDetails(details))
 	}
 }
 
@@ -698,6 +706,8 @@ type cliEvent struct {
 		} `json:"content"`
 	} `json:"message"`
 	Result       string   `json:"result"`
+	Subtype      string   `json:"subtype"`
+	IsError      bool     `json:"is_error"`
 	TotalCostUSD *float64 `json:"total_cost_usd"`
 	NumTurns     int      `json:"num_turns"`
 	SessionID    string   `json:"session_id"`
@@ -708,6 +718,8 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	starts := map[string]time.Time{}
 	var finalText string
+	var resultIsError bool
+	var resultSubtype string
 	var cost *float64
 	var turns int
 	var sessionID string
@@ -784,6 +796,8 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 			}
 		case "result":
 			finalText = ev.Result
+			resultIsError = ev.IsError
+			resultSubtype = ev.Subtype
 			cost = ev.TotalCostUSD
 			turns = ev.NumTurns
 			sessionID = ev.SessionID
@@ -794,6 +808,16 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	d.CostUSD = cost
 	d.Turns = turns
 	d.SessionID = sessionID
+	// A CLI that aborts (auth failure, rate limit, …) reports the reason via an
+	// is_error result on stdout, not stderr. Keep that text so the exit-error
+	// builder can turn it into an actionable message.
+	if resultIsError {
+		d.cliErrored = true
+		d.cliErrText = strings.TrimSpace(finalText)
+		if d.cliErrText == "" {
+			d.cliErrText = strings.TrimSpace(resultSubtype)
+		}
+	}
 	return d
 }
 

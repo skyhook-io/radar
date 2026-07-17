@@ -16,6 +16,8 @@ type claudeAgent struct{ bin string }
 
 func (a *claudeAgent) Name() string { return "claude" }
 
+func (a *claudeAgent) SigninCmd() string { return "claude auth login" }
+
 func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
 	cfgPath, cleanup, err := writeMCPConfig(s.mcpURL)
 	if err != nil {

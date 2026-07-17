@@ -15,6 +15,8 @@ import (
 type Agent interface {
 	// Name is the stable backend identifier ("claude", "codex").
 	Name() string
+	// SigninCmd is shown when the CLI reports that it is signed out.
+	SigninCmd() string
 	// command builds the fully-configured *exec.Cmd for one turn (bin, args, env,
 	// cwd) plus a cleanup for any temp files it created.
 	command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error)

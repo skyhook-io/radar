@@ -32,6 +32,8 @@ type cursorAgent struct{ bin string }
 
 func (a *cursorAgent) Name() string { return "cursor-agent" }
 
+func (a *cursorAgent) SigninCmd() string { return "cursor-agent login" }
+
 func (a *cursorAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
 	// Cursor has no system-prompt flag; the framing rides on the first turn's
 	// prompt (the resumed session already carries it).

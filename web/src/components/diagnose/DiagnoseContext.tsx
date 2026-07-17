@@ -361,6 +361,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     startRunRef.current(t);
   }, []);
   const openRun = useCallback((id: string) => {
+    setStartError(null);
     setActiveRunId(id);
     setView("investigation");
     setOpen(true);

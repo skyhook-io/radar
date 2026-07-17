@@ -251,22 +251,25 @@ func TestDetectAgents_OnlyKnownNames(t *testing.T) {
 // TestAgentExitError_Classifies pins the best-effort error taxonomy: common
 // actionable failures get a plain-language lead; the rest get a generic line.
 func TestAgentExitError_Classifies(t *testing.T) {
-	cases := []struct{ stderr, want string }{
+	cases := []struct{ detail, want string }{
 		{"Error: Not logged in. Please run claude login", "isn't signed in"},
-		{"request failed: 401 unauthorized", "isn't signed in"},
+		{"invalid API key", "check its API credentials"},
 		{"API error 429: rate limit exceeded", "rate-limited"},
 		{"overloaded_error: server is overloaded", "rate-limited"},
 		{"reached max turns", "step limit"},
 		{"panic: nil pointer", "stopped unexpectedly"},
 	}
 	for _, c := range cases {
-		if got := agentExitError("claude", c.stderr).Error(); !strings.Contains(got, c.want) {
-			t.Errorf("stderr %q → %q, want substring %q", c.stderr, got, c.want)
+		if got := agentExitError("claude", "claude auth login", c.detail, "").Error(); !strings.Contains(got, c.want) {
+			t.Errorf("detail %q → %q, want substring %q", c.detail, got, c.want)
 		}
 	}
-	// The raw tail is preserved for debugging.
-	if got := agentExitError("codex", "boom detail").Error(); !strings.Contains(got, "boom detail") {
-		t.Errorf("expected raw stderr tail preserved, got %q", got)
+	if got := agentExitError("claude", "claude auth login", "Not logged in", "incidental warning").Error(); !strings.Contains(got, "claude auth login") {
+		t.Errorf("expected sign-in command in message, got %q", got)
+	}
+	got := agentExitError("claude", "claude auth login", "request failed: 401 unauthorized", "provider rejected the token").Error()
+	if !strings.Contains(got, "stopped unexpectedly") || !strings.Contains(got, "401 unauthorized") || !strings.Contains(got, "provider rejected the token") {
+		t.Errorf("ambiguous auth failure should preserve both details, got %q", got)
 	}
 }
 
@@ -344,13 +347,13 @@ func TestParseStream_InterleavesNarration(t *testing.T) {
 // agent exit is forgiven only when a STRUCTURED verdict parsed (the trailing
 // JSON block) — free-text alone means the process died mid-stream and must
 // surface as an error, never as a calm "done".
-func TestDiagnoseStream_NonzeroExit(t *testing.T) {
-	mkCLI := func(t *testing.T, resultLine string) string {
+func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
+	mkCLI := func(t *testing.T, resultLine, exitCode string) string {
 		t.Helper()
 		dir := t.TempDir()
 		bin := dir + "/claude"
 		// printf %s, not echo — sh's echo may expand \n escapes inside the JSON.
-		script := "#!/bin/sh\nprintf '%s\\n' '" + resultLine + "'\nexit 3\n"
+		script := "#!/bin/sh\nprintf '%s\\n' '" + resultLine + "'\nexit " + exitCode + "\n"
 		if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -368,12 +371,32 @@ func TestDiagnoseStream_NonzeroExit(t *testing.T) {
 	}
 
 	freeText := `{"type":"result","result":"got halfway through checking the pod","num_turns":1}`
-	if _, err := run(t, mkCLI(t, freeText)); err == nil {
+	if _, err := run(t, mkCLI(t, freeText, "3")); err == nil {
 		t.Error("nonzero exit with free-text-only output must return an error")
 	}
 
+	authErr := `{"type":"result","result":"Not logged in · Please run /login","is_error":true,"num_turns":1}`
+	for _, exitCode := range []string{"0", "3"} {
+		_, err := run(t, mkCLI(t, authErr, exitCode))
+		if err == nil {
+			t.Fatalf("is_error result with exit %s must return an error", exitCode)
+		}
+		if !strings.Contains(err.Error(), "isn't signed in") {
+			t.Errorf("auth failure with exit %s should surface the sign-in hint, got: %v", exitCode, err)
+		}
+	}
+
+	emptyMaxTurnsErr := `{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":1}`
+	_, err := run(t, mkCLI(t, emptyMaxTurnsErr, "0"))
+	if err == nil {
+		t.Fatal("is_error result without result text must return an error")
+	}
+	if !strings.Contains(err.Error(), "step limit") || !strings.Contains(err.Error(), "error_max_turns") {
+		t.Errorf("empty max-turns error should classify and preserve its subtype, got: %v", err)
+	}
+
 	structured := "{\"type\":\"result\",\"result\":\"```json\\n{\\\"root_cause\\\":\\\"bad tag\\\",\\\"remediation\\\":[\\\"fix it\\\"]}\\n```\",\"num_turns\":1}"
-	diag, err := run(t, mkCLI(t, structured))
+	diag, err := run(t, mkCLI(t, structured, "3"))
 	if err != nil {
 		t.Fatalf("nonzero exit with a complete structured verdict should be forgiven, got %v", err)
 	}

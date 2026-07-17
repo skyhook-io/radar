@@ -402,6 +402,7 @@ export function TurnView({
   onApply,
   onAsk,
   onCheckStatus,
+  onRetryDiagnosis,
   hideVerdict = false,
 }: {
   turn: Turn;
@@ -410,6 +411,7 @@ export function TurnView({
   onApply?: (fix: string) => void;
   onAsk?: (question: string) => void;
   onCheckStatus?: () => void;
+  onRetryDiagnosis?: () => void;
   // In the maximized workspace the pinned turn's verdict renders in the side rail,
   // so the transcript suppresses its own copy (reasoning + tool calls still show).
   hideVerdict?: boolean;
@@ -469,7 +471,18 @@ export function TurnView({
       {turn.status === "error" && turn.error && (
         <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-          <span>{turn.error}</span>
+          <div className="flex min-w-0 flex-col gap-2">
+            <span className="whitespace-pre-wrap break-words">{turn.error}</span>
+            {onRetryDiagnosis && (
+              <button
+                type="button"
+                onClick={onRetryDiagnosis}
+                className="btn-brand self-start px-3 py-1 text-xs"
+              >
+                Retry diagnosis
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

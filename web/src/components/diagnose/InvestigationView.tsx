@@ -44,7 +44,11 @@ export function InvestigationView({
   maximized: boolean;
 }) {
   const { kind, namespace, name } = run;
-  const { refreshRuns, openInvestigation } = useDiagnose();
+  const { refreshRuns, openInvestigation, startError } = useDiagnose();
+  const retryDiagnosis = useCallback(
+    () => openInvestigation({ kind, namespace, name }),
+    [openInvestigation, kind, namespace, name],
+  );
   const queryClient = useQueryClient();
   const [turns, setTurns] = useState<Turn[]>([]);
   // The run is gone server-side (evicted past the retention cap, or lost on a
@@ -505,14 +509,23 @@ export function InvestigationView({
                   onApply={canApply ? requestApply : undefined}
                   onAsk={isLast && !busy && !stale ? askFollowup : undefined}
                   onCheckStatus={canCheck ? checkStatus : undefined}
+                  onRetryDiagnosis={
+                    isLast &&
+                    t.status === "error" &&
+                    !t.question &&
+                    !t.apply &&
+                    !stale
+                      ? retryDiagnosis
+                      : undefined
+                  }
                   hideVerdict={pinned && i === pinnedIdx}
                 />
               );
             })}
-            {actionError && (
+            {(actionError || startError) && (
               <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-                <span>{actionError}</span>
+                <span>{actionError || startError}</span>
               </div>
             )}
           </div>

@@ -24,6 +24,8 @@ type codexAgent struct{ bin string }
 
 func (a *codexAgent) Name() string { return "codex" }
 
+func (a *codexAgent) SigninCmd() string { return "codex login" }
+
 func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
 	// Codex has no system-prompt flag; the framing rides on the first turn's
 	// prompt (the resumed session already carries it).
