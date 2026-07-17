@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   BookOpen,
   CheckCircle2,
-  ChevronDown,
   CircleDashed,
   ExternalLink,
   FileSearch,
@@ -15,6 +14,8 @@ import {
 } from 'lucide-react'
 import {
   Badge,
+  Collapse,
+  CollapseChevron,
   EmptyState,
   FreshnessControl,
   PageHeader,
@@ -177,7 +178,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
         <CoverageNotice headline="No namespace access" body="Radar cannot inspect workload configuration in this cluster for your current identity." />
       )}
 
-      <section className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
+      <section className="shrink-0 overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
         <div className="flex items-center justify-between border-b-subtle px-4 py-3">
           <div>
             <h2 className="text-sm font-semibold text-theme-text-primary">Checks for Kubernetes {data.targetVersion}</h2>
@@ -280,9 +281,16 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
   const meta = statusMeta[check.status]
   const Icon = meta.icon
   const [open, setOpen] = useState(false)
+  const detailID = `upgrade-check-${check.id}`
   return (
-    <details className="group" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary className="grid cursor-pointer list-none items-center gap-3 px-4 py-3 transition-colors hover:bg-theme-hover md:grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] md:gap-4">
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={detailID}
+        onClick={() => setOpen((value) => !value)}
+        className="grid w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20 md:grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] md:gap-4"
+      >
         <div className="flex min-w-0 items-center gap-2.5">
           <Icon className={clsx('h-4 w-4 shrink-0', meta.iconClass)} />
           <div className="min-w-0">
@@ -298,24 +306,26 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
             <Badge severity={meta.badgeSeverity}>{meta.label}</Badge>
             <div className="mt-1 truncate text-[11px] text-theme-text-tertiary">{evidenceLabel(check)}</div>
           </div>
-          <ChevronDown className="h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform group-open:rotate-180" />
+          <CollapseChevron open={open} className="h-4 w-4" />
         </div>
-      </summary>
-      <div className="border-t-subtle bg-theme-elevated px-4 py-3">
-        {check.findings.length > 0 && (
-          <div className="flex flex-col gap-2">
-            {check.findings.map((finding, index) => (
-              <FindingRow key={findingKey(finding, index)} finding={finding} onNavigateToResource={onNavigateToResource} />
-            ))}
+      </button>
+      <Collapse open={open} mountLazily>
+        <div id={detailID} className="border-t-subtle bg-theme-elevated px-4 py-3">
+          {check.findings.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {check.findings.map((finding, index) => (
+                <FindingRow key={findingKey(finding, index)} finding={finding} onNavigateToResource={onNavigateToResource} />
+              ))}
+            </div>
+          )}
+          <div className={clsx('flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-theme-text-tertiary', check.findings.length > 0 && 'mt-3 border-t-subtle pt-3')}>
+            {check.caveat && <span className="inline-flex items-start gap-1.5 text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />Coverage note: {check.caveat}</span>}
+            <span className="inline-flex items-center gap-1.5"><FileSearch className="h-3.5 w-3.5" />{check.scope}</span>
+            {(check.references ?? []).map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
           </div>
-        )}
-        <div className={clsx('flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-theme-text-tertiary', check.findings.length > 0 && 'mt-3 border-t-subtle pt-3')}>
-          {check.caveat && <span className="inline-flex items-start gap-1.5 text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />Coverage note: {check.caveat}</span>}
-          <span className="inline-flex items-center gap-1.5"><FileSearch className="h-3.5 w-3.5" />{check.scope}</span>
-          {(check.references ?? []).map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
         </div>
-      </div>
-    </details>
+      </Collapse>
+    </div>
   )
 }
 
