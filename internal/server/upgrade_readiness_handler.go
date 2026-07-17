@@ -46,7 +46,9 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	var prometheusUnavailableNamespaces []string
 	var prometheusInstalled, discoveryAvailable bool
 	if !noAccess {
-		manifestResources, helmUnavailableNamespaces = collectUpgradeHelmManifests(r, namespaces)
+		if helmNamespaces, ok := s.resolveHelmNamespacesForScope(r, namespaces); ok {
+			manifestResources, helmUnavailableNamespaces = collectUpgradeHelmManifests(r, helmNamespaces)
+		}
 		deprecatedRequests, deprecatedMetricsWindow = collectDeprecatedAPIRequests(r)
 		prometheusRules, prometheusInstalled, discoveryAvailable, prometheusUnavailableNamespaces = s.collectUpgradePrometheusRules(r, namespaces)
 	}

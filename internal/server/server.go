@@ -1134,6 +1134,15 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
+	return s.resolveHelmNamespacesForScope(r, namespaces)
+}
+
+// resolveHelmNamespacesForScope applies Helm's Secret-specific RBAC and
+// no-auth fallback behavior to an already resolved workload namespace scope.
+// Callers that intentionally ignore the browsing namespace picker (such as the
+// cluster upgrade scan) can reuse the same Helm resolution without rebuilding
+// it from request query state.
+func (s *Server) resolveHelmNamespacesForScope(r *http.Request, namespaces []string) ([]string, bool) {
 	if noNamespaceAccess(namespaces) {
 		return nil, false
 	}
