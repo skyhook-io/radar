@@ -62,7 +62,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Description: "Use for inventory-style cluster or namespace health triage, like " +
 			"`kubectl get all` plus detected problems and warning events in one call. " +
 			"Returns resource counts, failing pods, unhealthy workloads, recent Warning " +
-			"events, and Helm release status so you can rank likely suspects before " +
+			"events (topWarnings, most-recent first — each row carries lastSeen and the " +
+			"involved objects, so check lastSeen before treating a warning as live), " +
+			"and Helm release status so you can rank likely suspects before " +
 			"calling get_resource or logs. Routing: unknown broken thing -> issues; " +
 			"content/name search -> search; service routing/dependencies -> get_topology " +
 			"or get_neighborhood; inventory/counts/Helm/events overview -> get_dashboard. " +
@@ -2038,10 +2040,36 @@ func countBySeverity(problems []mcpProblem) map[string]int {
 	return out
 }
 
+// topWarningObjectCap bounds involved-object refs per topWarnings row. The
+// grouping is systemic (reason + normalized message), so one row can span
+// many objects; three named subjects plus objectCount conveys both "who"
+// and "how widespread" without bloating the dashboard.
+const topWarningObjectCap = 3
+
 type mcpWarning struct {
 	Reason  string `json:"reason"`
 	Message string `json:"message"`
 	Count   int    `json:"count"`
+	// LastSeen is the most recent occurrence across the group — without it
+	// a consumer cannot tell a stale warning from a live one, and a
+	// long-resolved BackOff reads as current behavior.
+	LastSeen time.Time `json:"lastSeen"`
+	// Objects lists up to topWarningObjectCap distinct involved objects
+	// (most recent first) as Kind/namespace/name; ObjectCount is the
+	// uncapped distinct total.
+	Objects          []string `json:"objects,omitempty"`
+	ObjectCount      int      `json:"objectCount,omitempty"`
+	ObjectsTruncated bool     `json:"objectsTruncated,omitempty"`
+}
+
+// formatEventObjectRef renders an involved object as Kind/namespace/name
+// (Kind/name for cluster-scoped objects) — the same compact ref shape agents
+// can feed straight into get_resource/diagnose.
+func formatEventObjectRef(ref aicontext.EventObjectRef) string {
+	if ref.Namespace == "" {
+		return ref.Kind + "/" + ref.Name
+	}
+	return ref.Kind + "/" + ref.Namespace + "/" + ref.Name
 }
 
 type mcpHelmSummary struct {
@@ -2314,19 +2342,28 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 		d.WarningEvents = len(warningValues)
 
-		// Deduplicate and sort by count descending to surface systemic issues
-		deduplicated := aicontext.DeduplicateEvents(warningValues)
-		sort.Slice(deduplicated, func(i, j int) bool {
-			return deduplicated[i].Count > deduplicated[j].Count
-		})
+		// Deduplicate keeping involved objects. Rows arrive most-recent
+		// first with deterministic tie-breakers (recency, count, reason,
+		// message — applied inside dedup, before its group cap): a triage
+		// dashboard answers "what's happening now", and the old count-first
+		// ordering promoted stale noisy groups over the live incident.
+		// Count still rides along to convey chronicity.
+		deduplicated := aicontext.DeduplicateEventsWithObjects(warningValues, topWarningObjectCap)
 
 		limit := min(len(deduplicated), 5)
 		for _, e := range deduplicated[:limit] {
-			d.TopWarnings = append(d.TopWarnings, mcpWarning{
-				Reason:  e.Reason,
-				Message: k8s.Truncate(e.Message, 200),
-				Count:   e.Count,
-			})
+			w := mcpWarning{
+				Reason:           e.Reason,
+				Message:          k8s.Truncate(e.Message, 200),
+				Count:            e.Count,
+				LastSeen:         e.LastTimestamp,
+				ObjectCount:      e.ObjectCount,
+				ObjectsTruncated: e.ObjectsTruncated,
+			}
+			for _, o := range e.Objects {
+				w.Objects = append(w.Objects, formatEventObjectRef(o))
+			}
+			d.TopWarnings = append(d.TopWarnings, w)
 		}
 	}
 

@@ -1,7 +1,9 @@
 package context
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +42,148 @@ func TestDeduplicateEvents_CollapseIdentical(t *testing.T) {
 	}
 	if result[0].Reason != "BackOff" {
 		t.Errorf("Expected reason=BackOff, got %s", result[0].Reason)
+	}
+}
+
+func makeEventForObject(reason, message, eventType string, count int32, lastTime time.Time, kind, namespace, name string) corev1.Event {
+	ev := makeEvent(reason, message, eventType, count, lastTime)
+	ev.InvolvedObject = corev1.ObjectReference{Kind: kind, Namespace: namespace, Name: name}
+	return ev
+}
+
+// The systemic grouping key spans objects: two pods emitting the same
+// normalized warning collapse into ONE group whose count aggregates both —
+// Objects must name each contributor instead of leaving the count subjectless.
+func TestDeduplicateEventsWithObjects_CollectsDistinctObjects(t *testing.T) {
+	now := time.Now()
+	events := []corev1.Event{
+		makeEventForObject("BackOff", "Back-off restarting failed container in pod cart-5d4f7c9b8-aaaaa", "Warning", 3, now.Add(-10*time.Minute), "Pod", "shop", "cart-5d4f7c9b8-aaaaa"),
+		makeEventForObject("BackOff", "Back-off restarting failed container in pod cart-5d4f7c9b8-bbbbb", "Warning", 2, now.Add(-1*time.Minute), "Pod", "shop", "cart-5d4f7c9b8-bbbbb"),
+	}
+
+	result := DeduplicateEventsWithObjects(events, 3)
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 group (pod-hash normalization), got %d: %+v", len(result), result)
+	}
+	g := result[0]
+	if g.Count != 5 {
+		t.Errorf("count = %d, want 5 (aggregated across objects)", g.Count)
+	}
+	if g.ObjectCount != 2 || g.ObjectsTruncated {
+		t.Errorf("objectCount = %d truncated=%v, want 2/false", g.ObjectCount, g.ObjectsTruncated)
+	}
+	if len(g.Objects) != 2 {
+		t.Fatalf("objects = %+v, want both pods", g.Objects)
+	}
+	// Most recent contributor first.
+	if g.Objects[0].Name != "cart-5d4f7c9b8-bbbbb" || g.Objects[1].Name != "cart-5d4f7c9b8-aaaaa" {
+		t.Errorf("objects order = %+v, want most-recent first", g.Objects)
+	}
+}
+
+// Distinct identities are counted before the cap, and equal timestamps fall
+// back to name order so the emitted subset is deterministic.
+func TestDeduplicateEventsWithObjects_CapsDeterministically(t *testing.T) {
+	now := time.Now()
+	var events []corev1.Event
+	for _, name := range []string{"pod-d", "pod-b", "pod-c", "pod-a", "pod-e"} {
+		events = append(events, makeEventForObject("BackOff", "Back-off restarting failed container", "Warning", 1, now, "Pod", "shop", name))
+	}
+
+	result := DeduplicateEventsWithObjects(events, 3)
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(result))
+	}
+	g := result[0]
+	if g.ObjectCount != 5 || !g.ObjectsTruncated {
+		t.Errorf("objectCount = %d truncated=%v, want 5/true (distinct counted before cap)", g.ObjectCount, g.ObjectsTruncated)
+	}
+	if len(g.Objects) != 3 {
+		t.Fatalf("objects = %+v, want capped at 3", g.Objects)
+	}
+	for i, want := range []string{"pod-a", "pod-b", "pod-c"} {
+		if g.Objects[i].Name != want {
+			t.Errorf("objects[%d] = %s, want %s (name order on equal timestamps)", i, g.Objects[i].Name, want)
+		}
+	}
+}
+
+// Series-style events (events.k8s.io mirrored into core/v1) carry recency
+// and count in Series, not the legacy fields — an actively repeating warning
+// must not read as a stale count-1 one-off.
+func TestDeduplicateEvents_HonorsEventSeries(t *testing.T) {
+	now := time.Now()
+	ev := corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "series-ev", Namespace: "default"},
+		Reason:     "Unhealthy", Message: "Readiness probe failed", Type: "Warning",
+		// Legacy fields as a series emitter leaves them: Count zero,
+		// LastTimestamp zero, EventTime = FIRST occurrence (an hour ago).
+		EventTime: metav1.MicroTime{Time: now.Add(-1 * time.Hour)},
+		Series: &corev1.EventSeries{
+			Count:            42,
+			LastObservedTime: metav1.MicroTime{Time: now.Add(-30 * time.Second)},
+		},
+	}
+
+	result := DeduplicateEvents([]corev1.Event{ev})
+	if len(result) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(result))
+	}
+	if result[0].Count != 42 {
+		t.Errorf("count = %d, want 42 (Series.Count)", result[0].Count)
+	}
+	if got := result[0].LastTimestamp; now.Sub(got) > time.Minute {
+		t.Errorf("lastTimestamp = %v, want Series.LastObservedTime (~30s ago), not first-occurrence EventTime", got)
+	}
+}
+
+// Which equal-timestamp groups survive the 20-group cap must not depend on
+// input (informer map) order: same events, two orders, same output.
+func TestDeduplicateEvents_DeterministicUnderCapTies(t *testing.T) {
+	now := time.Now()
+	var events []corev1.Event
+	for i := 0; i < 30; i++ {
+		events = append(events, makeEvent(fmt.Sprintf("Reason%02d", i), fmt.Sprintf("message %02d", i), "Warning", 1, now))
+	}
+	reversed := make([]corev1.Event, len(events))
+	for i := range events {
+		reversed[len(events)-1-i] = events[i]
+	}
+
+	a := DeduplicateEvents(events)
+	b := DeduplicateEvents(reversed)
+	if len(a) != maxDeduplicatedEvents || len(b) != maxDeduplicatedEvents {
+		t.Fatalf("lens = %d/%d, want both capped at %d", len(a), len(b), maxDeduplicatedEvents)
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("order diverged at %d under equal timestamps: %+v vs %+v", i, a[i], b[i])
+		}
+	}
+}
+
+// The plain DeduplicateEvents wire shape is unchanged by the objects path —
+// its consumers (get_events, diagnose, resource includes) group across pods
+// on purpose and must not grow new fields.
+func TestDeduplicateEvents_ShapeUnchanged(t *testing.T) {
+	now := time.Now()
+	events := []corev1.Event{
+		makeEventForObject("BackOff", "Back-off restarting", "Warning", 1, now, "Pod", "shop", "pod-a"),
+	}
+	result := DeduplicateEvents(events)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(result))
+	}
+	data, err := json.Marshal(result[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, forbidden := range []string{"objects", "objectCount", "objectsTruncated"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Errorf("DeduplicatedEvent JSON grew %q: %s", forbidden, data)
+		}
 	}
 }
 
