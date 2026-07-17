@@ -1547,6 +1547,11 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 			if !res.IsCRD {
 				continue
 			}
+			// Crossplane serves this legacy API with a deprecation warning on every
+			// informer watch renewal. Keep it available on demand, but don't eagerly watch it.
+			if res.Group == "apiextensions.crossplane.io" && res.Name == "usages" {
+				continue
+			}
 			hasList := false
 			hasWatch := false
 			for _, verb := range res.Verbs {
