@@ -199,20 +199,24 @@ func finalizeCheck(check *Check) {
 }
 
 func scanDeprecatedAPIRequests(input *Input, target *utilversion.Version) Check {
+	processScope := "since that process last restarted"
+	if input.DeprecatedAPIMetricsWindow != "" {
+		processScope = "over its " + input.DeprecatedAPIMetricsWindow + " process lifetime"
+	}
 	check := Check{
-		ID:         "deprecated-api-requests",
-		Category:   "API compatibility",
-		Title:      "Removed API usage",
-		Status:     CheckUnknown,
-		Summary:    "No removed API requests were observed on the sampled API server replica, but this is not cluster-wide history.",
-		Scope:      "Kubernetes API server usage metrics",
-		Caveat:     "API usage metrics cover one API server replica since that process last restarted.",
-		References: append([]Reference(nil), manifestAPIReferences...),
+		ID:           "deprecated-api-requests",
+		Category:     "API compatibility",
+		Title:        "Removed API usage",
+		Status:       CheckPassed,
+		Summary:      "No removed API requests were observed on one API server process " + processScope + ".",
+		Scope:        "Kubernetes API server usage metrics",
+		EvidenceNote: "API usage metrics cover one API server process " + processScope + "; they are not cluster-wide history.",
+		References:   append([]Reference(nil), manifestAPIReferences...),
 	}
 	if input.DeprecatedAPIRequests == nil {
 		check.Status = CheckUnknown
 		check.Summary = "API usage metrics are unavailable; Radar could not inspect deprecated API requests."
-		check.Caveat = ""
+		check.EvidenceNote = ""
 		return check
 	}
 	check.Inspected = len(input.DeprecatedAPIRequests)
@@ -233,7 +237,7 @@ func scanDeprecatedAPIRequests(input *Input, target *utilversion.Version) Check 
 			RuleID:      check.ID,
 			Title:       "API removed in Kubernetes " + minorString(removed),
 			Level:       LevelBlocker,
-			Evidence:    Evidence{Source: "apiserver metrics", Path: path, Detail: "observed on the sampled API server replica since its last restart"},
+			Evidence:    Evidence{Source: "apiserver metrics", Path: path, Detail: "observed on one API server process " + processScope},
 			AppliesFrom: minorString(removed),
 			Impact:      "A client is still requesting an API that the target Kubernetes version no longer serves.",
 			Remediation: "Identify the client from audit logs or user-agent metrics, then migrate it to the replacement API before upgrading.",
@@ -241,7 +245,7 @@ func scanDeprecatedAPIRequests(input *Input, target *utilversion.Version) Check 
 		})
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d removed API request %s observed on the sampled API server replica.", len(check.Findings), plural(len(check.Findings), "series", "series"))
+		check.Summary = fmt.Sprintf("%d removed API request %s observed on one API server process %s.", len(check.Findings), plural(len(check.Findings), "series", "series"), processScope)
 	}
 	return check
 }
@@ -250,7 +254,7 @@ func scanManifestCompatibility(input *Input, target *utilversion.Version) Check 
 	check := Check{
 		ID:         "manifest-api-compatibility",
 		Category:   "API compatibility",
-		Title:      "Deployment manifest APIs",
+		Title:      "Source manifest API versions",
 		Status:     CheckPassed,
 		Summary:    "No incompatible API versions were found in readable source manifests.",
 		Scope:      "Helm release manifests and kubectl last-applied configuration",
@@ -328,7 +332,7 @@ func scanManifestCompatibility(input *Input, target *utilversion.Version) Check 
 		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests could not be read in: "+strings.Join(input.HelmUnavailableNamespaces, ", ")+".")
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d source manifest %s an API affected by the target version.", len(check.Findings), plural(len(check.Findings), "uses", "use"))
+		check.Summary = fmt.Sprintf("%d source %s %s an API affected by the target version.", len(check.Findings), plural(len(check.Findings), "manifest", "manifests"), plural(len(check.Findings), "uses", "use"))
 	} else if check.Caveat != "" {
 		check.Status = CheckUnknown
 		if input.Namespaces != nil {
@@ -371,7 +375,7 @@ func scanNodeHealth(input *Input) Check {
 		})
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d node %s not Ready.", len(check.Findings), plural(len(check.Findings), "is", "are"))
+		check.Summary = fmt.Sprintf("%d %s %s not Ready.", len(check.Findings), plural(len(check.Findings), "node", "nodes"), plural(len(check.Findings), "is", "are"))
 	}
 	return check
 }
@@ -419,7 +423,7 @@ func scanKubeletSkew(input *Input, target *utilversion.Version) Check {
 		}
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d kubelet %s outside the supported skew for Kubernetes %s.", len(check.Findings), plural(len(check.Findings), "is", "are"), minorString(target))
+		check.Summary = fmt.Sprintf("%d %s %s outside the supported skew for Kubernetes %s.", len(check.Findings), plural(len(check.Findings), "kubelet", "kubelets"), plural(len(check.Findings), "is", "are"), minorString(target))
 	}
 	if unparsed > 0 {
 		check.Caveat = fmt.Sprintf("The kubelet version could not be parsed on %d %s.", unparsed, plural(unparsed, "node", "nodes"))
@@ -487,7 +491,7 @@ func scanKubeProxySkew(input *Input, target *utilversion.Version) Check {
 		}
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d kube-proxy installation %s outside the supported skew.", len(check.Findings), plural(len(check.Findings), "is", "is"))
+		check.Summary = fmt.Sprintf("%d kube-proxy %s %s outside the supported skew.", len(check.Findings), plural(len(check.Findings), "installation", "installations"), plural(len(check.Findings), "is", "are"))
 	}
 	if unparsed > 0 {
 		check.Caveat = "The kube-proxy image version could not be determined for one or more installations."
@@ -528,7 +532,7 @@ func scanGitRepo(input *Input, index *workloadIndex) Check {
 		}
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d workload %s the removed gitRepo volume driver.", len(check.Findings), plural(len(check.Findings), "uses", "use"))
+		check.Summary = fmt.Sprintf("%d %s %s the removed gitRepo volume driver.", len(check.Findings), plural(len(check.Findings), "workload", "workloads"), plural(len(check.Findings), "uses", "use"))
 	}
 	if workloadsUnavailable(input) {
 		check.Caveat = appendCaveat(check.Caveat, "One or more workload kinds were unavailable, so additional gitRepo usage may exist.")
@@ -591,7 +595,7 @@ func scanFlexVolume(input *Input, index *workloadIndex) Check {
 		})
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d FlexVolume reference %s manual review for Kubernetes 1.36.", len(check.Findings), plural(len(check.Findings), "needs", "need"))
+		check.Summary = fmt.Sprintf("%d FlexVolume %s %s manual review for Kubernetes 1.36.", len(check.Findings), plural(len(check.Findings), "reference", "references"), plural(len(check.Findings), "needs", "need"))
 	}
 	if workloadsUnavailable(input) || input.PersistentVolumes == nil {
 		check.Caveat = appendCaveat(check.Caveat, "Workload or PersistentVolume coverage is incomplete, so additional FlexVolume usage may exist.")
@@ -673,7 +677,7 @@ func scanServiceExternalIPs(input *Input) Check {
 		})
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d Service %s deprecated spec.externalIPs.", len(check.Findings), plural(len(check.Findings), "uses", "use"))
+		check.Summary = fmt.Sprintf("%d %s %s deprecated spec.externalIPs.", len(check.Findings), plural(len(check.Findings), "Service", "Services"), plural(len(check.Findings), "uses", "use"))
 	}
 	return check
 }
@@ -744,7 +748,7 @@ func scanRenamedMetrics(input *Input) Check {
 		}
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d PrometheusRule %s a metric renamed in Kubernetes 1.36.", len(check.Findings), plural(len(check.Findings), "references", "references"))
+		check.Summary = fmt.Sprintf("%d %s %s a metric renamed in Kubernetes 1.36.", len(check.Findings), plural(len(check.Findings), "PrometheusRule", "PrometheusRules"), plural(len(check.Findings), "references", "reference"))
 	} else if check.Caveat != "" {
 		check.Status = CheckUnknown
 		if input.Namespaces != nil {

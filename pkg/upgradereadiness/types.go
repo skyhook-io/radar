@@ -36,7 +36,7 @@ const (
 
 type Input struct {
 	// Namespaces is nil for a cluster-wide scan and populated when live
-	// namespaced evidence was filtered by the current view or RBAC ceiling.
+	// namespaced evidence was filtered by an RBAC or configured cache ceiling.
 	Namespaces []string
 
 	Pods              []*corev1.Pod
@@ -61,8 +61,11 @@ type Input struct {
 	HelmUnavailableNamespaces []string
 
 	// DeprecatedAPIRequests is nil when /metrics could not be read. An empty,
-	// non-nil slice means the sampled API server replica had no active series.
+	// non-nil slice means the sampled API server process had no active series.
 	DeprecatedAPIRequests []DeprecatedAPIRequest
+	// DeprecatedAPIMetricsWindow is the observed API server process lifetime,
+	// formatted for display by the collector that read the metrics endpoint.
+	DeprecatedAPIMetricsWindow string
 	// PrometheusRules is nil when the CRD exists but Radar could not inspect it.
 	// An empty slice with PrometheusRulesInstalled=false means not applicable.
 	PrometheusRules                     []*unstructured.Unstructured
@@ -123,17 +126,18 @@ type Finding struct {
 }
 
 type Check struct {
-	ID          string      `json:"id"`
-	Category    string      `json:"category"`
-	Title       string      `json:"title"`
-	Status      CheckStatus `json:"status"`
-	Summary     string      `json:"summary"`
-	Caveat      string      `json:"caveat,omitempty"`
-	Scope       string      `json:"scope"`
-	Inspected   int         `json:"inspected,omitempty"`
-	AppliesFrom string      `json:"appliesFrom,omitempty"`
-	Findings    []Finding   `json:"findings"`
-	References  []Reference `json:"references,omitempty"`
+	ID           string      `json:"id"`
+	Category     string      `json:"category"`
+	Title        string      `json:"title"`
+	Status       CheckStatus `json:"status"`
+	Summary      string      `json:"summary"`
+	EvidenceNote string      `json:"evidenceNote,omitempty"`
+	Caveat       string      `json:"caveat,omitempty"`
+	Scope        string      `json:"scope"`
+	Inspected    int         `json:"inspected,omitempty"`
+	AppliesFrom  string      `json:"appliesFrom,omitempty"`
+	Findings     []Finding   `json:"findings"`
+	References   []Reference `json:"references,omitempty"`
 }
 
 type Summary struct {

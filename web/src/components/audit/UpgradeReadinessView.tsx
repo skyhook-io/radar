@@ -7,6 +7,7 @@ import {
   BookOpen,
   CheckCircle2,
   CircleDashed,
+  CircleMinus,
   ExternalLink,
   FileSearch,
   ShieldAlert,
@@ -39,6 +40,8 @@ interface UpgradeReadinessViewProps {
   onNavigateToResource: (resource: SelectedResource) => void
 }
 
+const FINDING_CAP = 8
+
 const statusMeta: Record<UpgradeReadinessCheckStatus, {
   label: string
   icon: typeof CheckCircle2
@@ -49,7 +52,7 @@ const statusMeta: Record<UpgradeReadinessCheckStatus, {
   warning: { label: 'Review', icon: AlertTriangle, iconClass: 'text-amber-600 dark:text-amber-400', badgeSeverity: 'warning' },
   unknown: { label: 'Incomplete', icon: CircleDashed, iconClass: 'text-theme-text-tertiary', badgeSeverity: 'neutral' },
   passed: { label: 'Passed', icon: CheckCircle2, iconClass: 'text-emerald-600 dark:text-emerald-400', badgeSeverity: 'success' },
-  not_applicable: { label: 'Not applicable', icon: CircleDashed, iconClass: 'text-theme-text-disabled', badgeSeverity: 'neutral' },
+  not_applicable: { label: 'Not applicable', icon: CircleMinus, iconClass: 'text-theme-text-disabled', badgeSeverity: 'neutral' },
 }
 
 const statusOrder: Record<UpgradeReadinessCheckStatus, number> = {
@@ -68,7 +71,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
   const location = useLocation()
   const navigate = useNavigate()
   const requestedTarget = new URLSearchParams(location.search).get('target') ?? undefined
-  const { data, isLoading, error, dataUpdatedAt, refetch } = useUpgradeReadiness(namespaces, requestedTarget)
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useUpgradeReadiness(requestedTarget)
   const { connection } = useConnection()
   const targetOptions = useMemo(
     () => buildTargetOptions(data?.currentVersion, data?.reviewedThrough, data?.targetVersion),
@@ -123,16 +126,24 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
         description={`Find configuration and compatibility changes before upgrading Kubernetes ${data.currentVersion} → ${data.targetVersion}.`}
         actions={
           <>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-theme-text-tertiary">Target</span>
-              <SelectMenu
-                value={data.targetVersion}
-                options={targetOptions}
-                onChange={setTarget}
-                ariaLabel="Target Kubernetes version"
-                className="w-24"
-              />
-            </div>
+            {data.coverage.state !== 'no_access' && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-theme-text-tertiary">Target</span>
+                {targetOptions.length > 1 ? (
+                  <SelectMenu
+                    value={data.targetVersion}
+                    options={targetOptions}
+                    onChange={setTarget}
+                    ariaLabel="Target Kubernetes version"
+                    className="w-24"
+                  />
+                ) : (
+                  <span className="rounded-md bg-theme-elevated px-2.5 py-1.5 text-xs font-medium tabular-nums text-theme-text-primary">
+                    {data.targetVersion}
+                  </span>
+                )}
+              </div>
+            )}
             <FreshnessControl
               mode="snapshot"
               dataUpdatedAt={dataUpdatedAt}
@@ -145,58 +156,73 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
 
       <ChecksViewTabs />
 
-      <UpgradeSummary
-        verdict={data.verdict}
-        target={data.targetVersion}
-        reviewedThrough={data.reviewedThrough}
-        summary={data.summary}
-        coverageState={data.coverage.state}
-      />
-
-      {unsupportedTarget && (
-        <CoverageNotice
-          headline={`Coverage ends at Kubernetes ${data.reviewedThrough}`}
-          body={`Known results are shown, but checks added after ${data.reviewedThrough} are not included for ${data.targetVersion}.`}
+      {data.coverage.state !== 'no_access' && (
+        <UpgradeSummary
+          verdict={data.verdict}
+          target={data.targetVersion}
+          reviewedThrough={data.reviewedThrough}
+          summary={data.summary}
+          coverageState={data.coverage.state}
         />
       )}
-      {(data.coverage.scopedNamespaces?.length ?? 0) > 0 && (
+
+      {unsupportedTarget && data.coverage.state !== 'no_access' && (
+        <CoverageNotice
+          headline={`Coverage ends at Kubernetes ${data.reviewedThrough}`}
+          body={`Known results are shown, but checks added after ${data.reviewedThrough} are not included for ${data.targetVersion}. Update Radar when a release with ${data.targetVersion} coverage is available, then run this scan again.`}
+        />
+      )}
+      {data.coverage.state !== 'no_access' && (data.coverage.scopedNamespaces?.length ?? 0) > 0 && (
         <CoverageNotice
           headline={`Scoped to ${data.coverage.scopedNamespaces!.length} ${data.coverage.scopedNamespaces!.length === 1 ? 'namespace' : 'namespaces'}`}
           body={`Results do not cover namespaced configuration outside ${formatNamespaceScope(data.coverage.scopedNamespaces!)}.`}
         />
       )}
-      {(data.coverage.unavailableKinds?.length ?? 0) > 0 && (
+      {namespaces.length > 0 && !data.coverage.scopedNamespaces?.length && data.coverage.state !== 'no_access' && (
+        <CoverageNotice
+          headline="Cluster-wide upgrade scan"
+          body="The current namespace browsing filter does not limit upgrade checks. Radar evaluates every namespace your identity can read."
+        />
+      )}
+      {data.coverage.state !== 'no_access' && (data.coverage.unavailableKinds?.length ?? 0) > 0 && (
         <CoverageNotice
           headline="Some live resources were unavailable"
-          body={`Radar could not inspect: ${(data.coverage.unavailableKinds ?? []).join(', ')}. Affected checks are marked unavailable.`}
+          body={`Radar could not inspect: ${(data.coverage.unavailableKinds ?? []).join(', ')}. Affected checks are marked incomplete.`}
         />
       )}
       {data.coverage.state === 'partial' && !data.coverage.scopedNamespaces?.length && !data.coverage.unavailableKinds?.length && (
         <CoverageNotice headline="Some evidence is incomplete" body="Expand rows with a coverage note to see what Radar could not verify." />
       )}
-      {data.coverage.state === 'no_access' && (
-        <CoverageNotice headline="No namespace access" body="Radar cannot inspect workload configuration in this cluster for your current identity." />
-      )}
-
-      <section className="shrink-0 overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
-        <div className="flex items-center justify-between border-b-subtle px-4 py-3">
-          <div>
-            <h2 className="text-sm font-semibold text-theme-text-primary">Checks for Kubernetes {data.targetVersion}</h2>
-            <p className="mt-0.5 text-xs text-theme-text-tertiary">Results are ordered by required action. Expand a row for evidence and remediation.</p>
+      {data.coverage.state === 'no_access' ? (
+        <section className="shrink-0">
+          <EmptyState
+            tone="neutral"
+            icon={FileSearch}
+            headline="Upgrade checks need namespace access"
+            body="Radar cannot inspect workload configuration in this cluster for your current identity. Ask a cluster administrator for read access, then refresh this page."
+          />
+        </section>
+      ) : (
+        <section className="shrink-0 overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
+          <div className="flex items-center justify-between border-b-subtle px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold text-theme-text-primary">Checks for Kubernetes {data.targetVersion}</h2>
+              <p className="mt-0.5 text-xs text-theme-text-tertiary">Results are ordered by required action. Expand a row for evidence and remediation.</p>
+            </div>
+            <span className="text-xs tabular-nums text-theme-text-tertiary">{data.checks.length} checks</span>
           </div>
-          <span className="text-xs tabular-nums text-theme-text-tertiary">{data.checks.length} checks</span>
-        </div>
-        <div className="hidden grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] gap-4 border-b-subtle bg-theme-elevated px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary md:grid">
-          <span>Check</span>
-          <span>Result</span>
-          <span>Status</span>
-        </div>
-        <div className="divide-y divide-theme-border">
-          {sortedChecks.map((check) => (
-            <CheckRow key={check.id} check={check} onNavigateToResource={onNavigateToResource} />
-          ))}
-        </div>
-      </section>
+          <div className="hidden grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] gap-4 border-b-subtle bg-theme-elevated px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary md:grid">
+            <span>Check</span>
+            <span>Result</span>
+            <span>Status</span>
+          </div>
+          <div className="divide-y divide-theme-border">
+            {sortedChecks.map((check) => (
+              <CheckRow key={check.id} check={check} onNavigateToResource={onNavigateToResource} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   )
 }
@@ -206,7 +232,7 @@ function UpgradeSummary({ verdict, target, reviewedThrough, summary, coverageSta
   target: string
   reviewedThrough: string
   summary: { blocked: number; warnings: number; passed: number; unknown: number; notApplicable: number }
-  coverageState: 'complete' | 'partial' | 'no_access'
+  coverageState: 'complete' | 'partial'
 }) {
   const meta = summaryMeta(verdict, target, reviewedThrough, summary, coverageState)
   const Icon = meta.icon
@@ -240,7 +266,7 @@ function summaryMeta(
   target: string,
   reviewedThrough: string,
   summary: { blocked: number; warnings: number; unknown: number },
-  coverageState: 'complete' | 'partial' | 'no_access',
+  coverageState: 'complete' | 'partial',
 ) {
   if (verdict === 'blocked') return {
     headline: `${summary.blocked} upgrade ${summary.blocked === 1 ? 'blocker' : 'blockers'} found`,
@@ -281,7 +307,12 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
   const meta = statusMeta[check.status]
   const Icon = meta.icon
   const [open, setOpen] = useState(false)
+  const [showAllFindings, setShowAllFindings] = useState(false)
   const detailID = `upgrade-check-${check.id}`
+  const visibleFindings = showAllFindings ? check.findings : check.findings.slice(0, FINDING_CAP)
+  const hiddenFindings = check.findings.length - visibleFindings.length
+  const sharedFinding = sharedFindingDetails(check.findings)
+  const label = evidenceLabel(check)
   return (
     <div>
       <button
@@ -304,7 +335,7 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
         <div className="flex min-w-0 items-center justify-between gap-2 pl-6 md:pl-0">
           <div className="min-w-0">
             <Badge severity={meta.badgeSeverity}>{meta.label}</Badge>
-            <div className="mt-1 truncate text-[11px] text-theme-text-tertiary">{evidenceLabel(check)}</div>
+            {label && <div className="mt-1 text-[11px] text-theme-text-tertiary">{label}</div>}
           </div>
           <CollapseChevron open={open} className="h-4 w-4" />
         </div>
@@ -313,13 +344,28 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
         <div id={detailID} className="border-t-subtle bg-theme-elevated px-4 py-3">
           {check.findings.length > 0 && (
             <div className="flex flex-col gap-2">
-              {check.findings.map((finding, index) => (
-                <FindingRow key={findingKey(finding, index)} finding={finding} onNavigateToResource={onNavigateToResource} />
-              ))}
+              {sharedFinding ? (
+                <SharedFindingGroup
+                  finding={sharedFinding}
+                  findings={visibleFindings}
+                  total={check.findings.length}
+                  hidden={hiddenFindings}
+                  onShowAll={() => setShowAllFindings(true)}
+                  onNavigateToResource={onNavigateToResource}
+                />
+              ) : (
+                <>
+                  {visibleFindings.map((finding, index) => (
+                    <FindingRow key={findingKey(finding, index)} finding={finding} onNavigateToResource={onNavigateToResource} />
+                  ))}
+                  {hiddenFindings > 0 && <ShowAllFindings total={check.findings.length} onClick={() => setShowAllFindings(true)} />}
+                </>
+              )}
             </div>
           )}
           <div className={clsx('flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-theme-text-tertiary', check.findings.length > 0 && 'mt-3 border-t-subtle pt-3')}>
             {check.caveat && <span className="inline-flex items-start gap-1.5 text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />Coverage note: {check.caveat}</span>}
+            {check.evidenceNote && <span className="inline-flex items-start gap-1.5"><FileSearch className="mt-0.5 h-3.5 w-3.5 shrink-0" />Evidence scope: {check.evidenceNote}</span>}
             <span className="inline-flex items-center gap-1.5"><FileSearch className="h-3.5 w-3.5" />{check.scope}</span>
             {(check.references ?? []).map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
           </div>
@@ -329,15 +375,100 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
   )
 }
 
+function sharedFindingDetails(findings: UpgradeReadinessFinding[]) {
+  if (findings.length < 2) return undefined
+  const first = findings[0]
+  const referenceKey = JSON.stringify(first.references)
+  return findings.every((finding) =>
+    finding.ruleID === first.ruleID
+    && finding.title === first.title
+    && finding.level === first.level
+    && finding.impact === first.impact
+    && finding.remediation === first.remediation
+    && finding.appliesFrom === first.appliesFrom
+    && JSON.stringify(finding.references) === referenceKey
+  ) ? first : undefined
+}
+
+function SharedFindingGroup({ finding, findings, total, hidden, onShowAll, onNavigateToResource }: {
+  finding: UpgradeReadinessFinding
+  findings: UpgradeReadinessFinding[]
+  total: number
+  hidden: number
+  onShowAll: () => void
+  onNavigateToResource: (resource: SelectedResource) => void
+}) {
+  return (
+    <article className="overflow-hidden rounded-lg border border-theme-border bg-theme-surface">
+      <div className="px-3 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge severity={finding.level === 'blocker' ? 'error' : 'warning'}>{finding.level === 'blocker' ? 'Blocker' : 'Review'}</Badge>
+          <span className="text-xs font-medium text-theme-text-primary">{finding.title}</span>
+          <span className="text-[11px] text-theme-text-tertiary">{total} findings</span>
+        </div>
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <FindingDetail icon={AlertTriangle} label="Impact">{finding.impact}</FindingDetail>
+          <FindingDetail icon={Wrench} label="Remediation">{finding.remediation}</FindingDetail>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t-subtle pt-2 text-[11px] text-theme-text-tertiary">
+          {finding.appliesFrom && <span>Applies from Kubernetes {finding.appliesFrom}</span>}
+          {finding.references.map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
+        </div>
+      </div>
+      <div className="divide-y divide-theme-border border-t-subtle">
+        {findings.map((item, index) => (
+          <CompactFindingRow key={findingKey(item, index)} finding={item} onNavigateToResource={onNavigateToResource} />
+        ))}
+      </div>
+      {hidden > 0 && <div className="border-t-subtle px-2 py-1.5"><ShowAllFindings total={total} onClick={onShowAll} /></div>}
+    </article>
+  )
+}
+
+function CompactFindingRow({ finding, onNavigateToResource }: {
+  finding: UpgradeReadinessFinding
+  onNavigateToResource: (resource: SelectedResource) => void
+}) {
+  const resourceLabel = finding.resource && `${finding.resource.namespace ? `${finding.resource.namespace}/` : ''}${finding.resource.name}`
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[11px] text-theme-text-tertiary">
+      {finding.resource && (
+        <button
+          type="button"
+          onClick={() => onNavigateToResource({ ...finding.resource!, group: finding.resource!.group ?? '' })}
+          className="flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-theme-hover"
+        >
+          <Badge kind={finding.resource.kind} size="sm">{finding.resource.kind}</Badge>
+          <span className="max-w-[280px] truncate text-xs font-medium text-accent-text">{resourceLabel}</span>
+        </button>
+      )}
+      <span className="inline-flex min-w-0 items-center gap-1"><FileSearch className="h-3 w-3 shrink-0" /><code className="truncate">{finding.evidence.path}</code>{finding.evidence.detail ? ` · ${finding.evidence.detail}` : ''}</span>
+      {finding.managedBy && <span>Managed by {finding.managedBy.kind} {finding.managedBy.namespace ? `${finding.managedBy.namespace}/` : ''}{finding.managedBy.name}</span>}
+    </div>
+  )
+}
+
+function ShowAllFindings({ total, onClick }: { total: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex w-fit items-center gap-1 rounded px-2 py-1 text-xs font-medium text-accent-text hover:underline"
+    >
+      View all {total} findings →
+    </button>
+  )
+}
+
 function formatNamespaceScope(namespaces: string[]) {
   if (namespaces.length <= 3) return namespaces.join(', ')
   return `${namespaces.slice(0, 3).join(', ')} and ${namespaces.length - 3} more`
 }
 
 function evidenceLabel(check: UpgradeReadinessCheck) {
-  if (check.findings.length > 0) return `${check.findings.length} affected`
+  if (check.findings.length > 0) return `${check.findings.length} ${check.findings.length === 1 ? 'finding' : 'findings'}`
   if (check.inspected !== undefined && check.inspected > 0) return `${check.inspected} inspected`
-  return check.scope
+  return undefined
 }
 
 function FindingRow({ finding, onNavigateToResource }: { finding: UpgradeReadinessFinding; onNavigateToResource: (resource: SelectedResource) => void }) {

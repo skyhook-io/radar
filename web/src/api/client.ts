@@ -421,6 +421,7 @@ export interface UpgradeReadinessCheck {
   title: string
   status: UpgradeReadinessCheckStatus
   summary: string
+  evidenceNote?: string
   caveat?: string
   scope: string
   inspected?: number
@@ -539,13 +540,12 @@ export function useAudit(namespaces: string[] = []) {
   });
 }
 
-export function useUpgradeReadiness(namespaces: string[] = [], target?: string) {
+export function useUpgradeReadiness(target?: string) {
   const params = new URLSearchParams()
-  if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
   if (target) params.set('target', target)
   const query = params.toString()
   return useQuery<UpgradeReadinessResponse>({
-    queryKey: ['upgrade-readiness', namespaces, target ?? 'next'],
+    queryKey: ['upgrade-readiness', target ?? 'next'],
     queryFn: () => fetchJSON(`/upgrade-readiness${query ? `?${query}` : ''}`),
     staleTime: 30000,
   })

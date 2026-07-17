@@ -1,11 +1,15 @@
 package server
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 type fakeUpgradeResourceLister struct {
@@ -13,6 +17,46 @@ type fakeUpgradeResourceLister struct {
 	clusterWideSynced bool
 	lists             int
 	resources         []*unstructured.Unstructured
+}
+
+func TestUpgradeReadinessNamespacesIgnoresBrowsingFilter(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/upgrade-readiness?namespaces=payments", nil)
+	if got := (&Server{}).upgradeReadinessNamespaces(req); got != nil {
+		t.Fatalf("upgrade namespace scope = %v, want cluster-wide", got)
+	}
+}
+
+func TestUpgradeReadinessNamespacesHonorsForcedScope(t *testing.T) {
+	previousForce := k8s.ForceNamespaceScope
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("tenant-a")
+	t.Cleanup(func() {
+		k8s.SetNamespaceScopeOverride("")
+		k8s.ForceNamespaceScope = previousForce
+	})
+
+	req := httptest.NewRequest("GET", "/api/upgrade-readiness", nil)
+	got := (&Server{}).upgradeReadinessNamespaces(req)
+	if len(got) != 1 || got[0] != "tenant-a" {
+		t.Fatalf("upgrade namespace scope = %v, want [tenant-a]", got)
+	}
+}
+
+func TestUpgradeReadinessNamespacesIntersectsForcedScopeWithUserAccess(t *testing.T) {
+	previousForce := k8s.ForceNamespaceScope
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("tenant-a")
+	t.Cleanup(func() {
+		k8s.SetNamespaceScopeOverride("")
+		k8s.ForceNamespaceScope = previousForce
+	})
+
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("alice", &auth.UserPermissions{AllowedNamespaces: []string{"tenant-b"}})
+	req := requestWithUser("GET", "/api/upgrade-readiness", &auth.User{Username: "alice"})
+	if got := s.upgradeReadinessNamespaces(req); !noNamespaceAccess(got) {
+		t.Fatalf("upgrade namespace scope = %v, want no access", got)
+	}
 }
 
 func (f *fakeUpgradeResourceLister) ListNamespaces(schema.GroupVersionResource, []string) ([]*unstructured.Unstructured, error) {
@@ -61,13 +105,18 @@ func TestParseDeprecatedAPIRequests(t *testing.T) {
 # TYPE apiserver_requested_deprecated_apis gauge
 apiserver_requested_deprecated_apis{group="flowcontrol.apiserver.k8s.io",removed_release="1.32",resource="flowschemas",subresource="status",version="v1beta3"} 1
 apiserver_requested_deprecated_apis{group="",removed_release="1.25",resource="podsecuritypolicies",subresource="",version="v1beta1"} 0
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.721234567e+09
 `)
-	requests, err := parseDeprecatedAPIRequests(raw)
+	requests, startedAt, err := parseDeprecatedAPIRequests(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 {
 		t.Fatalf("requests = %+v", requests)
+	}
+	if got := startedAt.Unix(); got != 1721234567 {
+		t.Fatalf("process start = %d, want 1721234567", got)
 	}
 	got := requests[0]
 	if got.Group != "flowcontrol.apiserver.k8s.io" || got.Version != "v1beta3" || got.Resource != "flowschemas" || got.Subresource != "status" || got.RemovedRelease != "1.32" || got.Requests != 1 {
@@ -76,11 +125,14 @@ apiserver_requested_deprecated_apis{group="",removed_release="1.25",resource="po
 }
 
 func TestParseDeprecatedAPIRequestsMissingMetricIsObservedEmpty(t *testing.T) {
-	requests, err := parseDeprecatedAPIRequests([]byte("# EOF\n"))
+	requests, startedAt, err := parseDeprecatedAPIRequests([]byte("# EOF\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if requests == nil || len(requests) != 0 {
 		t.Fatalf("requests = %#v, want observed empty slice", requests)
+	}
+	if !startedAt.IsZero() {
+		t.Fatalf("process start = %v, want zero", startedAt)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log"
+	"math"
 	"net/http"
 	"time"
 
@@ -30,7 +31,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	namespaces := s.parseNamespacesForUser(r)
+	namespaces := s.upgradeReadinessNamespaces(r)
 	noAccess := noNamespaceAccess(namespaces)
 	var scanInput *k8s.ResourceCache
 	if !noAccess {
@@ -40,12 +41,13 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	var manifestResources []upgradereadiness.ManifestResource
 	var helmUnavailableNamespaces []string
 	var deprecatedRequests []upgradereadiness.DeprecatedAPIRequest
+	var deprecatedMetricsWindow string
 	var prometheusRules []*unstructured.Unstructured
 	var prometheusUnavailableNamespaces []string
 	var prometheusInstalled, discoveryAvailable bool
 	if !noAccess {
 		manifestResources, helmUnavailableNamespaces = collectUpgradeHelmManifests(r, namespaces)
-		deprecatedRequests = collectDeprecatedAPIRequests(r)
+		deprecatedRequests, deprecatedMetricsWindow = collectDeprecatedAPIRequests(r)
 		prometheusRules, prometheusInstalled, discoveryAvailable, prometheusUnavailableNamespaces = s.collectUpgradePrometheusRules(r, namespaces)
 	}
 	platform, _ := k8s.GetClusterPlatform(r.Context())
@@ -56,6 +58,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		ManifestResources:                   manifestResources,
 		HelmUnavailableNamespaces:           helmUnavailableNamespaces,
 		DeprecatedAPIRequests:               deprecatedRequests,
+		DeprecatedAPIMetricsWindow:          deprecatedMetricsWindow,
 		PrometheusRules:                     prometheusRules,
 		PrometheusRulesInstalled:            prometheusInstalled,
 		PrometheusRulesDiscoveryAvailable:   discoveryAvailable,
@@ -80,6 +83,20 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.writeJSON(w, results)
+}
+
+// upgradeReadinessNamespaces intentionally ignores the active namespace picker:
+// an upgrade affects the cluster, while the picker is only a browsing filter.
+// Authenticated users are still limited to their full RBAC namespace ceiling,
+// and --namespace-scope remains an explicit hard boundary on cached evidence.
+func (s *Server) upgradeReadinessNamespaces(r *http.Request) []string {
+	if k8s.ForceNamespaceScope {
+		if namespace := k8s.GetNamespaceScopeTarget(); namespace != "" {
+			return s.getUserNamespaces(r, []string{namespace})
+		}
+		return []string{}
+	}
+	return s.getUserNamespaces(r, nil)
 }
 
 func collectUpgradeHelmManifests(r *http.Request, namespaces []string) ([]upgradereadiness.ManifestResource, []string) {
@@ -113,32 +130,46 @@ func collectUpgradeHelmManifests(r *http.Request, namespaces []string) ([]upgrad
 	return result, unavailableNamespaces
 }
 
-func collectDeprecatedAPIRequests(r *http.Request) []upgradereadiness.DeprecatedAPIRequest {
+func collectDeprecatedAPIRequests(r *http.Request) ([]upgradereadiness.DeprecatedAPIRequest, string) {
 	client := k8s.ClientFromContext(r.Context())
 	if client == nil || client.Discovery().RESTClient() == nil {
-		return nil
+		return nil, ""
 	}
 	raw, err := client.Discovery().RESTClient().Get().AbsPath("/metrics").DoRaw(r.Context())
 	if err != nil {
-		return nil
+		return nil, ""
 	}
-	requests, err := parseDeprecatedAPIRequests(raw)
+	requests, processStartedAt, err := parseDeprecatedAPIRequests(raw)
 	if err != nil {
 		log.Printf("[upgrade-impact] failed to parse API server metrics: %v", err)
-		return nil
+		return nil, ""
 	}
-	return requests
+	window := ""
+	if !processStartedAt.IsZero() {
+		age := time.Since(processStartedAt)
+		if age >= 0 {
+			window = k8s.FormatAge(age)
+		}
+	}
+	return requests, window
 }
 
-func parseDeprecatedAPIRequests(raw []byte) ([]upgradereadiness.DeprecatedAPIRequest, error) {
+func parseDeprecatedAPIRequests(raw []byte) ([]upgradereadiness.DeprecatedAPIRequest, time.Time, error) {
 	parser := expfmt.NewTextParser(model.LegacyValidation)
 	families, err := parser.TextToMetricFamilies(bytes.NewReader(raw))
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
+	}
+	var processStartedAt time.Time
+	if processFamily := families["process_start_time_seconds"]; processFamily != nil && len(processFamily.Metric) > 0 {
+		if startedAt := metricValue(processFamily.GetType(), processFamily.Metric[0]); startedAt > 0 {
+			seconds, fraction := math.Modf(startedAt)
+			processStartedAt = time.Unix(int64(seconds), int64(fraction*float64(time.Second)))
+		}
 	}
 	family := families["apiserver_requested_deprecated_apis"]
 	if family == nil {
-		return []upgradereadiness.DeprecatedAPIRequest{}, nil
+		return []upgradereadiness.DeprecatedAPIRequest{}, processStartedAt, nil
 	}
 	requests := make([]upgradereadiness.DeprecatedAPIRequest, 0, len(family.Metric))
 	for _, metric := range family.Metric {
@@ -154,7 +185,7 @@ func parseDeprecatedAPIRequests(raw []byte) ([]upgradereadiness.DeprecatedAPIReq
 			Requests: metricValue(family.GetType(), metric),
 		})
 	}
-	return requests, nil
+	return requests, processStartedAt, nil
 }
 
 func metricLabels(metric *dto.Metric) map[string]string {

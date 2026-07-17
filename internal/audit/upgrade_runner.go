@@ -19,6 +19,7 @@ type UpgradeReadinessOptions struct {
 	ManifestResources                   []upgradereadiness.ManifestResource
 	HelmUnavailableNamespaces           []string
 	DeprecatedAPIRequests               []upgradereadiness.DeprecatedAPIRequest
+	DeprecatedAPIMetricsWindow          string
 	PrometheusRules                     []*unstructured.Unstructured
 	PrometheusRulesInstalled            bool
 	PrometheusRulesDiscoveryAvailable   bool
@@ -96,6 +97,7 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 		ManifestResources:                   opts.ManifestResources,
 		HelmUnavailableNamespaces:           opts.HelmUnavailableNamespaces,
 		DeprecatedAPIRequests:               opts.DeprecatedAPIRequests,
+		DeprecatedAPIMetricsWindow:          opts.DeprecatedAPIMetricsWindow,
 		PrometheusRules:                     opts.PrometheusRules,
 		PrometheusRulesInstalled:            opts.PrometheusRulesInstalled,
 		PrometheusRulesDiscoveryAvailable:   opts.PrometheusRulesDiscoveryAvailable,

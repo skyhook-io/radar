@@ -5,18 +5,21 @@ export function ChecksViewTabs() {
   const { pathname, search } = useLocation()
   const upgrade = pathname.startsWith('/checks/upgrade')
   const current = new URLSearchParams(search)
-  const shared = new URLSearchParams()
-  for (const key of ['namespace', 'namespaces', 'target']) {
+  const browsing = new URLSearchParams()
+  for (const key of ['namespace', 'namespaces']) {
     const value = current.get(key)
-    if (value) shared.set(key, value)
+    if (value) browsing.set(key, value)
   }
+  const upgradeSearch = new URLSearchParams(browsing)
+  const target = current.get('target')
+  if (target) upgradeSearch.set('target', target)
 
   return (
     <div className="flex items-center gap-1 border-b border-theme-border" role="tablist" aria-label="Check views">
-      <ChecksTab to={{ pathname: '/checks', search: shared.toString() }} active={!upgrade}>
+      <ChecksTab to={{ pathname: '/checks', search: browsing.toString() }} active={!upgrade}>
         Best practices
       </ChecksTab>
-      <ChecksTab to={{ pathname: '/checks/upgrade', search: shared.toString() }} active={upgrade}>
+      <ChecksTab to={{ pathname: '/checks/upgrade', search: upgradeSearch.toString() }} active={upgrade}>
         Upgrade impact
       </ChecksTab>
     </div>

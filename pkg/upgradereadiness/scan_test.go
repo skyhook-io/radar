@@ -62,20 +62,20 @@ func gitRepoSpec() corev1.PodSpec {
 	}}}
 }
 
-func TestScanBaselineHasNamedChecksAndHonestMetricsCoverage(t *testing.T) {
+func TestScanBaselineCanPassWithSampledMetricsEvidence(t *testing.T) {
 	got, err := Scan(completeInput(), "1.35", "1.36")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Verdict != VerdictUnknown || got.Summary.Blocked != 0 || got.Summary.Passed != 7 || got.Summary.Unknown != 1 || got.Summary.NotApplicable != 2 {
+	if got.Verdict != VerdictNoKnownBlockers || got.Summary.Blocked != 0 || got.Summary.Passed != 8 || got.Summary.Unknown != 0 || got.Summary.NotApplicable != 2 {
 		t.Fatalf("unexpected result: %+v", got)
 	}
 	if len(got.Checks) != 10 {
 		t.Fatalf("checks = %d, want 10", len(got.Checks))
 	}
 	metrics := checkByID(t, got, "deprecated-api-requests")
-	if metrics.Status != CheckUnknown || metrics.Caveat == "" {
-		t.Fatalf("single-replica metrics must not produce a pass: %+v", metrics)
+	if metrics.Status != CheckPassed || metrics.EvidenceNote == "" || metrics.Caveat != "" {
+		t.Fatalf("sampled metrics should pass with an evidence note: %+v", metrics)
 	}
 }
 
@@ -97,6 +97,9 @@ func TestScanGitRepoAcrossWorkloadKinds(t *testing.T) {
 	if got.Verdict != VerdictBlocked || check.Status != CheckBlocked || len(check.Findings) != 7 || check.Inspected != 7 {
 		t.Fatalf("unexpected gitRepo result: %+v", check)
 	}
+	if check.Summary != "7 workloads use the removed gitRepo volume driver." {
+		t.Fatalf("gitRepo summary = %q", check.Summary)
+	}
 	wantPaths := map[string]string{
 		"Pod": "spec.volumes[0].gitRepo", "Deployment": "spec.template.spec.volumes[0].gitRepo",
 		"ReplicaSet": "spec.template.spec.volumes[0].gitRepo", "StatefulSet": "spec.template.spec.volumes[0].gitRepo",
@@ -112,6 +115,7 @@ func TestScanGitRepoAcrossWorkloadKinds(t *testing.T) {
 
 func TestScanDeprecatedAPIRequests(t *testing.T) {
 	input := completeInput()
+	input.DeprecatedAPIMetricsWindow = "6h"
 	input.DeprecatedAPIRequests = []DeprecatedAPIRequest{{Group: "extensions", Version: "v1beta1", Resource: "ingresses", RemovedRelease: "1.22", Requests: 4}}
 	got, err := Scan(input, "1.35", "1.36")
 	if err != nil {
@@ -120,6 +124,9 @@ func TestScanDeprecatedAPIRequests(t *testing.T) {
 	check := checkByID(t, got, "deprecated-api-requests")
 	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Resource != nil {
 		t.Fatalf("unexpected API request result: %+v", check)
+	}
+	if !strings.Contains(check.Summary, "6h process lifetime") || !strings.Contains(check.EvidenceNote, "not cluster-wide history") {
+		t.Fatalf("API metrics scope is not explicit: %+v", check)
 	}
 
 	input.DeprecatedAPIRequests = nil
@@ -188,6 +195,9 @@ func TestScanManifestCompatibilityFromHelmAndLastApplied(t *testing.T) {
 	if check.Status != CheckBlocked || len(check.Findings) != 2 || check.Inspected != 2 {
 		t.Fatalf("unexpected manifest result: %+v", check)
 	}
+	if check.Summary != "2 source manifests use an API affected by the target version." {
+		t.Fatalf("manifest summary = %q", check.Summary)
+	}
 	if check.Findings[0].ManagedBy == nil && check.Findings[1].ManagedBy == nil {
 		t.Fatalf("Helm ownership was not preserved: %+v", check.Findings)
 	}
@@ -208,16 +218,25 @@ func TestScanHealthAndComponentSkew(t *testing.T) {
 	input := completeInput()
 	input.Nodes = []*corev1.Node{readyNode("old", "v1.32.9"), readyNode("new", "v1.35.2")}
 	input.Nodes[1].Status.Conditions[0].Status = corev1.ConditionFalse
-	input.DaemonSets = []*appsv1.DaemonSet{{
-		ObjectMeta: metav1.ObjectMeta{Name: "kube-proxy", Namespace: "kube-system"},
-		Spec:       appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-proxy", Image: "registry.k8s.io/kube-proxy:v1.32.9"}}}}},
-	}}
+	input.DaemonSets = []*appsv1.DaemonSet{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "kube-proxy", Namespace: "kube-system"},
+			Spec:       appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-proxy", Image: "registry.k8s.io/kube-proxy:v1.32.9"}}}}},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "kube-proxy-canary", Namespace: "kube-system", Labels: map[string]string{"k8s-app": "kube-proxy"}},
+			Spec:       appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-proxy", Image: "registry.k8s.io/kube-proxy:v1.32.9"}}}}},
+		},
+	}
 	got, err := Scan(input, "1.35", "1.36")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if checkByID(t, got, "node-health").Status != CheckWarning || checkByID(t, got, "kubelet-version-skew").Status != CheckBlocked || checkByID(t, got, "kube-proxy-version-skew").Status != CheckBlocked {
 		t.Fatalf("unexpected health/skew checks: %+v", got.Checks)
+	}
+	if got := checkByID(t, got, "kube-proxy-version-skew").Summary; got != "2 kube-proxy installations are outside the supported skew." {
+		t.Fatalf("kube-proxy summary = %q", got)
 	}
 }
 
@@ -233,23 +252,43 @@ func TestScanSkewFindingRetainsUnparsedVersionCaveat(t *testing.T) {
 
 func TestScanKubernetes136ConfigurationChanges(t *testing.T) {
 	input := completeInput()
-	input.Services = []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "default"}, Spec: corev1.ServiceSpec{ExternalIPs: []string{"203.0.113.10"}}}}
+	input.Services = []*corev1.Service{
+		{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "default"}, Spec: corev1.ServiceSpec{ExternalIPs: []string{"203.0.113.10"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "legacy-secondary", Namespace: "default"}, Spec: corev1.ServiceSpec{ExternalIPs: []string{"203.0.113.11"}}},
+	}
 	input.PersistentVolumes = []*corev1.PersistentVolume{{ObjectMeta: metav1.ObjectMeta{Name: "flex"}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{FlexVolume: &corev1.FlexPersistentVolumeSource{Driver: "example.com/driver"}}}}}
 	input.PrometheusRulesInstalled = true
-	input.PrometheusRules = []*unstructured.Unstructured{{Object: map[string]any{
-		"apiVersion": "monitoring.coreos.com/v1", "kind": "PrometheusRule",
-		"metadata": map[string]any{"name": "kubernetes", "namespace": "monitoring"},
-		"spec":     map[string]any{"groups": []any{map[string]any{"rules": []any{map[string]any{"alert": "VolumeErrors", "expr": "rate(volume_operation_total_errors[5m]) > 0"}}}}},
-	}}}
+	input.PrometheusRules = []*unstructured.Unstructured{
+		{Object: map[string]any{
+			"apiVersion": "monitoring.coreos.com/v1", "kind": "PrometheusRule",
+			"metadata": map[string]any{"name": "kubernetes", "namespace": "monitoring"},
+			"spec":     map[string]any{"groups": []any{map[string]any{"rules": []any{map[string]any{"alert": "VolumeErrors", "expr": "rate(volume_operation_total_errors[5m]) > 0"}}}}},
+		}},
+		{Object: map[string]any{
+			"apiVersion": "monitoring.coreos.com/v1", "kind": "PrometheusRule",
+			"metadata": map[string]any{"name": "kubernetes-secondary", "namespace": "monitoring"},
+			"spec":     map[string]any{"groups": []any{map[string]any{"rules": []any{map[string]any{"alert": "VolumeErrorsSecondary", "expr": "rate(volume_operation_total_errors[5m]) > 0"}}}}},
+		}},
+	}
 	got, err := Scan(input, "1.35", "1.36")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"flexvolume-kubeadm-support", "service-externalips-deprecated", "renamed-control-plane-metrics"} {
 		check := checkByID(t, got, id)
-		if check.Status != CheckWarning || len(check.Findings) != 1 {
+		wantFindings := 1
+		if id == "renamed-control-plane-metrics" || id == "service-externalips-deprecated" {
+			wantFindings = 2
+		}
+		if check.Status != CheckWarning || len(check.Findings) != wantFindings {
 			t.Fatalf("%s = %+v", id, check)
 		}
+	}
+	if got := checkByID(t, got, "service-externalips-deprecated").Summary; got != "2 Services use deprecated spec.externalIPs." {
+		t.Fatalf("Service summary = %q", got)
+	}
+	if got := checkByID(t, got, "renamed-control-plane-metrics").Summary; got != "2 PrometheusRules reference a metric renamed in Kubernetes 1.36." {
+		t.Fatalf("PrometheusRule summary = %q", got)
 	}
 }
 
