@@ -407,12 +407,14 @@ type Issue struct {
 	// Deterministic evidence, not a causal claim — the consumer weighs
 	// whether the change explains the issue.
 	CorrelatedChanges []RecentChange `json:"correlated_changes,omitempty"`
-	// NoRecentChanges states the lookback window contained no non-status
-	// changes for this issue's subject — evidence the issue is NOT
-	// change-driven within that window. Omitted when correlation was not
-	// attempted (cap reached, lookup failed) or when the candidate fetch
-	// saturated and may have missed changes; absence must never be read as
-	// "no changes".
+	// NoRecentChanges states the lookback window contained no TRACKED
+	// non-status changes for this issue's subject (and, for workloads, its
+	// directly referenced ConfigMaps). It is scoped evidence, not proof the
+	// incident is chronic — untracked dependencies (Secret values, resources
+	// outside the tracked kind set, external systems) can still have changed.
+	// Omitted when correlation was not attempted (cap reached, lookup failed)
+	// or when the candidate fetch saturated and may have missed changes;
+	// absence must never be read as "no changes".
 	NoRecentChanges *NoRecentChangesMarker `json:"no_recent_changes,omitempty"`
 }
 
@@ -435,8 +437,9 @@ type Response struct {
 	RecentChanges       []RecentChange  `json:"recent_changes,omitempty"`
 	RecentChangesReason string          `json:"recent_changes_reason,omitempty"`
 	// CorrelationTruncated is set when per-issue change correlation skipped
-	// some critical issues (cap reached). Under truncation, an issue without
-	// correlation markers means "not checked", not "no changes".
+	// some critical or warning issues (shared cap reached; criticals are
+	// checked first). Under truncation, an issue without correlation markers
+	// means "not checked", not "no changes".
 	CorrelationTruncated bool `json:"correlation_truncated,omitempty"`
 }
 

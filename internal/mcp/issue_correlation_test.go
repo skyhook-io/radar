@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -53,6 +54,14 @@ func criticalIssue(kind, name string) issuesapi.Issue {
 	}
 }
 
+func warningIssue(kind, name string) issuesapi.Issue {
+	return issuesapi.Issue{
+		Severity: issuesapi.SeverityWarning,
+		Kind:     kind, Namespace: "shop", Name: name,
+		Reason: "SelectorMatchesNoPods",
+	}
+}
+
 // The changed workload gets correlated_changes; the chronic one gets an
 // explicit no_recent_changes marker with the window.
 func TestAttachIssueChangeCorrelation_Markers(t *testing.T) {
@@ -78,10 +87,23 @@ func TestAttachIssueChangeCorrelation_Markers(t *testing.T) {
 		t.Fatalf("append quiet status: %v", err)
 	}
 
+	// A warning-severity Service whose selector was just changed — the
+	// degraded-not-down case warning correlation exists for.
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "svc-selector", Timestamp: time.Now().Add(-3 * time.Minute),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Service", Namespace: "shop", Name: "warn-changed",
+		EventType: timeline.EventTypeUpdate,
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.selector.app", OldValue: "cart", NewValue: "cartt"}}, Summary: "selector changed"},
+	}); err != nil {
+		t.Fatalf("append service selector: %v", err)
+	}
+
 	resp := issues.ListResponse{Issues: []issuesapi.Issue{
 		criticalIssue("Deployment", "web"),
 		criticalIssue("Deployment", "quiet"),
-		{Severity: issuesapi.SeverityWarning, Kind: "Deployment", Namespace: "shop", Name: "warn-only"},
+		warningIssue("Service", "warn-changed"),
+		warningIssue("Deployment", "warn-quiet"),
 		criticalIssue("Pod", "standalone"), // untracked kind: no marker either way
 	}}
 	attachIssueChangeCorrelation(context.Background(), &resp)
@@ -97,10 +119,15 @@ func TestAttachIssueChangeCorrelation_Markers(t *testing.T) {
 	if quiet.NoRecentChanges == nil || quiet.NoRecentChanges.WindowSeconds != 3600 {
 		t.Fatalf("quiet should carry no_recent_changes{3600} despite status churn, got %+v (correlated=%+v)", quiet.NoRecentChanges, quiet.CorrelatedChanges)
 	}
-	if warn := resp.Issues[2]; warn.NoRecentChanges != nil || len(warn.CorrelatedChanges) != 0 {
-		t.Fatalf("warning issues must not be correlated: %+v", warn)
+	warn := resp.Issues[2]
+	if len(warn.CorrelatedChanges) != 1 || warn.CorrelatedChanges[0].Kind != "Service" || warn.CorrelatedChanges[0].Name != "warn-changed" {
+		t.Fatalf("warning issue should carry its subject's spec change, got %+v", warn.CorrelatedChanges)
 	}
-	if pod := resp.Issues[3]; pod.NoRecentChanges != nil || len(pod.CorrelatedChanges) != 0 {
+	warnQuiet := resp.Issues[3]
+	if warnQuiet.NoRecentChanges == nil {
+		t.Fatalf("unchanged warning subject should carry no_recent_changes, got %+v", warnQuiet)
+	}
+	if pod := resp.Issues[4]; pod.NoRecentChanges != nil || len(pod.CorrelatedChanges) != 0 {
 		t.Fatalf("untracked kinds must not carry markers (cannot truthfully claim 'no changes'): %+v", pod)
 	}
 	if resp.CorrelationTruncated {
@@ -258,4 +285,101 @@ func TestAttachIssueChangeCorrelation_Truncation(t *testing.T) {
 	if last.NoRecentChanges != nil || len(last.CorrelatedChanges) > 0 {
 		t.Fatalf("issue past cap must be unmarked: %+v", last)
 	}
+}
+
+// Criticals own the cap regardless of where they sit in the response: a
+// pile of warnings listed first must not consume the criticals' slots.
+func TestAttachIssueChangeCorrelation_CriticalsPriorityUnderCap(t *testing.T) {
+	initCorrelationStore(t)
+
+	var list []issuesapi.Issue
+	for i := 0; i < correlationIssueCap+2; i++ {
+		list = append(list, warningIssue("Deployment", fmt.Sprintf("warn-%d", i)))
+	}
+	list = append(list, criticalIssue("Deployment", "crit-a"), criticalIssue("Deployment", "crit-b"))
+	resp := issues.ListResponse{Issues: list}
+	attachIssueChangeCorrelation(context.Background(), &resp)
+
+	if !resp.CorrelationTruncated {
+		t.Fatal("correlation_truncated must be set when issues exceed the shared cap")
+	}
+	marked := 0
+	for _, iss := range resp.Issues {
+		if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+			marked++
+			if iss.Severity == issuesapi.SeverityWarning && marked > correlationIssueCap {
+				t.Fatalf("warning %s marked past the cap", iss.Name)
+			}
+		}
+	}
+	if marked != correlationIssueCap {
+		t.Fatalf("marked = %d, want exactly the cap (%d)", marked, correlationIssueCap)
+	}
+	for _, iss := range resp.Issues {
+		if iss.Severity == issuesapi.SeverityCritical && iss.NoRecentChanges == nil && len(iss.CorrelatedChanges) == 0 {
+			t.Fatalf("critical %s lost its slot to an earlier-listed warning", iss.Name)
+		}
+	}
+}
+
+// A warning-only response truncates on the same shared cap.
+func TestAttachIssueChangeCorrelation_WarningOnlyTruncation(t *testing.T) {
+	initCorrelationStore(t)
+
+	var list []issuesapi.Issue
+	for i := 0; i < correlationIssueCap+2; i++ {
+		list = append(list, warningIssue("Deployment", fmt.Sprintf("warn-%d", i)))
+	}
+	resp := issues.ListResponse{Issues: list}
+	attachIssueChangeCorrelation(context.Background(), &resp)
+
+	if !resp.CorrelationTruncated {
+		t.Fatal("correlation_truncated must be set for warning-only overflow")
+	}
+	marked := 0
+	for _, iss := range resp.Issues {
+		if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+			marked++
+		}
+	}
+	if marked != correlationIssueCap {
+		t.Fatalf("marked = %d, want exactly the cap (%d)", marked, correlationIssueCap)
+	}
+}
+
+// Worst-case correlation payload (cap × changes × field diffs, with realistic
+// field values) stays bounded — a guard against unnoticed schema growth now
+// that warnings are eligible too.
+func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
+	var iss []issuesapi.Issue
+	for i := 0; i < correlationIssueCap; i++ {
+		issue := criticalIssue("Deployment", fmt.Sprintf("dep-%d", i))
+		for c := 0; c < correlationChangeCap; c++ {
+			change := issuesapi.RecentChange{
+				Source: "informer", Kind: "Deployment", Namespace: "shop",
+				Name:           fmt.Sprintf("dep-%d", i),
+				ChangeType:     "update",
+				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+				Summary:        "spec changed: containers[app].image, containers[app].resources, replicas, strategy, template.metadata.labels",
+			}
+			for f := 0; f < correlationFieldLimit; f++ {
+				change.Fields = append(change.Fields, issuesapi.ChangeField{
+					Path:     fmt.Sprintf("spec.template.spec.containers[app].env[FEATURE_FLAG_%d].value", f),
+					OldValue: "a-realistically-long-previous-configuration-value-1234567890",
+					NewValue: "a-realistically-long-updated-configuration-value-0987654321",
+				})
+			}
+			issue.CorrelatedChanges = append(issue.CorrelatedChanges, change)
+		}
+		iss = append(iss, issue)
+	}
+	data, err := json.Marshal(issuesapi.Response{Issues: iss, Total: len(iss)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	const maxBytes = 128 * 1024
+	if len(data) > maxBytes {
+		t.Fatalf("worst-case correlation payload = %d bytes, exceeds %d — correlation caps no longer bound the response", len(data), maxBytes)
+	}
+	t.Logf("worst-case correlation payload: %d bytes", len(data))
 }
