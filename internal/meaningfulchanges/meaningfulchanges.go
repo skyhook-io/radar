@@ -78,7 +78,7 @@ func recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, bool,
 
 	if len(q.Kinds) > 0 || q.Name != "" {
 		queryLimit := candidateLimit(q.Limit, q.Name != "")
-		events, err := queryCandidates(ctx, store, q, q.Kinds, queryLimit)
+		events, rawEvents, err := queryCandidates(ctx, store, q, q.Kinds, queryLimit)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -86,33 +86,33 @@ func recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, bool,
 		// update churn can't push them out of the newest-N candidate window
 		// before ranking ever sees them. Ranking scores deletes above status
 		// churn, but it can only rank what the fetch returns.
-		lifecycleEvents, err := queryLifecycleCandidates(ctx, store, q, q.Kinds)
+		lifecycleEvents, rawLifecycle, err := queryLifecycleCandidates(ctx, store, q, q.Kinds)
 		if err != nil {
 			return nil, false, false, err
 		}
 		changes, capped, err := rankedChanges(coalesceRecreatePairs(dedupeEvents(append(events, lifecycleEvents...))), q.Name, q.Limit, q.FieldLimit)
-		saturated := len(events) >= queryLimit || len(lifecycleEvents) >= lifecycleCandidateLimit
+		saturated := rawEvents >= queryLimit || rawLifecycle >= lifecycleCandidateLimit
 		return changes, capped, saturated, err
 	}
 
 	perQueryLimit := candidateLimit(q.Limit, false)
-	configEvents, err := queryCandidates(ctx, store, q, configKinds, perQueryLimit)
+	configEvents, rawConfig, err := queryCandidates(ctx, store, q, configKinds, perQueryLimit)
 	if err != nil {
 		return nil, false, false, err
 	}
-	specEvents, err := queryCandidates(ctx, store, q, specKinds, perQueryLimit)
+	specEvents, rawSpec, err := queryCandidates(ctx, store, q, specKinds, perQueryLimit)
 	if err != nil {
 		return nil, false, false, err
 	}
 	lifecycleKinds := append(append([]string{}, configKinds...), specKinds...)
 	lifecycleKinds = append(lifecycleKinds, lifecycleOnlyKinds...)
-	lifecycleEvents, err := queryLifecycleCandidates(ctx, store, q, lifecycleKinds)
+	lifecycleEvents, rawLifecycle, err := queryLifecycleCandidates(ctx, store, q, lifecycleKinds)
 	if err != nil {
 		return nil, false, false, err
 	}
 	merged := coalesceRecreatePairs(dedupeEvents(append(append(configEvents, specEvents...), lifecycleEvents...)))
 	changes, capped, err := rankedChanges(merged, "", q.Limit, q.FieldLimit)
-	saturated := len(configEvents) >= perQueryLimit || len(specEvents) >= perQueryLimit || len(lifecycleEvents) >= lifecycleCandidateLimit
+	saturated := rawConfig >= perQueryLimit || rawSpec >= perQueryLimit || rawLifecycle >= lifecycleCandidateLimit
 	return changes, capped, saturated, err
 }
 
@@ -289,7 +289,12 @@ const lifecycleCandidateLimit = 50
 
 // queryLifecycleCandidates fetches add/delete events for the given kinds in a
 // query of their own, immune to crowding by update events.
-func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string) ([]timeline.TimelineEvent, error) {
+// queryLifecycleCandidates returns group-filtered events plus the RAW
+// pre-filter count — saturation must key on how many events the bounded
+// query consumed, not how many survived filtering, or mismatched-group
+// events crowding the window would turn "unknown" into a false "no
+// changes".
+func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string) ([]timeline.TimelineEvent, int, error) {
 	opts := timeline.QueryOptions{
 		Namespaces:       q.Namespaces,
 		Kinds:            compactKinds(kinds),
@@ -303,10 +308,12 @@ func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q 
 		IncludeK8sEvents: false,
 	}
 	events, err := store.Query(ctx, opts)
-	return filterTrackedGroupEvents(events), err
+	return filterTrackedGroupEvents(events), len(events), err
 }
 
-func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, limit int) ([]timeline.TimelineEvent, error) {
+// queryCandidates returns group-filtered events plus the RAW pre-filter
+// count (see queryLifecycleCandidates for why saturation needs it).
+func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, limit int) ([]timeline.TimelineEvent, int, error) {
 	opts := timeline.QueryOptions{
 		Namespaces: q.Namespaces,
 		Kinds:      compactKinds(kinds),
@@ -322,7 +329,7 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 		IncludeK8sEvents: false,
 	}
 	events, err := store.Query(ctx, opts)
-	return filterTrackedGroupEvents(events), err
+	return filterTrackedGroupEvents(events), len(events), err
 }
 
 // filterTrackedGroupEvents drops candidate events recorded from a different

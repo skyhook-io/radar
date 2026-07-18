@@ -404,6 +404,36 @@ func TestAttachIssueChangeCorrelation_CoreIssueIgnoresCRDEvents(t *testing.T) {
 	}
 }
 
+// Crowding: when mismatched-group events fill the bounded candidate window,
+// the answer is UNKNOWN (saturated), never a false no_recent_changes — an
+// older core change may sit beyond the events the query consumed.
+func TestAttachIssueChangeCorrelation_CRDCrowdingIsUnknownNotNoChanges(t *testing.T) {
+	store := initCorrelationStore(t)
+	now := time.Now()
+	for i := 0; i < 100; i++ { // name-filtered candidate limit
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID: fmt.Sprintf("knative-%d", i), Timestamp: now.Add(-time.Duration(i) * time.Second),
+			Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+			Kind: "Service", APIVersion: "serving.knative.dev/v1", Namespace: "shop", Name: "web",
+			EventType: timeline.EventTypeUpdate,
+			Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.template", OldValue: i, NewValue: i + 1}}, Summary: "revision churn"},
+		}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{warningIssue("Service", "web")}}
+	attachIssueChangeCorrelation(context.Background(), &resp)
+
+	core := resp.Issues[0]
+	if len(core.CorrelatedChanges) != 0 {
+		t.Fatalf("core issue absorbed CRD events: %+v", core.CorrelatedChanges)
+	}
+	if core.NoRecentChanges != nil {
+		t.Fatalf("crowded window must read as unknown (saturated), not no_recent_changes: %+v", core.NoRecentChanges)
+	}
+}
+
 // Worst-case correlation payload (cap × changes × field diffs, with realistic
 // field values) stays bounded — a guard against unnoticed schema growth now
 // that warnings are eligible too.
