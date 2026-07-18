@@ -377,6 +377,33 @@ func TestAttachIssueChangeCorrelation_GroupCollisionNotCorrelated(t *testing.T) 
 	}
 }
 
+// Reverse collision direction: a CORE Service issue must not absorb a
+// same-named Knative Service's change events — candidate events are group
+// filtered, so the core subject truthfully reports no_recent_changes.
+func TestAttachIssueChangeCorrelation_CoreIssueIgnoresCRDEvents(t *testing.T) {
+	store := initCorrelationStore(t)
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "knative-svc-change", Timestamp: time.Now().Add(-5 * time.Minute),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Service", APIVersion: "serving.knative.dev/v1", Namespace: "shop", Name: "web",
+		EventType: timeline.EventTypeUpdate,
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.template", OldValue: "a", NewValue: "b"}}, Summary: "revision changed"},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{warningIssue("Service", "web")}}
+	attachIssueChangeCorrelation(context.Background(), &resp)
+
+	core := resp.Issues[0]
+	if len(core.CorrelatedChanges) != 0 {
+		t.Fatalf("core Service issue absorbed a Knative Service's change: %+v", core.CorrelatedChanges)
+	}
+	if core.NoRecentChanges == nil {
+		t.Fatalf("core Service should truthfully report no tracked (core) changes, got %+v", core)
+	}
+}
+
 // Worst-case correlation payload (cap × changes × field diffs, with realistic
 // field values) stays bounded — a guard against unnoticed schema growth now
 // that warnings are eligible too.

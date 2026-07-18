@@ -302,7 +302,8 @@ func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q 
 		IncludeManaged:   false,
 		IncludeK8sEvents: false,
 	}
-	return store.Query(ctx, opts)
+	events, err := store.Query(ctx, opts)
+	return filterTrackedGroupEvents(events), err
 }
 
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, limit int) ([]timeline.TimelineEvent, error) {
@@ -320,7 +321,38 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 		IncludeManaged:   false,
 		IncludeK8sEvents: false,
 	}
-	return store.Query(ctx, opts)
+	events, err := store.Query(ctx, opts)
+	return filterTrackedGroupEvents(events), err
+}
+
+// filterTrackedGroupEvents drops candidate events recorded from a different
+// API group than the one the feed tracks for that kind — kind strings are
+// queried by name, so without this a Knative Service event would enter a
+// core Service's candidate set (and vice versa). Events with no recorded
+// apiVersion are kept: unknown, not mismatched.
+func filterTrackedGroupEvents(events []timeline.TimelineEvent) []timeline.TimelineEvent {
+	out := events[:0]
+	for _, e := range events {
+		if eventGroupMatchesTracked(e.Kind, e.APIVersion) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func eventGroupMatchesTracked(kind, apiVersion string) bool {
+	if apiVersion == "" {
+		return true // emitter did not record it — unknown, not mismatched
+	}
+	expected, ok := trackedKindGroups[canonicalKind(kind)]
+	if !ok {
+		return true
+	}
+	group := "" // bare "v1" = core group
+	if idx := strings.IndexByte(apiVersion, '/'); idx > 0 {
+		group = apiVersion[:idx]
+	}
+	return group == expected
 }
 
 func rankedChanges(events []timeline.TimelineEvent, name string, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
