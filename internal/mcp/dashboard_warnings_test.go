@@ -2,11 +2,13 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -25,11 +27,12 @@ func warningEvent(name, reason, message string, count int32, last time.Time, obj
 	}
 }
 
-// topWarnings must order by recency (not lifetime count) and carry the facts
-// a consumer needs to judge each row: lastSeen and the involved objects. The
-// old count-first ordering promoted a long-stale high-count group over the
-// live incident, and the old shape gave no way to tell the two apart.
-func TestBuildDashboard_TopWarnings_RecencyAndObjects(t *testing.T) {
+// warningGroups must order by recency (not lifetime count) and carry the
+// facts a consumer needs to judge each row: lastSeen and the involved
+// objects. The old count-first ordering promoted a long-stale high-count
+// group over the live incident, and the old shape gave no way to tell the
+// two apart.
+func TestBuildDashboard_WarningGroups_RecencyAndObjects(t *testing.T) {
 	defer k8s.ResetTestState()
 
 	ns := "shop"
@@ -52,18 +55,18 @@ func TestBuildDashboard_TopWarnings_RecencyAndObjects(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		dashboard = buildDashboard(context.Background(), cache, ns, false, false)
-		if len(dashboard.TopWarnings) >= 2 {
+		if len(dashboard.WarningGroups) >= 2 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(dashboard.TopWarnings) < 2 {
-		t.Fatalf("topWarnings never populated: %+v", dashboard.TopWarnings)
+	if len(dashboard.WarningGroups) < 2 {
+		t.Fatalf("warningGroups never populated: %+v", dashboard.WarningGroups)
 	}
 
-	live := dashboard.TopWarnings[0]
+	live := dashboard.WarningGroups[0]
 	if live.Reason != "BackOff" {
-		t.Fatalf("topWarnings[0] = %+v, want the RECENT BackOff group first despite the stale group's higher count", dashboard.TopWarnings)
+		t.Fatalf("warningGroups[0] = %+v, want the RECENT BackOff group first despite the stale group's higher count", dashboard.WarningGroups)
 	}
 	if live.Count != 3 {
 		t.Errorf("live count = %d, want 3 (aggregated across both pods)", live.Count)
@@ -78,54 +81,65 @@ func TestBuildDashboard_TopWarnings_RecencyAndObjects(t *testing.T) {
 		t.Errorf("objects[0] = %+v, want most-recent pod %+v", live.Objects[0], want)
 	}
 
-	stale := dashboard.TopWarnings[1]
+	stale := dashboard.WarningGroups[1]
 	if stale.Reason != "FailedMount" {
-		t.Fatalf("topWarnings[1] = %+v, want the stale FailedMount group", stale)
+		t.Fatalf("warningGroups[1] = %+v, want the stale FailedMount group", stale)
 	}
 	if stale.LastSeen.IsZero() || now.Sub(stale.LastSeen) < time.Hour {
 		t.Errorf("stale lastSeen = %v — without an old lastSeen a consumer cannot tell this group is stale", stale.LastSeen)
 	}
 }
 
-// Row selection is a union: the newest groups must not evict an actively
-// repeating storm whose latest event record is merely minutes older than a
-// burst of one-off churn — and vice versa, a stale storm must not hide fresh
-// incidents (observed in benchmark transcripts, where a resolved storm
-// outranked the live incident under count-first ordering). Six groups:
-// five fresh one-offs (count 1)
-// plus a 4-minute-old storm (count 400). Recency-only would emit the five
-// one-offs; count-only would lead with the storm. The union keeps the three
-// newest AND the storm.
-func TestSelectTopWarningGroups_UnionKeepsStormAndFresh(t *testing.T) {
+// The dashboard emits the FULL dedup window with no row selection: any
+// pick-N heuristic creates unrecoverable omissions (a live incident or an
+// active storm not making the cut — both observed in benchmark transcripts).
+// Seven distinct groups must yield seven rows, recency-ordered, with the
+// high-count storm present even though it is the oldest.
+func TestBuildDashboard_WarningGroups_FullWindowNoSelection(t *testing.T) {
+	defer k8s.ResetTestState()
+
+	ns := "shop"
 	now := time.Now()
-	mk := func(reason string, count int, last time.Time) aicontext.DeduplicatedEventGroup {
-		return aicontext.DeduplicatedEventGroup{DeduplicatedEvent: aicontext.DeduplicatedEvent{
-			Reason: reason, Message: "m", Type: "Warning", Count: count, LastTimestamp: last,
-		}}
+
+	objs := make([]runtime.Object, 0, 7)
+	for i := 0; i < 6; i++ {
+		objs = append(objs, warningEvent(
+			fmt.Sprintf("ev-fresh-%d", i), fmt.Sprintf("FreshReason%d", i),
+			fmt.Sprintf("distinct message %d", i), 1,
+			now.Add(-time.Duration(i+1)*time.Minute), "Pod", ns, fmt.Sprintf("pod-%d", i)))
 	}
-	groups := []aicontext.DeduplicatedEventGroup{ // dedup order: most recent first
-		mk("Fresh1", 1, now.Add(-10*time.Second)),
-		mk("Fresh2", 1, now.Add(-20*time.Second)),
-		mk("Fresh3", 1, now.Add(-30*time.Second)),
-		mk("Fresh4", 1, now.Add(-40*time.Second)),
-		mk("Fresh5", 1, now.Add(-50*time.Second)),
-		mk("Storm", 400, now.Add(-4*time.Minute)),
+	// Oldest group in the window, but an active storm by count — a 5-row
+	// selection under pure recency would have dropped it.
+	objs = append(objs, warningEvent("ev-storm", "StormReason", "storm message", 400,
+		now.Add(-10*time.Minute), "Pod", ns, "storm-pod"))
+
+	client := fake.NewSimpleClientset(objs...)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
 	}
-	selected := selectTopWarningGroups(groups, topWarningRecentSlots, topWarningRows)
-	if len(selected) != topWarningRows {
-		t.Fatalf("selected %d rows, want %d", len(selected), topWarningRows)
+	cache := k8s.GetResourceCache()
+
+	var dashboard mcpDashboard
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		dashboard = buildDashboard(context.Background(), cache, ns, false, false)
+		if len(dashboard.WarningGroups) >= 7 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	reasons := make(map[string]bool)
-	for _, g := range selected {
-		reasons[g.Reason] = true
+	if len(dashboard.WarningGroups) != 7 {
+		t.Fatalf("warningGroups = %d rows, want all 7 groups (no selection layer): %+v",
+			len(dashboard.WarningGroups), dashboard.WarningGroups)
 	}
-	for _, want := range []string{"Fresh1", "Fresh2", "Fresh3", "Storm"} {
-		if !reasons[want] {
-			t.Errorf("selection %v missing %s", reasons, want)
+	for i := 1; i < len(dashboard.WarningGroups); i++ {
+		if dashboard.WarningGroups[i].LastSeen.After(dashboard.WarningGroups[i-1].LastSeen) {
+			t.Errorf("rows not recency-ordered at %d: %v after %v",
+				i, dashboard.WarningGroups[i].LastSeen, dashboard.WarningGroups[i-1].LastSeen)
 		}
 	}
-	if selected[len(selected)-1].Reason != "Storm" {
-		t.Errorf("rows should stay in recency order with the storm last, got %v", reasons)
+	if last := dashboard.WarningGroups[6]; last.Reason != "StormReason" || last.Count != 400 {
+		t.Errorf("oldest row = %+v, want the storm group present with count 400", last)
 	}
 }
 
