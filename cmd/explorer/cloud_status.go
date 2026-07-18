@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/cliui"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/internal/config"
@@ -24,6 +25,8 @@ const (
 	hubTunnelUnavailable hubTunnelVerdict = iota
 	hubTunnelHealthy
 	hubTunnelUnhealthy
+
+	hubTunnelNeverConnectedSummary = "never connected"
 )
 
 type hubTunnelResult struct {
@@ -129,13 +132,13 @@ func cloudStatus(args []string, out, errOut io.Writer) int {
 			return 1
 		}
 	}
-	fmt.Fprintf(out, "\nStatus: %s\n\n", cloudStatusHeadline(targets, result.ClusterWideError, tunnel))
+	fmt.Fprintf(out, "\n%s\n\n", formatCloudStatusHeadline(cliui.New(out), targets, result.ClusterWideError, tunnel))
 	code := printCloudDiscoveryStatus(out, errOut, targets, result.ClusterWideError, exactTarget, normalizedNamespace, normalizedRelease)
 	if len(targets) == 1 {
 		if targets[0].Runtime.AlreadyCloud {
 			printHubTunnelStatus(out, targets[0], tunnel)
 		} else if tunnel.next != "" {
-			fmt.Fprintf(out, "\nNext: %s\n", tunnel.next)
+			fmt.Fprintf(out, "\n%s %s\n", cliui.New(out).Bold("Next:"), tunnel.next)
 		}
 		if tunnel.verdict == hubTunnelUnhealthy {
 			return 1
@@ -146,7 +149,8 @@ func cloudStatus(args []string, out, errOut io.Writer) int {
 
 func printCloudDiscoveryStatus(out, errOut io.Writer, targets []cloudinstall.RadarTarget, clusterWideErr error, exactTarget bool, namespace, release string) int {
 	if clusterWideErr != nil {
-		fmt.Fprintf(errOut, "Warning: Radar could not inspect all visible namespaces: %v\n", clusterWideErr)
+		style := cliui.New(errOut)
+		fmt.Fprintf(errOut, "%s Radar could not inspect all visible namespaces: %v\n", style.Tone(cliui.Attention, "Warning:"), clusterWideErr)
 	}
 	switch len(targets) {
 	case 0:
@@ -164,7 +168,8 @@ func printCloudDiscoveryStatus(out, errOut io.Writer, targets []cloudinstall.Rad
 	case 1:
 		healthy := printCloudStatus(out, targets[0])
 		if clusterWideErr != nil {
-			fmt.Fprintln(out, "Discovery: incomplete; other Radar installations could not be ruled out")
+			style := cliui.New(out)
+			fmt.Fprintf(out, "Discovery: %s incomplete; other Radar installations could not be ruled out\n", style.Marker(cliui.Attention))
 			fmt.Fprintln(out, "Pass --namespace and --release to make the target explicit.")
 			return 1
 		}
@@ -179,6 +184,10 @@ func printCloudDiscoveryStatus(out, errOut io.Writer, targets []cloudinstall.Rad
 }
 
 func printCloudStatus(out io.Writer, target cloudinstall.RadarTarget) bool {
+	return printCloudStatusWithStyle(out, target, cliui.New(out))
+}
+
+func printCloudStatusWithStyle(out io.Writer, target cloudinstall.RadarTarget, style cliui.Styler) bool {
 	runtime := target.Runtime
 	fmt.Fprintf(out, "Radar installation: %s/%s\n", target.Namespace, target.DeploymentName)
 	fmt.Fprintf(out, "Managed by: %s\n", cloudOwnershipLabel(target))
@@ -190,10 +199,12 @@ func printCloudStatus(out io.Writer, target cloudinstall.RadarTarget) bool {
 	}
 
 	ready := cloudAgentHealthy(runtime)
+	agentTone := cloudAgentTone(runtime)
 	if runtime.DesiredReplicas == 0 {
-		fmt.Fprintln(out, "Agent: scaled to zero")
+		fmt.Fprintf(out, "Agent: %s scaled to zero\n", style.Marker(agentTone))
 	} else if !runtime.StatusObserved {
-		fmt.Fprintf(out, "Agent: rollout status pending (%d/%d replicas ready)\n", runtime.ReadyReplicas, runtime.DesiredReplicas)
+		state := fmt.Sprintf("rollout status pending (%d/%d replicas ready)", runtime.ReadyReplicas, runtime.DesiredReplicas)
+		fmt.Fprintf(out, "Agent: %s %s\n", style.Marker(agentTone), state)
 	} else if !ready {
 		oldReplicas := runtime.TotalReplicas - runtime.UpdatedReplicas
 		if oldReplicas > 0 {
@@ -201,9 +212,8 @@ func printCloudStatus(out io.Writer, target cloudinstall.RadarTarget) bool {
 			if oldReplicas != 1 {
 				noun = "replicas"
 			}
-			fmt.Fprintf(
-				out,
-				"Agent: rollout incomplete (%d/%d updated, %d/%d ready, %d/%d available; %d old %s still running; readiness includes old replicas)\n",
+			state := fmt.Sprintf(
+				"rollout incomplete (%d/%d updated, %d/%d ready, %d/%d available; %d old %s still running; readiness includes old replicas)",
 				runtime.UpdatedReplicas,
 				runtime.DesiredReplicas,
 				runtime.ReadyReplicas,
@@ -213,10 +223,10 @@ func printCloudStatus(out io.Writer, target cloudinstall.RadarTarget) bool {
 				oldReplicas,
 				noun,
 			)
+			fmt.Fprintf(out, "Agent: %s %s\n", style.Marker(agentTone), state)
 		} else {
-			fmt.Fprintf(
-				out,
-				"Agent: rollout incomplete (%d/%d updated, %d/%d ready, %d/%d available)\n",
+			state := fmt.Sprintf(
+				"rollout incomplete (%d/%d updated, %d/%d ready, %d/%d available)",
 				runtime.UpdatedReplicas,
 				runtime.DesiredReplicas,
 				runtime.ReadyReplicas,
@@ -224,21 +234,24 @@ func printCloudStatus(out io.Writer, target cloudinstall.RadarTarget) bool {
 				runtime.AvailableReplicas,
 				runtime.DesiredReplicas,
 			)
+			fmt.Fprintf(out, "Agent: %s %s\n", style.Marker(agentTone), state)
 		}
 	} else {
-		fmt.Fprintf(out, "Agent: %d/%d replicas ready\n", runtime.ReadyReplicas, runtime.DesiredReplicas)
+		state := fmt.Sprintf("%d/%d replicas ready", runtime.ReadyReplicas, runtime.DesiredReplicas)
+		fmt.Fprintf(out, "Agent: %s %s\n", style.Marker(agentTone), state)
 	}
 
 	if !runtime.AlreadyCloud {
-		fmt.Fprintln(out, "Cloud configuration: not configured")
+		fmt.Fprintf(out, "Cloud configuration: %s not configured\n", style.Marker(cliui.Attention))
 		return false
 	}
 
 	missing := missingCloudConfiguration(runtime)
 	if len(missing) > 0 {
-		fmt.Fprintf(out, "Cloud configuration: incomplete (missing %s)\n", strings.Join(missing, ", "))
+		state := fmt.Sprintf("incomplete (missing %s)", strings.Join(missing, ", "))
+		fmt.Fprintf(out, "Cloud configuration: %s %s\n", style.Marker(cliui.Attention), state)
 	} else {
-		fmt.Fprintln(out, "Cloud configuration: present")
+		fmt.Fprintf(out, "Cloud configuration: %s present\n", style.Marker(cliui.Success))
 	}
 	if runtime.CloudModeUnresolved {
 		fmt.Fprintln(out, "Cloud mode: configured from a referenced value (value not inspected)")
@@ -254,6 +267,16 @@ func printCloudStatus(out io.Writer, target cloudinstall.RadarTarget) bool {
 		fmt.Fprintln(out, "Configured cluster reference: sourced from a referenced value (value not inspected)")
 	}
 	return ready && len(missing) == 0
+}
+
+func cloudAgentTone(runtime cloudinstall.DeploymentRuntime) cliui.Tone {
+	if runtime.DesiredReplicas == 0 {
+		return cliui.Failure
+	}
+	if cloudAgentHealthy(runtime) {
+		return cliui.Success
+	}
+	return cliui.Attention
 }
 
 func cloudAgentHealthy(runtime cloudinstall.DeploymentRuntime) bool {
@@ -283,6 +306,41 @@ func cloudStatusHeadline(targets []cloudinstall.RadarTarget, clusterWideErr erro
 	}
 }
 
+func formatCloudStatusHeadline(style cliui.Styler, targets []cloudinstall.RadarTarget, clusterWideErr error, tunnel hubTunnelResult) string {
+	return fmt.Sprintf("%s %s %s", style.Bold("Status:"), style.Marker(cloudStatusTone(targets, clusterWideErr, tunnel)), cloudStatusHeadline(targets, clusterWideErr, tunnel))
+}
+
+func cloudStatusTone(targets []cloudinstall.RadarTarget, clusterWideErr error, tunnel hubTunnelResult) cliui.Tone {
+	if len(targets) != 1 {
+		return cliui.Attention
+	}
+	tone := cloudTargetStatusTone(targets[0], tunnel)
+	if clusterWideErr != nil && tone == cliui.Success {
+		return cliui.Attention
+	}
+	return tone
+}
+
+func cloudTargetStatusTone(target cloudinstall.RadarTarget, tunnel hubTunnelResult) cliui.Tone {
+	agentTone := cloudAgentTone(target.Runtime)
+	if !target.Runtime.AlreadyCloud || len(missingCloudConfiguration(target.Runtime)) > 0 {
+		if agentTone == cliui.Failure {
+			return cliui.Failure
+		}
+		return cliui.Attention
+	}
+	if tunnel.verdict == hubTunnelHealthy {
+		return agentTone
+	}
+	if tunnel.verdict == hubTunnelUnhealthy && tunnel.summary != hubTunnelNeverConnectedSummary {
+		return cliui.Failure
+	}
+	if agentTone == cliui.Failure {
+		return cliui.Failure
+	}
+	return cliui.Attention
+}
+
 func cloudTargetStatusHeadline(target cloudinstall.RadarTarget, tunnel hubTunnelResult) string {
 	runtime := target.Runtime
 	agentHealthy := cloudAgentHealthy(runtime)
@@ -310,7 +368,7 @@ func cloudTargetStatusHeadline(target cloudinstall.RadarTarget, tunnel hubTunnel
 		switch tunnel.summary {
 		case "disconnected":
 			connection = "it is disconnected from the Hub"
-		case "never connected":
+		case hubTunnelNeverConnectedSummary:
 			connection = "it has never connected to the Hub"
 		case "failed — the Hub rejected the connection token":
 			connection = "the Hub rejected its connection token"
@@ -334,7 +392,12 @@ func cloudTargetStatusHeadline(target cloudinstall.RadarTarget, tunnel hubTunnel
 }
 
 func printHubTunnelStatus(out io.Writer, target cloudinstall.RadarTarget, result hubTunnelResult) {
-	fmt.Fprintf(out, "\nCloud connection: %s\n", result.summary)
+	printHubTunnelStatusWithStyle(out, target, result, cliui.New(out))
+}
+
+func printHubTunnelStatusWithStyle(out io.Writer, target cloudinstall.RadarTarget, result hubTunnelResult, style cliui.Styler) {
+	tone := hubTunnelTone(result)
+	fmt.Fprintf(out, "\nCloud connection: %s %s\n", style.Marker(tone), result.summary)
 	if result.hubClusterID != "" && result.hubClusterID != target.Runtime.ClusterName {
 		fmt.Fprintf(out, "Hub cluster ID: %s\n", result.hubClusterID)
 	}
@@ -346,10 +409,24 @@ func printHubTunnelStatus(out io.Writer, target cloudinstall.RadarTarget, result
 		fmt.Fprintf(out, "%s: %s\n", label, result.lastConnectedAt.UTC().Format(time.RFC3339))
 	}
 	if result.detail != "" {
-		fmt.Fprintf(out, "Details: %s\n", result.detail)
+		fmt.Fprintf(out, "%s %s\n", style.Dim("Details:"), result.detail)
 	}
 	if result.next != "" {
-		fmt.Fprintf(out, "Next: %s\n", result.next)
+		fmt.Fprintf(out, "%s %s\n", style.Bold("Next:"), result.next)
+	}
+}
+
+func hubTunnelTone(result hubTunnelResult) cliui.Tone {
+	switch result.verdict {
+	case hubTunnelHealthy:
+		return cliui.Success
+	case hubTunnelUnhealthy:
+		if result.summary == hubTunnelNeverConnectedSummary {
+			return cliui.Attention
+		}
+		return cliui.Failure
+	default:
+		return cliui.Attention
 	}
 }
 
@@ -466,7 +543,7 @@ func evaluateHubTunnelStatus(status *cloud.AgentStatusResponse, err error) hubTu
 		}
 	case "never_connected":
 		return hubTunnelResult{
-			verdict: hubTunnelUnhealthy, summary: "never connected", hubClusterID: status.ClusterID,
+			verdict: hubTunnelUnhealthy, summary: hubTunnelNeverConnectedSummary, hubClusterID: status.ClusterID,
 			next: "check the Radar agent state above and its Cloud connection logs.",
 		}
 	default:

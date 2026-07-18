@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
+	"github.com/skyhook-io/radar/internal/cliui"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/internal/config"
@@ -241,6 +242,8 @@ func cloudInstall(args []string) {
 
 	ctx, cancel := signalContext()
 	defer cancel()
+	stdoutStyle := cliui.New(os.Stdout)
+	stderrStyle := cliui.New(os.Stderr)
 
 	// Build kube + helm clients against the resolved kubecontext — the driver runs
 	// before Radar's normal boot, so we resolve these ourselves.
@@ -250,7 +253,7 @@ func cloudInstall(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Inspecting Kubernetes context %q for an existing Radar installation…\n\n", ctxName)
+	fmt.Printf("%s Inspecting Kubernetes context %q for an existing Radar installation…\n\n", stdoutStyle.Marker(cliui.Progress), ctxName)
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
 	plan, err := inspectCloudInstallPlan(ctx, clients, *namespace, *release, cloudInstallUsesExactTarget(explicitNamespace, explicitRelease))
 	if err != nil {
@@ -332,7 +335,7 @@ func cloudInstall(args []string) {
 			})
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "permission preflight failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "%s permission preflight failed: %v\n", stderrStyle.Marker(cliui.Failure), err)
 			fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
 			os.Exit(1)
 		}
@@ -341,15 +344,16 @@ func cloudInstall(args []string) {
 			fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
 			os.Exit(1)
 		}
+		fmt.Printf("%s Permission preflight passed.\n", stdoutStyle.Marker(cliui.Success))
 		printCloudPermissionAdvisories(os.Stdout, pf)
 	}
 
 	// Dry-run stops before device approval and token minting.
 	if *dryRun {
 		if plan.Mode == cloudInstallGitOps {
-			fmt.Println("Dry run complete. The verified GitOps controller and exact stable target are shown above; no Hub request or live Kubernetes change was made.")
+			fmt.Printf("%s Dry run complete. The verified GitOps controller and exact stable target are shown above; no Hub request or live Kubernetes change was made.\n", stdoutStyle.Marker(cliui.Success))
 		} else {
-			fmt.Println("Dry run complete. Blocking permission checks and chart preparation passed; no Hub request or Kubernetes change was made.")
+			fmt.Printf("%s Dry run complete. Blocking permission checks and chart preparation passed; no Hub request or Kubernetes change was made.\n", stdoutStyle.Marker(cliui.Success))
 		}
 		return
 	}
@@ -360,18 +364,18 @@ func cloudInstall(args []string) {
 	client := cloud.NewConnectClient(*hubURL)
 	cr, err := client.Create(ctx, meta)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\ncouldn't start the connect flow: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n%s couldn't start the connect flow: %v\n", stderrStyle.Marker(cliui.Failure), err)
 		os.Exit(1)
 	}
-	fmt.Printf("  Approve this connection in your browser:\n\n    %s\n\n", cr.ConnectURL)
+	fmt.Printf("  %s Approve this connection in your browser:\n\n    %s\n\n", stdoutStyle.Marker(cliui.Progress), cr.ConnectURL)
 	if !*noBrowser {
 		go app.OpenBrowser(cr.ConnectURL, *browserPref)
 	}
-	fmt.Println("  Waiting for approval… (Ctrl-C to cancel)")
+	fmt.Printf("  %s Waiting for approval… (Ctrl-C to cancel)\n", stdoutStyle.Marker(cliui.Progress))
 
 	pr, err := client.PollUntilApproved(ctx, cr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\nconnect failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n%s connect failed: %v\n", stderrStyle.Marker(cliui.Failure), err)
 		os.Exit(1)
 	}
 	if ctx.Err() != nil && plan.Mode != cloudInstallGitOps {
@@ -384,7 +388,7 @@ func cloudInstall(args []string) {
 			printGitOpsHandoffFailure(os.Stderr, err, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
 			os.Exit(1)
 		}
-		fmt.Printf("\n  Waiting up to %s for your GitOps-managed agent to connect (you can safely leave this running)…\n", cloudTunnelConfirmationTimeout)
+		fmt.Printf("\n  %s Waiting up to %s for your GitOps-managed agent to connect (you can safely leave this running)…\n", stdoutStyle.Marker(cliui.Progress), cloudTunnelConfirmationTimeout)
 		if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationTimeout); err != nil {
 			printGitOpsPendingHandoff(os.Stderr, err, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
 			os.Exit(1)
@@ -399,7 +403,8 @@ func cloudInstall(args []string) {
 	if plan.Mode == cloudInstallAdopt {
 		action = "Upgrading and connecting"
 	}
-	fmt.Printf("\n  Approved. %s Radar in namespace %q…\n", action, prepared.Namespace())
+	fmt.Printf("\n  %s Approved.\n", stdoutStyle.Marker(cliui.Success))
+	fmt.Printf("  %s %s Radar in namespace %q…\n", stdoutStyle.Marker(cliui.Progress), action, prepared.Namespace())
 	perr := cloudinstall.ProvisionPrepared(ctx, clients.Kubernetes, prepared, cloudinstall.ProvisionConfig{
 		Namespace:    prepared.Namespace(),
 		ReleaseName:  prepared.ReleaseName(),
@@ -409,12 +414,13 @@ func cloudInstall(args []string) {
 		Token:        pr.Token,
 	})
 	if perr != nil {
-		fmt.Fprintf(os.Stderr, "\nprovisioning failed: %v\n", perr)
+		fmt.Fprintf(os.Stderr, "\n%s provisioning failed: %v\n", stderrStyle.Marker(cliui.Failure), perr)
 		printPostApprovalRecoveryGuidance(os.Stderr, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID), provisionRecoveryFrom(prepared), perr, commandTarget)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n  Kubernetes provisioning complete. Waiting up to %s for the in-cluster agent to connect…\n", cloudTunnelConfirmationTimeout)
+	fmt.Printf("\n  %s Kubernetes provisioning complete.\n", stdoutStyle.Marker(cliui.Success))
+	fmt.Printf("  %s Waiting up to %s for the in-cluster agent to connect…\n", stdoutStyle.Marker(cliui.Progress), cloudTunnelConfirmationTimeout)
 	if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationTimeout); err != nil {
 		printTunnelConfirmationFailure(os.Stderr, err, pr.ClusterID, pr.WSSURL, prepared.Deployment(), commandTarget)
 		os.Exit(1)
@@ -470,7 +476,7 @@ func cloudClusterURL(connectURL, clusterID string) string {
 }
 
 func printInstallSuccess(w io.Writer, clusterName, clusterURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
-	fmt.Fprintf(w, "\n  ✓ Cluster %q is connected to Radar.\n", clusterName)
+	fmt.Fprintf(w, "\n  %s Cluster %q is connected to Radar.\n", cliui.New(w).Marker(cliui.Success), clusterName)
 	fmt.Fprintf(w, "    Open: %s\n", clusterURL)
 	fmt.Fprintf(w, "    Track it: %s -n %s rollout status deployment/%s\n\n", target.kubectl(), deployment.Namespace, deployment.Name)
 }
@@ -520,7 +526,7 @@ func printTokenSecretConflict(w io.Writer, err error) bool {
 }
 
 func printCanceledAfterApproval(w io.Writer, clusterID, clusterURL string) {
-	fmt.Fprintf(w, "\nThe Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", clusterID)
+	fmt.Fprintf(w, "\n%s The Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", cliui.New(w).Marker(cliui.Attention), clusterID)
 	fmt.Fprintln(w, "No token Secret or Helm release was written. Rerun `radar cloud install` to try again.")
 	fmt.Fprintln(w, "The previous approval may remain as a pending cluster in Radar. An organization owner can delete it later:")
 	fmt.Fprintf(w, "  %s\n", clusterURL)
@@ -597,7 +603,7 @@ func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL 
 		reason = "confirmation was canceled"
 	}
 
-	fmt.Fprintf(w, "\nRadar was provisioned and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.\n", clusterID, reason)
+	fmt.Fprintf(w, "\n%s Radar was provisioned and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.\n", cliui.New(w).Marker(cliui.Attention), clusterID, reason)
 	fmt.Fprintln(w, "Do not rerun the installer or delete the cluster by default; the existing agent can still connect after you resolve its startup or egress issue.")
 	fmt.Fprintln(w, "Inspect:")
 	fmt.Fprintf(w, "  %s -n %s rollout status deployment/%s\n", target.kubectl(), deployment.Namespace, deployment.Name)

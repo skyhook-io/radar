@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/cliui"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -47,7 +48,7 @@ func shellArgument(value string) string {
 }
 
 func printPreparedInstallPlan(w io.Writer, prepared *cloudinstall.PreparedProvision, enableCloudFeatures, noSelfUpgrade bool) {
-	fmt.Fprintln(w, "Plan:")
+	fmt.Fprintln(w, cliui.New(w).Bold("Plan:"))
 	fmt.Fprintf(w, "  Kubernetes target: namespace %q, Helm release %q\n", prepared.Namespace(), prepared.ReleaseName())
 	if prepared.Mode() == cloudinstall.ProvisionFresh {
 		fmt.Fprintln(w, "  Action: install a new connected Radar release")
@@ -81,7 +82,7 @@ func printPreparedInstallPlan(w io.Writer, prepared *cloudinstall.PreparedProvis
 }
 
 func printGitOpsInstallPlan(w io.Writer, plan cloudInstallPlan, target helm.PreparedChartSummary, enableCloudFeatures bool) {
-	fmt.Fprintln(w, "Plan:")
+	fmt.Fprintln(w, cliui.New(w).Bold("Plan:"))
 	fmt.Fprintf(w, "  Kubernetes target: namespace %q, Helm release %q, Deployment %q\n",
 		plan.Namespace, plan.Release, plan.Target.DeploymentName)
 	fmt.Fprintln(w, "  Action: generate a source-of-truth handoff; do not mutate the live controller or workload")
@@ -111,7 +112,7 @@ func printCloudPermissionFailure(
 	prepared *cloudinstall.PreparedProvision,
 	clusterName string,
 ) {
-	fmt.Fprintln(w, "Your current Kubernetes identity cannot perform the exact planned Radar operation.")
+	fmt.Fprintf(w, "%s Your current Kubernetes identity cannot perform the exact planned Radar operation.\n", cliui.New(w).Marker(cliui.Failure))
 	fmt.Fprintln(w, "Blocked while trying to:")
 	for _, detail := range pf.Blocking {
 		fmt.Fprintf(w, "  • %s\n", detail)
@@ -126,7 +127,8 @@ func printCloudPermissionAdvisories(w io.Writer, pf cloudinstall.PreflightResult
 	if len(pf.Advisory) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "Preflight notes:")
+	style := cliui.New(w)
+	fmt.Fprintf(w, "%s %s\n", style.Marker(cliui.Attention), style.Tone(cliui.Attention, "Preflight notes:"))
 	for _, detail := range pf.Advisory {
 		fmt.Fprintf(w, "  • %s\n", detail)
 	}
@@ -144,7 +146,7 @@ func printApprovedGitOpsHandoff(
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(w, "\n  Approved. No live Kubernetes resource was changed.")
+	fmt.Fprintf(w, "\n  %s Approved. No live Kubernetes resource was changed.\n", cliui.New(w).Marker(cliui.Success))
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, handoff.Guidance)
 	fmt.Fprintln(w, "\nOne-time connection token (store it through your existing secret-management workflow; never place it in Helm values or Git):")
@@ -183,7 +185,7 @@ func buildGitOpsHandoff(
 }
 
 func printGitOpsHandoffFailure(w io.Writer, err error, clusterID, clusterURL string) {
-	fmt.Fprintf(w, "\nCould not generate the source-of-truth handoff for Hub cluster %q: %v.\n", clusterID, err)
+	fmt.Fprintf(w, "\n%s Could not generate the source-of-truth handoff for Hub cluster %q: %v.\n", cliui.New(w).Marker(cliui.Failure), clusterID, err)
 	fmt.Fprintln(w, "The Hub approval already created this cluster, but no live Kubernetes resource was changed and no GitOps instructions or token Secret were generated.")
 	fmt.Fprintln(w, "Do not rerun `radar cloud install`, because that would create another pending cluster.")
 	fmt.Fprintln(w, "The credentials from this attempt were not handed off and cannot be recovered after this command exits.")
@@ -201,7 +203,7 @@ func printGitOpsPendingHandoff(w io.Writer, err error, clusterID, clusterURL str
 	case errors.Is(err, context.Canceled):
 		reason = "the local wait was canceled"
 	}
-	fmt.Fprintf(w, "\nGitOps handoff generated for Hub cluster %q, but its in-cluster connection was not confirmed: %s.\n", clusterID, reason)
+	fmt.Fprintf(w, "\n%s GitOps handoff generated for Hub cluster %q, but its in-cluster connection was not confirmed: %s.\n", cliui.New(w).Marker(cliui.Attention), clusterID, reason)
 	fmt.Fprintln(w, "The configuration handoff is ready. Commit the generated configuration and token Secret through the source of truth; the existing Hub cluster remains the one to connect.")
 	fmt.Fprintln(w, "Do not rerun `radar cloud install`, because that would create another pending cluster.")
 	fmt.Fprintf(w, "Open or recover this cluster in Radar: %s\n", clusterURL)

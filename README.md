@@ -158,6 +158,8 @@ and Cloud configuration without printing the connection token. Passing both
 `--namespace` and `--release` selects an exact installation. Live tunnel status
 is reported by Radar Cloud using the token in the referenced Kubernetes Secret.
 If the Secret or Hub is unavailable, local installation diagnostics still run.
+Interactive terminals use restrained status colors; set `NO_COLOR` (or pipe the
+output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 
 **CLI Flags**
 

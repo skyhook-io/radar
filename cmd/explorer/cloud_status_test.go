@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/cliui"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/pkg/subject"
@@ -70,7 +71,7 @@ func TestPrintCloudStatusConfiguredReady(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
-		"radar/radar", `Helm release "radar"`, "1/1 replicas ready", "Cloud configuration: present",
+		"radar/radar", `Helm release "radar"`, "Agent: ✓ 1/1 replicas ready", "Cloud configuration: ✓ present",
 		"wss://api.radarhq.io/agent", "Configured cluster reference: cluster-123",
 	} {
 		if !strings.Contains(got, want) {
@@ -193,7 +194,7 @@ func TestPrintHubTunnelStatusKeepsBottomLineReadableAndExpertIdentityWhenNeeded(
 	printHubTunnelStatus(&out, target, result)
 	got := out.String()
 	for _, want := range []string{
-		"\nCloud connection: connected\n", "Hub cluster ID: clus_123", "Connected since: 2026-07-18T07:30:00Z",
+		"\nCloud connection: ✓ connected\n", "Hub cluster ID: clus_123", "Connected since: 2026-07-18T07:30:00Z",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("status missing %q:\n%s", want, got)
@@ -239,6 +240,84 @@ func TestCloudStatusHeadlineSynthesizesHumanVerdict(t *testing.T) {
 				t.Fatalf("headline = %q, want substring %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCloudStatusToneDistinguishesAttentionFromConfirmedFailure(t *testing.T) {
+	healthyRuntime := cloudinstall.DeploymentRuntime{
+		DesiredReplicas: 1, TotalReplicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1, StatusObserved: true,
+		AlreadyCloud: true, CloudModeConfigured: true, CloudMode: true,
+		CloudURLConfigured: true, CloudURL: "wss://api.radarhq.io/agent",
+		ClusterNameConfigured: true, ClusterName: "clus_123", CloudTokenConfigured: true,
+	}
+	attentionRuntime := healthyRuntime
+	attentionRuntime.StatusObserved = false
+	failureRuntime := healthyRuntime
+	failureRuntime.DesiredReplicas = 0
+	failureRuntime.TotalReplicas = 0
+	failureRuntime.UpdatedReplicas = 0
+	failureRuntime.ReadyReplicas = 0
+	failureRuntime.AvailableReplicas = 0
+
+	for _, tc := range []struct {
+		name    string
+		targets []cloudinstall.RadarTarget
+		err     error
+		tunnel  hubTunnelResult
+		want    cliui.Tone
+	}{
+		{name: "not installed", want: cliui.Attention},
+		{name: "healthy connected", targets: []cloudinstall.RadarTarget{{Runtime: healthyRuntime}}, tunnel: hubTunnelResult{verdict: hubTunnelHealthy}, want: cliui.Success},
+		{name: "rollout pending", targets: []cloudinstall.RadarTarget{{Runtime: attentionRuntime}}, tunnel: hubTunnelResult{verdict: hubTunnelHealthy}, want: cliui.Attention},
+		{name: "scaled to zero", targets: []cloudinstall.RadarTarget{{Runtime: failureRuntime}}, tunnel: hubTunnelResult{verdict: hubTunnelHealthy}, want: cliui.Failure},
+		{name: "never connected", targets: []cloudinstall.RadarTarget{{Runtime: healthyRuntime}}, tunnel: hubTunnelResult{verdict: hubTunnelUnhealthy, summary: hubTunnelNeverConnectedSummary}, want: cliui.Attention},
+		{name: "disconnected", targets: []cloudinstall.RadarTarget{{Runtime: healthyRuntime}}, tunnel: hubTunnelResult{verdict: hubTunnelUnhealthy, summary: "disconnected"}, want: cliui.Failure},
+		{name: "Hub unverified", targets: []cloudinstall.RadarTarget{{Runtime: healthyRuntime}}, want: cliui.Attention},
+		{name: "partial discovery", targets: []cloudinstall.RadarTarget{{Runtime: healthyRuntime}}, err: errors.New("forbidden"), tunnel: hubTunnelResult{verdict: hubTunnelHealthy}, want: cliui.Attention},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cloudStatusTone(tc.targets, tc.err, tc.tunnel); got != tc.want {
+				t.Fatalf("tone = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCloudStatusStylingIsSemanticAndLeavesCopyableValuesPlain(t *testing.T) {
+	runtime := cloudinstall.DeploymentRuntime{
+		DesiredReplicas: 1, TotalReplicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1, StatusObserved: true,
+		AlreadyCloud: true, CloudModeConfigured: true, CloudMode: true,
+		CloudURLConfigured: true, CloudURL: "wss://api.radarhq.io/agent",
+		ClusterNameConfigured: true, ClusterName: "clus_123", CloudTokenConfigured: true,
+	}
+	target := cloudinstall.RadarTarget{Namespace: "radar", DeploymentName: "radar", Runtime: runtime}
+	style := cliui.Styler{Enabled: true}
+
+	headline := formatCloudStatusHeadline(style, []cloudinstall.RadarTarget{target}, nil, hubTunnelResult{verdict: hubTunnelHealthy})
+	if !strings.Contains(headline, cliui.Bold+"Status:"+cliui.Reset) || !strings.Contains(headline, cliui.Green+"✓"+cliui.Reset) {
+		t.Fatalf("styled headline = %q", headline)
+	}
+
+	var out bytes.Buffer
+	printCloudStatusWithStyle(&out, target, style)
+	printHubTunnelStatusWithStyle(&out, target, hubTunnelResult{verdict: hubTunnelHealthy, summary: "connected"}, style)
+	got := out.String()
+	if strings.Count(got, cliui.Green+"✓"+cliui.Reset) < 3 {
+		t.Fatalf("styled state output = %q", got)
+	}
+	for _, plain := range []string{"1/1 replicas ready", "present", "connected"} {
+		if strings.Contains(got, cliui.Green+plain) {
+			t.Fatalf("state explanation %q was colored instead of remaining readable: %q", plain, got)
+		}
+	}
+	if !strings.Contains(got, "Hub: wss://api.radarhq.io/agent\n") || strings.Contains(got, "Hub: "+cliui.Cyan) {
+		t.Fatalf("Hub URL was styled instead of remaining copyable: %q", got)
+	}
+
+	out.Reset()
+	printCloudStatus(&out, target)
+	if strings.Contains(out.String(), "\x1b[") {
+		t.Fatalf("buffered output contains ANSI sequences: %q", out.String())
 	}
 }
 
@@ -441,7 +520,7 @@ func TestPrintCloudDiscoveryStatusHealthyTargetStillFailsAfterPartialScan(t *tes
 	}}
 	var out, errOut bytes.Buffer
 	code := printCloudDiscoveryStatus(&out, &errOut, []cloudinstall.RadarTarget{target}, errors.New("forbidden"), false, "radar", "radar")
-	if code != 1 || !strings.Contains(out.String(), "Discovery: incomplete") || !strings.Contains(errOut.String(), "could not inspect all visible namespaces") {
+	if code != 1 || !strings.Contains(out.String(), "Discovery: ! incomplete") || !strings.Contains(errOut.String(), "could not inspect all visible namespaces") {
 		t.Fatalf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }

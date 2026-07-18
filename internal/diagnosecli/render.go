@@ -10,19 +10,18 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/term"
-
 	"github.com/skyhook-io/radar/internal/ai"
+	"github.com/skyhook-io/radar/internal/cliui"
 )
 
 const (
-	cReset = "\x1b[0m"
-	cDim   = "\x1b[2m"
-	cBold  = "\x1b[1m"
-	cGreen = "\x1b[32m"
-	cRed   = "\x1b[31m"
-	cAmber = "\x1b[33m"
-	cCyan  = "\x1b[36m"
+	cReset = cliui.Reset
+	cDim   = cliui.Dim
+	cBold  = cliui.Bold
+	cGreen = cliui.Green
+	cRed   = cliui.Red
+	cAmber = cliui.Amber
+	cCyan  = cliui.Cyan
 
 	// clearLine returns the cursor to column 0 and erases the spinner line.
 	clearLine = "\r\x1b[K"
@@ -54,7 +53,7 @@ func newRenderer(jsonMode bool) *renderer {
 	}
 	return &renderer{
 		w:         w,
-		color:     term.IsTerminal(int(w.Fd())) && os.Getenv("NO_COLOR") == "",
+		color:     cliui.ColorEnabled(w),
 		lastEvent: time.Now(),
 		stopSpin:  make(chan struct{}),
 	}
