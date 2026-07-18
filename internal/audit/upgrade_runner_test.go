@@ -6,7 +6,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
@@ -57,6 +59,38 @@ func TestRunUpgradeReadinessWithoutCachePreservesAPIServiceEvidence(t *testing.T
 		}
 	}
 	t.Fatal("APIService check not found")
+}
+
+func TestRunUpgradeReadinessWithCachePreservesDirectSourceEvidence(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
+		t.Fatalf("InitTestResourceCache() error = %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	lastApplied := `{"apiVersion":"networking.k8s.io/v1beta1","kind":"Ingress","metadata":{"name":"web","namespace":"default"}}`
+	source := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.k8s.io/v1", "kind": "Ingress",
+		"metadata": map[string]any{"name": "web", "namespace": "default", "annotations": map[string]any{
+			"kubectl.kubernetes.io/last-applied-configuration": lastApplied,
+		}},
+	}}
+
+	results, err := RunUpgradeReadinessFromCache(k8s.GetResourceCache(), nil, UpgradeReadinessOptions{
+		CurrentVersion: "1.24",
+		TargetVersion:  "1.25",
+		SourceObjects:  []metav1.Object{source},
+	})
+	if err != nil {
+		t.Fatalf("RunUpgradeReadinessFromCache() error = %v", err)
+	}
+	for _, check := range results.Checks {
+		if check.ID == "manifest-api-compatibility" {
+			if check.Status != upgradereadiness.CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Resource.Kind != "Ingress" {
+				t.Fatalf("source manifest check = %+v, want one removed Ingress API blocker", check)
+			}
+			return
+		}
+	}
+	t.Fatal("source manifest API check not found")
 }
 
 func TestFilterPersistentVolumesForNamespaces(t *testing.T) {

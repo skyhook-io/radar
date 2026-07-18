@@ -314,6 +314,7 @@ func scanManifestCompatibility(input *Input, target *utilversion.Version) Check 
 	resources = append(resources, lastApplied...)
 	resources = dedupeManifestResources(resources)
 	check.Inspected = len(resources)
+	appendSourceManifestCoverageCaveats(&check, input)
 	if len(resources) == 0 {
 		check.Status = CheckUnknown
 		switch {
@@ -368,17 +369,6 @@ func scanManifestCompatibility(input *Input, target *utilversion.Version) Check 
 				References:  append([]Reference(nil), manifestAPIReferences...),
 			})
 		}
-	}
-	if !helmManifestsAvailable {
-		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests were unavailable; only kubectl last-applied configuration was inspected.")
-	} else if helmUnavailable {
-		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests could not be read in: "+strings.Join(input.HelmUnavailableNamespaces, ", ")+".")
-	}
-	if input.ManifestParseErrors > 0 {
-		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d Helm manifest %s could not be parsed.", input.ManifestParseErrors, plural(input.ManifestParseErrors, "document", "documents")))
-	}
-	if len(input.SourceObjectUnavailableKinds) > 0 {
-		check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+strings.Join(input.SourceObjectUnavailableKinds, ", ")+".")
 	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d source %s %s an API affected by the target version.", len(check.Findings), plural(len(check.Findings), "manifest", "manifests"), plural(len(check.Findings), "uses", "use"))
@@ -1050,6 +1040,24 @@ func appendCaveat(existing, addition string) string {
 		return existing
 	}
 	return existing + " " + addition
+}
+
+func appendSourceManifestCoverageCaveats(check *Check, input *Input) {
+	if input.ManifestResources == nil {
+		if input.SourceObjects == nil {
+			check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests and kubectl last-applied configuration were unavailable.")
+		} else {
+			check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests were unavailable; only kubectl last-applied configuration was inspected.")
+		}
+	} else if len(input.HelmUnavailableNamespaces) > 0 {
+		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests could not be read in: "+strings.Join(input.HelmUnavailableNamespaces, ", ")+".")
+	}
+	if input.ManifestParseErrors > 0 {
+		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d Helm manifest %s could not be parsed.", input.ManifestParseErrors, plural(input.ManifestParseErrors, "document", "documents")))
+	}
+	if len(input.SourceObjectUnavailableKinds) > 0 {
+		check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+strings.Join(input.SourceObjectUnavailableKinds, ", ")+".")
+	}
 }
 
 func unavailableKinds(input *Input) []string {

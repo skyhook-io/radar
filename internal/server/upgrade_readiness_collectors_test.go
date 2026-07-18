@@ -25,17 +25,39 @@ func TestCollectUpgradeSourceObjectsRetainsPartialEvidence(t *testing.T) {
 			"namespace": "default",
 		},
 	}}
-	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, pod)
+	lastApplied := map[string]any{"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"networking.k8s.io/v1beta1","kind":"Ingress","metadata":{"name":"web","namespace":"default"}}`}
+	ingress := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.k8s.io/v1", "kind": "Ingress",
+		"metadata": map[string]any{"name": "web", "namespace": "default", "annotations": lastApplied},
+	}}
+	hpa := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "autoscaling/v2", "kind": "HorizontalPodAutoscaler",
+		"metadata": map[string]any{"name": "api", "namespace": "default"},
+	}}
+	pdb := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "policy/v1", "kind": "PodDisruptionBudget",
+		"metadata": map[string]any{"name": "api", "namespace": "default"},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, pod, ingress, hpa, pdb)
 	client.PrependReactor("list", "networkpolicies", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("forbidden")
 	})
 
 	objects, unavailable := collectUpgradeSourceObjectsWithClient(context.Background(), client, nil)
-	if len(objects) != 1 || objects[0].GetName() != "api" {
-		t.Fatalf("partial objects = %#v, want retained Pod", objects)
+	if len(objects) != 4 {
+		t.Fatalf("partial objects = %#v, want Pod, Ingress, HPA, and PDB", objects)
 	}
 	if len(unavailable) != 1 || unavailable[0] != "networkpolicies" {
 		t.Fatalf("unavailable = %v, want [networkpolicies]", unavailable)
+	}
+	foundIngressEvidence := false
+	for _, object := range objects {
+		if object.GetName() == "web" && object.GetAnnotations()["kubectl.kubernetes.io/last-applied-configuration"] != "" {
+			foundIngressEvidence = true
+		}
+	}
+	if !foundIngressEvidence {
+		t.Fatal("Ingress kubectl last-applied evidence was not retained")
 	}
 }
 

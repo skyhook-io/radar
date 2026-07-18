@@ -229,6 +229,42 @@ func TestScanManifestFindingRetainsPartialHelmCoverage(t *testing.T) {
 	}
 }
 
+func TestSourceChecksExposeUnavailableKindsWithoutReadableManifest(t *testing.T) {
+	input := completeInput()
+	input.ManifestResources = []ManifestResource{}
+	input.SourceObjects = []metav1.Object{}
+	input.HelmUnavailableNamespaces = []string{"payments"}
+	input.SourceObjectUnavailableKinds = []string{"ingresses"}
+
+	got, err := Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"manifest-api-compatibility", "strict-ip-cidr-validation"} {
+		check := checkByID(t, got, id)
+		if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "payments") || !strings.Contains(check.Caveat, "ingresses") {
+			t.Fatalf("%s hid partial source coverage without readable manifests: %+v", id, check)
+		}
+	}
+	if got.Coverage.State != "partial" {
+		t.Fatalf("coverage state = %q, want partial", got.Coverage.State)
+	}
+
+	input.ManifestResources = nil
+	input.SourceObjects = nil
+	input.HelmUnavailableNamespaces = nil
+	got, err = Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"manifest-api-compatibility", "strict-ip-cidr-validation"} {
+		check := checkByID(t, got, id)
+		if !strings.Contains(check.Caveat, "Helm release manifests and kubectl last-applied configuration were unavailable") || strings.Contains(check.Caveat, "only kubectl") {
+			t.Fatalf("%s misrepresented unreadable source collectors: %+v", id, check)
+		}
+	}
+}
+
 func TestScanHealthAndComponentSkew(t *testing.T) {
 	input := completeInput()
 	input.Nodes = []*corev1.Node{readyNode("old", "v1.32.9"), readyNode("new", "v1.35.2")}

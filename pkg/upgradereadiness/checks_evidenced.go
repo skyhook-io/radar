@@ -333,11 +333,12 @@ func drainPodFinding(check Check, pod *corev1.Pod, level Level, title, path, det
 
 func scanAdmissionWebhookReadiness(input *Input) Check {
 	check := Check{ID: "admission-webhook-readiness", Category: "Admission control", Title: "Admission webhook readiness", Status: CheckPassed, Summary: "Inspected admission webhooks have reachable Service backends and upgrade-safe matching behavior.", Scope: "Admission webhook configurations, Services, and EndpointSlices", References: append([]Reference(nil), admissionReferences...)}
-	if input.AdmissionWebhookConfigurations == nil || input.Services == nil || input.EndpointSlices == nil {
-		check.Status, check.Summary = CheckUnknown, "Admission webhook configuration or backend evidence was unavailable."
+	if input.AdmissionWebhookConfigurations == nil {
+		check.Status, check.Summary = CheckUnknown, "Admission webhook configuration evidence was unavailable."
 		return check
 	}
 	check.Inspected = len(input.AdmissionWebhookConfigurations)
+	backendEvidenceAvailable := input.Services != nil && input.EndpointSlices != nil
 	services := map[string]bool{}
 	for _, svc := range input.Services {
 		if svc != nil {
@@ -372,7 +373,9 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 				ns, _ := service["namespace"].(string)
 				svc, _ := service["name"].(string)
 				key := ns + "/" + svc
-				if !services[key] || !ready[key] {
+				if !backendEvidenceAvailable {
+					check.Caveat = appendCaveat(check.Caveat, "Service or EndpointSlice evidence was unavailable; webhook backend readiness could not be verified.")
+				} else if !services[key] || !ready[key] {
 					level := LevelBlocker
 					title := "Fail-closed webhook backend unavailable"
 					impact := "Admission requests that match this fail-closed webhook are rejected while its backend is unavailable."
@@ -472,10 +475,11 @@ func stringSlice(value any) []string {
 
 func scanCRDConversionWebhookReadiness(input *Input) Check {
 	check := Check{ID: "crd-conversion-webhook-readiness", Category: "API extensions", Title: "CRD conversion webhook readiness", Status: CheckPassed, Summary: "Inspected CRD conversion webhooks have ready Service backends.", Scope: "CustomResourceDefinitions, Services, and EndpointSlices", References: append([]Reference(nil), crdConversionReferences...)}
-	if input.CustomResourceDefinitions == nil || input.Services == nil || input.EndpointSlices == nil {
-		check.Status, check.Summary = CheckUnknown, "CRD conversion webhook evidence was unavailable."
+	if input.CustomResourceDefinitions == nil {
+		check.Status, check.Summary = CheckUnknown, "CRD conversion configuration evidence was unavailable."
 		return check
 	}
+	backendEvidenceAvailable := input.Services != nil && input.EndpointSlices != nil
 	services := map[string]bool{}
 	for _, svc := range input.Services {
 		if svc != nil {
@@ -505,7 +509,19 @@ func scanCRDConversionWebhookReadiness(input *Input) Check {
 		ns, _ := service["namespace"].(string)
 		name, _ := service["name"].(string)
 		key := ns + "/" + name
-		if !found || !services[key] || !ready[key] {
+		if !found || ns == "" || name == "" {
+			level := LevelBlocker
+			if !crdConversionCanBeNeeded(crd) {
+				level = LevelWarning
+			}
+			check.Findings = append(check.Findings, crdFinding(check, crd, level, "spec.conversion.webhook.clientConfig.service", key, "The API server may be unable to convert stored custom resources while this backend is unavailable.", "Restore the conversion Service and at least one ready EndpointSlice before upgrading."))
+			continue
+		}
+		if !backendEvidenceAvailable {
+			check.Caveat = appendCaveat(check.Caveat, "Service or EndpointSlice evidence was unavailable; conversion backend readiness could not be verified.")
+			continue
+		}
+		if !services[key] || !ready[key] {
 			level := LevelBlocker
 			if !crdConversionCanBeNeeded(crd) {
 				level = LevelWarning
@@ -564,6 +580,7 @@ func scanStrictIPCIDRValidation(input *Input) Check {
 	}
 	resources := append([]ManifestResource(nil), input.ManifestResources...)
 	resources = append(resources, lastAppliedResources(input.SourceObjects)...)
+	appendSourceManifestCoverageCaveats(&check, input)
 	if resources == nil {
 		check.Status, check.Summary = CheckUnknown, "Source manifests were unavailable; strict IP and CIDR validation could not be evaluated."
 		return check
@@ -590,26 +607,12 @@ func scanStrictIPCIDRValidation(input *Input) Check {
 		check.Status, check.Summary = CheckUnknown, "Readable full source objects were unavailable; API-version-only manifest evidence is insufficient for strict validation."
 	} else if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d non-canonical source network %s.", len(check.Findings), plural(len(check.Findings), "value requires review", "values require review"))
-		if input.ManifestParseErrors > 0 || len(input.SourceObjectUnavailableKinds) > 0 || input.Namespaces != nil {
-			if input.ManifestParseErrors > 0 {
-				check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d Helm manifest %s could not be parsed.", input.ManifestParseErrors, plural(input.ManifestParseErrors, "document", "documents")))
-			}
-			if len(input.SourceObjectUnavailableKinds) > 0 {
-				check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+strings.Join(input.SourceObjectUnavailableKinds, ", ")+".")
-			}
-		}
-	} else if input.ManifestParseErrors > 0 || len(input.SourceObjectUnavailableKinds) > 0 || input.Namespaces != nil {
+	} else if check.Caveat != "" {
 		check.Status = CheckUnknown
 		if input.Namespaces != nil {
 			check.Summary = "No invalid network values were found in source manifests in the selected namespace scope, but source-manifest coverage is incomplete."
 		} else {
 			check.Summary = "No invalid network values were found, but source-manifest coverage is incomplete."
-		}
-		if input.ManifestParseErrors > 0 {
-			check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d Helm manifest %s could not be parsed.", input.ManifestParseErrors, plural(input.ManifestParseErrors, "document", "documents")))
-		}
-		if len(input.SourceObjectUnavailableKinds) > 0 {
-			check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+strings.Join(input.SourceObjectUnavailableKinds, ", ")+".")
 		}
 	}
 	return check

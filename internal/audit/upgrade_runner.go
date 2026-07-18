@@ -39,6 +39,8 @@ type UpgradeReadinessOptions struct {
 }
 
 func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string, opts UpgradeReadinessOptions) (*upgradereadiness.ScanResults, error) {
+	// Source manifest evidence must come from the direct collector: informer
+	// transforms intentionally remove kubectl's last-applied annotation.
 	input := &upgradereadiness.Input{
 		Namespaces:                          cloneStrings(namespaces),
 		EndpointSlices:                      opts.EndpointSlices,
@@ -73,46 +75,6 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 	if opts.CanReadNodes {
 		nodes = listNamespaced(cache.Nodes(), namespaces)
 	}
-	sourceObjects := make([]metav1.Object, 0,
-		len(typed.Pods)+len(typed.Deployments)+len(replicaSets)+len(typed.StatefulSets)+
-			len(typed.DaemonSets)+len(typed.Jobs)+len(typed.CronJobs)+len(typed.Services)+
-			len(typed.Ingresses)+len(typed.HorizontalPodAutoscalers)+len(typed.PodDisruptionBudgets))
-	for _, object := range typed.Pods {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range typed.Deployments {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range replicaSets {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range typed.StatefulSets {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range typed.DaemonSets {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range typed.Jobs {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range typed.CronJobs {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range typed.Services {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range typed.Ingresses {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range typed.HorizontalPodAutoscalers {
-		sourceObjects = append(sourceObjects, object)
-	}
-	for _, object := range typed.PodDisruptionBudgets {
-		sourceObjects = append(sourceObjects, object)
-	}
-	if opts.SourceObjects != nil {
-		sourceObjects = opts.SourceObjects
-	}
 	events := listNamespaced(cache.Events(), namespaces)
 
 	services := mergeServices(typed.Services, opts.AdditionalServices)
@@ -128,7 +90,6 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 	input.Nodes = nodes
 	input.Events = events
 	input.PodDisruptionBudgets = typed.PodDisruptionBudgets
-	input.SourceObjects = sourceObjects
 	return upgradereadiness.Scan(input, opts.CurrentVersion, opts.TargetVersion)
 }
 

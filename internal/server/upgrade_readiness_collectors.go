@@ -26,7 +26,10 @@ var upgradeSourceGVRs = []schema.GroupVersionResource{
 	{Group: "apps", Version: "v1", Resource: "daemonsets"},
 	{Group: "batch", Version: "v1", Resource: "jobs"},
 	{Group: "batch", Version: "v1", Resource: "cronjobs"},
+	{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"},
 	{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"},
+	{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"},
+	{Group: "policy", Version: "v1", Resource: "poddisruptionbudgets"},
 	{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"},
 }
 
@@ -133,23 +136,23 @@ func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs, crds [
 	referenced := webhookServiceNamespaces(configs, crds)
 	for _, namespace := range referenced {
 		if !s.canRead(r, "", "services", namespace, "list") || !s.canRead(r, endpointSliceGVR.Group, endpointSliceGVR.Resource, namespace, "list") {
-			return nil, crds, nil, nil
+			return configs, crds, nil, nil
 		}
 		svcList, err := typedClient.CoreV1().Services(namespace).List(r.Context(), metav1.ListOptions{})
 		if err != nil {
-			return nil, crds, nil, nil
+			return configs, crds, nil, nil
 		}
 		for i := range svcList.Items {
 			services = append(services, svcList.Items[i].DeepCopy())
 		}
 		sliceList, err := dynamicClient.Resource(endpointSliceGVR).Namespace(namespace).List(r.Context(), metav1.ListOptions{})
 		if err != nil {
-			return nil, crds, nil, nil
+			return configs, crds, nil, nil
 		}
 		for i := range sliceList.Items {
 			var slice discoveryv1.EndpointSlice
 			if runtime.DefaultUnstructuredConverter.FromUnstructured(sliceList.Items[i].Object, &slice) != nil {
-				return nil, crds, nil, nil
+				return configs, crds, nil, nil
 			}
 			endpointSlices = append(endpointSlices, &slice)
 		}

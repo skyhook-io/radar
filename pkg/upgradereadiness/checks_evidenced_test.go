@@ -271,6 +271,49 @@ func TestAdmissionAndCRDBackendSemantics(t *testing.T) {
 	}
 }
 
+func TestWebhookConfigurationFindingsSurviveMissingBackendEvidence(t *testing.T) {
+	input := completeInput()
+	input.Services = nil
+	input.EndpointSlices = nil
+	input.AdmissionWebhookConfigurations = []*unstructured.Unstructured{{Object: map[string]any{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingWebhookConfiguration", "metadata": map[string]any{"name": "policy"},
+		"webhooks": []any{map[string]any{
+			"name": "policy.example", "matchPolicy": "Exact",
+			"clientConfig": map[string]any{"service": map[string]any{"namespace": "policy-system", "name": "policy"}},
+			"rules":        []any{map[string]any{"operations": []any{"CREATE"}, "apiGroups": []any{"authentication.k8s.io"}, "resources": []any{"tokenreviews"}}},
+		}},
+	}}}
+
+	admission := scanAdmissionWebhookReadiness(input)
+	finalizeCheck(&admission)
+	if admission.Status != CheckReview || len(admission.Findings) != 2 || admission.Caveat == "" {
+		t.Fatalf("config-only admission evidence = %+v, want two review findings plus incomplete backend coverage", admission)
+	}
+
+	input.AdmissionWebhookConfigurations[0].Object["webhooks"] = []any{map[string]any{
+		"name": "policy.example", "clientConfig": map[string]any{"service": map[string]any{"namespace": "policy-system", "name": "policy"}},
+	}}
+	admission = scanAdmissionWebhookReadiness(input)
+	finalizeCheck(&admission)
+	if admission.Status != CheckUnknown || len(admission.Findings) != 0 || admission.Caveat == "" {
+		t.Fatalf("unverified admission backend = %+v, want incomplete without a false blocker", admission)
+	}
+
+	input.CustomResourceDefinitions = []*unstructured.Unstructured{{Object: map[string]any{
+		"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition", "metadata": map[string]any{"name": "widgets.example.io"},
+		"spec": map[string]any{
+			"versions":   []any{map[string]any{"name": "v1", "served": true, "storage": true}},
+			"conversion": map[string]any{"strategy": "Webhook", "webhook": map[string]any{"clientConfig": map[string]any{"url": "https://converter.example"}}},
+		},
+		"status": map[string]any{"storedVersions": []any{"v1"}},
+	}}}
+	conversion := scanCRDConversionWebhookReadiness(input)
+	finalizeCheck(&conversion)
+	if conversion.Status != CheckReview || len(conversion.Findings) != 1 || conversion.Caveat != "" {
+		t.Fatalf("URL conversion evidence = %+v, want review without irrelevant Service coverage caveat", conversion)
+	}
+}
+
 func TestWebhookBackendsOutsideBrowseScopeUseCollectedEvidence(t *testing.T) {
 	input := completeInput()
 	input.Namespaces = []string{"default"}
