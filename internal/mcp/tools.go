@@ -343,15 +343,14 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"not yet visible as runtime issues, or help distinguish creation-time " +
 			"baseline failures from the active incident. " +
 			"Single-namespace responses additionally correlate changes PER critical and " +
-			"warning issue (criticals checked first under a shared cap): " +
+			"warning issue: " +
 			"`correlated_changes` lists recent non-status changes on that issue's subject " +
 			"(and its referenced ConfigMaps); `no_recent_changes.window_seconds` states the " +
 			"subject had NO tracked changes in that window — evidence the issue is not " +
 			"driven by a tracked change on its own subject; untracked dependencies (Secret " +
 			"values, external systems) can still have changed. For an issue with neither " +
-			"marker, correlation is unknown (not checked under the cap — see " +
-			"`correlation_truncated` — or the lookup failed/saturated); never read absence " +
-			"as 'no changes'. " +
+			"marker, correlation is unknown — never read absence as 'no changes' (see " +
+			"`correlation_truncated`). " +
 			"ConfigMap change entries carry `consumed_by` (workloads that mount/reference " +
 			"them directly). " +
 			"For raw Kubernetes Warning events use get_events; for static best-practice / " +
