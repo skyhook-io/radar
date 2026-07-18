@@ -262,12 +262,35 @@ func GroupOfAPIVersion(apiVersion string) string {
 // selectGroupObjects orders a group's distinct involved objects by most
 // recent contribution (ties broken by kind/namespace/name for determinism)
 // and caps the emitted list, counting distinct identities before the cap.
+// Distinct means distinct EMITTED identity (kind/group/namespace/name):
+// UID keying during collection can hold several incarnations of one name
+// (a StatefulSet pod deleted and recreated while old events linger), and
+// for a lookup-oriented surface those are one subject, not duplicates.
 func selectGroupObjects(seen map[eventObjectIdentity]objectSighting, limit int) ([]EventObjectRef, int, bool) {
 	if len(seen) == 0 {
 		return nil, 0, false
 	}
-	sightings := make([]objectSighting, 0, len(seen))
+	merged := make(map[eventObjectIdentity]objectSighting, len(seen))
 	for _, s := range seen {
+		id := eventObjectIdentity{
+			Kind:      s.Ref.Kind,
+			Group:     GroupOfAPIVersion(s.Ref.APIVersion),
+			Namespace: s.Ref.Namespace,
+			Name:      s.Ref.Name,
+		}
+		prev, existed := merged[id]
+		if !existed || s.Last.After(prev.Last) {
+			if existed && s.Ref.APIVersion == "" && prev.Ref.APIVersion != "" {
+				s.Ref.APIVersion = prev.Ref.APIVersion
+			}
+			merged[id] = s
+		} else if prev.Ref.APIVersion == "" && s.Ref.APIVersion != "" {
+			prev.Ref.APIVersion = s.Ref.APIVersion
+			merged[id] = prev
+		}
+	}
+	sightings := make([]objectSighting, 0, len(merged))
+	for _, s := range merged {
 		sightings = append(sightings, s)
 	}
 	// Sort by the emitted ref, not the identity key — UID-keyed identities

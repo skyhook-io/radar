@@ -261,6 +261,32 @@ func TestDeduplicateEventsWithObjects_UIDMergesAcrossMissingAPIVersion(t *testin
 	}
 }
 
+// Two UIDs behind one name are successive incarnations (a StatefulSet pod
+// deleted and recreated while its old events linger), not two objects: the
+// emitted list must not repeat an identical kind/group/namespace/name ref,
+// and objectCount must not inflate past what a consumer can act on.
+func TestDeduplicateEventsWithObjects_RecreatedObjectIsOneRef(t *testing.T) {
+	now := time.Now()
+	oldIncarnation := makeEventForObject("BackOff", "restarting", "Warning", 3, now.Add(-time.Minute), "Pod", "shop", "db-0")
+	oldIncarnation.InvolvedObject.UID = "uid-old"
+	newIncarnation := makeEventForObject("BackOff", "restarting", "Warning", 1, now, "Pod", "shop", "db-0")
+	newIncarnation.InvolvedObject.UID = "uid-new"
+	newIncarnation.InvolvedObject.APIVersion = "v1"
+
+	result := DeduplicateEventsWithObjects([]corev1.Event{oldIncarnation, newIncarnation}, 3)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(result))
+	}
+	g := result[0]
+	if g.ObjectCount != 1 || len(g.Objects) != 1 || g.ObjectsTruncated {
+		t.Fatalf("objects = %+v (count %d, truncated %v), want ONE ref across incarnations", g.Objects, g.ObjectCount, g.ObjectsTruncated)
+	}
+	want := EventObjectRef{Kind: "Pod", APIVersion: "v1", Namespace: "shop", Name: "db-0"}
+	if g.Objects[0] != want {
+		t.Errorf("objects[0] = %+v, want most-recent incarnation's ref %+v", g.Objects[0], want)
+	}
+}
+
 // The plain DeduplicateEvents wire shape is unchanged by the objects path —
 // its consumers (get_events, diagnose, resource includes) group across pods
 // on purpose and must not grow new fields.

@@ -90,7 +90,9 @@ func TestBuildDashboard_TopWarnings_RecencyAndObjects(t *testing.T) {
 // Row selection is a union: the newest groups must not evict an actively
 // repeating storm whose latest event record is merely minutes older than a
 // burst of one-off churn — and vice versa, a stale storm must not hide fresh
-// incidents (the batch7 failure). Six groups: five fresh one-offs (count 1)
+// incidents (observed in benchmark transcripts, where a resolved storm
+// outranked the live incident under count-first ordering). Six groups:
+// five fresh one-offs (count 1)
 // plus a 4-minute-old storm (count 400). Recency-only would emit the five
 // one-offs; count-only would lead with the storm. The union keeps the three
 // newest AND the storm.
