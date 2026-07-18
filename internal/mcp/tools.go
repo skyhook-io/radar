@@ -342,17 +342,16 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"attached it. It lists recent spec/config changes that may explain failures " +
 			"not yet visible as runtime issues, or help distinguish creation-time " +
 			"baseline failures from the active incident. " +
-			"Single-namespace responses additionally correlate changes PER critical and " +
-			"warning issue: " +
-			"`correlated_changes` lists recent non-status changes on that issue's subject " +
-			"(and its referenced ConfigMaps); `no_recent_changes.window_seconds` states the " +
-			"subject had NO tracked changes in that window — evidence the issue is not " +
-			"driven by a tracked change on its own subject; untracked dependencies (Secret " +
-			"values, external systems) can still have changed. For an issue with neither " +
-			"marker, correlation is unknown — never read absence as 'no changes' (see " +
-			"`correlation_truncated`). " +
-			"ConfigMap change entries carry `consumed_by` (workloads that mount/reference " +
-			"them directly). " +
+			"Single-namespace responses may add per-issue change evidence to eligible " +
+			"critical and warning issues: `correlated_changes` lists recent non-status " +
+			"changes on the issue subject (and, for workloads, its directly referenced " +
+			"ConfigMaps); `no_recent_changes.window_seconds` means Radar observed no such " +
+			"tracked change in that window. Treat that as evidence against, not disproof " +
+			"of, a recent tracked-change cause — Secret values and external dependencies " +
+			"may still have changed. If neither field is present, correlation is unknown, " +
+			"not 'no changes'. " +
+			"When present on a ConfigMap change, `consumed_by` identifies workloads that " +
+			"directly reference it. " +
 			"For raw Kubernetes Warning events use get_events; for static best-practice / " +
 			"security-posture findings (runAsRoot, missing PDB, no probes, missing resource " +
 			"limits) use get_cluster_audit — a separate axis that must never be conflated (a " +
