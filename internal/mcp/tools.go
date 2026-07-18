@@ -348,8 +348,10 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"(and its referenced ConfigMaps); `no_recent_changes.window_seconds` states the " +
 			"subject had NO tracked changes in that window — evidence the issue is not " +
 			"driven by a tracked change on its own subject; untracked dependencies (Secret " +
-			"values, external systems) can still have changed. An issue with neither marker " +
-			"was not checked (see `correlation_truncated`) — never read absence as 'no changes'. " +
+			"values, external systems) can still have changed. For an issue with neither " +
+			"marker, correlation is unknown (not checked under the cap — see " +
+			"`correlation_truncated` — or the lookup failed/saturated); never read absence " +
+			"as 'no changes'. " +
 			"ConfigMap change entries carry `consumed_by` (workloads that mount/reference " +
 			"them directly). " +
 			"For raw Kubernetes Warning events use get_events; for static best-practice / " +
@@ -2654,9 +2656,10 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		}
 	}
 	// Per-issue change correlation (single-namespace responses): each
-	// critical issue carries either its correlated non-status changes or an
-	// explicit no_recent_changes marker — deterministic per-subject evidence
-	// the global recent_changes list can't bind to individual issues.
+	// critical and warning issue (criticals first under a shared cap)
+	// carries either its correlated non-status changes or an explicit
+	// no_recent_changes marker — deterministic per-subject evidence the
+	// global recent_changes list can't bind to individual issues.
 	if len(allowedNamespaces) == 1 {
 		attachIssueChangeCorrelation(ctx, &resp)
 	}
