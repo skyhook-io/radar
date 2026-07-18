@@ -38,15 +38,34 @@ type UpgradeReadinessOptions struct {
 }
 
 func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string, opts UpgradeReadinessOptions) (*upgradereadiness.ScanResults, error) {
+	input := &upgradereadiness.Input{
+		Namespaces:                          cloneStrings(namespaces),
+		EndpointSlices:                      opts.EndpointSlices,
+		AdmissionWebhookConfigurations:      opts.AdmissionWebhookConfigurations,
+		CustomResourceDefinitions:           opts.CustomResourceDefinitions,
+		NodeRuntimeEvidence:                 opts.NodeRuntimeEvidence,
+		SourceObjects:                       opts.SourceObjects,
+		SourceObjectUnavailableKinds:        opts.SourceObjectUnavailableKinds,
+		ManifestResources:                   opts.ManifestResources,
+		HelmUnavailableNamespaces:           opts.HelmUnavailableNamespaces,
+		ManifestParseErrors:                 opts.ManifestParseErrors,
+		DeprecatedAPIRequests:               opts.DeprecatedAPIRequests,
+		DeprecatedAPIMetricsWindow:          opts.DeprecatedAPIMetricsWindow,
+		PrometheusRules:                     opts.PrometheusRules,
+		PrometheusRulesInstalled:            opts.PrometheusRulesInstalled,
+		PrometheusRulesDiscoveryAvailable:   opts.PrometheusRulesDiscoveryAvailable,
+		PrometheusRuleUnavailableNamespaces: opts.PrometheusRuleUnavailableNamespaces,
+		Platform:                            opts.Platform,
+	}
 	if cache == nil {
-		return upgradereadiness.Scan(nil, opts.CurrentVersion, opts.TargetVersion)
+		return upgradereadiness.Scan(input, opts.CurrentVersion, opts.TargetVersion)
 	}
 
 	typed := collectTypedInput(cache, namespaces)
 	replicaSets := listNamespaced(cache.ReplicaSets(), namespaces)
 	var persistentVolumes []*corev1.PersistentVolume
 	if opts.CanReadPersistentVolumes {
-		persistentVolumes = listNamespaced(cache.PersistentVolumes(), namespaces)
+		persistentVolumes = filterPersistentVolumesForNamespaces(listNamespaced(cache.PersistentVolumes(), nil), namespaces)
 	}
 	var nodes []*corev1.Node
 	if opts.CanReadNodes {
@@ -96,35 +115,42 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 
 	services := append([]*corev1.Service(nil), typed.Services...)
 	services = append(services, opts.AdditionalServices...)
-	return upgradereadiness.Scan(&upgradereadiness.Input{
-		Namespaces:                          append([]string(nil), namespaces...),
-		Pods:                                typed.Pods,
-		Deployments:                         typed.Deployments,
-		ReplicaSets:                         replicaSets,
-		StatefulSets:                        typed.StatefulSets,
-		DaemonSets:                          typed.DaemonSets,
-		Jobs:                                typed.Jobs,
-		CronJobs:                            typed.CronJobs,
-		Services:                            services,
-		PersistentVolumes:                   persistentVolumes,
-		Nodes:                               nodes,
-		Events:                              events,
-		PodDisruptionBudgets:                typed.PodDisruptionBudgets,
-		EndpointSlices:                      opts.EndpointSlices,
-		AdmissionWebhookConfigurations:      opts.AdmissionWebhookConfigurations,
-		CustomResourceDefinitions:           opts.CustomResourceDefinitions,
-		NodeRuntimeEvidence:                 opts.NodeRuntimeEvidence,
-		SourceObjects:                       sourceObjects,
-		SourceObjectUnavailableKinds:        opts.SourceObjectUnavailableKinds,
-		ManifestResources:                   opts.ManifestResources,
-		HelmUnavailableNamespaces:           opts.HelmUnavailableNamespaces,
-		ManifestParseErrors:                 opts.ManifestParseErrors,
-		DeprecatedAPIRequests:               opts.DeprecatedAPIRequests,
-		DeprecatedAPIMetricsWindow:          opts.DeprecatedAPIMetricsWindow,
-		PrometheusRules:                     opts.PrometheusRules,
-		PrometheusRulesInstalled:            opts.PrometheusRulesInstalled,
-		PrometheusRulesDiscoveryAvailable:   opts.PrometheusRulesDiscoveryAvailable,
-		PrometheusRuleUnavailableNamespaces: opts.PrometheusRuleUnavailableNamespaces,
-		Platform:                            opts.Platform,
-	}, opts.CurrentVersion, opts.TargetVersion)
+	input.Pods = typed.Pods
+	input.Deployments = typed.Deployments
+	input.ReplicaSets = replicaSets
+	input.StatefulSets = typed.StatefulSets
+	input.DaemonSets = typed.DaemonSets
+	input.Jobs = typed.Jobs
+	input.CronJobs = typed.CronJobs
+	input.Services = services
+	input.PersistentVolumes = persistentVolumes
+	input.Nodes = nodes
+	input.Events = events
+	input.PodDisruptionBudgets = typed.PodDisruptionBudgets
+	input.SourceObjects = sourceObjects
+	return upgradereadiness.Scan(input, opts.CurrentVersion, opts.TargetVersion)
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string{}, values...)
+}
+
+func filterPersistentVolumesForNamespaces(volumes []*corev1.PersistentVolume, namespaces []string) []*corev1.PersistentVolume {
+	if namespaces == nil {
+		return volumes
+	}
+	allowed := make(map[string]bool, len(namespaces))
+	for _, namespace := range namespaces {
+		allowed[namespace] = true
+	}
+	filtered := make([]*corev1.PersistentVolume, 0, len(volumes))
+	for _, volume := range volumes {
+		if volume != nil && volume.Spec.ClaimRef != nil && allowed[volume.Spec.ClaimRef.Namespace] {
+			filtered = append(filtered, volume)
+		}
+	}
+	return filtered
 }
