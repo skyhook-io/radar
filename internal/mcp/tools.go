@@ -62,8 +62,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Description: "Use for inventory-style cluster or namespace health triage, like " +
 			"`kubectl get all` plus detected problems and warning events in one call. " +
 			"Returns resource counts, failing pods, unhealthy workloads, recent Warning " +
-			"events (topWarnings, most-recent first — each row carries lastSeen and the " +
-			"involved objects, so check lastSeen before treating a warning as live), " +
+			"events (topWarnings mixes the newest and most-frequent recent warning " +
+			"groups; check each row's lastSeen before treating it as live — objects " +
+			"lists the affected resources), " +
 			"and Helm release status so you can rank likely suspects before " +
 			"calling get_resource or logs. Routing: unknown broken thing -> issues; " +
 			"content/name search -> search; service routing/dependencies -> get_topology " +
