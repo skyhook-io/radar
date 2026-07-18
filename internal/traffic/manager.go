@@ -44,6 +44,9 @@ var (
 	// configuredMetricsHeaders are sent with every Prometheus query — required
 	// for auth-protected backends. Also persists across context switches.
 	configuredMetricsHeaders map[string]string
+	// configuredBeylaJobSelector overrides the default `job` label matcher used
+	// to scope Beyla's Prometheus queries; empty means use the built-in default.
+	configuredBeylaJobSelector string
 )
 
 // SetMetricsURL sets a manual Prometheus/VictoriaMetrics URL, bypassing auto-discovery.
@@ -65,6 +68,24 @@ func SetMetricsHeaders(h map[string]string) {
 	out := make(map[string]string, len(h))
 	maps.Copy(out, h)
 	configuredMetricsHeaders = out
+}
+
+// SetBeylaJobSelector overrides the `job` label matcher fragment (e.g.
+// `job=~".*beyla.*"`) Beyla queries use to scope which Prometheus series they
+// read — for a cluster where Alloy or Beyla runs under a non-default job
+// name. Pass "" to restore the default.
+func SetBeylaJobSelector(selector string) {
+	metricsConfigMu.Lock()
+	defer metricsConfigMu.Unlock()
+	configuredBeylaJobSelector = selector
+}
+
+// BeylaJobSelector returns the configured Beyla job-label matcher fragment,
+// or "" if unset.
+func BeylaJobSelector() string {
+	metricsConfigMu.RLock()
+	defer metricsConfigMu.RUnlock()
+	return configuredBeylaJobSelector
 }
 
 // metricsConfig returns the configured URL + headers under the read lock.
@@ -98,6 +119,7 @@ func InitializeWithConfig(client kubernetes.Interface, config *rest.Config, cont
 		caretta.headers = metricsHeaders
 		manager.sources["caretta"] = caretta
 		manager.sources["istio"] = NewIstioSource(client)
+		manager.sources["beyla"] = NewBeylaSource(client)
 
 		// Set K8s clients for port-forward functionality
 		if config != nil {
@@ -132,8 +154,8 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 	}
 
 	// Check each registered source in deterministic priority order
-	// (hubble has deepest visibility, istio has L7 metrics, caretta is fallback)
-	sourceOrder := []string{"hubble", "istio", "caretta"}
+	// (hubble has deepest visibility, istio has L7 metrics, caretta is fallback, beyla is external eBPF)
+	sourceOrder := []string{"hubble", "istio", "caretta", "beyla"}
 	for _, name := range sourceOrder {
 		source, ok := m.sources[name]
 		if !ok {
@@ -541,6 +563,8 @@ func (m *Manager) Connect(ctx context.Context) (*portforward.ConnectionInfo, err
 	case *HubbleSource:
 		return s.Connect(ctx, contextName)
 	case *IstioSource:
+		return s.Connect(ctx, contextName)
+	case *BeylaSource:
 		return s.Connect(ctx, contextName)
 	default:
 		// For sources without Connect support, just report connected.

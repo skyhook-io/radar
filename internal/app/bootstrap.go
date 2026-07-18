@@ -61,6 +61,7 @@ type AppConfig struct {
 	PrometheusURL            string
 	PrometheusHeaders        map[string]string
 	PrometheusHeadersFromEnv map[string]string
+	BeylaJobSelector         string
 	Version                  string
 	MCPEnabled               bool
 	AIHistory                bool   // persist AI investigations across restarts
@@ -241,6 +242,9 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	if len(cfg.PrometheusHeaders) > 0 {
 		traffic.SetMetricsHeaders(cfg.PrometheusHeaders)
 		prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
+	}
+	if cfg.BeylaJobSelector != "" {
+		traffic.SetBeylaJobSelector(cfg.BeylaJobSelector)
 	}
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {

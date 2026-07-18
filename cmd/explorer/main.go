@@ -139,6 +139,7 @@ func main() {
 	flag.Var(promHeaders, "prometheus-header", "HTTP header to send with Prometheus requests, e.g. 'Authorization=Bearer <token>' (repeatable). Required for auth-protected backends.")
 	promHeadersFromEnv := newHeaderFromEnvFlag(fileCfg.PrometheusHeadersFromEnv)
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
+	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL job-label matcher fragment Beyla traffic queries use to scope Prometheus series, e.g. 'job=~"my-beyla.*"' (empty = built-in default matching *beyla* or *alloy* job names)`)
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
@@ -350,6 +351,7 @@ func main() {
 		PrometheusURL:            *prometheusURL,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
+		BeylaJobSelector:         *beylaJobSelector,
 		MCPEnabled:               mcpEnabled,
 		AIHistory:                *aiHistory,
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,

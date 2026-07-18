@@ -399,14 +399,15 @@ See the [GitOps guide](docs/gitops.md) for the full feature matrix, RBAC require
 
 ### Traffic
 
-Visualize live network traffic between services using Hubble or Caretta.
+Visualize live network traffic between services using Hubble, Caretta, Istio, or Beyla.
 
 <p align="center">
   <img src="docs/screenshots/traffic-view.png" alt="Traffic View" width="800">
   <br><em>Traffic View — See how services communicate in real-time</em>
 </p>
 
-- Auto-detects Hubble (Cilium), Caretta, or Istio as traffic data sources
+- Auto-detects Hubble (Cilium), Istio, Caretta, or Grafana Beyla as traffic data sources
+- Beyla (standalone or via Grafana Alloy) provides eBPF L4 + HTTP visibility with no service mesh, read from Prometheus
 - Animated flow graph showing requests per second between services
 - Filter by namespace, protocol, or status code
 - Setup wizard to install a traffic source if none is detected
