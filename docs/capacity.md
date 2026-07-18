@@ -22,7 +22,7 @@ Capacity is a hub-and-spoke under `/capacity`:
 The recurring posture check.
 
 - **KPI tiles** — NodePools (readiness), Nodes (+N outside Karpenter pools), NodeClaims with a lifecycle rollup ("8 ready · 1 launched · 1 failed · +1 orphaned"), and Pending pods with a jump into Demand.
-- **Cluster scheduling capacity bar** — per resource (CPU, memory, plus any extended resource with allocatable or pending demand): scheduled requests fill the allocatable track proportionally; **in-flight claim capacity extends beyond the allocatable edge** (to scale — it is capacity that will exist once claims register, never capacity the scheduler can use today); **pending demand is a count chip after a `//` discontinuity** — demand can exceed the whole fleet, and no bounded bar can draw 10× overflow proportionally without lying. A resource the fleet doesn't have renders as "0 requested of 0 allocatable · N pending" — the GPU-pool-missing story in one line.
+- **Karpenter scheduling capacity bar** — Karpenter-pooled nodes only (static capacity is deliberately outside its ledger); per resource (CPU, memory, plus any extended resource with allocatable or pending demand): scheduled requests fill the allocatable track proportionally; **in-flight claim capacity extends beyond the allocatable edge** (to scale — it is capacity that will exist once claims register, never capacity the scheduler can use today); **pending demand is a count chip after a `//` discontinuity** — demand can exceed the whole fleet, and no bounded bar can draw 10× overflow proportionally without lying. A resource the fleet doesn't have renders as "0 requested of 0 allocatable · N pending" — the GPU-pool-missing story in one line.
 - **Operational signals** — prioritized findings (limit pressure, registration health, blocked disruption, pending-demand states), each linking to its diagnosis.
 - **NodePool inventory** — every pool with readiness, mode, NodeClass, member counts, scheduled requests, usage, and limit pressure.
 
@@ -38,7 +38,9 @@ Pending pods grouped by **scheduling signature** — canonicalized node selector
 - **pool evaluations**: the group checked against every NodePool's declared constraints, with per-predicate evidence (see below);
 - the scheduler's own reasons, aggregated.
 
-Filterable by state, by pool ("how does observed demand evaluate against this pool"), and by workload owner — the form Issues deep links use, filtered server-side so an empty result is a true zero, not a paging artifact.
+Filterable by state, by pool ("how does observed demand evaluate against this pool" — the filter narrows only which evaluation perspective is returned; group states and counts are always classified against the whole fleet), and by workload owner — the form Issues deep links use, filtered server-side so an empty result is a true zero, not a paging artifact.
+
+Evaluations cover Karpenter NodePools only: `blocked` means no NodePool can take the demand, not that no node can — on mixed clusters, capacity Karpenter doesn't manage may still satisfy it.
 
 ### Activity
 

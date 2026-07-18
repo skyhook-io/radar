@@ -501,7 +501,7 @@ describe("CapacityView overview", () => {
     const html = renderCapacity("/capacity", (client) =>
       client.setQueryData(["capacity", "overview"], overview()),
     );
-    expect(html).toContain("Cluster scheduling capacity");
+    expect(html).toContain("Karpenter scheduling capacity");
     expect(html).toContain("not usage, not a health score");
     expect(html).toContain("in flight (beyond the edge)");
     expect(html).toContain("pending demand — count, not to scale");

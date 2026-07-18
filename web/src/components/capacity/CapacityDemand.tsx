@@ -223,6 +223,10 @@ export function CapacityDemand({
           <div className="mt-2">
             <ScopeBadges coverage={response.coverage} />
           </div>
+          <p className="mt-1.5 text-xs text-theme-text-tertiary">
+            Evaluations cover Karpenter NodePools only — “blocked” means no
+            NodePool can take it, not that no node can.
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <LinkButton
@@ -280,8 +284,8 @@ export function CapacityDemand({
           <span className="font-medium text-theme-text-primary">
             {poolFilter}
           </span>{" "}
-          — the state counts below describe how the observed demand evaluates
-          against this pool, not global scheduling state.{" "}
+          — each group's evaluation shows this pool's perspective; states and
+          counts stay fleet-wide.{" "}
           <LinkButton className="inline" onClick={clearPoolFilter}>
             Evaluate against all NodePools
           </LinkButton>

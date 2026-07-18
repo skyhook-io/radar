@@ -20,9 +20,10 @@ import {
   resourceLabel,
 } from "./shared";
 
-// Cluster scheduling capacity — the fleet-level "how full is Karpenter, and
-// how much is knocking at the door" bar. Scale semantics are deliberate and
-// asymmetric:
+// Karpenter scheduling capacity — the fleet-level "how full is Karpenter, and
+// how much is knocking at the door" bar. Karpenter-pooled nodes only: on mixed
+// clusters, static capacity is deliberately outside this bar's ledger. Scale
+// semantics are deliberate and asymmetric:
 //   · scheduled requests fill the allocatable track proportionally;
 //   · in-flight claim capacity extends BEYOND the allocatable edge, to scale —
 //     it is capacity that will exist once claims register, never current
@@ -238,8 +239,8 @@ export function ClusterSchedulingCard({
   if (rows.length === 0) {
     return (
       <SectionCard
-        title="Cluster scheduling capacity"
-        subtitle="scheduled requests vs node allocatable, Karpenter-pooled nodes · not usage, not a health score"
+        title="Karpenter scheduling capacity"
+        subtitle="scheduled requests vs node allocatable, Karpenter-pooled nodes only · not usage, not a health score"
         actions={<LinkButton onClick={onExplain}>How to read →</LinkButton>}
         bodyClassName="px-4 py-3"
       >
@@ -254,8 +255,8 @@ export function ClusterSchedulingCard({
 
   return (
     <SectionCard
-      title="Cluster scheduling capacity"
-      subtitle="scheduled requests vs node allocatable, Karpenter-pooled nodes · not usage, not a health score"
+      title="Karpenter scheduling capacity"
+      subtitle="scheduled requests vs node allocatable, Karpenter-pooled nodes only · not usage, not a health score"
       actions={<LinkButton onClick={onExplain}>How to read →</LinkButton>}
       bodyClassName="flex flex-col gap-3 px-4 py-3"
     >
