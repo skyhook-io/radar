@@ -313,6 +313,8 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
   const hiddenFindings = check.findings.length - visibleFindings.length
   const sharedFinding = sharedFindingDetails(check.findings)
   const label = evidenceLabel(check)
+  const findingReferenceURLs = new Set(check.findings.flatMap((finding) => finding.references.map((reference) => reference.url)))
+  const checkReferences = (check.references ?? []).filter((reference) => !findingReferenceURLs.has(reference.url))
   return (
     <div>
       <button
@@ -320,7 +322,7 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
         aria-expanded={open}
         aria-controls={detailID}
         onClick={() => setOpen((value) => !value)}
-        className="grid w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20 md:grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] md:gap-4"
+        className="grid w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20 md:grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] md:gap-4"
       >
         <div className="flex min-w-0 items-center gap-2.5">
           <Icon className={clsx('h-4 w-4 shrink-0', meta.iconClass)} />
@@ -341,9 +343,9 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
         </div>
       </button>
       <Collapse open={open} mountLazily>
-        <div id={detailID} className="border-t-subtle bg-theme-elevated px-4 py-3">
+        <div id={detailID} className="border-t border-theme-border bg-theme-base/40 px-4 py-3">
           {check.findings.length > 0 && (
-            <div className="flex flex-col gap-2">
+            <div className={clsx(!sharedFinding && 'divide-y divide-theme-border/70')}>
               {sharedFinding ? (
                 <SharedFindingGroup
                   finding={sharedFinding}
@@ -366,8 +368,8 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
           <div className={clsx('flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-theme-text-tertiary', check.findings.length > 0 && 'mt-3 border-t-subtle pt-3')}>
             {check.caveat && <span className="inline-flex items-start gap-1.5 text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />Coverage note: {check.caveat}</span>}
             {check.evidenceNote && <span className="inline-flex items-start gap-1.5"><FileSearch className="mt-0.5 h-3.5 w-3.5 shrink-0" />Evidence scope: {check.evidenceNote}</span>}
-            <span className="inline-flex items-center gap-1.5"><FileSearch className="h-3.5 w-3.5" />{check.scope}</span>
-            {(check.references ?? []).map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
+            <span className="inline-flex items-center gap-1.5"><FileSearch className="h-3.5 w-3.5" />Check scope: {check.scope}</span>
+            {checkReferences.map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
           </div>
         </div>
       </Collapse>
@@ -399,8 +401,8 @@ function SharedFindingGroup({ finding, findings, total, hidden, onShowAll, onNav
   onNavigateToResource: (resource: SelectedResource) => void
 }) {
   return (
-    <article className="overflow-hidden rounded-lg border border-theme-border bg-theme-surface">
-      <div className="px-3 py-3">
+    <article>
+      <div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge severity={finding.level === 'blocker' ? 'error' : 'warning'}>{finding.level === 'blocker' ? 'Blocker' : 'Review'}</Badge>
           <span className="text-xs font-medium text-theme-text-primary">{finding.title}</span>
@@ -415,12 +417,12 @@ function SharedFindingGroup({ finding, findings, total, hidden, onShowAll, onNav
           {finding.references.map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
         </div>
       </div>
-      <div className="divide-y divide-theme-border border-t-subtle">
+      <div className="mt-3 divide-y divide-theme-border/70 border-t-subtle">
         {findings.map((item, index) => (
           <CompactFindingRow key={findingKey(item, index)} finding={item} onNavigateToResource={onNavigateToResource} />
         ))}
       </div>
-      {hidden > 0 && <div className="border-t-subtle px-2 py-1.5"><ShowAllFindings total={total} onClick={onShowAll} /></div>}
+      {hidden > 0 && <div className="border-t-subtle py-1.5"><ShowAllFindings total={total} onClick={onShowAll} /></div>}
     </article>
   )
 }
@@ -431,7 +433,7 @@ function CompactFindingRow({ finding, onNavigateToResource }: {
 }) {
   const resourceLabel = finding.resource && `${finding.resource.namespace ? `${finding.resource.namespace}/` : ''}${finding.resource.name}`
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[11px] text-theme-text-tertiary">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-[11px] text-theme-text-tertiary">
       {finding.resource && (
         <button
           type="button"
@@ -474,7 +476,7 @@ function evidenceLabel(check: UpgradeReadinessCheck) {
 function FindingRow({ finding, onNavigateToResource }: { finding: UpgradeReadinessFinding; onNavigateToResource: (resource: SelectedResource) => void }) {
   const resourceLabel = finding.resource && `${finding.resource.namespace ? `${finding.resource.namespace}/` : ''}${finding.resource.name}`
   return (
-    <article className="rounded-lg border border-theme-border bg-theme-surface px-3 py-3">
+    <article className="py-3 first:pt-0 last:pb-0">
       <div className="flex flex-wrap items-center gap-2">
         <Badge severity={finding.level === 'blocker' ? 'error' : 'warning'}>{finding.level === 'blocker' ? 'Blocker' : 'Review'}</Badge>
         <span className="text-xs font-medium text-theme-text-primary">{finding.title}</span>
