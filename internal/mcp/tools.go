@@ -2055,21 +2055,31 @@ type mcpWarning struct {
 	// long-resolved BackOff reads as current behavior.
 	LastSeen time.Time `json:"lastSeen"`
 	// Objects lists up to topWarningObjectCap distinct involved objects
-	// (most recent first) as Kind/namespace/name; ObjectCount is the
-	// uncapped distinct total.
-	Objects          []string `json:"objects,omitempty"`
-	ObjectCount      int      `json:"objectCount,omitempty"`
-	ObjectsTruncated bool     `json:"objectsTruncated,omitempty"`
+	// (most recent first); ObjectCount is the uncapped distinct total.
+	Objects          []mcpWarningObject `json:"objects,omitempty"`
+	ObjectCount      int                `json:"objectCount,omitempty"`
+	ObjectsTruncated bool               `json:"objectsTruncated,omitempty"`
 }
 
-// formatEventObjectRef renders an involved object as Kind/namespace/name
-// (Kind/name for cluster-scoped objects) — the same compact ref shape agents
-// can feed straight into get_resource/diagnose.
-func formatEventObjectRef(ref aicontext.EventObjectRef) string {
-	if ref.Namespace == "" {
-		return ref.Kind + "/" + ref.Name
+// mcpWarningObject is one involved object behind a topWarnings row, shaped
+// to feed straight into get_resource/diagnose (kind + group + namespace +
+// name). Group is included because bare kinds collide (core Service vs
+// Knative Service); empty means the core API group.
+type mcpWarningObject struct {
+	Kind      string `json:"kind"`
+	Group     string `json:"group,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+}
+
+// warningObjectFromRef converts an event's involved-object ref, deriving the
+// API group from apiVersion ("apps/v1" → "apps"; "v1" → core/empty).
+func warningObjectFromRef(ref aicontext.EventObjectRef) mcpWarningObject {
+	group := ""
+	if idx := strings.IndexByte(ref.APIVersion, '/'); idx > 0 {
+		group = ref.APIVersion[:idx]
 	}
-	return ref.Kind + "/" + ref.Namespace + "/" + ref.Name
+	return mcpWarningObject{Kind: ref.Kind, Group: group, Namespace: ref.Namespace, Name: ref.Name}
 }
 
 type mcpHelmSummary struct {
@@ -2361,7 +2371,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 				ObjectsTruncated: e.ObjectsTruncated,
 			}
 			for _, o := range e.Objects {
-				w.Objects = append(w.Objects, formatEventObjectRef(o))
+				w.Objects = append(w.Objects, warningObjectFromRef(o))
 			}
 			d.TopWarnings = append(d.TopWarnings, w)
 		}

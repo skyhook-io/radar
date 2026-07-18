@@ -164,6 +164,56 @@ func TestDeduplicateEvents_DeterministicUnderCapTies(t *testing.T) {
 	}
 }
 
+// Type is a grouping key, so it must also be a comparator key: a Normal and
+// a Warning group identical on every other field must not swap which one
+// survives the 20-group cap based on input order.
+func TestDeduplicateEvents_TypeTieDeterministicAtCap(t *testing.T) {
+	now := time.Now()
+	events := make([]corev1.Event, 0, 21)
+	for i := 0; i < 19; i++ {
+		events = append(events, makeEvent(fmt.Sprintf("A%02d", i), "m", "Warning", 1, now))
+	}
+	events = append(events,
+		makeEvent("Z", "same", "Normal", 1, now),
+		makeEvent("Z", "same", "Warning", 1, now),
+	)
+	reversed := make([]corev1.Event, len(events))
+	for i := range events {
+		reversed[len(events)-1-i] = events[i]
+	}
+	a, b := DeduplicateEvents(events), DeduplicateEvents(reversed)
+	if len(a) != maxDeduplicatedEvents || len(b) != maxDeduplicatedEvents {
+		t.Fatalf("lens = %d/%d, want both capped", len(a), len(b))
+	}
+	if a[len(a)-1] != b[len(b)-1] {
+		t.Fatalf("cap survivor depends on input order: %+v vs %+v", a[len(a)-1], b[len(b)-1])
+	}
+}
+
+// Partial involved-object refs (kind without name, or name without kind) are
+// not a usable identity and must be dropped, not emitted malformed. APIVersion
+// is carried through for kind disambiguation.
+func TestDeduplicateEventsWithObjects_RefValidityAndAPIVersion(t *testing.T) {
+	now := time.Now()
+	full := makeEventForObject("BackOff", "restarting", "Warning", 1, now, "Pod", "shop", "pod-a")
+	full.InvolvedObject.APIVersion = "v1"
+	kindless := makeEventForObject("BackOff", "restarting", "Warning", 1, now, "", "shop", "orphan")
+	nameless := makeEventForObject("BackOff", "restarting", "Warning", 1, now, "Pod", "shop", "")
+
+	result := DeduplicateEventsWithObjects([]corev1.Event{full, kindless, nameless}, 3)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(result))
+	}
+	g := result[0]
+	if g.ObjectCount != 1 || len(g.Objects) != 1 {
+		t.Fatalf("objects = %+v (count %d), want only the fully-identified ref", g.Objects, g.ObjectCount)
+	}
+	want := EventObjectRef{Kind: "Pod", APIVersion: "v1", Namespace: "shop", Name: "pod-a"}
+	if g.Objects[0] != want {
+		t.Errorf("objects[0] = %+v, want %+v", g.Objects[0], want)
+	}
+}
+
 // The plain DeduplicateEvents wire shape is unchanged by the objects path —
 // its consumers (get_events, diagnose, resource includes) group across pods
 // on purpose and must not grow new fields.

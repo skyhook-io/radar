@@ -56,11 +56,14 @@ type eventKey struct {
 }
 
 // EventObjectRef identifies one involved object that contributed to a
-// deduplicated event group.
+// deduplicated event group. APIVersion is carried so consumers can
+// disambiguate colliding kinds (core Service vs Knative Service) when
+// feeding the ref into resource lookups.
 type EventObjectRef struct {
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name"`
+	Kind       string `json:"kind"`
+	APIVersion string `json:"apiVersion,omitempty"`
+	Namespace  string `json:"namespace,omitempty"`
+	Name       string `json:"name"`
 }
 
 // DeduplicatedEventGroup is a DeduplicatedEvent plus the distinct involved
@@ -142,11 +145,15 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 			order = append(order, key)
 		}
 
-		if objectCap > 0 && (ev.InvolvedObject.Kind != "" || ev.InvolvedObject.Name != "") {
+		// Both kind AND name required — legacy Event validation doesn't
+		// reliably enforce either, and a partial ref ("Pod/shop/" or
+		// "/shop/foo") is not a usable identity.
+		if objectCap > 0 && ev.InvolvedObject.Kind != "" && ev.InvolvedObject.Name != "" {
 			ref := EventObjectRef{
-				Kind:      ev.InvolvedObject.Kind,
-				Namespace: ev.InvolvedObject.Namespace,
-				Name:      ev.InvolvedObject.Name,
+				Kind:       ev.InvolvedObject.Kind,
+				APIVersion: ev.InvolvedObject.APIVersion,
+				Namespace:  ev.InvolvedObject.Namespace,
+				Name:       ev.InvolvedObject.Name,
 			}
 			seen := objects[key]
 			if seen == nil {
@@ -170,7 +177,9 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 
 	// Most recent first, with full deterministic tie-breakers BEFORE the
 	// cap — otherwise which equal-timestamp groups survive the cut depends
-	// on informer map iteration order.
+	// on informer map iteration order. Type is a comparator key because it
+	// is a grouping key: Normal and Warning groups can tie on everything
+	// else.
 	sort.Slice(result, func(i, j int) bool {
 		a, b := result[i], result[j]
 		if !a.LastTimestamp.Equal(b.LastTimestamp) {
@@ -182,7 +191,10 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 		if a.Reason != b.Reason {
 			return a.Reason < b.Reason
 		}
-		return a.Message < b.Message
+		if a.Message != b.Message {
+			return a.Message < b.Message
+		}
+		return a.Type < b.Type
 	})
 
 	if len(result) > maxDeduplicatedEvents {
@@ -215,7 +227,10 @@ func selectGroupObjects(seen map[EventObjectRef]time.Time, limit int) ([]EventOb
 		if a.Namespace != b.Namespace {
 			return a.Namespace < b.Namespace
 		}
-		return a.Name < b.Name
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.APIVersion < b.APIVersion
 	})
 	total := len(refs)
 	if total > limit {

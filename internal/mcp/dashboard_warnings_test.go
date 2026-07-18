@@ -10,6 +10,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 )
 
 func warningEvent(name, reason, message string, count int32, last time.Time, objKind, objNS, objName string) *corev1.Event {
@@ -73,8 +74,8 @@ func TestBuildDashboard_TopWarnings_RecencyAndObjects(t *testing.T) {
 	if live.ObjectCount != 2 || len(live.Objects) != 2 {
 		t.Fatalf("live objects = %+v (count %d), want both pods", live.Objects, live.ObjectCount)
 	}
-	if live.Objects[0] != "Pod/shop/cart-5d4f7c9b8-bbbbb" {
-		t.Errorf("objects[0] = %q, want most-recent pod as Kind/namespace/name", live.Objects[0])
+	if want := (mcpWarningObject{Kind: "Pod", Namespace: "shop", Name: "cart-5d4f7c9b8-bbbbb"}); live.Objects[0] != want {
+		t.Errorf("objects[0] = %+v, want most-recent pod %+v", live.Objects[0], want)
 	}
 
 	stale := dashboard.TopWarnings[1]
@@ -83,5 +84,25 @@ func TestBuildDashboard_TopWarnings_RecencyAndObjects(t *testing.T) {
 	}
 	if stale.LastSeen.IsZero() || now.Sub(stale.LastSeen) < time.Hour {
 		t.Errorf("stale lastSeen = %v — without an old lastSeen a consumer cannot tell this group is stale", stale.LastSeen)
+	}
+}
+
+// The emitted object ref derives the API group from apiVersion so agents can
+// disambiguate colliding kinds when feeding it into get_resource.
+func TestWarningObjectFromRef_GroupDerivation(t *testing.T) {
+	cases := []struct {
+		apiVersion string
+		wantGroup  string
+	}{
+		{"apps/v1", "apps"},
+		{"v1", ""},
+		{"", ""},
+		{"serving.knative.dev/v1", "serving.knative.dev"},
+	}
+	for _, tt := range cases {
+		got := warningObjectFromRef(aicontext.EventObjectRef{Kind: "Service", APIVersion: tt.apiVersion, Namespace: "ns", Name: "x"})
+		if got.Group != tt.wantGroup {
+			t.Errorf("apiVersion %q: group = %q, want %q", tt.apiVersion, got.Group, tt.wantGroup)
+		}
 	}
 }
