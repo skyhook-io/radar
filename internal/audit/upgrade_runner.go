@@ -2,6 +2,7 @@ package audit
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -18,6 +19,7 @@ type UpgradeReadinessOptions struct {
 	Platform                            string
 	ManifestResources                   []upgradereadiness.ManifestResource
 	HelmUnavailableNamespaces           []string
+	ManifestParseErrors                 int
 	DeprecatedAPIRequests               []upgradereadiness.DeprecatedAPIRequest
 	DeprecatedAPIMetricsWindow          string
 	PrometheusRules                     []*unstructured.Unstructured
@@ -26,6 +28,13 @@ type UpgradeReadinessOptions struct {
 	PrometheusRuleUnavailableNamespaces []string
 	CanReadNodes                        bool
 	CanReadPersistentVolumes            bool
+	SourceObjects                       []metav1.Object
+	AdmissionWebhookConfigurations      []*unstructured.Unstructured
+	CustomResourceDefinitions           []*unstructured.Unstructured
+	EndpointSlices                      []*discoveryv1.EndpointSlice
+	NodeRuntimeEvidence                 []upgradereadiness.NodeRuntimeEvidence
+	AdditionalServices                  []*corev1.Service
+	SourceObjectUnavailableKinds        []string
 }
 
 func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string, opts UpgradeReadinessOptions) (*upgradereadiness.ScanResults, error) {
@@ -80,7 +89,13 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 	for _, object := range typed.PodDisruptionBudgets {
 		sourceObjects = append(sourceObjects, object)
 	}
+	if opts.SourceObjects != nil {
+		sourceObjects = opts.SourceObjects
+	}
+	events := listNamespaced(cache.Events(), namespaces)
 
+	services := append([]*corev1.Service(nil), typed.Services...)
+	services = append(services, opts.AdditionalServices...)
 	return upgradereadiness.Scan(&upgradereadiness.Input{
 		Namespaces:                          append([]string(nil), namespaces...),
 		Pods:                                typed.Pods,
@@ -90,12 +105,20 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 		DaemonSets:                          typed.DaemonSets,
 		Jobs:                                typed.Jobs,
 		CronJobs:                            typed.CronJobs,
-		Services:                            typed.Services,
+		Services:                            services,
 		PersistentVolumes:                   persistentVolumes,
 		Nodes:                               nodes,
+		Events:                              events,
+		PodDisruptionBudgets:                typed.PodDisruptionBudgets,
+		EndpointSlices:                      opts.EndpointSlices,
+		AdmissionWebhookConfigurations:      opts.AdmissionWebhookConfigurations,
+		CustomResourceDefinitions:           opts.CustomResourceDefinitions,
+		NodeRuntimeEvidence:                 opts.NodeRuntimeEvidence,
 		SourceObjects:                       sourceObjects,
+		SourceObjectUnavailableKinds:        opts.SourceObjectUnavailableKinds,
 		ManifestResources:                   opts.ManifestResources,
 		HelmUnavailableNamespaces:           opts.HelmUnavailableNamespaces,
+		ManifestParseErrors:                 opts.ManifestParseErrors,
 		DeprecatedAPIRequests:               opts.DeprecatedAPIRequests,
 		DeprecatedAPIMetricsWindow:          opts.DeprecatedAPIMetricsWindow,
 		PrometheusRules:                     opts.PrometheusRules,

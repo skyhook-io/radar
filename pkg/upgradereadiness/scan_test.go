@@ -8,23 +8,37 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func completeInput() *Input {
 	return &Input{
-		Pods:                              []*corev1.Pod{},
-		Deployments:                       []*appsv1.Deployment{},
-		ReplicaSets:                       []*appsv1.ReplicaSet{},
-		StatefulSets:                      []*appsv1.StatefulSet{},
-		DaemonSets:                        []*appsv1.DaemonSet{},
-		Jobs:                              []*batchv1.Job{},
-		CronJobs:                          []*batchv1.CronJob{},
-		Services:                          []*corev1.Service{},
-		PersistentVolumes:                 []*corev1.PersistentVolume{},
-		Nodes:                             []*corev1.Node{readyNode("node-a", "v1.35.7")},
-		ManifestResources:                 []ManifestResource{{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "api", Source: "Helm"}},
+		Pods:                           []*corev1.Pod{},
+		Deployments:                    []*appsv1.Deployment{},
+		ReplicaSets:                    []*appsv1.ReplicaSet{},
+		StatefulSets:                   []*appsv1.StatefulSet{},
+		DaemonSets:                     []*appsv1.DaemonSet{},
+		Jobs:                           []*batchv1.Job{},
+		CronJobs:                       []*batchv1.CronJob{},
+		Services:                       []*corev1.Service{},
+		PersistentVolumes:              []*corev1.PersistentVolume{},
+		Nodes:                          []*corev1.Node{readyNode("node-a", "v1.35.7")},
+		Events:                         []*corev1.Event{},
+		PodDisruptionBudgets:           []*policyv1.PodDisruptionBudget{},
+		EndpointSlices:                 []*discoveryv1.EndpointSlice{},
+		AdmissionWebhookConfigurations: []*unstructured.Unstructured{},
+		CustomResourceDefinitions:      []*unstructured.Unstructured{},
+		NodeRuntimeEvidence:            []NodeRuntimeEvidence{{NodeName: "node-a", MetricsAvailable: true, CgroupVersion: 2, CgroupVersionAvailable: true}},
+		ManifestResources: []ManifestResource{{
+			APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "api", Source: "Helm",
+			Object: &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "apps/v1", "kind": "Deployment",
+				"metadata": map[string]any{"name": "api", "namespace": "default"},
+			}},
+		}},
 		DeprecatedAPIRequests:             []DeprecatedAPIRequest{},
 		PrometheusRules:                   []*unstructured.Unstructured{},
 		PrometheusRulesInstalled:          false,
@@ -37,7 +51,7 @@ func readyNode(name, version string) *corev1.Node {
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Status: corev1.NodeStatus{
 			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
-			NodeInfo:   corev1.NodeSystemInfo{KubeletVersion: version},
+			NodeInfo:   corev1.NodeSystemInfo{KubeletVersion: version, ContainerRuntimeVersion: "containerd://2.1.0", OperatingSystem: "linux"},
 		},
 	}
 }
@@ -67,11 +81,11 @@ func TestScanBaselineCanPassWithSampledMetricsEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Verdict != VerdictNoKnownBlockers || got.Summary.Blocked != 0 || got.Summary.Passed != 8 || got.Summary.Unknown != 0 || got.Summary.NotApplicable != 2 {
+	if got.Verdict != VerdictNoKnownBlockers || got.Summary.Blocked != 0 || got.Summary.Passed != 12 || got.Summary.Unknown != 0 || got.Summary.NotApplicable != 3 {
 		t.Fatalf("unexpected result: %+v", got)
 	}
-	if len(got.Checks) != 10 {
-		t.Fatalf("checks = %d, want 10", len(got.Checks))
+	if len(got.Checks) != 15 {
+		t.Fatalf("checks = %d, want 15", len(got.Checks))
 	}
 	metrics := checkByID(t, got, "deprecated-api-requests")
 	if metrics.Status != CheckPassed || metrics.EvidenceNote == "" || metrics.Caveat != "" {
@@ -97,7 +111,7 @@ func TestScanGitRepoAcrossWorkloadKinds(t *testing.T) {
 	if got.Verdict != VerdictBlocked || check.Status != CheckBlocked || len(check.Findings) != 7 || check.Inspected != 7 {
 		t.Fatalf("unexpected gitRepo result: %+v", check)
 	}
-	if check.Summary != "7 workloads use the removed gitRepo volume driver." {
+	if check.Summary != "7 workloads use the disabled gitRepo volume driver." {
 		t.Fatalf("gitRepo summary = %q", check.Summary)
 	}
 	wantPaths := map[string]string{

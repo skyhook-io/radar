@@ -3,6 +3,8 @@ package helm
 import (
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -200,6 +202,7 @@ type ReleaseManifestResource struct {
 	ReleaseName      string
 	ReleaseNamespace string
 	Resource         OwnedResource
+	Object           *unstructured.Unstructured
 }
 
 // HelmValues represents the values for a release

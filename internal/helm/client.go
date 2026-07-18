@@ -367,21 +367,23 @@ func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username stri
 // ListManifestResourcesAcrossNamespaces returns resource declarations from the
 // latest stored manifest of each visible Helm release. It follows the same
 // namespace and impersonation rules as ListReleasesAcrossNamespaces.
-func (c *Client) ListManifestResourcesAcrossNamespaces(namespaces []string, username string, groups []string) ([]ReleaseManifestResource, []string, error) {
+func (c *Client) ListManifestResourcesAcrossNamespaces(namespaces []string, username string, groups []string) ([]ReleaseManifestResource, []string, int, error) {
 	if namespaces == nil {
-		resources, err := c.listManifestResourcesAsUser("", username, groups)
-		return resources, nil, err
+		resources, parseErrors, err := c.listManifestResourcesAsUser("", username, groups)
+		return resources, nil, parseErrors, err
 	}
 	var all []ReleaseManifestResource
 	var forbidden []string
+	parseErrors := 0
 	for _, namespace := range namespaces {
-		resources, err := c.listManifestResourcesAsUser(namespace, username, groups)
+		resources, namespaceParseErrors, err := c.listManifestResourcesAsUser(namespace, username, groups)
+		parseErrors += namespaceParseErrors
 		if err != nil {
 			if IsForbiddenError(err) {
 				forbidden = append(forbidden, namespace)
 				continue
 			}
-			return nil, forbidden, err
+			return nil, forbidden, parseErrors, err
 		}
 		all = append(all, resources...)
 	}
@@ -400,10 +402,10 @@ func (c *Client) ListManifestResourcesAcrossNamespaces(namespaces []string, user
 			Name: all[j].Resource.Name, Namespace: all[j].Resource.Namespace,
 		})
 	})
-	return all, forbidden, nil
+	return all, forbidden, parseErrors, nil
 }
 
-func (c *Client) listManifestResourcesAsUser(namespace, username string, groups []string) ([]ReleaseManifestResource, error) {
+func (c *Client) listManifestResourcesAsUser(namespace, username string, groups []string) ([]ReleaseManifestResource, int, error) {
 	var actionConfig *action.Configuration
 	var err error
 	if username == "" {
@@ -412,31 +414,36 @@ func (c *Client) listManifestResourcesAsUser(namespace, username string, groups 
 		actionConfig, err = c.getActionConfigForUser(namespace, username, groups)
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := actionConfig.KubeClient.IsReachable(); err != nil {
-		return nil, fmt.Errorf("failed to inspect helm manifests: %w", err)
+		return nil, 0, fmt.Errorf("failed to inspect helm manifests: %w", err)
 	}
 	client, err := helmStorageClient(username, groups)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	snapshot, err := helmReleaseStorageSnapshotWithClient(client, namespace)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	resources := []ReleaseManifestResource{}
+	parseErrors := 0
 	for _, rel := range snapshot.latest {
 		if rel == nil {
 			continue
 		}
-		for _, resource := range parseManifestResources(rel.Manifest, rel.Namespace) {
+		rendered, errors := parseManifestResourceObjects(rel.Manifest, rel.Namespace)
+		parseErrors += errors
+		for _, resource := range rendered {
 			resources = append(resources, ReleaseManifestResource{
-				ReleaseName: rel.Name, ReleaseNamespace: rel.Namespace, Resource: resource,
+				ReleaseName: rel.Name, ReleaseNamespace: rel.Namespace,
+				Resource: OwnedResource{Kind: resource.Ref.Kind, APIVersion: resource.Ref.APIVersion, Name: resource.Ref.Name, Namespace: resource.Ref.Namespace},
+				Object:   resource.Object,
 			})
 		}
 	}
-	return resources, nil
+	return resources, parseErrors, nil
 }
 
 func listReleasesWith(actionConfig *action.Configuration, namespace, username string, groups []string) ([]HelmRelease, error) {

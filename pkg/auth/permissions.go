@@ -262,11 +262,18 @@ func ReviewSubjectAccess(ctx context.Context, client kubernetes.Interface, usern
 // user can perform an action. This uses the ServiceAccount's permissions to check
 // on behalf of the user.
 func SubjectCanI(ctx context.Context, client kubernetes.Interface, username string, groups []string, namespace, group, resource, verb string) (bool, error) {
+	return SubjectCanISubresource(ctx, client, username, groups, namespace, group, resource, "", verb)
+}
+
+// SubjectCanISubresource performs the same impersonated authorization check
+// for an exact resource/subresource tuple such as nodes/proxy.
+func SubjectCanISubresource(ctx context.Context, client kubernetes.Interface, username string, groups []string, namespace, group, resource, subresource, verb string) (bool, error) {
 	status, err := ReviewSubjectAccess(ctx, client, username, groups, authv1.ResourceAttributes{
-		Namespace: namespace,
-		Group:     group,
-		Resource:  resource,
-		Verb:      verb,
+		Namespace:   namespace,
+		Group:       group,
+		Resource:    resource,
+		Subresource: subresource,
+		Verb:        verb,
 	})
 	if err != nil {
 		log.Printf("[auth] SubjectAccessReview failed for user=%s %s %s/%s: %v", username, verb, group, resource, err)

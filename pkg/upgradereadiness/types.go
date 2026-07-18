@@ -4,6 +4,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -39,26 +41,41 @@ type Input struct {
 	// namespaced evidence was filtered by an RBAC or configured cache ceiling.
 	Namespaces []string
 
-	Pods              []*corev1.Pod
-	Deployments       []*appsv1.Deployment
-	ReplicaSets       []*appsv1.ReplicaSet
-	StatefulSets      []*appsv1.StatefulSet
-	DaemonSets        []*appsv1.DaemonSet
-	Jobs              []*batchv1.Job
-	CronJobs          []*batchv1.CronJob
-	Services          []*corev1.Service
-	PersistentVolumes []*corev1.PersistentVolume
-	Nodes             []*corev1.Node
+	Pods                 []*corev1.Pod
+	Deployments          []*appsv1.Deployment
+	ReplicaSets          []*appsv1.ReplicaSet
+	StatefulSets         []*appsv1.StatefulSet
+	DaemonSets           []*appsv1.DaemonSet
+	Jobs                 []*batchv1.Job
+	CronJobs             []*batchv1.CronJob
+	Services             []*corev1.Service
+	PersistentVolumes    []*corev1.PersistentVolume
+	Nodes                []*corev1.Node
+	Events               []*corev1.Event
+	PodDisruptionBudgets []*policyv1.PodDisruptionBudget
+	EndpointSlices       []*discoveryv1.EndpointSlice
+
+	// AdmissionWebhookConfigurations and CustomResourceDefinitions are nil
+	// when their cluster-scoped sources could not be read. Empty, non-nil
+	// slices mean the sources were inspected and contained no objects.
+	AdmissionWebhookConfigurations []*unstructured.Unstructured
+	CustomResourceDefinitions      []*unstructured.Unstructured
+	// NodeRuntimeEvidence is nil when kubelet metrics could not be inspected.
+	NodeRuntimeEvidence []NodeRuntimeEvidence
 
 	// SourceObjects are live typed objects whose kubectl last-applied annotation
 	// can preserve the apiVersion originally submitted to the API server.
 	SourceObjects []metav1.Object
+	// SourceObjectUnavailableKinds records direct source-object list failures.
+	// Successful kinds remain usable while checks expose the coverage gap.
+	SourceObjectUnavailableKinds []string
 	// ManifestResources come from rendered Helm release manifests. Unlike live
 	// objects, they preserve the apiVersion that a future reconcile will submit.
 	ManifestResources []ManifestResource
 	// HelmUnavailableNamespaces names namespaces whose stored release
 	// manifests could not be read while other namespaces were inspected.
 	HelmUnavailableNamespaces []string
+	ManifestParseErrors       int
 
 	// DeprecatedAPIRequests is nil when /metrics could not be read. An empty,
 	// non-nil slice means the sampled API server process had no active series.
@@ -83,6 +100,18 @@ type ManifestResource struct {
 	Source          string
 	SourceNamespace string
 	SourceName      string
+	Object          *unstructured.Unstructured
+}
+
+// NodeRuntimeEvidence preserves the upgrade-related kubelet metrics sampled
+// from one node. Missing metric flags are distinct from zero-valued metrics.
+type NodeRuntimeEvidence struct {
+	NodeName                  string
+	MetricsAvailable          bool
+	CgroupVersion             int
+	CgroupVersionAvailable    bool
+	CRILosingSupportVersion   string
+	CRILosingSupportAvailable bool
 }
 
 type DeprecatedAPIRequest struct {

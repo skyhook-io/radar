@@ -13,6 +13,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 
@@ -75,14 +76,29 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 		scanKubeProxySkew(input, target),
 	)
 
-	if target.AtLeast(utilversion.MustParseGeneric("1.36")) {
+	if crossesRelease(current, target, "1.35") {
 		result.Checks = append(result.Checks,
+			scanNodeCgroupCompatibility(input),
+			scanGKEExecProbeTimeout(input),
+		)
+	}
+
+	if crossesRelease(current, target, "1.36") {
+		result.Checks = append(result.Checks,
+			scanContainerRuntimeSupport(input, target),
 			scanGitRepo(input, index),
 			scanFlexVolume(input, index),
 			scanServiceExternalIPs(input),
 			scanRenamedMetrics(input),
+			scanStrictIPCIDRValidation(input),
 		)
 	}
+
+	result.Checks = append(result.Checks,
+		scanNodeDrainFeasibility(input),
+		scanAdmissionWebhookReadiness(input),
+		scanCRDConversionWebhookReadiness(input),
+	)
 
 	for i := range result.Checks {
 		finalizeCheck(&result.Checks[i])
@@ -118,6 +134,11 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 	}
 
 	return result, nil
+}
+
+func crossesRelease(current, target *utilversion.Version, release string) bool {
+	v := utilversion.MustParseGeneric(release)
+	return current.LessThan(v) && target.AtLeast(v)
 }
 
 func scanUpgradePath(current, target *utilversion.Version) Check {
@@ -193,7 +214,7 @@ func finalizeCheck(check *Check) {
 			return
 		}
 	}
-	if len(check.Findings) > 0 {
+	if len(check.Findings) > 0 && check.Status != CheckUnknown {
 		check.Status = CheckWarning
 	}
 }
@@ -330,6 +351,12 @@ func scanManifestCompatibility(input *Input, target *utilversion.Version) Check 
 		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests were unavailable; only kubectl last-applied configuration was inspected.")
 	} else if helmUnavailable {
 		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests could not be read in: "+strings.Join(input.HelmUnavailableNamespaces, ", ")+".")
+	}
+	if input.ManifestParseErrors > 0 {
+		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d Helm manifest %s could not be parsed.", input.ManifestParseErrors, plural(input.ManifestParseErrors, "document", "documents")))
+	}
+	if len(input.SourceObjectUnavailableKinds) > 0 {
+		check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+strings.Join(input.SourceObjectUnavailableKinds, ", ")+".")
 	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d source %s %s an API affected by the target version.", len(check.Findings), plural(len(check.Findings), "manifest", "manifests"), plural(len(check.Findings), "uses", "use"))
@@ -507,7 +534,7 @@ func scanGitRepo(input *Input, index *workloadIndex) Check {
 	check := Check{
 		ID:          "gitrepo-volume-removed",
 		Category:    "Workload configuration",
-		Title:       "gitRepo volume driver removal",
+		Title:       "gitRepo volume driver disabled",
 		Status:      CheckPassed,
 		Summary:     "No live workload uses a gitRepo volume.",
 		Scope:       "Pod specs across seven workload kinds",
@@ -527,12 +554,12 @@ func scanGitRepo(input *Input, index *workloadIndex) Check {
 			}
 			check.Findings = append(check.Findings, workloadFinding(subject, check, LevelBlocker,
 				fmt.Sprintf("%s.volumes[%d].gitRepo", subject.pathPrefix, i),
-				"Pods that reference a gitRepo volume cannot start because Kubernetes 1.36 no longer includes the driver.",
+				"Pods that reference a gitRepo volume cannot start because Kubernetes 1.36 disables the driver by default with no option to turn it back on.",
 				"Clone the repository into an emptyDir from an init container, then mount that emptyDir into the workload containers."))
 		}
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d %s %s the removed gitRepo volume driver.", len(check.Findings), plural(len(check.Findings), "workload", "workloads"), plural(len(check.Findings), "uses", "use"))
+		check.Summary = fmt.Sprintf("%d %s %s the disabled gitRepo volume driver.", len(check.Findings), plural(len(check.Findings), "workload", "workloads"), plural(len(check.Findings), "uses", "use"))
 	}
 	if workloadsUnavailable(input) {
 		check.Caveat = appendCaveat(check.Caveat, "One or more workload kinds were unavailable, so additional gitRepo usage may exist.")
@@ -843,29 +870,23 @@ func lastAppliedResources(objects []metav1.Object) []ManifestResource {
 		if raw == "" {
 			continue
 		}
-		var manifest struct {
-			APIVersion string `json:"apiVersion"`
-			Kind       string `json:"kind"`
-			Metadata   struct {
-				Namespace string `json:"namespace"`
-				Name      string `json:"name"`
-			} `json:"metadata"`
-		}
-		if json.Unmarshal([]byte(raw), &manifest) != nil || manifest.APIVersion == "" || manifest.Kind == "" {
+		var manifest unstructured.Unstructured
+		if json.Unmarshal([]byte(raw), &manifest.Object) != nil || manifest.GetAPIVersion() == "" || manifest.GetKind() == "" {
 			continue
 		}
-		if manifest.Metadata.Name == "" {
-			manifest.Metadata.Name = object.GetName()
+		if manifest.GetName() == "" {
+			manifest.SetName(object.GetName())
 		}
-		if manifest.Metadata.Namespace == "" {
-			manifest.Metadata.Namespace = object.GetNamespace()
+		if manifest.GetNamespace() == "" {
+			manifest.SetNamespace(object.GetNamespace())
 		}
 		resources = append(resources, ManifestResource{
-			APIVersion: manifest.APIVersion,
-			Kind:       manifest.Kind,
-			Namespace:  manifest.Metadata.Namespace,
-			Name:       manifest.Metadata.Name,
+			APIVersion: manifest.GetAPIVersion(),
+			Kind:       manifest.GetKind(),
+			Namespace:  manifest.GetNamespace(),
+			Name:       manifest.GetName(),
 			Source:     "kubectl last-applied",
+			Object:     manifest.DeepCopy(),
 		})
 	}
 	return resources

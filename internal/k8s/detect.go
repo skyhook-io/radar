@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 const probeFailureWindow = 10 * time.Minute
@@ -1576,17 +1577,7 @@ func namespaceTerminationConditionMessage(ns *corev1.Namespace) string {
 }
 
 func pdbStructurallyBlocksEvictions(pdb *policyv1.PodDisruptionBudget) bool {
-	if pdb == nil || pdb.DeletionTimestamp != nil {
-		return false
-	}
-	if pdb.Generation > 0 && pdb.Status.ObservedGeneration > 0 && pdb.Status.ObservedGeneration < pdb.Generation {
-		return false
-	}
-	status := pdb.Status
-	return status.ExpectedPods > 0 &&
-		status.DisruptionsAllowed == 0 &&
-		status.CurrentHealthy >= status.ExpectedPods &&
-		status.DesiredHealthy >= status.ExpectedPods
+	return k8score.PodDisruptionBudgetEvictionState(pdb) == k8score.PDBEvictionBlocked
 }
 
 func pdbBlocksEvictionsMessage(pdb *policyv1.PodDisruptionBudget) string {
