@@ -278,6 +278,22 @@ func TestCheckHubTunnelStatusExplainsUnconfiguredAndIncompleteInstallations(t *t
 	}
 }
 
+func TestCheckHubTunnelStatusFailsForInvalidHubURL(t *testing.T) {
+	runtime := cloudinstall.DeploymentRuntime{
+		AlreadyCloud: true, CloudModeConfigured: true, CloudMode: true,
+		CloudURLConfigured: true, CloudURL: "://invalid",
+		ClusterNameConfigured: true, ClusterName: "clus_123", CloudTokenConfigured: true,
+	}
+
+	got := checkHubTunnelStatus(context.Background(), fake.NewSimpleClientset(), cloudinstall.RadarTarget{Runtime: runtime})
+	if got.verdict != hubTunnelUnhealthy || !strings.Contains(got.summary, "configured Hub URL is invalid") || got.next == "" {
+		t.Fatalf("result = %#v", got)
+	}
+	if headline := cloudTargetStatusHeadline(cloudinstall.RadarTarget{Runtime: runtime}, got); !strings.Contains(headline, "configured Hub URL is invalid") {
+		t.Fatalf("headline = %q", headline)
+	}
+}
+
 func TestPrintCloudStatusIncompleteOrUnreadyFails(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

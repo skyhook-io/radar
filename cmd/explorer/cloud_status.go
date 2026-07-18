@@ -124,6 +124,10 @@ func cloudStatus(args []string, out, errOut io.Writer) int {
 	var tunnel hubTunnelResult
 	if len(targets) == 1 {
 		tunnel = checkHubTunnelStatus(ctx, clients.Kubernetes, targets[0])
+		if ctx.Err() != nil {
+			fmt.Fprintln(errOut, "cloud status: interrupted")
+			return 1
+		}
 	}
 	fmt.Fprintf(out, "\nStatus: %s\n\n", cloudStatusHeadline(targets, result.ClusterWideError, tunnel))
 	code := printCloudDiscoveryStatus(out, errOut, targets, result.ClusterWideError, exactTarget, normalizedNamespace, normalizedRelease)
@@ -314,6 +318,8 @@ func cloudTargetStatusHeadline(target cloudinstall.RadarTarget, tunnel hubTunnel
 			connection = "its connection Secret is missing"
 		case "failed — the connection Secret has no usable token":
 			connection = "its connection Secret has no usable token"
+		case "failed — the configured Hub URL is invalid":
+			connection = "its configured Hub URL is invalid"
 		}
 		if agentHealthy {
 			return "Radar is installed, but " + connection + "."
@@ -371,7 +377,8 @@ func checkHubTunnelStatus(ctx context.Context, kc kubernetes.Interface, target c
 	client, err := cloud.NewAgentStatusClient(runtime.CloudURL)
 	if err != nil {
 		return hubTunnelResult{
-			summary: "not checked — the configured Hub URL is invalid",
+			verdict: hubTunnelUnhealthy,
+			summary: "failed — the configured Hub URL is invalid",
 			detail:  err.Error(),
 			next:    "correct the Hub URL, then run this command again.",
 		}
