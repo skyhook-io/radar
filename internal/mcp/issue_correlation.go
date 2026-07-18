@@ -129,41 +129,10 @@ func correlateIssue(ctx context.Context, iss *issuesapi.Issue, window time.Durat
 		}
 		return
 	}
-	changes = annotateOnsetOrder(changes, iss.FirstSeen)
 	if len(changes) > correlationChangeCap {
 		changes = changes[:correlationChangeCap]
 	}
 	iss.CorrelatedChanges = changes
-}
-
-// onsetSlop absorbs detection lag and clock skew between a change landing
-// and the resulting condition transition: a change within this margin after
-// first_seen may still explain the onset, so it is not flagged.
-const onsetSlop = 2 * time.Minute
-
-// annotateOnsetOrder marks changes that postdate the issue's onset
-// (first_seen + slop) with AfterIssueOnset — deterministic causal-direction
-// evidence: such a change cannot explain why the issue began, though it may
-// explain later behavior. Pre-onset changes are ordered first so the cap
-// never drops a possible cause in favor of a post-onset edit. No filtering:
-// the consumer weighs.
-func annotateOnsetOrder(changes []issuesapi.RecentChange, firstSeen time.Time) []issuesapi.RecentChange {
-	if firstSeen.IsZero() {
-		return changes
-	}
-	cutoff := firstSeen.Add(onsetSlop)
-	pre := make([]issuesapi.RecentChange, 0, len(changes))
-	post := make([]issuesapi.RecentChange, 0)
-	for _, c := range changes {
-		ts, err := time.Parse(time.RFC3339, c.Timestamp)
-		if err != nil || !ts.After(cutoff) {
-			pre = append(pre, c) // unparseable ⇒ unknown ⇒ no claim
-			continue
-		}
-		c.AfterIssueOnset = true
-		post = append(post, c)
-	}
-	return append(pre, post...)
 }
 
 func filterSpecConfigChanges(changes []issuesapi.RecentChange) []issuesapi.RecentChange {

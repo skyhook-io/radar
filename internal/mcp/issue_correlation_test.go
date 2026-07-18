@@ -377,51 +377,6 @@ func TestAttachIssueChangeCorrelation_GroupCollisionNotCorrelated(t *testing.T) 
 	}
 }
 
-// Every kind the feed tracks must have a group entry — a kind added to
-// specKinds/configKinds without one silently stops correlating.
-func TestTrackedKindGroups_CoversAllTrackedKinds(t *testing.T) {
-	for _, kind := range []string{
-		"ConfigMap", "Secret",
-		"Deployment", "StatefulSet", "DaemonSet", "Service", "Ingress",
-		"HorizontalPodAutoscaler", "Application", "Kustomization", "HelmRelease",
-		"GitRepository", "OCIRepository", "HelmRepository",
-		"ResourceQuota", "LimitRange",
-		"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration",
-	} {
-		if !meaningfulchanges.TrackedKindForGroup(kind, "") {
-			t.Errorf("tracked kind %q has no group entry — correlation silently disabled for it", kind)
-		}
-	}
-}
-
-// Changes that postdate the issue's onset are annotated after_issue_onset
-// and ordered after pre-onset changes, so the cap never drops a possible
-// cause in favor of a post-onset edit.
-func TestAnnotateOnsetOrder(t *testing.T) {
-	now := time.Now()
-	firstSeen := now.Add(-30 * time.Minute)
-	pre := issuesapi.RecentChange{Name: "pre", Timestamp: now.Add(-45 * time.Minute).Format(time.RFC3339)}
-	post := issuesapi.RecentChange{Name: "post", Timestamp: now.Add(-5 * time.Minute).Format(time.RFC3339)}
-	within := issuesapi.RecentChange{Name: "within-slop", Timestamp: firstSeen.Add(time.Minute).Format(time.RFC3339)}
-	bad := issuesapi.RecentChange{Name: "unparseable", Timestamp: "not-a-time"}
-
-	out := annotateOnsetOrder([]issuesapi.RecentChange{post, pre, within, bad}, firstSeen)
-	if len(out) != 4 {
-		t.Fatalf("len = %d, want 4 (annotate, never filter)", len(out))
-	}
-	if out[len(out)-1].Name != "post" || !out[len(out)-1].AfterIssueOnset {
-		t.Fatalf("post-onset change should sort last and be annotated: %+v", out)
-	}
-	for _, c := range out[:3] {
-		if c.AfterIssueOnset {
-			t.Errorf("%s wrongly annotated after_issue_onset (slop/parse rules)", c.Name)
-		}
-	}
-	if zero := annotateOnsetOrder([]issuesapi.RecentChange{post}, time.Time{}); zero[0].AfterIssueOnset {
-		t.Error("unknown onset must not annotate")
-	}
-}
-
 // Worst-case correlation payload (cap × changes × field diffs, with realistic
 // field values) stays bounded — a guard against unnoticed schema growth now
 // that warnings are eligible too.

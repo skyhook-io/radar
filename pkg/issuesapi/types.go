@@ -307,12 +307,6 @@ type RecentChange struct {
 	// only — runtime consumers reading through an intermediary service are
 	// not captured.
 	ConsumedBy []string `json:"consumed_by,omitempty"`
-	// AfterIssueOnset marks a per-issue correlated change whose timestamp
-	// postdates the issue's first_seen (plus a small detection-lag margin):
-	// it cannot explain why the issue began, though it may explain later
-	// behavior. Deterministic causal-direction evidence, not a filter —
-	// only set on correlated_changes where the issue's onset is known.
-	AfterIssueOnset bool `json:"after_issue_onset,omitempty"`
 }
 
 type ClusterContext struct {
