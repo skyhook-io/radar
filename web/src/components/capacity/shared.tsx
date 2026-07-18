@@ -1277,8 +1277,13 @@ export function EmptyState({
 }
 
 export function ScrollableContent({ children }: { children: ReactNode }) {
+  // Expanding/collapsing cards can toggle the scrollbar; a stable gutter
+  // keeps the centered column from shifting sideways when that happens.
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto" id="rk-scroll">
+    <div
+      className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+      id="rk-scroll"
+    >
       <div className="mx-auto max-w-[1760px] space-y-5 px-5 py-5 xl:px-7">
         {children}
       </div>
