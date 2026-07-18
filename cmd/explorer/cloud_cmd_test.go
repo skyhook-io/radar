@@ -381,15 +381,34 @@ func TestCloudClusterURLUsesConnectOriginAndEscapesClusterID(t *testing.T) {
 	if want := "https://app.radarhq.io/c/clus%2Fa%20b"; got != want {
 		t.Fatalf("cloudClusterURL() = %q, want %q", got, want)
 	}
+	if got := cloudClustersURL("https://app.radarhq.io/connect/req_123?from=cli#approval"); got != "https://app.radarhq.io/clusters" {
+		t.Fatalf("cloudClustersURL() = %q", got)
+	}
+}
+
+func TestPrintConnectFailurePointsToClusterRecovery(t *testing.T) {
+	var out bytes.Buffer
+	printConnectFailure(&out, cloud.ErrConnectRecoveryTimeout, "https://app.radarhq.io/clusters")
+	got := out.String()
+	for _, want := range []string{"connect failed", cloud.ErrConnectRecoveryTimeout.Error(), "Open: https://app.radarhq.io/clusters"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("connect failure missing %q:\n%s", want, got)
+		}
+	}
 }
 
 func TestPrintTokenSecretConflict(t *testing.T) {
 	var out bytes.Buffer
 	err := fmt.Errorf("wrapped: %w", &cloudinstall.TokenSecretExistsError{Name: "radar-cloud-config", Namespace: "ops"})
-	if !printTokenSecretConflict(&out, err) {
+	if !printTokenSecretConflict(&out, err, "radar", cloudCommandTarget{Context: "prod context"}) {
 		t.Fatal("typed Secret conflict was not classified")
 	}
-	for _, want := range []string{"will not overwrite", "recover that installation", "corresponding Hub cluster"} {
+	for _, want := range []string{
+		"will not overwrite",
+		"radar cloud status --context 'prod context' --namespace 'ops' --release 'radar'",
+		"Recover that installation",
+		"corresponding Hub cluster",
+	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("guidance missing %q:\n%s", want, out.String())
 		}
@@ -398,13 +417,14 @@ func TestPrintTokenSecretConflict(t *testing.T) {
 
 func TestTunnelConfirmationFailurePreservesExistingInstall(t *testing.T) {
 	var out bytes.Buffer
-	printTunnelConfirmationFailure(&out, cloud.ErrConnectConsumptionTimeout, "clus_existing", "wss://api.example/agent", helm.DeploymentRef{
+	printTunnelConfirmationFailure(&out, cloud.ErrConnectConsumptionTimeout, "clus_existing", "wss://api.example/agent", "https://app.example/c/clus_existing", helm.DeploymentRef{
 		Name: "prod-radar", Namespace: "radar-prod",
 	}, cloudCommandTarget{})
 	got := out.String()
 	for _, want := range []string{
 		"Radar was provisioned", "clus_existing", "five-minute confirmation window",
 		"Do not rerun", "deployment/prod-radar", "logs deployment/prod-radar",
+		"Open: https://app.example/c/clus_existing",
 		"outbound WSS/HTTPS access to wss://api.example/agent", "Only if you deliberately abandon",
 	} {
 		if !strings.Contains(got, want) {
@@ -416,7 +436,7 @@ func TestTunnelConfirmationFailurePreservesExistingInstall(t *testing.T) {
 func TestTunnelConfirmationPickupExpiryDoesNotRepeatDeleteAdvice(t *testing.T) {
 	var out bytes.Buffer
 	err := fmt.Errorf("%w: delete pending cluster", cloud.ErrConnectPickupExpired)
-	printTunnelConfirmationFailure(&out, err, "clus_existing", "wss://api.example/agent", helm.DeploymentRef{Name: "radar", Namespace: "radar"}, cloudCommandTarget{})
+	printTunnelConfirmationFailure(&out, err, "clus_existing", "wss://api.example/agent", "https://app.example/c/clus_existing", helm.DeploymentRef{Name: "radar", Namespace: "radar"}, cloudCommandTarget{})
 	got := out.String()
 	if strings.Contains(got, "delete pending cluster") {
 		t.Fatalf("post-install guidance repeated pre-install deletion advice:\n%s", got)

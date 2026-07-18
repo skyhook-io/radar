@@ -302,7 +302,7 @@ func cloudInstall(args []string) {
 		}
 	}
 	if err != nil {
-		if !printFreshInstallConflict(os.Stderr, err, commandTarget) && !printTokenSecretConflict(os.Stderr, err) {
+		if !printFreshInstallConflict(os.Stderr, err, commandTarget) && !printTokenSecretConflict(os.Stderr, err, plan.Release, commandTarget) {
 			fmt.Fprintf(os.Stderr, "installation preparation failed: %v\n", err)
 		}
 		fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
@@ -375,7 +375,7 @@ func cloudInstall(args []string) {
 
 	pr, err := client.PollUntilApproved(ctx, cr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\n%s connect failed: %v\n", stderrStyle.Marker(cliui.Failure), err)
+		printConnectFailure(os.Stderr, err, cloudClustersURL(cr.ConnectURL))
 		os.Exit(1)
 	}
 	if ctx.Err() != nil && plan.Mode != cloudInstallGitOps {
@@ -422,7 +422,7 @@ func cloudInstall(args []string) {
 	fmt.Printf("\n  %s Kubernetes provisioning complete.\n", stdoutStyle.Marker(cliui.Success))
 	fmt.Printf("  %s Waiting up to %s for the in-cluster agent to connect…\n", stdoutStyle.Marker(cliui.Progress), cloudTunnelConfirmationTimeout)
 	if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationTimeout); err != nil {
-		printTunnelConfirmationFailure(os.Stderr, err, pr.ClusterID, pr.WSSURL, prepared.Deployment(), commandTarget)
+		printTunnelConfirmationFailure(os.Stderr, err, pr.ClusterID, pr.WSSURL, cloudClusterURL(cr.ConnectURL, pr.ClusterID), prepared.Deployment(), commandTarget)
 		os.Exit(1)
 	}
 
@@ -470,9 +470,21 @@ func resolveCloudInstallClusterName(explicit, contextName string) string {
 }
 
 func cloudClusterURL(connectURL, clusterID string) string {
+	return cloudFrontendOrigin(connectURL) + "/c/" + url.PathEscape(clusterID)
+}
+
+func cloudClustersURL(connectURL string) string {
+	return cloudFrontendOrigin(connectURL) + "/clusters"
+}
+
+func cloudFrontendOrigin(connectURL string) string {
 	u, _ := url.Parse(connectURL)
-	origin := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
-	return origin + "/c/" + url.PathEscape(clusterID)
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+}
+
+func printConnectFailure(w io.Writer, err error, clustersURL string) {
+	fmt.Fprintf(w, "\n%s connect failed: %v\n", cliui.New(w).Marker(cliui.Failure), err)
+	fmt.Fprintf(w, "Open: %s\n", clustersURL)
 }
 
 func printInstallSuccess(w io.Writer, clusterName, clusterURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
@@ -514,13 +526,15 @@ func printFreshInstallConflict(w io.Writer, err error, target cloudCommandTarget
 	return false
 }
 
-func printTokenSecretConflict(w io.Writer, err error) bool {
+func printTokenSecretConflict(w io.Writer, err error, releaseName string, target cloudCommandTarget) bool {
 	var secret *cloudinstall.TokenSecretExistsError
 	if !errors.As(err, &secret) {
 		return false
 	}
 	fmt.Fprintf(w, "Cloud token Secret %q already exists in namespace %q; Radar will not overwrite it.\n", secret.Name, secret.Namespace)
-	fmt.Fprintln(w, "Inspect the existing Helm release and Secret, and recover that installation if it belongs to an earlier approval.")
+	fmt.Fprintln(w, "Inspect the existing installation and its Cloud pairing:")
+	fmt.Fprintf(w, "  %s\n", target.cloudStatus(secret.Namespace, releaseName))
+	fmt.Fprintln(w, "Recover that installation if it belongs to an earlier approval.")
 	fmt.Fprintln(w, "If it was abandoned, clean up its Helm release and Secret and delete the corresponding Hub cluster before starting a fresh flow.")
 	return true
 }
@@ -592,7 +606,7 @@ func printPostApprovalRecoveryGuidance(w io.Writer, clusterID, clusterURL string
 	fmt.Fprintln(w, "If the token Secret remains, recover the partial install with this Hub cluster. If the Secret was cleaned up, the token is no longer recoverable: clean up any partial Helm release, then delete this Hub cluster before starting a fresh flow.")
 }
 
-func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
+func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL, clusterURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
 	reason := err.Error()
 	switch {
 	case errors.Is(err, cloud.ErrConnectConsumptionTimeout):
@@ -604,6 +618,7 @@ func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL 
 	}
 
 	fmt.Fprintf(w, "\n%s Radar was provisioned and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.\n", cliui.New(w).Marker(cliui.Attention), clusterID, reason)
+	fmt.Fprintf(w, "Open: %s\n", clusterURL)
 	fmt.Fprintln(w, "Do not rerun the installer or delete the cluster by default; the existing agent can still connect after you resolve its startup or egress issue.")
 	fmt.Fprintln(w, "Inspect:")
 	fmt.Fprintf(w, "  %s -n %s rollout status deployment/%s\n", target.kubectl(), deployment.Namespace, deployment.Name)

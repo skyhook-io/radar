@@ -43,6 +43,14 @@ func (t cloudCommandTarget) helm() string {
 	return command
 }
 
+func (t cloudCommandTarget) cloudStatus(namespace, release string) string {
+	command := "radar cloud status"
+	if t.Context != "" {
+		command += " --context " + shellArgument(t.Context)
+	}
+	return command + " --namespace " + shellArgument(namespace) + " --release " + shellArgument(release)
+}
+
 func shellArgument(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }

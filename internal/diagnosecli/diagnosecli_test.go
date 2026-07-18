@@ -47,6 +47,25 @@ func TestRendererVerdictShapes(t *testing.T) {
 	}
 }
 
+func TestRendererVerdictRepeatsWatchURL(t *testing.T) {
+	tmp, err := createTempFile(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &renderer{w: tmp, color: false}
+	r.header(runSummary{ID: "run-123", Kind: "Pod", Name: "checkout", Agent: "codex"}, "http://localhost:9280")
+	r.verdict(diagnosis{Healthy: true})
+	if _, err := tmp.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 8192)
+	n, _ := tmp.Read(buf)
+	got := string(buf[:n])
+	if url := "http://localhost:9280/?ai-run=run-123"; strings.Count(got, url) != 2 {
+		t.Fatalf("watch URL should appear in the header and final footer:\n%s", got)
+	}
+}
+
 func captureVerdict(t *testing.T, d diagnosis) string {
 	t.Helper()
 	tmp, err := createTempFile(t)
