@@ -236,6 +236,31 @@ func TestDeduplicateEventsWithObjects_APIVersionVariantsAreOneIdentity(t *testin
 	}
 }
 
+// A NON-core object seen with and without apiVersion is still one identity
+// when the emitter set UID (the group fallback alone cannot merge "" with
+// "apps/v1"), and the known apiVersion is carried onto the kept ref even
+// when the most recent sighting lacked it.
+func TestDeduplicateEventsWithObjects_UIDMergesAcrossMissingAPIVersion(t *testing.T) {
+	now := time.Now()
+	withVersion := makeEventForObject("ScalingReplicaSet", "scaled down", "Warning", 1, now.Add(-time.Minute), "Deployment", "shop", "web")
+	withVersion.InvolvedObject.APIVersion = "apps/v1"
+	withVersion.InvolvedObject.UID = "uid-web-1"
+	versionless := makeEventForObject("ScalingReplicaSet", "scaled down", "Warning", 1, now, "Deployment", "shop", "web")
+	versionless.InvolvedObject.UID = "uid-web-1"
+
+	result := DeduplicateEventsWithObjects([]corev1.Event{withVersion, versionless}, 3)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(result))
+	}
+	g := result[0]
+	if g.ObjectCount != 1 || len(g.Objects) != 1 {
+		t.Fatalf("objects = %+v (count %d), want ONE identity via UID", g.Objects, g.ObjectCount)
+	}
+	if g.Objects[0].APIVersion != "apps/v1" {
+		t.Errorf("kept ref apiVersion = %q, want \"apps/v1\" carried from the earlier sighting", g.Objects[0].APIVersion)
+	}
+}
+
 // The plain DeduplicateEvents wire shape is unchanged by the objects path —
 // its consumers (get_events, diagnose, resource includes) group across pods
 // on purpose and must not grow new fields.

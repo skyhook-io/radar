@@ -2046,6 +2046,47 @@ func countBySeverity(problems []mcpProblem) map[string]int {
 // and "how widespread" without bloating the dashboard.
 const topWarningObjectCap = 3
 
+// topWarnings row selection: topWarningRecentSlots newest groups, remaining
+// rows filled by highest count among the rest of the dedup window.
+const (
+	topWarningRows        = 5
+	topWarningRecentSlots = 3
+)
+
+// selectTopWarningGroups picks up to total rows: the first recentSlots
+// groups in dedup (recency) order, then the highest-count remaining groups
+// (ties broken by recency order, which is itself deterministic). Emitted in
+// recency order.
+func selectTopWarningGroups(groups []aicontext.DeduplicatedEventGroup, recentSlots, total int) []aicontext.DeduplicatedEventGroup {
+	if len(groups) <= total {
+		return groups
+	}
+	picked := make(map[int]bool, total)
+	for i := 0; i < recentSlots; i++ {
+		picked[i] = true
+	}
+	rest := make([]int, 0, len(groups)-recentSlots)
+	for i := recentSlots; i < len(groups); i++ {
+		rest = append(rest, i)
+	}
+	sort.SliceStable(rest, func(a, b int) bool {
+		return groups[rest[a]].Count > groups[rest[b]].Count
+	})
+	for _, i := range rest {
+		if len(picked) >= total {
+			break
+		}
+		picked[i] = true
+	}
+	out := make([]aicontext.DeduplicatedEventGroup, 0, total)
+	for i := range groups {
+		if picked[i] {
+			out = append(out, groups[i])
+		}
+	}
+	return out
+}
+
 type mcpWarning struct {
 	Reason  string `json:"reason"`
 	Message string `json:"message"`
@@ -2064,7 +2105,8 @@ type mcpWarning struct {
 // mcpWarningObject is one involved object behind a topWarnings row, shaped
 // to feed straight into get_resource/diagnose (kind + group + namespace +
 // name). Group is included because bare kinds collide (core Service vs
-// Knative Service); empty means the core API group.
+// Knative Service); empty means the core API group — or unknown, when no
+// sighting of the object carried an apiVersion.
 type mcpWarningObject struct {
 	Kind      string `json:"kind"`
 	Group     string `json:"group,omitempty"`
@@ -2353,16 +2395,21 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 		d.WarningEvents = len(warningValues)
 
-		// Deduplicate keeping involved objects. Rows arrive most-recent
-		// first with deterministic tie-breakers (recency, count, reason,
-		// message — applied inside dedup, before its group cap): a triage
-		// dashboard answers "what's happening now", and the old count-first
-		// ordering promoted stale noisy groups over the live incident.
-		// Count still rides along to convey chronicity.
+		// Deduplicate keeping involved objects. Dedup returns groups
+		// most-recent first with deterministic tie-breakers (recency,
+		// count, reason, message, type — applied before its group cap).
 		deduplicated := aicontext.DeduplicateEventsWithObjects(warningValues, topWarningObjectCap)
 
-		limit := min(len(deduplicated), 5)
-		for _, e := range deduplicated[:limit] {
+		// Row selection is a bounded union of both signals: the newest
+		// groups ("what just happened") plus the highest-count groups
+		// among the recent ones ("what keeps happening"). Pure count-first
+		// let a long-stale noisy group hide a live incident; pure
+		// recency-first lets a burst of one-off deploy churn hide an
+		// actively repeating storm whose last event record is minutes old.
+		// The union keeps both without a brittle time threshold; rows are
+		// emitted in recency order regardless of which rule selected them.
+		selected := selectTopWarningGroups(deduplicated, topWarningRecentSlots, topWarningRows)
+		for _, e := range selected {
 			w := mcpWarning{
 				Reason:           e.Reason,
 				Message:          k8s.Truncate(e.Message, 200),

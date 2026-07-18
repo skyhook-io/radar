@@ -87,6 +87,46 @@ func TestBuildDashboard_TopWarnings_RecencyAndObjects(t *testing.T) {
 	}
 }
 
+// Row selection is a union: the newest groups must not evict an actively
+// repeating storm whose latest event record is merely minutes older than a
+// burst of one-off churn — and vice versa, a stale storm must not hide fresh
+// incidents (the batch7 failure). Six groups: five fresh one-offs (count 1)
+// plus a 4-minute-old storm (count 400). Recency-only would emit the five
+// one-offs; count-only would lead with the storm. The union keeps the three
+// newest AND the storm.
+func TestSelectTopWarningGroups_UnionKeepsStormAndFresh(t *testing.T) {
+	now := time.Now()
+	mk := func(reason string, count int, last time.Time) aicontext.DeduplicatedEventGroup {
+		return aicontext.DeduplicatedEventGroup{DeduplicatedEvent: aicontext.DeduplicatedEvent{
+			Reason: reason, Message: "m", Type: "Warning", Count: count, LastTimestamp: last,
+		}}
+	}
+	groups := []aicontext.DeduplicatedEventGroup{ // dedup order: most recent first
+		mk("Fresh1", 1, now.Add(-10*time.Second)),
+		mk("Fresh2", 1, now.Add(-20*time.Second)),
+		mk("Fresh3", 1, now.Add(-30*time.Second)),
+		mk("Fresh4", 1, now.Add(-40*time.Second)),
+		mk("Fresh5", 1, now.Add(-50*time.Second)),
+		mk("Storm", 400, now.Add(-4*time.Minute)),
+	}
+	selected := selectTopWarningGroups(groups, topWarningRecentSlots, topWarningRows)
+	if len(selected) != topWarningRows {
+		t.Fatalf("selected %d rows, want %d", len(selected), topWarningRows)
+	}
+	reasons := make(map[string]bool)
+	for _, g := range selected {
+		reasons[g.Reason] = true
+	}
+	for _, want := range []string{"Fresh1", "Fresh2", "Fresh3", "Storm"} {
+		if !reasons[want] {
+			t.Errorf("selection %v missing %s", reasons, want)
+		}
+	}
+	if selected[len(selected)-1].Reason != "Storm" {
+		t.Errorf("rows should stay in recency order with the storm last, got %v", reasons)
+	}
+}
+
 // The emitted object ref derives the API group from apiVersion so agents can
 // disambiguate colliding kinds when feeding it into get_resource.
 func TestWarningObjectFromRef_GroupDerivation(t *testing.T) {

@@ -155,24 +155,24 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 				Namespace:  ev.InvolvedObject.Namespace,
 				Name:       ev.InvolvedObject.Name,
 			}
-			// Identity keys on the API GROUP, not the raw apiVersion:
-			// emitters are inconsistent about populating involvedObject
-			// apiVersion ("" vs "v1" vs "apps/v1"), and version-within-group
-			// never distinguishes objects — keying on the raw string would
-			// double-count one object seen through two emitters.
-			id := eventObjectIdentity{
-				Kind:      ref.Kind,
-				Group:     GroupOfAPIVersion(ref.APIVersion),
-				Namespace: ref.Namespace,
-				Name:      ref.Name,
-			}
+			id := identityForInvolvedObject(&ev.InvolvedObject)
 			seen := objects[key]
 			if seen == nil {
 				seen = make(map[eventObjectIdentity]objectSighting)
 				objects[key] = seen
 			}
-			if prev, ok := seen[id]; !ok || last.After(prev.Last) {
+			prev, existed := seen[id]
+			if !existed || last.After(prev.Last) {
+				// Carry a known apiVersion across sightings — emitters are
+				// inconsistent about populating it, and losing it would
+				// mislabel the object's API group downstream.
+				if existed && ref.APIVersion == "" && prev.Ref.APIVersion != "" {
+					ref.APIVersion = prev.Ref.APIVersion
+				}
 				seen[id] = objectSighting{Ref: ref, Last: last}
+			} else if existed && prev.Ref.APIVersion == "" && ref.APIVersion != "" {
+				prev.Ref.APIVersion = ref.APIVersion
+				seen[id] = prev
 			}
 		}
 	}
@@ -215,15 +215,33 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 	return result
 }
 
-// eventObjectIdentity is the dedup key for involved objects: kind + API
+// eventObjectIdentity is the dedup key for involved objects. UID is the
+// primary identity when the emitter populated it; otherwise kind + API
 // group + namespace + name. Version-within-group is deliberately excluded —
 // it never distinguishes objects, and emitters populate apiVersion
-// inconsistently.
+// inconsistently (which also means the group fallback can split one
+// non-core object seen with and without apiVersion; UID avoids that
+// whenever it is available).
 type eventObjectIdentity struct {
+	UID       string
 	Kind      string
 	Group     string
 	Namespace string
 	Name      string
+}
+
+// identityForInvolvedObject builds the dedup key: UID alone when present,
+// else the kind/group/namespace/name fallback.
+func identityForInvolvedObject(obj *corev1.ObjectReference) eventObjectIdentity {
+	if obj.UID != "" {
+		return eventObjectIdentity{UID: string(obj.UID)}
+	}
+	return eventObjectIdentity{
+		Kind:      obj.Kind,
+		Group:     GroupOfAPIVersion(obj.APIVersion),
+		Namespace: obj.Namespace,
+		Name:      obj.Name,
+	}
 }
 
 // objectSighting keeps the most recent full ref observed for one identity.
@@ -248,35 +266,36 @@ func selectGroupObjects(seen map[eventObjectIdentity]objectSighting, limit int) 
 	if len(seen) == 0 {
 		return nil, 0, false
 	}
-	ids := make([]eventObjectIdentity, 0, len(seen))
-	for id := range seen {
-		ids = append(ids, id)
+	sightings := make([]objectSighting, 0, len(seen))
+	for _, s := range seen {
+		sightings = append(sightings, s)
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		a, b := ids[i], ids[j]
-		at, bt := seen[a].Last, seen[b].Last
-		if !at.Equal(bt) {
-			return at.After(bt)
+	// Sort by the emitted ref, not the identity key — UID-keyed identities
+	// carry no name fields.
+	sort.Slice(sightings, func(i, j int) bool {
+		a, b := sightings[i], sightings[j]
+		if !a.Last.Equal(b.Last) {
+			return a.Last.After(b.Last)
 		}
-		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
+		if a.Ref.Kind != b.Ref.Kind {
+			return a.Ref.Kind < b.Ref.Kind
 		}
-		if a.Namespace != b.Namespace {
-			return a.Namespace < b.Namespace
+		if a.Ref.Namespace != b.Ref.Namespace {
+			return a.Ref.Namespace < b.Ref.Namespace
 		}
-		if a.Name != b.Name {
-			return a.Name < b.Name
+		if a.Ref.Name != b.Ref.Name {
+			return a.Ref.Name < b.Ref.Name
 		}
-		return a.Group < b.Group
+		return a.Ref.APIVersion < b.Ref.APIVersion
 	})
-	total := len(ids)
+	total := len(sightings)
 	truncated := total > limit
 	if truncated {
-		ids = ids[:limit]
+		sightings = sightings[:limit]
 	}
-	refs := make([]EventObjectRef, len(ids))
-	for i, id := range ids {
-		refs[i] = seen[id].Ref
+	refs := make([]EventObjectRef, len(sightings))
+	for i, s := range sightings {
+		refs[i] = s.Ref
 	}
 	return refs, total, truncated
 }
