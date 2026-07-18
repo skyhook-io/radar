@@ -1236,6 +1236,7 @@ export interface CapacityActivityQueryOptions extends CapacityPageQueryOptions {
   claim?: string;
   node?: string;
   reason?: string;
+  type?: string;
 }
 
 export function useCapacityActivity(options?: CapacityActivityQueryOptions) {
@@ -1248,6 +1249,7 @@ export function useCapacityActivity(options?: CapacityActivityQueryOptions) {
   if (options?.claim) params.set("claim", options.claim);
   if (options?.node) params.set("node", options.node);
   if (options?.reason) params.set("reason", options.reason);
+  if (options?.type) params.set("type", options.type);
   const query = params.toString();
   const queryKey = [
     "capacity",
@@ -1259,6 +1261,7 @@ export function useCapacityActivity(options?: CapacityActivityQueryOptions) {
     options?.claim,
     options?.node,
     options?.reason,
+    options?.type,
   ];
   return useQuery<CapacityActivityResponse>({
     queryKey,

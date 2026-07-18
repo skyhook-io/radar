@@ -10,6 +10,33 @@ import (
 	"github.com/skyhook-io/radar/pkg/timeline"
 )
 
+func TestAggregateActivityRecordsCountsByTypeAndState(t *testing.T) {
+	records := []ActivityRecord{
+		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityProvision, State: capacityapi.ActivityCompleted}},
+		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityProvision, State: capacityapi.ActivityFailed}},
+		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityProvision, State: capacityapi.ActivityOpen}},
+		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityDisruption, State: capacityapi.ActivityBlocked}},
+	}
+	aggregate := AggregateActivityRecords(records)
+	if aggregate.Total != 4 {
+		t.Fatalf("total = %d, want 4", aggregate.Total)
+	}
+	provision := aggregate.ByType[capacityapi.ActivityProvision]
+	if provision.Total != 3 || provision.ByState[capacityapi.ActivityCompleted] != 1 ||
+		provision.ByState[capacityapi.ActivityFailed] != 1 || provision.ByState[capacityapi.ActivityOpen] != 1 {
+		t.Fatalf("provision counts = %+v", provision)
+	}
+	disruption := aggregate.ByType[capacityapi.ActivityDisruption]
+	if disruption.Total != 1 || disruption.ByState[capacityapi.ActivityBlocked] != 1 {
+		t.Fatalf("disruption counts = %+v", disruption)
+	}
+
+	empty := AggregateActivityRecords(nil)
+	if empty.Total != 0 || empty.ByType == nil {
+		t.Fatalf("empty aggregate = %+v, want zero total with a non-null byType map", empty)
+	}
+}
+
 func TestBuildActivityRecordsCorrelatesAndClosesProvisionEpisode(t *testing.T) {
 	start := time.Date(2026, time.July, 13, 10, 0, 0, 0, time.UTC)
 	events := []timeline.TimelineEvent{

@@ -462,6 +462,13 @@ function activityResponse(): CapacityActivityResponse {
       },
       gaps: [],
     },
+    aggregate: {
+      total: 3,
+      byType: {
+        provision: { total: 2, byState: { completed: 1, failed: 1 } },
+        disruption: { total: 1, byState: { blocked: 1 } },
+      },
+    },
   };
 }
 
@@ -951,7 +958,7 @@ describe("CapacityView demand", () => {
 });
 
 describe("CapacityView activity", () => {
-  it("renders the bounded observation window and episodes", () => {
+  it("renders the window line, type rollup pills, and demoted provenance", () => {
     const html = renderCapacity("/capacity/activity", (client) =>
       client.setQueryData(
         [
@@ -964,15 +971,24 @@ describe("CapacityView activity", () => {
           undefined,
           undefined,
           undefined,
+          undefined,
         ],
         activityResponse(),
       ),
     );
     expect(html).toContain("Activity");
     expect(html).toContain("Recent Karpenter capacity events");
-    expect(html).toContain("Observation window");
+    // The observation-window card collapsed into a single header line.
+    expect(html).not.toContain("Observation window");
+    expect(html).toContain("Window ");
     expect(html).toContain("Provisioned a node for pending pods");
-    // First episode is expanded by default → its evidence table renders.
-    expect(html).toContain("Relationship");
+    // Type pills carry whole-window rollup counts, failures called out.
+    expect(html).toContain("All · 3");
+    expect(html).toContain("Provision · 2 · 1 failed");
+    expect(html).toContain("Disruption · 1");
+    // Provenance columns hide behind the toggle; the raw evidence leads.
+    expect(html).toContain("Show provenance");
+    expect(html).not.toContain("Relationship");
+    expect(html).toContain("Raw");
   });
 });

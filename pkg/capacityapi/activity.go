@@ -81,6 +81,20 @@ func NewActivityEpisode() ActivityEpisode {
 	return ActivityEpisode{State: ActivityUnknown, Evidence: []ActivityEvidence{}}
 }
 
+type ActivityTypeCounts struct {
+	Total   int                   `json:"total"`
+	ByState map[ActivityState]int `json:"byState"`
+}
+
+type ActivityAggregate struct {
+	Total  int                                 `json:"total"`
+	ByType map[ActivityType]ActivityTypeCounts `json:"byType"`
+}
+
+func NewActivityAggregate() ActivityAggregate {
+	return ActivityAggregate{ByType: map[ActivityType]ActivityTypeCounts{}}
+}
+
 type CursorStatus string
 
 const (

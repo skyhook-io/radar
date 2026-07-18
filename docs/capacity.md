@@ -46,6 +46,8 @@ Evaluations cover Karpenter NodePools only: `blocked` means no NodePool can take
 
 A bounded evidence timeline of provisioning, disruption, interruption, termination, and NodePool config-change **episodes**, correlated from resource lifecycle transitions and Karpenter's exact event vocabulary. Every episode carries its evidence with per-item confidence — heuristic matches are labeled `inferred`, never presented as fact.
 
+A **type rollup strip** summarizes the whole filtered window ("Provision · 28 · 3 failed"), so a provisioning storm reads as a shape, not a page of rows. The rollup comes with the first page and stays stable while the type pills narrow the list (mirroring the Demand state pills); when timeline coverage is partial or bounded, every count renders as a `≥` lower bound. Evidence tables lead with when/source/raw/references; the normalized reason code, relationship, and confidence columns sit behind a per-episode "Show provenance" toggle.
+
 ## Entry points
 
 Operators rarely start at the nav. Capacity meets them where they are:
@@ -104,7 +106,7 @@ All read-only, all behind the NodePool RBAC gate:
 - `GET /api/capacity` — overview: KPIs, scheduling aggregate, signals, pool summaries
 - `GET /api/capacity/pools` (+ `/{name}`, `/{name}/members`) — inventory, detail, paginated members
 - `GET /api/capacity/demand` — groups with `?state=`, `?pool=`, `?owner=ns/Kind/name` filters
-- `GET /api/capacity/activity` — episode timeline with keyset cursors
+- `GET /api/capacity/activity` — episode timeline with keyset cursors; `?type=` narrows to one episode type, and first-page responses carry an `aggregate` rollup of the whole filtered window that the type filter deliberately does not narrow
 
 ## Limitations
 

@@ -587,6 +587,16 @@ export interface CapacityObservationWindow {
   gaps: CapacityObservationGap[];
 }
 
+export interface CapacityActivityTypeCounts {
+  total: number;
+  byState: Partial<Record<CapacityActivityState, number>>;
+}
+
+export interface CapacityActivityAggregate {
+  total: number;
+  byType: Partial<Record<CapacityActivityType, CapacityActivityTypeCounts>>;
+}
+
 export interface CapacityActivityResponse extends CapacityResponseMeta {
   state: CapacityIntegrationState;
   items: CapacityActivityEpisode[];
@@ -594,4 +604,6 @@ export interface CapacityActivityResponse extends CapacityResponseMeta {
   cursorStatus: CapacityCursorStatus;
   cursorGap?: CapacityObservationGap;
   observation: CapacityObservationWindow;
+  /** Whole-window rollup; present only on first-page responses and never narrowed by the type filter. */
+  aggregate?: CapacityActivityAggregate;
 }

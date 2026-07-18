@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/timeline"
 )
 
@@ -102,12 +104,44 @@ func TestCapacityActivityCursorRejectsMalformedPayload(t *testing.T) {
 	}
 }
 
+func TestCapacityActivityTypeFilterBindsFingerprintAndNarrowsRecords(t *testing.T) {
+	base, err := parseCapacityActivityRequest(url.Values{})
+	if err != nil {
+		t.Fatalf("parse base request: %v", err)
+	}
+	typed, err := parseCapacityActivityRequest(url.Values{"type": {"provision"}})
+	if err != nil {
+		t.Fatalf("parse typed request: %v", err)
+	}
+	if typed.typeFilter != capacityapi.ActivityProvision {
+		t.Fatalf("typeFilter = %q, want provision", typed.typeFilter)
+	}
+	if typed.filterFingerprint == base.filterFingerprint {
+		t.Fatal("type filter must participate in the cursor filter fingerprint")
+	}
+
+	records := []capacitymodel.ActivityRecord{
+		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityProvision}},
+		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityDisruption}},
+	}
+	all := filterCapacityActivityRecordsByType(append([]capacitymodel.ActivityRecord{}, records...), "")
+	if len(all) != 2 {
+		t.Fatalf("unfiltered records = %d, want 2", len(all))
+	}
+	kept := filterCapacityActivityRecordsByType(records, capacityapi.ActivityDisruption)
+	if len(kept) != 1 || kept[0].Episode.Type != capacityapi.ActivityDisruption {
+		t.Fatalf("type-filtered records = %#v", kept)
+	}
+}
+
 func TestCapacityActivityRequestValidatesFiltersAndSince(t *testing.T) {
 	for name, query := range map[string]url.Values{
 		"repeated filter": {"pool": {"a", "b"}},
 		"invalid since":   {"since": {"yesterday"}},
 		"repeated since":  {"since": {"2026-07-13T10:00:00Z", "2026-07-13T11:00:00Z"}},
 		"workload filter": {"workload": {"api"}},
+		"invalid type":    {"type": {"resize"}},
+		"repeated type":   {"type": {"provision", "termination"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseCapacityActivityRequest(query); err == nil {

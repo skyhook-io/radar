@@ -19,14 +19,12 @@ import {
   ActivityStateBadge,
   CapacityFreshness,
   InlineEmpty,
-  KeyValueRows,
   LinkButton,
   Notice,
   PageControls,
   ROW_HOVER,
   ScopeBadges,
   ScrollableContent,
-  SectionCard,
   TABLE_HEAD,
   TABLE_WRAP,
   TBODY,
@@ -55,6 +53,17 @@ const WINDOW_PILLS: [number | undefined, string][] = [
   [24, "Last 24 hours"],
 ];
 
+const TYPE_PILL_ORDER: CapacityActivityEpisode["type"][] = [
+  "provision",
+  "launch_failure",
+  "registration_failure",
+  "initialization_failure",
+  "disruption",
+  "interruption",
+  "termination",
+  "config_change",
+];
+
 export function CapacityActivity({
   connectionState,
   onOpenPool,
@@ -73,6 +82,7 @@ export function CapacityActivity({
   const claimFilter = search.get("claim") || undefined;
   const nodeFilter = search.get("node") || undefined;
   const reasonFilter = search.get("reason") || undefined;
+  const typeFilter = search.get("type") || undefined;
   const sinceFilter = search.get("since") || undefined;
   const invalidSinceFilter = Boolean(
     sinceFilter && !Number.isFinite(Date.parse(sinceFilter)),
@@ -116,6 +126,7 @@ export function CapacityActivity({
     claim: claimFilter,
     node: nodeFilter,
     reason: reasonFilter,
+    type: typeFilter,
     since: requestSinceFilter,
   });
   const recoveringCursor = useCapacityCursorRecovery(
@@ -155,10 +166,23 @@ export function CapacityActivity({
     event.preventDefault();
     updateFilters(poolDraft, reasonDraft, sinceFilter);
   };
+  const changeTypeFilter = (type?: CapacityActivityEpisode["type"]) => {
+    const params = new URLSearchParams(location.search);
+    params.delete("workload");
+    if (type) params.set("type", type);
+    else params.delete("type");
+    navigate(
+      {
+        pathname: location.pathname,
+        search: params.toString() ? `?${params.toString()}` : "",
+      },
+      { replace: true },
+    );
+  };
   const clearFilters = () => {
     const params = new URLSearchParams(location.search);
-    ["pool", "claim", "node", "workload", "reason", "since"].forEach((key) =>
-      params.delete(key),
+    ["pool", "claim", "node", "workload", "reason", "since", "type"].forEach(
+      (key) => params.delete(key),
     );
     navigate(
       {
@@ -189,8 +213,19 @@ export function CapacityActivity({
   };
 
   const hasActiveFilters = Boolean(
-    poolFilter || claimFilter || nodeFilter || reasonFilter || sinceFilter,
+    poolFilter ||
+    claimFilter ||
+    nodeFilter ||
+    reasonFilter ||
+    sinceFilter ||
+    typeFilter,
   );
+  const aggregate = response.aggregate;
+  const aggregateIsLowerBound = coverageIsLowerBound(
+    response.coverage.timeline,
+  );
+  const formatAggregateCount = (count: number) =>
+    `${aggregateIsLowerBound ? "≥" : ""}${count}`;
 
   return (
     <ScrollableContent>
@@ -213,6 +248,23 @@ export function CapacityActivity({
               source="karpenterObjectEvents"
             />
           </div>
+          {coverageHasObservations(response.coverage.timeline) && (
+            <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-xs text-theme-text-tertiary">
+              <span>
+                Window {formatTimestamp(response.observation.startedAt)} →{" "}
+                {formatTimestamp(response.observation.endedAt)}
+              </span>
+              {response.observation.sources.length > 0 && (
+                <span>· {response.observation.sources.join(" · ")}</span>
+              )}
+              <span>· {retentionLabel(response.observation.retention)}</span>
+              <WithTooltip
+                tip={`An observation window, not a durable audit log. ${coverageMessage(response.coverage.timeline, "Retained activity")}`}
+              >
+                <span aria-label="About the observation window">ⓘ</span>
+              </WithTooltip>
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {pagination.cursor && (
@@ -281,38 +333,6 @@ export function CapacityActivity({
           . Episodes may omit events outside this user’s authorized namespaces.
         </Notice>
       )}
-
-      <SectionCard
-        title="Observation window"
-        subtitle="an observation window, not a durable audit log"
-        bodyClassName="px-4 py-3"
-      >
-        {coverageHasObservations(response.coverage.timeline) ? (
-          <KeyValueRows
-            rows={[
-              [
-                "Window",
-                `${formatTimestamp(response.observation.startedAt)} → ${formatTimestamp(response.observation.endedAt)}`,
-              ],
-              [
-                "Sources",
-                response.observation.sources.length > 0
-                  ? response.observation.sources.join(" · ")
-                  : "No evidence sources observed",
-              ],
-              ["Retention", retentionLabel(response.observation.retention)],
-              [
-                "Coverage",
-                coverageMessage(response.coverage.timeline, "Retained activity"),
-              ],
-            ]}
-          />
-        ) : (
-          <p className="text-sm text-theme-text-secondary">
-            {coverageMessage(response.coverage.timeline, "Retained activity")}
-          </p>
-        )}
-      </SectionCard>
 
       <form
         className="flex flex-wrap items-end gap-2 rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm"
@@ -395,6 +415,61 @@ export function CapacityActivity({
         )}
       </form>
 
+      {(aggregate !== undefined || typeFilter !== undefined) && (
+        <div
+          className="flex flex-wrap gap-1.5"
+          aria-label="Filter activity by type"
+        >
+          {/* Counts come from the whole-window rollup (stable across the active
+            type filter), not the current page. Pills without a rollup (cursor
+            pages) never show a fabricated count. */}
+          <button
+            type="button"
+            aria-pressed={typeFilter === undefined}
+            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+              typeFilter === undefined
+                ? "selection border-theme-border text-theme-text-primary"
+                : "border-theme-border text-theme-text-secondary hover:bg-theme-hover"
+            }`}
+            onClick={() => changeTypeFilter(undefined)}
+          >
+            {aggregate
+              ? `All · ${formatAggregateCount(aggregate.total)}`
+              : "All"}
+          </button>
+          {TYPE_PILL_ORDER.filter(
+            (type) =>
+              (aggregate?.byType[type]?.total ?? 0) > 0 || type === typeFilter,
+          ).map((type) => {
+            const counts = aggregate?.byType[type];
+            const failed = counts?.byState?.failed ?? 0;
+            return (
+              <button
+                key={type}
+                type="button"
+                aria-pressed={typeFilter === type}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  typeFilter === type
+                    ? "selection border-theme-border text-theme-text-primary"
+                    : "border-theme-border text-theme-text-secondary hover:bg-theme-hover"
+                }`}
+                onClick={() =>
+                  changeTypeFilter(typeFilter === type ? undefined : type)
+                }
+              >
+                {counts
+                  ? `${activityTypeLabel(type)} · ${formatAggregateCount(counts.total)}${
+                      failed > 0
+                        ? ` · ${formatAggregateCount(failed)} failed`
+                        : ""
+                    }`
+                  : activityTypeLabel(type)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {response.items.length > 0 ? (
         <div className="space-y-3">
           {response.items.map((episode, index) => (
@@ -474,12 +549,9 @@ function ActivityEpisodeCard({
   onOpenResource: (resource: SelectedResource) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const subjects = [
-    episode.pool,
-    episode.claim,
-    episode.node,
-  ].filter((identity): identity is CapacityResourceIdentity =>
-    Boolean(identity),
+  const [showProvenance, setShowProvenance] = useState(false);
+  const subjects = [episode.pool, episode.claim, episode.node].filter(
+    (identity): identity is CapacityResourceIdentity => Boolean(identity),
   );
   const duration =
     episode.durationSeconds !== undefined
@@ -504,7 +576,9 @@ function ActivityEpisodeCard({
               {activityTypeLabel(episode.type)}
             </Badge>
             <ActivityStateBadge state={episode.state} />
-            {!episode.evidence.some((item) => item.relationship === "direct") && (
+            {!episode.evidence.some(
+              (item) => item.relationship === "direct",
+            ) && (
               <WithTooltip tip="No controller-recorded cause — this episode was inferred by correlating event text. Expand for the raw evidence.">
                 <Badge severity="neutral" size="sm">
                   inferred
@@ -564,15 +638,22 @@ function ActivityEpisodeCard({
         <div className="border-t border-theme-border">
           {episode.evidence.length > 0 ? (
             <div className={TABLE_WRAP}>
+              <div className="flex justify-end px-4 pt-2">
+                <LinkButton
+                  onClick={() => setShowProvenance((current) => !current)}
+                >
+                  {showProvenance ? "Hide provenance ▴" : "Show provenance ▾"}
+                </LinkButton>
+              </div>
               <table className="w-full text-left">
                 <thead className={TABLE_HEAD}>
                   <tr>
                     <th className={TH}>When</th>
                     <th className={TH}>Source</th>
-                    <th className={TH}>Normalized</th>
+                    {showProvenance && <th className={TH}>Normalized</th>}
                     <th className={TH}>Raw</th>
-                    <th className={TH}>Relationship</th>
-                    <th className={TH}>Confidence</th>
+                    {showProvenance && <th className={TH}>Relationship</th>}
+                    {showProvenance && <th className={TH}>Confidence</th>}
                     <th className={TH}>References</th>
                   </tr>
                 </thead>
@@ -582,7 +663,9 @@ function ActivityEpisodeCard({
                       key={`${evidence.at}-${evidence.reasonCode}-${index}`}
                       className={ROW_HOVER}
                     >
-                      <td className={`${TD} whitespace-nowrap font-mono text-theme-text-tertiary`}>
+                      <td
+                        className={`${TD} whitespace-nowrap font-mono text-theme-text-tertiary`}
+                      >
                         {relativeTime(evidence.at)}
                       </td>
                       <td className={TD}>
@@ -590,25 +673,35 @@ function ActivityEpisodeCard({
                           {evidence.source.replace("_", " ")}
                         </Badge>
                       </td>
-                      <td className={`${TD} font-mono`}>{evidence.reasonCode}</td>
+                      {showProvenance && (
+                        <td className={`${TD} font-mono`}>
+                          {evidence.reasonCode}
+                        </td>
+                      )}
                       <td className={`${TD} text-theme-text-secondary`}>
                         {evidence.rawReason || evidence.rawMessage ? (
                           <>
-                            {evidence.rawReason ? `${evidence.rawReason}: ` : ""}
+                            {evidence.rawReason
+                              ? `${evidence.rawReason}: `
+                              : ""}
                             {evidence.rawMessage}
                           </>
                         ) : (
                           "—"
                         )}
                       </td>
-                      <td className={`${TD} text-theme-text-secondary`}>
-                        {evidence.relationship}
-                      </td>
-                      <td className={TD}>
-                        <Badge tone="structural" size="sm">
-                          {evidence.confidence}
-                        </Badge>
-                      </td>
+                      {showProvenance && (
+                        <td className={`${TD} text-theme-text-secondary`}>
+                          {evidence.relationship}
+                        </td>
+                      )}
+                      {showProvenance && (
+                        <td className={TD}>
+                          <Badge tone="structural" size="sm">
+                            {evidence.confidence}
+                          </Badge>
+                        </td>
+                      )}
                       <td className={TD}>
                         {evidence.refs.length > 0 ? (
                           <div className="flex flex-wrap gap-1">

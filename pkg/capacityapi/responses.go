@@ -121,6 +121,9 @@ type ActivityResponse struct {
 	CursorStatus CursorStatus      `json:"cursorStatus"`
 	CursorGap    *ObservationGap   `json:"cursorGap,omitempty"`
 	Observation  ObservationWindow `json:"observation"`
+	// Aggregate summarizes the whole filtered window and is present only on
+	// first-page responses; the type filter deliberately does not narrow it.
+	Aggregate *ActivityAggregate `json:"aggregate,omitempty"`
 }
 
 func NewActivityResponse(generatedAt time.Time) ActivityResponse {

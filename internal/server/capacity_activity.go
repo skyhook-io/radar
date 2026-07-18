@@ -40,6 +40,7 @@ type capacityActivityRequest struct {
 	cursor            *capacityActivityCursor
 	filterFingerprint string
 	filters           url.Values
+	typeFilter        capacityapi.ActivityType
 	since             time.Time
 	sinceProvided     bool
 }
@@ -178,6 +179,16 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 
 	records := capacitymodel.BuildActivityRecords(events)
 	records = filterCapacityActivityRecords(records, request.filters)
+	// The aggregate summarizes the whole filtered window, so it is computed
+	// before the type filter (type pills stay stable while the list narrows,
+	// mirroring the demand-state rollup) and only on first-page requests —
+	// cursor pages see a window bounded near the cursor, and an aggregate
+	// over that slice would misread as the whole window.
+	if request.cursor == nil {
+		aggregate := capacitymodel.AggregateActivityRecords(records)
+		response.Aggregate = &aggregate
+	}
+	records = filterCapacityActivityRecordsByType(records, request.typeFilter)
 	if request.cursor == nil {
 		reverseActivityRecords(records)
 	} else {
@@ -429,6 +440,26 @@ func parseCapacityActivityRequest(query url.Values) (capacityActivityRequest, er
 		request.sinceProvided = true
 		filters.Set("since", request.since.UTC().Format(time.RFC3339Nano))
 	}
+	if values := query["type"]; len(values) > 1 {
+		return capacityActivityRequest{}, fmt.Errorf("type must be specified at most once")
+	} else if len(values) == 1 && strings.TrimSpace(values[0]) != "" {
+		activityType := capacityapi.ActivityType(strings.TrimSpace(values[0]))
+		valid := map[capacityapi.ActivityType]bool{
+			capacityapi.ActivityProvision:             true,
+			capacityapi.ActivityLaunchFailure:         true,
+			capacityapi.ActivityRegistrationFailure:   true,
+			capacityapi.ActivityInitializationFailure: true,
+			capacityapi.ActivityDisruption:            true,
+			capacityapi.ActivityInterruption:          true,
+			capacityapi.ActivityTermination:           true,
+			capacityapi.ActivityConfigChange:          true,
+		}
+		if !valid[activityType] {
+			return capacityActivityRequest{}, fmt.Errorf("invalid activity type %q", activityType)
+		}
+		request.typeFilter = activityType
+		filters.Set("type", string(activityType))
+	}
 	request.filterFingerprint = capacityFilterFingerprint(filters)
 	if values := query["cursor"]; len(values) > 1 {
 		return capacityActivityRequest{}, newCapacityCursorInvalidError("cursor must be specified at most once")
@@ -564,6 +595,19 @@ func filterCapacityActivityRecords(records []capacitymodel.ActivityRecord, filte
 		result = append(result, record)
 	}
 	return result
+}
+
+func filterCapacityActivityRecordsByType(records []capacitymodel.ActivityRecord, activityType capacityapi.ActivityType) []capacitymodel.ActivityRecord {
+	if activityType == "" {
+		return records
+	}
+	kept := records[:0]
+	for _, record := range records {
+		if record.Episode.Type == activityType {
+			kept = append(kept, record)
+		}
+	}
+	return kept
 }
 
 func episodeHasReason(episode capacityapi.ActivityEpisode, reason string) bool {

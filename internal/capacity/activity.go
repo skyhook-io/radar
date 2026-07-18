@@ -55,6 +55,21 @@ func inferredActivity(activityType capacityapi.ActivityType, state capacityapi.A
 	}
 }
 
+func AggregateActivityRecords(records []ActivityRecord) capacityapi.ActivityAggregate {
+	aggregate := capacityapi.NewActivityAggregate()
+	for _, record := range records {
+		aggregate.Total++
+		counts := aggregate.ByType[record.Episode.Type]
+		counts.Total++
+		if counts.ByState == nil {
+			counts.ByState = map[capacityapi.ActivityState]int{}
+		}
+		counts.ByState[record.Episode.State]++
+		aggregate.ByType[record.Episode.Type] = counts
+	}
+	return aggregate
+}
+
 func BuildActivityRecords(events []timeline.TimelineEvent) []ActivityRecord {
 	orderedEvents := append([]timeline.TimelineEvent{}, events...)
 	sort.Slice(orderedEvents, func(i, j int) bool {
