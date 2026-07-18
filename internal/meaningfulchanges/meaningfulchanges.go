@@ -477,8 +477,13 @@ func TrackedKind(kind string) bool {
 // feed actually records it from. Kind strings collide across groups — a
 // Knative Service (serving.knative.dev) is not the core Service whose
 // changes the feed tracks.
+// NOTE: this map must cover exactly TrackedKind's set (configKinds +
+// specKinds) — no lifecycleOnlyKinds. Secret is delete-only in the feed
+// (updates are never recorded), so making Secret issues marker-eligible
+// would emit a false no_recent_changes after a data rotation the feed
+// cannot see. The drift-guard test pins both directions.
 var trackedKindGroups = map[string]string{
-	"ConfigMap": "", "Service": "", "ResourceQuota": "", "LimitRange": "", "Secret": "",
+	"ConfigMap": "", "Service": "", "ResourceQuota": "", "LimitRange": "",
 	"Deployment": "apps", "StatefulSet": "apps", "DaemonSet": "apps",
 	"Ingress":                        "networking.k8s.io",
 	"HorizontalPodAutoscaler":        "autoscaling",

@@ -377,6 +377,18 @@ func TestAttachIssueChangeCorrelation_GroupCollisionNotCorrelated(t *testing.T) 
 	}
 }
 
+// Secret issues are delete-only in the feed — updates are never recorded —
+// so they must never be marker-eligible: a no_recent_changes after a data
+// rotation the feed cannot see would be a false claim.
+func TestAttachIssueChangeCorrelation_SecretIssuesNotMarkerEligible(t *testing.T) {
+	initCorrelationStore(t)
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{warningIssue("Secret", "db-credentials")}}
+	attachIssueChangeCorrelation(context.Background(), &resp)
+	if sec := resp.Issues[0]; sec.NoRecentChanges != nil || len(sec.CorrelatedChanges) != 0 {
+		t.Fatalf("Secret issue must carry no markers (updates not recorded): %+v", sec)
+	}
+}
+
 // Reverse collision direction: a CORE Service issue must not absorb a
 // same-named Knative Service's change events — candidate events are group
 // filtered, so the core subject truthfully reports no_recent_changes.
