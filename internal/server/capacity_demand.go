@@ -51,13 +51,13 @@ func (s *Server) handleCapacityDemand(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	pools := capacityDemandPoolInputs(result, poolFilter)
+	classificationPools, evaluationPools := demandPoolSets(result, poolFilter)
 	groups := capacitymodel.BuildDemandGroupModels(capacitymodel.DemandInput{
 		GeneratedAt:     result.meta.GeneratedAt,
 		Pods:            result.snapshot.Pods,
 		ResolvePodOwner: result.snapshot.ResolvePodOwner,
 	})
-	capacitymodel.ClassifyDemandGroupModels(groups, pools)
+	capacitymodel.ClassifyDemandGroupModels(groups, classificationPools)
 	s.capacityIssuesForRequest(r).attachDemand(groups)
 	if capacityCoverageObserved(result.meta.Coverage[capacityapi.CoveragePods]) {
 		summary := capacitymodel.SummarizeDemandGroupModels(groups)
@@ -86,7 +86,7 @@ func (s *Server) handleCapacityDemand(w http.ResponseWriter, r *http.Request) {
 		}
 		groups = filtered
 	}
-	snapshotFingerprint := capacitymodel.DemandSnapshotFingerprint(groups, pools)
+	snapshotFingerprint := capacitymodel.DemandSnapshotFingerprint(groups, evaluationPools)
 	page, err := paginateCapacityKeysetWithSnapshot(groups, pageRequest, func(group capacitymodel.DemandGroupModel) string {
 		return group.Group.ID
 	}, snapshotFingerprint)
@@ -94,7 +94,7 @@ func (s *Server) handleCapacityDemand(w http.ResponseWriter, r *http.Request) {
 		s.writeCapacityPageError(w, err)
 		return
 	}
-	response.Items = capacitymodel.EvaluateDemandGroupModels(page.items, pools, 0)
+	response.Items = capacitymodel.EvaluateDemandGroupModels(page.items, evaluationPools, 0)
 	response.Page = capacityapi.PageInfo{HasMore: page.hasMore, NextCursor: page.nextCursor}
 	s.writeJSON(w, response)
 }
@@ -157,17 +157,35 @@ func parseCapacityDemandFilters(query url.Values) (url.Values, capacityapi.Deman
 	return filters, state, pool, owner, nil
 }
 
-func capacityDemandPoolInputs(result capacityLoadResult, poolFilter string) []capacitymodel.DemandPoolInput {
+// demandPoolSets derives the two pool views the demand endpoint needs: demand
+// state is a property of the whole fleet, so classification always sees every
+// pool; the ?pool= filter narrows only which evaluation perspective is
+// returned.
+func demandPoolSets(result capacityLoadResult, poolFilter string) (classification, evaluation []capacitymodel.DemandPoolInput) {
+	classification = capacityDemandPoolInputs(result)
+	if poolFilter == "" {
+		return classification, classification
+	}
+	evaluation = make([]capacitymodel.DemandPoolInput, 0, 1)
+	for _, input := range classification {
+		if input.NodePool.GetName() == poolFilter {
+			evaluation = append(evaluation, input)
+		}
+	}
+	return classification, evaluation
+}
+
+func capacityDemandPoolInputs(result capacityLoadResult) []capacitymodel.DemandPoolInput {
 	shapesByPool := capacitymodel.ObservedMemberShapesByPool(result.snapshot.Nodes, result.snapshot.NodeClaims)
 	pools := make([]capacitymodel.DemandPoolInput, 0, len(result.snapshot.NodePools))
 	for _, pool := range result.snapshot.NodePools {
-		if pool == nil || (poolFilter != "" && pool.GetName() != poolFilter) {
+		if pool == nil {
 			continue
 		}
 		input := capacitymodel.DemandPoolInput{
-			NodePool:                pool,
-			ProvisionedKnown:        karpenter.NodePoolStatusResources(pool) != nil,
-			ObservedMemberShapes:    shapesByPool[pool.GetName()],
+			NodePool:             pool,
+			ProvisionedKnown:     karpenter.NodePoolStatusResources(pool) != nil,
+			ObservedMemberShapes: shapesByPool[pool.GetName()],
 		}
 		if observed, found := result.model.Pool(pool.GetName()); found && observed.Observation.NodeClass != nil {
 			input.NodeClassReady = observed.Observation.NodeClass.Ready

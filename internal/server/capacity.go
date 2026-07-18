@@ -70,7 +70,7 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 			Pods:            result.snapshot.Pods,
 			ResolvePodOwner: result.snapshot.ResolvePodOwner,
 		})
-		capacitymodel.ClassifyDemandGroupModels(groups, capacityDemandPoolInputs(result, ""))
+		capacitymodel.ClassifyDemandGroupModels(groups, capacityDemandPoolInputs(result))
 		response.Summary.Actions = append(response.Summary.Actions, capacityDemandActions(groups)...)
 	}
 	if capacityCoverageObserved(result.meta.Coverage[capacityapi.CoverageNodeClaims]) {

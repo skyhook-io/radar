@@ -154,6 +154,31 @@ func TestCapacityDemandPoolFilterRequiresObservedNodePool(t *testing.T) {
 	}
 }
 
+func TestCapacityDemandPoolSetsClassifyAgainstWholeFleet(t *testing.T) {
+	snapshot := &capacitymodel.Snapshot{
+		GeneratedAt: time.Now().UTC(),
+		NodePools: []*unstructured.Unstructured{
+			capacityContractNodePool("pool-a"),
+			capacityContractNodePool("pool-b"),
+		},
+	}
+	model := capacitymodel.Build(*snapshot)
+	result := capacityLoadResult{model: &model, snapshot: snapshot}
+
+	classification, evaluation := demandPoolSets(result, "pool-a")
+	if len(classification) != 2 {
+		t.Fatalf("classification pools = %d, want the whole fleet — demand state is a fleet-wide property", len(classification))
+	}
+	if len(evaluation) != 1 || evaluation[0].NodePool.GetName() != "pool-a" {
+		t.Fatalf("evaluation pools = %#v, want only the filtered pool", evaluation)
+	}
+
+	classification, evaluation = demandPoolSets(result, "")
+	if len(classification) != 2 || len(evaluation) != 2 {
+		t.Fatalf("unfiltered pool sets = %d/%d, want 2/2", len(classification), len(evaluation))
+	}
+}
+
 func TestCapacityProjectsCanonicalNodePoolIssues(t *testing.T) {
 	pool := capacityContractNodePool("unhealthy")
 	pool.SetGeneration(2)

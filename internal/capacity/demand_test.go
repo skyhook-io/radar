@@ -638,6 +638,78 @@ func TestDemandBoundsPoolEvaluationsWithoutChangingCounts(t *testing.T) {
 	}
 }
 
+func TestDemandTolerationOperatorDefaultCoalescesGroups(t *testing.T) {
+	controller := true
+	ownerRef := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-abc", Controller: &controller}
+	implicit := demandTestPod("implicit-equal", "500m")
+	implicit.OwnerReferences = []metav1.OwnerReference{ownerRef}
+	implicit.Spec.Tolerations = []corev1.Toleration{{Key: "dedicated", Value: "batch", Effect: corev1.TaintEffectNoSchedule}}
+	explicit := demandTestPod("explicit-equal", "500m")
+	explicit.OwnerReferences = []metav1.OwnerReference{ownerRef}
+	explicit.Spec.Tolerations = []corev1.Toleration{{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "batch", Effect: corev1.TaintEffectNoSchedule}}
+
+	groups := BuildDemandGroups(DemandInput{GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{implicit, explicit}})
+	if len(groups) != 1 || groups[0].PodCount != 2 {
+		t.Fatalf("groups = %#v, want one group holding both pods — an omitted toleration operator is Equal", groups)
+	}
+}
+
+func TestDemandHostnamePinIsIncompatibleNotUnknown(t *testing.T) {
+	ready := true
+	pool := demandTestPool("general", &ready, demandPoolSpec(nil, nil, nil, nil, nil), nil)
+
+	pinned := demandTestPod("pinned", "500m")
+	pinned.Spec.NodeSelector = map[string]string{corev1.LabelHostname: "ip-10-0-0-1"}
+	evaluation := BuildDemandGroups(DemandInput{
+		GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{pinned}, Pools: []DemandPoolInput{{NodePool: pool, ProvisionedKnown: true}},
+	})[0].PoolEvaluations[0]
+	if evaluation.Result != capacityapi.PoolIncompatible {
+		t.Fatalf("evaluation = %#v, want incompatible — a provisioned node always carries a new hostname", evaluation)
+	}
+
+	excluded := demandTestPod("excluded", "500m")
+	excluded.Spec.Affinity = requiredNodeAffinity([]corev1.NodeSelectorRequirement{{
+		Key: corev1.LabelHostname, Operator: corev1.NodeSelectorOpNotIn, Values: []string{"ip-10-0-0-1"},
+	}})
+	evaluation = BuildDemandGroups(DemandInput{
+		GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{excluded}, Pools: []DemandPoolInput{{NodePool: pool, ProvisionedKnown: true}},
+	})[0].PoolEvaluations[0]
+	if evaluation.Result != capacityapi.PoolDeclaredCompatible {
+		t.Fatalf("evaluation = %#v, want declared_compatible — a fresh hostname is never in the excluded set", evaluation)
+	}
+	for _, predicate := range evaluation.UnknownPredicates {
+		if predicate == "providerOfferings."+corev1.LabelHostname {
+			t.Fatalf("hostname degraded to an offering unknown: %#v", evaluation.UnknownPredicates)
+		}
+	}
+}
+
+func TestDemandPoolBoundingKeepsDeclaredCompatiblePools(t *testing.T) {
+	pod := demandTestPod("worker", "500m")
+	pod.Spec.NodeSelector = map[string]string{"example.com/team": "a"}
+	ready := true
+	pools := make([]DemandPoolInput, 0, DefaultDemandPoolEvaluationLimit+6)
+	for index := range DefaultDemandPoolEvaluationLimit + 5 {
+		pools = append(pools, DemandPoolInput{NodePool: demandTestPool(fmt.Sprintf("pool-%02d", index), &ready, demandPoolSpec(nil, nil, nil, nil, nil), nil)})
+	}
+	match := demandTestPool("zz-match", &ready, demandPoolSpec([]any{
+		demandRequirementObject("example.com/team", corev1.NodeSelectorOpIn, "a"),
+	}, nil, nil, nil, nil), nil)
+	pools = append(pools, DemandPoolInput{NodePool: match})
+
+	group := BuildDemandGroups(DemandInput{GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{pod}, Pools: pools})[0]
+	if group.PoolEvaluationCounts.DeclaredCompatible != 1 {
+		t.Fatalf("evaluation counts = %+v, want exactly one declared-compatible pool", group.PoolEvaluationCounts)
+	}
+	if len(group.PoolEvaluations) != DefaultDemandPoolEvaluationLimit || !group.PoolEvaluationsMeta.Truncated {
+		t.Fatalf("bounded evaluations = %d %+v", len(group.PoolEvaluations), group.PoolEvaluationsMeta)
+	}
+	first := group.PoolEvaluations[0]
+	if first.Pool.Name != "zz-match" || first.Result != capacityapi.PoolDeclaredCompatible {
+		t.Fatalf("first bounded evaluation = %+v, want the declared-compatible pool to survive bounding", first)
+	}
+}
+
 func TestDemandBoundsEvaluationEvidenceAndSignature(t *testing.T) {
 	pod := demandTestPod("worker", "500m")
 	pod.Spec.NodeSelector = map[string]string{}

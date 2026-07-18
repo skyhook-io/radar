@@ -579,12 +579,7 @@ func evaluateDemandPools(model demandSchedulingModel, requests corev1.ResourceLi
 	if evaluationLimit == 0 {
 		evaluationLimit = DefaultDemandPoolEvaluationLimit
 	}
-	capacity := len(ordered)
-	if evaluationLimit > 0 && capacity > evaluationLimit {
-		capacity = evaluationLimit
-	}
-	result := make([]capacityapi.PoolEvaluation, 0, capacity)
-	meta := capacityapi.BoundedResultMeta{Total: len(ordered)}
+	evaluations := make([]capacityapi.PoolEvaluation, 0, len(ordered))
 	counts := capacityapi.PoolEvaluationCounts{}
 	for _, input := range ordered {
 		evaluation := evaluateDemandPool(model, requests, input)
@@ -596,13 +591,40 @@ func evaluateDemandPools(model demandSchedulingModel, requests corev1.ResourceLi
 		default:
 			counts.Unknown++
 		}
-		if evaluationLimit < 0 || len(result) < evaluationLimit {
+		evaluations = append(evaluations, evaluation)
+	}
+	capacity := len(evaluations)
+	if evaluationLimit > 0 && capacity > evaluationLimit {
+		capacity = evaluationLimit
+	}
+	// Bounding must keep the most decision-relevant evaluations: dropping a
+	// declared-compatible pool while the counts still report one would leave
+	// "which pool could take this?" unanswerable.
+	result := make([]capacityapi.PoolEvaluation, 0, capacity)
+	for rank := range 3 {
+		for _, evaluation := range evaluations {
+			if evaluationLimit >= 0 && len(result) >= evaluationLimit {
+				break
+			}
+			if poolEvaluationBoundingRank(evaluation.Result) != rank {
+				continue
+			}
 			result = append(result, evaluation)
 		}
 	}
-	meta.Returned = len(result)
-	meta.Truncated = meta.Returned < meta.Total
+	meta := capacityapi.BoundedResultMeta{Total: len(ordered), Returned: len(result), Truncated: len(result) < len(ordered)}
 	return result, meta, counts
+}
+
+func poolEvaluationBoundingRank(result capacityapi.PoolEvaluationResult) int {
+	switch result {
+	case capacityapi.PoolDeclaredCompatible:
+		return 0
+	case capacityapi.PoolIncompatible:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func evaluateDemandPool(model demandSchedulingModel, requests corev1.ResourceList, input DemandPoolInput) capacityapi.PoolEvaluation {
@@ -838,6 +860,37 @@ func evaluateDemandSelectorTerm(podRequirements []demandRequirement, poolRequire
 				"selectorRequirement", firstRequirementPath(podForKey), formatRequirements(podForKey), formatRequirements(poolForKey),
 				"The Pod's required node labels contradict the NodePool's declared labels or requirements.",
 			)
+			continue
+		}
+		// kubernetes.io/hostname names one specific node — it is not an
+		// offering dimension. Every provisioned node carries a fresh, unique
+		// hostname, so pinning to known hostnames can never be satisfied by
+		// new capacity, while Exists/NotIn are satisfied by any new node.
+		if key == corev1.LabelHostname {
+			pinned := false
+			absentRequired := false
+			for _, requirement := range podForKey {
+				switch requirement.Operator {
+				case corev1.NodeSelectorOpIn:
+					pinned = true
+				case corev1.NodeSelectorOpDoesNotExist:
+					absentRequired = true
+				}
+			}
+			switch {
+			case pinned:
+				evidence.add(
+					"selectorRequirement", firstRequirementPath(podForKey), formatRequirements(podForKey),
+					[]string{"a new, unique hostname per provisioned node"},
+					"The Pod is pinned to specific node hostnames — every provisioned node carries a new, unique hostname, so no NodePool can satisfy this with new capacity.",
+				)
+			case absentRequired:
+				evidence.add(
+					"selectorRequirement", firstRequirementPath(podForKey), formatRequirements(podForKey),
+					[]string{"kubernetes.io/hostname present on every node"},
+					"Every node carries the kubernetes.io/hostname label, so requiring it to be absent cannot be satisfied by any node.",
+				)
+			}
 			continue
 		}
 		if requirementNeedsPresentLabel(podForKey) && !requirementNeedsPresentLabel(poolForKey) {
@@ -1272,8 +1325,14 @@ func sortedCanonicalRequirements(requirements []canonicalRequirement) []canonica
 }
 
 func canonicalTolerationFor(toleration corev1.Toleration) canonicalToleration {
+	// The scheduler treats an omitted operator as Equal; fingerprint the
+	// semantic form so implicit and explicit Equal coalesce into one group.
+	operator := toleration.Operator
+	if operator == "" {
+		operator = corev1.TolerationOpEqual
+	}
 	return canonicalToleration{
-		Key: toleration.Key, Operator: string(toleration.Operator), Value: toleration.Value,
+		Key: toleration.Key, Operator: string(operator), Value: toleration.Value,
 		Effect: string(toleration.Effect), TolerationSeconds: toleration.TolerationSeconds,
 	}
 }
