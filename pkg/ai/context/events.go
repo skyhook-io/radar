@@ -112,7 +112,7 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 	}
 
 	groups := make(map[eventKey]*DeduplicatedEventGroup)
-	objects := make(map[eventKey]map[EventObjectRef]time.Time)
+	objects := make(map[eventKey]map[eventObjectIdentity]objectSighting)
 	order := make([]eventKey, 0)
 
 	for i := range events {
@@ -155,13 +155,24 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 				Namespace:  ev.InvolvedObject.Namespace,
 				Name:       ev.InvolvedObject.Name,
 			}
+			// Identity keys on the API GROUP, not the raw apiVersion:
+			// emitters are inconsistent about populating involvedObject
+			// apiVersion ("" vs "v1" vs "apps/v1"), and version-within-group
+			// never distinguishes objects — keying on the raw string would
+			// double-count one object seen through two emitters.
+			id := eventObjectIdentity{
+				Kind:      ref.Kind,
+				Group:     GroupOfAPIVersion(ref.APIVersion),
+				Namespace: ref.Namespace,
+				Name:      ref.Name,
+			}
 			seen := objects[key]
 			if seen == nil {
-				seen = make(map[EventObjectRef]time.Time)
+				seen = make(map[eventObjectIdentity]objectSighting)
 				objects[key] = seen
 			}
-			if prev, ok := seen[ref]; !ok || last.After(prev) {
-				seen[ref] = last
+			if prev, ok := seen[id]; !ok || last.After(prev.Last) {
+				seen[id] = objectSighting{Ref: ref, Last: last}
 			}
 		}
 	}
@@ -204,20 +215,46 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 	return result
 }
 
+// eventObjectIdentity is the dedup key for involved objects: kind + API
+// group + namespace + name. Version-within-group is deliberately excluded —
+// it never distinguishes objects, and emitters populate apiVersion
+// inconsistently.
+type eventObjectIdentity struct {
+	Kind      string
+	Group     string
+	Namespace string
+	Name      string
+}
+
+// objectSighting keeps the most recent full ref observed for one identity.
+type objectSighting struct {
+	Ref  EventObjectRef
+	Last time.Time
+}
+
+// GroupOfAPIVersion returns the API group portion of an apiVersion string
+// ("apps/v1" → "apps"; "v1" or "" → "" for the core group).
+func GroupOfAPIVersion(apiVersion string) string {
+	if idx := strings.IndexByte(apiVersion, '/'); idx > 0 {
+		return apiVersion[:idx]
+	}
+	return ""
+}
+
 // selectGroupObjects orders a group's distinct involved objects by most
 // recent contribution (ties broken by kind/namespace/name for determinism)
 // and caps the emitted list, counting distinct identities before the cap.
-func selectGroupObjects(seen map[EventObjectRef]time.Time, limit int) ([]EventObjectRef, int, bool) {
+func selectGroupObjects(seen map[eventObjectIdentity]objectSighting, limit int) ([]EventObjectRef, int, bool) {
 	if len(seen) == 0 {
 		return nil, 0, false
 	}
-	refs := make([]EventObjectRef, 0, len(seen))
-	for ref := range seen {
-		refs = append(refs, ref)
+	ids := make([]eventObjectIdentity, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
 	}
-	sort.Slice(refs, func(i, j int) bool {
-		a, b := refs[i], refs[j]
-		at, bt := seen[a], seen[b]
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := ids[i], ids[j]
+		at, bt := seen[a].Last, seen[b].Last
 		if !at.Equal(bt) {
 			return at.After(bt)
 		}
@@ -230,13 +267,18 @@ func selectGroupObjects(seen map[EventObjectRef]time.Time, limit int) ([]EventOb
 		if a.Name != b.Name {
 			return a.Name < b.Name
 		}
-		return a.APIVersion < b.APIVersion
+		return a.Group < b.Group
 	})
-	total := len(refs)
-	if total > limit {
-		return refs[:limit], total, true
+	total := len(ids)
+	truncated := total > limit
+	if truncated {
+		ids = ids[:limit]
 	}
-	return refs, total, false
+	refs := make([]EventObjectRef, len(ids))
+	for i, id := range ids {
+		refs[i] = seen[id].Ref
+	}
+	return refs, total, truncated
 }
 
 // FormatEvents renders deduplicated events as a string for LLM context.

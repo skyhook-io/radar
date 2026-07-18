@@ -2075,11 +2075,12 @@ type mcpWarningObject struct {
 // warningObjectFromRef converts an event's involved-object ref, deriving the
 // API group from apiVersion ("apps/v1" → "apps"; "v1" → core/empty).
 func warningObjectFromRef(ref aicontext.EventObjectRef) mcpWarningObject {
-	group := ""
-	if idx := strings.IndexByte(ref.APIVersion, '/'); idx > 0 {
-		group = ref.APIVersion[:idx]
+	return mcpWarningObject{
+		Kind:      ref.Kind,
+		Group:     aicontext.GroupOfAPIVersion(ref.APIVersion),
+		Namespace: ref.Namespace,
+		Name:      ref.Name,
 	}
-	return mcpWarningObject{Kind: ref.Kind, Group: group, Namespace: ref.Namespace, Name: ref.Name}
 }
 
 type mcpHelmSummary struct {

@@ -214,6 +214,28 @@ func TestDeduplicateEventsWithObjects_RefValidityAndAPIVersion(t *testing.T) {
 	}
 }
 
+// One object seen through emitters that populate apiVersion inconsistently
+// ("" vs "v1") is ONE object — identity keys on the API group, never the raw
+// apiVersion string.
+func TestDeduplicateEventsWithObjects_APIVersionVariantsAreOneIdentity(t *testing.T) {
+	now := time.Now()
+	older := makeEventForObject("BackOff", "restarting", "Warning", 1, now.Add(-time.Minute), "Pod", "shop", "pod-a")
+	newer := makeEventForObject("BackOff", "restarting", "Warning", 1, now, "Pod", "shop", "pod-a")
+	newer.InvolvedObject.APIVersion = "v1"
+
+	result := DeduplicateEventsWithObjects([]corev1.Event{older, newer}, 3)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(result))
+	}
+	g := result[0]
+	if g.ObjectCount != 1 || len(g.Objects) != 1 {
+		t.Fatalf("objects = %+v (count %d), want ONE identity across apiVersion variants", g.Objects, g.ObjectCount)
+	}
+	if g.Objects[0].APIVersion != "v1" {
+		t.Errorf("kept ref apiVersion = %q, want the most recent sighting's (\"v1\")", g.Objects[0].APIVersion)
+	}
+}
+
 // The plain DeduplicateEvents wire shape is unchanged by the objects path —
 // its consumers (get_events, diagnose, resource includes) group across pods
 // on purpose and must not grow new fields.
