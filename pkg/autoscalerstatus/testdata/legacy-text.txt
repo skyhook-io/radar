@@ -1,0 +1,34 @@
+Cluster-autoscaler status at 2026-07-18 22:01:54.093779908 +0000 UTC:
+Cluster-wide:
+  Health:      Healthy (ready=5 unready=0 (resourceUnready=0) notStarted=0 longNotStarted=0 registered=5 longUnregistered=0)
+               LastProbeTime:      2026-07-18 22:01:54.093779908 +0000 UTC
+               LastTransitionTime: 2026-07-05 06:13:24.567890123 +0000 UTC
+  ScaleUp:     NoActivity (ready=5 registered=5)
+               LastProbeTime:      2026-07-18 22:01:54.093779908 +0000 UTC
+               LastTransitionTime: 2026-07-05 06:13:24.567890123 +0000 UTC
+  ScaleDown:   NoCandidates (candidates=0)
+               LastProbeTime:      2026-07-18 22:01:54.093779908 +0000 UTC
+               LastTransitionTime: 2026-07-05 06:13:24.567890123 +0000 UTC
+
+NodeGroups:
+  Name:        https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-b/instanceGroups/gke-legacy-cluster-default-pool-a1b2c3d4-grp
+  Health:      Healthy (ready=3 unready=0 (resourceUnready=0) notStarted=0 longNotStarted=0 registered=3 longUnregistered=0 cloudProviderTarget=3 (minSize=1, maxSize=5))
+               LastProbeTime:      2026-07-18 22:01:54.093779908 +0000 UTC
+               LastTransitionTime: 2026-07-05 06:13:24.567890123 +0000 UTC
+  ScaleUp:     NoActivity (ready=3 cloudProviderTarget=3)
+               LastProbeTime:      2026-07-18 22:01:54.093779908 +0000 UTC
+               LastTransitionTime: 2026-07-05 06:13:24.567890123 +0000 UTC
+  ScaleDown:   NoCandidates (candidates=0)
+               LastProbeTime:      2026-07-18 22:01:54.093779908 +0000 UTC
+               LastTransitionTime: 2026-07-05 06:13:24.567890123 +0000 UTC
+
+  Name:        https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-c/instanceGroups/gke-legacy-cluster-spot-pool-e5f6a7b8-grp
+  Health:      Healthy (ready=2 unready=0 (resourceUnready=0) notStarted=0 longNotStarted=0 registered=2 longUnregistered=0 cloudProviderTarget=2 (minSize=0, maxSize=10))
+               LastProbeTime:      2026-07-18 22:01:54.093779908 +0000 UTC
+               LastTransitionTime: 2026-07-05 06:13:24.567890123 +0000 UTC
+  ScaleUp:     NoActivity (ready=2 cloudProviderTarget=2)
+               LastProbeTime:      2026-07-18 22:01:54.093779908 +0000 UTC
+               LastTransitionTime: 2026-07-05 06:13:24.567890123 +0000 UTC
+  ScaleDown:   NoCandidates (candidates=0)
+               LastProbeTime:      2026-07-18 22:01:54.093779908 +0000 UTC
+               LastTransitionTime: 2026-07-05 06:13:24.567890123 +0000 UTC

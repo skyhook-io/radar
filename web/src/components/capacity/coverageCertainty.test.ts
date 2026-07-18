@@ -24,7 +24,12 @@ describe("coverageCertainty", () => {
   it("is unknown — never a false exact — when the source was not observed", () => {
     // The trust thesis: syncing / unavailable / error / absent must not read
     // as "=" (exact) on the KPI glyphs.
-    for (const status of ["denied", "syncing", "unavailable", "error"] as const) {
+    for (const status of [
+      "denied",
+      "syncing",
+      "unavailable",
+      "error",
+    ] as const) {
       expect(coverageCertainty(cov(status))).toBe("unknown");
     }
     expect(coverageCertainty(undefined)).toBe("unknown");

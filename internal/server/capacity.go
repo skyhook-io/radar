@@ -87,6 +87,7 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 		unpooled := result.model.UnpooledNodeCount
 		response.Summary.UnpooledNodeCount = &unpooled
 	}
+	s.attachCapacityGroups(r, result, &response)
 	response.Summary.Actions = append(response.Summary.Actions, capacityActions(*result.model, issueProjection.available)...)
 	summaries := result.model.Summaries()
 	if len(summaries) > capacityOverviewPoolLimit {

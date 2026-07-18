@@ -1,0 +1,53 @@
+autoscalerStatus: Running
+clusterWide:
+  health:
+    lastProbeTime: "2026-07-18T22:01:49Z"
+    lastTransitionTime: "2026-07-12T06:21:36Z"
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 9
+        total: 9
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:49Z"
+    lastTransitionTime: "2026-07-12T06:21:36Z"
+    status: NoCandidates
+  scaleUp:
+    lastProbeTime: "2026-07-18T22:01:49Z"
+    lastTransitionTime: "2026-07-12T06:21:36Z"
+    status: NoActivity
+nodeGroups:
+- health:
+    cloudProviderTarget: 9
+    lastProbeTime: "2026-07-18T22:01:49Z"
+    lastTransitionTime: "2026-07-12T06:21:36Z"
+    maxSize: 11
+    minSize: 5
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 9
+        total: 9
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-b/instanceGroups/gke-demo-cluster--default-pool-16275362-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:49Z"
+    lastTransitionTime: "2026-07-12T06:21:36Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: "2026-07-18T22:01:49Z"
+    lastTransitionTime: "2026-07-12T06:21:36Z"
+    status: NoActivity
+time: 2026-07-18 22:01:49.110900936 +0000 UTC

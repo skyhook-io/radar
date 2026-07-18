@@ -1,32 +1,33 @@
-import { useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useMemo, useRef, useState, type RefObject } from "react";
 import { Layers3 } from "lucide-react";
 import {
   Collapse,
   CollapseChevron,
+  StatusDot,
   WithTooltip,
+  mapHealthToTone,
+  type CapacityAutoscalerBackoff,
+  type CapacityAutoscalerChildObservation,
+  type CapacityBoundedResultMeta,
   type CapacityCertainty,
   type CapacityClaimLifecycleSummary,
   type CapacityCoverageBySource,
   type CapacityDemandState,
+  type CapacityGroupSummary,
+  type CapacityManagerSummary,
   type CapacityOverviewResponse,
   type CapacityOverviewSummary,
-  type CapacityPoolListResponse,
   type CapacityPoolSummary,
   type CapacitySourceCoverage,
 } from "@skyhook-io/k8s-ui";
 import { ClusterSchedulingCard } from "./ClusterSchedulingCard";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import type { useCapacityOverview } from "../../api/client";
-import {
-  isCapacityCursorInvalidError,
-  useCapacityPools,
-} from "../../api/client";
 import type { SelectedResource } from "../../types";
 import {
   actionSeverity,
-  ActualUsageInline,
   CapacityFreshness,
+  capacityManagerLabel,
   coverageHasObservations,
   coverageIsDenied,
   coverageIsLowerBound,
@@ -41,15 +42,14 @@ import {
   InlineEmpty,
   integrationBlock,
   KpiTile,
-  LimitPressureCell,
   LinkButton,
-  Notice,
-  PageControls,
+  managerStatusTone,
   pickWorstPressure,
   PoolReadyBadge,
   poolReadinessDetail,
   QuantityInline,
   RefreshError,
+  relativeTime,
   ROW_HOVER,
   ScopeBadges,
   ScrollableContent,
@@ -61,12 +61,23 @@ import {
   TBODY,
   TD,
   TH,
-  useCapacityCursorRecovery,
-  useCapacityPagination,
+  worstManagerStatus,
   type CapacityConnectionState,
 } from "./shared";
 
 const EXPLAIN_CARDS: { term: string; body: string }[] = [
+  {
+    term: "Capacity managers",
+    body: "The controllers that add and remove nodes — Karpenter, the GKE or AKS cluster autoscaler, or the standalone Cluster Autoscaler. Detection is coverage-gated: when the autoscaler status is hidden by permissions, Radar says detection is unavailable rather than reporting none.",
+  },
+  {
+    term: "Node groups",
+    body: "Logical groups an operator recognizes — a Karpenter NodePool, a GKE node pool, an EKS managed node group, an AKS agent pool. Identity comes from node labels or CRD evidence, never from parsing provider group names. Nodes with no group identity are counted apart — never called static.",
+  },
+  {
+    term: "Cluster scheduling capacity",
+    body: "Scheduled requests against node allocatable across every observed node, not just Karpenter's. Requests are what the scheduler consumes, never live usage, and the bar never takes a health color. In-flight capacity stays Karpenter-only — no other manager reports claims before they register.",
+  },
   {
     term: "Configured limit",
     body: "A ceiling declared on the NodePool. Says nothing about what exists right now. A missing limit is not unlimited capacity — provider quota still applies.",
@@ -138,8 +149,6 @@ export function CapacityOverview({
   onOpenResource: (resource: SelectedResource) => void;
   onNavigate: (path: string) => void;
 }) {
-  const location = useLocation();
-  const navigate = useNavigate();
   const [showExplain, setShowExplain] = useState(false);
   const explainAnchorRef = useRef<HTMLDivElement>(null);
   const inventoryRef = useRef<HTMLDivElement>(null);
@@ -150,26 +159,6 @@ export function CapacityOverview({
       block: "start",
     });
   };
-
-  const showAllPools =
-    new URLSearchParams(location.search).get("poolView") === "all";
-  const poolPagination = useCapacityPagination<CapacityPoolListResponse>(
-    `overview-pools:${location.search}`,
-  );
-  const poolQuery = useCapacityPools({
-    enabled: showAllPools,
-    limit: 100,
-    cursor: poolPagination.cursor,
-  });
-  const recoveringPoolCursor = useCapacityCursorRecovery(
-    poolQuery.error,
-    poolPagination.cursor,
-    poolPagination.recover,
-  );
-  const recoveredPoolCursor = poolPagination.recovered || recoveringPoolCursor;
-  const poolPage =
-    poolQuery.data ??
-    (recoveredPoolCursor ? poolPagination.retainedPage : undefined);
 
   const blocked = integrationBlock(
     query.data,
@@ -194,22 +183,9 @@ export function CapacityOverview({
   const coverage = data.coverage;
   const podsDeniedFlag = coverageIsDenied(coverage.pods);
   const unavailableRefresh = query.error ? errorMessage(query.error) : null;
-
-  const visiblePools = showAllPools && poolPage ? poolPage.items : data.pools;
-  const visiblePoolCoverage = poolPage?.coverage ?? coverage;
-
-  const setShowAllPools = (show: boolean) => {
-    const params = new URLSearchParams(location.search);
-    if (show) params.set("poolView", "all");
-    else params.delete("poolView");
-    navigate(
-      {
-        pathname: location.pathname,
-        search: params.toString() ? `?${params.toString()}` : "",
-      },
-      { replace: true },
-    );
-  };
+  // Cluster scope is the honest headline once the server measures every node;
+  // the Karpenter-only ledger is the fallback until it does.
+  const clusterScheduling = summary.clusterScheduling;
 
   const signals = buildSignals(summary, { onOpenPool, onNavigate });
 
@@ -271,7 +247,12 @@ export function CapacityOverview({
 
       {unavailableRefresh && <RefreshError message={unavailableRefresh} />}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
+        <ManagersTile
+          managers={summary.managers}
+          autoscalerDenied={coverageIsDenied(coverage.autoscalerStatus)}
+          nodesObserved={coverageHasObservations(coverage.nodes)}
+        />
         <KpiTile
           label="NodePools"
           value={summary.poolCount}
@@ -341,9 +322,10 @@ export function CapacityOverview({
       </div>
 
       <ClusterSchedulingCard
-        scheduling={summary.scheduling}
+        scheduling={clusterScheduling ?? summary.scheduling}
         pending={podsDeniedFlag ? undefined : summary.aggregateDemand}
         onExplain={openExplainer}
+        scope={clusterScheduling ? "cluster" : "karpenter"}
       />
 
       <PendingDemandChips
@@ -416,219 +398,528 @@ export function CapacityOverview({
         )}
       </SectionCard>
 
-      <div ref={inventoryRef} className="scroll-mt-4">
-        <SectionCard
-          title="NodePool inventory"
-          subtitle="every Karpenter NodePool in this cluster"
-          actions={
-            (data.poolsTruncated || showAllPools) && (
-              <button
-                type="button"
-                className="rounded-lg border border-theme-border px-2.5 py-1 text-xs font-medium text-accent-text transition-colors hover:bg-theme-hover"
-                onClick={() => setShowAllPools(!showAllPools)}
-              >
-                {showAllPools
-                  ? "Return to posture list"
-                  : "Browse all NodePools"}
-              </button>
-            )
-          }
-          bodyClassName=""
-        >
-          {recoveredPoolCursor && (
-            <div className="border-b border-theme-border-subtle px-4 py-2">
-              <Notice>
-                Pool inventory changed; showing the latest results.
-              </Notice>
-            </div>
-          )}
-          {showAllPools &&
-            poolQuery.error &&
-            !isCapacityCursorInvalidError(poolQuery.error) && (
-              <div className="border-b border-theme-border-subtle px-4 py-2">
-                <RefreshError message={errorMessage(poolQuery.error)} />
-              </div>
-            )}
-          {showAllPools && poolQuery.isLoading && (
-            <div className="border-b border-theme-border-subtle px-4 py-2 text-xs text-theme-text-tertiary">
-              Loading paginated NodePool inventory…
-            </div>
-          )}
-          <div className={TABLE_WRAP}>
-            <table className="w-full min-w-[1180px] text-left">
-              <thead className={TABLE_HEAD}>
-                <tr>
-                  <th className={TH}>Pool</th>
-                  <th className={TH}>Readiness</th>
-                  <th className={TH}>Mode</th>
-                  <th className={TH}>NodeClass</th>
-                  <th className={TH}>Nodes · claims</th>
-                  <th className={`${TH} w-[190px]`}>
-                    <WithTooltip tip="Provisioned capacity as a share of the configured NodePool limit">
-                      <span>Limit pressure</span>
-                    </WithTooltip>
-                  </th>
-                  <th className={TH}>
-                    <WithTooltip tip="Sum of scheduled pod requests on this pool's nodes">
-                      <span>Scheduled requests</span>
-                    </WithTooltip>
-                  </th>
-                  <th className={`${TH} w-[210px]`}>
-                    <WithTooltip tip="Point-in-time usage from the metrics API — an efficiency signal, not headroom">
-                      <span>Usage (live)</span>
-                    </WithTooltip>
-                  </th>
-                  <th className={TH}>Signals</th>
-                  <th className={TH} />
-                </tr>
-              </thead>
-              <tbody className={TBODY}>
-                {visiblePools.map((pool) => (
-                  <InventoryRow
-                    key={pool.resource.ref.name}
-                    pool={pool}
-                    coverage={visiblePoolCoverage}
-                    podsDenied={coverageIsDenied(visiblePoolCoverage.pods)}
-                    onOpenPool={onOpenPool}
-                    onOpenResource={onOpenResource}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {visiblePools.length === 0 && (
-            <InlineEmpty
-              title="No NodePools"
-              detail={
-                summary.poolCount === 0
-                  ? "Karpenter is installed, but no NodePools exist yet — the inventory fills in as soon as one is created."
-                  : "No NodePools on this page."
-              }
-            />
-          )}
-          <div className="flex items-center gap-3 border-t border-theme-border-subtle px-4 py-2.5 text-xs text-theme-text-tertiary">
-            <span>
-              {summary.poolCount} {summary.poolCount === 1 ? "pool" : "pools"} ·
-              cluster-scoped watch (exact)
-            </span>
-            <div className="flex-1" />
-            {showAllPools &&
-              poolPage &&
-              (poolPagination.history.length > 0 || poolPage.page.hasMore) && (
-                <PageControls
-                  page={poolPagination.history.length + 1}
-                  hasPrevious={poolPagination.history.length > 0}
-                  hasNext={
-                    poolPage.page.hasMore && Boolean(poolPage.page.nextCursor)
-                  }
-                  busy={poolQuery.isFetching}
-                  onPrevious={() => poolPagination.goBack(poolPage)}
-                  onNext={() =>
-                    poolPage.page.nextCursor &&
-                    poolPagination.goNext(poolPage.page.nextCursor, poolPage)
-                  }
-                />
-              )}
-          </div>
-        </SectionCard>
-      </div>
+      <NodeGroupsSection
+        sectionRef={inventoryRef}
+        groups={data.groups}
+        pools={data.pools}
+        coverage={coverage}
+        poolCount={summary.poolCount}
+        unattributedNodeCount={summary.unattributedNodeCount ?? 0}
+        onOpenPool={onOpenPool}
+        onOpenResource={onOpenResource}
+      />
+
+      <OrphanAutoscalerSection
+        orphans={data.orphanAutoscalerGroups}
+        meta={data.orphanAutoscalerGroupsMeta}
+      />
     </ScrollableContent>
   );
 }
 
-function InventoryRow({
-  pool,
+// ============================================================================
+// Capacity managers KPI tile
+// ============================================================================
+
+function ManagersTile({
+  managers,
+  autoscalerDenied,
+  nodesObserved,
+}: {
+  managers: CapacityManagerSummary[];
+  autoscalerDenied: boolean;
+  nodesObserved: boolean;
+}) {
+  const worst = worstManagerStatus(managers);
+  return (
+    <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+          Capacity managers
+        </span>
+        {worst === "degraded" && (
+          <Badge severity="warning" size="sm">
+            Attention
+          </Badge>
+        )}
+      </div>
+      <div className="mt-1.5">
+        {managers.length === 0 ? (
+          // A denied autoscaler ConfigMap is not a zero — never say "none".
+          autoscalerDenied ? (
+            <>
+              <div className="text-sm font-medium text-theme-text-primary">
+                Detection unavailable
+              </div>
+              <div className="mt-0.5 text-xs text-theme-text-tertiary">
+                Autoscaler status is hidden by permissions — this is not "none
+                detected".
+              </div>
+            </>
+          ) : nodesObserved ? (
+            <div className="text-sm text-theme-text-secondary">
+              None detected
+            </div>
+          ) : (
+            <div className="text-xs text-theme-text-tertiary">
+              Not yet observed
+            </div>
+          )
+        ) : (
+          <div className="flex flex-col gap-1">
+            {managers.map((manager) => (
+              <ManagerLine key={manager.manager} manager={manager} />
+            ))}
+            {autoscalerDenied && (
+              <div className="mt-0.5 text-[11px] text-theme-text-tertiary">
+                Autoscaler detection is partially unavailable — permissions hide
+                some status.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ManagerLine({ manager }: { manager: CapacityManagerSummary }) {
+  const tone = managerStatusTone(manager.status);
+  const showDetail = manager.status === "degraded" && manager.detail;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <StatusDot tone={tone} />
+          <span className="truncate text-sm text-theme-text-primary">
+            {capacityManagerLabel(manager.manager)}
+          </span>
+        </span>
+        <span className="shrink-0 font-mono text-xs text-theme-text-tertiary">
+          {manager.groupCount} {manager.groupCount === 1 ? "group" : "groups"}
+        </span>
+      </div>
+      {showDetail && (
+        <div className="mt-0.5 pl-3 text-[11px] text-theme-text-tertiary">
+          {manager.detail}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// Node groups inventory (every manager) + autoscaler-child sub-tables
+// ============================================================================
+
+function NodeGroupsSection({
+  sectionRef,
+  groups,
+  pools,
   coverage,
-  podsDenied,
+  poolCount,
+  unattributedNodeCount,
   onOpenPool,
   onOpenResource,
 }: {
-  pool: CapacityPoolSummary;
+  sectionRef: RefObject<HTMLDivElement | null>;
+  groups: CapacityGroupSummary[];
+  pools: CapacityPoolSummary[];
   coverage: CapacityCoverageBySource;
-  podsDenied: boolean;
+  poolCount: number;
+  unattributedNodeCount: number;
   onOpenPool: (name: string) => void;
   onOpenResource: (resource: SelectedResource) => void;
 }) {
-  const nodes = pool.nodes;
-  const claims = pool.claims;
+  const nodesObserved = coverageHasObservations(coverage.nodes);
+  const poolByName = useMemo(() => {
+    const map = new Map<string, CapacityPoolSummary>();
+    for (const pool of pools) map.set(pool.resource.ref.name, pool);
+    return map;
+  }, [pools]);
+
   return (
-    <tr className={ROW_HOVER}>
-      <td className={TD}>
-        <LinkButton
-          onClick={() => onOpenPool(pool.resource.ref.name)}
-          className="font-mono text-xs font-medium text-accent-text hover:underline"
-        >
-          {pool.resource.ref.name}
-        </LinkButton>
-      </td>
-      <td className={TD}>
-        <PoolReadyBadge ready={pool.ready} />
-      </td>
-      <td className={`${TD} whitespace-nowrap text-theme-text-secondary`}>
-        {pool.mode === "unknown" ? "—" : pool.mode}
-      </td>
-      <td className={`${TD} font-mono text-xs`}>
-        {pool.nodeClass ? `${pool.nodeClass.kind}/${pool.nodeClass.name}` : "—"}
-      </td>
-      <td className={`${TD} whitespace-nowrap text-theme-text-secondary`}>
-        {nodes ? `${nodes.total} nodes` : "— nodes"} ·{" "}
-        {claims ? `${claims.total} claims` : "— claims"}
-      </td>
-      <td className={TD}>
-        <LimitPressureCell
-          pressure={pickWorstPressure(pool.ledger.limitPressure)}
-          hasConfiguredLimit={Boolean(pool.ledger.configuredLimit)}
-        />
-      </td>
-      <td className={TD}>
-        {podsDenied ? (
-          <DeniedBadge />
+    <div ref={sectionRef} className="scroll-mt-4">
+      <SectionCard
+        title="Node groups"
+        subtitle="logical groups across every capacity manager"
+        bodyClassName=""
+      >
+        {groups.length === 0 ? (
+          nodesObserved ? (
+            <InlineEmpty
+              title="No node groups identified"
+              detail={
+                poolCount > 0
+                  ? "Nodes carry no group-identity labels and no Karpenter NodePool owns them yet."
+                  : "Nodes carry no group-identity labels."
+              }
+            />
+          ) : (
+            <InlineEmpty
+              title="Node groups unavailable"
+              detail={coverageMessage(coverage.nodes, "Node inventory")}
+            />
+          )
         ) : (
-          <QuantityInline
-            observation={pool.ledger.scheduledRequests}
-            empty={
-              coverageHasObservations(coverage.pods)
-                ? "0"
-                : coverageMessage(coverage.pods, "Pod requests")
-            }
-          />
+          <>
+            <div className={TABLE_WRAP}>
+              <table className="w-full min-w-[980px] text-left">
+                <thead className={TABLE_HEAD}>
+                  <tr>
+                    <th className={TH}>Group</th>
+                    <th className={TH}>Manager</th>
+                    <th className={TH}>Nodes</th>
+                    <th className={TH}>
+                      <WithTooltip tip="Allocatable the kubelet offers the scheduler across this group's nodes">
+                        <span>Allocatable</span>
+                      </WithTooltip>
+                    </th>
+                    <th className={TH}>
+                      <WithTooltip tip="Sum of scheduled pod requests on this group's nodes">
+                        <span>Scheduled requests</span>
+                      </WithTooltip>
+                    </th>
+                    <th className={TH}>Scaling</th>
+                  </tr>
+                </thead>
+                <tbody className={TBODY}>
+                  {groups.map((group) => (
+                    <GroupRow
+                      key={group.id}
+                      group={group}
+                      pool={
+                        group.manager === "karpenter"
+                          ? poolByName.get(group.name)
+                          : undefined
+                      }
+                      onOpenPool={onOpenPool}
+                      onOpenResource={onOpenResource}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {unattributedNodeCount > 0 && (
+              <div className="border-t border-theme-border-subtle px-4 py-2.5">
+                <WithTooltip tip="No group-identity label and no Karpenter ownership — Radar does not guess group membership from node names.">
+                  <span className="text-xs text-theme-text-tertiary">
+                    {`${unattributedNodeCount} ${
+                      unattributedNodeCount === 1 ? "node" : "nodes"
+                    } without group identity`}
+                  </span>
+                </WithTooltip>
+              </div>
+            )}
+          </>
         )}
-      </td>
-      <td className={TD}>
-        <ActualUsageInline
-          usage={pool.ledger.actualUsage}
-          coverage={coverage.nodeMetrics}
-        />
-      </td>
-      <td className={TD}>
-        {pool.issueCount > 0 || pool.factCount > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {pool.issueCount > 0 && (
+      </SectionCard>
+    </div>
+  );
+}
+
+function GroupRow({
+  group,
+  pool,
+  onOpenPool,
+  onOpenResource,
+}: {
+  group: CapacityGroupSummary;
+  pool?: CapacityPoolSummary;
+  onOpenPool: (name: string) => void;
+  onOpenResource: (resource: SelectedResource) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hasChildren = group.children.length > 0;
+  const isKarpenter = group.manager === "karpenter";
+  const worstPressure = pool
+    ? pickWorstPressure(pool.ledger.limitPressure)
+    : undefined;
+  // Server-rendered prose — joined, never sorted or parsed.
+  const scalingText = group.scaling.map((fact) => fact.summary).join(" · ");
+
+  return (
+    <>
+      <tr className={ROW_HOVER}>
+        <td className={TD}>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {hasChildren && (
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={expanded ? "Collapse children" : "Expand children"}
+                onClick={() => setExpanded((value) => !value)}
+                className="rounded p-0.5 hover:bg-theme-hover"
+              >
+                <CollapseChevron open={expanded} className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {isKarpenter ? (
+              <LinkButton
+                onClick={() => onOpenPool(group.name)}
+                className="font-mono text-xs font-medium text-accent-text hover:underline"
+              >
+                {group.name}
+              </LinkButton>
+            ) : (
+              <span className="font-mono text-xs text-theme-text-primary">
+                {group.name}
+              </span>
+            )}
+            {pool && <PoolReadyBadge ready={pool.ready} />}
+            {worstPressure?.overLimit && (
               <Badge severity="warning" size="sm">
-                {pool.issueCount} {pool.issueCount === 1 ? "issue" : "issues"}
+                Over limit
               </Badge>
             )}
-            {pool.factCount > 0 && (
-              <Badge severity="info" size="sm">
-                {pool.factCount} {pool.factCount === 1 ? "fact" : "facts"}
-              </Badge>
+            {isKarpenter && pool && (
+              <LinkButton
+                onClick={() =>
+                  onOpenResource(identityToSelectedResource(pool.resource))
+                }
+                title="Open the raw NodePool in the resource drawer"
+                className="text-theme-text-tertiary"
+              >
+                Inspect
+              </LinkButton>
             )}
           </div>
-        ) : (
-          <span className="text-xs text-theme-text-tertiary">—</span>
-        )}
-      </td>
-      <td className={`${TD} text-right`}>
-        <LinkButton
-          onClick={() =>
-            onOpenResource(identityToSelectedResource(pool.resource))
-          }
-          title="Open the raw NodePool in the resource drawer"
+        </td>
+        <td className={TD}>
+          {group.manager ? (
+            <Badge tone="structural" size="sm">
+              {capacityManagerLabel(group.manager)}
+            </Badge>
+          ) : (
+            <WithTooltip tip="No manager could be attributed to this group's nodes.">
+              <span className="text-xs text-theme-text-tertiary">
+                none detected
+              </span>
+            </WithTooltip>
+          )}
+        </td>
+        <td
+          className={`${TD} whitespace-nowrap font-mono text-xs text-theme-text-secondary`}
         >
-          Inspect
-        </LinkButton>
-      </td>
-    </tr>
+          {`${group.readyNodeCount}/${group.nodeCount}`}
+        </td>
+        <td className={TD}>
+          <QuantityInline
+            observation={group.allocatable}
+            empty="Not observed"
+          />
+        </td>
+        <td className={TD}>
+          <QuantityInline
+            observation={group.scheduledRequests}
+            empty="Not observed"
+          />
+        </td>
+        <td className={`${TD} text-xs text-theme-text-secondary`}>
+          {scalingText || <span className="text-theme-text-tertiary">—</span>}
+        </td>
+      </tr>
+      {hasChildren && (
+        <tr>
+          <td colSpan={6} className="p-0">
+            <Collapse open={expanded}>
+              <ChildSubTable group={group} />
+            </Collapse>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+const CHILD_TH = "px-3 py-1.5 text-left font-medium whitespace-nowrap";
+const CHILD_TD = "px-3 py-1.5 align-top text-xs text-theme-text-primary";
+
+function ChildSubTable({ group }: { group: CapacityGroupSummary }) {
+  return (
+    <div className="border-t border-theme-border-subtle bg-theme-base/40 px-4 py-3">
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+        As the autoscaler reports it
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-left">
+          <thead className="text-[11px] uppercase tracking-wide text-theme-text-tertiary">
+            <tr>
+              <th className={CHILD_TH}>Group</th>
+              <th className={CHILD_TH}>Min–max</th>
+              <th className={CHILD_TH}>Target</th>
+              <th className={CHILD_TH}>Ready / total</th>
+              <th className={CHILD_TH}>Health</th>
+              <th className={CHILD_TH}>Backoff</th>
+              <th className={CHILD_TH}>Observed</th>
+            </tr>
+          </thead>
+          <tbody className={TBODY}>
+            {group.children.map((child) => (
+              <tr key={child.id} className={ROW_HOVER}>
+                <td className={`${CHILD_TD} font-mono`}>
+                  <WithTooltip tip={child.name}>
+                    <span>{child.id}</span>
+                  </WithTooltip>
+                </td>
+                <td
+                  className={`${CHILD_TD} font-mono text-theme-text-secondary`}
+                >
+                  {childMinMax(child)}
+                </td>
+                <td className={CHILD_TD}>
+                  <ChildTarget target={child.target} />
+                </td>
+                <td
+                  className={`${CHILD_TD} font-mono text-theme-text-secondary`}
+                >
+                  {childReadyTotal(child)}
+                </td>
+                <td className={CHILD_TD}>
+                  <ChildHealth health={child.health} />
+                </td>
+                <td className={CHILD_TD}>
+                  <ChildBackoff backoff={child.backoff} />
+                </td>
+                <td className={CHILD_TD}>
+                  <ChildObserved asOf={child.asOf} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {group.childrenMeta.truncated && (
+        <p className="mt-2 text-[11px] text-theme-text-tertiary">
+          {`Showing ${group.childrenMeta.returned} of ${group.childrenMeta.total} child groups.`}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// Autoscaler-known groups with no joinable node (scale-to-zero included)
+// ============================================================================
+
+function OrphanAutoscalerSection({
+  orphans,
+  meta,
+}: {
+  orphans: CapacityAutoscalerChildObservation[];
+  meta: CapacityBoundedResultMeta;
+}) {
+  if (orphans.length === 0) return null;
+  return (
+    <SectionCard
+      title="Known to the autoscaler, unattributed"
+      subtitle="Groups the autoscaler reports that no observed node joins — scale-to-zero groups live here until nodes appear."
+      bodyClassName=""
+    >
+      <div className={TABLE_WRAP}>
+        <table className="w-full min-w-[720px] text-left">
+          <thead className={TABLE_HEAD}>
+            <tr>
+              <th className={TH}>Group</th>
+              <th className={TH}>Min–max</th>
+              <th className={TH}>Target</th>
+              <th className={TH}>Health</th>
+              <th className={TH}>Observed</th>
+            </tr>
+          </thead>
+          <tbody className={TBODY}>
+            {orphans.map((child) => (
+              <tr key={child.id} className={ROW_HOVER}>
+                <td className={`${TD} font-mono text-xs`}>
+                  <WithTooltip tip={child.name}>
+                    <span>{child.id}</span>
+                  </WithTooltip>
+                </td>
+                <td
+                  className={`${TD} whitespace-nowrap font-mono text-xs text-theme-text-secondary`}
+                >
+                  {childMinMax(child)}
+                </td>
+                <td className={TD}>
+                  <ChildTarget target={child.target} />
+                </td>
+                <td className={TD}>
+                  <ChildHealth health={child.health} />
+                </td>
+                <td className={TD}>
+                  <ChildObserved asOf={child.asOf} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {meta.truncated && (
+        <div className="border-t border-theme-border-subtle px-4 py-2.5 text-[11px] text-theme-text-tertiary">
+          {`Showing ${meta.returned} of ${meta.total} groups.`}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Autoscaler-child cell renderers (shared by group children + orphan groups)
+// ---------------------------------------------------------------------------
+
+function childMinMax(child: CapacityAutoscalerChildObservation): string {
+  if (child.minSize === undefined && child.maxSize === undefined) return "—";
+  return `${child.minSize ?? "?"}–${child.maxSize ?? "?"}`;
+}
+
+function childReadyTotal(child: CapacityAutoscalerChildObservation): string {
+  if (child.readyNodes === undefined && child.totalNodes === undefined)
+    return "—";
+  return `${child.readyNodes ?? "?"}/${child.totalNodes ?? "?"}`;
+}
+
+function ChildTarget({ target }: { target?: number }) {
+  // A published 0 is a real target (scale-to-zero), not an absence — render it.
+  if (target === undefined)
+    return <span className="text-theme-text-tertiary">—</span>;
+  return (
+    <span className="font-mono text-theme-text-primary tabular-nums">
+      {target}
+    </span>
+  );
+}
+
+function ChildHealth({ health }: { health?: string }) {
+  if (!health) return <span className="text-theme-text-tertiary">—</span>;
+  return (
+    <span className="flex items-center gap-1.5">
+      <StatusDot tone={mapHealthToTone(health)} />
+      <span className="text-theme-text-secondary">{health}</span>
+    </span>
+  );
+}
+
+function ChildBackoff({ backoff }: { backoff?: CapacityAutoscalerBackoff }) {
+  const message = backoff?.errorMessage;
+  const label = backoff?.errorCode ?? backoff?.errorClass;
+  if (!backoff || (!message && !label))
+    return <span className="text-theme-text-tertiary">—</span>;
+  return (
+    <WithTooltip tip={message ?? label ?? "Backoff"}>
+      <Badge severity="alert" size="sm">
+        {label ?? "Backoff"}
+      </Badge>
+    </WithTooltip>
+  );
+}
+
+/** Relative freshness; an absent `asOf` is "not probed" — never a zero time
+ *  and never "now" (the payload published null, meaning we never checked). */
+function ChildObserved({ asOf }: { asOf?: string }) {
+  if (!asOf)
+    return <span className="text-theme-text-tertiary">not probed</span>;
+  return (
+    <span className="text-theme-text-secondary">{relativeTime(asOf)}</span>
   );
 }
 

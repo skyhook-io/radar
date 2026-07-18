@@ -1,0 +1,377 @@
+autoscalerStatus: Running
+clusterWide:
+  health:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 5
+        total: 5
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-07-18T21:50:25Z"
+    status: NoCandidates
+  scaleUp:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-07-18T21:49:35Z"
+    status: NoActivity
+nodeGroups:
+- health:
+    cloudProviderTarget: 2
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 2
+        total: 2
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-c/instanceGroups/gk3-regional-cluster-nap-kjnu23mp-6f58e7de-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-07-18T21:33:05Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-07-18T21:22:14Z"
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-d/instanceGroups/gk3-regional-cluster-default-pool-1c65ecbb-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-b/instanceGroups/gk3-regional-cluster-pool-1-3c9bf686-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-c/instanceGroups/gk3-regional-cluster-pool-1-0ceb8f7d-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-d/instanceGroups/gk3-regional-cluster-pool-2-d4a0a5b9-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-b/instanceGroups/gk3-regional-cluster-pool-3-f8d59246-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+- health:
+    cloudProviderTarget: 2
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 2
+        total: 2
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-b/instanceGroups/gk3-regional-cluster-nap-kjnu23mp-add1693d-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-07-18T21:34:55Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-07-18T21:31:50Z"
+    status: NoActivity
+- health:
+    cloudProviderTarget: 1
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 1
+        total: 1
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-d/instanceGroups/gk3-regional-cluster-nap-kjnu23mp-582d8abb-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-07-18T21:50:25Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-07-18T21:49:35Z"
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-d/instanceGroups/gk3-regional-cluster-pool-1-86beda56-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-b/instanceGroups/gk3-regional-cluster-pool-2-03eeff4a-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-c/instanceGroups/gk3-regional-cluster-pool-2-c11e29fe-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-c/instanceGroups/gk3-regional-cluster-pool-3-e5476b04-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+- health:
+    cloudProviderTarget: 0
+    lastProbeTime: null
+    lastTransitionTime: null
+    maxSize: 1000
+    minSize: 0
+    nodeCounts:
+      longUnregistered: 0
+      registered:
+        notStarted: 0
+        ready: 0
+        total: 0
+        unready:
+          resourceUnready: 0
+          total: 0
+      unregistered: 0
+    status: Healthy
+  name: https://www.googleapis.com/compute/v1/projects/example-project/zones/us-east1-d/instanceGroups/gk3-regional-cluster-pool-3-3402b052-grp
+  scaleDown:
+    lastProbeTime: "2026-07-18T22:01:55Z"
+    lastTransitionTime: "2026-06-12T22:13:08Z"
+    status: NoCandidates
+  scaleUp:
+    backoffInfo: {}
+    lastProbeTime: null
+    lastTransitionTime: null
+    status: NoActivity
+time: 2026-07-18 22:01:55.294184967 +0000 UTC

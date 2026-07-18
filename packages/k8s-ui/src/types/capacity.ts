@@ -107,7 +107,8 @@ export type CapacityCoverageSource =
   | "workloads"
   | "karpenterObjectEvents"
   | "nodeMetrics"
-  | "timeline";
+  | "timeline"
+  | "autoscalerStatus";
 
 export type CapacityCoverageStatus =
   "available" | "partial" | "denied" | "syncing" | "unavailable" | "error";
@@ -384,6 +385,77 @@ export interface CapacityOverviewSummary {
   pendingPodCount?: number;
   orphanedClaimCount?: number;
   unpooledNodeCount?: number;
+  /** All observed nodes, every manager included; `scheduling` above stays Karpenter-scoped forever. */
+  clusterScheduling?: CapacitySchedulingCapacity;
+  /** Detected capacity managers; interpretation is coverage-gated. */
+  managers: CapacityManagerSummary[];
+  /** Nodes with no group-identity evidence — a presentation bucket, never "static". */
+  unattributedNodeCount?: number;
+}
+
+export type CapacityManager =
+  | "karpenter"
+  | "cluster_autoscaler"
+  | "gke_autoscaler"
+  | "aks_autoscaler";
+
+export type CapacityManagerRollupStatus = "healthy" | "degraded" | "unknown";
+
+export interface CapacityManagerSummary {
+  manager: CapacityManager;
+  groupCount: number;
+  status: CapacityManagerRollupStatus;
+  detail?: string;
+  asOf?: string;
+}
+
+export interface CapacityScalingFact {
+  code: string;
+  summary: string;
+}
+
+export interface CapacityAutoscalerBackoff {
+  errorClass?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+/**
+ * One node group as the autoscaler itself reports it (zonal MIG / VMSS).
+ * ID is the published name's basename and never changes when the child gains
+ * or loses a parent group. `asOf` nil means the payload published null —
+ * "not probed", never zero and never now.
+ */
+export interface CapacityAutoscalerChildObservation {
+  id: string;
+  name: string;
+  minSize?: number;
+  maxSize?: number;
+  target?: number;
+  health?: string;
+  readyNodes?: number;
+  totalNodes?: number;
+  backoff?: CapacityAutoscalerBackoff;
+  asOf?: string;
+}
+
+/**
+ * A logical node group a user recognizes (Karpenter NodePool, GKE node pool,
+ * EKS managed node group, AKS agent pool). Identity comes from node labels or
+ * CRD evidence, never from parsing provider group names.
+ */
+export interface CapacityGroupSummary {
+  id: string;
+  name: string;
+  manager?: CapacityManager;
+  managerValidated: boolean;
+  nodeCount: number;
+  readyNodeCount: number;
+  allocatable?: CapacityQuantityObservation;
+  scheduledRequests?: CapacityQuantityObservation;
+  scaling: CapacityScalingFact[];
+  children: CapacityAutoscalerChildObservation[];
+  childrenMeta: CapacityBoundedResultMeta;
 }
 
 /**
@@ -402,6 +474,11 @@ export interface CapacityOverviewResponse extends CapacityResponseMeta {
   summary: CapacityOverviewSummary;
   pools: CapacityPoolSummary[];
   poolsTruncated: boolean;
+  /** Logical-group inventory across every manager; empty is a true zero only under observed node coverage. */
+  groups: CapacityGroupSummary[];
+  /** Autoscaler-known groups with no joinable nodes (scale-to-zero included) — never counted as logical groups. */
+  orphanAutoscalerGroups: CapacityAutoscalerChildObservation[];
+  orphanAutoscalerGroupsMeta: CapacityBoundedResultMeta;
 }
 
 export interface CapacityPoolDetailResponse extends CapacityResponseMeta {

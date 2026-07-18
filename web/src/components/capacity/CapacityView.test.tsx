@@ -5,10 +5,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   CapacityActivityEpisode,
   CapacityActivityResponse,
+  CapacityAutoscalerChildObservation,
   CapacityBoundedResultMeta,
   CapacityDemandGroup,
   CapacityDemandResponse,
   CapacityDemandSummary,
+  CapacityGroupSummary,
+  CapacityManagerSummary,
   CapacityMemberListResponse,
   CapacityOverviewResponse,
   CapacityPoolDetailResponse,
@@ -182,10 +185,120 @@ function overview(
       claimCount: 4,
       nodeCount: 4,
       pendingPodCount: 2,
+      managers: [],
     },
     pools: [poolSummary],
     poolsTruncated: false,
+    groups: [],
+    orphanAutoscalerGroups: [],
+    orphanAutoscalerGroupsMeta: boundedMeta(0),
     ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Comprehensive-capacity fixtures: multi-manager groups, autoscaler children,
+// orphan (scale-to-zero) groups, managers rollup, cluster scheduling.
+// ---------------------------------------------------------------------------
+
+const managers: CapacityManagerSummary[] = [
+  { manager: "karpenter", groupCount: 1, status: "healthy" },
+  {
+    manager: "gke_autoscaler",
+    groupCount: 1,
+    status: "degraded",
+    detail: "1 group backing off on a stockout",
+  },
+];
+
+const gkeChild: CapacityAutoscalerChildObservation = {
+  id: "gke-mig-us-central1-a",
+  name: "https://www.googleapis.com/.../gke-mig-us-central1-a",
+  minSize: 1,
+  maxSize: 10,
+  target: 3,
+  health: "healthy",
+  readyNodes: 3,
+  totalNodes: 3,
+  asOf: generatedAt,
+};
+
+const gkeChildBackoff: CapacityAutoscalerChildObservation = {
+  id: "gke-mig-us-central1-b",
+  name: "https://www.googleapis.com/.../gke-mig-us-central1-b",
+  minSize: 0,
+  maxSize: 5,
+  target: 2,
+  health: "degraded",
+  readyNodes: 1,
+  totalNodes: 2,
+  backoff: {
+    errorClass: "OutOfResource",
+    errorCode: "stockout",
+    errorMessage: "Instances unavailable in zone us-central1-b",
+  },
+  asOf: generatedAt,
+};
+
+const karpenterGroup: CapacityGroupSummary = {
+  id: "grp-karpenter-default",
+  // Matches poolSummary.resource.ref.name so the karpenter row can join pools.
+  name: "default",
+  manager: "karpenter",
+  managerValidated: true,
+  nodeCount: 4,
+  readyNodeCount: 4,
+  allocatable: quantity({ cpu: "10", memory: "40Gi" }),
+  scheduledRequests: quantity({ cpu: "6500m", memory: "28Gi" }),
+  scaling: [{ code: "dynamic", summary: "provisions on demand" }],
+  children: [],
+  childrenMeta: boundedMeta(0),
+};
+
+const gkeGroup: CapacityGroupSummary = {
+  id: "grp-gke-default",
+  name: "gke-default-pool",
+  manager: "gke_autoscaler",
+  managerValidated: true,
+  nodeCount: 5,
+  readyNodeCount: 4,
+  allocatable: quantity({ cpu: "20", memory: "80Gi" }),
+  scheduledRequests: quantity({ cpu: "12", memory: "40Gi" }),
+  scaling: [
+    { code: "min_max", summary: "1–10 nodes across 2 zones" },
+    { code: "surge", summary: "surge upgrade" },
+  ],
+  children: [gkeChild, gkeChildBackoff],
+  childrenMeta: { total: 3, returned: 2, truncated: true },
+};
+
+const orphanScaleToZero: CapacityAutoscalerChildObservation = {
+  id: "gke-scale-to-zero",
+  name: "https://www.googleapis.com/.../gke-scale-to-zero",
+  minSize: 0,
+  maxSize: 8,
+  // A real published zero — scale-to-zero, not an absent value.
+  target: 0,
+  health: "healthy",
+  // asOf deliberately omitted → "not probed".
+};
+
+function comprehensiveOverview(): CapacityOverviewResponse {
+  const base = overview();
+  return {
+    ...base,
+    summary: {
+      ...base.summary,
+      managers,
+      clusterScheduling: {
+        scheduledRequests: quantity({ cpu: "30", memory: "120Gi" }),
+        allocatable: quantity({ cpu: "60", memory: "240Gi" }),
+      },
+      unattributedNodeCount: 2,
+    },
+    groups: [karpenterGroup, gkeGroup],
+    orphanAutoscalerGroups: [orphanScaleToZero],
+    orphanAutoscalerGroupsMeta: boundedMeta(1),
   };
 }
 
@@ -490,7 +603,7 @@ function renderCapacity(
 }
 
 describe("CapacityView overview", () => {
-  it("renders KPI tiles, the NodePool inventory, and the Karpenter chip", () => {
+  it("renders KPI tiles, the node-groups inventory, and the Karpenter chip", () => {
     const html = renderCapacity("/capacity", (client) =>
       client.setQueryData(["capacity", "overview"], overview()),
     );
@@ -499,7 +612,7 @@ describe("CapacityView overview", () => {
     expect(html).toContain("NodePools");
     expect(html).toContain("NodeClaims");
     expect(html).toContain("Pending pods");
-    expect(html).toContain("NodePool inventory");
+    expect(html).toContain("Node groups");
     expect(html).toContain("Operational signals");
     expect(html).toContain("default");
   });
@@ -603,6 +716,97 @@ describe("CapacityView overview", () => {
     expect(syncing).toContain(
       "Karpenter API discovery is incomplete; retrying…",
     );
+  });
+
+  it("renders the capacity managers tile with labels, counts, and degraded detail", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], comprehensiveOverview()),
+    );
+    expect(html).toContain("Capacity managers");
+    expect(html).toContain("Karpenter");
+    expect(html).toContain("GKE autoscaler");
+    expect(html).toContain("1 group");
+    // Degraded rollup surfaces its reason as a visible line (SSR-safe).
+    expect(html).toContain("1 group backing off on a stockout");
+  });
+
+  it("shows autoscaler detection unavailable — never 'none' — when the status ConfigMap is denied", () => {
+    const denied = overview({
+      summary: { ...overview().summary, managers: [] },
+      coverage: {
+        ...meta.coverage,
+        autoscalerStatus: sourceCoverage(
+          "denied",
+          "Autoscaler status hidden by permissions",
+        ),
+      },
+    });
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], denied),
+    );
+    expect(html).toContain("Detection unavailable");
+    expect(html).not.toContain("None detected");
+  });
+
+  it("renders a unified node-groups table across managers with karpenter pool affordances", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], comprehensiveOverview()),
+    );
+    expect(html).toContain("Node groups");
+    // GKE group: name, manager badge, and server-rendered scaling prose.
+    expect(html).toContain("gke-default-pool");
+    expect(html).toContain("GKE autoscaler");
+    expect(html).toContain("1–10 nodes across 2 zones");
+    expect(html).toContain("provisions on demand");
+    // Ready/total node counts render as "ready/total".
+    expect(html).toContain("4/5");
+    // Karpenter row keeps its pool-detail + raw-inspect affordances.
+    expect(html).toContain("default");
+    expect(html).toContain("Inspect");
+    // Unattributed footer — a bucket, never called "static".
+    expect(html).toContain("2 nodes without group identity");
+  });
+
+  it("expands autoscaler child sub-tables with min–max, backoff, and truncation", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], comprehensiveOverview()),
+    );
+    // Collapse keeps children mounted, so SSR renders the sub-table content.
+    expect(html).toContain("gke-mig-us-central1-a");
+    expect(html).toContain("gke-mig-us-central1-b");
+    expect(html).toContain("1–10");
+    // Backoff badge label is visible (its message rides a hover tooltip).
+    expect(html).toContain("stockout");
+    expect(html).toContain("Showing 2 of 3 child groups.");
+  });
+
+  it("renders scale-to-zero orphan groups with a real 0 target and 'not probed' freshness", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], comprehensiveOverview()),
+    );
+    expect(html).toContain("Known to the autoscaler, unattributed");
+    expect(html).toContain("gke-scale-to-zero");
+    // A nil asOf reads "not probed", never a zero time or "now".
+    expect(html).toContain("not probed");
+  });
+
+  it("titles the scheduling bar cluster-wide when clusterScheduling is present", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], comprehensiveOverview()),
+    );
+    expect(html).toContain("Cluster scheduling capacity");
+    expect(html).toContain(
+      "scheduled requests vs node allocatable, all observed nodes",
+    );
+    expect(html).toContain("in flight (Karpenter, beyond the edge)");
+  });
+
+  it("keeps the scheduling bar Karpenter-scoped when clusterScheduling is absent", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], overview()),
+    );
+    expect(html).toContain("Karpenter scheduling capacity");
+    expect(html).toContain("in flight (beyond the edge)");
   });
 });
 

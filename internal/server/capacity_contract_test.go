@@ -358,6 +358,7 @@ func TestCapacityOptionalSourceDenialOmitsCounts(t *testing.T) {
 	permissions.SetCanI("list", "metrics.k8s.io", "nodes", "", false)
 	permissions.SetCanI("list", "apps", "replicasets", "default", false)
 	permissions.SetCanI("list", "batch", "jobs", "default", false)
+	permissions.SetCanI("get", "", "configmaps", "kube-system", false)
 	env.srv.permCache.Set("alice", permissions)
 
 	resp := env.authGet(t, "/api/capacity", "alice", "")
@@ -406,6 +407,15 @@ func TestCapacityOptionalSourceDenialOmitsCounts(t *testing.T) {
 	}
 	if _, found := coverage["itemCount"]; found {
 		t.Fatalf("coverage.nodeClaims.itemCount must be omitted under denial: %s", wire)
+	}
+	autoscalerCoverage := body.Coverage[capacityapi.CoverageAutoscalerStatus]
+	if autoscalerCoverage.Status != capacityapi.CoverageDenied || autoscalerCoverage.ReasonCode != "autoscaler_status_configmap_denied" {
+		t.Fatalf("autoscalerStatus coverage = %#v", autoscalerCoverage)
+	}
+	for _, manager := range body.Summary.Managers {
+		if manager.Manager != capacityapi.ManagerKarpenter {
+			t.Fatalf("autoscaler manager fabricated under denied ConfigMap access: %#v", manager)
+		}
 	}
 }
 

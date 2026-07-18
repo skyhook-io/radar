@@ -65,15 +65,16 @@ func NewProvider() Provider {
 type CoverageSource string
 
 const (
-	CoverageNodePools              CoverageSource = "nodePools"
-	CoverageNodeClaims             CoverageSource = "nodeClaims"
-	CoverageNodeClasses            CoverageSource = "nodeClasses"
-	CoverageNodes                  CoverageSource = "nodes"
-	CoveragePods                   CoverageSource = "pods"
-	CoverageWorkloads              CoverageSource = "workloads"
-	CoverageKarpenterObjectEvents  CoverageSource = "karpenterObjectEvents"
-	CoverageNodeMetrics            CoverageSource = "nodeMetrics"
-	CoverageTimeline               CoverageSource = "timeline"
+	CoverageNodePools             CoverageSource = "nodePools"
+	CoverageNodeClaims            CoverageSource = "nodeClaims"
+	CoverageNodeClasses           CoverageSource = "nodeClasses"
+	CoverageNodes                 CoverageSource = "nodes"
+	CoveragePods                  CoverageSource = "pods"
+	CoverageWorkloads             CoverageSource = "workloads"
+	CoverageKarpenterObjectEvents CoverageSource = "karpenterObjectEvents"
+	CoverageNodeMetrics           CoverageSource = "nodeMetrics"
+	CoverageTimeline              CoverageSource = "timeline"
+	CoverageAutoscalerStatus      CoverageSource = "autoscalerStatus"
 )
 
 var CoverageSources = []CoverageSource{
@@ -86,6 +87,7 @@ var CoverageSources = []CoverageSource{
 	CoverageKarpenterObjectEvents,
 	CoverageNodeMetrics,
 	CoverageTimeline,
+	CoverageAutoscalerStatus,
 }
 
 type CoverageStatus string

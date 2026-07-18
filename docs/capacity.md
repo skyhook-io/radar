@@ -95,6 +95,16 @@ The failure model matches how Karpenter actually fails:
 - `DisruptionBlocked` and `Unconsolidatable` classify as disruption being **blocked** — the opposite of disruption happening — via an exact event-reason table.
 - The durable trace after Karpenter cleans up timed-out claims is the NodePool's `NodeRegistrationHealthy=False` condition, surfaced as its own issue.
 
+## How group attribution works (all managers)
+
+Beyond Karpenter, the Overview carries a logical-group inventory across every capacity manager, built without any cloud API:
+
+- **Identity comes only from node labels or CRDs** — `karpenter.sh/nodepool`, `cloud.google.com/gke-nodepool`, `eks.amazonaws.com/nodegroup`, `kubernetes.azure.com/agentpool`. Provider group names are never parsed into identity (they truncate long pool names). Nodes with no identity evidence are an **unattributed** presentation bucket — never a group, and deliberately never called "static". The eksctl name label is a hint only and does not create groups.
+- **Autoscaler observations** come from the `kube-system/cluster-autoscaler-status` ConfigMap (published by the Cluster Autoscaler and by the GKE/AKS managed autoscalers; structured YAML ≥ 1.30 plus the legacy text format). Per-zone children (MIGs/VMSS) join a logical group by node-name-prefix evidence; children with no joinable nodes — scale-to-zero groups included — stay **orphans** in their own "known to the autoscaler, unattributed" list, with IDs that never change when nodes later appear.
+- **Managers** (`karpenter`, `gke_autoscaler`, `cluster_autoscaler`, `aks_autoscaler`) roll up worst-of health; a denied or unreadable source is never rendered as "none detected". The GKE prefix join is validated against live clusters; the AKS and EKS joins are marked unvalidated on the wire (`managerValidated`). The ConfigMap's own timestamp is surfaced as "as of T" — healthy quiet clusters publish hours-old payloads, so staleness is context, not breakage.
+- **Scaling facts** are typed prose ("5–11 nodes · target 9", "bounds not published in-cluster", "no capacity manager detected") — never a bare dash, never a fabricated zero.
+- The cluster-wide scheduling ledger (`summary.clusterScheduling`) spans **all observed nodes**; `summary.scheduling` stays Karpenter-scoped forever — consumers depend on that meaning.
+
 ## Scope
 
 Capacity is deliberately **cluster-wide**. Supply (NodePools, Nodes, NodeClaims) is cluster-scoped and unfilterable, so the header's namespace view filter does not apply here — scoping only the pod-derived numbers would show "my namespace's demand" against "everyone's supply". RBAC and the `--namespaces` deployment flag remain the only scopers, and both are labeled in the coverage badges.
@@ -103,7 +113,7 @@ Capacity is deliberately **cluster-wide**. Supply (NodePools, Nodes, NodeClaims)
 
 All read-only, all behind the NodePool RBAC gate:
 
-- `GET /api/capacity` — overview: KPIs, scheduling aggregate, signals, pool summaries
+- `GET /api/capacity` — overview: KPIs, scheduling aggregates (Karpenter-scoped `scheduling` + all-nodes `clusterScheduling`), signals, pool summaries, the cross-manager `groups` inventory with autoscaler children, `orphanAutoscalerGroups`, and `summary.managers`; the `autoscalerStatus` coverage source reports denied / cache-scope / not-published / parse-error distinctly
 - `GET /api/capacity/pools` (+ `/{name}`, `/{name}/members`) — inventory, detail, paginated members
 - `GET /api/capacity/demand` — groups with `?state=`, `?pool=`, `?owner=ns/Kind/name` filters
 - `GET /api/capacity/activity` — episode timeline with keyset cursors; `?type=` narrows to one episode type, and first-page responses carry an `aggregate` rollup of the whole filtered window that the type filter deliberately does not narrow

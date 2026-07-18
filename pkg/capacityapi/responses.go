@@ -26,6 +26,16 @@ type OverviewSummary struct {
 	PendingPodCount    *int                   `json:"pendingPodCount,omitempty"`
 	OrphanedClaimCount *int                   `json:"orphanedClaimCount,omitempty"`
 	UnpooledNodeCount  *int                   `json:"unpooledNodeCount,omitempty"`
+	// ClusterScheduling is scheduled requests vs allocatable across ALL
+	// observed nodes, every manager included. Scheduling (above) stays
+	// Karpenter-scoped forever — consumers depend on that meaning.
+	ClusterScheduling *SchedulingCapacity `json:"clusterScheduling,omitempty"`
+	// Managers lists detected capacity managers; interpretation is gated on
+	// coverage (an empty list under denied node coverage is not "none").
+	Managers []ManagerSummary `json:"managers"`
+	// UnattributedNodeCount counts nodes with no group-identity evidence at
+	// all — a presentation bucket, deliberately never called "static".
+	UnattributedNodeCount *int `json:"unattributedNodeCount,omitempty"`
 }
 
 // SchedulingCapacity is the cluster-level scheduling ledger across
@@ -44,14 +54,27 @@ type OverviewResponse struct {
 	Summary        OverviewSummary  `json:"summary"`
 	Pools          []PoolSummary    `json:"pools"`
 	PoolsTruncated bool             `json:"poolsTruncated"`
+	// Groups is the logical-group inventory across every manager (Karpenter
+	// pools included). Interpretation is coverage-gated: empty under observed
+	// node coverage is a true zero; under denied coverage it is unavailable.
+	Groups []CapacityGroupSummary `json:"groups"`
+	// OrphanAutoscalerGroups are autoscaler-known groups with no joinable
+	// nodes (scale-to-zero included) — never counted as logical groups.
+	OrphanAutoscalerGroups     []AutoscalerChildObservation `json:"orphanAutoscalerGroups"`
+	OrphanAutoscalerGroupsMeta BoundedResultMeta            `json:"orphanAutoscalerGroupsMeta"`
 }
 
 func NewOverviewResponse(generatedAt time.Time) OverviewResponse {
 	return OverviewResponse{
 		ResponseMeta: NewResponseMeta(generatedAt),
 		State:        IntegrationSyncing,
-		Summary:      OverviewSummary{Actions: []ActionSummary{}},
-		Pools:        []PoolSummary{},
+		Summary: OverviewSummary{
+			Actions:  []ActionSummary{},
+			Managers: []ManagerSummary{},
+		},
+		Pools:                  []PoolSummary{},
+		Groups:                 []CapacityGroupSummary{},
+		OrphanAutoscalerGroups: []AutoscalerChildObservation{},
 	}
 }
 

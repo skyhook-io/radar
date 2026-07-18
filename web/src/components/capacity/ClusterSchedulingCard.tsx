@@ -218,14 +218,45 @@ export function deriveSchedulingRows(
 
 const VISIBLE_ROW_LIMIT = 3;
 
+// The bar has one explicit scope. Cluster scope draws scheduled requests vs
+// allocatable across EVERY observed node (all managers); Karpenter scope keeps
+// the original Karpenter-pooled-only ledger. In-flight capacity is Karpenter-
+// only in both — no other manager reports claim capacity before it registers —
+// so the cluster legend spells that out.
+type SchedulingScope = "cluster" | "karpenter";
+
+const SCOPE_COPY: Record<
+  SchedulingScope,
+  { title: string; subtitle: string; inFlightLegend: string; empty: string }
+> = {
+  cluster: {
+    title: "Cluster scheduling capacity",
+    subtitle:
+      "scheduled requests vs node allocatable, all observed nodes · not usage, not a health score",
+    inFlightLegend: "in flight (Karpenter, beyond the edge)",
+    empty:
+      "No scheduling capacity observed yet — no node reports allocatable, and nothing is pending. Bars appear as soon as either side of the ledger exists.",
+  },
+  karpenter: {
+    title: "Karpenter scheduling capacity",
+    subtitle:
+      "scheduled requests vs node allocatable, Karpenter-pooled nodes only · not usage, not a health score",
+    inFlightLegend: "in flight (beyond the edge)",
+    empty:
+      "No Karpenter-provisioned capacity yet — the fleet has no pooled nodes or in-flight claims, and no pending demand. Bars appear as soon as either side of the ledger exists.",
+  },
+};
+
 export function ClusterSchedulingCard({
   scheduling,
   pending,
   onExplain,
+  scope = "karpenter",
 }: {
   scheduling?: CapacitySchedulingCapacity;
   pending?: CapacityQuantityObservation;
   onExplain: () => void;
+  scope?: SchedulingScope;
 }) {
   const rows = useMemo(
     () => deriveSchedulingRows(scheduling, pending),
@@ -233,30 +264,27 @@ export function ClusterSchedulingCard({
   );
   const [expanded, setExpanded] = useState(false);
   if (!scheduling) return null;
+  const copy = SCOPE_COPY[scope];
   const visible = expanded ? rows : rows.slice(0, VISIBLE_ROW_LIMIT);
   const hidden = rows.length - visible.length;
 
   if (rows.length === 0) {
     return (
       <SectionCard
-        title="Karpenter scheduling capacity"
-        subtitle="scheduled requests vs node allocatable, Karpenter-pooled nodes only · not usage, not a health score"
+        title={copy.title}
+        subtitle={copy.subtitle}
         actions={<LinkButton onClick={onExplain}>How to read →</LinkButton>}
         bodyClassName="px-4 py-3"
       >
-        <p className="text-xs text-theme-text-tertiary">
-          No Karpenter-provisioned capacity yet — the fleet has no pooled nodes
-          or in-flight claims, and no pending demand. Bars appear as soon as
-          either side of the ledger exists.
-        </p>
+        <p className="text-xs text-theme-text-tertiary">{copy.empty}</p>
       </SectionCard>
     );
   }
 
   return (
     <SectionCard
-      title="Karpenter scheduling capacity"
-      subtitle="scheduled requests vs node allocatable, Karpenter-pooled nodes only · not usage, not a health score"
+      title={copy.title}
+      subtitle={copy.subtitle}
       actions={<LinkButton onClick={onExplain}>How to read →</LinkButton>}
       bodyClassName="flex flex-col gap-3 px-4 py-3"
     >
@@ -282,7 +310,7 @@ export function ClusterSchedulingCard({
             className="h-2 w-4 rounded-sm border border-theme-border"
             style={HATCH_STYLE}
           />
-          in flight (beyond the edge)
+          {copy.inFlightLegend}
         </span>
         <span className="flex items-center gap-1.5">
           <span

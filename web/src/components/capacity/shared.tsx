@@ -30,6 +30,9 @@ import {
   type CapacityDemandState,
   type CapacityIntegrationState,
   type CapacityLimitPressure,
+  type CapacityManager,
+  type CapacityManagerRollupStatus,
+  type CapacityManagerSummary,
   type CapacityMemberType,
   type CapacityPoolSummary,
   type CapacityQuantityObservation,
@@ -38,6 +41,7 @@ import {
   type CapacitySourceCoverage,
   type CapacityUsageObservation,
   type Issue,
+  type StatusTone,
 } from "@skyhook-io/k8s-ui";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import {
@@ -461,6 +465,47 @@ export function poolReadinessDetail(
   if (parts.length === 0)
     return pools.length === 0 ? "No pools visible" : "Readiness unknown";
   return truncated ? `${parts.join(" · ")} (first page)` : parts.join(" · ");
+}
+
+/** Human label for a detected capacity manager. */
+export function capacityManagerLabel(manager: CapacityManager): string {
+  if (manager === "karpenter") return "Karpenter";
+  if (manager === "gke_autoscaler") return "GKE autoscaler";
+  if (manager === "cluster_autoscaler") return "Cluster Autoscaler";
+  if (manager === "aks_autoscaler") return "AKS autoscaler";
+  return manager;
+}
+
+/** Manager rollup status → status tone. `unknown` maps to neutral (an absence
+ *  of health signal), never to the alarming `unknown` slate — the capacity
+ *  contract treats "we haven't determined health" as informational, not bad. */
+export function managerStatusTone(
+  status: CapacityManagerRollupStatus,
+): StatusTone {
+  if (status === "healthy") return "healthy";
+  if (status === "degraded") return "degraded";
+  return "neutral";
+}
+
+const MANAGER_STATUS_RANK: Record<CapacityManagerRollupStatus, number> = {
+  degraded: 0,
+  unknown: 1,
+  healthy: 2,
+};
+
+/** Worst-of status across managers (degraded worst), driving the tile accent.
+ *  Undefined when no managers were detected. */
+export function worstManagerStatus(
+  managers: CapacityManagerSummary[],
+): CapacityManagerRollupStatus | undefined {
+  if (managers.length === 0) return undefined;
+  return managers.reduce<CapacityManagerRollupStatus>(
+    (worst, manager) =>
+      MANAGER_STATUS_RANK[manager.status] < MANAGER_STATUS_RANK[worst]
+        ? manager.status
+        : worst,
+    managers[0].status,
+  );
 }
 
 export function demandStateLabel(state: CapacityDemandState): string {
