@@ -82,8 +82,29 @@ var (
 	validatingWebhookGVR = schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
 	mutatingWebhookGVR   = schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}
 	crdGVR               = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	apiServiceGVR        = schema.GroupVersionResource{Group: "apiregistration.k8s.io", Version: "v1", Resource: "apiservices"}
 	endpointSliceGVR     = schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
 )
+
+func (s *Server) collectUpgradeAPIServices(r *http.Request) []*unstructured.Unstructured {
+	client := k8s.DynamicClientFromContext(r.Context())
+	if client == nil || !s.canRead(r, apiServiceGVR.Group, apiServiceGVR.Resource, "", "list") {
+		return nil
+	}
+	return collectUpgradeAPIServicesWithClient(r.Context(), client)
+}
+
+func collectUpgradeAPIServicesWithClient(ctx context.Context, client dynamic.Interface) []*unstructured.Unstructured {
+	list, err := client.Resource(apiServiceGVR).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil
+	}
+	apiServices := make([]*unstructured.Unstructured, 0, len(list.Items))
+	for i := range list.Items {
+		apiServices = append(apiServices, list.Items[i].DeepCopy())
+	}
+	return apiServices
+}
 
 func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
 	dynamicClient := k8s.DynamicClientFromContext(r.Context())

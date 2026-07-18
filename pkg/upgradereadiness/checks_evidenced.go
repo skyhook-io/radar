@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -15,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 
+	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -106,7 +108,11 @@ func scanContainerRuntimeSupport(input *Input, target *utilversion.Version) Chec
 }
 
 func scanNodeDrainFeasibility(input *Input) Check {
-	check := Check{ID: "node-drain-feasibility", Category: "Upgrade operations", Title: "Node drain feasibility", Status: CheckPassed, Summary: "No inspected workload requires exceptional drain flags or is blocked by an authoritative PDB.", Scope: "Live pods and PodDisruptionBudget status", References: append([]Reference(nil), drainReferences...)}
+	check := Check{ID: "node-drain-feasibility", Category: "Upgrade operations", Title: "Node drain feasibility", Status: CheckPassed, Summary: "No inspected workload requires exceptional drain flags or is blocked by a PodDisruptionBudget.", Scope: "Live pods and PodDisruptionBudget configuration and status", References: append([]Reference(nil), drainReferences...)}
+	if input.Namespaces != nil {
+		check.Caveat = scopedCoverageNote(input.Namespaces, "Pods and PodDisruptionBudgets")
+		check.Summary = "No drain risk was found in the selected namespace scope."
+	}
 	if input.Pods == nil || input.PodDisruptionBudgets == nil {
 		check.Status, check.Summary = CheckUnknown, "Pods or PodDisruptionBudgets were unavailable; drain feasibility could not be established."
 		return check
@@ -118,11 +124,16 @@ func scanNodeDrainFeasibility(input *Input) Check {
 		}
 	}
 	check.Inspected = len(active)
+	type pdbSelection struct {
+		pdb  *policyv1.PodDisruptionBudget
+		pods []*corev1.Pod
+	}
+	selections := make([]pdbSelection, 0, len(input.PodDisruptionBudgets))
 	stale := 0
 	for _, pdb := range input.PodDisruptionBudgets {
-		state := k8score.PodDisruptionBudgetEvictionState(pdb)
-		if state == k8score.PDBEvictionUnknown {
-			stale++
+		// A deleting PDB can briefly keep blocking eviction until removal, but
+		// reporting it here would turn a transient teardown into standing debt.
+		if pdb == nil || pdb.DeletionTimestamp != nil {
 			continue
 		}
 		selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
@@ -130,47 +141,170 @@ func scanNodeDrainFeasibility(input *Input) Check {
 			stale++
 			continue
 		}
-		selected, healthy := 0, 0
+		selectedPods := make([]*corev1.Pod, 0)
+		healthy := 0
 		for _, pod := range active {
 			if pod.Namespace == pdb.Namespace && selector.Matches(labels.Set(pod.Labels)) {
-				selected++
+				selectedPods = append(selectedPods, pod)
 				if podIsReady(pod) {
 					healthy++
 				}
 			}
 		}
-		if selected == 0 {
+		if len(selectedPods) == 0 {
+			continue
+		}
+		// Multi-PDB eviction rejection is selector-based, so even a PDB with
+		// stale controller status must participate in overlap detection.
+		selections = append(selections, pdbSelection{pdb: pdb, pods: selectedPods})
+		state := k8score.PodDisruptionBudgetEvictionState(pdb)
+		if state == k8score.PDBEvictionUnknown {
+			stale++
 			continue
 		}
 		alwaysAllow := pdb.Spec.UnhealthyPodEvictionPolicy != nil && *pdb.Spec.UnhealthyPodEvictionPolicy == "AlwaysAllow"
 		if state != k8score.PDBEvictionBlocked && (pdb.Status.DisruptionsAllowed != 0 || (alwaysAllow && healthy == 0)) {
 			continue
 		}
-		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "PodDisruptionBudget allows no evictions", Level: LevelBlocker, Resource: &ResourceRef{Group: "policy", Kind: "PodDisruptionBudget", Namespace: pdb.Namespace, Name: pdb.Name}, Evidence: Evidence{Source: "live", Path: "status.disruptionsAllowed", Detail: fmt.Sprintf("0 across %d active pod(s)", selected)}, Impact: "A default eviction-based node drain is blocked while this authoritative PDB status allows zero disruptions.", Remediation: "Restore workload headroom, scale replicas, or adjust minAvailable/maxUnavailable so at least one disruption is allowed before draining nodes.", References: append([]Reference(nil), check.References...)})
+		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "PodDisruptionBudget allows no evictions", Level: LevelBlocker, Resource: &ResourceRef{Group: "policy", Kind: "PodDisruptionBudget", Namespace: pdb.Namespace, Name: pdb.Name}, Evidence: Evidence{Source: "live", Path: "status.disruptionsAllowed", Detail: fmt.Sprintf("0 across %d active pod(s)", len(selectedPods))}, Impact: "A default eviction-based node drain is blocked while this authoritative PDB status allows zero disruptions.", Remediation: "Restore workload headroom, scale replicas, or adjust minAvailable/maxUnavailable so at least one disruption is allowed before draining nodes.", References: append([]Reference(nil), check.References...)})
+	}
+	sort.Slice(selections, func(i, j int) bool {
+		if selections[i].pdb.Namespace != selections[j].pdb.Namespace {
+			return selections[i].pdb.Namespace < selections[j].pdb.Namespace
+		}
+		return selections[i].pdb.Name < selections[j].pdb.Name
+	})
+	for i := 0; i < len(selections); i++ {
+		selected := make(map[string]bool, len(selections[i].pods))
+		for _, pod := range selections[i].pods {
+			selected[pod.Namespace+"/"+pod.Name] = true
+		}
+		for j := i + 1; j < len(selections); j++ {
+			if selections[i].pdb.Namespace != selections[j].pdb.Namespace {
+				continue
+			}
+			overlap := make([]string, 0)
+			for _, pod := range selections[j].pods {
+				key := pod.Namespace + "/" + pod.Name
+				if selected[key] {
+					overlap = append(overlap, key)
+				}
+			}
+			if len(overlap) == 0 {
+				continue
+			}
+			sort.Strings(overlap)
+			first, second := selections[i].pdb, selections[j].pdb
+			check.Findings = append(check.Findings, Finding{
+				RuleID:      check.ID,
+				Title:       "Pod is selected by multiple PodDisruptionBudgets",
+				Level:       LevelBlocker,
+				Resource:    &ResourceRef{Group: "policy", Kind: "PodDisruptionBudget", Namespace: first.Namespace, Name: first.Name},
+				Evidence:    Evidence{Source: "live", Path: "spec.selector", Detail: fmt.Sprintf("also overlaps %s/%s across %d active pod(s), including Pod %s", second.Namespace, second.Name, len(overlap), overlap[0])},
+				Impact:      "The Kubernetes Eviction API rejects eviction of a pod selected by multiple PodDisruptionBudgets, so a default node drain cannot proceed.",
+				Remediation: "Narrow or remove one selector so each pod is covered by only one PodDisruptionBudget, or finish the intentional budget transition before draining nodes.",
+				References:  append([]Reference(nil), check.References...),
+			})
+		}
 	}
 	for _, pod := range active {
 		owner := controllerOwner(pod.OwnerReferences)
 		if owner == nil {
-			check.Findings = append(check.Findings, drainPodFinding(check, pod, "Bare pod requires forced drain", "metadata.ownerReferences", "no controller owner", "kubectl drain requires --force to remove this unmanaged pod; it will not be recreated automatically.", "Replace the bare pod with a controller-managed workload or explicitly plan and approve a forced drain."))
+			check.Findings = append(check.Findings, drainPodFinding(check, pod, LevelWarning, "Bare pod requires forced drain", "metadata.ownerReferences", "no controller owner", "kubectl drain requires --force to remove this unmanaged pod; it will not be recreated automatically.", "Replace the bare pod with a controller-managed workload or explicitly plan and approve a forced drain."))
 		}
-		for i, volume := range pod.Spec.Volumes {
-			if volume.EmptyDir == nil {
-				continue
+		emptyDirs := make([]string, 0)
+		for _, volume := range pod.Spec.Volumes {
+			if volume.EmptyDir != nil {
+				emptyDirs = append(emptyDirs, volume.Name)
 			}
-			check.Findings = append(check.Findings, drainPodFinding(check, pod, "Pod uses node-local emptyDir data", fmt.Sprintf("spec.volumes[%d].emptyDir", i), volume.Name, "kubectl drain requires --delete-emptydir-data and this local data will be lost.", "Confirm the data is disposable or move it to persistent storage before draining the node."))
+		}
+		if len(emptyDirs) > 0 {
+			sort.Strings(emptyDirs)
+			check.Findings = append(check.Findings, drainPodFinding(check, pod, LevelReview, "Pod uses node-local emptyDir data", "spec.volumes[].emptyDir", strings.Join(emptyDirs, ", "), "kubectl drain requires --delete-emptydir-data and this local data will be lost.", "Confirm the data is disposable or move it to persistent storage before draining the node."))
 		}
 	}
 	if stale > 0 {
-		check.Caveat = fmt.Sprintf("%d PodDisruptionBudget %s stale or unreadable status.", stale, plural(stale, "has", "have"))
-		check.Status = CheckUnknown
+		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d PodDisruptionBudget %s stale or unreadable status.", stale, plural(stale, "has", "have")))
 		if len(check.Findings) == 0 {
 			check.Summary = "No drain blockers were found, but PDB evidence is incomplete."
 		}
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d drain %s require action or explicit operator review.", len(check.Findings), plural(len(check.Findings), "condition", "conditions"))
+		check.Summary = fmt.Sprintf("%d drain %s.", len(check.Findings), plural(len(check.Findings), "condition requires action or explicit operator review", "conditions require action or explicit operator review"))
+	} else if check.Caveat != "" {
+		check.Status = CheckUnknown
+		if input.Namespaces != nil {
+			check.Summary = "No drain risk was found in the selected namespace scope, but Pod and PodDisruptionBudget coverage is incomplete."
+		} else {
+			check.Summary = "No drain risk was found in readable evidence, but coverage is incomplete."
+		}
 	}
 	return check
+}
+
+func scanAPIServiceReadiness(input *Input) Check {
+	check := Check{ID: "aggregated-apiservice-readiness", Category: "API extensions", Title: "Aggregated APIService readiness", Status: CheckPassed, Summary: "All inspected delegated APIServices report Available.", Scope: "Delegated APIService availability conditions", References: append([]Reference(nil), apiServiceReferences...)}
+	if input.APIServices == nil {
+		check.Status, check.Summary = CheckUnknown, "APIService availability could not be inspected."
+		return check
+	}
+	for _, apiService := range input.APIServices {
+		if apiService == nil {
+			continue
+		}
+		if _, delegated, _ := unstructured.NestedMap(apiService.Object, "spec", "service"); !delegated {
+			continue
+		}
+		check.Inspected++
+		state, found := conditions.Find(apiService, "Available")
+		if !found || (state.Status != "True" && state.Status != "False" && state.Status != "Unknown") {
+			check.Caveat = appendCaveat(check.Caveat, apiService.GetName()+" has no readable Available condition.")
+			continue
+		}
+		if state.Status == "True" {
+			continue
+		}
+		check.Findings = append(check.Findings, Finding{
+			RuleID:      check.ID,
+			Title:       "Aggregated APIService is unavailable",
+			Level:       LevelWarning,
+			Resource:    &ResourceRef{Group: "apiregistration.k8s.io", Kind: "APIService", Name: apiService.GetName()},
+			Evidence:    Evidence{Source: "live", Path: "status.conditions[type=Available]", Detail: apiServiceConditionDetail(state)},
+			Impact:      "The kube-apiserver aggregation layer cannot currently serve this delegated API, which can disrupt discovery and clients that depend on it during control-plane operations.",
+			Remediation: "Restore the backing Service and endpoints, then resolve API aggregation or TLS errors until the APIService reports Available=True.",
+			References:  append([]Reference(nil), check.References...),
+		})
+	}
+	if check.Inspected == 0 {
+		check.Status, check.Summary = CheckNotApplicable, "No delegated APIService is registered."
+	} else {
+		if check.Caveat != "" {
+			check.Status = CheckUnknown
+		}
+		if len(check.Findings) > 0 {
+			check.Summary = fmt.Sprintf("%d delegated %s unavailable.", len(check.Findings), plural(len(check.Findings), "APIService is", "APIServices are"))
+		} else if check.Caveat != "" {
+			check.Summary = "No unavailable delegated APIs were identified, but APIService evidence is incomplete."
+		}
+	}
+	return check
+}
+
+func apiServiceConditionDetail(state conditions.State) string {
+	detail := state.Status
+	if state.Reason != "" {
+		detail += " (" + state.Reason + ")"
+	}
+	message := strings.Join(strings.Fields(state.Message), " ")
+	if message != "" {
+		const maxRunes = 180
+		runes := []rune(message)
+		if len(runes) > maxRunes {
+			message = string(runes[:maxRunes-1]) + "…"
+		}
+		detail += ": " + message
+	}
+	return detail
 }
 
 func podIsReady(pod *corev1.Pod) bool {
@@ -193,8 +327,8 @@ func drainRelevantPod(pod *corev1.Pod) bool {
 	return owner == nil || owner.Kind != "DaemonSet"
 }
 
-func drainPodFinding(check Check, pod *corev1.Pod, title, path, detail, impact, remediation string) Finding {
-	return Finding{RuleID: check.ID, Title: title, Level: LevelWarning, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: path, Detail: detail}, Impact: impact, Remediation: remediation, References: append([]Reference(nil), check.References...)}
+func drainPodFinding(check Check, pod *corev1.Pod, level Level, title, path, detail, impact, remediation string) Finding {
+	return Finding{RuleID: check.ID, Title: title, Level: level, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: path, Detail: detail}, Impact: impact, Remediation: remediation, References: append([]Reference(nil), check.References...)}
 }
 
 func scanAdmissionWebhookReadiness(input *Input) Check {
@@ -231,7 +365,7 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 				failurePolicy = "Ignore"
 			}
 			if strings.EqualFold(stringValue(webhook, "matchPolicy"), "Exact") {
-				check.Findings = append(check.Findings, admissionFinding(check, config, name, i, LevelWarning, "matchPolicy", "Exact matching can skip equivalent API versions during an upgrade.", "Use matchPolicy: Equivalent unless exact version matching is intentionally required."))
+				check.Findings = append(check.Findings, admissionFinding(check, config, i, LevelReview, "Exact API version matching", "matchPolicy", "Exact", "Exact matching can skip equivalent API versions during an upgrade.", "Use matchPolicy: Equivalent unless exact version matching is intentionally required."))
 			}
 			service, found, _ := unstructured.NestedMap(webhook, "clientConfig", "service")
 			if found {
@@ -240,14 +374,18 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 				key := ns + "/" + svc
 				if !services[key] || !ready[key] {
 					level := LevelBlocker
+					title := "Fail-closed webhook backend unavailable"
+					impact := "Admission requests that match this fail-closed webhook are rejected while its backend is unavailable."
 					if failurePolicy == "Ignore" {
 						level = LevelWarning
+						title = "Fail-open webhook backend unavailable"
+						impact = "Admission requests that match this webhook currently fail open, bypassing the intended policy while its backend is unavailable."
 					}
-					check.Findings = append(check.Findings, admissionFinding(check, config, name, i, level, "clientConfig.service", key, "Restore the Service and a ready EndpointSlice, or intentionally change failurePolicy after evaluating the admission bypass risk."))
+					check.Findings = append(check.Findings, admissionFinding(check, config, i, level, title, "clientConfig.service", key, impact, "Restore the Service and a ready EndpointSlice, or intentionally change failurePolicy after evaluating the admission bypass risk."))
 				}
 			}
 			if webhookInterceptsAuth(webhook) {
-				check.Findings = append(check.Findings, admissionFinding(check, config, name, i, LevelWarning, "rules", "The webhook can intercept TokenReview or SubjectAccessReview requests used during authentication and authorization.", "Verify the webhook remains available and deliberately excludes authentication and authorization review APIs if interception is unnecessary."))
+				check.Findings = append(check.Findings, admissionFinding(check, config, i, LevelReview, "Authentication review interception", "rules", name, "The webhook can intercept TokenReview or SubjectAccessReview requests used during authentication and authorization.", "Verify the webhook remains available and deliberately excludes authentication and authorization review APIs if interception is unnecessary."))
 			}
 		}
 	}
@@ -258,7 +396,7 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 		}
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d admission webhook %s require action or review.", len(check.Findings), plural(len(check.Findings), "condition", "conditions"))
+		check.Summary = fmt.Sprintf("%d admission webhook %s.", len(check.Findings), plural(len(check.Findings), "condition requires action or review", "conditions require action or review"))
 	}
 	return check
 }
@@ -283,8 +421,8 @@ func readyEndpointServices(slices []*discoveryv1.EndpointSlice) map[string]bool 
 	return out
 }
 
-func admissionFinding(check Check, config *unstructured.Unstructured, webhook string, index int, level Level, path, impact, remediation string) Finding {
-	return Finding{RuleID: check.ID, Title: "Admission webhook requires upgrade review", Level: level, Resource: &ResourceRef{Group: "admissionregistration.k8s.io", Kind: config.GetKind(), Name: config.GetName()}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("webhooks[%d].%s", index, path), Detail: webhook}, Impact: impact, Remediation: remediation, References: append([]Reference(nil), check.References...)}
+func admissionFinding(check Check, config *unstructured.Unstructured, index int, level Level, title, path, detail, impact, remediation string) Finding {
+	return Finding{RuleID: check.ID, Title: title, Level: level, Resource: &ResourceRef{Group: "admissionregistration.k8s.io", Kind: config.GetKind(), Name: config.GetName()}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("webhooks[%d].%s", index, path), Detail: detail}, Impact: impact, Remediation: remediation, References: append([]Reference(nil), check.References...)}
 }
 
 func stringValue(object map[string]any, key string) string {
@@ -360,7 +498,7 @@ func scanCRDConversionWebhookReadiness(input *Input) Check {
 			continue
 		}
 		if url, ok := config["url"].(string); ok && url != "" {
-			check.Findings = append(check.Findings, crdFinding(check, crd, LevelWarning, "spec.conversion.webhook.clientConfig.url", url, "URL-based conversion backends are outside cluster Service readiness evidence.", "Verify DNS, TLS, network reachability, and availability of the external conversion endpoint during the upgrade."))
+			check.Findings = append(check.Findings, crdFinding(check, crd, LevelReview, "spec.conversion.webhook.clientConfig.url", url, "URL-based conversion backends are outside cluster Service readiness evidence.", "Verify DNS, TLS, network reachability, and availability of the external conversion endpoint during the upgrade."))
 			continue
 		}
 		service, found, _ := unstructured.NestedMap(config, "service")
@@ -377,13 +515,15 @@ func scanCRDConversionWebhookReadiness(input *Input) Check {
 	}
 	if check.Inspected == 0 {
 		check.Status, check.Summary = CheckNotApplicable, "No CRD uses webhook conversion."
-	} else if check.Caveat != "" {
-		check.Status = CheckUnknown
-		if len(check.Findings) == 0 {
+	} else {
+		if check.Caveat != "" {
+			check.Status = CheckUnknown
+		}
+		if len(check.Findings) > 0 {
+			check.Summary = fmt.Sprintf("%d CRD conversion webhook %s.", len(check.Findings), plural(len(check.Findings), "condition requires action or review", "conditions require action or review"))
+		} else if check.Caveat != "" {
 			check.Summary = "No conversion backend failures were identified, but CRD evidence is incomplete."
 		}
-	} else if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d CRD conversion webhook %s require action or review.", len(check.Findings), plural(len(check.Findings), "condition", "conditions"))
 	}
 	return check
 }
@@ -418,6 +558,10 @@ func crdFinding(check Check, crd *unstructured.Unstructured, level Level, path, 
 
 func scanStrictIPCIDRValidation(input *Input) Check {
 	check := Check{ID: "strict-ip-cidr-validation", Category: "API compatibility", Title: "Strict source IP and CIDR validation", Status: CheckPassed, Summary: "No non-canonical IP or CIDR values were found in readable source manifests.", Scope: "Helm and kubectl last-applied source manifests", AppliesFrom: "1.36", References: append([]Reference(nil), strictIPReferences...)}
+	if input.Namespaces != nil {
+		check.Caveat = scopedCoverageNote(input.Namespaces, "source manifests")
+		check.Summary = "No invalid network value was found in source manifests in the selected namespace scope."
+	}
 	resources := append([]ManifestResource(nil), input.ManifestResources...)
 	resources = append(resources, lastAppliedResources(input.SourceObjects)...)
 	if resources == nil {
@@ -439,24 +583,34 @@ func scanStrictIPCIDRValidation(input *Input) Check {
 			if len(errs) == 0 {
 				continue
 			}
-			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "Source manifest contains a value rejected by strict validation", Level: LevelWarning, Resource: &ResourceRef{Group: groupForAPIVersion(resource.APIVersion), Kind: resource.Kind, Namespace: resource.Namespace, Name: resource.Name}, Evidence: Evidence{Source: resource.Source, Path: candidate.path, Detail: candidate.value}, AppliesFrom: check.AppliesFrom, Impact: "A future update that touches this field can be rejected once strict IP/CIDR validation applies; existing stored values may remain because validation ratchets.", Remediation: "Normalize this source value to canonical IP or CIDR syntax, then reconcile it before upgrading.", References: append([]Reference(nil), check.References...)})
+			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "Source manifest contains a value rejected by strict validation", Level: LevelReview, Resource: &ResourceRef{Group: groupForAPIVersion(resource.APIVersion), Kind: resource.Kind, Namespace: resource.Namespace, Name: resource.Name}, Evidence: Evidence{Source: resource.Source, Path: candidate.path, Detail: candidate.value}, AppliesFrom: check.AppliesFrom, Impact: "A future update that touches this field can be rejected once strict IP/CIDR validation applies; existing stored values may remain because validation ratchets.", Remediation: "Normalize this source value to canonical IP or CIDR syntax, then reconcile it before upgrading.", References: append([]Reference(nil), check.References...)})
 		}
 	}
 	if check.Inspected == 0 {
 		check.Status, check.Summary = CheckUnknown, "Readable full source objects were unavailable; API-version-only manifest evidence is insufficient for strict validation."
-	} else if input.ManifestParseErrors > 0 || len(input.SourceObjectUnavailableKinds) > 0 {
+	} else if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d non-canonical source network %s.", len(check.Findings), plural(len(check.Findings), "value requires review", "values require review"))
+		if input.ManifestParseErrors > 0 || len(input.SourceObjectUnavailableKinds) > 0 || input.Namespaces != nil {
+			if input.ManifestParseErrors > 0 {
+				check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d Helm manifest %s could not be parsed.", input.ManifestParseErrors, plural(input.ManifestParseErrors, "document", "documents")))
+			}
+			if len(input.SourceObjectUnavailableKinds) > 0 {
+				check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+strings.Join(input.SourceObjectUnavailableKinds, ", ")+".")
+			}
+		}
+	} else if input.ManifestParseErrors > 0 || len(input.SourceObjectUnavailableKinds) > 0 || input.Namespaces != nil {
 		check.Status = CheckUnknown
-		if len(check.Findings) == 0 {
+		if input.Namespaces != nil {
+			check.Summary = "No invalid network values were found in source manifests in the selected namespace scope, but source-manifest coverage is incomplete."
+		} else {
 			check.Summary = "No invalid network values were found, but source-manifest coverage is incomplete."
 		}
 		if input.ManifestParseErrors > 0 {
-			check.Caveat = fmt.Sprintf("%d Helm manifest %s could not be parsed.", input.ManifestParseErrors, plural(input.ManifestParseErrors, "document", "documents"))
+			check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d Helm manifest %s could not be parsed.", input.ManifestParseErrors, plural(input.ManifestParseErrors, "document", "documents")))
 		}
 		if len(input.SourceObjectUnavailableKinds) > 0 {
 			check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+strings.Join(input.SourceObjectUnavailableKinds, ", ")+".")
 		}
-	} else if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d non-canonical source network %s require review.", len(check.Findings), plural(len(check.Findings), "value", "values"))
 	}
 	return check
 }
@@ -580,6 +734,10 @@ func scanGKEExecProbeTimeout(input *Input) Check {
 		check.Status, check.Summary = CheckUnknown, "Workloads were unavailable; exec probes could not be inspected."
 		return check
 	}
+	if input.Namespaces != nil {
+		check.Caveat = scopedCoverageNote(input.Namespaces, "workloads and recent Events")
+		check.Summary = "No risky GKE exec probe was found in the selected namespace scope."
+	}
 	timedOut := map[string]bool{}
 	if input.Events != nil {
 		for _, event := range input.Events {
@@ -600,27 +758,31 @@ func scanGKEExecProbeTimeout(input *Input) Check {
 					continue
 				}
 				check.Inspected++
-				level := LevelWarning
+				level := LevelReview
+				title := "Exec probe relies on default one-second timeout"
 				impact := "This exec probe relies on the one-second default timeout and may begin failing after the GKE 1.35 behavior change."
 				if timedOut[subject.resource.Namespace+"/"+subject.resource.Name] {
 					level = LevelBlocker
+					title = "Exec probe already timing out"
 					impact = "Recent events show this exec probe timing out; the GKE behavior change is already observable."
 				}
-				check.Findings = append(check.Findings, workloadFinding(subject, check, level, subject.pathPrefix+".containers["+container.Name+"]."+name+".timeoutSeconds", impact, "Set an explicit timeoutSeconds greater than 1 after measuring the command's normal duration, then verify probe behavior."))
+				check.Findings = append(check.Findings, workloadFinding(subject, check, title, level, subject.pathPrefix+".containers["+container.Name+"]."+name+".timeoutSeconds", impact, "Set an explicit timeoutSeconds greater than 1 after measuring the command's normal duration, then verify probe behavior."))
 			}
 		}
 	}
 	if input.Events == nil && len(check.Findings) > 0 {
-		check.Status = CheckUnknown
-		check.Caveat = "Recent Events were unavailable, so Radar could not distinguish observed timeouts from static exposure."
+		check.Caveat = appendCaveat(check.Caveat, "Recent Events were unavailable, so Radar could not distinguish observed timeouts from static exposure.")
 	}
 	if configured > 0 && len(check.Findings) == 0 {
 		check.Status = CheckUnknown
 		check.Summary = "Exec probe timeouts are configured, but static configuration and short-lived Events cannot prove their commands finish within the timeout."
-		check.Caveat = "Verify probe duration in staging or longer-lived logs before upgrading."
+		check.Caveat = appendCaveat(check.Caveat, "Verify probe duration in staging or longer-lived logs before upgrading.")
 	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d GKE exec %s rely on a one-second timeout.", len(check.Findings), plural(len(check.Findings), "probe", "probes"))
+	} else if input.Namespaces != nil && configured == 0 {
+		check.Status = CheckUnknown
+		check.Summary = "No risky GKE exec probe was found in the selected namespace scope, but workload and Event coverage is incomplete."
 	}
 	return check
 }

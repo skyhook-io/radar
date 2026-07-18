@@ -57,6 +57,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	var sourceObjects []metav1.Object
 	var sourceObjectUnavailableKinds []string
 	var admissionConfigs, crds []*unstructured.Unstructured
+	var apiServices []*unstructured.Unstructured
 	var endpointSlices []*discoveryv1.EndpointSlice
 	var additionalServices []*corev1.Service
 	var nodeRuntimeEvidence []upgradereadiness.NodeRuntimeEvidence
@@ -68,6 +69,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		prometheusRules, prometheusInstalled, discoveryAvailable, prometheusUnavailableNamespaces = s.collectUpgradePrometheusRules(r, namespaces)
 		sourceObjects, sourceObjectUnavailableKinds = collectUpgradeSourceObjects(r, namespaces)
 		admissionConfigs, crds, endpointSlices, additionalServices = s.collectUpgradeWebhookEvidence(r)
+		apiServices = s.collectUpgradeAPIServices(r)
 		if s.canReadSubresource(r, "", "nodes", "proxy", "", "get") && cache.Nodes() != nil {
 			nodes, _ := cache.Nodes().List(labels.Everything())
 			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(r.Context(), nodes)
@@ -93,6 +95,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		SourceObjectUnavailableKinds:        sourceObjectUnavailableKinds,
 		AdmissionWebhookConfigurations:      admissionConfigs,
 		CustomResourceDefinitions:           crds,
+		APIServices:                         apiServices,
 		EndpointSlices:                      endpointSlices,
 		AdditionalServices:                  additionalServices,
 		NodeRuntimeEvidence:                 nodeRuntimeEvidence,

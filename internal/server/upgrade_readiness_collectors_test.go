@@ -70,3 +70,35 @@ func TestCollectUpgradeCRDsReturnsNilOnListFailure(t *testing.T) {
 		t.Fatalf("crds = %#v, want nil so the check reports incomplete evidence", crds)
 	}
 }
+
+func TestCollectUpgradeAPIServicesPreservesNilAndEmptyEvidence(t *testing.T) {
+	listKinds := map[schema.GroupVersionResource]string{apiServiceGVR: "APIServiceList"}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
+
+	apiServices := collectUpgradeAPIServicesWithClient(context.Background(), client)
+	if apiServices == nil || len(apiServices) != 0 {
+		t.Fatalf("empty successful list = %#v, want non-nil empty evidence", apiServices)
+	}
+
+	client.PrependReactor("list", "apiservices", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("forbidden")
+	})
+	if apiServices := collectUpgradeAPIServicesWithClient(context.Background(), client); apiServices != nil {
+		t.Fatalf("failed list = %#v, want nil incomplete evidence", apiServices)
+	}
+}
+
+func TestCollectUpgradeAPIServicesReturnsObjects(t *testing.T) {
+	apiService := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apiregistration.k8s.io/v1",
+		"kind":       "APIService",
+		"metadata":   map[string]any{"name": "v1.example.io"},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		apiServiceGVR: "APIServiceList",
+	}, apiService)
+	got := collectUpgradeAPIServicesWithClient(context.Background(), client)
+	if len(got) != 1 || got[0].GetName() != "v1.example.io" {
+		t.Fatalf("APIServices = %#v, want v1.example.io", got)
+	}
+}

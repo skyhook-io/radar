@@ -14,6 +14,7 @@ type Verdict string
 
 const (
 	VerdictBlocked         Verdict = "blocked"
+	VerdictWarning         Verdict = "warning"
 	VerdictReview          Verdict = "review"
 	VerdictNoKnownBlockers Verdict = "no_known_blockers"
 	VerdictUnknown         Verdict = "unknown"
@@ -25,6 +26,7 @@ const (
 	CheckPassed        CheckStatus = "passed"
 	CheckBlocked       CheckStatus = "blocked"
 	CheckWarning       CheckStatus = "warning"
+	CheckReview        CheckStatus = "review"
 	CheckUnknown       CheckStatus = "unknown"
 	CheckNotApplicable CheckStatus = "not_applicable"
 )
@@ -34,6 +36,7 @@ type Level string
 const (
 	LevelBlocker Level = "blocker"
 	LevelWarning Level = "warning"
+	LevelReview  Level = "review"
 )
 
 type Input struct {
@@ -55,11 +58,13 @@ type Input struct {
 	PodDisruptionBudgets []*policyv1.PodDisruptionBudget
 	EndpointSlices       []*discoveryv1.EndpointSlice
 
-	// AdmissionWebhookConfigurations and CustomResourceDefinitions are nil
+	// AdmissionWebhookConfigurations, CustomResourceDefinitions, and
+	// APIServices are nil
 	// when their cluster-scoped sources could not be read. Empty, non-nil
 	// slices mean the sources were inspected and contained no objects.
 	AdmissionWebhookConfigurations []*unstructured.Unstructured
 	CustomResourceDefinitions      []*unstructured.Unstructured
+	APIServices                    []*unstructured.Unstructured
 	// NodeRuntimeEvidence is nil when kubelet metrics could not be inspected.
 	NodeRuntimeEvidence []NodeRuntimeEvidence
 
@@ -172,6 +177,7 @@ type Check struct {
 type Summary struct {
 	Blocked       int `json:"blocked"`
 	Warnings      int `json:"warnings"`
+	Reviews       int `json:"reviews"`
 	Passed        int `json:"passed"`
 	Unknown       int `json:"unknown"`
 	NotApplicable int `json:"notApplicable"`

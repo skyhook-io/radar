@@ -5,15 +5,18 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
 func TestRunUpgradeReadinessWithoutCachePreservesCollectedEvidence(t *testing.T) {
+	apiServices := []*unstructured.Unstructured{}
 	results, err := RunUpgradeReadinessFromCache(nil, []string{}, UpgradeReadinessOptions{
 		CurrentVersion:        "1.34",
 		TargetVersion:         "1.35",
 		DeprecatedAPIRequests: make([]upgradereadiness.DeprecatedAPIRequest, 0),
+		APIServices:           apiServices,
 	})
 	if err != nil {
 		t.Fatalf("RunUpgradeReadinessFromCache() error = %v", err)
@@ -27,6 +30,33 @@ func TestRunUpgradeReadinessWithoutCachePreservesCollectedEvidence(t *testing.T)
 		}
 	}
 	t.Fatal("deprecated API check not found")
+}
+
+func TestRunUpgradeReadinessWithoutCachePreservesAPIServiceEvidence(t *testing.T) {
+	apiService := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apiregistration.k8s.io/v1",
+		"kind":       "APIService",
+		"metadata":   map[string]any{"name": "v1.example.io"},
+		"spec":       map[string]any{"service": map[string]any{"namespace": "default", "name": "example"}},
+		"status":     map[string]any{"conditions": []any{map[string]any{"type": "Available", "status": "True"}}},
+	}}
+	results, err := RunUpgradeReadinessFromCache(nil, nil, UpgradeReadinessOptions{
+		CurrentVersion: "1.35",
+		TargetVersion:  "1.36",
+		APIServices:    []*unstructured.Unstructured{apiService},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range results.Checks {
+		if check.ID == "aggregated-apiservice-readiness" {
+			if check.Status != upgradereadiness.CheckPassed || check.Inspected != 1 {
+				t.Fatalf("APIService check = %+v, want one passed inspection", check)
+			}
+			return
+		}
+	}
+	t.Fatal("APIService check not found")
 }
 
 func TestFilterPersistentVolumesForNamespaces(t *testing.T) {
@@ -56,5 +86,16 @@ func TestFilterPersistentVolumesForNamespaces(t *testing.T) {
 	none := filterPersistentVolumesForNamespaces(volumes, []string{})
 	if len(none) != 0 {
 		t.Fatalf("empty namespace scope returned %d volumes, want 0", len(none))
+	}
+}
+
+func TestMergeServicesDeduplicatesCollectedWebhookBackends(t *testing.T) {
+	cached := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "policy-system"}}
+	duplicate := cached.DeepCopy()
+	additional := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "converter", Namespace: "policy-system"}}
+
+	merged := mergeServices([]*corev1.Service{cached}, []*corev1.Service{duplicate, nil, additional})
+	if len(merged) != 2 || merged[0] != cached || merged[1] != additional {
+		t.Fatalf("mergeServices() = %#v, want stable namespace/name deduplication", merged)
 	}
 }

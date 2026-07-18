@@ -29,6 +29,7 @@ import {
   type UpgradeReadinessCheck,
   type UpgradeReadinessCheckStatus,
   type UpgradeReadinessFinding,
+  type UpgradeReadinessResponse,
   type UpgradeReadinessVerdict,
 } from '../../api/client'
 import type { SelectedResource } from '../../types'
@@ -41,15 +42,17 @@ interface UpgradeReadinessViewProps {
 }
 
 const FINDING_CAP = 8
+export const UPGRADE_IMPACT_DOCS_URL = 'https://radarhq.io/docs/features/upgrade-impact'
 
 const statusMeta: Record<UpgradeReadinessCheckStatus, {
   label: string
   icon: typeof CheckCircle2
   iconClass: string
-  badgeSeverity: 'error' | 'warning' | 'success' | 'neutral'
+  badgeSeverity: 'error' | 'warning' | 'info' | 'success' | 'neutral'
 }> = {
   blocked: { label: 'Blocked', icon: AlertCircle, iconClass: 'text-red-600 dark:text-red-400', badgeSeverity: 'error' },
-  warning: { label: 'Review', icon: AlertTriangle, iconClass: 'text-amber-600 dark:text-amber-400', badgeSeverity: 'warning' },
+  warning: { label: 'Warning', icon: AlertTriangle, iconClass: 'text-amber-600 dark:text-amber-400', badgeSeverity: 'warning' },
+  review: { label: 'Review', icon: FileSearch, iconClass: 'text-blue-600 dark:text-blue-400', badgeSeverity: 'info' },
   unknown: { label: 'Incomplete', icon: CircleDashed, iconClass: 'text-theme-text-tertiary', badgeSeverity: 'neutral' },
   passed: { label: 'Passed', icon: CheckCircle2, iconClass: 'text-emerald-600 dark:text-emerald-400', badgeSeverity: 'success' },
   not_applicable: { label: 'Not applicable', icon: CircleMinus, iconClass: 'text-theme-text-disabled', badgeSeverity: 'neutral' },
@@ -58,9 +61,10 @@ const statusMeta: Record<UpgradeReadinessCheckStatus, {
 const statusOrder: Record<UpgradeReadinessCheckStatus, number> = {
   blocked: 0,
   warning: 1,
-  unknown: 2,
-  passed: 3,
-  not_applicable: 4,
+  review: 2,
+  unknown: 3,
+  passed: 4,
+  not_applicable: 5,
 }
 
 const checkPriority: Record<string, number> = {
@@ -209,8 +213,9 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
               <h2 className="text-sm font-semibold text-theme-text-primary">Checks for Kubernetes {data.targetVersion}</h2>
               <p className="mt-0.5 text-xs text-theme-text-tertiary">Results are ordered by required action. Expand a row for evidence and remediation.</p>
             </div>
-            <span className="text-xs tabular-nums text-theme-text-tertiary">{data.checks.length} checks</span>
+            <span className="text-right text-xs tabular-nums text-theme-text-tertiary">{upgradeEvaluationSummary(data.checks.length, data.summary, incompleteUpgradeCheckCount(data.checks))}</span>
           </div>
+          <CoverageMethodology data={data} />
           <div className="hidden grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] gap-4 border-b-subtle bg-theme-elevated px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary md:grid">
             <span>Check</span>
             <span>Result</span>
@@ -227,11 +232,68 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
   )
 }
 
+export function incompleteUpgradeCheckCount(checks: Pick<UpgradeReadinessCheck, 'status' | 'caveat'>[]) {
+  return checks.filter((check) => check.status === 'unknown' || Boolean(check.caveat)).length
+}
+
+export function upgradeEvaluationSummary(total: number, summary: UpgradeReadinessResponse['summary'], incomplete = summary.unknown) {
+  const applicable = Math.max(0, total - summary.notApplicable)
+  const partialEvidenceLabel = incomplete > 0 ? ` · ${incomplete} with partial evidence` : ''
+  return `${total} evaluated · ${applicable} applicable${partialEvidenceLabel} · ${summary.notApplicable} not applicable`
+}
+
+function CoverageMethodology({ data }: { data: UpgradeReadinessResponse }) {
+  const [open, setOpen] = useState(false)
+  const unavailable = data.coverage.unavailableKinds ?? []
+  return (
+    <div className="border-b-subtle bg-theme-base/30">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="upgrade-coverage-methodology"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20"
+      >
+        <span className="inline-flex min-w-0 items-center gap-2 text-xs font-medium text-theme-text-secondary">
+          <FileSearch className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
+          Coverage and methodology
+        </span>
+        <span className="flex min-w-0 items-center gap-2 text-xs text-theme-text-tertiary">
+          <span className="hidden truncate sm:inline">Reviewed through Kubernetes {data.reviewedThrough}</span>
+          <CollapseChevron open={open} className="h-3.5 w-3.5 shrink-0" />
+        </span>
+      </button>
+      <Collapse open={open} mountLazily>
+        <div id="upgrade-coverage-methodology" className="space-y-2 border-t border-theme-border px-4 py-3 text-xs leading-5 text-theme-text-secondary">
+          <p>
+            Radar evaluated the checks relevant to Kubernetes {data.currentVersion} → {data.targetVersion}. Release-specific checks outside this upgrade path are excluded instead of being counted as passed or not applicable.
+          </p>
+          <p>
+            Results use live cluster resources and the row-specific evidence scope shown below. {unavailable.length > 0
+              ? `Radar could not inspect ${unavailable.join(', ')}; affected checks are marked incomplete.`
+              : data.coverage.state === 'complete'
+                ? 'Every required evidence source for the displayed checks was readable.'
+                : 'Coverage is partial; affected rows explain which evidence was missing, unreadable, or outside the scan scope.'}
+          </p>
+          <a
+            href={UPGRADE_IMPACT_DOCS_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-blue-600 hover:underline dark:text-blue-400"
+          >
+            View the complete check catalog and evidence model <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+      </Collapse>
+    </div>
+  )
+}
+
 function UpgradeSummary({ verdict, target, reviewedThrough, summary, coverageState }: {
   verdict: UpgradeReadinessVerdict
   target: string
   reviewedThrough: string
-  summary: { blocked: number; warnings: number; passed: number; unknown: number; notApplicable: number }
+  summary: { blocked: number; warnings: number; reviews: number; passed: number; unknown: number; notApplicable: number }
   coverageState: 'complete' | 'partial'
 }) {
   const meta = summaryMeta(verdict, target, reviewedThrough, summary, coverageState)
@@ -247,7 +309,8 @@ function UpgradeSummary({ verdict, target, reviewedThrough, summary, coverageSta
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pl-11 text-xs tabular-nums text-theme-text-secondary sm:pl-0">
         {summary.blocked > 0 && <SummaryCount tone="error" value={summary.blocked} label="blocked" />}
-        {summary.warnings > 0 && <SummaryCount tone="warning" value={summary.warnings} label="review" />}
+        {summary.warnings > 0 && <SummaryCount tone="warning" value={summary.warnings} label="warning" />}
+        {summary.reviews > 0 && <SummaryCount tone="info" value={summary.reviews} label="review" />}
         {summary.passed > 0 && <SummaryCount tone="success" value={summary.passed} label="passed" />}
         {summary.unknown > 0 && <SummaryCount tone="neutral" value={summary.unknown} label="incomplete" />}
         {summary.notApplicable > 0 && <span>{summary.notApplicable} not applicable</span>}
@@ -256,8 +319,8 @@ function UpgradeSummary({ verdict, target, reviewedThrough, summary, coverageSta
   )
 }
 
-function SummaryCount({ tone, value, label }: { tone: 'error' | 'warning' | 'success' | 'neutral'; value: number; label: string }) {
-  const dot = { error: 'bg-red-500', warning: 'bg-amber-500', success: 'bg-emerald-500', neutral: 'bg-theme-text-tertiary' }[tone]
+function SummaryCount({ tone, value, label }: { tone: 'error' | 'warning' | 'info' | 'success' | 'neutral'; value: number; label: string }) {
+  const dot = { error: 'bg-red-500', warning: 'bg-amber-500', info: 'bg-blue-500', success: 'bg-emerald-500', neutral: 'bg-theme-text-tertiary' }[tone]
   return <span className="inline-flex items-center gap-1.5"><span className={clsx('h-1.5 w-1.5 rounded-full', dot)} />{value} {label}</span>
 }
 
@@ -265,7 +328,7 @@ function summaryMeta(
   verdict: UpgradeReadinessVerdict,
   target: string,
   reviewedThrough: string,
-  summary: { blocked: number; warnings: number; unknown: number },
+  summary: { blocked: number; warnings: number; reviews: number; unknown: number },
   coverageState: 'complete' | 'partial',
 ) {
   if (verdict === 'blocked') return {
@@ -273,10 +336,15 @@ function summaryMeta(
     body: `Resolve blocked checks before moving the control plane to Kubernetes ${target}.`,
     icon: AlertCircle, iconClass: 'text-red-600 dark:text-red-400', className: 'border-red-500/30 bg-red-500/5',
   }
-  if (verdict === 'review') return {
-    headline: `No blockers found · ${summary.warnings} ${summary.warnings === 1 ? 'change needs' : 'changes need'} review`,
-    body: `Review the affected configuration before scheduling Kubernetes ${target}.`,
+  if (verdict === 'warning') return {
+    headline: `No blockers found · ${summary.warnings} ${summary.warnings === 1 ? 'warning needs' : 'warnings need'} attention`,
+    body: `Resolve or explicitly accept these risks before scheduling Kubernetes ${target}.`,
     icon: AlertTriangle, iconClass: 'text-amber-600 dark:text-amber-400', className: 'border-amber-500/30 bg-amber-500/5',
+  }
+  if (verdict === 'review') return {
+    headline: `No blockers found · ${summary.reviews} ${summary.reviews === 1 ? 'item needs' : 'items need'} review`,
+    body: `Verify the affected configuration before scheduling Kubernetes ${target}.`,
+    icon: FileSearch, iconClass: 'text-blue-600 dark:text-blue-400', className: 'border-blue-500/30 bg-blue-500/5',
   }
   if (verdict === 'unknown') return {
     headline: 'No blockers found · coverage is incomplete',
@@ -307,11 +375,8 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
   const meta = statusMeta[check.status]
   const Icon = meta.icon
   const [open, setOpen] = useState(false)
-  const [showAllFindings, setShowAllFindings] = useState(false)
   const detailID = `upgrade-check-${check.id}`
-  const visibleFindings = showAllFindings ? check.findings : check.findings.slice(0, FINDING_CAP)
-  const hiddenFindings = check.findings.length - visibleFindings.length
-  const sharedFinding = sharedFindingDetails(check.findings)
+  const findingGroups = groupFindings(check.findings)
   const label = evidenceLabel(check)
   const findingReferenceURLs = new Set(check.findings.flatMap((finding) => finding.references.map((reference) => reference.url)))
   const checkReferences = (check.references ?? []).filter((reference) => !findingReferenceURLs.has(reference.url))
@@ -345,24 +410,21 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
       <Collapse open={open} mountLazily>
         <div id={detailID} className="border-t border-theme-border bg-theme-base/40 px-4 py-3">
           {check.findings.length > 0 && (
-            <div className={clsx(!sharedFinding && 'divide-y divide-theme-border/70')}>
-              {sharedFinding ? (
-                <SharedFindingGroup
-                  finding={sharedFinding}
-                  findings={visibleFindings}
-                  total={check.findings.length}
-                  hidden={hiddenFindings}
-                  onShowAll={() => setShowAllFindings(true)}
-                  onNavigateToResource={onNavigateToResource}
-                />
-              ) : (
-                <>
-                  {visibleFindings.map((finding, index) => (
-                    <FindingRow key={findingKey(finding, index)} finding={finding} onNavigateToResource={onNavigateToResource} />
-                  ))}
-                  {hiddenFindings > 0 && <ShowAllFindings total={check.findings.length} onClick={() => setShowAllFindings(true)} />}
-                </>
-              )}
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-theme-text-tertiary">
+                <span className="font-medium uppercase tracking-wide">Issue types</span>
+                <span>{findingGroups.length} {findingGroups.length === 1 ? 'type' : 'types'} · {check.findings.length} affected {check.findings.length === 1 ? 'resource' : 'resources'}</span>
+              </div>
+              <div className="divide-y divide-theme-border overflow-hidden rounded-lg border border-theme-border bg-theme-surface">
+                {findingGroups.map((group, index) => (
+                  <FindingGroupRow
+                    key={group.key}
+                    id={`${detailID}-issue-${index}`}
+                    group={group}
+                    onNavigateToResource={onNavigateToResource}
+                  />
+                ))}
+              </div>
             </div>
           )}
           <div className={clsx('flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-theme-text-tertiary', check.findings.length > 0 && 'mt-3 border-t-subtle pt-3')}>
@@ -377,52 +439,81 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
   )
 }
 
-function sharedFindingDetails(findings: UpgradeReadinessFinding[]) {
-  if (findings.length < 2) return undefined
-  const first = findings[0]
-  const referenceKey = JSON.stringify(first.references)
-  return findings.every((finding) =>
-    finding.ruleID === first.ruleID
-    && finding.title === first.title
-    && finding.level === first.level
-    && finding.impact === first.impact
-    && finding.remediation === first.remediation
-    && finding.appliesFrom === first.appliesFrom
-    && JSON.stringify(finding.references) === referenceKey
-  ) ? first : undefined
+export function groupFindings(findings: UpgradeReadinessFinding[]) {
+  const groups = new Map<string, UpgradeReadinessFinding[]>()
+  for (const finding of findings) {
+    const key = findingGroupKey(finding)
+    const grouped = groups.get(key)
+    if (grouped) grouped.push(finding)
+    else groups.set(key, [finding])
+  }
+  return [...groups.entries()].map(([key, grouped]) => ({ key, findings: grouped, total: grouped.length }))
 }
 
-function SharedFindingGroup({ finding, findings, total, hidden, onShowAll, onNavigateToResource }: {
-  finding: UpgradeReadinessFinding
-  findings: UpgradeReadinessFinding[]
-  total: number
-  hidden: number
-  onShowAll: () => void
+function FindingGroupRow({ id, group, onNavigateToResource }: {
+  id: string
+  group: ReturnType<typeof groupFindings>[number]
   onNavigateToResource: (resource: SelectedResource) => void
 }) {
+  const [open, setOpen] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  const finding = group.findings[0]
+  const level = findingLevelMeta(finding.level)
+  const preview = group.findings.slice(0, FINDING_CAP)
+  const remaining = group.findings.slice(FINDING_CAP)
   return (
     <article>
-      <div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge severity={finding.level === 'blocker' ? 'error' : 'warning'}>{finding.level === 'blocker' ? 'Blocker' : 'Review'}</Badge>
-          <span className="text-xs font-medium text-theme-text-primary">{finding.title}</span>
-          <span className="text-[11px] text-theme-text-tertiary">{total} findings</span>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20"
+      >
+        <span className="flex min-w-0 flex-wrap items-center gap-2">
+          <Badge severity={level.severity}>{level.label}</Badge>
+          <span className="truncate text-xs font-medium text-theme-text-primary">{finding.title}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2 text-[11px] text-theme-text-tertiary">
+          {group.total} affected
+          <CollapseChevron open={open} className="h-3.5 w-3.5" />
+        </span>
+      </button>
+      <Collapse open={open} mountLazily>
+        <div id={id} className="border-t border-theme-border bg-theme-base/30 px-3 py-3">
+          <div className="grid gap-3 lg:grid-cols-2">
+            <FindingDetail icon={AlertTriangle} label="Impact">{finding.impact}</FindingDetail>
+            <FindingDetail icon={Wrench} label="Remediation">{finding.remediation}</FindingDetail>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t-subtle pt-2 text-[11px] text-theme-text-tertiary">
+            {finding.appliesFrom && <span>Applies from Kubernetes {finding.appliesFrom}</span>}
+            {finding.references.map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
+          </div>
+          <div className="mt-3 divide-y divide-theme-border/70 border-t-subtle">
+            {preview.map((item, index) => (
+              <CompactFindingRow key={findingKey(item, index)} finding={item} onNavigateToResource={onNavigateToResource} />
+            ))}
+            {remaining.length > 0 && (
+              <Collapse open={showAll}>
+                <div className="divide-y divide-theme-border/70">
+                  {remaining.map((item, index) => (
+                    <CompactFindingRow key={findingKey(item, index + FINDING_CAP)} finding={item} onNavigateToResource={onNavigateToResource} />
+                  ))}
+                </div>
+              </Collapse>
+            )}
+          </div>
+          {remaining.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAll((value) => !value)}
+              className="mt-2 inline-flex w-fit items-center gap-1 rounded px-1 py-1 text-xs font-medium text-accent-text hover:underline"
+            >
+              {showAll ? 'Show fewer affected resources' : `Show all ${group.total} affected resources`}
+            </button>
+          )}
         </div>
-        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          <FindingDetail icon={AlertTriangle} label="Impact">{finding.impact}</FindingDetail>
-          <FindingDetail icon={Wrench} label="Remediation">{finding.remediation}</FindingDetail>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t-subtle pt-2 text-[11px] text-theme-text-tertiary">
-          {finding.appliesFrom && <span>Applies from Kubernetes {finding.appliesFrom}</span>}
-          {finding.references.map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
-        </div>
-      </div>
-      <div className="mt-3 divide-y divide-theme-border/70 border-t-subtle">
-        {findings.map((item, index) => (
-          <CompactFindingRow key={findingKey(item, index)} finding={item} onNavigateToResource={onNavigateToResource} />
-        ))}
-      </div>
-      {hidden > 0 && <div className="border-t-subtle py-1.5"><ShowAllFindings total={total} onClick={onShowAll} /></div>}
+      </Collapse>
     </article>
   )
 }
@@ -450,18 +541,6 @@ function CompactFindingRow({ finding, onNavigateToResource }: {
   )
 }
 
-function ShowAllFindings({ total, onClick }: { total: number; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex w-fit items-center gap-1 rounded px-2 py-1 text-xs font-medium text-accent-text hover:underline"
-    >
-      View all {total} findings →
-    </button>
-  )
-}
-
 function formatNamespaceScope(namespaces: string[]) {
   if (namespaces.length <= 3) return namespaces.join(', ')
   return `${namespaces.slice(0, 3).join(', ')} and ${namespaces.length - 3} more`
@@ -471,38 +550,6 @@ function evidenceLabel(check: UpgradeReadinessCheck) {
   if (check.findings.length > 0) return `${check.findings.length} ${check.findings.length === 1 ? 'finding' : 'findings'}`
   if (check.inspected !== undefined && check.inspected > 0) return `${check.inspected} inspected`
   return undefined
-}
-
-function FindingRow({ finding, onNavigateToResource }: { finding: UpgradeReadinessFinding; onNavigateToResource: (resource: SelectedResource) => void }) {
-  const resourceLabel = finding.resource && `${finding.resource.namespace ? `${finding.resource.namespace}/` : ''}${finding.resource.name}`
-  return (
-    <article className="py-3 first:pt-0 last:pb-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge severity={finding.level === 'blocker' ? 'error' : 'warning'}>{finding.level === 'blocker' ? 'Blocker' : 'Review'}</Badge>
-        <span className="text-xs font-medium text-theme-text-primary">{finding.title}</span>
-        {finding.resource && (
-          <button
-            type="button"
-            onClick={() => onNavigateToResource({ ...finding.resource!, group: finding.resource!.group ?? '' })}
-            className="ml-auto flex min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-left transition-colors hover:bg-theme-hover"
-          >
-            <Badge kind={finding.resource.kind} size="sm">{finding.resource.kind}</Badge>
-            <span className="max-w-[280px] truncate text-xs font-medium text-accent-text">{resourceLabel}</span>
-          </button>
-        )}
-      </div>
-      <div className="mt-3 grid gap-3 lg:grid-cols-2">
-        <FindingDetail icon={AlertTriangle} label="Impact">{finding.impact}</FindingDetail>
-        <FindingDetail icon={Wrench} label="Remediation">{finding.remediation}</FindingDetail>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t-subtle pt-2 text-[11px] text-theme-text-tertiary">
-        <span className="inline-flex items-center gap-1"><FileSearch className="h-3 w-3" />{finding.evidence.source}: <code>{finding.evidence.path}</code>{finding.evidence.detail ? ` · ${finding.evidence.detail}` : ''}</span>
-        {finding.appliesFrom && <span>Applies from Kubernetes {finding.appliesFrom}</span>}
-        {finding.managedBy && <span>Managed by {finding.managedBy.kind} {finding.managedBy.namespace ? `${finding.managedBy.namespace}/` : ''}{finding.managedBy.name}</span>}
-        {finding.references.map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
-      </div>
-    </article>
-  )
 }
 
 function FindingDetail({ icon: Icon, label, children }: { icon: typeof AlertTriangle; label: string; children: React.ReactNode }) {
@@ -521,6 +568,29 @@ function ReferenceLink({ reference }: { reference: { title: string; url: string 
 function findingKey(finding: UpgradeReadinessFinding, index: number) {
   const resource = finding.resource
   return `${finding.ruleID}:${resource?.group ?? ''}:${resource?.kind ?? ''}:${resource?.namespace ?? ''}:${resource?.name ?? ''}:${finding.evidence.path}:${index}`
+}
+
+function findingGroupKey(finding: UpgradeReadinessFinding) {
+  return JSON.stringify([
+    finding.ruleID,
+    finding.title,
+    finding.level,
+    finding.impact,
+    finding.remediation,
+    finding.appliesFrom,
+    finding.references,
+  ])
+}
+
+function findingLevelMeta(level: UpgradeReadinessFinding['level']) {
+  switch (level) {
+    case 'blocker':
+      return { label: 'Blocker', severity: 'error' as const }
+    case 'warning':
+      return { label: 'Warning', severity: 'warning' as const }
+    default:
+      return { label: 'Review', severity: 'info' as const }
+  }
 }
 
 function buildTargetOptions(current?: string, reviewed?: string, selected?: string) {

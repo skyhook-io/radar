@@ -12,6 +12,48 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+// State is the structured value of one Kubernetes status condition. Status is
+// intentionally kept as a string so callers can distinguish True, False,
+// Unknown, and malformed values without this neutral package assigning product
+// semantics to them.
+type State struct {
+	Status  string
+	Reason  string
+	Message string
+}
+
+// Find returns the first condition with the requested type. The v1beta2 shape
+// is checked first to match FindFalseCondition's established precedence.
+func Find(obj *unstructured.Unstructured, condType string) (State, bool) {
+	if obj == nil || condType == "" {
+		return State{}, false
+	}
+	condSlices := [][]any{}
+	if v1b2, ok, _ := unstructured.NestedSlice(obj.Object, "status", "v1beta2", "conditions"); ok {
+		condSlices = append(condSlices, v1b2)
+	}
+	if v1b1, ok, _ := unstructured.NestedSlice(obj.Object, "status", "conditions"); ok {
+		condSlices = append(condSlices, v1b1)
+	}
+	for _, conds := range condSlices {
+		for _, raw := range conds {
+			condition, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			conditionType, _ := condition["type"].(string)
+			if conditionType != condType {
+				continue
+			}
+			status, _ := condition["status"].(string)
+			reason, _ := condition["reason"].(string)
+			message, _ := condition["message"].(string)
+			return State{Status: status, Reason: reason, Message: message}, true
+		}
+	}
+	return State{}, false
+}
+
 // DefaultFalseConditionTypes is the set of "is this resource healthy?" condition
 // types the generic CRD fallback flags when False. Order matters only for
 // tiebreaking when multiple are False — first hit wins, biasing toward the

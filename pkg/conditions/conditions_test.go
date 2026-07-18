@@ -75,3 +75,57 @@ func TestFindFalseCondition_V1beta2TakesPrecedence(t *testing.T) {
 		t.Fatalf("got reason=%q ok=%v, want V1Beta2Reason/true (v1beta2 must take precedence)", reason, ok)
 	}
 }
+
+func TestFind(t *testing.T) {
+	tests := []struct {
+		name      string
+		object    *unstructured.Unstructured
+		condition string
+		want      State
+		found     bool
+	}{
+		{
+			name: "returns structured condition",
+			object: cond(map[string]any{"conditions": []any{
+				map[string]any{"type": "Available", "status": "False", "reason": "ServiceNotFound", "message": "backend is missing"},
+			}}),
+			condition: "Available",
+			want:      State{Status: "False", Reason: "ServiceNotFound", Message: "backend is missing"},
+			found:     true,
+		},
+		{
+			name: "preserves malformed status",
+			object: cond(map[string]any{"conditions": []any{
+				map[string]any{"type": "Available", "status": true},
+			}}),
+			condition: "Available",
+			want:      State{},
+			found:     true,
+		},
+		{name: "condition absent", object: cond(map[string]any{}), condition: "Available"},
+		{name: "nil object", condition: "Available"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found := Find(tt.object, tt.condition)
+			if found != tt.found || got != tt.want {
+				t.Fatalf("Find() = (%+v, %v), want (%+v, %v)", got, found, tt.want, tt.found)
+			}
+		})
+	}
+}
+
+func TestFind_V1beta2TakesPrecedence(t *testing.T) {
+	object := cond(map[string]any{
+		"v1beta2": map[string]any{"conditions": []any{
+			map[string]any{"type": "Available", "status": "True", "reason": "Current"},
+		}},
+		"conditions": []any{
+			map[string]any{"type": "Available", "status": "False", "reason": "Legacy"},
+		},
+	})
+	got, found := Find(object, "Available")
+	if !found || got.Status != "True" || got.Reason != "Current" {
+		t.Fatalf("Find() = (%+v, %v), want v1beta2 condition", got, found)
+	}
+}

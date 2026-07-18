@@ -446,12 +446,12 @@ Proactive best-practices scanner with 31 checks across security, reliability, an
 
 ### Kubernetes Upgrade Impact
 
-Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action. Release-specific checks appear only when their Kubernetes minor lies in the selected upgrade path; the current catalog contains 17 checks through Kubernetes 1.36.
+Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action. Release-specific checks appear only when their Kubernetes minor lies in the selected upgrade path; the current catalog contains 18 checks through Kubernetes 1.36.
 
-- Finds blockers such as skipped minor versions, APIs removed in the target release, unsupported kubelet or kube-proxy skew, and the `gitRepo` volume driver disabled in Kubernetes 1.36
-- Flags changes that need review, including FlexVolume exposure, deprecated Service `externalIPs`, and renamed control-plane metrics
-- Inspects live resources, Helm release manifests, kubectl last-applied configuration, API server usage metrics, and PrometheusRule expressions
-- Distinguishes **Passed**, **Review**, **Blocked**, **Incomplete**, and **Not applicable** instead of treating missing evidence as a clean result
+- Finds blockers such as skipped minor versions, APIs removed in the target release, unsupported kubelet or kube-proxy skew, overlapping PodDisruptionBudgets, and the `gitRepo` volume driver disabled in Kubernetes 1.36
+- Flags likely operational impact such as FlexVolume exposure and renamed control-plane metrics as warnings, while intent-dependent configuration such as deprecated Service `externalIPs` remains review
+- Inspects live resources, aggregated API availability, Helm release manifests, kubectl last-applied configuration, API server usage metrics, and PrometheusRule expressions
+- Distinguishes **Passed**, **Review**, **Warning**, **Blocked**, **Incomplete**, and **Not applicable** instead of flattening advisory findings, likely impact, and missing evidence into one state
 - Scans every namespace the current identity can read; the header namespace picker remains a browsing filter and does not narrow upgrade analysis
 - Shows the bundled catalog boundary and the evidence scope for sampled or unavailable data
 

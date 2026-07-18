@@ -98,6 +98,7 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 		scanNodeDrainFeasibility(input),
 		scanAdmissionWebhookReadiness(input),
 		scanCRDConversionWebhookReadiness(input),
+		scanAPIServiceReadiness(input),
 	)
 
 	for i := range result.Checks {
@@ -112,6 +113,8 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 			result.Summary.Blocked++
 		case CheckWarning:
 			result.Summary.Warnings++
+		case CheckReview:
+			result.Summary.Reviews++
 		case CheckPassed:
 			result.Summary.Passed++
 		case CheckUnknown:
@@ -126,6 +129,8 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 	case result.Summary.Blocked > 0:
 		result.Verdict = VerdictBlocked
 	case result.Summary.Warnings > 0:
+		result.Verdict = VerdictWarning
+	case result.Summary.Reviews > 0:
 		result.Verdict = VerdictReview
 	case result.Summary.Unknown > 0 || target.GreaterThan(reviewed) || result.Coverage.State != "complete":
 		result.Verdict = VerdictUnknown
@@ -194,7 +199,7 @@ func finalizeCheck(check *Check) {
 	}
 	sort.Slice(check.Findings, func(i, j int) bool {
 		if check.Findings[i].Level != check.Findings[j].Level {
-			return check.Findings[i].Level == LevelBlocker
+			return findingLevelOrder(check.Findings[i].Level) < findingLevelOrder(check.Findings[j].Level)
 		}
 		a, b := check.Findings[i].Resource, check.Findings[j].Resource
 		if a == nil || b == nil {
@@ -214,8 +219,25 @@ func finalizeCheck(check *Check) {
 			return
 		}
 	}
-	if len(check.Findings) > 0 && check.Status != CheckUnknown {
-		check.Status = CheckWarning
+	for _, finding := range check.Findings {
+		if finding.Level == LevelWarning {
+			check.Status = CheckWarning
+			return
+		}
+	}
+	if len(check.Findings) > 0 {
+		check.Status = CheckReview
+	}
+}
+
+func findingLevelOrder(level Level) int {
+	switch level {
+	case LevelBlocker:
+		return 0
+	case LevelWarning:
+		return 1
+	default:
+		return 2
 	}
 }
 
@@ -314,7 +336,7 @@ func scanManifestCompatibility(input *Input, target *utilversion.Version) Check 
 			}
 			deprecated, depErr := parseMinor(entry.DeprecatedIn)
 			removed, remErr := parseMinor(entry.RemovedIn)
-			level := LevelWarning
+			level := LevelReview
 			appliesFrom := ""
 			impact := "This manifest uses an API deprecated by the target Kubernetes version."
 			if remErr == nil && target.AtLeast(removed) {
@@ -436,6 +458,10 @@ func scanKubeletSkew(input *Input, target *utilversion.Version) Check {
 		}
 		if version.LessThan(minimum) || version.GreaterThan(target) {
 			ref := &ResourceRef{Kind: "Node", Name: node.Name}
+			remediation := fmt.Sprintf("Upgrade this node's kubelet to at least Kubernetes %s before upgrading the control plane.", minorString(minimum))
+			if version.GreaterThan(target) {
+				remediation = fmt.Sprintf("This kubelet is newer than the Kubernetes %s target. Choose a target that supports kubelet %s or replace the node with a target-compatible version.", minorString(target), minorString(version))
+			}
 			check.Findings = append(check.Findings, Finding{
 				RuleID:      check.ID,
 				Title:       "Unsupported kubelet " + minorString(version),
@@ -444,7 +470,7 @@ func scanKubeletSkew(input *Input, target *utilversion.Version) Check {
 				Evidence:    Evidence{Source: "live", Path: "status.nodeInfo.kubeletVersion", Detail: node.Status.NodeInfo.KubeletVersion},
 				AppliesFrom: minorString(target),
 				Impact:      fmt.Sprintf("Kubernetes %s supports kubelets from %s through %s.", minorString(target), minorString(minimum), minorString(target)),
-				Remediation: fmt.Sprintf("Upgrade this node's kubelet to at least Kubernetes %s before upgrading the control plane.", minorString(minimum)),
+				Remediation: remediation,
 				References:  append([]Reference(nil), versionSkewReferences...),
 			})
 		}
@@ -552,7 +578,7 @@ func scanGitRepo(input *Input, index *workloadIndex) Check {
 			if volume.GitRepo == nil {
 				continue
 			}
-			check.Findings = append(check.Findings, workloadFinding(subject, check, LevelBlocker,
+			check.Findings = append(check.Findings, workloadFinding(subject, check, check.Title, LevelBlocker,
 				fmt.Sprintf("%s.volumes[%d].gitRepo", subject.pathPrefix, i),
 				"Pods that reference a gitRepo volume cannot start because Kubernetes 1.36 disables the driver by default with no option to turn it back on.",
 				"Clone the repository into an emptyDir from an init container, then mount that emptyDir into the workload containers."))
@@ -564,9 +590,13 @@ func scanGitRepo(input *Input, index *workloadIndex) Check {
 	if workloadsUnavailable(input) {
 		check.Caveat = appendCaveat(check.Caveat, "One or more workload kinds were unavailable, so additional gitRepo usage may exist.")
 	}
-	if len(check.Findings) == 0 && workloadsUnavailable(input) {
+	if len(check.Findings) == 0 && (workloadsUnavailable(input) || input.Namespaces != nil) {
 		check.Status = CheckUnknown
-		check.Summary = "Workload coverage is incomplete; gitRepo volume usage could not be ruled out."
+		if input.Namespaces != nil {
+			check.Summary = "No gitRepo usage was found in the selected namespace scope, but workload coverage is incomplete."
+		} else {
+			check.Summary = "Workload coverage is incomplete; gitRepo volume usage could not be ruled out."
+		}
 	}
 	return check
 }
@@ -598,7 +628,7 @@ func scanFlexVolume(input *Input, index *workloadIndex) Check {
 			if volume.FlexVolume == nil {
 				continue
 			}
-			check.Findings = append(check.Findings, workloadFinding(subject, check, LevelWarning,
+			check.Findings = append(check.Findings, workloadFinding(subject, check, "Workload uses a FlexVolume volume", LevelWarning,
 				fmt.Sprintf("%s.volumes[%d].flexVolume", subject.pathPrefix, i),
 				"Kubernetes 1.36 removes kubeadm's integrated FlexVolume setup; kubeadm-managed clusters need explicit controller-manager configuration.",
 				"Migrate the volume to a CSI driver, or verify the required custom kube-controller-manager image, flag, and mount before upgrading."))
@@ -611,7 +641,7 @@ func scanFlexVolume(input *Input, index *workloadIndex) Check {
 		ref := &ResourceRef{Kind: "PersistentVolume", Name: volume.Name}
 		check.Findings = append(check.Findings, Finding{
 			RuleID:      check.ID,
-			Title:       check.Title,
+			Title:       "PersistentVolume uses FlexVolume",
 			Level:       LevelWarning,
 			Resource:    ref,
 			Evidence:    Evidence{Source: "live", Path: "spec.flexVolume"},
@@ -622,14 +652,18 @@ func scanFlexVolume(input *Input, index *workloadIndex) Check {
 		})
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d FlexVolume %s %s manual review for Kubernetes 1.36.", len(check.Findings), plural(len(check.Findings), "reference", "references"), plural(len(check.Findings), "needs", "need"))
+		check.Summary = fmt.Sprintf("%d FlexVolume %s %s attention for Kubernetes 1.36.", len(check.Findings), plural(len(check.Findings), "reference", "references"), plural(len(check.Findings), "needs", "need"))
 	}
 	if workloadsUnavailable(input) || input.PersistentVolumes == nil {
 		check.Caveat = appendCaveat(check.Caveat, "Workload or PersistentVolume coverage is incomplete, so additional FlexVolume usage may exist.")
 	}
-	if len(check.Findings) == 0 && (workloadsUnavailable(input) || input.PersistentVolumes == nil) {
+	if len(check.Findings) == 0 && (workloadsUnavailable(input) || input.PersistentVolumes == nil || input.Namespaces != nil) {
 		check.Status = CheckUnknown
-		check.Summary = "Workload or PersistentVolume coverage is incomplete; FlexVolume usage could not be ruled out."
+		if input.Namespaces != nil {
+			check.Summary = "No FlexVolume usage was found in workloads in the selected namespace scope or inspected PersistentVolumes, but workload coverage is incomplete."
+		} else {
+			check.Summary = "Workload or PersistentVolume coverage is incomplete; FlexVolume usage could not be ruled out."
+		}
 	}
 	return check
 }
@@ -693,7 +727,7 @@ func scanServiceExternalIPs(input *Input) Check {
 		check.Findings = append(check.Findings, Finding{
 			RuleID:      check.ID,
 			Title:       check.Title,
-			Level:       LevelWarning,
+			Level:       LevelReview,
 			Resource:    ref,
 			ManagedBy:   managedByRef(service, *ref),
 			Evidence:    Evidence{Source: "live", Path: "spec.externalIPs", Detail: strings.Join(service.Spec.ExternalIPs, ", ")},
@@ -705,6 +739,9 @@ func scanServiceExternalIPs(input *Input) Check {
 	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d %s %s deprecated spec.externalIPs.", len(check.Findings), plural(len(check.Findings), "Service", "Services"), plural(len(check.Findings), "uses", "use"))
+	} else if input.Namespaces != nil {
+		check.Status = CheckUnknown
+		check.Summary = "No deprecated spec.externalIPs usage was found in Services in the selected namespace scope, but Service coverage is incomplete."
 	}
 	return check
 }
@@ -834,11 +871,11 @@ func workloadSubjects(input *Input, index *workloadIndex) []podSpecSubject {
 	return subjects
 }
 
-func workloadFinding(subject podSpecSubject, check Check, level Level, path, impact, remediation string) Finding {
+func workloadFinding(subject podSpecSubject, check Check, title string, level Level, path, impact, remediation string) Finding {
 	resource := subject.resource
 	return Finding{
 		RuleID:      check.ID,
-		Title:       check.Title,
+		Title:       title,
 		Level:       level,
 		Resource:    &resource,
 		ManagedBy:   managedByRef(subject.obj, resource),
@@ -1031,6 +1068,7 @@ func unavailableKinds(input *Input) []string {
 		{"services", input.Services != nil},
 		{"persistentvolumes", input.PersistentVolumes != nil},
 		{"nodes", input.Nodes != nil},
+		{"apiservices", input.APIServices != nil},
 	}
 	for _, item := range checks {
 		if !item.available {

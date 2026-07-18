@@ -31,6 +31,7 @@ func completeInput() *Input {
 		EndpointSlices:                 []*discoveryv1.EndpointSlice{},
 		AdmissionWebhookConfigurations: []*unstructured.Unstructured{},
 		CustomResourceDefinitions:      []*unstructured.Unstructured{},
+		APIServices:                    []*unstructured.Unstructured{},
 		NodeRuntimeEvidence:            []NodeRuntimeEvidence{{NodeName: "node-a", MetricsAvailable: true, CgroupVersion: 2, CgroupVersionAvailable: true}},
 		ManifestResources: []ManifestResource{{
 			APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "api", Source: "Helm",
@@ -81,11 +82,11 @@ func TestScanBaselineCanPassWithSampledMetricsEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Verdict != VerdictNoKnownBlockers || got.Summary.Blocked != 0 || got.Summary.Passed != 12 || got.Summary.Unknown != 0 || got.Summary.NotApplicable != 3 {
+	if got.Verdict != VerdictNoKnownBlockers || got.Summary.Blocked != 0 || got.Summary.Passed != 12 || got.Summary.Unknown != 0 || got.Summary.NotApplicable != 4 {
 		t.Fatalf("unexpected result: %+v", got)
 	}
-	if len(got.Checks) != 15 {
-		t.Fatalf("checks = %d, want 15", len(got.Checks))
+	if len(got.Checks) != 16 {
+		t.Fatalf("checks = %d, want 16", len(got.Checks))
 	}
 	metrics := checkByID(t, got, "deprecated-api-requests")
 	if metrics.Status != CheckPassed || metrics.EvidenceNote == "" || metrics.Caveat != "" {
@@ -165,7 +166,7 @@ func TestScanScopedNamespaceDoesNotClaimClusterWideCoverage(t *testing.T) {
 	if proxy.Status != CheckUnknown {
 		t.Fatalf("kube-proxy outside namespace scope must be unknown: %+v", proxy)
 	}
-	for _, id := range []string{"manifest-api-compatibility", "gitrepo-volume-removed", "flexvolume-kubeadm-support", "service-externalips-deprecated", "renamed-control-plane-metrics"} {
+	for _, id := range []string{"manifest-api-compatibility", "gitrepo-volume-removed", "flexvolume-kubeadm-support", "service-externalips-deprecated", "renamed-control-plane-metrics", "strict-ip-cidr-validation", "node-drain-feasibility"} {
 		check := checkByID(t, got, id)
 		if check.Caveat == "" || !strings.Contains(check.Summary, "selected namespace scope") {
 			t.Fatalf("%s must qualify namespace-scoped evidence: %+v", id, check)
@@ -254,6 +255,19 @@ func TestScanHealthAndComponentSkew(t *testing.T) {
 	}
 }
 
+func TestKubeletNewerThanTargetHasCorrectRemediation(t *testing.T) {
+	input := completeInput()
+	input.Nodes = []*corev1.Node{readyNode("newer", "v1.37.2")}
+	got, err := Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := checkByID(t, got, "kubelet-version-skew")
+	if check.Status != CheckBlocked || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Remediation, "newer than the Kubernetes 1.36 target") {
+		t.Fatalf("too-new kubelet remediation = %+v", check)
+	}
+}
+
 func TestScanSkewFindingRetainsUnparsedVersionCaveat(t *testing.T) {
 	input := completeInput()
 	input.Nodes = []*corev1.Node{readyNode("old", "v1.31.9"), readyNode("unknown", "vendor-build")}
@@ -266,6 +280,7 @@ func TestScanSkewFindingRetainsUnparsedVersionCaveat(t *testing.T) {
 
 func TestScanKubernetes136ConfigurationChanges(t *testing.T) {
 	input := completeInput()
+	input.Deployments = []*appsv1.Deployment{{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "legacy", VolumeSource: corev1.VolumeSource{FlexVolume: &corev1.FlexVolumeSource{Driver: "example.com/driver"}}}}}}}}}
 	input.Services = []*corev1.Service{
 		{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "default"}, Spec: corev1.ServiceSpec{ExternalIPs: []string{"203.0.113.10"}}},
 		{ObjectMeta: metav1.ObjectMeta{Name: "legacy-secondary", Namespace: "default"}, Spec: corev1.ServiceSpec{ExternalIPs: []string{"203.0.113.11"}}},
@@ -291,12 +306,20 @@ func TestScanKubernetes136ConfigurationChanges(t *testing.T) {
 	for _, id := range []string{"flexvolume-kubeadm-support", "service-externalips-deprecated", "renamed-control-plane-metrics"} {
 		check := checkByID(t, got, id)
 		wantFindings := 1
-		if id == "renamed-control-plane-metrics" || id == "service-externalips-deprecated" {
+		if id == "flexvolume-kubeadm-support" || id == "renamed-control-plane-metrics" || id == "service-externalips-deprecated" {
 			wantFindings = 2
 		}
-		if check.Status != CheckWarning || len(check.Findings) != wantFindings {
+		wantStatus := CheckWarning
+		if id == "service-externalips-deprecated" {
+			wantStatus = CheckReview
+		}
+		if check.Status != wantStatus || len(check.Findings) != wantFindings {
 			t.Fatalf("%s = %+v", id, check)
 		}
+	}
+	flex := checkByID(t, got, "flexvolume-kubeadm-support")
+	if flex.Findings[0].Title == flex.Findings[1].Title {
+		t.Fatalf("FlexVolume issue types must distinguish workload and PersistentVolume exposure: %+v", flex.Findings)
 	}
 	if got := checkByID(t, got, "service-externalips-deprecated").Summary; got != "2 Services use deprecated spec.externalIPs." {
 		t.Fatalf("Service summary = %q", got)
@@ -371,6 +394,49 @@ func TestScanCoverageAndVerdictPrecedence(t *testing.T) {
 	got, _ = Scan(completeInput(), "1.36", "1.37")
 	if got.Verdict != VerdictUnknown {
 		t.Fatalf("target beyond reviewed catalog must be unknown: %+v", got)
+	}
+}
+
+func TestScanWarningAndReviewVerdictsRemainDistinct(t *testing.T) {
+	reviewInput := completeInput()
+	reviewInput.Services = []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "default"}, Spec: corev1.ServiceSpec{ExternalIPs: []string{"203.0.113.10"}}}}
+	review, err := Scan(reviewInput, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Verdict != VerdictReview || review.Summary.Reviews != 1 || review.Summary.Warnings != 0 {
+		t.Fatalf("review-only result = %+v", review)
+	}
+
+	warningInput := completeInput()
+	warningInput.Nodes[0].Status.Conditions[0].Status = corev1.ConditionFalse
+	warning, err := Scan(warningInput, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warning.Verdict != VerdictWarning || warning.Summary.Warnings != 1 || warning.Summary.Reviews != 0 {
+		t.Fatalf("warning result = %+v", warning)
+	}
+}
+
+func TestFinalizeCheckUsesHighestActionLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		findings  []Finding
+		want      CheckStatus
+		wantLevel Level
+	}{
+		{name: "review", findings: []Finding{{Level: LevelReview}}, want: CheckReview, wantLevel: LevelReview},
+		{name: "warning over review", findings: []Finding{{Level: LevelReview}, {Level: LevelWarning}}, want: CheckWarning, wantLevel: LevelWarning},
+		{name: "blocker over warning", findings: []Finding{{Level: LevelWarning}, {Level: LevelBlocker}}, want: CheckBlocked, wantLevel: LevelBlocker},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := Check{Status: CheckPassed, Findings: tc.findings}
+			finalizeCheck(&check)
+			if check.Status != tc.want || check.Findings[0].Level != tc.wantLevel {
+				t.Fatalf("finalized check = %+v, want status %s and highest action first", check, tc.want)
+			}
+		})
 	}
 }
 

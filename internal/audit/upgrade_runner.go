@@ -31,6 +31,7 @@ type UpgradeReadinessOptions struct {
 	SourceObjects                       []metav1.Object
 	AdmissionWebhookConfigurations      []*unstructured.Unstructured
 	CustomResourceDefinitions           []*unstructured.Unstructured
+	APIServices                         []*unstructured.Unstructured
 	EndpointSlices                      []*discoveryv1.EndpointSlice
 	NodeRuntimeEvidence                 []upgradereadiness.NodeRuntimeEvidence
 	AdditionalServices                  []*corev1.Service
@@ -43,6 +44,7 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 		EndpointSlices:                      opts.EndpointSlices,
 		AdmissionWebhookConfigurations:      opts.AdmissionWebhookConfigurations,
 		CustomResourceDefinitions:           opts.CustomResourceDefinitions,
+		APIServices:                         opts.APIServices,
 		NodeRuntimeEvidence:                 opts.NodeRuntimeEvidence,
 		SourceObjects:                       opts.SourceObjects,
 		SourceObjectUnavailableKinds:        opts.SourceObjectUnavailableKinds,
@@ -113,8 +115,7 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 	}
 	events := listNamespaced(cache.Events(), namespaces)
 
-	services := append([]*corev1.Service(nil), typed.Services...)
-	services = append(services, opts.AdditionalServices...)
+	services := mergeServices(typed.Services, opts.AdditionalServices)
 	input.Pods = typed.Pods
 	input.Deployments = typed.Deployments
 	input.ReplicaSets = replicaSets
@@ -129,6 +130,25 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 	input.PodDisruptionBudgets = typed.PodDisruptionBudgets
 	input.SourceObjects = sourceObjects
 	return upgradereadiness.Scan(input, opts.CurrentVersion, opts.TargetVersion)
+}
+
+func mergeServices(groups ...[]*corev1.Service) []*corev1.Service {
+	var merged []*corev1.Service
+	seen := map[string]bool{}
+	for _, services := range groups {
+		for _, service := range services {
+			if service == nil {
+				continue
+			}
+			key := service.Namespace + "/" + service.Name
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged = append(merged, service)
+		}
+	}
+	return merged
 }
 
 func cloneStrings(values []string) []string {

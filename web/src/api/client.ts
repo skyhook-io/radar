@@ -391,9 +391,9 @@ export interface AuditResponse {
   groupedChecks?: Check[];
 }
 
-export type UpgradeReadinessVerdict = 'blocked' | 'review' | 'no_known_blockers' | 'unknown'
-export type UpgradeReadinessLevel = 'blocker' | 'warning'
-export type UpgradeReadinessCheckStatus = 'passed' | 'blocked' | 'warning' | 'unknown' | 'not_applicable'
+export type UpgradeReadinessVerdict = 'blocked' | 'warning' | 'review' | 'no_known_blockers' | 'unknown'
+export type UpgradeReadinessLevel = 'blocker' | 'warning' | 'review'
+export type UpgradeReadinessCheckStatus = 'passed' | 'blocked' | 'warning' | 'review' | 'unknown' | 'not_applicable'
 
 export interface UpgradeReadinessResourceRef {
   group?: string
@@ -435,7 +435,7 @@ export interface UpgradeReadinessResponse {
   targetVersion: string
   reviewedThrough: string
   verdict: UpgradeReadinessVerdict
-  summary: { blocked: number; warnings: number; passed: number; unknown: number; notApplicable: number; findings: number }
+  summary: { blocked: number; warnings: number; reviews: number; passed: number; unknown: number; notApplicable: number; findings: number }
   checks: UpgradeReadinessCheck[]
   coverage: {
     source: 'live'
