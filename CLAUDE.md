@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-Radar is a modern Kubernetes visibility tool — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, Helm management, and cluster audit (best-practices scanning). Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Built by Skyhook.
+Radar is a modern Kubernetes visibility tool — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, Helm management, cluster audit (best-practices scanning), and Kubernetes upgrade impact analysis. Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Built by Skyhook.
 
 ## Code comments
 
@@ -140,6 +140,7 @@ Use `/visual-test` command for the full workflow (cluster check, Playwright MCP,
 - Nodes: `/api/nodes/{name}/...` (cordon, uncordon, drain, debug)
 - Audit: `/api/audit`, `/api/audit/resource/{kind}/{ns}/{name}`, `/api/settings/audit` (GET/PUT)
 - Capacity (Karpenter): `/api/capacity` (overview), `/api/capacity/pools` (+ `/{name}`, `/{name}/members`), `/api/capacity/demand` (`?state=`, `?pool=`, `?owner=ns/Kind/name`, `?pod=ns/name`), `/api/capacity/activity` — all read-only, all gated on the caller's ability to list NodePools; deliberately cluster-wide (no namespace view-filter forwarding). See [docs/capacity.md](docs/capacity.md)
+- Upgrade impact: `/api/upgrade-readiness?target={major.minor}` (GET; cluster-wide evidence bounded by the current identity's RBAC and the configured cache scope)
 - CAPI: `/api/capi/clusters/{ns}/{name}/kubeconfig` (GET), `/api/capi/clusters/{ns}/{name}/connect` (POST)
 - RBAC reverse-lookup: `/api/rbac/subject/{kind}/{namespace}/{name}` (ServiceAccount) and `/api/rbac/subject/{kind}/{name}` (User/Group) return direct + group-inherited bindings + flattened effective rules. SA subjects also get a `usedByPods` list (Pods whose `spec.serviceAccountName` matches — closes the loop on the SA detail page). `/api/rbac/role/{kind}/{namespace}/{name}` (use `_` for ClusterRole's empty namespace) returns the inverse — bindings that reference the role + their subjects. `/api/rbac/namespace/{namespace}` returns RoleBindings in the namespace + ClusterRoleBindings with at least one SA subject in it + a ServiceAccount count (backs the NamespaceRenderer's RBAC section; group-only ClusterRoleBindings like `system:authenticated` grants are deliberately excluded — they'd appear in every namespace and would be noise). `/api/rbac/whoami?namespace=...` is a pass-through of `SelfSubjectRulesReview` for the current user. Backed by `pkg/rbac/` (pure index + 5s TTL memo); endpoints gate on `list rolebindings` AND `list clusterrolebindings` (403 when either is denied — silent partial views would mislead operators).
 
