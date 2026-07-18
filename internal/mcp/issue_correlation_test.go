@@ -347,6 +347,81 @@ func TestAttachIssueChangeCorrelation_WarningOnlyTruncation(t *testing.T) {
 	}
 }
 
+// A CRD issue whose kind collides with a tracked core kind (Knative Service
+// vs core Service) must not be correlated against the same-named core
+// object's changes — and must not carry a marker either way (its own changes
+// are not tracked, so "no changes" would be a false statement).
+func TestAttachIssueChangeCorrelation_GroupCollisionNotCorrelated(t *testing.T) {
+	store := initCorrelationStore(t)
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "core-svc-change", Timestamp: time.Now().Add(-5 * time.Minute),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Service", Namespace: "shop", Name: "web",
+		EventType: timeline.EventTypeUpdate,
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.selector.app", OldValue: "a", NewValue: "b"}}, Summary: "selector changed"},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	knative := warningIssue("Service", "web")
+	knative.Group = "serving.knative.dev"
+	core := warningIssue("Service", "web") // Group empty = unknown/core, keeps correlating
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{knative, core}}
+	attachIssueChangeCorrelation(context.Background(), &resp)
+
+	if k := resp.Issues[0]; k.NoRecentChanges != nil || len(k.CorrelatedChanges) != 0 {
+		t.Fatalf("Knative-group Service must not be correlated against core Service changes: %+v", k)
+	}
+	if c := resp.Issues[1]; len(c.CorrelatedChanges) != 1 {
+		t.Fatalf("core Service should still correlate its own change, got %+v", c)
+	}
+}
+
+// Every kind the feed tracks must have a group entry — a kind added to
+// specKinds/configKinds without one silently stops correlating.
+func TestTrackedKindGroups_CoversAllTrackedKinds(t *testing.T) {
+	for _, kind := range []string{
+		"ConfigMap", "Secret",
+		"Deployment", "StatefulSet", "DaemonSet", "Service", "Ingress",
+		"HorizontalPodAutoscaler", "Application", "Kustomization", "HelmRelease",
+		"GitRepository", "OCIRepository", "HelmRepository",
+		"ResourceQuota", "LimitRange",
+		"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration",
+	} {
+		if !meaningfulchanges.TrackedKindForGroup(kind, "") {
+			t.Errorf("tracked kind %q has no group entry — correlation silently disabled for it", kind)
+		}
+	}
+}
+
+// Changes that postdate the issue's onset are annotated after_issue_onset
+// and ordered after pre-onset changes, so the cap never drops a possible
+// cause in favor of a post-onset edit.
+func TestAnnotateOnsetOrder(t *testing.T) {
+	now := time.Now()
+	firstSeen := now.Add(-30 * time.Minute)
+	pre := issuesapi.RecentChange{Name: "pre", Timestamp: now.Add(-45 * time.Minute).Format(time.RFC3339)}
+	post := issuesapi.RecentChange{Name: "post", Timestamp: now.Add(-5 * time.Minute).Format(time.RFC3339)}
+	within := issuesapi.RecentChange{Name: "within-slop", Timestamp: firstSeen.Add(time.Minute).Format(time.RFC3339)}
+	bad := issuesapi.RecentChange{Name: "unparseable", Timestamp: "not-a-time"}
+
+	out := annotateOnsetOrder([]issuesapi.RecentChange{post, pre, within, bad}, firstSeen)
+	if len(out) != 4 {
+		t.Fatalf("len = %d, want 4 (annotate, never filter)", len(out))
+	}
+	if out[len(out)-1].Name != "post" || !out[len(out)-1].AfterIssueOnset {
+		t.Fatalf("post-onset change should sort last and be annotated: %+v", out)
+	}
+	for _, c := range out[:3] {
+		if c.AfterIssueOnset {
+			t.Errorf("%s wrongly annotated after_issue_onset (slop/parse rules)", c.Name)
+		}
+	}
+	if zero := annotateOnsetOrder([]issuesapi.RecentChange{post}, time.Time{}); zero[0].AfterIssueOnset {
+		t.Error("unknown onset must not annotate")
+	}
+}
+
 // Worst-case correlation payload (cap × changes × field diffs, with realistic
 // field values) stays bounded — a guard against unnoticed schema growth now
 // that warnings are eligible too.

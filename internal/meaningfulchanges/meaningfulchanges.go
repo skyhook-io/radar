@@ -434,6 +434,40 @@ func TrackedKind(kind string) bool {
 	return isConfigKind(kind) || isSpecKind(kind)
 }
 
+// trackedKindGroups maps each tracked (canonical) kind to the API group the
+// feed actually records it from. Kind strings collide across groups — a
+// Knative Service (serving.knative.dev) is not the core Service whose
+// changes the feed tracks.
+var trackedKindGroups = map[string]string{
+	"ConfigMap": "", "Service": "", "ResourceQuota": "", "LimitRange": "", "Secret": "",
+	"Deployment": "apps", "StatefulSet": "apps", "DaemonSet": "apps",
+	"Ingress":                        "networking.k8s.io",
+	"HorizontalPodAutoscaler":        "autoscaling",
+	"Application":                    "argoproj.io",
+	"Kustomization":                  "kustomize.toolkit.fluxcd.io",
+	"HelmRelease":                    "helm.toolkit.fluxcd.io",
+	"GitRepository":                  "source.toolkit.fluxcd.io",
+	"OCIRepository":                  "source.toolkit.fluxcd.io",
+	"HelmRepository":                 "source.toolkit.fluxcd.io",
+	"MutatingWebhookConfiguration":   "admissionregistration.k8s.io",
+	"ValidatingWebhookConfiguration": "admissionregistration.k8s.io",
+}
+
+// TrackedKindForGroup is TrackedKind with kind-collision protection: when
+// the caller KNOWS the subject's API group and it differs from the group the
+// feed records for that kind, the subject is NOT tracked — correlating a
+// Knative Service against the same-named core Service's changes would
+// attach another resource's history to the issue. An empty group is
+// permissive (unknown ⇒ current behavior).
+func TrackedKindForGroup(kind, group string) bool {
+	kind = canonicalKind(kind)
+	expected, ok := trackedKindGroups[kind]
+	if !ok {
+		return false
+	}
+	return group == "" || group == expected
+}
+
 func RankAndCap(changes *[]issuesapi.RecentChange, limit int) {
 	if changes == nil {
 		return

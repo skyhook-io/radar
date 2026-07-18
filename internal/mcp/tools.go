@@ -348,8 +348,10 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"(and its referenced ConfigMaps); `no_recent_changes.window_seconds` states the " +
 			"subject had NO tracked changes in that window — evidence the issue is not " +
 			"driven by a tracked change on its own subject; untracked dependencies (Secret " +
-			"values, external systems) can still have changed. For an issue with neither " +
-			"marker, correlation is unknown (not checked under the cap — see " +
+			"values, external systems) can still have changed. A correlated change with " +
+			"`after_issue_onset: true` postdates the issue's first_seen — it cannot explain " +
+			"why the issue began, though it may explain later behavior. For an issue with " +
+			"neither marker, correlation is unknown (not checked under the cap — see " +
 			"`correlation_truncated` — or the lookup failed/saturated); never read absence " +
 			"as 'no changes'. " +
 			"ConfigMap change entries carry `consumed_by` (workloads that mount/reference " +
