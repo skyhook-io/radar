@@ -672,6 +672,7 @@ function NodeGroupsSection({
                 <thead className={TABLE_HEAD}>
                   <tr>
                     <th className={TH}>Group</th>
+                    <th className={TH}>Status</th>
                     <th className={TH}>Manager</th>
                     <th className={TH}>Nodes</th>
                     <th className={TH}>
@@ -722,6 +723,32 @@ function NodeGroupsSection({
   );
 }
 
+/** Worst-of rollup of the autoscaler's own per-child health so the collapsed
+ *  row carries the "expand me" signal: backoff outranks unhealthy outranks
+ *  healthy; health strings pass through verbatim. Null when no child reports
+ *  anything — never a fabricated "Healthy". */
+function worstChildHealth(
+  children: CapacityAutoscalerChildObservation[],
+): { label: string; tone: "healthy" | "alert"; tip?: string } | null {
+  const backoff = children.find((child) => child.backoff);
+  if (backoff) {
+    const message = backoff.backoff?.errorMessage;
+    return {
+      label: "Backoff",
+      tone: "alert",
+      tip: `${backoff.id}${message ? `: ${message}` : ""}`,
+    };
+  }
+  const unhealthy = children.find(
+    (child) => child.health && child.health.toLowerCase() !== "healthy",
+  );
+  if (unhealthy) {
+    return { label: unhealthy.health ?? "", tone: "alert", tip: unhealthy.id };
+  }
+  if (!children.some((child) => child.health)) return null;
+  return { label: "Healthy", tone: "healthy" };
+}
+
 function GroupRow({
   group,
   pool,
@@ -739,6 +766,7 @@ function GroupRow({
   const worstPressure = pool
     ? pickWorstPressure(pool.ledger.limitPressure)
     : undefined;
+  const childHealth = worstChildHealth(group.children);
   // Server-rendered prose — joined, never sorted or parsed.
   const scalingText = group.scaling.map((fact) => fact.summary).join(" · ");
 
@@ -760,8 +788,8 @@ function GroupRow({
         }
       >
         <td className={TD}>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {hasChildren && (
+          <div className="flex items-center gap-1.5">
+            {hasChildren ? (
               <button
                 type="button"
                 aria-expanded={expanded}
@@ -771,6 +799,9 @@ function GroupRow({
               >
                 <CollapseChevron open={expanded} className="h-3.5 w-3.5" />
               </button>
+            ) : (
+              // Names align across rows with and without children.
+              <span aria-hidden="true" className="w-[23px] shrink-0" />
             )}
             {isKarpenter ? (
               <LinkButton
@@ -784,11 +815,28 @@ function GroupRow({
                 {group.name}
               </span>
             )}
+          </div>
+        </td>
+        <td className={TD}>
+          <div className="flex flex-wrap items-center gap-1.5">
             {pool && <PoolReadyBadge ready={pool.ready} />}
             {worstPressure?.overLimit && (
               <Badge severity="warning" size="sm">
                 Over limit
               </Badge>
+            )}
+            {childHealth && (
+              <WithTooltip
+                tip={
+                  childHealth.tip ??
+                  "Worst of the autoscaler's own per-group health reports."
+                }
+              >
+                <span className="flex items-center gap-1 text-xs text-theme-text-secondary">
+                  <StatusDot tone={childHealth.tone} />
+                  {childHealth.label}
+                </span>
+              </WithTooltip>
             )}
             {isKarpenter && pool && (
               <LinkButton
@@ -800,6 +848,9 @@ function GroupRow({
               >
                 Inspect
               </LinkButton>
+            )}
+            {!pool && !childHealth && !worstPressure?.overLimit && (
+              <span className="text-xs text-theme-text-tertiary">—</span>
             )}
           </div>
         </td>
@@ -839,7 +890,7 @@ function GroupRow({
       </tr>
       {hasChildren && (
         <tr>
-          <td colSpan={6} className="p-0">
+          <td colSpan={7} className="p-0">
             <Collapse open={expanded}>
               <ChildSubTable group={group} />
             </Collapse>
