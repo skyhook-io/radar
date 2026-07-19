@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { UPGRADE_IMPACT_DOCS_URL, groupFindings, incompleteUpgradeCheckCount, upgradeEvaluationSummary } from './UpgradeReadinessView'
+import { UPGRADE_IMPACT_DOCS_URL, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, upgradeEvaluationSummary } from './UpgradeReadinessView'
 
 describe('upgradeEvaluationSummary', () => {
   it('distinguishes applicable, incomplete, and not-applicable checks', () => {
@@ -56,5 +56,17 @@ describe('groupFindings', () => {
       { ...base, level: 'warning', evidence: { ...base.evidence, detail: 'default/c' } },
     ])
     expect(groups.map((group) => group.total)).toEqual([2, 1])
+  })
+})
+
+describe('issueSpecificReferences', () => {
+  it('keeps check-wide sources at the parent while preserving issue-specific sources', () => {
+    const checkReferences = [{ title: 'Admission webhook good practices', url: 'https://example.com/admission' }]
+    const findingReferences = [
+      ...checkReferences,
+      { title: 'Matching requests: matchPolicy', url: 'https://example.com/admission#match-policy' },
+    ]
+
+    expect(issueSpecificReferences(checkReferences, findingReferences)).toEqual([findingReferences[1]])
   })
 })

@@ -252,6 +252,9 @@ func TestAdmissionAndCRDBackendSemantics(t *testing.T) {
 	if admission.Status != CheckBlocked || admission.Findings[0].Title != "Fail-closed webhook backend unavailable" || admission.Findings[0].Evidence.Detail != "default/missing" || !strings.Contains(admission.Findings[0].Impact, "rejected") {
 		t.Fatal("fail-closed webhook with no backend must block")
 	}
+	if got := admission.Findings[0].References; len(got) != 2 || got[0].URL != "https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#failure-policy" || got[1].URL != "https://kubernetes.io/docs/concepts/cluster-administration/admission-webhooks-good-practices/#ha-deployment" {
+		t.Fatalf("backend finding references = %+v, want failure-policy and availability guidance", got)
+	}
 	webhooks := input.AdmissionWebhookConfigurations[0].Object["webhooks"].([]any)
 	webhooks[0].(map[string]any)["failurePolicy"] = "Ignore"
 	result, _ = Scan(input, "1.35", "1.36")
@@ -308,6 +311,23 @@ func TestWebhookConfigurationFindingsSurviveMissingBackendEvidence(t *testing.T)
 	finalizeCheck(&admission)
 	if admission.Status != CheckReview || len(admission.Findings) != 2 || admission.Caveat == "" {
 		t.Fatalf("config-only admission evidence = %+v, want two review findings plus incomplete backend coverage", admission)
+	}
+	findingsByTitle := map[string]Finding{}
+	for _, finding := range admission.Findings {
+		findingsByTitle[finding.Title] = finding
+		for _, reference := range finding.References {
+			for _, generic := range admissionReferences {
+				if reference.URL == generic.URL {
+					t.Fatalf("finding %q repeated check-wide reference %q", finding.Title, reference.URL)
+				}
+			}
+		}
+	}
+	if got := findingsByTitle["Exact API version matching"].References; len(got) != 1 || !strings.HasSuffix(got[0].URL, "#match-all-versions") {
+		t.Fatalf("exact matching references = %+v, want specific matchPolicy guidance", got)
+	}
+	if got := findingsByTitle["Authentication review interception"].References; len(got) != 1 || !strings.HasSuffix(got[0].URL, "#webhook-limit-scope") {
+		t.Fatalf("authentication review references = %+v, want specific scope guidance", got)
 	}
 
 	input.AdmissionWebhookConfigurations[0].Object["webhooks"] = []any{map[string]any{

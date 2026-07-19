@@ -369,7 +369,7 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 				failurePolicy = "Ignore"
 			}
 			if strings.EqualFold(stringValue(webhook, "matchPolicy"), "Exact") {
-				check.Findings = append(check.Findings, admissionFinding(check, config, i, LevelReview, "Exact API version matching", "matchPolicy", "Exact", "Exact matching can skip equivalent API versions during an upgrade.", "Use matchPolicy: Equivalent unless exact version matching is intentionally required."))
+				check.Findings = append(check.Findings, admissionFinding(check, config, i, LevelReview, "Exact API version matching", "matchPolicy", "Exact", "Exact matching can skip equivalent API versions during an upgrade.", "Use matchPolicy: Equivalent unless exact version matching is intentionally required.", admissionMatchPolicyReferences))
 			}
 			service, found, _ := unstructured.NestedMap(webhook, "clientConfig", "service")
 			if found {
@@ -387,11 +387,11 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 						title = "Fail-open webhook backend unavailable"
 						impact = "Admission requests that match this webhook currently fail open, bypassing the intended policy while its backend is unavailable."
 					}
-					check.Findings = append(check.Findings, admissionFinding(check, config, i, level, title, "clientConfig.service", key, impact, "Restore the Service and a ready EndpointSlice, or intentionally change failurePolicy after evaluating the admission bypass risk."))
+					check.Findings = append(check.Findings, admissionFinding(check, config, i, level, title, "clientConfig.service", key, impact, "Restore the Service and a ready EndpointSlice, or intentionally change failurePolicy after evaluating the admission bypass risk.", admissionBackendReferences))
 				}
 			}
 			if webhookInterceptsAuth(webhook) {
-				check.Findings = append(check.Findings, admissionFinding(check, config, i, LevelReview, "Authentication review interception", "rules", name, "The webhook can intercept TokenReview or SubjectAccessReview requests used during authentication and authorization.", "Verify the webhook remains available and deliberately excludes authentication and authorization review APIs if interception is unnecessary."))
+				check.Findings = append(check.Findings, admissionFinding(check, config, i, LevelReview, "Authentication review interception", "rules", name, "The webhook can intercept TokenReview or SubjectAccessReview requests used during authentication and authorization.", "Verify the webhook remains available and deliberately excludes authentication and authorization review APIs if interception is unnecessary.", admissionAuthReviewReferences))
 			}
 		}
 	}
@@ -427,8 +427,8 @@ func readyEndpointServices(slices []*discoveryv1.EndpointSlice) map[string]bool 
 	return out
 }
 
-func admissionFinding(check Check, config *unstructured.Unstructured, index int, level Level, title, path, detail, impact, remediation string) Finding {
-	return Finding{RuleID: check.ID, Title: title, Level: level, Resource: &ResourceRef{Group: "admissionregistration.k8s.io", Kind: config.GetKind(), Name: config.GetName()}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("webhooks[%d].%s", index, path), Detail: detail}, Impact: impact, Remediation: remediation, References: append([]Reference(nil), check.References...)}
+func admissionFinding(check Check, config *unstructured.Unstructured, index int, level Level, title, path, detail, impact, remediation string, references []Reference) Finding {
+	return Finding{RuleID: check.ID, Title: title, Level: level, Resource: &ResourceRef{Group: "admissionregistration.k8s.io", Kind: config.GetKind(), Name: config.GetName()}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("webhooks[%d].%s", index, path), Detail: detail}, Impact: impact, Remediation: remediation, References: append([]Reference(nil), references...)}
 }
 
 func stringValue(object map[string]any, key string) string {

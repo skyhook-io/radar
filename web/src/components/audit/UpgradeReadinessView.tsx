@@ -378,8 +378,7 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
   const detailID = `upgrade-check-${check.id}`
   const findingGroups = groupFindings(check.findings)
   const label = evidenceLabel(check)
-  const findingReferenceURLs = new Set(check.findings.flatMap((finding) => finding.references.map((reference) => reference.url)))
-  const checkReferences = (check.references ?? []).filter((reference) => !findingReferenceURLs.has(reference.url))
+  const checkReferences = check.references ?? []
   return (
     <div>
       <button
@@ -427,6 +426,7 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
                     key={group.key}
                     id={`${detailID}-issue-${index}`}
                     group={group}
+                    checkReferences={checkReferences}
                     onNavigateToResource={onNavigateToResource}
                   />
                 ))}
@@ -456,14 +456,16 @@ export function groupFindings(findings: UpgradeReadinessFinding[]) {
   return [...groups.entries()].map(([key, grouped]) => ({ key, findings: grouped, total: grouped.length }))
 }
 
-function FindingGroupRow({ id, group, onNavigateToResource }: {
+function FindingGroupRow({ id, group, checkReferences, onNavigateToResource }: {
   id: string
   group: ReturnType<typeof groupFindings>[number]
+  checkReferences: NonNullable<UpgradeReadinessCheck['references']>
   onNavigateToResource: (resource: SelectedResource) => void
 }) {
   const [open, setOpen] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const finding = group.findings[0]
+  const references = issueSpecificReferences(checkReferences, finding.references)
   const level = findingLevelMeta(finding.level)
   const preview = group.findings.slice(0, FINDING_CAP)
   const remaining = group.findings.slice(FINDING_CAP)
@@ -491,10 +493,12 @@ function FindingGroupRow({ id, group, onNavigateToResource }: {
             <FindingDetail icon={AlertTriangle} label="Impact">{finding.impact}</FindingDetail>
             <FindingDetail icon={Wrench} label="Remediation">{finding.remediation}</FindingDetail>
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t-subtle pt-2 text-[11px] text-theme-text-tertiary">
-            {finding.appliesFrom && <span>Applies from Kubernetes {finding.appliesFrom}</span>}
-            {finding.references.map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
-          </div>
+          {(finding.appliesFrom || references.length > 0) && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t-subtle pt-2 text-[11px] text-theme-text-tertiary">
+              {finding.appliesFrom && <span>Applies from Kubernetes {finding.appliesFrom}</span>}
+              {references.map((reference) => <ReferenceLink key={reference.url} reference={reference} />)}
+            </div>
+          )}
           <div className="mt-3 divide-y divide-theme-border/70 border-t-subtle">
             {preview.map((item, index) => (
               <CompactFindingRow key={findingKey(item, index)} finding={item} onNavigateToResource={onNavigateToResource} />
@@ -522,6 +526,14 @@ function FindingGroupRow({ id, group, onNavigateToResource }: {
       </Collapse>
     </article>
   )
+}
+
+export function issueSpecificReferences(
+  checkReferences: NonNullable<UpgradeReadinessCheck['references']>,
+  findingReferences: UpgradeReadinessFinding['references'],
+) {
+  const checkReferenceURLs = new Set(checkReferences.map((reference) => reference.url))
+  return findingReferences.filter((reference) => !checkReferenceURLs.has(reference.url))
 }
 
 function CompactFindingRow({ finding, onNavigateToResource }: {
