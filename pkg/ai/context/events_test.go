@@ -40,6 +40,25 @@ func TestNormalizeMessage_CollapsesSerialNumericIncarnations(t *testing.T) {
 			"child 'radar-batch-cronworkflow-1784443200-1321105865' failed",
 			"child 'radar-batch-cronworkflow-1784442000-1354049248' failed",
 		},
+		// cert-manager Order/Challenge names carry decimal FNV suffixes
+		// (<=10 digits; a 5-digit render falls to podHashPattern instead).
+		{
+			"Created Order resource shop/example-cert-4082662562",
+			"Created Order resource shop/example-cert-1193317457",
+		},
+		// Kubelet SystemOOM embeds the ephemeral PID — identity, never
+		// magnitude — so repeated kills of one process are one story.
+		{
+			"System OOM encountered, victim process: java, pid: 1234567",
+			"System OOM encountered, victim process: java, pid: 7654321",
+		},
+		// CronJob MissSchedule emits RFC1123Z timestamps, repeatedly for a
+		// chronically missing schedule; the ISO tsPattern never matched
+		// these, so each emission formed a new group.
+		{
+			"Missed scheduled time to start a job: Sun, 19 Jul 2026 12:30:00 +0000",
+			"Missed scheduled time to start a job: Sat, 18 Jul 2026 09:10:00 +0000",
+		},
 	}
 	for _, p := range pairs {
 		a, b := normalizeMessage(p[0]), normalizeMessage(p[1])
@@ -62,9 +81,14 @@ func TestNormalizeMessage_PreservesMeaningfulSmallNumbers(t *testing.T) {
 		{"Error (exit code 64): task failed", "Error (exit code 137): task failed"},
 		{"0/9 nodes are available", "0/3 nodes are available"},
 		// Freestanding large quantities are diagnostic values, not name
-		// segments — the hyphen anchor keeps them distinct.
+		// segments — the word-boundary anchor keeps them distinct.
 		{"Container was using 123456789, request is 100000000", "Container was using 987654321, request is 100000000"},
 		{"attempting to reclaim 512000000 bytes of ephemeral-storage", "attempting to reclaim 128000000 bytes of ephemeral-storage"},
+		// A hyphen NOT preceded by a word character is a sign or a flag,
+		// not a name segment (\b anchor): negative metric values and
+		// --flag-style tokens stay distinct.
+		{"current metric value: -123456789", "current metric value: -987654321"},
+		{"unknown flag: --123456", "unknown flag: --654321"},
 	}
 	for _, p := range distinct {
 		a, b := normalizeMessage(p[0]), normalizeMessage(p[1])
