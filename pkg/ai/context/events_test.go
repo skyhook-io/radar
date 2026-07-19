@@ -61,6 +61,10 @@ func TestNormalizeMessage_PreservesMeaningfulSmallNumbers(t *testing.T) {
 		{"Readiness probe failed: HTTP probe failed with statuscode: 500", "Readiness probe failed: HTTP probe failed with statuscode: 503"},
 		{"Error (exit code 64): task failed", "Error (exit code 137): task failed"},
 		{"0/9 nodes are available", "0/3 nodes are available"},
+		// Freestanding large quantities are diagnostic values, not name
+		// segments — the hyphen anchor keeps them distinct.
+		{"Container was using 123456789, request is 100000000", "Container was using 987654321, request is 100000000"},
+		{"attempting to reclaim 512000000 bytes of ephemeral-storage", "attempting to reclaim 128000000 bytes of ephemeral-storage"},
 	}
 	for _, p := range distinct {
 		a, b := normalizeMessage(p[0]), normalizeMessage(p[1])

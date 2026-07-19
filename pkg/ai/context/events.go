@@ -39,13 +39,15 @@ var (
 	uuidPattern    = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	tsPattern      = regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}`)
 	ipPattern      = regexp.MustCompile(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?`)
-	// Runs of >=6 digits are generated identifiers (epoch suffixes in Argo
-	// cron workflow names, controller child-node IDs), not meaningful
-	// message text. podHashPattern's {5,10} bound only partially consumes
-	// them, leaving distinct digit tails that split one chronic failure
-	// into a new group per incarnation. The >=6 floor preserves ports
-	// (4-5 digits), HTTP status codes, and exit codes.
-	longNumPattern = regexp.MustCompile(`\d{6,}`)
+	// Hyphen-anchored runs of >=6 digits are generated NAME SEGMENTS (epoch
+	// suffixes in Argo cron workflow names, CronJob pod names, controller
+	// child-node IDs). podHashPattern's {5,10} bound only partially consumes
+	// them, leaving distinct digit tails that split one chronic failure into
+	// a new group per incarnation. The leading hyphen restricts this to
+	// identifier context: freestanding quantities (eviction thresholds,
+	// byte counts — "using 123456789") stay distinct, and the >=6 floor
+	// additionally preserves ports, HTTP status codes, and exit codes.
+	longNumPattern = regexp.MustCompile(`-\d{6,}`)
 )
 
 func normalizeMessage(msg string) string {
@@ -62,7 +64,7 @@ func normalizeMessage(msg string) string {
 	s := uuidPattern.ReplaceAllString(msg, "<uuid>")
 	s = tsPattern.ReplaceAllString(s, "<timestamp>")
 	s = ipPattern.ReplaceAllString(s, "<ip>")
-	s = longNumPattern.ReplaceAllString(s, "nnnnnn")
+	s = longNumPattern.ReplaceAllString(s, "-nnnnnn")
 	s = podHashPattern.ReplaceAllString(s, "<pod>")
 	return s
 }
