@@ -43,6 +43,13 @@ func TestNodeCompatibilityEvidence(t *testing.T) {
 		t.Fatal("cgroup v1 must block")
 	}
 
+	input.Nodes = nil
+	result, _ = Scan(input, "1.34", "1.36")
+	cgroup := checkByID(t, result, "node-cgroup-v1")
+	if cgroup.Status != CheckUnknown || len(cgroup.Findings) != 0 {
+		t.Fatalf("cgroup evidence without node-list access = %+v, want incomplete with no findings", cgroup)
+	}
+
 	input = completeInput()
 	input.Nodes[0].Status.NodeInfo.ContainerRuntimeVersion = "containerd://1.7.24"
 	result, _ = Scan(input, "1.35", "1.36")

@@ -61,6 +61,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	var endpointSlices []*discoveryv1.EndpointSlice
 	var additionalServices []*corev1.Service
 	var nodeRuntimeEvidence []upgradereadiness.NodeRuntimeEvidence
+	canReadNodes := !noAccess && s.canRead(r, "", "nodes", "", "list")
 	if !noAccess {
 		if helmNamespaces, ok := s.resolveHelmNamespacesForScope(r, namespaces); ok {
 			manifestResources, helmUnavailableNamespaces, manifestParseErrors = collectUpgradeHelmManifests(r, helmNamespaces)
@@ -70,7 +71,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		sourceObjects, sourceObjectUnavailableKinds = collectUpgradeSourceObjects(r, namespaces)
 		admissionConfigs, crds, endpointSlices, additionalServices = s.collectUpgradeWebhookEvidence(r)
 		apiServices = s.collectUpgradeAPIServices(r)
-		if s.canReadSubresource(r, "", "nodes", "proxy", "", "get") && cache.Nodes() != nil {
+		if canReadNodes && s.canReadSubresource(r, "", "nodes", "proxy", "", "get") && cache.Nodes() != nil {
 			nodes, _ := cache.Nodes().List(labels.Everything())
 			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(r.Context(), nodes)
 		}
@@ -89,7 +90,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		PrometheusRulesInstalled:            prometheusInstalled,
 		PrometheusRulesDiscoveryAvailable:   discoveryAvailable,
 		PrometheusRuleUnavailableNamespaces: prometheusUnavailableNamespaces,
-		CanReadNodes:                        !noAccess && s.canRead(r, "", "nodes", "", "list"),
+		CanReadNodes:                        canReadNodes,
 		CanReadPersistentVolumes:            !noAccess && s.canRead(r, "", "persistentvolumes", "", "list"),
 		SourceObjects:                       sourceObjects,
 		SourceObjectUnavailableKinds:        sourceObjectUnavailableKinds,

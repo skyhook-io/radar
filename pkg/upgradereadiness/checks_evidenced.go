@@ -22,6 +22,10 @@ import (
 
 func scanNodeCgroupCompatibility(input *Input) Check {
 	check := Check{ID: "node-cgroup-v1", Category: "Node compatibility", Title: "Node cgroup compatibility", Status: CheckPassed, Summary: "All inspected nodes use cgroup v2.", Scope: "Kubelet cgroup version metric", AppliesFrom: "1.35", References: append([]Reference(nil), cgroupReferences...)}
+	if input.Nodes == nil {
+		check.Status, check.Summary = CheckUnknown, "Nodes were unavailable; Radar could not inspect cgroup compatibility."
+		return check
+	}
 	if input.NodeRuntimeEvidence == nil {
 		check.Status, check.Summary = CheckUnknown, "Kubelet cgroup version metrics were unavailable."
 		return check
