@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-
+import { useMemo, useRef, useState, type RefObject } from "react";
 import { Layers3 } from "lucide-react";
 import {
   Collapse,
@@ -66,32 +65,6 @@ import {
   worstManagerStatus,
   type CapacityConnectionState,
 } from "./shared";
-
-// "View inventory" scrolls — on a page with no overflow the click is a no-op,
-// so the link hides. Unlike per-section visibility, whole-page scrollability
-// is stable while scrolling; it changes only with content or viewport size.
-function usePageHasOverflow(): boolean {
-  const [overflowing, setOverflowing] = useState(true);
-  useEffect(() => {
-    // Deliberately boring: measure on mount, on window resize, and on a slow
-    // interval (content height changes without a resize event — loading
-    // finishing, rows expanding). The container mounts after the loading
-    // screen, so every path re-runs the lookup rather than caching it.
-    const measure = () => {
-      const container = document.getElementById("rk-scroll");
-      if (!container) return;
-      setOverflowing(container.scrollHeight > container.clientHeight + 1);
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    const interval = window.setInterval(measure, 2000);
-    return () => {
-      window.removeEventListener("resize", measure);
-      window.clearInterval(interval);
-    };
-  }, []);
-  return overflowing;
-}
 
 const EXPLAIN_CARDS: { term: string; body: string }[] = [
   {
@@ -236,7 +209,6 @@ export function CapacityOverview({
   const [showExplain, setShowExplain] = useState(false);
   const explainAnchorRef = useRef<HTMLDivElement>(null);
   const inventoryRef = useRef<HTMLDivElement>(null);
-  const pageHasOverflow = usePageHasOverflow();
   const openExplainer = () => {
     setShowExplain(true);
     explainAnchorRef.current?.scrollIntoView({
@@ -386,15 +358,12 @@ export function CapacityOverview({
           certainty={coverageCertainty(coverage.nodes)}
           certaintyTitle={coverageMessage(coverage.nodes, "Node groups")}
           attention={data.pools.some((pool) => pool.ready === false)}
-          linkLabel={pageHasOverflow ? "View inventory ↓" : undefined}
-          onClick={
-            pageHasOverflow
-              ? () =>
-                  inventoryRef.current?.scrollIntoView({
-                    behavior: "smooth",
-                    block: "start",
-                  })
-              : undefined
+          linkLabel="View inventory ↓"
+          onClick={() =>
+            inventoryRef.current?.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            })
           }
         />
         <KpiTile
