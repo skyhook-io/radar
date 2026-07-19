@@ -1218,15 +1218,7 @@ export function useCapacityDemand(options?: CapacityDemandQueryOptions) {
     staleTime: 15_000,
     refetchInterval: capacityRefetchInterval(options, enabled, options?.cursor),
     retry: shouldRetryCapacityQuery,
-    placeholderData: (previous, previousQuery) => {
-      const previousKey = previousQuery?.queryKey;
-      return previousKey?.[2] === options?.limit &&
-        previousKey?.[4] === options?.state &&
-        previousKey?.[5] === options?.pool &&
-        previousKey?.[6] === options?.owner
-        ? previous
-        : undefined;
-    },
+    placeholderData: (previous) => previous, // Keep previous data visible during refetch
   });
 }
 
@@ -1235,7 +1227,6 @@ export interface CapacityActivityQueryOptions extends CapacityPageQueryOptions {
   pool?: string;
   claim?: string;
   node?: string;
-  reason?: string;
   type?: string;
 }
 
@@ -1248,7 +1239,6 @@ export function useCapacityActivity(options?: CapacityActivityQueryOptions) {
   if (options?.pool) params.set("pool", options.pool);
   if (options?.claim) params.set("claim", options.claim);
   if (options?.node) params.set("node", options.node);
-  if (options?.reason) params.set("reason", options.reason);
   if (options?.type) params.set("type", options.type);
   const query = params.toString();
   const queryKey = [
@@ -1260,7 +1250,6 @@ export function useCapacityActivity(options?: CapacityActivityQueryOptions) {
     options?.pool,
     options?.claim,
     options?.node,
-    options?.reason,
     options?.type,
   ];
   return useQuery<CapacityActivityResponse>({
@@ -1274,16 +1263,7 @@ export function useCapacityActivity(options?: CapacityActivityQueryOptions) {
     staleTime: 15_000,
     refetchInterval: capacityRefetchInterval(options, enabled, options?.cursor),
     retry: shouldRetryCapacityQuery,
-    placeholderData: (previous, previousQuery) => {
-      const previousKey = previousQuery?.queryKey;
-      return previousKey?.length === queryKey.length &&
-        previousKey?.[2] === options?.limit &&
-        previousKey
-          ?.slice(4)
-          .every((value, index) => value === queryKey[index + 4])
-        ? previous
-        : undefined;
-    },
+    placeholderData: (previous) => previous, // Keep previous data visible during refetch
   });
 }
 

@@ -84,7 +84,7 @@ export function CapacityActivity({
   const poolFilter = search.get("pool") || undefined;
   const claimFilter = search.get("claim") || undefined;
   const nodeFilter = search.get("node") || undefined;
-  const reasonFilter = search.get("reason") || undefined;
+  const qParam = search.get("q") || undefined;
   const typeFilter = search.get("type") || undefined;
   const sinceFilter = search.get("since") || undefined;
   const invalidSinceFilter = Boolean(
@@ -104,16 +104,17 @@ export function CapacityActivity({
       { replace: true },
     );
   }, [location.pathname, location.search, navigate]);
-  const [reasonInput, setReasonInput] = useState(reasonFilter ?? "");
-  // Deferred writes (the debounced reason search) must merge onto the CURRENT
-  // params, not a snapshot captured when the timer was armed — otherwise a
-  // window/pool change made mid-type would be dropped when the write lands.
+  const [searchInput, setSearchInput] = useState(qParam ?? "");
+  // Deferred writes (the debounced URL mirror of the search) must merge onto
+  // the CURRENT params, not a snapshot captured when the timer was armed —
+  // otherwise a window/pool change made mid-type would be dropped when the
+  // write lands.
   const searchRef = useRef(location.search);
   searchRef.current = location.search;
   const pathRef = useRef(location.pathname);
   pathRef.current = location.pathname;
   const setParam = useCallback(
-    (key: "pool" | "reason" | "since", value: string | undefined) => {
+    (key: "pool" | "q" | "since", value: string | undefined) => {
       const params = new URLSearchParams(searchRef.current);
       params.delete("workload");
       const trimmed = value?.trim();
@@ -129,20 +130,27 @@ export function CapacityActivity({
     },
     [navigate],
   );
-  // URL is the source of truth: reflect external param changes (Clear filters,
-  // back/forward) back into the input buffer.
+  // The search filters the loaded episodes client-side, instantly. The URL
+  // `q` param is a shareability mirror only — it never drives a server fetch.
+  // Reflect external changes (Clear filters, back/forward) into the buffer;
+  // both guards compare trimmed so the mirror landing mid-type can never eat
+  // a trailing space the user is still extending.
   useEffect(() => {
-    setReasonInput(reasonFilter ?? "");
-  }, [reasonFilter]);
-  // Typing debounces straight into the URL — no submit. The guard skips a
-  // redundant write once the buffer already matches the committed param.
+    setSearchInput((current) =>
+      current.trim() === (qParam ?? "") ? current : (qParam ?? ""),
+    );
+  }, [qParam]);
   useEffect(() => {
-    if (reasonInput === (reasonFilter ?? "")) return;
-    const timer = setTimeout(() => setParam("reason", reasonInput), 350);
+    if (searchInput.trim() === (qParam ?? "")) return;
+    const timer = setTimeout(() => setParam("q", searchInput), 350);
     return () => clearTimeout(timer);
-  }, [reasonInput, reasonFilter, setParam]);
+  }, [searchInput, qParam, setParam]);
+  // The URL mirror of the search must not reset pagination — only the
+  // server-side filters do.
+  const paginationParams = new URLSearchParams(location.search);
+  paginationParams.delete("q");
   const pagination = useCapacityPagination<CapacityActivityResponse>(
-    `${location.search}`,
+    paginationParams.toString(),
   );
   const query = useCapacityActivity({
     limit: 50,
@@ -150,7 +158,6 @@ export function CapacityActivity({
     pool: poolFilter,
     claim: claimFilter,
     node: nodeFilter,
-    reason: reasonFilter,
     type: typeFilter,
     since: requestSinceFilter,
   });
@@ -184,9 +191,12 @@ export function CapacityActivity({
     );
   };
   const clearFilters = () => {
+    // Reset the buffer directly — otherwise a pending debounce timer would
+    // rewrite `q` right after the URL was cleared.
+    setSearchInput("");
     const params = new URLSearchParams(location.search);
-    ["pool", "claim", "node", "workload", "reason", "since", "type"].forEach(
-      (key) => params.delete(key),
+    ["pool", "claim", "node", "workload", "q", "since", "type"].forEach((key) =>
+      params.delete(key),
     );
     navigate(
       {
@@ -219,10 +229,16 @@ export function CapacityActivity({
     poolFilter ||
     claimFilter ||
     nodeFilter ||
-    reasonFilter ||
+    searchInput.trim() ||
     sinceFilter ||
     typeFilter,
   );
+  const searchTerm = searchInput.trim().toLowerCase();
+  const visibleItems = searchTerm
+    ? response.items.filter((episode) =>
+        episodeMatchesSearch(episode, searchTerm),
+      )
+    : response.items;
   const aggregate = response.aggregate;
   const aggregateIsLowerBound = coverageIsLowerBound(
     response.coverage.timeline,
@@ -358,11 +374,11 @@ export function CapacityActivity({
           unavailableLabel="NodePool options unavailable; activity remains available."
         />
         <SearchBox
-          value={reasonInput}
-          onChange={setReasonInput}
+          value={searchInput}
+          onChange={setSearchInput}
           scope="global"
           shortcutId="capacity-activity-search"
-          placeholder="LaunchFailed, interruption…"
+          placeholder="LaunchFailed, node name…"
           className="w-60 2xl:w-72"
         />
         {(claimFilter || nodeFilter) && (
@@ -443,18 +459,23 @@ export function CapacityActivity({
         </div>
       )}
 
-      {response.items.length > 0 ? (
+      {visibleItems.length > 0 ? (
         <div className="space-y-3">
-          {response.items.map((episode, index) => (
+          {visibleItems.map((episode, index) => (
             <ActivityEpisodeCard
               key={episode.id}
               episode={episode}
-              defaultExpanded={index === 0}
+              defaultExpanded={index === 0 && !searchTerm}
               onOpenPool={onOpenPool}
               onOpenResource={onOpenResource}
             />
           ))}
         </div>
+      ) : response.items.length > 0 ? (
+        <InlineEmpty
+          title="No loaded episodes match this search"
+          detail="The search narrows the episodes loaded on this page. Matches may exist on other pages — page through, or clear the search."
+        />
       ) : coverageHasObservations(response.coverage.timeline) ? (
         <InlineEmpty
           title="No episodes match these filters"
@@ -489,6 +510,29 @@ export function CapacityActivity({
       )}
     </ScrollableContent>
   );
+}
+
+function episodeMatchesSearch(
+  episode: CapacityActivityEpisode,
+  term: string,
+): boolean {
+  const haystacks = [
+    episode.summary,
+    activityTypeLabel(episode.type),
+    episode.state,
+    episode.primaryReasonCode,
+    ...[episode.pool, episode.claim, episode.node]
+      .filter((identity): identity is CapacityResourceIdentity =>
+        Boolean(identity),
+      )
+      .flatMap((identity) => [identity.ref.kind, identity.ref.name]),
+    ...episode.evidence.flatMap((evidence) => [
+      evidence.reasonCode,
+      evidence.rawReason,
+      evidence.rawMessage,
+    ]),
+  ];
+  return haystacks.some((value) => value?.toLowerCase().includes(term));
 }
 
 function ActivityFilterChip({

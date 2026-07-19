@@ -1393,7 +1393,6 @@ describe("CapacityView activity", () => {
           undefined,
           undefined,
           undefined,
-          undefined,
         ],
         activityResponse(),
       ),
@@ -1427,17 +1426,64 @@ describe("CapacityView activity", () => {
           undefined,
           undefined,
           undefined,
+        ],
+        activityResponse(),
+      ),
+    );
+    // The search is the shared SearchBox with an example placeholder — not a
+    // submit-gated <input>.
+    expect(html).toContain("LaunchFailed, node name");
+    // NodePool filter is the shared PoolSelector with an "Any pool" empty option.
+    expect(html).toContain("Any pool");
+    // The Apply-to-commit flow is gone.
+    expect(html).not.toContain("Apply");
+  });
+
+  it("search filters the loaded episodes client-side — never a server fetch", () => {
+    // The seeded query key carries no search term: `q` narrows the already
+    // loaded page in the client, so typing can never unmount the view or
+    // trigger a refetch.
+    const matched = renderCapacity("/capacity/activity?q=nodeclaim", (client) =>
+      client.setQueryData(
+        [
+          "capacity",
+          "activity",
+          50,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
           undefined,
         ],
         activityResponse(),
       ),
     );
-    // Reason/message filter is now the shared SearchBox (live-debounced), keeping
-    // its example placeholder — not a submit-gated <input>.
-    expect(html).toContain("LaunchFailed, interruption");
-    // NodePool filter is the shared PoolSelector with an "Any pool" empty option.
-    expect(html).toContain("Any pool");
-    // The Apply-to-commit flow is gone.
-    expect(html).not.toContain("Apply");
+    // Matches evidence text ("created a NodeClaim"), case-insensitively.
+    expect(matched).toContain("Provisioned a node for pending pods");
+
+    const unmatched = renderCapacity(
+      "/capacity/activity?q=no-such-episode",
+      (client) =>
+        client.setQueryData(
+          [
+            "capacity",
+            "activity",
+            50,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+          ],
+          activityResponse(),
+        ),
+    );
+    expect(unmatched).not.toContain("Provisioned a node for pending pods");
+    expect(unmatched).toContain("No loaded episodes match this search");
+    // Type pills keep the whole-window rollup — search narrows the page, not
+    // the window.
+    expect(unmatched).toContain("All · 3");
   });
 });

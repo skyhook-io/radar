@@ -423,7 +423,7 @@ func parseCapacityActivityRequest(query url.Values) (capacityActivityRequest, er
 		return capacityActivityRequest{}, fmt.Errorf("workload is not a supported activity filter")
 	}
 	filters := url.Values{}
-	for _, key := range []string{"pool", "claim", "node", "reason"} {
+	for _, key := range []string{"pool", "claim", "node"} {
 		values := query[key]
 		if len(values) > 1 {
 			return capacityActivityRequest{}, fmt.Errorf("%s must be specified at most once", key)
@@ -592,9 +592,6 @@ func filterCapacityActivityRecords(records []capacitymodel.ActivityRecord, filte
 		if value := filters.Get("node"); value != "" && (episode.Node == nil || episode.Node.Ref.Name != value) {
 			continue
 		}
-		if value := strings.ToLower(filters.Get("reason")); value != "" && !episodeHasReason(episode, value) {
-			continue
-		}
 		result = append(result, record)
 	}
 	return result
@@ -611,15 +608,6 @@ func filterCapacityActivityRecordsByType(records []capacitymodel.ActivityRecord,
 		}
 	}
 	return kept
-}
-
-func episodeHasReason(episode capacityapi.ActivityEpisode, reason string) bool {
-	for _, evidence := range episode.Evidence {
-		if strings.Contains(strings.ToLower(evidence.ReasonCode+" "+evidence.RawReason+" "+evidence.RawMessage), reason) {
-			return true
-		}
-	}
-	return false
 }
 
 func activitySequenceBounds(events []timeline.TimelineEvent) (maxSeq, minSeq int64) {

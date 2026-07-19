@@ -39,7 +39,7 @@ func TestCapacityActivityObservationStartUsesRetainedMemoryEvidenceWithoutPredat
 }
 
 func TestCapacityActivityCursorRoundTripAndFilterBinding(t *testing.T) {
-	filters := url.Values{"pool": {"general"}, "reason": {"launch"}}
+	filters := url.Values{"pool": {"general"}, "claim": {"general-abc12"}}
 	fingerprint := capacityFilterFingerprint(filters)
 	encoded, err := encodeCapacityActivityCursor("epoch-a", fingerprint, "cluster-a", 42, "older")
 	if err != nil {
@@ -56,16 +56,16 @@ func TestCapacityActivityCursorRoundTripAndFilterBinding(t *testing.T) {
 	previousContext := k8s.SetTestContextName("cluster-a")
 	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
 	request, err := parseCapacityActivityRequest(url.Values{
-		"pool": {"general"}, "reason": {"launch"}, "cursor": {encoded}, "limit": {"75"},
+		"pool": {"general"}, "claim": {"general-abc12"}, "cursor": {encoded}, "limit": {"75"},
 	})
 	if err != nil || request.cursor == nil || request.limit != 75 {
 		t.Fatalf("parse bound cursor = %#v, %v", request, err)
 	}
-	if _, err := parseCapacityActivityRequest(url.Values{"pool": {"other"}, "reason": {"launch"}, "cursor": {encoded}}); err == nil || !isCapacityCursorInvalidError(err) {
+	if _, err := parseCapacityActivityRequest(url.Values{"pool": {"other"}, "claim": {"general-abc12"}, "cursor": {encoded}}); err == nil || !isCapacityCursorInvalidError(err) {
 		t.Fatalf("changed filters error = %v, want classified cursor error", err)
 	}
 	k8s.SetTestContextName("cluster-b")
-	if _, err := parseCapacityActivityRequest(url.Values{"pool": {"general"}, "reason": {"launch"}, "cursor": {encoded}}); err == nil || !isCapacityCursorInvalidError(err) {
+	if _, err := parseCapacityActivityRequest(url.Values{"pool": {"general"}, "claim": {"general-abc12"}, "cursor": {encoded}}); err == nil || !isCapacityCursorInvalidError(err) {
 		t.Fatalf("changed cluster error = %v, want classified cursor error", err)
 	}
 }
