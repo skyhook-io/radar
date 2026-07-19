@@ -73,17 +73,22 @@ import {
 function usePageHasOverflow(): boolean {
   const [overflowing, setOverflowing] = useState(true);
   useEffect(() => {
-    const container = document.getElementById("rk-scroll");
-    if (!container || typeof ResizeObserver === "undefined") return;
-    const measure = () =>
+    // Deliberately boring: measure on mount, on window resize, and on a slow
+    // interval (content height changes without a resize event — loading
+    // finishing, rows expanding). The container mounts after the loading
+    // screen, so every path re-runs the lookup rather than caching it.
+    const measure = () => {
+      const container = document.getElementById("rk-scroll");
+      if (!container) return;
       setOverflowing(container.scrollHeight > container.clientHeight + 1);
+    };
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(container);
-    if (container.firstElementChild) {
-      observer.observe(container.firstElementChild);
-    }
-    return () => observer.disconnect();
+    window.addEventListener("resize", measure);
+    const interval = window.setInterval(measure, 2000);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.clearInterval(interval);
+    };
   }, []);
   return overflowing;
 }
