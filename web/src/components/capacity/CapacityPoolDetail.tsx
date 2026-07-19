@@ -1024,7 +1024,12 @@ function MemberPage({
   return (
     <SectionCard
       title={title}
-      subtitle={response ? `Page ${pagination.history.length + 1}` : undefined}
+      subtitle={
+        // "Page 1" is noise unless pagination is actually happening.
+        response && (pagination.history.length > 0 || response.page.hasMore)
+          ? `Page ${pagination.history.length + 1}`
+          : undefined
+      }
     >
       {recoveredCursor && (
         <div className="border-b border-theme-border-subtle px-4 py-2">
