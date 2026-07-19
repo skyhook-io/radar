@@ -25,6 +25,78 @@ func makeEvent(reason, message, eventType string, count int32, lastTime time.Tim
 	}
 }
 
+// Serial incarnations of one chronic failure must be ONE group. Messages
+// verbatim from a live cluster: an Argo cron workflow fails every tick, and
+// each run's epoch-suffixed name plus child-node ID used to survive
+// normalization as distinct digit tails ("<pod>05865" vs "<pod>0114"),
+// filling 11 of 20 dashboard rows with one failure.
+func TestNormalizeMessage_CollapsesSerialNumericIncarnations(t *testing.T) {
+	pairs := [][2]string{
+		{
+			"Failed node radar-batch-cronworkflow-1784443200: child 'radar-batch-cronworkflow-1784443200-1321105865' failed",
+			"Failed node radar-batch-cronworkflow-1784442600: child 'radar-batch-cronworkflow-1784442600-331300114' failed",
+		},
+		{
+			"child 'radar-batch-cronworkflow-1784443200-1321105865' failed",
+			"child 'radar-batch-cronworkflow-1784442000-1354049248' failed",
+		},
+	}
+	for _, p := range pairs {
+		a, b := normalizeMessage(p[0]), normalizeMessage(p[1])
+		if a != b {
+			t.Errorf("incarnations did not collapse:\n  %q -> %q\n  %q -> %q", p[0], a, p[1], b)
+		}
+	}
+}
+
+// The >=6-digit floor must NOT merge messages whose small numbers are
+// meaningful: ports, HTTP status codes, exit codes, replica fractions.
+func TestNormalizeMessage_PreservesMeaningfulSmallNumbers(t *testing.T) {
+	distinct := [][2]string{
+		// Same-shaped probe failures on different ports are different probes.
+		{
+			`Liveness probe failed: Get "http://svc:9440/healthz": context deadline exceeded`,
+			`Liveness probe failed: Get "http://svc:8082/healthz": context deadline exceeded`,
+		},
+		{"Readiness probe failed: HTTP probe failed with statuscode: 500", "Readiness probe failed: HTTP probe failed with statuscode: 503"},
+		{"Error (exit code 64): task failed", "Error (exit code 137): task failed"},
+		{"0/9 nodes are available", "0/3 nodes are available"},
+	}
+	for _, p := range distinct {
+		a, b := normalizeMessage(p[0]), normalizeMessage(p[1])
+		if a == b {
+			t.Errorf("meaningful numbers were merged: %q and %q both -> %q", p[0], p[1], a)
+		}
+	}
+}
+
+// Pattern-order pins. A digit-heavy UUID must still normalize as <uuid> —
+// longNumPattern running first would mangle it into "<n>-1234-…" and split
+// same-shaped messages by UUID composition. IPs keep their <ip> placeholder.
+func TestNormalizeMessage_SpecificPatternsWinOverLongNum(t *testing.T) {
+	a := normalizeMessage("volume 12345678-1234-1234-1234-123456789012 mount failed")
+	b := normalizeMessage("volume a1b2c3d4-e5f6-7890-abcd-ef1234567890 mount failed")
+	if a != b {
+		t.Errorf("UUID normalization diverged by digit composition: %q vs %q", a, b)
+	}
+	if got := normalizeMessage("dial tcp 10.192.5.18:8081: connect: connection refused"); !strings.Contains(got, "<ip>") {
+		t.Errorf("IP not normalized as <ip>: %q", got)
+	}
+}
+
+// Documented, accepted debt (pre-existing, NOT introduced by longNumPattern):
+// podHashPattern's shape also matches ordinary hyphenated word pairs, so
+// same-shaped messages differing only in such a pair over-merge. Real
+// mis-grouping additionally requires identical reason and type. This test
+// pins the behavior so a future podHashPattern redesign notices it.
+func TestNormalizeMessage_KnownHyphenatedPhraseOverMerge(t *testing.T) {
+	a := normalizeMessage("error: connection-refused by peer")
+	b := normalizeMessage("error: connection-timeout by peer")
+	if a != b {
+		t.Errorf("hyphenated-phrase over-merge no longer occurs (%q vs %q) — podHashPattern changed; update this documented-debt test and audit grouping", a, b)
+	}
+}
+
 func TestDeduplicateEvents_CollapseIdentical(t *testing.T) {
 	now := time.Now()
 	events := make([]corev1.Event, 50)
