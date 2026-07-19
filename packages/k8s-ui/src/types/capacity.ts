@@ -467,6 +467,8 @@ export interface CapacitySchedulingCapacity {
   scheduledRequests?: CapacityQuantityObservation;
   allocatable?: CapacityQuantityObservation;
   inFlightCapacity?: CapacityQuantityObservation;
+  /** SUBSET of scheduledRequests from pods with spec.priority < 0 (potential preemption victims). Never additive with scheduledRequests. */
+  negativePriorityRequests?: CapacityQuantityObservation;
 }
 
 export interface CapacityOverviewResponse extends CapacityResponseMeta {
@@ -579,6 +581,8 @@ export interface CapacityDemandGroup {
   firstSeen: string;
   lastSeen: string;
   podCount: number;
+  /** Pods holding a scheduler node nomination (preemption in progress; best-effort — never changes state or eligibility). */
+  nominatedPodCount?: number;
   perPodRequests: CapacityQuantityObservation;
   aggregateRequests: CapacityQuantityObservation;
   schedulingSignature: CapacitySchedulingSignature;

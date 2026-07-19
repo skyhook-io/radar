@@ -661,6 +661,55 @@ describe("CapacityView overview", () => {
     expect(html).toContain("Pod slots 2");
   });
 
+  it("draws the negative-priority sub-band and legend under exact certainty", () => {
+    const base = overview();
+    const data: CapacityOverviewResponse = {
+      ...base,
+      summary: {
+        ...base.summary,
+        scheduling: {
+          scheduledRequests: quantity({ cpu: "6", memory: "24Gi", pods: "12" }),
+          allocatable: quantity({ cpu: "12", memory: "48Gi", pods: "110" }),
+          negativePriorityRequests: quantity({ cpu: "3" }),
+        },
+      },
+    };
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], data),
+    );
+    // The legend entry only appears when a proportional band is actually drawn.
+    expect(html).toContain("negative-priority (potential preemption victims)");
+  });
+
+  it("annotates negative-priority as a lower bound instead of a band under non-exact certainty", () => {
+    const base = overview();
+    const data: CapacityOverviewResponse = {
+      ...base,
+      summary: {
+        ...base.summary,
+        scheduling: {
+          scheduledRequests: quantity(
+            { cpu: "6", memory: "24Gi", pods: "12" },
+            "lower_bound",
+          ),
+          allocatable: quantity(
+            { cpu: "12", memory: "48Gi", pods: "110" },
+            "lower_bound",
+          ),
+          negativePriorityRequests: quantity({ cpu: "3" }, "lower_bound"),
+        },
+      },
+    };
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], data),
+    );
+    // No proportional split under a lower bound — a ≥ annotation instead, and
+    // no band means no legend swatch describing one.
+    expect(html).toContain("≥3 cores");
+    expect(html).toContain("negative-priority");
+    expect(html).not.toContain("(potential preemption victims)");
+  });
+
   it("derives operational signals from server actions", () => {
     const html = renderCapacity("/capacity", (client) =>
       client.setQueryData(["capacity", "overview"], overview()),

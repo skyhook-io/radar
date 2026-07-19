@@ -13,6 +13,46 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+func TestGroupIdentityRecognizesPlatformDomains(t *testing.T) {
+	cases := map[string]struct {
+		labels map[string]string
+		wantID string
+	}{
+		"kops":     {map[string]string{labelKopsInstanceGroup: "nodes-us-east-1a"}, "kops-instancegroup/nodes-us-east-1a"},
+		"doks":     {map[string]string{labelDOKSNodePool: "pool-web"}, "doks-nodepool/pool-web"},
+		"ack":      {map[string]string{labelACKNodePoolID: "np-abc123"}, "ack-nodepool/np-abc123"},
+		"lke":      {map[string]string{labelLKEPoolID: "12345"}, "lke-pool/12345"},
+		"scaleway": {map[string]string{labelScalewayPoolName: "default"}, "scaleway-pool/default"},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			id, _, _, ok := groupIdentityForNode(groupsTestNode("node-1", testCase.labels))
+			if !ok || id != testCase.wantID {
+				t.Fatalf("identity = %q ok=%v, want %q", id, ok, testCase.wantID)
+			}
+		})
+	}
+}
+
+func TestGroupIdentityConflictRules(t *testing.T) {
+	karpenterOnGKE := groupsTestNode("n1", map[string]string{
+		"karpenter.sh/nodepool": "fast",
+		labelGKENodePool:        "platform-pool",
+	})
+	id, _, domain, ok := groupIdentityForNode(karpenterOnGKE)
+	if !ok || id != "karpenter-nodepool/fast" || domain != "karpenter" {
+		t.Fatalf("active provisioner must outrank the platform label: %q %q %v", id, domain, ok)
+	}
+
+	twoPlatforms := groupsTestNode("n2", map[string]string{
+		labelKopsInstanceGroup: "nodes",
+		labelDOKSNodePool:      "pool-web",
+	})
+	if _, _, _, ok := groupIdentityForNode(twoPlatforms); ok {
+		t.Fatal("two platform identities on one node is ambiguity — must stay unattributed, never a silent pick")
+	}
+}
+
 func TestBuildGroupsModelEKSChildJoinsByValidatedNameDerivation(t *testing.T) {
 	node := groupsTestNode("ip-10-0-1-5.ec2.internal", map[string]string{labelEKSNodeGroup: "system-pool"})
 	shortNode := groupsTestNode("ip-10-0-1-6.ec2.internal", map[string]string{labelEKSNodeGroup: "system"})
@@ -319,6 +359,77 @@ func TestBuildGroupsModelClusterSchedulingSumsAllNodesIncludingUnattributed(t *t
 	assertVectorQuantity(t, gm.ClusterScheduling.Allocatable.Resources, "cpu", "6")
 	// Both bound pods count (1 cpu each), including the pod on the unattributed node.
 	assertVectorQuantity(t, gm.ClusterScheduling.ScheduledRequests.Resources, "cpu", "2")
+}
+
+func TestBuildGroupsModelClusterSchedulingSplitsNegativePriorityRequests(t *testing.T) {
+	node := groupsTestNodeAlloc("gke-pool-a-1234-x7kq", map[string]string{labelGKENodePool: "pool-a"}, resourceList(map[corev1.ResourceName]string{corev1.ResourceCPU: "8"}))
+
+	t.Run("mixed pods yield a strict subset", func(t *testing.T) {
+		gm := buildGroups(Snapshot{
+			GeneratedAt: capacityTestTime(),
+			Nodes:       []*corev1.Node{node},
+			Pods: []*corev1.Pod{
+				capacityTestPod("web-1", node.Name, "web", map[corev1.ResourceName]string{corev1.ResourceCPU: "1"}),
+				withPriority(capacityTestPod("batch-1", node.Name, "batch", map[corev1.ResourceName]string{corev1.ResourceCPU: "2"}), -10),
+			},
+			Coverage: capacityTestCoverage(),
+		}, nil)
+		if gm.ClusterScheduling == nil {
+			t.Fatal("cluster scheduling is nil")
+		}
+		assertVectorQuantity(t, gm.ClusterScheduling.ScheduledRequests.Resources, "cpu", "3")
+		capacityTestAssertObservation(t, gm.ClusterScheduling.NegativePriorityRequests, capacityapi.CertaintyExact, capacityapi.GranularityAggregate, map[string]string{"cpu": "2", "pods": "1"})
+		capacityTestAssertSubset(t, gm.ClusterScheduling.NegativePriorityRequests, gm.ClusterScheduling.ScheduledRequests, true)
+	})
+
+	t.Run("nil-priority-only pods leave the field absent", func(t *testing.T) {
+		gm := buildGroups(Snapshot{
+			GeneratedAt: capacityTestTime(),
+			Nodes:       []*corev1.Node{node},
+			Pods: []*corev1.Pod{
+				capacityTestPod("web-1", node.Name, "web", map[corev1.ResourceName]string{corev1.ResourceCPU: "1"}),
+			},
+			Coverage: capacityTestCoverage(),
+		}, nil)
+		if gm.ClusterScheduling == nil || gm.ClusterScheduling.NegativePriorityRequests != nil {
+			t.Fatalf("negative-priority requests = %+v, want absent", gm.ClusterScheduling)
+		}
+	})
+
+	t.Run("pods unobserved gates the field off", func(t *testing.T) {
+		coverage := capacityTestCoverage()
+		coverage[capacityapi.CoveragePods] = capacityapi.NewSourceCoverage(capacityapi.CoverageDenied, capacityapi.CoverageScopeCluster)
+		gm := buildGroups(Snapshot{
+			GeneratedAt: capacityTestTime(),
+			Nodes:       []*corev1.Node{node},
+			Pods: []*corev1.Pod{
+				withPriority(capacityTestPod("batch-1", node.Name, "batch", map[corev1.ResourceName]string{corev1.ResourceCPU: "2"}), -10),
+			},
+			Coverage: coverage,
+		}, nil)
+		if gm.ClusterScheduling == nil {
+			t.Fatal("cluster scheduling is nil (allocatable should keep it present)")
+		}
+		if gm.ClusterScheduling.ScheduledRequests != nil || gm.ClusterScheduling.NegativePriorityRequests != nil {
+			t.Fatalf("pods-denied cluster scheduling = %+v, want requests and negative-priority both absent", gm.ClusterScheduling)
+		}
+	})
+
+	t.Run("negative-priority-only pods make the subset equal the total", func(t *testing.T) {
+		gm := buildGroups(Snapshot{
+			GeneratedAt: capacityTestTime(),
+			Nodes:       []*corev1.Node{node},
+			Pods: []*corev1.Pod{
+				withPriority(capacityTestPod("batch-1", node.Name, "batch", map[corev1.ResourceName]string{corev1.ResourceCPU: "2"}), -10),
+			},
+			Coverage: capacityTestCoverage(),
+		}, nil)
+		if gm.ClusterScheduling == nil {
+			t.Fatal("cluster scheduling is nil")
+		}
+		capacityTestAssertObservation(t, gm.ClusterScheduling.NegativePriorityRequests, capacityapi.CertaintyExact, capacityapi.GranularityAggregate, map[string]string{"cpu": "2", "pods": "1"})
+		capacityTestAssertSubset(t, gm.ClusterScheduling.NegativePriorityRequests, gm.ClusterScheduling.ScheduledRequests, false)
+	})
 }
 
 func TestBuildGroupsModelManagerDegradedOnChildBackoff(t *testing.T) {

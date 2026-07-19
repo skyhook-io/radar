@@ -530,6 +530,17 @@ function DemandGroupCard({
             <Badge tone="structural" size="sm">
               {group.podCount} {group.podCount === 1 ? "pod" : "pods"}
             </Badge>
+            {group.nominatedPodCount != null && group.nominatedPodCount > 0 && (
+              <WithTooltip
+                tip={`${group.nominatedPodCount} ${
+                  group.nominatedPodCount === 1 ? "pod holds" : "pods hold"
+                } a scheduler node nomination — preemption in progress. Nomination is best-effort and can go stale; it does not change the group's state.`}
+              >
+                <Badge tone="note" size="sm" className="cursor-help">
+                  {`${group.nominatedPodCount} nominated`}
+                </Badge>
+              </WithTooltip>
+            )}
             <span className="font-mono text-xs text-theme-text-secondary">
               {quantityText(group.aggregateRequests) ?? "No requests reported"}
             </span>

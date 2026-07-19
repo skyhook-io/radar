@@ -699,6 +699,85 @@ func TestBuildClusterSchedulingAggregateGatesOnCoverage(t *testing.T) {
 	}
 }
 
+func TestBuildClusterSchedulingAggregateSplitsNegativePriorityRequests(t *testing.T) {
+	pool := capacityTestPool("compute", "pool-uid", nil, nil)
+	node := capacityTestNode("pooled", "pooled-uid", "", "compute", resourceList(map[corev1.ResourceName]string{corev1.ResourceCPU: "8"}))
+
+	t.Run("mixed pods yield a strict subset", func(t *testing.T) {
+		model := Build(Snapshot{
+			GeneratedAt: capacityTestTime(),
+			NodePools:   []*unstructured.Unstructured{pool},
+			Nodes:       []*corev1.Node{node},
+			Pods: []*corev1.Pod{
+				capacityTestPod("normal", "pooled", "web", map[corev1.ResourceName]string{corev1.ResourceCPU: "1"}),
+				withPriority(capacityTestPod("victim", "pooled", "batch", map[corev1.ResourceName]string{corev1.ResourceCPU: "2"}), -10),
+			},
+			Coverage: capacityTestCoverage(),
+		})
+		if model.Scheduling == nil {
+			t.Fatal("scheduling aggregate is nil")
+		}
+		capacityTestAssertObservation(t, model.Scheduling.ScheduledRequests, capacityapi.CertaintyExact, capacityapi.GranularityAggregate, map[string]string{"cpu": "3", "pods": "2"})
+		capacityTestAssertObservation(t, model.Scheduling.NegativePriorityRequests, capacityapi.CertaintyExact, capacityapi.GranularityAggregate, map[string]string{"cpu": "2", "pods": "1"})
+		capacityTestAssertSubset(t, model.Scheduling.NegativePriorityRequests, model.Scheduling.ScheduledRequests, true)
+	})
+
+	t.Run("nil-priority-only pods leave the field absent", func(t *testing.T) {
+		model := Build(Snapshot{
+			GeneratedAt: capacityTestTime(),
+			NodePools:   []*unstructured.Unstructured{pool},
+			Nodes:       []*corev1.Node{node},
+			Pods: []*corev1.Pod{
+				capacityTestPod("normal", "pooled", "web", map[corev1.ResourceName]string{corev1.ResourceCPU: "1"}),
+			},
+			Coverage: capacityTestCoverage(),
+		})
+		if model.Scheduling == nil || model.Scheduling.NegativePriorityRequests != nil {
+			t.Fatalf("negative-priority requests = %+v, want absent (no negative-priority pods)", model.Scheduling)
+		}
+	})
+
+	t.Run("pods unobserved gates the field off", func(t *testing.T) {
+		coverage := capacityTestCoverage()
+		coverage[capacityapi.CoveragePods] = capacityapi.NewSourceCoverage(capacityapi.CoverageDenied, capacityapi.CoverageScopeCluster)
+		model := Build(Snapshot{
+			GeneratedAt: capacityTestTime(),
+			NodePools:   []*unstructured.Unstructured{pool},
+			Nodes:       []*corev1.Node{node},
+			Pods: []*corev1.Pod{
+				withPriority(capacityTestPod("victim", "pooled", "batch", map[corev1.ResourceName]string{corev1.ResourceCPU: "2"}), -10),
+			},
+			Coverage: coverage,
+		})
+		if model.Scheduling == nil {
+			t.Fatal("scheduling aggregate is nil (allocatable should keep it present)")
+		}
+		if model.Scheduling.ScheduledRequests != nil || model.Scheduling.NegativePriorityRequests != nil {
+			t.Fatalf("pods-denied aggregate = %+v, want requests and negative-priority both absent", model.Scheduling)
+		}
+	})
+
+	t.Run("negative-priority-only pods make the subset equal the total", func(t *testing.T) {
+		model := Build(Snapshot{
+			GeneratedAt: capacityTestTime(),
+			NodePools:   []*unstructured.Unstructured{pool},
+			Nodes:       []*corev1.Node{node},
+			Pods: []*corev1.Pod{
+				withPriority(capacityTestPod("victim-a", "pooled", "batch", map[corev1.ResourceName]string{corev1.ResourceCPU: "2"}), -10),
+				withPriority(capacityTestPod("victim-b", "pooled", "batch", map[corev1.ResourceName]string{corev1.ResourceCPU: "500m"}), -1),
+			},
+			Coverage: capacityTestCoverage(),
+		})
+		if model.Scheduling == nil {
+			t.Fatal("scheduling aggregate is nil")
+		}
+		capacityTestAssertObservation(t, model.Scheduling.NegativePriorityRequests, capacityapi.CertaintyExact, capacityapi.GranularityAggregate, map[string]string{"cpu": "2500m", "pods": "2"})
+		// Every scheduled pod is negative priority, so the subset is not strict.
+		capacityTestAssertSubset(t, model.Scheduling.NegativePriorityRequests, model.Scheduling.ScheduledRequests, false)
+		capacityTestAssertObservation(t, model.Scheduling.ScheduledRequests, capacityapi.CertaintyExact, capacityapi.GranularityAggregate, map[string]string{"cpu": "2500m", "pods": "2"})
+	})
+}
+
 func TestBuildAttributesScheduledPodsThroughVisibleClaimsWhenNodesAreDenied(t *testing.T) {
 	pool := capacityTestPool("compute", "pool-uid", nil, nil)
 	claim := capacityTestClaimWithConditions("registered", pool, []map[string]any{
@@ -957,6 +1036,39 @@ func capacityTestPod(name, nodeName, ownerName string, requests map[corev1.Resou
 			Containers: []corev1.Container{containerWithRequests(requests)},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+func withPriority(pod *corev1.Pod, priority int32) *corev1.Pod {
+	pod.Spec.Priority = &priority
+	return pod
+}
+
+// capacityTestAssertSubset fails unless every resource in subset is <= the same
+// resource in total; strict additionally requires at least one resource to be
+// strictly smaller (a proper subset).
+func capacityTestAssertSubset(t *testing.T, subset, total *capacityapi.QuantityObservation, strict bool) {
+	t.Helper()
+	if subset == nil || total == nil {
+		t.Fatalf("subset=%v total=%v, both must be present", subset, total)
+	}
+	anyStrict := false
+	for name, raw := range subset.Resources {
+		totalRaw, ok := total.Resources[name]
+		if !ok {
+			t.Fatalf("resource %q in subset but absent from total %+v", name, total.Resources)
+		}
+		sub := resource.MustParse(raw)
+		tot := resource.MustParse(totalRaw)
+		switch sub.Cmp(tot) {
+		case 1:
+			t.Fatalf("resource %q subset %s exceeds total %s", name, raw, totalRaw)
+		case -1:
+			anyStrict = true
+		}
+	}
+	if strict && !anyStrict {
+		t.Fatalf("subset %+v is not strictly smaller than total %+v", subset.Resources, total.Resources)
 	}
 }
 

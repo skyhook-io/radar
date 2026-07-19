@@ -92,6 +92,10 @@ const EXPLAIN_CARDS: { term: string; body: string }[] = [
     body: "What the scheduler has placed. This is what consumes scheduling capacity — not live usage.",
   },
   {
+    term: "Negative-priority requests",
+    body: "The subset of scheduled requests coming from pods with a priority below zero — potential preemption victims. Default-priority workloads can reclaim their capacity, subject to preemption policy, placement, and disruption constraints. A measured priority fact, never added to scheduled requests: Radar does not claim these are an overprovisioning buffer.",
+  },
+  {
     term: "Actual usage",
     body: "Point-in-time consumption from metrics. An efficiency signal. Never scheduler headroom.",
   },

@@ -46,6 +46,13 @@ type SchedulingCapacity struct {
 	ScheduledRequests *QuantityObservation `json:"scheduledRequests,omitempty"`
 	Allocatable       *QuantityObservation `json:"allocatable,omitempty"`
 	InFlightCapacity  *QuantityObservation `json:"inFlightCapacity,omitempty"`
+	// NegativePriorityRequests is the SUBSET of ScheduledRequests coming from
+	// pods with spec.priority < 0 — potential preemption victims. Never add it
+	// to ScheduledRequests. It states a measured priority fact, not intent:
+	// whether such pods are an overprovisioning buffer or productive batch
+	// work, their requests are reclaimable by default-priority workloads
+	// (subject to preemption policy, placement, and disruption constraints).
+	NegativePriorityRequests *QuantityObservation `json:"negativePriorityRequests,omitempty"`
 }
 
 type OverviewResponse struct {

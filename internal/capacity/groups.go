@@ -18,10 +18,35 @@ import (
 // parsing an autoscaler's own group names, which cloud providers truncate.
 // Precedence when a node carries several: karpenter > gke > eks > aks.
 const (
-	labelGKENodePool  = "cloud.google.com/gke-nodepool"
-	labelEKSNodeGroup = "eks.amazonaws.com/nodegroup"
-	labelAKSAgentPool = "kubernetes.azure.com/agentpool"
+	labelGKENodePool       = "cloud.google.com/gke-nodepool"
+	labelEKSNodeGroup      = "eks.amazonaws.com/nodegroup"
+	labelAKSAgentPool      = "kubernetes.azure.com/agentpool"
+	labelKopsInstanceGroup = "kops.k8s.io/instancegroup"
+	labelDOKSNodePool      = "doks.digitalocean.com/node-pool"
+	labelACKNodePoolID     = "alibabacloud.com/nodepool-id"
+	labelLKEPoolID         = "lke.linode.com/pool-id"
+	labelScalewayPoolName  = "k8s.scaleway.com/pool-name"
 )
+
+// platformIdentityLabels is an ordered slice for deterministic iteration only —
+// order is NOT a tie-break. A node matching more than one platform label is
+// ambiguous and stays unattributed; only the active-provisioner (Karpenter)
+// label outranks a platform label, because a Karpenter node on any cloud
+// legitimately carries both.
+var platformIdentityLabels = []struct {
+	key    string
+	prefix string
+	domain string
+}{
+	{labelGKENodePool, "gke-nodepool/", "gke"},
+	{labelEKSNodeGroup, "eks-nodegroup/", "eks"},
+	{labelAKSAgentPool, "aks-agentpool/", "aks"},
+	{labelKopsInstanceGroup, "kops-instancegroup/", "kops"},
+	{labelDOKSNodePool, "doks-nodepool/", "doks"},
+	{labelACKNodePoolID, "ack-nodepool/", "ack"},
+	{labelLKEPoolID, "lke-pool/", "lke"},
+	{labelScalewayPoolName, "scaleway-pool/", "scaleway"},
+}
 
 // maxGroupChildren bounds the per-group autoscaler-child list; the meta carries
 // the truncation so nothing is silently dropped.
@@ -232,16 +257,24 @@ func groupIdentityForNode(node *corev1.Node) (id, name, domain string, ok bool) 
 	if v := node.Labels[karpenter.NodePoolLabelKey]; v != "" {
 		return "karpenter-nodepool/" + v, v, "karpenter", true
 	}
-	if v := node.Labels[labelGKENodePool]; v != "" {
-		return "gke-nodepool/" + v, v, "gke", true
+	matched := -1
+	for i, label := range platformIdentityLabels {
+		if node.Labels[label.key] == "" {
+			continue
+		}
+		if matched >= 0 {
+			// Two different platform identities on one node is ambiguity, not
+			// a tie to break silently — the node stays unattributed.
+			return "", "", "", false
+		}
+		matched = i
 	}
-	if v := node.Labels[labelEKSNodeGroup]; v != "" {
-		return "eks-nodegroup/" + v, v, "eks", true
+	if matched < 0 {
+		return "", "", "", false
 	}
-	if v := node.Labels[labelAKSAgentPool]; v != "" {
-		return "aks-agentpool/" + v, v, "aks", true
-	}
-	return "", "", "", false
+	label := platformIdentityLabels[matched]
+	value := node.Labels[label.key]
+	return label.prefix + value, value, label.domain, true
 }
 
 func finalizeGroup(b *groupBuilder, snapshot Snapshot, podsByNode map[string][]*corev1.Pod, statusObserved bool, asOf time.Time) capacityapi.CapacityGroupSummary {
@@ -546,6 +579,10 @@ func buildClusterScheduling(snapshot Snapshot, model *Model, asOf time.Time) *ca
 	if sourceObserved(snapshot.Coverage, capacityapi.CoveragePods) {
 		requests := QuantityObservation(accounting.ScheduledRequests, scheduledRequestCertainty(snapshot.Coverage), capacityapi.GranularityAggregate, asOf, "pods.spec.resources")
 		scheduling.ScheduledRequests = &requests
+		if negative := negativePriorityScheduledRequests(snapshot.Pods); len(negative) > 0 {
+			negativeRequests := QuantityObservation(negative, scheduledRequestCertainty(snapshot.Coverage), capacityapi.GranularityAggregate, asOf, "pods.spec.resources", "pods.spec.priority")
+			scheduling.NegativePriorityRequests = &negativeRequests
+		}
 	}
 	if model != nil && model.Scheduling != nil {
 		scheduling.InFlightCapacity = model.Scheduling.InFlightCapacity

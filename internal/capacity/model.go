@@ -242,6 +242,10 @@ func buildSchedulingAggregate(model *Model, pooledNodes []*corev1.Node, pooledPo
 	if sourceObserved(snapshot.Coverage, capacityapi.CoveragePods) {
 		requests := QuantityObservation(accounting.ScheduledRequests, scheduledRequestCertainty(snapshot.Coverage), capacityapi.GranularityAggregate, snapshot.GeneratedAt, "pods.spec.resources")
 		scheduling.ScheduledRequests = &requests
+		if negative := negativePriorityScheduledRequests(pooledPods); len(negative) > 0 {
+			negativeRequests := QuantityObservation(negative, scheduledRequestCertainty(snapshot.Coverage), capacityapi.GranularityAggregate, snapshot.GeneratedAt, "pods.spec.resources", "pods.spec.priority")
+			scheduling.NegativePriorityRequests = &negativeRequests
+		}
 	}
 	if sourceObserved(snapshot.Coverage, capacityapi.CoverageNodes) {
 		allocatable := QuantityObservation(accounting.Allocatable, nodeCertainty, capacityapi.GranularityAggregate, snapshot.GeneratedAt, "nodes.status.allocatable")

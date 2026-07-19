@@ -226,6 +226,9 @@ func BuildDemandGroupModels(input DemandInput) []DemandGroupModel {
 		for _, pod := range aggregate.pods[:returned] {
 			aggregate.group.Pods = append(aggregate.group.Pods, identityForPod(pod))
 		}
+		if nominated := countNominatedPods(aggregate.pods); nominated > 0 {
+			aggregate.group.NominatedPodCount = &nominated
+		}
 		aggregate.group.FirstSeen = demandFirstSeen(aggregate.pods, input.GeneratedAt)
 		aggregate.group.LastSeen = input.GeneratedAt
 		aggregate.group.AggregateRequests = QuantityObservation(
@@ -245,6 +248,20 @@ func BuildDemandGroupModels(input DemandInput) []DemandGroupModel {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Group.ID < result[j].Group.ID })
 	return result
+}
+
+// countNominatedPods counts pods carrying a scheduler node nomination
+// (status.nominatedNodeName) — the scheduler is preempting to make room for
+// them. Nomination is best-effort and can go stale, so this only annotates a
+// demand group; it never feeds State or pool eligibility.
+func countNominatedPods(pods []*corev1.Pod) int {
+	count := 0
+	for _, pod := range pods {
+		if pod != nil && pod.Status.NominatedNodeName != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func demandPodRefs(pods []*corev1.Pod) []subject.Ref {

@@ -124,6 +124,73 @@ describe("deriveSchedulingRows", () => {
   });
 });
 
+describe("deriveSchedulingRows negative-priority split", () => {
+  it("computes a proportional fraction under exact coverage", () => {
+    const rows = deriveSchedulingRows(
+      {
+        scheduledRequests: observation({ cpu: "6", memory: "24Gi" }),
+        allocatable: observation({ cpu: "12", memory: "48Gi" }),
+        negativePriorityRequests: observation({ cpu: "3" }),
+      },
+      undefined,
+    );
+    const cpu = rows.find((row) => row.resource === "cpu");
+    expect(cpu?.negativePriority).toBe("3");
+    expect(cpu?.negativePriorityCertainty).toBe("exact");
+    expect(cpu?.negativePriorityFraction).toBeCloseTo(3 / 12, 5);
+    // Memory carries no negative-priority key: a present observation missing the
+    // resource is a structural "0", never a band.
+    const memory = rows.find((row) => row.resource === "memory");
+    expect(memory?.negativePriority).toBe("0");
+    expect(memory?.negativePriorityFraction).toBeNull();
+  });
+
+  it("draws no proportional split under a lower-bound observation", () => {
+    const rows = deriveSchedulingRows(
+      {
+        scheduledRequests: observation({ cpu: "6" }, "lower_bound"),
+        allocatable: observation({ cpu: "12" }),
+        negativePriorityRequests: observation({ cpu: "3" }, "lower_bound"),
+      },
+      undefined,
+    );
+    const cpu = rows.find((row) => row.resource === "cpu");
+    // Two lower bounds cannot establish a share — the value survives for the
+    // text annotation, but no proportional band is drawn.
+    expect(cpu?.negativePriority).toBe("3");
+    expect(cpu?.negativePriorityCertainty).toBe("lower_bound");
+    expect(cpu?.negativePriorityFraction).toBeNull();
+  });
+
+  it("requires allocatable itself to be exact for a proportional split", () => {
+    const rows = deriveSchedulingRows(
+      {
+        scheduledRequests: observation({ cpu: "6" }),
+        allocatable: observation({ cpu: "12" }, "lower_bound"),
+        negativePriorityRequests: observation({ cpu: "3" }),
+      },
+      undefined,
+    );
+    const cpu = rows.find((row) => row.resource === "cpu");
+    expect(cpu?.negativePriority).toBe("3");
+    expect(cpu?.negativePriorityFraction).toBeNull();
+  });
+
+  it("leaves negative-priority null when the field is absent", () => {
+    const rows = deriveSchedulingRows(
+      {
+        scheduledRequests: observation({ cpu: "6" }),
+        allocatable: observation({ cpu: "12" }),
+      },
+      undefined,
+    );
+    const cpu = rows.find((row) => row.resource === "cpu");
+    expect(cpu?.negativePriority).toBeNull();
+    expect(cpu?.negativePriorityCertainty).toBeNull();
+    expect(cpu?.negativePriorityFraction).toBeNull();
+  });
+});
+
 describe("quantityToNumber", () => {
   it("parses cpu, memory, and extended counts", () => {
     expect(quantityToNumber("cpu", "500m")).toBeGreaterThan(0);

@@ -80,6 +80,13 @@ Hover (or focus) a glyph for the coverage detail behind it. The invariants this 
 - **Scheduling capacity ≠ actual usage.** Requests are what the scheduler consumes; usage is an efficiency signal. The ledger keeps them structurally apart, and the bar never acquires health colors — high utilization is a bin-packing goal, not an incident.
 - **Declared ≠ actual.** See below.
 
+Two measured facts about pending demand are surfaced without changing any group's state:
+
+- **Negative-priority requests.** Requests from pods with `spec.priority < 0` are reported separately as `negativePriorityRequests`. These pods are potential preemption victims, so this is a measured priority fact, not an overprovisioning claim — whether they are actually preempted depends on scheduler policy, placement, and disruption constraints.
+- **Scheduler nominations.** A pod holding a node nomination (`status.nominatedNodeName` — the scheduler is preempting to make room for it) is annotated per demand group. Nomination is best-effort and can go stale, so it never changes the group's state or a pool's eligibility.
+
+Per-pod request math delegates to `k8s.io/component-helpers/resource` (v0.36) — the same helper the kube-scheduler uses — with in-place-resize (status-based), pod-level resources, and DRA resource-claim accounting enabled; native sidecars (restartable init containers) are counted as that helper does by default.
+
 ## How demand evaluation works
 
 Pool evaluations are **declared compatibility**: does the pod's declared scheduling contract intersect the NodePool's declared provisioning contract? Radar checks readiness (pool and NodeClass), permanent taints vs tolerations, selector/requirement feasibility, configured limits, `minValues`, and observed member shapes. The result is `declared_compatible`, `incompatible` (with per-predicate evidence), or `unknown` — and the boundaries are deliberate:
@@ -126,5 +133,6 @@ All read-only. Every route sits behind the node-visibility gate (list Nodes clus
 ## Limitations
 
 - **No scheduling simulation.** Radar evaluates declared contracts; it does not model provider offerings, spot availability, or bin-packing.
+- **DRA demand is invisible to the requests ledger.** Classic Dynamic Resource Allocation `ResourceClaims` (GA since Kubernetes 1.34) express accelerator demand outside container requests, so DRA-based accelerator demand never appears in the requests ledger — demand evaluation already degrades such pods to a labeled `unknown` rather than guessing.
 - **No trends yet.** All screens show current state plus the bounded activity window; historical capacity trends are planned.
 - **Single cluster.** Like the rest of Radar OSS, Capacity describes the connected cluster.

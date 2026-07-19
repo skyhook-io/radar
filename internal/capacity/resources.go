@@ -64,6 +64,29 @@ func AccountResources(nodes []*corev1.Node, pods []*corev1.Pod) ResourceAccounti
 	return accounting
 }
 
+// negativePriorityScheduledRequests sums the effective requests of the bound,
+// non-terminal pods with spec.priority < 0 — the SUBSET of
+// AccountResources.ScheduledRequests that names potential preemption victims. It
+// applies the identical inclusion rules (skip nil, terminal, and unscheduled
+// pods), so the result is always a per-resource subset of ScheduledRequests. It
+// is a measured priority fact, never an intent claim about overprovisioning.
+func negativePriorityScheduledRequests(pods []*corev1.Pod) corev1.ResourceList {
+	requests := corev1.ResourceList{}
+	for _, pod := range pods {
+		if pod == nil || isTerminal(pod) {
+			continue
+		}
+		if pod.Spec.NodeName == "" {
+			continue
+		}
+		if pod.Spec.Priority == nil || *pod.Spec.Priority >= 0 {
+			continue
+		}
+		addResources(requests, EffectivePodRequests(pod))
+	}
+	return requests
+}
+
 func isTerminal(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 }

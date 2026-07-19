@@ -106,6 +106,44 @@ func TestDemandGroupModelKeepsAllPodRefsBeyondWireLimit(t *testing.T) {
 	}
 }
 
+func TestBuildDemandGroupModelsCountsNominatedPods(t *testing.T) {
+	controller := true
+	ownerRef := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-abc", Controller: &controller}
+	nominatedA := demandTestPod("nominated-a", "500m")
+	nominatedA.OwnerReferences = []metav1.OwnerReference{ownerRef}
+	nominatedA.Status.NominatedNodeName = "ip-10-0-0-1"
+	nominatedB := demandTestPod("nominated-b", "500m")
+	nominatedB.OwnerReferences = []metav1.OwnerReference{ownerRef}
+	nominatedB.Status.NominatedNodeName = "ip-10-0-0-2"
+	plain := demandTestPod("plain-c", "500m")
+	plain.OwnerReferences = []metav1.OwnerReference{ownerRef}
+
+	models := BuildDemandGroupModels(DemandInput{
+		GeneratedAt: capacityTestTime(),
+		Pods:        []*corev1.Pod{nominatedA, nominatedB, plain},
+	})
+	if len(models) != 1 {
+		t.Fatalf("BuildDemandGroupModels() returned %d groups, want 1: %#v", len(models), models)
+	}
+	got := models[0].Group.NominatedPodCount
+	if got == nil {
+		t.Fatal("NominatedPodCount = nil, want 2")
+	}
+	if *got != 2 {
+		t.Fatalf("NominatedPodCount = %d, want 2", *got)
+	}
+
+	none := demandTestPod("plain-solo", "500m")
+	none.OwnerReferences = []metav1.OwnerReference{ownerRef}
+	noneModels := BuildDemandGroupModels(DemandInput{
+		GeneratedAt: capacityTestTime(),
+		Pods:        []*corev1.Pod{none},
+	})
+	if count := noneModels[0].Group.NominatedPodCount; count != nil {
+		t.Fatalf("NominatedPodCount = %d, want nil when no pod is nominated", *count)
+	}
+}
+
 func TestBuildDemandGroupsCanonicalizesAffinityAndTolerationOrder(t *testing.T) {
 	first := demandTestPod("worker-a", "250m")
 	first.Spec.NodeSelector = map[string]string{"workload-tier": "batch", "team": "compute"}

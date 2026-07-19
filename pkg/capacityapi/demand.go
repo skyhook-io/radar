@@ -103,15 +103,20 @@ func NewPoolEvaluation() PoolEvaluation {
 }
 
 type DemandGroup struct {
-	ID                   string               `json:"id"`
-	Fingerprint          string               `json:"fingerprint"`
-	Owner                *subject.Ref         `json:"owner,omitempty"`
-	Pods                 []ResourceIdentity   `json:"pods"`
-	PodsMeta             BoundedResultMeta    `json:"podsMeta"`
-	Namespace            string               `json:"namespace"`
-	FirstSeen            time.Time            `json:"firstSeen"`
-	LastSeen             time.Time            `json:"lastSeen"`
-	PodCount             int                  `json:"podCount"`
+	ID          string             `json:"id"`
+	Fingerprint string             `json:"fingerprint"`
+	Owner       *subject.Ref       `json:"owner,omitempty"`
+	Pods        []ResourceIdentity `json:"pods"`
+	PodsMeta    BoundedResultMeta  `json:"podsMeta"`
+	Namespace   string             `json:"namespace"`
+	FirstSeen   time.Time          `json:"firstSeen"`
+	LastSeen    time.Time          `json:"lastSeen"`
+	PodCount    int                `json:"podCount"`
+	// NominatedPodCount counts pods holding a scheduler node nomination
+	// (status.nominatedNodeName) — preemption in progress. Nomination is
+	// best-effort and can go stale, so this annotates the group; it never
+	// changes State or pool eligibility.
+	NominatedPodCount    *int                 `json:"nominatedPodCount,omitempty"`
 	PerPodRequests       QuantityObservation  `json:"perPodRequests"`
 	AggregateRequests    QuantityObservation  `json:"aggregateRequests"`
 	SchedulingSignature  SchedulingSignature  `json:"schedulingSignature"`

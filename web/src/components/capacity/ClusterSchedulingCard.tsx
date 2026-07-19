@@ -70,6 +70,19 @@ export interface SchedulingBarRow {
   /** in-flight relative to allocatable (same scale as the track), null when
    *  not computable or no in-flight. */
   inFlightFraction: number | null;
+  /** Requests from bound pods with priority < 0 — the SUBSET of `requested`
+   *  naming potential preemption victims. null = the field was absent (none
+   *  observed or the source was unobserved); a present-but-missing resource is
+   *  a structural "0". Never additive with `requested`. */
+  negativePriority: string | null;
+  /** Certainty of the negative-priority observation, for the annotation glyph;
+   *  null when the field is absent. */
+  negativePriorityCertainty: CapacityCertainty | null;
+  /** negativePriority/allocatable in [0,1], populated ONLY when both the
+   *  negative-priority and allocatable observations are exact — two lower
+   *  bounds cannot establish a share. null otherwise (the row falls back to a
+   *  text annotation). */
+  negativePriorityFraction: number | null;
 }
 
 export function quantityToNumber(
@@ -131,6 +144,8 @@ export function deriveSchedulingRows(
   // resource nobody reasons about in units would be noise.
   names.delete("pods");
 
+  const negativeObservation = scheduling?.negativePriorityRequests;
+
   const value = (component: RowComponent, resource: string): string | null => {
     const observation = observations[component];
     if (!observation) return null;
@@ -151,6 +166,15 @@ export function deriveSchedulingRows(
     const allocatableNumber = numeric(allocatable, resource);
     const requestedNumber = numeric(requested, resource);
     const pendingNumber = numeric(pendingValue, resource);
+    const negativePriority = negativeObservation
+      ? (negativeObservation.resources[resource] ?? "0")
+      : null;
+    const negativePriorityNumber = numeric(negativePriority, resource);
+    // A proportional split is only honest when the share's numerator and
+    // denominator are both exact — two lower bounds cannot establish a fraction.
+    const negativePrioritySplittable =
+      negativeObservation?.certainty === "exact" &&
+      observations.allocatable?.certainty === "exact";
     // A row earns its place with a signal: capacity that exists, requests or
     // demand that exist, in-flight claims, or an unobserved source worth an
     // honest "not zero". A fully-zero row (empty fleet, nothing pending) is
@@ -204,6 +228,16 @@ export function deriveSchedulingRows(
         allocatableNumber !== null &&
         allocatableNumber > 0
           ? inFlightNumber / allocatableNumber
+          : null,
+      negativePriority,
+      negativePriorityCertainty: negativeObservation?.certainty ?? null,
+      negativePriorityFraction:
+        negativePrioritySplittable &&
+        negativePriorityNumber !== null &&
+        negativePriorityNumber > 0 &&
+        allocatableNumber !== null &&
+        allocatableNumber > 0
+          ? Math.min(1, negativePriorityNumber / allocatableNumber)
           : null,
     });
   }
@@ -267,6 +301,12 @@ export function ClusterSchedulingCard({
   const copy = SCOPE_COPY[scope];
   const visible = expanded ? rows : rows.slice(0, VISIBLE_ROW_LIMIT);
   const hidden = rows.length - visible.length;
+  // The hatch legend swatch describes a drawn sub-band; under non-exact
+  // certainty the negative-priority value is a text annotation instead, which is
+  // self-describing, so the swatch would describe nothing.
+  const hasNegativePriorityBand = rows.some(
+    (row) => row.negativePriorityFraction !== null,
+  );
 
   if (rows.length === 0) {
     return (
@@ -319,6 +359,16 @@ export function ClusterSchedulingCard({
           />
           pending demand — count, not to scale
         </span>
+        {hasNegativePriorityBand && (
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden
+              className="h-2 w-4 rounded-sm bg-blue-500/70 text-theme-text-primary"
+              style={NEGATIVE_PRIORITY_HATCH_STYLE}
+            />
+            negative-priority (potential preemption victims)
+          </span>
+        )}
       </div>
     </SectionCard>
   );
@@ -329,6 +379,14 @@ export function ClusterSchedulingCard({
 const HATCH_STYLE = {
   backgroundImage:
     "repeating-linear-gradient(135deg, currentColor 0 1px, transparent 1px 5px)",
+} as const;
+
+// A denser, opposite-angle hatch distinguishes the negative-priority sub-band
+// from the in-flight hatch and the solid requested fill it sits inside. Same
+// currentColor approach — no hand-picked color pair.
+const NEGATIVE_PRIORITY_HATCH_STYLE = {
+  backgroundImage:
+    "repeating-linear-gradient(45deg, currentColor 0 1px, transparent 1px 4px)",
 } as const;
 
 function rowGlyphTitle(row: SchedulingBarRow): string {
@@ -343,6 +401,17 @@ function SchedulingBarRowView({ row }: { row: SchedulingBarRow }) {
   const pendingNumber =
     row.pending === null ? null : quantityToNumber(row.resource, row.pending);
   const showPendingChip = pendingNumber !== null && pendingNumber > 0;
+  const negativePriorityNumber =
+    row.negativePriority === null
+      ? null
+      : quantityToNumber(row.resource, row.negativePriority);
+  // Band XOR annotation: the exact case draws the proportional sub-band; any
+  // present-but-unsplittable value falls back to an honest text annotation whose
+  // glyph carries the certainty (≥ under a lower bound).
+  const showNegativeAnnotation =
+    row.negativePriorityFraction === null &&
+    negativePriorityNumber !== null &&
+    negativePriorityNumber > 0;
   const ariaLabel = [
     resourceLabel(row.resource),
     row.requested !== null
@@ -357,6 +426,11 @@ function SchedulingBarRowView({ row }: { row: SchedulingBarRow }) {
     row.pending !== null
       ? `${formatQuantity(row.resource, row.pending)} pending demand`
       : "pending demand unknown",
+    row.negativePriority !== null &&
+    negativePriorityNumber !== null &&
+    negativePriorityNumber > 0
+      ? `${formatQuantity(row.resource, row.negativePriority)} negative-priority`
+      : null,
   ]
     .filter(Boolean)
     .join(", ");
@@ -395,9 +469,26 @@ function SchedulingBarRowView({ row }: { row: SchedulingBarRow }) {
             >
               {row.requestedFraction !== null && (
                 <div
-                  className="h-full bg-blue-500/70"
+                  className="flex h-full justify-end bg-blue-500/70"
                   style={{ width: `${row.requestedFraction * 100}%` }}
-                />
+                >
+                  {row.negativePriorityFraction !== null && (
+                    <div
+                      aria-hidden
+                      className="h-full border-l border-theme-base text-theme-text-primary"
+                      style={{
+                        ...NEGATIVE_PRIORITY_HATCH_STYLE,
+                        width: `${
+                          Math.min(
+                            1,
+                            row.negativePriorityFraction /
+                              row.requestedFraction,
+                          ) * 100
+                        }%`,
+                      }}
+                    />
+                  )}
+                </div>
               )}
             </div>
             {row.inFlightFraction !== null && (
@@ -469,6 +560,16 @@ function SchedulingBarRowView({ row }: { row: SchedulingBarRow }) {
               pending demand
             </span>
           )}
+        {showNegativeAnnotation && row.negativePriority !== null && (
+          <span className="text-theme-text-tertiary">
+            <span className="font-mono text-theme-text-secondary">
+              {`${certaintyGlyph(
+                row.negativePriorityCertainty ?? "unknown",
+              )}${formatQuantity(row.resource, row.negativePriority)}`}
+            </span>{" "}
+            negative-priority
+          </span>
+        )}
       </div>
     </div>
   );
