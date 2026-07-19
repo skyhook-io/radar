@@ -65,7 +65,8 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"groups (warningGroups: up to 20, ordered by lastSeen descending; use " +
 			"lastSeen for liveness, count for cumulative occurrence volume, and " +
 			"objectCount for breadth — objects is a capped sample of up to 3 involved " +
-			"resources, objectsTruncated flags more), " +
+			"resources, objectsTruncated flags more; if warningGroupsTruncated, more " +
+			"groups exist — use get_events with namespace/kind/name and a higher limit), " +
 			"and Helm release status so you can rank likely suspects before " +
 			"calling get_resource or logs. Routing: unknown broken thing -> issues; " +
 			"content/name search -> search; service routing/dependencies -> get_topology " +
@@ -1151,11 +1152,12 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 				// InvolvedObject == this kind+name.
 				matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), name, nil)
 				if len(matched) > 0 {
-					deduplicated := aicontext.DeduplicateEvents(matched)
-					if len(deduplicated) > 10 {
-						deduplicated = deduplicated[:10]
-					}
+					deduplicated, totalGroups := aicontext.DeduplicateEventsN(matched, 10)
 					result["events"] = deduplicated
+					if totalGroups > len(deduplicated) {
+						// The map shape makes truncation signaling cheap here.
+						result["eventsTotalGroups"] = totalGroups
+					}
 				}
 			}
 		} else {
@@ -1706,25 +1708,27 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 		eventValues[i] = *e
 	}
 
-	deduplicated := aicontext.DeduplicateEvents(eventValues)
-
 	limit := 20
 	if input.Limit > 0 {
 		limit = min(input.Limit, 100)
 	}
-	preCap := len(deduplicated)
-	if preCap > limit {
-		deduplicated = deduplicated[:limit]
-	}
+	// The helper cap is the caller's limit, so the documented limit range is
+	// real (a fixed internal 20 used to make 21-100 silently unreachable),
+	// and the pre-cap total makes truncation visible instead of silent.
+	deduplicated, totalGroups := aicontext.DeduplicateEventsN(eventValues, limit)
 
 	// Always wrap into the response struct so capped + uncapped agree on
 	// wire shape ({events: [...], narrowHint?: "..."}).
 	resp := getEventsResponseMCP{Events: deduplicated}
-	if preCap > limit {
-		resp.NarrowHint = fmt.Sprintf(
-			"returned %d of %d events — narrow with namespace=, kind=, name=, or raise limit (cap 100)",
-			limit, preCap,
+	if totalGroups > len(deduplicated) {
+		hint := fmt.Sprintf(
+			"returned %d of %d deduplicated event groups — narrow with namespace=, kind=, or name=",
+			len(deduplicated), totalGroups,
 		)
+		if limit < 100 {
+			hint += ", or raise limit (cap 100)"
+		}
+		resp.NarrowHint = hint
 	}
 	return toJSONResult(resp)
 }
@@ -1983,6 +1987,12 @@ type mcpDashboard struct {
 	RecentChanges      []mcpChange            `json:"recentChanges,omitempty"`
 	WarningEvents      int                    `json:"warningEvents"`
 	WarningGroups      []mcpWarning           `json:"warningGroups"`
+	// TotalWarningGroups counts distinct deduped groups before the
+	// dashboardWarningGroupCap; WarningGroupsTruncated flags that groups
+	// beyond the cap exist, so the consumer knows to narrow via get_events
+	// rather than assume it saw everything.
+	TotalWarningGroups     int  `json:"totalWarningGroups,omitempty"`
+	WarningGroupsTruncated bool `json:"warningGroupsTruncated,omitempty"`
 	HelmReleases       mcpHelmSummary         `json:"helmReleases"`
 	Metrics            *mcpMetrics            `json:"metrics,omitempty"`
 	TopologyNodes      int                    `json:"topologyNodes"`
@@ -2089,6 +2099,13 @@ func countBySeverity(problems []mcpProblem) map[string]int {
 // many objects; three named subjects plus objectCount conveys both "who"
 // and "how widespread" without bloating the dashboard.
 const warningObjectCap = 3
+
+// dashboardWarningGroupCap bounds warningGroups rows. 20 matches the
+// historical shared dedup window; the dashboard owns this number so cap
+// changes for other consumers (get_events allows up to 100) never silently
+// resize the dashboard. Truncation past it is signaled via
+// totalWarningGroups/warningGroupsTruncated.
+const dashboardWarningGroupCap = 20
 
 type mcpWarning struct {
 	Reason  string `json:"reason"`
@@ -2402,15 +2419,16 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		// most-recent first with deterministic tie-breakers (recency,
 		// count, reason, message, type — applied before its group cap).
 		//
-		// Emit the FULL dedup window — no row selection. Any pick-N-of-20
-		// heuristic pre-judges what the consumer needs and creates
-		// unrecoverable omissions (an agent can underweight a returned
-		// row; it cannot recover an absent one); lastSeen makes stale
-		// rows self-labeling, so extra rows are skimmable rather than
-		// misleading. Row count is bounded by the dedup helper's 20-group
-		// window (maxDeduplicatedEvents) — if that cap is ever raised for
-		// other consumers, give the dashboard its own cap here.
-		deduplicated := aicontext.DeduplicateEventsWithObjects(warningValues, warningObjectCap)
+		// Emit the full window up to the dashboard-owned cap — no row
+		// selection. Any pick-N heuristic pre-judges what the consumer
+		// needs and creates unrecoverable omissions (an agent can
+		// underweight a returned row; it cannot recover an absent one);
+		// lastSeen makes stale rows self-labeling, so extra rows are
+		// skimmable rather than misleading. Truncation past the cap is
+		// signaled, never silent.
+		deduplicated, totalGroups := aicontext.DeduplicateEventsWithObjects(warningValues, warningObjectCap, dashboardWarningGroupCap)
+		d.TotalWarningGroups = totalGroups
+		d.WarningGroupsTruncated = totalGroups > len(deduplicated)
 		for _, e := range deduplicated {
 			w := mcpWarning{
 				Reason:           e.Reason,

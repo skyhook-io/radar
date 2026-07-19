@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,9 +11,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 )
 
 func typedEvent(name, reason, eventType string, last time.Time) *corev1.Event {
@@ -92,5 +95,108 @@ func TestHandleGetEvents_TypeFilterAndWarningFirstOrder(t *testing.T) {
 
 	if _, _, err := handleGetEvents(context.Background(), nil, eventsInput{Namespace: "shop", Type: "bogus"}); err == nil || !strings.Contains(err.Error(), "invalid type") {
 		t.Fatalf("type=bogus err = %v, want invalid-type error", err)
+	}
+}
+
+// The documented limit range must be REAL: a fixed internal 20-group dedup
+// window used to make limit=21..100 silently unreachable. And truncation is
+// reported from the true pre-cap total — with "raise limit" advice only when
+// raising the limit can actually help.
+func TestHandleGetEvents_LimitBeyondTwentyAndHints(t *testing.T) {
+	defer k8s.ResetTestState()
+	now := time.Now()
+	objs := make([]runtime.Object, 0, 35)
+	for i := 0; i < 35; i++ {
+		objs = append(objs, &corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: fmt.Sprintf("ev-%02d", i), Namespace: "shop"},
+			Reason:         fmt.Sprintf("Reason%02d", i),
+			Message:        fmt.Sprintf("distinct message %02d", i),
+			Type:           "Warning",
+			Count:          1,
+			LastTimestamp:  metav1.Time{Time: now.Add(-time.Duration(i) * time.Second)},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "shop", Name: fmt.Sprintf("pod-%02d", i)},
+		})
+	}
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset(objs...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var byDefault getEventsResponseMCP
+	for time.Now().Before(deadline) {
+		byDefault = callGetEvents(t, eventsInput{Namespace: "shop"})
+		if len(byDefault.Events) >= 20 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if len(byDefault.Events) != 20 {
+		t.Fatalf("default limit: %d groups, want 20", len(byDefault.Events))
+	}
+	if !strings.Contains(byDefault.NarrowHint, "20 of 35") || !strings.Contains(byDefault.NarrowHint, "raise limit") {
+		t.Errorf("default narrowHint = %q, want true pre-cap total and raise-limit advice", byDefault.NarrowHint)
+	}
+
+	raised := callGetEvents(t, eventsInput{Namespace: "shop", Limit: 100})
+	if len(raised.Events) != 35 {
+		t.Fatalf("limit=100: %d groups, want all 35 (internal 20-cap must not apply)", len(raised.Events))
+	}
+	if raised.NarrowHint != "" {
+		t.Errorf("limit=100 with 35 groups: narrowHint = %q, want none", raised.NarrowHint)
+	}
+
+	atMax := callGetEvents(t, eventsInput{Namespace: "shop", Limit: 25})
+	if len(atMax.Events) != 25 || !strings.Contains(atMax.NarrowHint, "25 of 35") {
+		t.Fatalf("limit=25: %d groups, hint %q; want 25 groups and 25-of-35 hint", len(atMax.Events), atMax.NarrowHint)
+	}
+}
+
+// The events include on get_resource signals truncation via eventsTotalGroups
+// (map shape makes this additive); the field is absent when nothing was cut.
+func TestAttachResourceExtras_EventsTotalGroups(t *testing.T) {
+	defer k8s.ResetTestState()
+	now := time.Now()
+	objs := make([]runtime.Object, 0, 12)
+	for i := 0; i < 12; i++ {
+		objs = append(objs, &corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: fmt.Sprintf("dep-ev-%02d", i), Namespace: "shop"},
+			Reason:         fmt.Sprintf("DeployReason%02d", i),
+			Message:        fmt.Sprintf("deployment condition %02d", i),
+			Type:           "Warning",
+			Count:          1,
+			LastTimestamp:  metav1.Time{Time: now.Add(-time.Duration(i) * time.Second)},
+			InvolvedObject: corev1.ObjectReference{Kind: "Deployment", Namespace: "shop", Name: "web"},
+		})
+	}
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset(objs...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := k8s.GetResourceCache()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var result map[string]any
+	for time.Now().Before(deadline) {
+		result = map[string]any{}
+		attachResourceExtras(context.Background(), cache, result, map[string]bool{"events": true}, "deployment", "shop", "web")
+		if evs, ok := result["events"].([]aicontext.DeduplicatedEvent); ok && len(evs) == 10 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	evs, _ := result["events"].([]aicontext.DeduplicatedEvent)
+	if len(evs) != 10 {
+		t.Fatalf("events include = %d groups, want capped 10 (got %+v)", len(evs), result["events"])
+	}
+	if total, _ := result["eventsTotalGroups"].(int); total != 12 {
+		t.Errorf("eventsTotalGroups = %v, want 12", result["eventsTotalGroups"])
+	}
+
+	// Under the cap: no truncation field.
+	few := map[string]any{}
+	attachResourceExtras(context.Background(), cache, few, map[string]bool{"events": true}, "deployment", "shop", "missing")
+	if _, present := few["eventsTotalGroups"]; present {
+		t.Errorf("eventsTotalGroups present with no truncation: %+v", few)
 	}
 }

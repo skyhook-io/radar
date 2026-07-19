@@ -631,10 +631,10 @@ func fetchEventsForResource(cache *k8s.ResourceCache, kind, namespace, name stri
 	if len(matched) == 0 {
 		return nil, nil
 	}
-	dedup := aicontext.DeduplicateEvents(matched)
-	if limit > 0 && len(dedup) > limit {
-		dedup = dedup[:limit]
-	}
+	// Deliberately a fixed-size evidence sample with silent truncation: this
+	// feeds one section of a composite diagnosis, where a hint would be
+	// noise. get_events is the exhaustive, truncation-signaled path.
+	dedup, _ := aicontext.DeduplicateEventsN(matched, limit)
 	return dedup, nil
 }
 

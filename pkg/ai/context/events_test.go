@@ -137,6 +137,30 @@ func TestNormalizeMessage_KnownHyphenatedPhraseOverMerge(t *testing.T) {
 	}
 }
 
+// Callers own their group cap, and the pre-cap distinct total is reported so
+// truncation is never silent: 30 distinct groups, cap 25 -> 25 returned,
+// total 30. groupCap<=0 keeps the historical default of 20.
+func TestDeduplicateEventsN_CapAndPreCapTotal(t *testing.T) {
+	now := time.Now()
+	var events []corev1.Event
+	for i := 0; i < 30; i++ {
+		events = append(events, makeEvent(fmt.Sprintf("Reason%02d", i), fmt.Sprintf("message %02d", i), "Warning", 1, now.Add(-time.Duration(i)*time.Second)))
+	}
+
+	capped, total := DeduplicateEventsN(events, 25)
+	if len(capped) != 25 || total != 30 {
+		t.Errorf("cap 25: got %d groups, total %d; want 25/30", len(capped), total)
+	}
+	defaulted, total := DeduplicateEventsN(events, 0)
+	if len(defaulted) != maxDeduplicatedEvents || total != 30 {
+		t.Errorf("cap 0: got %d groups, total %d; want %d/30", len(defaulted), total, maxDeduplicatedEvents)
+	}
+	uncapped, total := DeduplicateEventsN(events, 100)
+	if len(uncapped) != 30 || total != 30 {
+		t.Errorf("cap 100: got %d groups, total %d; want 30/30", len(uncapped), total)
+	}
+}
+
 func TestDeduplicateEvents_CollapseIdentical(t *testing.T) {
 	now := time.Now()
 	events := make([]corev1.Event, 50)
@@ -207,7 +231,7 @@ func TestDeduplicateEventsWithObjects_CollectsDistinctObjects(t *testing.T) {
 		makeEventForObject("BackOff", "Back-off restarting failed container in pod cart-5d4f7c9b8-bbbbb", "Warning", 2, now.Add(-1*time.Minute), "Pod", "shop", "cart-5d4f7c9b8-bbbbb"),
 	}
 
-	result := DeduplicateEventsWithObjects(events, 3)
+	result, _ := DeduplicateEventsWithObjects(events, 3, 0)
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 group (pod-hash normalization), got %d: %+v", len(result), result)
@@ -237,7 +261,7 @@ func TestDeduplicateEventsWithObjects_CapsDeterministically(t *testing.T) {
 		events = append(events, makeEventForObject("BackOff", "Back-off restarting failed container", "Warning", 1, now, "Pod", "shop", name))
 	}
 
-	result := DeduplicateEventsWithObjects(events, 3)
+	result, _ := DeduplicateEventsWithObjects(events, 3, 0)
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(result))
@@ -346,7 +370,7 @@ func TestDeduplicateEventsWithObjects_RefValidityAndAPIVersion(t *testing.T) {
 	kindless := makeEventForObject("BackOff", "restarting", "Warning", 1, now, "", "shop", "orphan")
 	nameless := makeEventForObject("BackOff", "restarting", "Warning", 1, now, "Pod", "shop", "")
 
-	result := DeduplicateEventsWithObjects([]corev1.Event{full, kindless, nameless}, 3)
+	result, _ := DeduplicateEventsWithObjects([]corev1.Event{full, kindless, nameless}, 3, 0)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(result))
 	}
@@ -369,7 +393,7 @@ func TestDeduplicateEventsWithObjects_APIVersionVariantsAreOneIdentity(t *testin
 	newer := makeEventForObject("BackOff", "restarting", "Warning", 1, now, "Pod", "shop", "pod-a")
 	newer.InvolvedObject.APIVersion = "v1"
 
-	result := DeduplicateEventsWithObjects([]corev1.Event{older, newer}, 3)
+	result, _ := DeduplicateEventsWithObjects([]corev1.Event{older, newer}, 3, 0)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(result))
 	}
@@ -394,7 +418,7 @@ func TestDeduplicateEventsWithObjects_UIDMergesAcrossMissingAPIVersion(t *testin
 	versionless := makeEventForObject("ScalingReplicaSet", "scaled down", "Warning", 1, now, "Deployment", "shop", "web")
 	versionless.InvolvedObject.UID = "uid-web-1"
 
-	result := DeduplicateEventsWithObjects([]corev1.Event{withVersion, versionless}, 3)
+	result, _ := DeduplicateEventsWithObjects([]corev1.Event{withVersion, versionless}, 3, 0)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(result))
 	}
@@ -419,7 +443,7 @@ func TestDeduplicateEventsWithObjects_RecreatedObjectIsOneRef(t *testing.T) {
 	newIncarnation.InvolvedObject.UID = "uid-new"
 	newIncarnation.InvolvedObject.APIVersion = "v1"
 
-	result := DeduplicateEventsWithObjects([]corev1.Event{oldIncarnation, newIncarnation}, 3)
+	result, _ := DeduplicateEventsWithObjects([]corev1.Event{oldIncarnation, newIncarnation}, 3, 0)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(result))
 	}

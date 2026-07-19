@@ -143,6 +143,50 @@ func TestBuildDashboard_WarningGroups_FullWindowNoSelection(t *testing.T) {
 	}
 }
 
+// Past the dashboard-owned 20-group cap, truncation must be SIGNALED, never
+// silent: 21 distinct groups -> 20 rows, totalWarningGroups 21, truncated
+// true — and the invariant truncated == (total > len(rows)) holds.
+func TestBuildDashboard_WarningGroups_TruncationSignaled(t *testing.T) {
+	defer k8s.ResetTestState()
+
+	ns := "shop"
+	now := time.Now()
+	objs := make([]runtime.Object, 0, dashboardWarningGroupCap+1)
+	for i := 0; i <= dashboardWarningGroupCap; i++ {
+		objs = append(objs, warningEvent(
+			fmt.Sprintf("ev-%02d", i), fmt.Sprintf("Reason%02d", i),
+			fmt.Sprintf("distinct message %02d", i), 1,
+			now.Add(-time.Duration(i)*time.Second), "Pod", ns, fmt.Sprintf("pod-%02d", i)))
+	}
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset(objs...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := k8s.GetResourceCache()
+
+	var dashboard mcpDashboard
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		dashboard = buildDashboard(context.Background(), cache, ns, false, false)
+		if len(dashboard.WarningGroups) >= dashboardWarningGroupCap {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if len(dashboard.WarningGroups) != dashboardWarningGroupCap {
+		t.Fatalf("rows = %d, want capped at %d", len(dashboard.WarningGroups), dashboardWarningGroupCap)
+	}
+	if dashboard.TotalWarningGroups != dashboardWarningGroupCap+1 {
+		t.Errorf("totalWarningGroups = %d, want %d (pre-cap distinct total)", dashboard.TotalWarningGroups, dashboardWarningGroupCap+1)
+	}
+	if !dashboard.WarningGroupsTruncated {
+		t.Error("warningGroupsTruncated = false, want true")
+	}
+	if got, want := dashboard.WarningGroupsTruncated, dashboard.TotalWarningGroups > len(dashboard.WarningGroups); got != want {
+		t.Errorf("invariant broken: truncated=%v but total>len(rows)=%v", got, want)
+	}
+}
+
 // The emitted object ref derives the API group from apiVersion so agents can
 // disambiguate colliding kinds when feeding it into get_resource.
 func TestWarningObjectFromRef_GroupDerivation(t *testing.T) {

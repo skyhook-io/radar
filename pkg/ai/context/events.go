@@ -117,33 +117,48 @@ type DeduplicatedEventGroup struct {
 }
 
 // DeduplicateEvents groups similar K8s events by (Reason, normalizedMessage),
-// collapses repeats with counts, sorts by last timestamp descending, and caps at 20.
+// collapses repeats with counts, sorts by last timestamp descending, and caps
+// at the default 20 groups. It is the no-limit convenience form of
+// DeduplicateEventsN (cf. strings.Split / SplitN) for callers that want the
+// default cap and don't need the pre-cap total — reach for DeduplicateEventsN
+// when you expose your own limit or report truncation.
 func DeduplicateEvents(events []corev1.Event) []DeduplicatedEvent {
-	groups := deduplicateEventGroups(events, 0)
+	result, _ := DeduplicateEventsN(events, 0)
+	return result
+}
+
+// DeduplicateEventsN is DeduplicateEvents with a caller-owned group cap
+// (groupCap <= 0 means the default 20). The second return is the distinct
+// group count BEFORE the cap — after normalization, within the given
+// (already RBAC-filtered) input — so callers can report truncation instead
+// of silently swallowing it.
+func DeduplicateEventsN(events []corev1.Event, groupCap int) ([]DeduplicatedEvent, int) {
+	groups, total := deduplicateEventGroups(events, 0, groupCap)
 	if len(groups) == 0 {
-		return nil
+		return nil, total
 	}
 	result := make([]DeduplicatedEvent, len(groups))
 	for i := range groups {
 		result[i] = groups[i].DeduplicatedEvent
 	}
-	return result
+	return result, total
 }
 
-// DeduplicateEventsWithObjects is DeduplicateEvents plus per-group involved
+// DeduplicateEventsWithObjects is DeduplicateEventsN plus per-group involved
 // objects, for surfaces (like the dashboard) where an aggregated count
-// without a subject would be misleading. objectCap bounds Objects per group;
-// ObjectCount always carries the uncapped distinct total.
-func DeduplicateEventsWithObjects(events []corev1.Event, objectCap int) []DeduplicatedEventGroup {
+// without a subject would be misleading. objectCap bounds Objects per group
+// (ObjectCount always carries the uncapped distinct total); groupCap and the
+// pre-cap total behave as in DeduplicateEventsN.
+func DeduplicateEventsWithObjects(events []corev1.Event, objectCap, groupCap int) ([]DeduplicatedEventGroup, int) {
 	if objectCap <= 0 {
 		objectCap = 1
 	}
-	return deduplicateEventGroups(events, objectCap)
+	return deduplicateEventGroups(events, objectCap, groupCap)
 }
 
-func deduplicateEventGroups(events []corev1.Event, objectCap int) []DeduplicatedEventGroup {
+func deduplicateEventGroups(events []corev1.Event, objectCap, groupCap int) ([]DeduplicatedEventGroup, int) {
 	if len(events) == 0 {
-		return nil
+		return nil, 0
 	}
 
 	groups := make(map[eventKey]*DeduplicatedEventGroup)
@@ -248,11 +263,15 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 		return a.Message < b.Message
 	})
 
-	if len(result) > maxDeduplicatedEvents {
-		result = result[:maxDeduplicatedEvents]
+	total := len(result)
+	if groupCap <= 0 {
+		groupCap = maxDeduplicatedEvents
+	}
+	if len(result) > groupCap {
+		result = result[:groupCap]
 	}
 
-	return result
+	return result, total
 }
 
 // eventObjectIdentity is the dedup key for involved objects. UID is the
