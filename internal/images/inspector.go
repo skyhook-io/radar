@@ -57,7 +57,6 @@ func NewInspector() *Inspector {
 	// Start background cleanup goroutine
 	go i.cleanupLoop()
 
-	log.Printf("Image layer cache initialized at: %s", cacheDir)
 	return i
 }
 
@@ -72,7 +71,6 @@ func (i *Inspector) cleanCacheDir() {
 	if err := os.MkdirAll(i.cacheDir, 0755); err != nil {
 		log.Printf("Warning: failed to create cache directory: %v", err)
 	}
-	log.Printf("Cleaned image layer cache directory")
 }
 
 // cleanupLoop periodically removes expired entries from the cache

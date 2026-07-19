@@ -434,7 +434,6 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		// Cache not ready yet — wait for connection to be established
-		log.Println("SSE broadcaster: cache not ready, waiting for connection...")
 		ch := make(chan struct{}, 1)
 		k8s.OnConnectionChange(func(status k8s.ConnectionStatus) {
 			// Check if this watcher was replaced by a context switch.
@@ -466,7 +465,6 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 				log.Println("Warning: Resource cache still nil after connection")
 				return
 			}
-			log.Println("SSE broadcaster: cache ready, starting resource change watcher")
 		case <-b.stopCh:
 			return
 		case <-watchStop:

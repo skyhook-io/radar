@@ -112,7 +112,6 @@ func init() {
 func CancelOngoingOperations() {
 	operationMu.Lock()
 	defer operationMu.Unlock()
-	log.Printf("[ops] Canceling ongoing operations (previous API calls will be interrupted)")
 	operationCancel()
 	operationCtx, operationCancel = context.WithCancel(context.Background())
 	operationGen++

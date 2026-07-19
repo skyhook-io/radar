@@ -266,15 +266,6 @@ func doInit(opts InitOptions) error {
 					}
 				}
 			}
-			fileCount := len(kubeconfigPaths)
-			if fileCount == 0 && kubeconfigPath != "" {
-				fileCount = 1
-			}
-			// Total contexts across all files (pre-#519 this was the post-merge
-			// count, which silently hid colliding user/cluster definitions;
-			// now every file's contexts are individually reachable).
-			log.Printf("Kubeconfig loaded: mode=%s, files=%d, contexts=%d, exec-plugins=%d",
-				kubeconfigMode, fileCount, totalContextCount, len(execPluginCommands))
 		}
 
 		config, err = kubeConfig.ClientConfig()

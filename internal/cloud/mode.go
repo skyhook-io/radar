@@ -47,12 +47,3 @@ func Mode() bool {
 	}
 	return parsed
 }
-
-// LogStartupMode logs the resolved cloud-mode value once at process
-// start. Call from main after flag parsing. Logging both true and false
-// makes the deployment topology obvious in startup logs and aids
-// support-debugging when a Cloud install accidentally boots in OSS
-// mode.
-func LogStartupMode() {
-	log.Printf("[cloud] cloud mode: %t (%s=%q)", Mode(), cloudModeEnvVar, os.Getenv(cloudModeEnvVar))
-}

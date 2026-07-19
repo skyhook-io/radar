@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -93,9 +94,33 @@ func TestServerRejectsInvalidListenAddress(t *testing.T) {
 
 	if err := srv.StartWithReady(nil); err == nil {
 		t.Fatal("StartWithReady() error = nil, want invalid listen address error")
+	} else if !strings.Contains(err.Error(), `invalid listen address "192.0.2.10"`) {
+		t.Fatalf("StartWithReady() error = %q, want rejected address", err)
 	}
 	if srv.listener != nil {
 		t.Fatalf("StartWithReady() listener = %v, want nil after validation failure", srv.listener)
+	}
+}
+
+func TestServerBindFailureIncludesAddress(t *testing.T) {
+	blocked, err := net.Listen("tcp", net.JoinHostPort(DefaultListenAddress, "0"))
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	defer blocked.Close()
+
+	port := blocked.Addr().(*net.TCPAddr).Port
+	srv := New(Config{Port: port, ListenAddress: DefaultListenAddress})
+	err = srv.StartWithReady(nil)
+	if err == nil {
+		t.Fatal("StartWithReady() error = nil, want bind failure")
+	}
+	wantAddress := net.JoinHostPort(DefaultListenAddress, strconv.Itoa(port))
+	if !strings.Contains(err.Error(), "listen on "+wantAddress) {
+		t.Fatalf("StartWithReady() error = %q, want address %q", err, wantAddress)
+	}
+	if srv.listener != nil {
+		t.Fatalf("StartWithReady() listener = %v, want nil after bind failure", srv.listener)
 	}
 }
 
