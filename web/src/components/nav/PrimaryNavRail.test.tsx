@@ -1,25 +1,20 @@
-import { describe, expect, it } from 'vitest'
-import { renderToString } from 'react-dom/server'
-import { PrimaryNavRail } from './PrimaryNavRail'
+import { describe, expect, it } from "vitest";
+import { renderToString } from "react-dom/server";
+import { PrimaryNavRail } from "./PrimaryNavRail";
 
-function renderRail(showCapacity: boolean) {
+function renderRail() {
   return renderToString(
     <PrimaryNavRail
       activeView="home"
       onNavigate={() => {}}
       pinned
       onTogglePinned={() => {}}
-      showCapacity={showCapacity}
     />,
-  )
+  );
 }
 
-describe('PrimaryNavRail Karpenter discovery gate', () => {
-  it('shows Capacity when Karpenter NodePools are discoverable', () => {
-    expect(renderRail(true)).toContain('Capacity')
-  })
-
-  it('does not add irrelevant navigation on clusters without Karpenter', () => {
-    expect(renderRail(false)).not.toContain('Capacity')
-  })
-})
+describe("PrimaryNavRail", () => {
+  it("always surfaces Capacity — the view reads cluster capacity across every node manager, not just Karpenter", () => {
+    expect(renderRail()).toContain("Capacity");
+  });
+});

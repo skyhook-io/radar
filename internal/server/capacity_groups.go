@@ -64,6 +64,21 @@ func (s *Server) loadCapacityAutoscalerStatus(r *http.Request, meta *capacityapi
 	return &status
 }
 
+func (s *Server) loadKarpenterlessCapacityModel(r *http.Request, result *capacityLoadResult) {
+	now := result.meta.GeneratedAt
+	nodes := s.loadCapacityNodes(r, &result.meta, now)
+	pods := s.loadCapacityPods(r, &result.meta, now)
+	snapshot := capacitymodel.Snapshot{
+		GeneratedAt: now,
+		Nodes:       nodes,
+		Pods:        pods,
+		Coverage:    result.meta.Coverage,
+	}
+	model := capacitymodel.Build(snapshot)
+	result.model = &model
+	result.snapshot = &snapshot
+}
+
 func (s *Server) attachCapacityGroups(r *http.Request, result capacityLoadResult, response *capacityapi.OverviewResponse) {
 	autoscalerState := s.loadCapacityAutoscalerStatus(r, &response.ResponseMeta)
 	groupsModel := capacitymodel.BuildGroupsModel(*result.snapshot, autoscalerState, result.model, result.meta.GeneratedAt)

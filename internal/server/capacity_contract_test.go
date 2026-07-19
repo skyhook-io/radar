@@ -65,6 +65,11 @@ func TestCapacityNotDetectedPrecedesRBACDenial(t *testing.T) {
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
 	permissions.SetCanI("list", karpenter.Group, "nodepools", "", false)
+	permissions.SetCanI("list", "", "nodes", "", false)
+	permissions.SetCanI("list", "", "pods", "", false)
+	permissions.SetCanI("get", "", "configmaps", "kube-system", false)
+	permissions.SetCanI("list", "", "pods", "default", false)
+	permissions.SetCanI("list", "", "pods", "broken", false)
 	env.srv.permCache.Set("alice", permissions)
 
 	var body capacityapi.OverviewResponse
@@ -80,6 +85,11 @@ func TestCapacityAuthorizedStateEnvelopes(t *testing.T) {
 		env := newAuthTestServer(t)
 		permissions := &auth.UserPermissions{AllowedNamespaces: nil}
 		permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+		permissions.SetCanI("list", "", "nodes", "", false)
+		permissions.SetCanI("list", "", "pods", "", false)
+		permissions.SetCanI("get", "", "configmaps", "kube-system", false)
+		permissions.SetCanI("list", "", "pods", "default", false)
+		permissions.SetCanI("list", "", "pods", "broken", false)
 		env.srv.permCache.Set("alice", permissions)
 
 		var body capacityapi.OverviewResponse
@@ -109,6 +119,22 @@ func TestCapacityAuthorizedStateEnvelopes(t *testing.T) {
 			t.Fatalf("nodePools coverage = %#v", coverage)
 		}
 	})
+}
+
+func TestCapacityNotDetectedStillCarriesGroupSurface(t *testing.T) {
+	initCapacityContractDynamicState(t, false, false)
+
+	var body capacityapi.OverviewResponse
+	assertOK(t, get(t, "/api/capacity"), &body)
+	if body.State != capacityapi.IntegrationNotDetected {
+		t.Fatalf("state = %q, want %q", body.State, capacityapi.IntegrationNotDetected)
+	}
+	// Karpenter absent must not blank the capacity surface: groups, orphans,
+	// and managers are present (possibly empty) arrays, never null.
+	if body.Groups == nil || body.OrphanAutoscalerGroups == nil || body.Summary.Managers == nil {
+		t.Fatalf("group surface missing under not_detected: groups=%v orphans=%v managers=%v",
+			body.Groups, body.OrphanAutoscalerGroups, body.Summary.Managers)
+	}
 }
 
 func TestCapacityPoolMissingIsNotFoundWhenAvailable(t *testing.T) {

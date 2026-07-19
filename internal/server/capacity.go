@@ -46,6 +46,15 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 	response := capacityapi.NewOverviewResponse(result.meta.GeneratedAt)
 	response.ResponseMeta = result.meta
 	response.State = result.state
+	if result.model == nil && result.state == capacityapi.IntegrationNotDetected {
+		// Karpenter absent is not the end of capacity: the Overview still
+		// carries groups, managers, and the cluster ledger from nodes, pods,
+		// and the autoscaler status ConfigMap. Only the Overview widens —
+		// Demand/Pools/Activity stay Karpenter-scoped, and state keeps its
+		// frozen wire meaning (the Karpenter integration).
+		s.loadKarpenterlessCapacityModel(r, &result)
+		response.ResponseMeta = result.meta
+	}
 	if result.model == nil {
 		s.writeJSON(w, response)
 		return
@@ -70,7 +79,13 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 			Pods:            result.snapshot.Pods,
 			ResolvePodOwner: result.snapshot.ResolvePodOwner,
 		})
-		capacitymodel.ClassifyDemandGroupModels(groups, capacityDemandPoolInputs(result))
+		// Pool refinement only makes sense against pools that exist: with
+		// none, "blocked" would mean "no NodePool can take it" on clusters
+		// that never had NodePools — states stay at the scheduler-verdict
+		// level instead.
+		if len(result.snapshot.NodePools) > 0 {
+			capacitymodel.ClassifyDemandGroupModels(groups, capacityDemandPoolInputs(result))
+		}
 		response.Summary.Actions = append(response.Summary.Actions, capacityDemandActions(groups)...)
 	}
 	if capacityCoverageObserved(result.meta.Coverage[capacityapi.CoverageNodeClaims]) {

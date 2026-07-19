@@ -846,6 +846,91 @@ export function QuantityInline({
   );
 }
 
+/**
+ * Inventory-table quantity cell. CPU ("N cores") and memory ("N GiB") lead; a
+ * GPU resource is promoted into the visible cell ("gpu N") because it changes
+ * what can schedule; every other resource collapses into a "+N more" chip whose
+ * tooltip lists each one labeled — so pods and ephemeral-storage never sit as
+ * bare unlabeled numbers next to CPU/memory. Empty/unknown handling mirrors
+ * QuantityInline (unavailable ≠ zero, a lower bound keeps its glyph).
+ */
+export function InventoryQuantityCell({
+  observation,
+  empty,
+}: {
+  observation?: CapacityQuantityObservation;
+  empty: string;
+}) {
+  const entries = observation
+    ? sortedResourceEntries(observation.resources)
+    : [];
+  if (entries.length === 0) {
+    if (observation?.certainty === "unknown")
+      return (
+        <WithTooltip tip={observationTitle(observation)}>
+          <span className="text-xs text-theme-text-tertiary">Unknown</span>
+        </WithTooltip>
+      );
+    return (
+      <span className="text-xs text-theme-text-tertiary">
+        {empty}
+        {observation?.certainty === "lower_bound" && (
+          <>
+            {" "}
+            <CertaintyGlyph certainty="lower_bound" />
+          </>
+        )}
+      </span>
+    );
+  }
+
+  const visible: string[] = [];
+  const cpu = observation?.resources.cpu;
+  const memory = observation?.resources.memory;
+  if (cpu !== undefined) visible.push(formatQuantity("cpu", cpu));
+  if (memory !== undefined) visible.push(formatQuantity("memory", memory));
+  const hidden: [string, string][] = [];
+  for (const [resource, value] of entries) {
+    if (resource === "cpu" || resource === "memory") continue;
+    if (/gpu/i.test(resource)) {
+      visible.push(`gpu ${formatQuantity(resource, value)}`);
+    } else {
+      hidden.push([resource, value]);
+    }
+  }
+  const hiddenTip = hidden
+    .map(
+      ([resource, value]) => `${resource} ${formatQuantity(resource, value)}`,
+    )
+    .join(" · ");
+
+  return (
+    <span className="font-mono text-xs text-theme-text-secondary">
+      <WithTooltip
+        tip={observation ? observationTitle(observation) : undefined}
+      >
+        <span>{visible.join(" · ")}</span>
+      </WithTooltip>
+      {hidden.length > 0 && (
+        <>
+          {visible.length > 0 ? " · " : ""}
+          <WithTooltip tip={hiddenTip}>
+            <span className="cursor-help text-theme-text-tertiary underline decoration-dotted underline-offset-2">
+              {`+${hidden.length} more`}
+            </span>
+          </WithTooltip>
+        </>
+      )}
+      {observation && observation.certainty !== "exact" && (
+        <>
+          {" "}
+          <CertaintyGlyph certainty={observation.certainty} />
+        </>
+      )}
+    </span>
+  );
+}
+
 export function ActualUsageInline({
   usage,
   coverage,

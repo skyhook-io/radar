@@ -11,7 +11,7 @@ Capacity is diagnosis only — it never mutates NodePools, NodeClaims, or worklo
 
 ## When it appears
 
-The Capacity entry (nav rail, next to Cost; command palette `g p`) renders only when Karpenter NodePools are discovered in the cluster **and** the current identity can list them. Users without NodePool access never see the nav item, the palette entry, or any bridge into the view — every `/api/capacity/*` route enforces the same gate server-side. Both `karpenter.sh/v1` and `v1beta1` are supported, including provider NodeClasses (EC2NodeClass, AKSNodeClass, …) via API discovery.
+The Capacity entry (nav rail, next to Cost; command palette `g p`) is always visible: the Overview renders cluster-wide capacity — node groups, managers, the scheduling ledger — on any cluster, Karpenter or not. The Karpenter-specific screens (NodePool detail, Demand, Activity) and every Karpenter bridge still require the Karpenter integration: NodePools discovered **and** listable by the current identity. When NodePools exist but the caller is denied them, every `/api/capacity/*` route still fails closed with 403 — a deliberate conservative gate (the caller may separately be entitled to node-level data; widening that is an open decision, not an accident). Both `karpenter.sh/v1` and `v1beta1` are supported, including provider NodeClasses (EC2NodeClass, AKSNodeClass, …) via API discovery.
 
 ## The four screens
 

@@ -272,6 +272,28 @@ const gkeGroup: CapacityGroupSummary = {
   childrenMeta: { total: 3, returned: 2, truncated: true },
 };
 
+// A group whose allocatable vector carries the "unlabeled soup" the cell must
+// tame: cpu + memory lead, a GPU is promoted, pods + ephemeral-storage collapse.
+const richGroup: CapacityGroupSummary = {
+  id: "grp-rich",
+  name: "rich-pool",
+  manager: "karpenter",
+  managerValidated: true,
+  nodeCount: 3,
+  readyNodeCount: 3,
+  allocatable: quantity({
+    cpu: "16",
+    memory: "64Gi",
+    pods: "990",
+    "ephemeral-storage": "200Gi",
+    "nvidia.com/gpu": "8",
+  }),
+  scheduledRequests: quantity({ cpu: "8", memory: "32Gi" }),
+  scaling: [{ code: "dynamic", summary: "provisions on demand" }],
+  children: [],
+  childrenMeta: boundedMeta(0),
+};
+
 const orphanScaleToZero: CapacityAutoscalerChildObservation = {
   id: "gke-scale-to-zero",
   name: "https://www.googleapis.com/.../gke-scale-to-zero",
@@ -609,9 +631,9 @@ describe("CapacityView overview", () => {
     );
     expect(html).toContain("Capacity overview");
     expect(html).toContain("Karpenter");
-    expect(html).toContain("NodePools");
     expect(html).toContain("NodeClaims");
     expect(html).toContain("Pending pods");
+    // The former "NodePools" tile is now the unified "Node groups" tile.
     expect(html).toContain("Node groups");
     expect(html).toContain("Operational signals");
     expect(html).toContain("default");
@@ -680,10 +702,20 @@ describe("CapacityView overview", () => {
   });
 
   it("shows the integration state returned by the server", () => {
+    // not_detected only shows the block when there is no observable surface —
+    // strip node coverage and managers so nothing is left to render.
     const notDetected = renderCapacity("/capacity", (client) =>
       client.setQueryData(
         ["capacity", "overview"],
-        overview({ state: "not_detected" }),
+        overview({
+          state: "not_detected",
+          summary: { ...overview().summary, managers: [] },
+          coverage: {
+            ...meta.coverage,
+            nodes: sourceCoverage("unavailable"),
+            nodePools: sourceCoverage("unavailable"),
+          },
+        }),
       ),
     );
     expect(notDetected).toContain("Karpenter not detected");
@@ -807,6 +839,103 @@ describe("CapacityView overview", () => {
     );
     expect(html).toContain("Karpenter scheduling capacity");
     expect(html).toContain("in flight (beyond the edge)");
+  });
+
+  it("renders the overview on a Karpenter-less cluster that still has observable capacity", () => {
+    const notDetected = comprehensiveOverview();
+    notDetected.state = "not_detected";
+    // Karpenter-less: no NodePools, no Karpenter pool ledger, no claims — only
+    // node/manager evidence remains.
+    notDetected.pools = [];
+    notDetected.poolsTruncated = false;
+    notDetected.summary = {
+      ...notDetected.summary,
+      poolCount: 0,
+      claimCount: undefined,
+      claimStages: undefined,
+      scheduling: undefined,
+      managers: [
+        { manager: "gke_autoscaler", groupCount: 1, status: "healthy" },
+      ],
+      nodeCount: 9,
+    };
+    notDetected.groups = [gkeGroup];
+
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], notDetected),
+    );
+    // The page renders instead of the not-detected block.
+    expect(html).not.toContain("Karpenter not detected");
+    expect(html).toContain("Capacity overview");
+    // Node-groups inventory + managers tile both render from node/CM evidence.
+    expect(html).toContain("Node groups");
+    expect(html).toContain("gke-default-pool");
+    expect(html).toContain("Capacity managers");
+    expect(html).toContain("GKE autoscaler");
+    // Cluster scheduling bar renders from clusterScheduling.
+    expect(html).toContain("Cluster scheduling capacity");
+    // Karpenter-only signals section is omitted (no dead-end Demand/Activity links).
+    expect(html).not.toContain("Operational signals");
+  });
+
+  it("keeps the not-detected block when the cluster exposes no observable capacity surface", () => {
+    const blank = overview({
+      state: "not_detected",
+      summary: { ...overview().summary, managers: [], nodeCount: undefined },
+      groups: [],
+      orphanAutoscalerGroups: [],
+      coverage: {
+        ...meta.coverage,
+        nodes: sourceCoverage("unavailable"),
+        nodePools: sourceCoverage("unavailable"),
+      },
+    });
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], blank),
+    );
+    expect(html).toContain("Karpenter not detected");
+    // The block replaces the page — no tiles, no managers surface.
+    expect(html).not.toContain("Capacity managers");
+  });
+
+  it("headlines the Nodes tile with the total and decomposes pooled vs unattributed", () => {
+    const decomposed = overview({
+      summary: {
+        ...overview().summary,
+        nodeCount: 17,
+        poolCount: 3,
+        unpooledNodeCount: 5,
+        unattributedNodeCount: 2,
+      },
+    });
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], decomposed),
+    );
+    // Headline is the total observed, not the pooled subset (the old bug showed
+    // pooled = 12 as the headline on a 17-node cluster).
+    expect(html).toContain(">17</div>");
+    expect(html).not.toContain(">12</div>");
+    // Subline decomposes: 17 − 5 unpooled = 12 in Karpenter pools · 2 unattributed.
+    expect(html).toContain("12 in Karpenter pools");
+    expect(html).toContain("2 unattributed");
+  });
+
+  it("promotes GPUs into the inventory cell and collapses other resources into +N more", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(
+        ["capacity", "overview"],
+        overview({ groups: [richGroup] }),
+      ),
+    );
+    // CPU + memory lead; the GPU is promoted into the visible cell.
+    expect(html).toContain("16 cores");
+    expect(html).toContain("64.0 GiB");
+    expect(html).toContain("gpu 8");
+    // pods + ephemeral-storage collapse behind a labeled "+N more" tooltip.
+    expect(html).toContain("+2 more");
+    // The unlabeled "990" (pods) is no longer a bare number in the cell — it
+    // lives inside the tooltip, which SSR does not paint.
+    expect(html).not.toContain("990");
   });
 });
 

@@ -41,13 +41,13 @@ import {
   identityToSelectedResource,
   InlineEmpty,
   integrationBlock,
+  InventoryQuantityCell,
   KpiTile,
   LinkButton,
   managerStatusTone,
   pickWorstPressure,
   PoolReadyBadge,
   poolReadinessDetail,
-  QuantityInline,
   RefreshError,
   relativeTime,
   ROW_HOVER,
@@ -126,6 +126,58 @@ export function coverageCertainty(
   return "exact";
 }
 
+/** One-manager breakdown for the Node groups subline when no Karpenter pools
+ *  own the groups (e.g. a GKE/EKS-managed cluster). Null when no manager was
+ *  attributed. */
+function managerBreakdown(managers: CapacityManagerSummary[]): string | null {
+  if (managers.length === 0) return null;
+  if (managers.length === 1)
+    return `${managers[0].groupCount} ${capacityManagerLabel(managers[0].manager)}`;
+  return `across ${managers.length} managers`;
+}
+
+/** Node groups tile subline. Headline is the unified group count; the subline
+ *  keeps the Karpenter readiness signal when pools exist, else describes the
+ *  managers that own the groups, else says none/unavailable — never a
+ *  fabricated zero. */
+function nodeGroupsSubline(
+  summary: CapacityOverviewSummary,
+  data: CapacityOverviewResponse,
+  coverage: CapacityCoverageBySource,
+): string {
+  if (summary.poolCount > 0)
+    return `${summary.poolCount} Karpenter · ${poolReadinessDetail(
+      data.pools,
+      data.poolsTruncated,
+    )}`;
+  if (data.groups.length === 0)
+    return coverageHasObservations(coverage.nodes)
+      ? "none identified"
+      : coverageMessage(coverage.nodes, "Node inventory");
+  return managerBreakdown(summary.managers) ?? "logical groups across managers";
+}
+
+/** Nodes tile subline. Decomposes the total: nodes inside Karpenter pools, plus
+ *  nodes with no group identity. Falls back to the coverage message when the
+ *  total is unavailable or nothing decomposes (unavailable ≠ zero). */
+function nodesSubline(
+  summary: CapacityOverviewSummary,
+  coverage: CapacityCoverageBySource,
+): string {
+  if (summary.nodeCount === undefined)
+    return coverageMessage(coverage.nodes, "Node inventory");
+  const parts: string[] = [];
+  if (summary.poolCount > 0)
+    parts.push(
+      `${summary.nodeCount - (summary.unpooledNodeCount ?? 0)} in Karpenter pools`,
+    );
+  if ((summary.unattributedNodeCount ?? 0) > 0)
+    parts.push(`${summary.unattributedNodeCount} unattributed`);
+  return parts.length > 0
+    ? parts.join(" · ")
+    : coverageMessage(coverage.nodes, "Node inventory");
+}
+
 interface OverviewSignal {
   key: string;
   severity: "error" | "warning" | "info" | "neutral";
@@ -160,16 +212,40 @@ export function CapacityOverview({
     });
   };
 
-  const blocked = integrationBlock(
-    query.data,
-    query.error,
-    query.isLoading,
-    "Loading capacity overview…",
-  );
-  if (blocked) return blocked;
+  // A Karpenter-less cluster still has capacity worth showing — its nodes, node
+  // groups owned by other managers, the autoscaler ConfigMap. Render the
+  // overview whenever there is an observable surface; only fall through to the
+  // "Karpenter not detected" block when there is genuinely nothing to show.
+  // Loading / error / syncing / denied still short-circuit through
+  // integrationBlock unchanged.
+  const response = query.data;
+  const hasObservableSurface =
+    !!response &&
+    (coverageHasObservations(response.coverage.nodes) ||
+      response.groups.length > 0 ||
+      response.orphanAutoscalerGroups.length > 0 ||
+      response.summary.managers.length > 0);
+  const notDetectedWithSurface =
+    response?.state === "not_detected" && hasObservableSurface;
+
+  if (!notDetectedWithSurface) {
+    const blocked = integrationBlock(
+      query.data,
+      query.error,
+      query.isLoading,
+      "Loading capacity overview…",
+    );
+    if (blocked) return blocked;
+  }
 
   const data = query.data as CapacityOverviewResponse;
-  if (!coverageHasObservations(data.coverage.nodePools)) {
+  // Karpenter-specific tiles/sections key off this, not off the presence of any
+  // capacity data — a not-detected cluster with observable nodes still renders.
+  const karpenterActive = data.state === "available";
+  // The NodePool-inventory guard is a Karpenter-detected concern (Karpenter is
+  // present but its NodePools can't be read). A not-detected cluster has no
+  // NodePool coverage by definition — that is not an error to block on.
+  if (karpenterActive && !coverageHasObservations(data.coverage.nodePools)) {
     return (
       <EmptyState
         icon={Layers3}
@@ -184,8 +260,13 @@ export function CapacityOverview({
   const podsDeniedFlag = coverageIsDenied(coverage.pods);
   const unavailableRefresh = query.error ? errorMessage(query.error) : null;
   // Cluster scope is the honest headline once the server measures every node;
-  // the Karpenter-only ledger is the fallback until it does.
+  // the Karpenter-only ledger is the fallback until it does — and only while
+  // Karpenter is actually a manager here (never a fabricated Karpenter bar on a
+  // cluster that has none).
   const clusterScheduling = summary.clusterScheduling;
+  const schedulingForBar =
+    clusterScheduling ?? (karpenterActive ? summary.scheduling : undefined);
+  const schedulingScope = clusterScheduling ? "cluster" : "karpenter";
 
   const signals = buildSignals(summary, { onOpenPool, onNavigate });
 
@@ -199,7 +280,7 @@ export function CapacityOverview({
                 Capacity overview
               </h1>
               <span className="text-xs text-theme-text-tertiary">
-                Karpenter posture for this cluster · read-only diagnosis
+                cluster capacity posture · read-only diagnosis
               </span>
             </div>
             <button
@@ -254,11 +335,11 @@ export function CapacityOverview({
           nodesObserved={coverageHasObservations(coverage.nodes)}
         />
         <KpiTile
-          label="NodePools"
-          value={summary.poolCount}
-          sub={poolReadinessDetail(data.pools, data.poolsTruncated)}
-          certainty="exact"
-          certaintyTitle="Exact — cluster-scoped watch on Karpenter NodePools."
+          label="Node groups"
+          value={data.groups.length}
+          sub={nodeGroupsSubline(summary, data, coverage)}
+          certainty={coverageCertainty(coverage.nodes)}
+          certaintyTitle={coverageMessage(coverage.nodes, "Node groups")}
           attention={data.pools.some((pool) => pool.ready === false)}
           linkLabel="View inventory ↓"
           onClick={() =>
@@ -270,35 +351,29 @@ export function CapacityOverview({
         />
         <KpiTile
           label="Nodes"
-          value={
-            summary.nodeCount !== undefined
-              ? summary.nodeCount - (summary.unpooledNodeCount ?? 0)
-              : "—"
-          }
-          sub={
-            summary.unpooledNodeCount
-              ? `+${summary.unpooledNodeCount} outside Karpenter pools`
-              : coverageMessage(coverage.nodes, "Node inventory")
-          }
+          value={summary.nodeCount ?? "—"}
+          sub={nodesSubline(summary, coverage)}
           certainty={coverageCertainty(coverage.nodes)}
           certaintyTitle={coverageMessage(coverage.nodes, "Node inventory")}
         />
-        <KpiTile
-          label="NodeClaims"
-          value={summary.claimCount ?? "—"}
-          sub={
-            claimStagesDetail(
-              summary.claimStages,
-              summary.orphanedClaimCount,
-            ) ?? coverageMessage(coverage.nodeClaims, "Claim inventory")
-          }
-          certainty={coverageCertainty(coverage.nodeClaims)}
-          certaintyTitle={coverageMessage(
-            coverage.nodeClaims,
-            "Claim inventory",
-          )}
-          attention={(summary.claimStages?.failed ?? 0) > 0}
-        />
+        {karpenterActive && (
+          <KpiTile
+            label="NodeClaims"
+            value={summary.claimCount ?? "—"}
+            sub={
+              claimStagesDetail(
+                summary.claimStages,
+                summary.orphanedClaimCount,
+              ) ?? coverageMessage(coverage.nodeClaims, "Claim inventory")
+            }
+            certainty={coverageCertainty(coverage.nodeClaims)}
+            certaintyTitle={coverageMessage(
+              coverage.nodeClaims,
+              "Claim inventory",
+            )}
+            attention={(summary.claimStages?.failed ?? 0) > 0}
+          />
+        )}
         {podsDeniedFlag ? (
           <KpiTile
             label="Pending pods"
@@ -315,17 +390,19 @@ export function CapacityOverview({
             certainty={coverageCertainty(coverage.pods)}
             certaintyTitle={coverageMessage(coverage.pods, "Pending demand")}
             attention={(summary.pendingPodCount ?? 0) > 0}
-            linkLabel="Open Demand →"
-            onClick={() => onNavigate("/capacity/demand")}
+            linkLabel={karpenterActive ? "Open Demand →" : undefined}
+            onClick={
+              karpenterActive ? () => onNavigate("/capacity/demand") : undefined
+            }
           />
         )}
       </div>
 
       <ClusterSchedulingCard
-        scheduling={clusterScheduling ?? summary.scheduling}
+        scheduling={schedulingForBar}
         pending={podsDeniedFlag ? undefined : summary.aggregateDemand}
         onExplain={openExplainer}
-        scope={clusterScheduling ? "cluster" : "karpenter"}
+        scope={schedulingScope}
       />
 
       <PendingDemandChips
@@ -335,68 +412,75 @@ export function CapacityOverview({
         podsPartial={coverageIsLowerBound(coverage.pods)}
       />
 
-      <SectionCard
-        title="Operational signals"
-        subtitle="prioritized · each links to its diagnosis"
-        actions={
-          <div className="flex items-center gap-4">
-            <LinkButton onClick={() => onNavigate("/capacity/demand")}>
-              {summary.pendingPodCount !== undefined && !podsDeniedFlag
-                ? `All demand · ${summary.pendingPodCount} →`
-                : "All demand →"}
-            </LinkButton>
-            <LinkButton onClick={() => onNavigate("/capacity/activity")}>
-              Activity timeline →
-            </LinkButton>
-          </div>
-        }
-        bodyClassName="divide-y divide-theme-border-subtle"
-      >
-        {signals.length === 0 ? (
-          <InlineEmpty
-            title="No operational signals"
-            detail="Radar reported no capacity-affecting actions for this cluster."
-          />
-        ) : (
-          signals.map((signal) => (
-            <div
-              key={signal.key}
-              className="flex items-start gap-3 px-4 py-2.5 hover:bg-theme-hover/40"
-            >
-              <Badge
-                severity={signal.severity}
-                size="sm"
-                className="min-w-[3rem] justify-center"
-              >
-                {signalSeverityLabel(signal.severity)}
-              </Badge>
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-theme-text-primary">
-                  {signal.title}
-                </div>
-                <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-theme-text-secondary">
-                  {signal.subjects?.map((subject) => (
-                    <button
-                      key={subject.label}
-                      type="button"
-                      onClick={subject.open}
-                      className="font-mono text-accent-text hover:underline"
-                    >
-                      {subject.label}
-                    </button>
-                  ))}
-                  {signal.detail && <span>{signal.detail}</span>}
-                </div>
-              </div>
-              {signal.action && (
-                <LinkButton onClick={signal.action.run} className="shrink-0">
-                  {signal.action.label} →
-                </LinkButton>
-              )}
+      {/* Operational signals are Karpenter-scoped: the actions come from the
+          Karpenter action ledger and every link lands on a Karpenter-gated
+          screen (Demand / Activity / pool diagnosis). On a Karpenter-less
+          cluster the section — and its dead-end links — is omitted rather than
+          shown empty. */}
+      {karpenterActive && (
+        <SectionCard
+          title="Operational signals"
+          subtitle="prioritized · each links to its diagnosis"
+          actions={
+            <div className="flex items-center gap-4">
+              <LinkButton onClick={() => onNavigate("/capacity/demand")}>
+                {summary.pendingPodCount !== undefined && !podsDeniedFlag
+                  ? `All demand · ${summary.pendingPodCount} →`
+                  : "All demand →"}
+              </LinkButton>
+              <LinkButton onClick={() => onNavigate("/capacity/activity")}>
+                Activity timeline →
+              </LinkButton>
             </div>
-          ))
-        )}
-      </SectionCard>
+          }
+          bodyClassName="divide-y divide-theme-border-subtle"
+        >
+          {signals.length === 0 ? (
+            <InlineEmpty
+              title="No operational signals"
+              detail="Radar reported no capacity-affecting actions for this cluster."
+            />
+          ) : (
+            signals.map((signal) => (
+              <div
+                key={signal.key}
+                className="flex items-start gap-3 px-4 py-2.5 hover:bg-theme-hover/40"
+              >
+                <Badge
+                  severity={signal.severity}
+                  size="sm"
+                  className="min-w-[3rem] justify-center"
+                >
+                  {signalSeverityLabel(signal.severity)}
+                </Badge>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-theme-text-primary">
+                    {signal.title}
+                  </div>
+                  <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-theme-text-secondary">
+                    {signal.subjects?.map((subject) => (
+                      <button
+                        key={subject.label}
+                        type="button"
+                        onClick={subject.open}
+                        className="font-mono text-accent-text hover:underline"
+                      >
+                        {subject.label}
+                      </button>
+                    ))}
+                    {signal.detail && <span>{signal.detail}</span>}
+                  </div>
+                </div>
+                {signal.action && (
+                  <LinkButton onClick={signal.action.run} className="shrink-0">
+                    {signal.action.label} →
+                  </LinkButton>
+                )}
+              </div>
+            ))
+          )}
+        </SectionCard>
+      )}
 
       <NodeGroupsSection
         sectionRef={inventoryRef}
@@ -704,13 +788,13 @@ function GroupRow({
           {`${group.readyNodeCount}/${group.nodeCount}`}
         </td>
         <td className={TD}>
-          <QuantityInline
+          <InventoryQuantityCell
             observation={group.allocatable}
             empty="Not observed"
           />
         </td>
         <td className={TD}>
-          <QuantityInline
+          <InventoryQuantityCell
             observation={group.scheduledRequests}
             empty="Not observed"
           />
