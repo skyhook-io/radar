@@ -720,13 +720,56 @@ describe("CapacityView overview", () => {
     );
     expect(notDetected).toContain("Karpenter not detected");
 
+    // denied likewise only blocks when the node fleet is invisible too — with
+    // no observable surface, the access-denied block stands.
     const deniedState = renderCapacity("/capacity", (client) =>
       client.setQueryData(
         ["capacity", "overview"],
-        overview({ state: "denied" }),
+        overview({
+          state: "denied",
+          summary: { ...overview().summary, managers: [] },
+          groups: [],
+          coverage: {
+            ...meta.coverage,
+            nodes: sourceCoverage("denied"),
+            nodePools: sourceCoverage("denied"),
+          },
+        }),
       ),
     );
     expect(deniedState).toContain("Capacity access denied");
+  });
+
+  it("renders the cluster-only overview when NodePools are denied but nodes are visible", () => {
+    // Karpenter denied, node fleet visible: the Overview softens the denial into
+    // the cluster-only shape (inventory + managers from nodes/labels) with an
+    // honest notice, never the access-denied block and never Karpenter sections.
+    const denied = overview({
+      state: "denied",
+      summary: {
+        ...overview().summary,
+        managers: [
+          { manager: "gke_autoscaler", groupCount: 1, status: "healthy" },
+        ],
+        poolCount: 0,
+      },
+      pools: [],
+      groups: [gkeGroup],
+      coverage: {
+        ...meta.coverage,
+        nodePools: sourceCoverage("denied", "NodePools hidden by permissions"),
+      },
+    });
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], denied),
+    );
+    expect(html).not.toContain("Capacity access denied");
+    expect(html).toContain("Karpenter view unavailable");
+    expect(html).toContain("Node groups");
+    expect(html).toContain("gke-default-pool");
+    expect(html).toContain("GKE autoscaler");
+    // Karpenter-specific surfaces stay hidden under denial.
+    expect(html).not.toContain("Open Demand");
   });
 
   it("explains why Karpenter data is still syncing", () => {

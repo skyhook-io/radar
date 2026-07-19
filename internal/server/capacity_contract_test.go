@@ -65,7 +65,10 @@ func TestCapacityNotDetectedPrecedesRBACDenial(t *testing.T) {
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
 	permissions.SetCanI("list", karpenter.Group, "nodepools", "", false)
-	permissions.SetCanI("list", "", "nodes", "", false)
+	// Node visibility is the page gate; the premise here is that Karpenter
+	// absence (CRD not discovered) is reported as not_detected even though the
+	// caller is also denied NodePools — absence precedes that denial.
+	permissions.SetCanI("list", "", "nodes", "", true)
 	permissions.SetCanI("list", "", "pods", "", false)
 	permissions.SetCanI("get", "", "configmaps", "kube-system", false)
 	permissions.SetCanI("list", "", "pods", "default", false)
@@ -79,13 +82,90 @@ func TestCapacityNotDetectedPrecedesRBACDenial(t *testing.T) {
 	}
 }
 
+func TestCapacityNodeVisibilityGateDeniesEveryRoute(t *testing.T) {
+	// Capacity's page gate is cluster-level node visibility: a caller who cannot
+	// list Nodes has nothing honest to see, so every route fails closed with the
+	// node-visibility message — even one whose NodePools are listable.
+	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
+	env := newAuthTestServer(t)
+	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
+	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+	permissions.SetCanI("list", "", "nodes", "", false)
+	env.srv.permCache.Set("alice", permissions)
+
+	for _, path := range []string{"/api/capacity", "/api/capacity/pools", "/api/capacity/demand", "/api/capacity/activity"} {
+		resp := env.authGet(t, path, "alice", "")
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s status = %d, want 403; body = %s", path, resp.StatusCode, body)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			t.Fatalf("%s decode: %v", path, err)
+		}
+		if message, _ := decoded["error"].(string); message != "Capacity requires cluster-level node visibility (list nodes)" {
+			t.Fatalf("%s error = %q, want the node-visibility message", path, message)
+		}
+	}
+}
+
+func TestCapacityOverviewNodePoolsDeniedRendersClusterShape(t *testing.T) {
+	// NodePools exist but are unreadable, while the node fleet is visible. The
+	// Overview must soften Karpenter denial into the cluster-only shape (200,
+	// state denied, NodePools coverage denied, empty pools) rather than 403 —
+	// and must not fabricate any pool-spec-derived data or claim Karpenter
+	// health it could not read.
+	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
+	env := newAuthTestServer(t)
+	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
+	permissions.SetCanI("list", karpenter.Group, "nodepools", "", false)
+	permissions.SetCanI("list", "", "nodes", "", true)
+	permissions.SetCanI("list", "", "pods", "", false)
+	permissions.SetCanI("list", "", "pods", "default", false)
+	permissions.SetCanI("list", "", "pods", "broken", false)
+	permissions.SetCanI("get", "", "configmaps", "kube-system", false)
+	env.srv.permCache.Set("alice", permissions)
+
+	resp := env.authGet(t, "/api/capacity", "alice", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body = %s", resp.StatusCode, body)
+	}
+	var body capacityapi.OverviewResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.State != capacityapi.IntegrationDenied {
+		t.Fatalf("state = %q, want %q (wire meaning stays the Karpenter integration)", body.State, capacityapi.IntegrationDenied)
+	}
+	nodePoolCoverage := body.Coverage[capacityapi.CoverageNodePools]
+	if nodePoolCoverage.Status != capacityapi.CoverageDenied {
+		t.Fatalf("nodePools coverage = %#v, want denied", nodePoolCoverage)
+	}
+	if len(body.Pools) != 0 || body.Summary.PoolCount != 0 {
+		t.Fatalf("denied overview leaked pool-spec data: pools=%d poolCount=%d", len(body.Pools), body.Summary.PoolCount)
+	}
+	// The group surface is still present (arrays, never null); no Karpenter
+	// manager may claim readiness it could not observe.
+	if body.Groups == nil || body.Summary.Managers == nil {
+		t.Fatalf("cluster-only surface missing: groups=%v managers=%v", body.Groups, body.Summary.Managers)
+	}
+	for _, manager := range body.Summary.Managers {
+		if manager.Manager == capacityapi.ManagerKarpenter && manager.Status != capacityapi.ManagerUnknown {
+			t.Fatalf("karpenter rollup claimed readiness under NodePool denial: %#v", manager)
+		}
+	}
+}
+
 func TestCapacityAuthorizedStateEnvelopes(t *testing.T) {
 	t.Run("not detected", func(t *testing.T) {
 		initCapacityContractDynamicState(t, false, false)
 		env := newAuthTestServer(t)
 		permissions := &auth.UserPermissions{AllowedNamespaces: nil}
 		permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
-		permissions.SetCanI("list", "", "nodes", "", false)
+		permissions.SetCanI("list", "", "nodes", "", true)
 		permissions.SetCanI("list", "", "pods", "", false)
 		permissions.SetCanI("get", "", "configmaps", "kube-system", false)
 		permissions.SetCanI("list", "", "pods", "default", false)
@@ -107,6 +187,7 @@ func TestCapacityAuthorizedStateEnvelopes(t *testing.T) {
 		env := newAuthTestServer(t)
 		permissions := &auth.UserPermissions{AllowedNamespaces: nil}
 		permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+		permissions.SetCanI("list", "", "nodes", "", true)
 		env.srv.permCache.Set("alice", permissions)
 
 		var body capacityapi.OverviewResponse
@@ -288,7 +369,7 @@ func TestCapacityDemandSummaryOmittedWithoutPodObservations(t *testing.T) {
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{}}
 	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
 	permissions.SetCanI("list", karpenter.Group, "nodeclaims", "", false)
-	permissions.SetCanI("list", "", "nodes", "", false)
+	permissions.SetCanI("list", "", "nodes", "", true)
 	permissions.SetCanI("list", "", "pods", "", false)
 	permissions.SetCanI("list", "metrics.k8s.io", "nodes", "", false)
 	env.srv.permCache.Set("alice", permissions)
@@ -345,6 +426,9 @@ func TestCapacityDemandPoolFilterDoesNotRevealNodePoolExistenceUnderDenial(t *te
 	env := newAuthTestServer(t)
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
 	permissions.SetCanI("list", karpenter.Group, "nodepools", "", false)
+	// Node-visible but NodePool-denied: the demand route must fail closed on the
+	// NodePool denial (not the node gate), identically for every pool name.
+	permissions.SetCanI("list", "", "nodes", "", true)
 	env.srv.permCache.Set("alice", permissions)
 
 	var errorMessage string
@@ -868,11 +952,6 @@ func TestCapacityActivityRBACMetadataUsesOnlyAuthorizedRelevantEvents(t *testing
 			Kind: "Node", APIVersion: "v1", Name: "unrelated-node", EventType: pkgtimeline.EventTypeDelete, ClusterContext: k8s.ActiveClusterContext(),
 		},
 		{
-			ID: "denied-node", Timestamp: base.Add(-72 * time.Hour), Source: pkgtimeline.SourceInformer,
-			Kind: "Node", APIVersion: "v1", Name: "private-node", EventType: pkgtimeline.EventTypeDelete, ClusterContext: k8s.ActiveClusterContext(),
-			Labels: map[string]string{karpenter.NodePoolLabelKey: "private-pool"},
-		},
-		{
 			ID: "denied-k8s-event", Timestamp: base.Add(2 * time.Minute), Source: pkgtimeline.SourceK8sEvent,
 			Kind: karpenter.NodePoolKind, APIVersion: karpenter.APIVersionV1, Name: "general", UID: "general-uid",
 			Reason: "DisruptionBlocked", EventType: pkgtimeline.EventTypeNormal, Namespace: "private", ClusterContext: k8s.ActiveClusterContext(),
@@ -886,7 +965,10 @@ func TestCapacityActivityRBACMetadataUsesOnlyAuthorizedRelevantEvents(t *testing
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
 	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
 	permissions.SetCanI("list", karpenter.Group, "nodeclaims", "", false)
-	permissions.SetCanI("list", "", "nodes", "", false)
+	// Node visibility is the page gate for Activity, so a caller who reaches it
+	// can always see node events; per-event denial here is exercised through the
+	// claim and namespace-scoped event fixtures instead.
+	permissions.SetCanI("list", "", "nodes", "", true)
 	permissions.SetCanI("list", "", "events", "", false)
 	permissions.SetCanI("list", "", "events", "private", false)
 	env.srv.permCache.Set("alice", permissions)

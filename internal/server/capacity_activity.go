@@ -54,6 +54,9 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 		s.writeCapacityPageError(w, err)
 		return
 	}
+	if !s.requireNodeVisibility(w, r) {
+		return
+	}
 	now := time.Now().UTC()
 	response := capacityapi.NewActivityResponse(now)
 	response.ResponseMeta = newCapacityResponseMeta(now)

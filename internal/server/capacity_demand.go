@@ -33,7 +33,7 @@ func (s *Server) handleCapacityDemand(w http.ResponseWriter, r *http.Request) {
 		s.writeCapacityPageError(w, err)
 		return
 	}
-	result, ok := s.loadCapacityModel(w, r)
+	result, ok := s.loadCapacityModel(w, r, false)
 	if !ok {
 		return
 	}

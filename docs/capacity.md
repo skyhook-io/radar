@@ -11,7 +11,12 @@ Capacity is diagnosis only — it never mutates NodePools, NodeClaims, or worklo
 
 ## When it appears
 
-The Capacity entry (nav rail, next to Cost; command palette `g p`) is always visible: the Overview renders cluster-wide capacity — node groups, managers, the scheduling ledger — on any cluster, Karpenter or not. The Karpenter-specific screens (NodePool detail, Demand, Activity) and every Karpenter bridge still require the Karpenter integration: NodePools discovered **and** listable by the current identity. When NodePools exist but the caller is denied them, every `/api/capacity/*` route still fails closed with 403 — a deliberate conservative gate (the caller may separately be entitled to node-level data; widening that is an open decision, not an accident). Both `karpenter.sh/v1` and `v1beta1` are supported, including provider NodeClasses (EC2NodeClass, AKSNodeClass, …) via API discovery.
+**Capacity requires cluster-level node visibility; Karpenter access adds the Karpenter screens.** That is the whole rule — one page gate, two Overview shapes, never a partial Karpenter rendering.
+
+- **Node visibility is the page gate.** The whole surface is built on the node fleet, so every `/api/capacity/*` route first checks that the current identity can list Nodes cluster-wide. A caller who cannot gets a 403 ("Capacity requires cluster-level node visibility (list nodes)"), before the Karpenter check ever runs.
+- **Karpenter access adds the Karpenter screens.** When NodePools are discovered **and** listable, the Overview shows the full Karpenter posture and the NodePool detail, Demand, and Activity screens open. When NodePools exist but the caller is denied them, the Overview **alone** softens to the cluster-only shape — state `denied` (the wire meaning stays "the Karpenter integration"), NodePools coverage denied, and the same nodes/pods/ConfigMap surface a Karpenter-less cluster shows — with an honest "Karpenter view unavailable" notice. Demand, Activity, and the NodePool routes keep failing closed with 403.
+
+Both `karpenter.sh/v1` and `v1beta1` are supported, including provider NodeClasses (EC2NodeClass, AKSNodeClass, …) via API discovery.
 
 ## The four screens
 
@@ -102,7 +107,7 @@ Beyond Karpenter, the Overview carries a logical-group inventory across every ca
 - **Identity comes only from node labels or CRDs** — `karpenter.sh/nodepool`, `cloud.google.com/gke-nodepool`, `eks.amazonaws.com/nodegroup`, `kubernetes.azure.com/agentpool`. Provider group names are never parsed into identity (they truncate long pool names). Nodes with no identity evidence are an **unattributed** presentation bucket — never a group, and deliberately never called "static". The eksctl name label is a hint only and does not create groups.
 - **Autoscaler observations** come from the `kube-system/cluster-autoscaler-status` ConfigMap (published by the Cluster Autoscaler and by the GKE/AKS managed autoscalers; structured YAML ≥ 1.30 plus the legacy text format). Per-zone children (MIGs/VMSS) join a logical group by node-name-prefix evidence; children with no joinable nodes — scale-to-zero groups included — stay **orphans** in their own "known to the autoscaler, unattributed" list, with IDs that never change when nodes later appear.
 - **Managers** (`karpenter`, `gke_autoscaler`, `cluster_autoscaler`, `aks_autoscaler`) roll up worst-of health; a denied or unreadable source is never rendered as "none detected". The GKE prefix join is validated against live clusters; the AKS and EKS joins are marked unvalidated on the wire (`managerValidated`). The ConfigMap's own timestamp is surfaced as "as of T" — healthy quiet clusters publish hours-old payloads, so staleness is context, not breakage.
-- **Scaling facts** are typed prose ("5–11 nodes · target 9", "bounds not published in-cluster", "no capacity manager detected") — never a bare dash, never a fabricated zero.
+- **Scaling facts** are typed prose ("5–11 nodes · target 9", "bounds not published in-cluster", "NodePool not observed" for a Karpenter-labeled node whose NodePool we couldn't read, "no capacity manager detected") — never a bare dash, never a fabricated zero. A Karpenter node whose pool is unreadable (denied) or gone (label remnant) surfaces as `pool_not_observed`, and its manager rollup is `unknown`, never a claim about a spec we never saw.
 - The cluster-wide scheduling ledger (`summary.clusterScheduling`) spans **all observed nodes**; `summary.scheduling` stays Karpenter-scoped forever — consumers depend on that meaning.
 
 ## Scope
@@ -111,7 +116,7 @@ Capacity is deliberately **cluster-wide**. Supply (NodePools, Nodes, NodeClaims)
 
 ## Endpoints
 
-All read-only, all behind the NodePool RBAC gate:
+All read-only. Every route sits behind the node-visibility gate (list Nodes cluster-wide); the Karpenter-specific routes — and the NodePool data on the Overview — additionally require NodePool list access:
 
 - `GET /api/capacity` — overview: KPIs, scheduling aggregates (Karpenter-scoped `scheduling` + all-nodes `clusterScheduling`), signals, pool summaries, the cross-manager `groups` inventory with autoscaler children, `orphanAutoscalerGroups`, and `summary.managers`; the `autoscalerStatus` coverage source reports denied / cache-scope / not-published / parse-error distinctly
 - `GET /api/capacity/pools` (+ `/{name}`, `/{name}/members`) — inventory, detail, paginated members

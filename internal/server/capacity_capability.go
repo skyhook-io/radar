@@ -48,7 +48,12 @@ func (s *Server) karpenterCapability(r *http.Request) k8s.IntegrationCapability 
 		return k8s.IntegrationCapability{State: capacityapi.IntegrationAvailable}
 	}
 	if err := cache.EnsureWatching(gvr); err != nil {
-		return k8s.IntegrationCapability{State: capacityapi.IntegrationAvailable, ReasonCode: "nodepool_cache_unavailable", CacheUnavailable: true}
+		// The CRD exists but this deployment's identity cannot watch it. For a
+		// single-identity deployment that is denial, not a cache hiccup — the
+		// per-user canRead above only covers auth-proxy mode. Mapping it to
+		// denied lets the Overview soften to the cluster-only shape while the
+		// Karpenter screens refuse, instead of an eternally empty "available".
+		return k8s.IntegrationCapability{State: capacityapi.IntegrationDenied, ReasonCode: "nodepools_watch_denied", CacheUnavailable: true}
 	}
 	return k8s.IntegrationCapability{State: capacityapi.IntegrationSyncing, ReasonCode: "nodepools_syncing"}
 }

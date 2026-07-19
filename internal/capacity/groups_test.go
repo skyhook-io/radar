@@ -5,12 +5,58 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/autoscalerstatus"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
+
+func TestBuildGroupsModelEKSChildJoinsByValidatedNameDerivation(t *testing.T) {
+	node := groupsTestNode("ip-10-0-1-5.ec2.internal", map[string]string{labelEKSNodeGroup: "system-pool"})
+	shortNode := groupsTestNode("ip-10-0-1-6.ec2.internal", map[string]string{labelEKSNodeGroup: "system"})
+	probe := capacityTestTime()
+	status := &autoscalerstatus.Status{
+		Format:          autoscalerstatus.FormatStructured,
+		AutoscalerState: "Running",
+		Time:            &probe,
+		NodeGroups: []autoscalerstatus.NodeGroup{
+			{
+				Name:     "eks-system-pool-28cf09b0-ae43-f32a-94c0-27fea5fc8bdc",
+				Basename: "eks-system-pool-28cf09b0-ae43-f32a-94c0-27fea5fc8bdc",
+				MinSize:  intPtr(2), MaxSize: intPtr(4), Target: intPtr(2),
+				Health: autoscalerstatus.Health{Status: "Healthy", Ready: intPtr(2)},
+			},
+			// A zero-node MNG has no label-evidence group — stays an orphan.
+			{
+				Name:     "eks-loadtest-od-26cf0a34-4af9-ec18-066e-a8b0142e7d03",
+				Basename: "eks-loadtest-od-26cf0a34-4af9-ec18-066e-a8b0142e7d03",
+				MinSize:  intPtr(0), MaxSize: intPtr(1), Target: intPtr(0),
+			},
+			// A non-UUID remainder is not an EKS managed-node-group ASG name.
+			{Name: "eks-system-pool-notauuid", Basename: "eks-system-pool-notauuid"},
+		},
+	}
+	gm := buildGroups(Snapshot{GeneratedAt: capacityTestTime(), Nodes: []*corev1.Node{node, shortNode}, Coverage: capacityTestCoverage()}, status)
+
+	group := mustFindGroup(t, gm.Groups, "eks-nodegroup/system-pool")
+	if len(group.Children) != 1 || group.Children[0].ID != "eks-system-pool-28cf09b0-ae43-f32a-94c0-27fea5fc8bdc" {
+		t.Fatalf("children = %+v, want the derived ASG child", group.Children)
+	}
+	if group.Manager != capacityapi.ManagerClusterAutoscaler || !group.ManagerValidated {
+		t.Fatalf("manager = %q validated=%v, want cluster_autoscaler validated", group.Manager, group.ManagerValidated)
+	}
+	// "system" is a prefix of "system-pool": the UUID-shaped-remainder rule
+	// must keep the child off the shorter group.
+	short := mustFindGroup(t, gm.Groups, "eks-nodegroup/system")
+	if len(short.Children) != 0 {
+		t.Fatalf("system group children = %+v, want none", short.Children)
+	}
+	if len(gm.OrphanAutoscalerGroups) != 2 {
+		t.Fatalf("orphans = %+v, want the zero-node MNG and the non-UUID name", gm.OrphanAutoscalerGroups)
+	}
+}
 
 func TestBuildGroupsModelGKEJoinStripsGrpSuffix(t *testing.T) {
 	node := groupsTestNode("gke-cluster-pool-abc123-x7kq", map[string]string{labelGKENodePool: "cluster-pool"})
@@ -200,6 +246,32 @@ func TestBuildGroupsModelKarpenterLimitsFactFormatsResourceOrder(t *testing.T) {
 
 	group := mustFindGroup(t, gm.Groups, "karpenter-nodepool/gpu")
 	assertFact(t, group.Scaling, "limits", "limits: cpu 400 · memory 1Ti · nvidia.com/gpu 8")
+}
+
+func TestBuildGroupsModelKarpenterLabelWithoutPoolReportsPoolNotObserved(t *testing.T) {
+	// A node carries the Karpenter NodePool label but no NodePool CRD was
+	// observed — the Karpenter-denied case, and the label-remnant case after the
+	// CRD was removed. The group stands on label evidence, but every claim about
+	// the pool's spec/status must degrade honestly: scaling is "NodePool not
+	// observed" (never "no limits configured" — that asserts a spec we never
+	// read), and the manager rollup is unknown with no detail (pool readiness is
+	// unreadable), never a fabricated "healthy".
+	node := groupsTestNode("ip-10-0-2-2", map[string]string{karpenter.NodePoolLabelKey: "ghost-pool"})
+	gm := buildGroups(Snapshot{GeneratedAt: capacityTestTime(), Nodes: []*corev1.Node{node}, Coverage: capacityTestCoverage()}, nil)
+
+	group := mustFindGroup(t, gm.Groups, "karpenter-nodepool/ghost-pool")
+	if group.Manager != capacityapi.ManagerKarpenter {
+		t.Fatalf("manager = %q, want karpenter from label evidence", group.Manager)
+	}
+	assertFact(t, group.Scaling, "pool_not_observed", "NodePool not observed")
+	if _, ok := findFact(group.Scaling, "limits"); ok {
+		t.Fatalf("label-only karpenter group must not claim limits: %+v", group.Scaling)
+	}
+
+	manager := mustFindManager(t, gm.Managers, capacityapi.ManagerKarpenter)
+	if manager.GroupCount != 1 || manager.Status != capacityapi.ManagerUnknown || manager.Detail != "" {
+		t.Fatalf("karpenter rollup = %+v, want 1 group unknown with no detail", manager)
+	}
 }
 
 func TestBuildGroupsModelScheduledRequestsGatedOnPodObservation(t *testing.T) {

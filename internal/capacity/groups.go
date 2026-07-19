@@ -2,6 +2,7 @@ package capacity
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -174,8 +175,23 @@ func BuildGroupsModel(snapshot Snapshot, status *autoscalerstatus.Status, model 
 					}
 				}
 			}
+			target := ""
 			if matched > 0 && !conflict && consensus != "" && builders[consensus] != nil {
-				builders[consensus].children = append(builders[consensus].children, child)
+				target = consensus
+			} else if matched == 0 {
+				// EKS managed-node-group ASGs are named "eks-<mng>-<uuid>" and
+				// EKS node names are IPs, so prefix evidence can never join
+				// them. The name derivation (validated live) only ever links a
+				// child to a group that label evidence already established —
+				// autoscaler names still never create identity.
+				if mngName := eksManagedNodeGroupName(group.Basename); mngName != "" {
+					if id := "eks-nodegroup/" + mngName; builders[id] != nil {
+						target = id
+					}
+				}
+			}
+			if target != "" {
+				builders[target].children = append(builders[target].children, child)
 			} else {
 				result.OrphanAutoscalerGroups = append(result.OrphanAutoscalerGroups, child)
 			}
@@ -289,9 +305,25 @@ func detectManager(b *groupBuilder) (capacityapi.CapacityManager, bool) {
 	case "aks":
 		return capacityapi.ManagerAKSAutoscaler, false
 	case "eks":
-		return capacityapi.ManagerClusterAutoscaler, false
+		// The "eks-<mng>-<uuid>" name-derivation join is validated against a
+		// live cluster running the Cluster Autoscaler.
+		return capacityapi.ManagerClusterAutoscaler, true
 	}
 	return "", false
+}
+
+var eksASGSuffix = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func eksManagedNodeGroupName(basename string) string {
+	rest, ok := strings.CutPrefix(basename, "eks-")
+	if !ok || len(rest) < 38 || rest[len(rest)-37] != '-' {
+		return ""
+	}
+	name, suffix := rest[:len(rest)-37], rest[len(rest)-36:]
+	if name == "" || !eksASGSuffix.MatchString(suffix) {
+		return ""
+	}
+	return name
 }
 
 // scalingFacts always returns at least one fact — bounds/target when the
@@ -299,10 +331,13 @@ func detectManager(b *groupBuilder) (capacityapi.CapacityManager, bool) {
 // published or not detected. It never emits a bare dash.
 func scalingFacts(b *groupBuilder, statusObserved bool) []capacityapi.ScalingFact {
 	if b.domain == "karpenter" {
-		var limits corev1.ResourceList
-		if b.pool != nil {
-			limits = karpenter.NormalizeNodePoolSpec(b.pool).Limits
+		if b.pool == nil {
+			// Label evidence without an observed NodePool CRD (Karpenter denied,
+			// or label remnants after the CRD was removed). "no limits
+			// configured" would assert something about a spec we never read.
+			return []capacityapi.ScalingFact{{Code: "pool_not_observed", Summary: "NodePool not observed"}}
 		}
+		limits := karpenter.NormalizeNodePoolSpec(b.pool).Limits
 		if len(limits) > 0 {
 			return []capacityapi.ScalingFact{{Code: "limits", Summary: "limits: " + formatResourceList(limits)}}
 		}
@@ -371,17 +406,22 @@ func mapChild(group autoscalerstatus.NodeGroup) capacityapi.AutoscalerChildObser
 func buildManagers(snapshot Snapshot, status *autoscalerstatus.Status, builders []*groupBuilder, allChildren []capacityapi.AutoscalerChildObservation) []capacityapi.ManagerSummary {
 	managers := []capacityapi.ManagerSummary{}
 
-	if len(snapshot.NodePools) > 0 {
-		count := 0
-		for _, b := range builders {
-			if b.domain == "karpenter" {
-				count++
-			}
+	karpenterGroups := 0
+	for _, b := range builders {
+		if b.domain == "karpenter" {
+			karpenterGroups++
 		}
+	}
+	// Label evidence alone raises the Karpenter manager — a node carrying
+	// karpenter.sh/nodepool proves Karpenter even when its NodePool CRD is
+	// unreadable (denied) or gone (label remnants). karpenterHealthRollup then
+	// reports unknown for those, since pool readiness is unreadable without the
+	// pool — never a fabricated "healthy".
+	if karpenterGroups > 0 {
 		st, detail := karpenterHealthRollup(snapshot.NodePools)
 		managers = append(managers, capacityapi.ManagerSummary{
 			Manager:    capacityapi.ManagerKarpenter,
-			GroupCount: count,
+			GroupCount: karpenterGroups,
 			Status:     st,
 			Detail:     detail,
 		})
@@ -433,6 +473,12 @@ func karpenterHealthRollup(pools []*unstructured.Unstructured) (capacityapi.Mana
 		}
 	}
 	total := ready + notReady + unknown
+	if total == 0 {
+		// No NodePool was observed (Karpenter denied, or label remnants after
+		// the CRD was removed): pool readiness is unreadable, so the rollup must
+		// report unknown rather than claim a healthy fleet from zero evidence.
+		return capacityapi.ManagerUnknown, ""
+	}
 	if notReady > 0 {
 		return capacityapi.ManagerDegraded, fmt.Sprintf("%d of %d NodePools ready", ready, total)
 	}

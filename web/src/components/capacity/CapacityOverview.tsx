@@ -45,6 +45,7 @@ import {
   KpiTile,
   LinkButton,
   managerStatusTone,
+  Notice,
   pickWorstPressure,
   PoolReadyBadge,
   poolReadinessDetail,
@@ -212,12 +213,15 @@ export function CapacityOverview({
     });
   };
 
-  // A Karpenter-less cluster still has capacity worth showing — its nodes, node
-  // groups owned by other managers, the autoscaler ConfigMap. Render the
-  // overview whenever there is an observable surface; only fall through to the
-  // "Karpenter not detected" block when there is genuinely nothing to show.
-  // Loading / error / syncing / denied still short-circuit through
-  // integrationBlock unchanged.
+  // A Karpenter-less cluster — or one whose NodePools this identity cannot read
+  // — still has capacity worth showing: its nodes, node groups owned by other
+  // managers, the autoscaler ConfigMap. Render the overview whenever there is an
+  // observable surface; only fall through to the "not detected" / "access
+  // denied" block when there is genuinely nothing to show. Loading / error /
+  // syncing still short-circuit through integrationBlock unchanged. Node
+  // visibility is the page gate on the server, so a truly node-blind caller
+  // never reaches here with a surface — the fetch 403s and integrationBlock
+  // renders the denial.
   const response = query.data;
   const hasObservableSurface =
     !!response &&
@@ -225,10 +229,11 @@ export function CapacityOverview({
       response.groups.length > 0 ||
       response.orphanAutoscalerGroups.length > 0 ||
       response.summary.managers.length > 0);
-  const notDetectedWithSurface =
-    response?.state === "not_detected" && hasObservableSurface;
+  const stateWithSurface =
+    (response?.state === "not_detected" || response?.state === "denied") &&
+    hasObservableSurface;
 
-  if (!notDetectedWithSurface) {
+  if (!stateWithSurface) {
     const blocked = integrationBlock(
       query.data,
       query.error,
@@ -327,6 +332,14 @@ export function CapacityOverview({
       </div>
 
       {unavailableRefresh && <RefreshError message={unavailableRefresh} />}
+
+      {coverageIsDenied(coverage.nodePools) && (
+        <Notice>
+          Karpenter view unavailable — your identity cannot list NodePools. The
+          cluster capacity below is derived from nodes and pods only; the
+          NodePool detail, Demand, and Activity screens stay unavailable.
+        </Notice>
+      )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
         <ManagersTile

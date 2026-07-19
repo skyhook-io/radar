@@ -1,0 +1,34 @@
+Cluster-autoscaler status at 2026-07-18 22:05:20.512874633 +0000 UTC:
+Cluster-wide:
+  Health:      Healthy (ready=3 unready=0 notStarted=0 longNotStarted=0 registered=3 longUnregistered=0)
+               LastProbeTime:      2026-07-18 22:05:20.512874633 +0000 UTC
+               LastTransitionTime: 2026-07-09 07:55:11.223344556 +0000 UTC
+  ScaleUp:     Backoff (ready=3 registered=3)
+               LastProbeTime:      2026-07-18 22:05:20.512874633 +0000 UTC
+               LastTransitionTime: 2026-07-18 21:58:44.100200300 +0000 UTC
+  ScaleDown:   NoCandidates (candidates=0)
+               LastProbeTime:      2026-07-18 22:05:20.512874633 +0000 UTC
+               LastTransitionTime: 2026-07-09 07:55:11.223344556 +0000 UTC
+
+NodeGroups:
+  Name:        aks-nodepool1-33037761-vmss
+  Health:      Healthy (ready=2 unready=0 notStarted=0 longNotStarted=0 registered=2 longUnregistered=0 cloudProviderTarget=2 (minSize=1, maxSize=3))
+               LastProbeTime:      2026-07-18 22:05:20.512874633 +0000 UTC
+               LastTransitionTime: 2026-07-09 07:55:11.223344556 +0000 UTC
+  ScaleUp:     NoActivity (ready=2 cloudProviderTarget=2)
+               LastProbeTime:      2026-07-18 22:05:20.512874633 +0000 UTC
+               LastTransitionTime: 2026-07-09 07:55:11.223344556 +0000 UTC
+  ScaleDown:   NoCandidates (candidates=0)
+               LastProbeTime:      2026-07-18 22:05:20.512874633 +0000 UTC
+               LastTransitionTime: 2026-07-09 07:55:11.223344556 +0000 UTC
+
+  Name:        aks-spotgpu-41529630-vmss
+  Health:      Healthy (ready=1 unready=0 notStarted=0 longNotStarted=0 registered=1 longUnregistered=0 cloudProviderTarget=1 (minSize=0, maxSize=6))
+               LastProbeTime:      2026-07-18 22:05:20.512874633 +0000 UTC
+               LastTransitionTime: 2026-07-16 14:10:55.778899000 +0000 UTC
+  ScaleUp:     Backoff (ready=1 cloudProviderTarget=1)
+               LastProbeTime:      2026-07-18 22:05:20.512874633 +0000 UTC
+               LastTransitionTime: 2026-07-18 21:58:44.100200300 +0000 UTC
+  ScaleDown:   NoCandidates (candidates=0)
+               LastProbeTime:      2026-07-18 22:05:20.512874633 +0000 UTC
+               LastTransitionTime: 2026-07-16 14:10:55.778899000 +0000 UTC

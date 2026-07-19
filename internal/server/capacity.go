@@ -39,19 +39,20 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 	if !s.requireConnected(w) {
 		return
 	}
-	result, ok := s.loadCapacityModel(w, r)
+	result, ok := s.loadCapacityModel(w, r, true)
 	if !ok {
 		return
 	}
 	response := capacityapi.NewOverviewResponse(result.meta.GeneratedAt)
 	response.ResponseMeta = result.meta
 	response.State = result.state
-	if result.model == nil && result.state == capacityapi.IntegrationNotDetected {
-		// Karpenter absent is not the end of capacity: the Overview still
-		// carries groups, managers, and the cluster ledger from nodes, pods,
-		// and the autoscaler status ConfigMap. Only the Overview widens —
-		// Demand/Pools/Activity stay Karpenter-scoped, and state keeps its
-		// frozen wire meaning (the Karpenter integration).
+	if result.model == nil && (result.state == capacityapi.IntegrationNotDetected || result.state == capacityapi.IntegrationDenied) {
+		// Karpenter absent — or present but its NodePools denied — is not the
+		// end of capacity: the node fleet is visible (gated on list nodes), so
+		// the Overview still carries groups, managers, and the cluster ledger
+		// from nodes, pods, and the autoscaler status ConfigMap. Only the
+		// Overview widens — Demand/Pools/Activity stay Karpenter-scoped, and
+		// state keeps its frozen wire meaning (the Karpenter integration).
 		s.loadKarpenterlessCapacityModel(r, &result)
 		response.ResponseMeta = result.meta
 	}
@@ -126,7 +127,7 @@ func (s *Server) handleCapacityPools(w http.ResponseWriter, r *http.Request) {
 		s.writeCapacityPageError(w, err)
 		return
 	}
-	result, ok := s.loadCapacityModel(w, r)
+	result, ok := s.loadCapacityModel(w, r, false)
 	if !ok {
 		return
 	}
@@ -161,7 +162,7 @@ func (s *Server) handleCapacityPool(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "pool name is required")
 		return
 	}
-	result, ok := s.loadCapacityModel(w, r)
+	result, ok := s.loadCapacityModel(w, r, false)
 	if !ok {
 		return
 	}
@@ -206,7 +207,7 @@ func (s *Server) handleCapacityPoolMembers(w http.ResponseWriter, r *http.Reques
 		s.writeCapacityPageError(w, err)
 		return
 	}
-	result, ok := s.loadCapacityModel(w, r)
+	result, ok := s.loadCapacityModel(w, r, false)
 	if !ok {
 		return
 	}
@@ -243,14 +244,39 @@ func (s *Server) handleCapacityPoolMembers(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, response)
 }
 
-func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request) (capacityLoadResult, bool) {
+// requireNodeVisibility is the first gate on every Capacity route: the whole
+// surface is built on the node fleet, so a caller who cannot list Nodes
+// cluster-wide has nothing honest to see. Karpenter access layers the Karpenter
+// screens on top of this, never around it. (No-auth/local callers pass —
+// canRead returns true there.)
+func (s *Server) requireNodeVisibility(w http.ResponseWriter, r *http.Request) bool {
+	if s.canRead(r, "", "nodes", "", "list") {
+		return true
+	}
+	s.writeError(w, http.StatusForbidden, "Capacity requires cluster-level node visibility (list nodes)")
+	return false
+}
+
+// loadCapacityModel loads the shared capacity model behind the node-visibility
+// gate. softKarpenterDenial is set only by the Overview: when true, a
+// Karpenter-denied identity gets the cluster-only shape (state denied, NodePools
+// coverage denied, model nil for the caller to fill from nodes/pods) instead of
+// a 403. Every Karpenter-specific route passes false and fails closed.
+func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, softKarpenterDenial bool) (capacityLoadResult, bool) {
 	now := time.Now().UTC()
 	result := capacityLoadResult{meta: newCapacityResponseMeta(now)}
+	if !s.requireNodeVisibility(w, r) {
+		return capacityLoadResult{}, false
+	}
 	capability := s.karpenterCapability(r)
 	result.state = capability.State
 	if capability.State == capacityapi.IntegrationDenied {
-		s.writeError(w, http.StatusForbidden, "no access to NodePools (cluster-scoped resource requires explicit RBAC)")
-		return capacityLoadResult{}, false
+		if !softKarpenterDenial {
+			s.writeError(w, http.StatusForbidden, "no access to NodePools (cluster-scoped resource requires explicit RBAC)")
+			return capacityLoadResult{}, false
+		}
+		result.meta.Coverage[capacityapi.CoverageNodePools] = deniedCoverage(capability.ReasonCode, []string{"summary", "pools"})
+		return result, true
 	}
 	if capability.State == capacityapi.IntegrationNotDetected || capability.State == capacityapi.IntegrationSyncing {
 		result.meta.Coverage[capacityapi.CoverageNodePools] = sourceCoverageForState(capability.State, capability.ReasonCode)

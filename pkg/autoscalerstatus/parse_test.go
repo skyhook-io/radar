@@ -149,6 +149,40 @@ func TestParseTruncatedNames(t *testing.T) {
 	}
 }
 
+func TestParseEKSManagedNodeGroups(t *testing.T) {
+	raw, err := os.ReadFile("testdata/eks-managed-node-groups.yaml")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	status, err := Parse(string(raw))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if status.Format != FormatStructured || status.AutoscalerState != "Running" {
+		t.Fatalf("status = %q %q", status.Format, status.AutoscalerState)
+	}
+	if len(status.NodeGroups) != 3 {
+		t.Fatalf("node groups = %d, want 3", len(status.NodeGroups))
+	}
+	byName := map[string]NodeGroup{}
+	for _, group := range status.NodeGroups {
+		byName[group.Basename] = group
+	}
+	system, found := byName["eks-system-pool-28cf09b0-ae43-f32a-94c0-27fea5fc8bdc"]
+	if !found || system.MinSize == nil || *system.MinSize != 2 || system.MaxSize == nil || *system.MaxSize != 4 {
+		t.Fatalf("system pool group = %+v", system)
+	}
+	if system.Health.Ready == nil || *system.Health.Ready != 2 {
+		t.Fatalf("system pool ready = %+v", system.Health)
+	}
+	// Zero-node EKS groups omit nodeCounts entirely (GKE publishes explicit
+	// nulls instead) — both must land as nil, never zero.
+	loadtest := byName["eks-loadtest-od-26cf0a34-4af9-ec18-066e-a8b0142e7d03"]
+	if loadtest.Target == nil || *loadtest.Target != 0 || loadtest.Health.Ready != nil {
+		t.Fatalf("scale-to-zero group = %+v", loadtest)
+	}
+}
+
 func TestParseLegacyText(t *testing.T) {
 	st, err := Parse(loadFixture(t, "legacy-text.txt"))
 	if err != nil {
@@ -211,6 +245,159 @@ func TestParseLegacyText(t *testing.T) {
 	}
 	if got := mustInt(t, g1.Health.Ready, "group[1].Health.Ready"); got != 2 {
 		t.Errorf("group[1].Health.Ready = %d, want 2", got)
+	}
+}
+
+func TestParseAKSStructured(t *testing.T) {
+	st, err := Parse(loadFixture(t, "aks-structured.yaml"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if st.Format != FormatStructured {
+		t.Errorf("Format = %q, want %q", st.Format, FormatStructured)
+	}
+	if st.AutoscalerState != "Running" {
+		t.Errorf("AutoscalerState = %q, want %q", st.AutoscalerState, "Running")
+	}
+	if st.Time == nil {
+		t.Errorf("Time = nil, want non-nil parsed timestamp")
+	}
+	if len(st.NodeGroups) != 3 {
+		t.Fatalf("len(NodeGroups) = %d, want 3", len(st.NodeGroups))
+	}
+
+	// AKS reports each node group by its bare VMSS name (ScaleSet.Id() ==
+	// ScaleSet.Name). There is no "-grp" suffix and no "/"-delimited path, so
+	// Basename must equal the published name verbatim — never truncated, never
+	// stripped. Node names are the VMSS name plus a base36 instance suffix
+	// (aks-nodepool1-33037761-vmss000000), so HasPrefix(node, Basename) — the
+	// rule the logical-group join relies on — must hold.
+	byName := map[string]NodeGroup{}
+	for _, ng := range st.NodeGroups {
+		if ng.Basename != ng.Name {
+			t.Errorf("group %q: Basename = %q, want it to equal Name verbatim (no path, no suffix to strip)", ng.Name, ng.Basename)
+		}
+		if strings.HasSuffix(ng.Basename, "-grp") {
+			t.Errorf("group %q: Basename unexpectedly ends in -grp (that is a GKE MIG convention, not AKS)", ng.Name)
+		}
+		if trimmed := strings.TrimSuffix(ng.Basename, "-grp"); trimmed != ng.Basename {
+			t.Errorf("group %q: TrimSuffix(-grp) mutated the AKS basename to %q; the join key must be the VMSS name unchanged", ng.Name, trimmed)
+		}
+		syntheticNode := ng.Basename + "000000"
+		if !strings.HasPrefix(syntheticNode, ng.Basename) {
+			t.Errorf("group %q: node %q does not start with Basename %q — the group join would orphan this child", ng.Name, syntheticNode, ng.Basename)
+		}
+		byName[ng.Name] = ng
+	}
+
+	sys, ok := byName["aks-nodepool1-33037761-vmss"]
+	if !ok {
+		t.Fatalf("missing system node group aks-nodepool1-33037761-vmss; got %v", byName)
+	}
+	if got := mustInt(t, sys.MinSize, "system.MinSize"); got != 1 {
+		t.Errorf("system MinSize = %d, want 1", got)
+	}
+	if got := mustInt(t, sys.MaxSize, "system.MaxSize"); got != 3 {
+		t.Errorf("system MaxSize = %d, want 3", got)
+	}
+	if got := mustInt(t, sys.Target, "system.Target"); got != 2 {
+		t.Errorf("system Target = %d, want 2", got)
+	}
+	if got := mustInt(t, sys.Health.Ready, "system.Health.Ready"); got != 2 {
+		t.Errorf("system Health.Ready = %d, want 2", got)
+	}
+	if sys.Health.Status != "Healthy" {
+		t.Errorf("system Health.Status = %q, want %q", sys.Health.Status, "Healthy")
+	}
+	if sys.ScaleUp.Backoff != nil {
+		t.Errorf("system ScaleUp.Backoff = %+v, want nil for empty backoffInfo {}", sys.ScaleUp.Backoff)
+	}
+
+	// Scale-to-zero user pool: target 0 and minSize 0 must survive as real zero
+	// values, never confused with "not published".
+	zero, ok := byName["aks-spotgpu-41529630-vmss"]
+	if !ok {
+		t.Fatalf("missing scale-to-zero node group aks-spotgpu-41529630-vmss")
+	}
+	if got := mustInt(t, zero.MinSize, "spotgpu.MinSize"); got != 0 {
+		t.Errorf("spotgpu MinSize = %d, want 0", got)
+	}
+	if got := mustInt(t, zero.MaxSize, "spotgpu.MaxSize"); got != 4 {
+		t.Errorf("spotgpu MaxSize = %d, want 4", got)
+	}
+	if got := mustInt(t, zero.Target, "spotgpu.Target"); got != 0 {
+		t.Errorf("spotgpu Target = %d, want 0", got)
+	}
+	if got := mustInt(t, zero.Health.Ready, "spotgpu.Health.Ready"); got != 0 {
+		t.Errorf("spotgpu Health.Ready = %d, want 0", got)
+	}
+}
+
+func TestParseAKSLegacyText(t *testing.T) {
+	st, err := Parse(loadFixture(t, "aks-legacy-text.txt"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if st.Format != FormatLegacyText {
+		t.Errorf("Format = %q, want %q", st.Format, FormatLegacyText)
+	}
+	if st.Time == nil {
+		t.Errorf("Time = nil, want non-nil parsed header timestamp")
+	}
+	if len(st.NodeGroups) != 2 {
+		t.Fatalf("len(NodeGroups) = %d, want 2", len(st.NodeGroups))
+	}
+
+	g0 := st.NodeGroups[0]
+	if g0.Name != "aks-nodepool1-33037761-vmss" {
+		t.Errorf("group[0].Name = %q, want %q", g0.Name, "aks-nodepool1-33037761-vmss")
+	}
+	if g0.Basename != "aks-nodepool1-33037761-vmss" {
+		t.Errorf("group[0].Basename = %q, want it to equal the VMSS name verbatim", g0.Basename)
+	}
+	if strings.TrimSuffix(g0.Basename, "-grp") != g0.Basename {
+		t.Errorf("group[0].Basename %q was mutated by TrimSuffix(-grp); AKS VMSS names carry no such suffix", g0.Basename)
+	}
+	if !strings.HasPrefix(g0.Basename+"000000", g0.Basename) {
+		t.Errorf("group[0]: node name does not start with Basename %q", g0.Basename)
+	}
+	if g0.Health.Status != "Healthy" {
+		t.Errorf("group[0].Health.Status = %q, want %q", g0.Health.Status, "Healthy")
+	}
+	if got := mustInt(t, g0.MinSize, "group[0].MinSize"); got != 1 {
+		t.Errorf("group[0].MinSize = %d, want 1", got)
+	}
+	if got := mustInt(t, g0.MaxSize, "group[0].MaxSize"); got != 3 {
+		t.Errorf("group[0].MaxSize = %d, want 3", got)
+	}
+	if got := mustInt(t, g0.Target, "group[0].Target"); got != 2 {
+		t.Errorf("group[0].Target = %d, want 2", got)
+	}
+	if got := mustInt(t, g0.Health.Ready, "group[0].Health.Ready"); got != 2 {
+		t.Errorf("group[0].Health.Ready = %d, want 2", got)
+	}
+	if g0.ScaleUp.Status != "NoActivity" {
+		t.Errorf("group[0].ScaleUp.Status = %q, want %q", g0.ScaleUp.Status, "NoActivity")
+	}
+
+	// Second pool is a scale-to-zero user pool stuck in scale-up backoff (the
+	// canonical AKS quota-exhaustion failure). Bounds still parse; the backoff is
+	// surfaced as the ScaleUp status token.
+	g1 := st.NodeGroups[1]
+	if g1.Basename != "aks-spotgpu-41529630-vmss" {
+		t.Errorf("group[1].Basename = %q, want %q", g1.Basename, "aks-spotgpu-41529630-vmss")
+	}
+	if got := mustInt(t, g1.MinSize, "group[1].MinSize"); got != 0 {
+		t.Errorf("group[1].MinSize = %d, want 0", got)
+	}
+	if got := mustInt(t, g1.MaxSize, "group[1].MaxSize"); got != 6 {
+		t.Errorf("group[1].MaxSize = %d, want 6", got)
+	}
+	if got := mustInt(t, g1.Target, "group[1].Target"); got != 1 {
+		t.Errorf("group[1].Target = %d, want 1", got)
+	}
+	if g1.ScaleUp.Status != "Backoff" {
+		t.Errorf("group[1].ScaleUp.Status = %q, want %q", g1.ScaleUp.Status, "Backoff")
 	}
 }
 
