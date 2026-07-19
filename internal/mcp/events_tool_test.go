@@ -41,39 +41,44 @@ func callGetEvents(t *testing.T, input eventsInput) getEventsResponseMCP {
 	return resp
 }
 
-// get_events has always documented Warning events, but the handler never
-// filtered Type — Normal lifecycle churn consumed the dedup window and the
-// response cap. Default must be Warning-only; type=all / type=Normal opt out.
-func TestHandleGetEvents_TypeFilter(t *testing.T) {
+// get_events is named for events, not warnings: the default returns ALL
+// types, but dedup sorts Warning groups first, so warnings lead while a
+// resource's lifecycle timeline still shows instead of an empty result. Even
+// though the Warning here is the OLDEST event, it must sort ahead of the two
+// newer Normal groups. type=Warning/Normal narrow it.
+func TestHandleGetEvents_TypeFilterAndWarningFirstOrder(t *testing.T) {
 	defer k8s.ResetTestState()
 	now := time.Now()
 	client := fake.NewSimpleClientset(
-		typedEvent("w1", "BackOff", "Warning", now.Add(-1*time.Minute)),
-		typedEvent("n1", "Scheduled", "Normal", now.Add(-2*time.Minute)),
-		typedEvent("n2", "Pulled", "Normal", now.Add(-3*time.Minute)),
+		typedEvent("n1", "Scheduled", "Normal", now.Add(-1*time.Minute)), // newest
+		typedEvent("n2", "Pulled", "Normal", now.Add(-2*time.Minute)),
+		typedEvent("w1", "BackOff", "Warning", now.Add(-3*time.Minute)), // oldest
 	)
 	if err := k8s.InitTestResourceCache(client); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 
-	// Informer warm-up: poll until the default call sees the Warning group.
+	// Informer warm-up: poll until all three groups are visible.
 	deadline := time.Now().Add(2 * time.Second)
 	var byDefault getEventsResponseMCP
 	for time.Now().Before(deadline) {
 		byDefault = callGetEvents(t, eventsInput{Namespace: "shop"})
-		if len(byDefault.Events) > 0 {
+		if len(byDefault.Events) >= 3 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	if len(byDefault.Events) != 1 || byDefault.Events[0].Reason != "BackOff" {
-		t.Fatalf("default = %+v, want ONLY the Warning group", byDefault.Events)
+	if len(byDefault.Events) != 3 {
+		t.Fatalf("default = %+v, want all 3 groups (all types)", byDefault.Events)
+	}
+	if byDefault.Events[0].Reason != "BackOff" {
+		t.Errorf("default[0] = %q, want the Warning group first despite being oldest", byDefault.Events[0].Reason)
 	}
 
-	all := callGetEvents(t, eventsInput{Namespace: "shop", Type: "all"})
-	if len(all.Events) != 3 {
-		t.Fatalf("type=all = %+v, want all 3 groups", all.Events)
+	warningOnly := callGetEvents(t, eventsInput{Namespace: "shop", Type: "Warning"})
+	if len(warningOnly.Events) != 1 || warningOnly.Events[0].Reason != "BackOff" {
+		t.Fatalf("type=Warning = %+v, want ONLY the Warning group", warningOnly.Events)
 	}
 
 	normal := callGetEvents(t, eventsInput{Namespace: "shop", Type: "Normal"})

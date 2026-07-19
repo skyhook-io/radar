@@ -163,6 +163,40 @@ func makeEventForObject(reason, message, eventType string, count int32, lastTime
 	return ev
 }
 
+// Warning groups sort ahead of Normal regardless of recency, so a caller that
+// mixes types (get_events) never loses a warning to a burst of newer Normal
+// lifecycle churn when the group cap bites. Single-type callers are
+// unaffected (all-equal type comparison falls through to recency).
+func TestDeduplicateEvents_WarningGroupsSortFirst(t *testing.T) {
+	now := time.Now()
+	// One old Warning plus enough newer Normal groups to overflow the cap.
+	events := []corev1.Event{
+		makeEvent("BackOff", "back-off restarting", "Warning", 1, now.Add(-time.Hour)),
+	}
+	for i := 0; i < maxDeduplicatedEvents+5; i++ {
+		events = append(events, makeEvent(fmt.Sprintf("Normal%02d", i), fmt.Sprintf("normal msg %02d", i), "Normal", 1, now.Add(-time.Duration(i)*time.Second)))
+	}
+
+	result := DeduplicateEvents(events)
+
+	if len(result) != maxDeduplicatedEvents {
+		t.Fatalf("got %d groups, want cap %d", len(result), maxDeduplicatedEvents)
+	}
+	if result[0].Type != "Warning" || result[0].Reason != "BackOff" {
+		t.Errorf("result[0] = %+v, want the Warning group first despite being oldest", result[0])
+	}
+	// The Warning survived the cap even though 25 Normal groups are newer.
+	found := false
+	for _, g := range result {
+		if g.Type == "Warning" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Warning group was evicted by newer Normal churn — cap must drop Normal first")
+	}
+}
+
 // The systemic grouping key spans objects: two pods emitting the same
 // normalized warning collapse into ONE group whose count aggregates both —
 // Objects must name each contributor instead of leaving the count subjectless.

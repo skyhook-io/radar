@@ -221,13 +221,21 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 		result = append(result, g)
 	}
 
-	// Most recent first, with full deterministic tie-breakers BEFORE the
-	// cap — otherwise which equal-timestamp groups survive the cut depends
-	// on informer map iteration order. Type is a comparator key because it
-	// is a grouping key: Normal and Warning groups can tie on everything
-	// else.
+	// Warning groups first, then most recent, with full deterministic
+	// tie-breakers BEFORE the cap — otherwise which groups survive the cut
+	// depends on informer map iteration order.
+	//
+	// Type is the PRIMARY key so that when a caller mixes event types (only
+	// get_events does — every other consumer feeds Warning-only input, for
+	// which this is a no-op), the cap drops Normal lifecycle groups before
+	// Warnings: a burst of Scheduled/Pulled/Started churn can never evict a
+	// live warning from the window. Warning sorts before Normal explicitly
+	// (not alphabetically — "Normal" < "Warning").
 	sort.Slice(result, func(i, j int) bool {
 		a, b := result[i], result[j]
+		if a.Type != b.Type {
+			return a.Type == "Warning"
+		}
 		if !a.LastTimestamp.Equal(b.LastTimestamp) {
 			return a.LastTimestamp.After(b.LastTimestamp)
 		}
@@ -237,10 +245,7 @@ func deduplicateEventGroups(events []corev1.Event, objectCap int) []Deduplicated
 		if a.Reason != b.Reason {
 			return a.Reason < b.Reason
 		}
-		if a.Message != b.Message {
-			return a.Message < b.Message
-		}
-		return a.Type < b.Type
+		return a.Message < b.Message
 	})
 
 	if len(result) > maxDeduplicatedEvents {
