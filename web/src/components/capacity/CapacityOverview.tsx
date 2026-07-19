@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState, type RefObject } from "react";
-import { Layers3 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Layers3, X } from "lucide-react";
 import {
   Collapse,
   CollapseChevron,
@@ -207,15 +207,8 @@ export function CapacityOverview({
   onNavigate: (path: string) => void;
 }) {
   const [showExplain, setShowExplain] = useState(false);
-  const explainAnchorRef = useRef<HTMLDivElement>(null);
   const inventoryRef = useRef<HTMLDivElement>(null);
-  const openExplainer = () => {
-    setShowExplain(true);
-    explainAnchorRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  };
+  const openExplainer = () => setShowExplain(true);
 
   // A Karpenter-less cluster — or one whose NodePools this identity cannot read
   // — still has capacity worth showing: its nodes, node groups owned by other
@@ -281,7 +274,7 @@ export function CapacityOverview({
 
   return (
     <ScrollableContent>
-      <div ref={explainAnchorRef}>
+      <div>
         <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
           <div>
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -294,11 +287,9 @@ export function CapacityOverview({
             </div>
             <button
               type="button"
-              aria-expanded={showExplain}
-              onClick={() => setShowExplain((value) => !value)}
-              className="mt-1 flex items-center gap-1 text-xs font-medium text-accent-text hover:underline"
+              onClick={() => setShowExplain(true)}
+              className="mt-1 text-xs font-medium text-accent-text hover:underline"
             >
-              <CollapseChevron open={showExplain} className="h-3.5 w-3.5" />
               Scheduling capacity ≠ actual usage — how to read these numbers
             </button>
           </div>
@@ -311,29 +302,8 @@ export function CapacityOverview({
             />
           </div>
         </div>
-        <Collapse open={showExplain}>
-          <div className="mt-3 rounded-xl border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {EXPLAIN_CARDS.map((card) => (
-                <div key={card.term} className="text-xs leading-relaxed">
-                  <div className="font-semibold text-theme-text-primary">
-                    {card.term}
-                  </div>
-                  <div className="mt-0.5 text-theme-text-tertiary">
-                    {card.body}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <p className="mt-3 border-t border-theme-border-subtle pt-3 text-[11px] text-theme-text-tertiary">
-              Certainty on each value — <span className="font-mono">=</span>{" "}
-              exact · <span className="font-mono">≥</span> lower bound ·{" "}
-              <span className="font-mono">?</span> unknown. Hover a glyph for
-              its coverage detail.
-            </p>
-          </div>
-        </Collapse>
       </div>
+      <ExplainDialog open={showExplain} onClose={() => setShowExplain(false)} />
 
       {unavailableRefresh && <RefreshError message={unavailableRefresh} />}
 
@@ -719,6 +689,82 @@ function NodeGroupsSection({
           </>
         )}
       </SectionCard>
+    </div>
+  );
+}
+
+function ExplainDialog({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    dialogRef.current?.focus();
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-label="How to read capacity numbers"
+        className="dialog relative mx-4 flex max-h-[85vh] w-full max-w-3xl flex-col outline-none"
+      >
+        <div className="flex shrink-0 items-center justify-between border-b border-theme-border/50 px-6 py-4">
+          <div className="flex items-center gap-3">
+            <Layers3 className="h-5 w-5 text-accent-text" />
+            <h3 className="text-lg font-semibold text-theme-text-primary">
+              How to read these numbers
+            </h3>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-md p-1.5 transition-colors hover:bg-theme-elevated"
+          >
+            <X className="h-5 w-5 text-theme-text-tertiary" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <p className="text-sm text-theme-text-secondary">
+            Scheduling capacity ≠ actual usage. Requests are what the scheduler
+            consumes; usage is an efficiency signal — the two never mix, and no
+            bar here is a health score.
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {EXPLAIN_CARDS.map((card) => (
+              <div key={card.term} className="text-xs leading-relaxed">
+                <div className="font-semibold text-theme-text-primary">
+                  {card.term}
+                </div>
+                <div className="mt-0.5 text-theme-text-tertiary">
+                  {card.body}
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="mt-4 border-t border-theme-border-subtle pt-3 text-[11px] text-theme-text-tertiary">
+            Certainty on each value — <span className="font-mono">=</span> exact
+            · <span className="font-mono">≥</span> lower bound ·{" "}
+            <span className="font-mono">?</span> unknown. Hover a glyph for its
+            coverage detail.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
