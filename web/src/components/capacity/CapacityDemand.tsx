@@ -12,6 +12,7 @@ import {
   type CapacityPoolEvaluation,
 } from "@skyhook-io/k8s-ui";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
+import { FilterPill } from "@skyhook-io/k8s-ui";
 import {
   isCapacityCursorInvalidError,
   isNotFoundError,
@@ -24,7 +25,6 @@ import {
   CapacityIssueEvidence,
   DemandStateBadge,
   EmptyState,
-  FilterTogglePill,
   InlineEmpty,
   LinkButton,
   Notice,
@@ -305,13 +305,12 @@ export function CapacityDemand({
                 : rollup.byState[state]
               : undefined;
             return (
-              <FilterTogglePill
+              <FilterPill
                 key={state ?? "all"}
+                label={counts ? `${label} · ${counts.podCount}` : label}
                 active={stateFilter === state}
                 onClick={() => changeFilter(state)}
-              >
-                {counts ? `${label} · ${counts.podCount}` : label}
-              </FilterTogglePill>
+              />
             );
           })}
         </div>

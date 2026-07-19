@@ -779,33 +779,6 @@ export function DeniedBadge({ label = "Unavailable" }: { label?: string }) {
     </WithTooltip>
   );
 }
-
-/** Toggle pill for the demand/activity filter rows — active state reuses `.selection`. */
-export function FilterTogglePill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-        active
-          ? "selection border-theme-border text-theme-text-primary"
-          : "border-theme-border text-theme-text-secondary hover:bg-theme-hover"
-      }`}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
-}
-
 // ============================================================================
 // Quantity presentation
 // ============================================================================

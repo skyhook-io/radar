@@ -9,6 +9,7 @@ import {
   type CapacityActivityEpisode,
   type CapacityActivityResponse,
   type CapacityResourceIdentity,
+  FilterPill,
 } from "@skyhook-io/k8s-ui";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import {
@@ -19,7 +20,6 @@ import type { SelectedResource } from "../../types";
 import {
   ActivityStateBadge,
   CapacityFreshness,
-  FilterTogglePill,
   InlineEmpty,
   LinkButton,
   Notice,
@@ -341,19 +341,12 @@ export function CapacityActivity({
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-theme-text-tertiary">
           <span>Window</span>
           {WINDOW_PILLS.map(([hours, label]) => (
-            <button
+            <FilterPill
               key={hours ?? "retained"}
-              type="button"
-              aria-pressed={selectedWindow === hours}
-              className={`rounded-md border px-2 py-1 ${
-                selectedWindow === hours
-                  ? "selection border-theme-border text-theme-text-primary"
-                  : "border-transparent hover:bg-theme-hover"
-              }`}
+              label={label}
+              active={selectedWindow === hours}
               onClick={() => setWindowHours(hours, Date.now())}
-            >
-              {label}
-            </button>
+            />
           ))}
           {sinceFilter && <span>Since {formatTimestamp(sinceFilter)}</span>}
         </div>
@@ -413,14 +406,15 @@ export function CapacityActivity({
           {/* Counts come from the whole-window rollup (stable across the active
             type filter), not the current page. Pills without a rollup (cursor
             pages) never show a fabricated count. */}
-          <FilterTogglePill
+          <FilterPill
+            label={
+              aggregate
+                ? `All · ${formatAggregateCount(aggregate.total)}`
+                : "All"
+            }
             active={typeFilter === undefined}
             onClick={() => changeTypeFilter(undefined)}
-          >
-            {aggregate
-              ? `All · ${formatAggregateCount(aggregate.total)}`
-              : "All"}
-          </FilterTogglePill>
+          />
           {TYPE_PILL_ORDER.filter(
             (type) =>
               (aggregate?.byType[type]?.total ?? 0) > 0 || type === typeFilter,
@@ -428,21 +422,22 @@ export function CapacityActivity({
             const counts = aggregate?.byType[type];
             const failed = counts?.byState?.failed ?? 0;
             return (
-              <FilterTogglePill
+              <FilterPill
                 key={type}
+                label={
+                  counts
+                    ? `${activityTypeLabel(type)} · ${formatAggregateCount(counts.total)}${
+                        failed > 0
+                          ? ` · ${formatAggregateCount(failed)} failed`
+                          : ""
+                      }`
+                    : activityTypeLabel(type)
+                }
                 active={typeFilter === type}
                 onClick={() =>
                   changeTypeFilter(typeFilter === type ? undefined : type)
                 }
-              >
-                {counts
-                  ? `${activityTypeLabel(type)} · ${formatAggregateCount(counts.total)}${
-                      failed > 0
-                        ? ` · ${formatAggregateCount(failed)} failed`
-                        : ""
-                    }`
-                  : activityTypeLabel(type)}
-              </FilterTogglePill>
+              />
             );
           })}
         </div>
