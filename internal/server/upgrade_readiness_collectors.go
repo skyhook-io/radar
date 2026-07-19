@@ -47,30 +47,26 @@ func collectUpgradeSourceObjectsWithClient(ctx context.Context, client dynamic.I
 	successfulLists := 0
 	for _, gvr := range upgradeSourceGVRs {
 		if namespaces == nil {
-			list, err := client.Resource(gvr).List(ctx, metav1.ListOptions{})
+			listed, err := listUpgradeSourceObjects(ctx, client.Resource(gvr))
+			objects = append(objects, listed...)
 			if err != nil {
 				unavailable[gvr.Resource] = true
 				continue
 			}
 			successfulLists++
-			for i := range list.Items {
-				objects = append(objects, list.Items[i].DeepCopy())
-			}
 			continue
 		}
 		for _, namespace := range namespaces {
-			list, err := client.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+			listed, err := listUpgradeSourceObjects(ctx, client.Resource(gvr).Namespace(namespace))
+			objects = append(objects, listed...)
 			if err != nil {
 				unavailable[gvr.Resource] = true
 				continue
 			}
 			successfulLists++
-			for i := range list.Items {
-				objects = append(objects, list.Items[i].DeepCopy())
-			}
 		}
 	}
-	if successfulLists == 0 {
+	if successfulLists == 0 && len(objects) == 0 {
 		objects = nil
 	}
 	unavailableKinds := make([]string, 0, len(unavailable))
@@ -79,6 +75,28 @@ func collectUpgradeSourceObjectsWithClient(ctx context.Context, client dynamic.I
 	}
 	sort.Strings(unavailableKinds)
 	return objects, unavailableKinds
+}
+
+const upgradeSourceListPageSize int64 = 250
+
+func listUpgradeSourceObjects(ctx context.Context, resource dynamic.ResourceInterface) ([]metav1.Object, error) {
+	var objects []metav1.Object
+	continueToken := ""
+	for {
+		list, err := resource.List(ctx, metav1.ListOptions{Limit: upgradeSourceListPageSize, Continue: continueToken})
+		if err != nil {
+			return objects, err
+		}
+		for i := range list.Items {
+			if list.Items[i].GetAnnotations()["kubectl.kubernetes.io/last-applied-configuration"] != "" {
+				objects = append(objects, list.Items[i].DeepCopy())
+			}
+		}
+		continueToken = list.GetContinue()
+		if continueToken == "" {
+			return objects, nil
+		}
+	}
 }
 
 var (
@@ -109,22 +127,24 @@ func collectUpgradeAPIServicesWithClient(ctx context.Context, client dynamic.Int
 	return apiServices
 }
 
-func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
+func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs []*unstructured.Unstructured, unavailableConfigKinds []string, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
 	dynamicClient := k8s.DynamicClientFromContext(r.Context())
 	typedClient := k8s.ClientFromContext(r.Context())
 	if dynamicClient == nil || typedClient == nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	configs = []*unstructured.Unstructured{}
 	endpointSlices = []*discoveryv1.EndpointSlice{}
 	services = []*corev1.Service{}
 	for _, gvr := range []schema.GroupVersionResource{validatingWebhookGVR, mutatingWebhookGVR} {
 		if !s.canRead(r, gvr.Group, gvr.Resource, "", "list") {
-			return nil, nil, nil, nil
+			unavailableConfigKinds = append(unavailableConfigKinds, gvr.Resource)
+			continue
 		}
 		list, err := dynamicClient.Resource(gvr).List(r.Context(), metav1.ListOptions{})
 		if err != nil {
-			return nil, nil, nil, nil
+			unavailableConfigKinds = append(unavailableConfigKinds, gvr.Resource)
+			continue
 		}
 		for i := range list.Items {
 			configs = append(configs, list.Items[i].DeepCopy())
@@ -136,28 +156,29 @@ func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs, crds [
 	referenced := webhookServiceNamespaces(configs, crds)
 	for _, namespace := range referenced {
 		if !s.canRead(r, "", "services", namespace, "list") || !s.canRead(r, endpointSliceGVR.Group, endpointSliceGVR.Resource, namespace, "list") {
-			return configs, crds, nil, nil
+			return configs, unavailableConfigKinds, crds, nil, nil
 		}
 		svcList, err := typedClient.CoreV1().Services(namespace).List(r.Context(), metav1.ListOptions{})
 		if err != nil {
-			return configs, crds, nil, nil
+			return configs, unavailableConfigKinds, crds, nil, nil
 		}
 		for i := range svcList.Items {
 			services = append(services, svcList.Items[i].DeepCopy())
 		}
 		sliceList, err := dynamicClient.Resource(endpointSliceGVR).Namespace(namespace).List(r.Context(), metav1.ListOptions{})
 		if err != nil {
-			return configs, crds, nil, nil
+			return configs, unavailableConfigKinds, crds, nil, nil
 		}
 		for i := range sliceList.Items {
 			var slice discoveryv1.EndpointSlice
 			if runtime.DefaultUnstructuredConverter.FromUnstructured(sliceList.Items[i].Object, &slice) != nil {
-				return configs, crds, nil, nil
+				return configs, unavailableConfigKinds, crds, nil, nil
 			}
 			endpointSlices = append(endpointSlices, &slice)
 		}
 	}
-	return configs, crds, endpointSlices, services
+	sort.Strings(unavailableConfigKinds)
+	return configs, unavailableConfigKinds, crds, endpointSlices, services
 }
 
 func collectUpgradeCRDs(ctx context.Context, client dynamic.Interface) []*unstructured.Unstructured {

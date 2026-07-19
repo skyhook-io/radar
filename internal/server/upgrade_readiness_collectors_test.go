@@ -44,8 +44,8 @@ func TestCollectUpgradeSourceObjectsRetainsPartialEvidence(t *testing.T) {
 	})
 
 	objects, unavailable := collectUpgradeSourceObjectsWithClient(context.Background(), client, nil)
-	if len(objects) != 4 {
-		t.Fatalf("partial objects = %#v, want Pod, Ingress, HPA, and PDB", objects)
+	if len(objects) != 1 || objects[0].GetName() != "web" {
+		t.Fatalf("partial objects = %#v, want only the Ingress with last-applied evidence", objects)
 	}
 	if len(unavailable) != 1 || unavailable[0] != "networkpolicies" {
 		t.Fatalf("unavailable = %v, want [networkpolicies]", unavailable)

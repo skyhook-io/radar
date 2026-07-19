@@ -72,6 +72,15 @@ func TestNodeCompatibilityEvidence(t *testing.T) {
 	if checkByID(t, result, "container-runtime-support").Status != CheckUnknown {
 		t.Fatal("unrecognized CRI without metric must be incomplete")
 	}
+
+	input = completeInput()
+	input.Nodes[0].Status.NodeInfo.OperatingSystem = "windows"
+	input.NodeRuntimeEvidence[0] = NodeRuntimeEvidence{NodeName: input.Nodes[0].Name}
+	result, _ = Scan(input, "1.35", "1.36")
+	runtime := checkByID(t, result, "container-runtime-support")
+	if runtime.Status != CheckPassed || runtime.Caveat != "" || runtime.Inspected != 0 {
+		t.Fatalf("Windows node without Linux kubelet metrics = %+v, want an evidence-neutral pass", runtime)
+	}
 }
 
 func TestDrainPDBAuthorityAndAlwaysAllow(t *testing.T) {
@@ -270,6 +279,15 @@ func TestAdmissionAndCRDBackendSemantics(t *testing.T) {
 		t.Fatalf("fail-open webhook with no backend must warn with a concrete impact: %+v", admission)
 	}
 
+	input.AdmissionWebhookConfigurations[0].Object["webhooks"] = []any{map[string]any{
+		"name": "external.example", "clientConfig": map[string]any{"url": "https://policy.example/admit"},
+	}}
+	result, _ = Scan(input, "1.35", "1.36")
+	admission = checkByID(t, result, "admission-webhook-readiness")
+	if admission.Status != CheckReview || len(admission.Findings) != 1 || admission.Findings[0].Title != "URL webhook backend requires external verification" || admission.Findings[0].Evidence.Path != "webhooks[0].clientConfig.url" {
+		t.Fatalf("URL admission backend = %+v, want an explicit external-readiness review", admission)
+	}
+
 	input.CustomResourceDefinitions = []*unstructured.Unstructured{{Object: map[string]any{
 		"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition", "metadata": map[string]any{"name": "widgets.example.io"},
 		"spec":   map[string]any{"versions": []any{map[string]any{"name": "v1", "served": true, "storage": true}}, "conversion": map[string]any{"strategy": "Webhook", "webhook": map[string]any{"clientConfig": map[string]any{"service": map[string]any{"namespace": "default", "name": "missing"}}}}},
@@ -298,6 +316,21 @@ func TestAdmissionWebhookConfigurationWithoutWebhooksIsInspectedEmpty(t *testing
 	finalizeCheck(&check)
 	if check.Status != CheckUnknown || len(check.Findings) != 0 || check.Caveat == "" {
 		t.Fatalf("malformed admission webhook configuration = %+v, want incomplete coverage", check)
+	}
+}
+
+func TestAdmissionWebhookConfigurationPartialRBACPreservesReadableEvidence(t *testing.T) {
+	input := completeInput()
+	input.AdmissionWebhookUnavailableKinds = []string{"mutatingwebhookconfigurations"}
+	input.AdmissionWebhookConfigurations = []*unstructured.Unstructured{{Object: map[string]any{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingWebhookConfiguration", "metadata": map[string]any{"name": "policy"},
+		"webhooks": []any{map[string]any{"name": "policy.example", "matchPolicy": "Exact"}},
+	}}}
+
+	check := scanAdmissionWebhookReadiness(input)
+	finalizeCheck(&check)
+	if check.Status != CheckReview || len(check.Findings) != 1 || !strings.Contains(check.Caveat, "mutatingwebhookconfigurations") {
+		t.Fatalf("partially readable admission configurations = %+v, want readable findings plus a coverage caveat", check)
 	}
 }
 
@@ -418,6 +451,36 @@ func TestStrictSourceValidationAndGKEProbeEvidence(t *testing.T) {
 		t.Fatalf("scoped strict-IP clean result must remain incomplete: %+v", strict)
 	}
 
+	networkPolicy := &unstructured.Unstructured{Object: map[string]any{
+		"kind": "NetworkPolicy",
+		"spec": map[string]any{
+			"ingress": []any{map[string]any{
+				"from": []any{map[string]any{
+					"ipBlock": map[string]any{"cidr": "010.0.0.0/24", "except": []any{"010.0.0.1/32"}},
+				}},
+			}},
+			"egress": []any{map[string]any{
+				"to": []any{map[string]any{
+					"ipBlock": map[string]any{"cidr": "010.0.1.0/24"},
+				}},
+			}},
+		},
+	}}
+	candidates := strictNetworkCandidates(networkPolicy)
+	wantPaths := []string{
+		"spec.egress[0].to[0].ipBlock.cidr",
+		"spec.ingress[0].from[0].ipBlock.cidr",
+		"spec.ingress[0].from[0].ipBlock.except[0]",
+	}
+	if len(candidates) != len(wantPaths) {
+		t.Fatalf("NetworkPolicy candidates = %+v, want paths %v", candidates, wantPaths)
+	}
+	for i, want := range wantPaths {
+		if candidates[i].path != want {
+			t.Fatalf("NetworkPolicy candidate %d path = %q, want %q", i, candidates[i].path, want)
+		}
+	}
+
 	input = completeInput()
 	input.Platform = "gke"
 	input.Deployments = []*appsv1.Deployment{{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "api", LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"check"}}}}}}}}}}}
@@ -436,6 +499,16 @@ func TestStrictSourceValidationAndGKEProbeEvidence(t *testing.T) {
 	if gke.Status != CheckReview || gke.Findings[0].Title != "Exec probe relies on default one-second timeout" {
 		t.Fatalf("static GKE timeout exposure must have a distinct review title: %+v", gke)
 	}
+
+	input.Deployments[0].Spec.Template.Spec.InitContainers = input.Deployments[0].Spec.Template.Spec.Containers
+	input.Deployments[0].Spec.Template.Spec.Containers = nil
+	result, _ = Scan(input, "1.34", "1.35")
+	gke = checkByID(t, result, "gke-exec-probe-timeout")
+	if len(gke.Findings) != 1 || !strings.Contains(gke.Findings[0].Evidence.Path, ".initContainers[api].") {
+		t.Fatalf("init-container probe evidence path = %+v, want initContainers", gke.Findings)
+	}
+	input.Deployments[0].Spec.Template.Spec.Containers = input.Deployments[0].Spec.Template.Spec.InitContainers
+	input.Deployments[0].Spec.Template.Spec.InitContainers = nil
 
 	input.Namespaces = []string{"default"}
 	input.Deployments[0].Spec.Template.Spec.Containers[0].LivenessProbe.TimeoutSeconds = 2

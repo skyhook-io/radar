@@ -57,6 +57,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	var sourceObjects []metav1.Object
 	var sourceObjectUnavailableKinds []string
 	var admissionConfigs, crds []*unstructured.Unstructured
+	var admissionConfigUnavailableKinds []string
 	var apiServices []*unstructured.Unstructured
 	var endpointSlices []*discoveryv1.EndpointSlice
 	var additionalServices []*corev1.Service
@@ -69,7 +70,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		deprecatedRequests, deprecatedMetricsWindow = collectDeprecatedAPIRequests(r)
 		prometheusRules, prometheusInstalled, discoveryAvailable, prometheusUnavailableNamespaces = s.collectUpgradePrometheusRules(r, namespaces)
 		sourceObjects, sourceObjectUnavailableKinds = collectUpgradeSourceObjects(r, namespaces)
-		admissionConfigs, crds, endpointSlices, additionalServices = s.collectUpgradeWebhookEvidence(r)
+		admissionConfigs, admissionConfigUnavailableKinds, crds, endpointSlices, additionalServices = s.collectUpgradeWebhookEvidence(r)
 		apiServices = s.collectUpgradeAPIServices(r)
 		if canReadNodes && s.canReadSubresource(r, "", "nodes", "proxy", "", "get") && cache.Nodes() != nil {
 			nodes, _ := cache.Nodes().List(labels.Everything())
@@ -95,6 +96,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		SourceObjects:                       sourceObjects,
 		SourceObjectUnavailableKinds:        sourceObjectUnavailableKinds,
 		AdmissionWebhookConfigurations:      admissionConfigs,
+		AdmissionWebhookUnavailableKinds:    admissionConfigUnavailableKinds,
 		CustomResourceDefinitions:           crds,
 		APIServices:                         apiServices,
 		EndpointSlices:                      endpointSlices,
@@ -336,52 +338,62 @@ func collectUpgradeNodeRuntimeEvidence(ctx context.Context, nodes []*corev1.Node
 		return nil
 	}
 	results := make([]upgradereadiness.NodeRuntimeEvidence, len(nodes))
-	sem := make(chan struct{}, 8)
+	type nodeRuntimeJob struct {
+		index int
+		node  *corev1.Node
+	}
+	jobs := make(chan nodeRuntimeJob)
+	workerCount := min(8, len(nodes))
 	var wg sync.WaitGroup
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				result := upgradereadiness.NodeRuntimeEvidence{NodeName: job.node.Name}
+				probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+				raw, err := client.CoreV1().RESTClient().Get().AbsPath("/api/v1/nodes/" + url.PathEscape(job.node.Name) + "/proxy/metrics").DoRaw(probeCtx)
+				cancel()
+				if err == nil {
+					parser := expfmt.NewTextParser(model.LegacyValidation)
+					families, parseErr := parser.TextToMetricFamilies(bytes.NewReader(raw))
+					if parseErr == nil {
+						result.MetricsAvailable = true
+						if family := families["kubelet_cgroup_version"]; family != nil && len(family.Metric) > 0 {
+							result.CgroupVersionAvailable = true
+							result.CgroupVersion = int(metricValue(family.GetType(), family.Metric[0]))
+						}
+						if family := families["kubelet_cri_losing_support"]; family != nil {
+							for _, metric := range family.Metric {
+								if metricValue(family.GetType(), metric) > 0 {
+									result.CRILosingSupportAvailable = true
+									result.CRILosingSupportVersion = metricLabels(metric)["version"]
+									break
+								}
+							}
+						}
+					}
+				}
+				results[job.index] = result
+			}
+		}()
+	}
+dispatch:
 	for i, node := range nodes {
 		if node == nil {
 			continue
 		}
-		wg.Add(1)
-		go func(i int, node *corev1.Node) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			result := upgradereadiness.NodeRuntimeEvidence{NodeName: node.Name}
-			if strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
-				results[i] = result
-				return
-			}
-			probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-			defer cancel()
-			raw, err := client.CoreV1().RESTClient().Get().AbsPath("/api/v1/nodes/" + url.PathEscape(node.Name) + "/proxy/metrics").DoRaw(probeCtx)
-			if err != nil {
-				results[i] = result
-				return
-			}
-			parser := expfmt.NewTextParser(model.LegacyValidation)
-			families, err := parser.TextToMetricFamilies(bytes.NewReader(raw))
-			if err != nil {
-				results[i] = result
-				return
-			}
-			result.MetricsAvailable = true
-			if family := families["kubelet_cgroup_version"]; family != nil && len(family.Metric) > 0 {
-				result.CgroupVersionAvailable = true
-				result.CgroupVersion = int(metricValue(family.GetType(), family.Metric[0]))
-			}
-			if family := families["kubelet_cri_losing_support"]; family != nil {
-				for _, metric := range family.Metric {
-					if metricValue(family.GetType(), metric) > 0 {
-						result.CRILosingSupportAvailable = true
-						result.CRILosingSupportVersion = metricLabels(metric)["version"]
-						break
-					}
-				}
-			}
-			results[i] = result
-		}(i, node)
+		results[i].NodeName = node.Name
+		if strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
+			continue
+		}
+		select {
+		case jobs <- nodeRuntimeJob{index: i, node: node}:
+		case <-ctx.Done():
+			break dispatch
+		}
 	}
+	close(jobs)
 	wg.Wait()
 	return results
 }

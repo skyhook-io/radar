@@ -74,12 +74,16 @@ func scanContainerRuntimeSupport(input *Input, target *utilversion.Version) Chec
 	for _, evidence := range input.NodeRuntimeEvidence {
 		metrics[evidence.NodeName] = evidence
 	}
-	check.Inspected = len(input.Nodes)
+	check.Inspected = 0
 	unknown := 0
 	for _, node := range input.Nodes {
 		if node == nil {
 			continue
 		}
+		if strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
+			continue
+		}
+		check.Inspected++
 		evidence, hasMetric := metrics[node.Name]
 		if !hasMetric || !evidence.MetricsAvailable {
 			unknown++
@@ -341,6 +345,9 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 		check.Status, check.Summary = CheckUnknown, "Admission webhook configuration evidence was unavailable."
 		return check
 	}
+	if len(input.AdmissionWebhookUnavailableKinds) > 0 {
+		check.Caveat = appendCaveat(check.Caveat, "Admission webhook configurations could not be inspected for: "+strings.Join(input.AdmissionWebhookUnavailableKinds, ", ")+".")
+	}
 	check.Inspected = len(input.AdmissionWebhookConfigurations)
 	backendEvidenceAvailable := input.Services != nil && input.EndpointSlices != nil
 	services := map[string]bool{}
@@ -393,6 +400,9 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 					}
 					check.Findings = append(check.Findings, admissionFinding(check, config, i, level, title, "clientConfig.service", key, impact, "Restore the Service and a ready EndpointSlice, or intentionally change failurePolicy after evaluating the admission bypass risk.", admissionBackendReferences))
 				}
+			}
+			if webhookURL, found, _ := unstructured.NestedString(webhook, "clientConfig", "url"); found && webhookURL != "" {
+				check.Findings = append(check.Findings, admissionFinding(check, config, i, LevelReview, "URL webhook backend requires external verification", "clientConfig.url", webhookURL, "Radar cannot verify the availability of an admission webhook backend outside the cluster.", "Verify the URL backend is reachable and highly available throughout the control-plane upgrade, especially for fail-closed webhooks.", admissionBackendReferences))
 			}
 			if webhookInterceptsAuth(webhook) {
 				check.Findings = append(check.Findings, admissionFinding(check, config, i, LevelReview, "Authentication review interception", "rules", name, "The webhook can intercept TokenReview or SubjectAccessReview requests used during authentication and authorization.", "Verify the webhook remains available and deliberately excludes authentication and authorization review APIs if interception is unnecessary.", admissionAuthReviewReferences))
@@ -672,19 +682,20 @@ func strictNetworkCandidates(object *unstructured.Unstructured) []networkCandida
 		addStrings([]string{"spec", "loadBalancerSourceRanges"}, true)
 	case "NetworkPolicy":
 		for _, direction := range []string{"ingress", "egress"} {
+			peerField := map[string]string{"ingress": "from", "egress": "to"}[direction]
 			rules, _, _ := unstructured.NestedSlice(object.Object, "spec", direction)
 			for i, rawRule := range rules {
 				rule, _ := rawRule.(map[string]any)
-				peers, _ := rule[map[string]string{"ingress": "from", "egress": "to"}[direction]].([]any)
+				peers, _ := rule[peerField].([]any)
 				for j, rawPeer := range peers {
 					peer, _ := rawPeer.(map[string]any)
 					cidr, _, _ := unstructured.NestedString(peer, "ipBlock", "cidr")
 					if cidr != "" {
-						out = append(out, networkCandidate{path: fmt.Sprintf("spec.%s[%d].ipBlock[%d].cidr", direction, i, j), value: cidr, cidr: true})
+						out = append(out, networkCandidate{path: fmt.Sprintf("spec.%s[%d].%s[%d].ipBlock.cidr", direction, i, peerField, j), value: cidr, cidr: true})
 					}
 					exceptions, _, _ := unstructured.NestedStringSlice(peer, "ipBlock", "except")
 					for k, exception := range exceptions {
-						out = append(out, networkCandidate{path: fmt.Sprintf("spec.%s[%d].ipBlock[%d].except[%d]", direction, i, j, k), value: exception, cidr: true})
+						out = append(out, networkCandidate{path: fmt.Sprintf("spec.%s[%d].%s[%d].ipBlock.except[%d]", direction, i, peerField, j, k), value: exception, cidr: true})
 					}
 				}
 			}
@@ -758,25 +769,34 @@ func scanGKEExecProbeTimeout(input *Input) Check {
 	}
 	configured := 0
 	for _, subject := range workloadSubjects(input, newWorkloadIndex(input)) {
-		for _, container := range append(append([]corev1.Container(nil), subject.spec.InitContainers...), subject.spec.Containers...) {
-			for name, probe := range map[string]*corev1.Probe{"livenessProbe": container.LivenessProbe, "readinessProbe": container.ReadinessProbe, "startupProbe": container.StartupProbe} {
-				if probe == nil || probe.Exec == nil {
-					continue
+		containerGroups := []struct {
+			path       string
+			containers []corev1.Container
+		}{
+			{path: "initContainers", containers: subject.spec.InitContainers},
+			{path: "containers", containers: subject.spec.Containers},
+		}
+		for _, group := range containerGroups {
+			for _, container := range group.containers {
+				for name, probe := range map[string]*corev1.Probe{"livenessProbe": container.LivenessProbe, "readinessProbe": container.ReadinessProbe, "startupProbe": container.StartupProbe} {
+					if probe == nil || probe.Exec == nil {
+						continue
+					}
+					configured++
+					if probe.TimeoutSeconds > 1 {
+						continue
+					}
+					check.Inspected++
+					level := LevelReview
+					title := "Exec probe relies on default one-second timeout"
+					impact := "This exec probe relies on the one-second default timeout and may begin failing after the GKE 1.35 behavior change."
+					if timedOut[subject.resource.Namespace+"/"+subject.resource.Name] {
+						level = LevelBlocker
+						title = "Exec probe already timing out"
+						impact = "Recent events show this exec probe timing out; the GKE behavior change is already observable."
+					}
+					check.Findings = append(check.Findings, workloadFinding(subject, check, title, level, subject.pathPrefix+"."+group.path+"["+container.Name+"]."+name+".timeoutSeconds", impact, "Set an explicit timeoutSeconds greater than 1 after measuring the command's normal duration, then verify probe behavior."))
 				}
-				configured++
-				if probe.TimeoutSeconds > 1 {
-					continue
-				}
-				check.Inspected++
-				level := LevelReview
-				title := "Exec probe relies on default one-second timeout"
-				impact := "This exec probe relies on the one-second default timeout and may begin failing after the GKE 1.35 behavior change."
-				if timedOut[subject.resource.Namespace+"/"+subject.resource.Name] {
-					level = LevelBlocker
-					title = "Exec probe already timing out"
-					impact = "Recent events show this exec probe timing out; the GKE behavior change is already observable."
-				}
-				check.Findings = append(check.Findings, workloadFinding(subject, check, title, level, subject.pathPrefix+".containers["+container.Name+"]."+name+".timeoutSeconds", impact, "Set an explicit timeoutSeconds greater than 1 after measuring the command's normal duration, then verify probe behavior."))
 			}
 		}
 	}

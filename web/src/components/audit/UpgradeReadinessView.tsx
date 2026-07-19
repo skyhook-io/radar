@@ -96,21 +96,31 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
     navigate({ pathname: location.pathname, search: params.toString() }, { replace: true })
   }
 
-  if (isLoading) return <PaneLoader label="Analyzing upgrade impact…" className="flex-1" />
+  if (isLoading) {
+    return (
+      <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
+        <ChecksViewTabs />
+        <PaneLoader label="Analyzing upgrade impact…" className="flex-1" />
+      </div>
+    )
+  }
   if (error || !data) {
     return (
-      <div className="flex-1 flex items-center justify-center p-4">
-        <EmptyState
-          tone="neutral"
-          icon={AlertTriangle}
-          headline="Unable to analyze upgrade impact"
-          body={error instanceof ApiError ? error.message : 'Failed to analyze upgrade impact.'}
-          action={error instanceof ApiError && error.status === 400 ? (
-            <button type="button" onClick={resetTarget} className="btn-brand px-3 py-1.5 text-xs font-medium">
-              Use next Kubernetes version
-            </button>
-          ) : undefined}
-        />
+      <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
+        <ChecksViewTabs />
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            tone="neutral"
+            icon={AlertTriangle}
+            headline="Unable to analyze upgrade impact"
+            body={error instanceof ApiError ? error.message : 'Failed to analyze upgrade impact.'}
+            action={error instanceof ApiError && error.status === 400 ? (
+              <button type="button" onClick={resetTarget} className="btn-brand px-3 py-1.5 text-xs font-medium">
+                Use next Kubernetes version
+              </button>
+            ) : undefined}
+          />
+        </div>
       </div>
     )
   }
@@ -279,7 +289,7 @@ function CoverageMethodology({ data }: { data: UpgradeReadinessResponse }) {
             href={UPGRADE_IMPACT_DOCS_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-blue-600 hover:underline dark:text-blue-400"
+            className="inline-flex items-center gap-1 text-accent-text hover:underline"
           >
             View the complete check catalog and evidence model <ExternalLink className="h-3 w-3" />
           </a>
@@ -301,7 +311,7 @@ function UpgradeSummary({ verdict, target, reviewedThrough, summary, coverageSta
   return (
     <div className={clsx('flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between', meta.className)}>
       <div className="flex min-w-0 items-center gap-3">
-        <div className="rounded-full bg-theme-surface p-2 shadow-sm"><Icon className={clsx('h-5 w-5', meta.iconClass)} /></div>
+        <div className="rounded-full bg-theme-surface p-2 shadow-theme-sm"><Icon className={clsx('h-5 w-5', meta.iconClass)} /></div>
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-theme-text-primary">{meta.headline}</h2>
           <p className="mt-0.5 text-xs text-theme-text-secondary">{meta.body}</p>
@@ -418,7 +428,7 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
             <div>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-theme-text-tertiary">
                 <span className="font-medium uppercase tracking-wide">Issue types</span>
-                <span>{findingGroups.length} {findingGroups.length === 1 ? 'type' : 'types'} · {check.findings.length} affected {check.findings.length === 1 ? 'resource' : 'resources'}</span>
+                <span>{findingGroups.length} {findingGroups.length === 1 ? 'type' : 'types'} · {check.findings.length} {check.findings.length === 1 ? 'finding' : 'findings'}</span>
               </div>
               <div className="divide-y divide-theme-border overflow-hidden rounded-lg border border-theme-border bg-theme-surface">
                 {findingGroups.map((group, index) => (
@@ -483,7 +493,7 @@ function FindingGroupRow({ id, group, checkReferences, onNavigateToResource }: {
           <span className="truncate text-xs font-medium text-theme-text-primary">{finding.title}</span>
         </span>
         <span className="flex shrink-0 items-center gap-2 text-[11px] text-theme-text-tertiary">
-          {group.total} affected
+          {group.total} {group.total === 1 ? 'finding' : 'findings'}
           <CollapseChevron open={open} className="h-3.5 w-3.5" />
         </span>
       </button>
@@ -519,7 +529,7 @@ function FindingGroupRow({ id, group, checkReferences, onNavigateToResource }: {
               onClick={() => setShowAll((value) => !value)}
               className="mt-2 inline-flex w-fit items-center gap-1 rounded px-1 py-1 text-xs font-medium text-accent-text hover:underline"
             >
-              {showAll ? 'Show fewer affected resources' : `Show all ${group.total} affected resources`}
+              {showAll ? 'Show fewer findings' : `Show all ${group.total} findings`}
             </button>
           )}
         </div>

@@ -63,8 +63,12 @@ type Input struct {
 	// when their cluster-scoped sources could not be read. Empty, non-nil
 	// slices mean the sources were inspected and contained no objects.
 	AdmissionWebhookConfigurations []*unstructured.Unstructured
-	CustomResourceDefinitions      []*unstructured.Unstructured
-	APIServices                    []*unstructured.Unstructured
+	// AdmissionWebhookUnavailableKinds records configuration
+	// kinds that could not be listed while preserving evidence from readable
+	// kinds.
+	AdmissionWebhookUnavailableKinds []string
+	CustomResourceDefinitions        []*unstructured.Unstructured
+	APIServices                      []*unstructured.Unstructured
 	// NodeRuntimeEvidence is nil when kubelet metrics could not be inspected.
 	NodeRuntimeEvidence []NodeRuntimeEvidence
 

@@ -30,6 +30,7 @@ type UpgradeReadinessOptions struct {
 	CanReadPersistentVolumes            bool
 	SourceObjects                       []metav1.Object
 	AdmissionWebhookConfigurations      []*unstructured.Unstructured
+	AdmissionWebhookUnavailableKinds    []string
 	CustomResourceDefinitions           []*unstructured.Unstructured
 	APIServices                         []*unstructured.Unstructured
 	EndpointSlices                      []*discoveryv1.EndpointSlice
@@ -45,6 +46,7 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 		Namespaces:                          cloneStrings(namespaces),
 		EndpointSlices:                      opts.EndpointSlices,
 		AdmissionWebhookConfigurations:      opts.AdmissionWebhookConfigurations,
+		AdmissionWebhookUnavailableKinds:    opts.AdmissionWebhookUnavailableKinds,
 		CustomResourceDefinitions:           opts.CustomResourceDefinitions,
 		APIServices:                         opts.APIServices,
 		NodeRuntimeEvidence:                 opts.NodeRuntimeEvidence,

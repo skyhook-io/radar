@@ -1061,7 +1061,7 @@ func appendSourceManifestCoverageCaveats(check *Check, input *Input) {
 }
 
 func unavailableKinds(input *Input) []string {
-	var unavailable []string
+	unavailable := append([]string(nil), input.AdmissionWebhookUnavailableKinds...)
 	checks := []struct {
 		name      string
 		available bool

@@ -57,6 +57,23 @@ describe('groupFindings', () => {
     ])
     expect(groups.map((group) => group.total)).toEqual([2, 1])
   })
+
+  it('counts findings even when multiple findings do not map one-to-one to resources', () => {
+    const base = {
+      ruleID: 'renamed-control-plane-metrics',
+      title: 'Metric renamed',
+      level: 'review' as const,
+      evidence: { source: 'PrometheusRule', path: 'spec.groups' },
+      impact: 'A query stops matching.',
+      remediation: 'Update the query.',
+      references: [],
+    }
+    const groups = groupFindings([
+      { ...base, evidence: { ...base.evidence, detail: 'old_a' } },
+      { ...base, evidence: { ...base.evidence, detail: 'old_b' } },
+    ])
+    expect(groups[0].total).toBe(2)
+  })
 })
 
 describe('issueSpecificReferences', () => {

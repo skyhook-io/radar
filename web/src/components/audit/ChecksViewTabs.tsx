@@ -15,14 +15,14 @@ export function ChecksViewTabs() {
   if (target) upgradeSearch.set('target', target)
 
   return (
-    <div className="flex items-center gap-1 border-b border-theme-border" role="tablist" aria-label="Check views">
+    <nav className="flex items-center gap-1 border-b border-theme-border" aria-label="Check views">
       <ChecksTab to={{ pathname: '/checks', search: browsing.toString() }} active={!upgrade}>
         Best practices
       </ChecksTab>
       <ChecksTab to={{ pathname: '/checks/upgrade', search: upgradeSearch.toString() }} active={upgrade}>
         Upgrade impact
       </ChecksTab>
-    </div>
+    </nav>
   )
 }
 
@@ -30,8 +30,7 @@ function ChecksTab({ to, active, children }: { to: To; active: boolean; children
   return (
     <Link
       to={to}
-      role="tab"
-      aria-selected={active}
+      aria-current={active ? 'page' : undefined}
       className={clsx(
         'relative px-3 py-2 text-sm font-medium transition-colors',
         active ? 'text-theme-text-primary' : 'text-theme-text-tertiary hover:text-theme-text-secondary',
