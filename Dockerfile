@@ -72,8 +72,10 @@ COPY --from=backend-builder /radar /radar
 
 EXPOSE 9280
 USER nonroot:nonroot
-ENTRYPOINT ["/radar"]
-CMD ["--no-browser", "--listen-address=0.0.0.0"]
+# Keep the container networking invariant in ENTRYPOINT so docker run arguments
+# and Compose command overrides cannot silently replace the shared listener.
+ENTRYPOINT ["/radar", "--listen-address=0.0.0.0"]
+CMD ["--no-browser"]
 
 # =============================================================================
 # Stage 3b: Release build - uses pre-built binaries from goreleaser
@@ -92,5 +94,7 @@ COPY radar-${TARGETARCH} /radar
 
 EXPOSE 9280
 USER nonroot:nonroot
-ENTRYPOINT ["/radar"]
-CMD ["--no-browser", "--listen-address=0.0.0.0"]
+# Keep the container networking invariant in ENTRYPOINT so docker run arguments
+# and Compose command overrides cannot silently replace the shared listener.
+ENTRYPOINT ["/radar", "--listen-address=0.0.0.0"]
+CMD ["--no-browser"]
