@@ -255,15 +255,6 @@ export interface DashboardResourceCounts {
   restricted?: string[] // Resource kinds the user cannot list due to RBAC
 }
 
-export interface DashboardEvent {
-  type: string
-  reason: string
-  message: string
-  involvedObject: string
-  namespace: string
-  timestamp: string
-}
-
 export interface DashboardChange {
   kind: string
   namespace: string
@@ -387,7 +378,6 @@ export interface DashboardResponse {
   health: DashboardHealth
   problems: DashboardProblem[]
   resourceCounts: DashboardResourceCounts
-  recentEvents: DashboardEvent[]
   recentChanges: DashboardChange[]
   topologySummary: DashboardTopologySummary
   trafficSummary: DashboardTrafficSummary | null

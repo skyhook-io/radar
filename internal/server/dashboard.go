@@ -32,7 +32,6 @@ type DashboardResponse struct {
 	Health                 DashboardHealth                 `json:"health"`
 	Problems               []DashboardProblem              `json:"problems"`
 	ResourceCounts         DashboardResourceCounts         `json:"resourceCounts"`
-	RecentEvents           []DashboardEvent                `json:"recentEvents"`
 	RecentChanges          []DashboardChange               `json:"recentChanges"`
 	TopologySummary        DashboardTopologySummary        `json:"topologySummary"`
 	TrafficSummary         *DashboardTrafficSummary        `json:"trafficSummary"`
@@ -226,16 +225,6 @@ type DashboardCRDCount struct {
 	Count int    `json:"count"`
 }
 
-type DashboardEvent struct {
-	Type           string `json:"type"`
-	Reason         string `json:"reason"`
-	Message        string `json:"message"`
-	InvolvedObject string `json:"involvedObject"`
-	Namespace      string `json:"namespace"`
-	Timestamp      string `json:"timestamp"`
-	Count          int32  `json:"count,omitempty"`
-}
-
 type DashboardChange struct {
 	Kind       string `json:"kind"`
 	Namespace  string `json:"namespace"`
@@ -398,7 +387,6 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	t = time.Now()
 	for _, ns := range iterateNamespaces {
-		resp.RecentEvents = append(resp.RecentEvents, s.getDashboardRecentEvents(cache, ns)...)
 		resp.Health.WarningEvents += s.countWarningEvents(cache, ns)
 	}
 	k8s.LogTiming("  [dashboard] events: %v", time.Since(t))
@@ -1153,70 +1141,6 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 
 	counts.Restricted = restricted
 	return counts
-}
-
-func (s *Server) getDashboardRecentEvents(cache *k8s.ResourceCache, namespace string) []DashboardEvent {
-	eventLister := cache.Events()
-	if eventLister == nil {
-		return []DashboardEvent{}
-	}
-	var events []*corev1.Event
-	var err error
-	if namespace != "" {
-		events, err = eventLister.Events(namespace).List(labels.Everything())
-	} else {
-		events, err = eventLister.List(labels.Everything())
-	}
-	if err != nil || len(events) == 0 {
-		return []DashboardEvent{}
-	}
-
-	// Filter to Warning events only and sort by last timestamp desc
-	var warnings []*corev1.Event
-	for _, e := range events {
-		if e.Type == "Warning" {
-			warnings = append(warnings, e)
-		}
-	}
-
-	sort.Slice(warnings, func(i, j int) bool {
-		ci := max(warnings[i].Count, 1)
-		cj := max(warnings[j].Count, 1)
-		if ci != cj {
-			return ci > cj
-		}
-		ti := warnings[i].LastTimestamp.Time
-		tj := warnings[j].LastTimestamp.Time
-		if ti.IsZero() {
-			ti = warnings[i].CreationTimestamp.Time
-		}
-		if tj.IsZero() {
-			tj = warnings[j].CreationTimestamp.Time
-		}
-		return ti.After(tj)
-	})
-
-	// Take top 5
-	limit := min(len(warnings), 5)
-
-	result := make([]DashboardEvent, 0, limit)
-	for _, e := range warnings[:limit] {
-		ts := e.LastTimestamp.Time
-		if ts.IsZero() {
-			ts = e.CreationTimestamp.Time
-		}
-		result = append(result, DashboardEvent{
-			Type:           e.Type,
-			Reason:         e.Reason,
-			Message:        k8s.Truncate(e.Message, 200),
-			InvolvedObject: fmt.Sprintf("%s/%s", e.InvolvedObject.Kind, e.InvolvedObject.Name),
-			Namespace:      e.Namespace,
-			Timestamp:      ts.Format(time.RFC3339),
-			Count:          max(e.Count, 1),
-		})
-	}
-
-	return result
 }
 
 func (s *Server) getDashboardRecentChanges(ctx context.Context, namespaces []string) []DashboardChange {
