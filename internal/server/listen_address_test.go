@@ -38,6 +38,25 @@ func TestNormalizeListenAddress(t *testing.T) {
 	}
 }
 
+func TestSocketAddress(t *testing.T) {
+	tests := []struct {
+		name          string
+		listenAddress string
+		want          string
+	}{
+		{name: "loopback", listenAddress: DefaultListenAddress, want: "127.0.0.1:9280"},
+		{name: "all interfaces uses dual-stack wildcard", listenAddress: AllInterfacesAddress, want: ":9280"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := socketAddress(tt.listenAddress, 9280); got != tt.want {
+				t.Fatalf("socketAddress(%q, 9280) = %q, want %q", tt.listenAddress, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestServerListenAddress(t *testing.T) {
 	tests := []struct {
 		name          string

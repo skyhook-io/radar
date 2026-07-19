@@ -731,10 +731,11 @@ func (s *Server) StartWithReady(ready chan<- struct{}) error {
 		return fmt.Errorf("invalid listen address %q: %w", configuredListenAddress, err)
 	}
 	s.listenAddress = listenAddress
-	addr := net.JoinHostPort(listenAddress, strconv.Itoa(s.port))
-	ln, err := net.Listen("tcp", addr)
+	bindAddr := socketAddress(listenAddress, s.port)
+	ln, err := net.Listen("tcp", bindAddr)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", addr, err)
+		displayAddr := net.JoinHostPort(listenAddress, strconv.Itoa(s.port))
+		return fmt.Errorf("listen on %s: %w", displayAddr, err)
 	}
 	s.listener = ln
 	if s.startupLog {
@@ -747,7 +748,7 @@ func (s *Server) StartWithReady(ready chan<- struct{}) error {
 		}
 		if s.authConfig.Mode == "proxy" && !cloud.Mode() {
 			log.Printf("WARNING: Proxy auth trusts %s and %s; ensure the ingress strips client-supplied identity headers",
-				s.authConfig.UserHeader, s.authConfig.GroupsHeader)
+				sanitizeForLog(s.authConfig.UserHeader), sanitizeForLog(s.authConfig.GroupsHeader))
 		}
 	}
 	s.broadcaster.Start()

@@ -316,7 +316,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 // (RBAC checks + informer sync) so neither blocks the other. If the
 // connectivity check fails, subsystem init is canceled immediately.
 func InitializeCluster() {
-	log.Printf("── Kubernetes initialization · %s ─────────────────────────", k8s.GetContextName())
+	log.Printf("── Kubernetes initialization · %s ─────────────────────────", k8s.SanitizeForLog(k8s.GetContextName()))
 
 	// Cancel any in-flight API calls from previous attempts (e.g., browser
 	// polling /api/capabilities with RBAC checks through a broken exec plugin).

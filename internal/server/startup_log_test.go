@@ -108,6 +108,32 @@ func TestFormatStartupLogSummaryProxyWarning(t *testing.T) {
 	}
 }
 
+func TestFormatStartupLogSummarySanitizesLogFields(t *testing.T) {
+	got := strings.Join(formatStartupLogSummary(startupLogSummary{
+		listenAddress:     AllInterfacesAddress,
+		port:              9280,
+		authMode:          "proxy",
+		proxyUserHeader:   "X-User\nFORGED user log",
+		proxyGroupsHeader: "X-Groups\rFORGED groups log",
+		aiAgent:           "agent\nFORGED agent log",
+		contextName:       "cluster\nFORGED context log",
+		kubeconfigPath:    "/tmp/config\rFORGED path log",
+		kubeconfig:        k8s.KubeconfigSummary{Mode: "single"},
+	}, false), "\n")
+
+	for _, forged := range []string{
+		"\nFORGED user log",
+		"\rFORGED groups log",
+		"\nFORGED agent log",
+		"\nFORGED context log",
+		"\rFORGED path log",
+	} {
+		if strings.Contains(got, forged) {
+			t.Fatalf("startup summary contains unsanitized log field %q:\n%s", forged, got)
+		}
+	}
+}
+
 func TestStartupLogColorDisabledForNonTerminal(t *testing.T) {
 	if startupLogColorEnabled(&bytes.Buffer{}) {
 		t.Fatal("startupLogColorEnabled(buffer) = true, want false")

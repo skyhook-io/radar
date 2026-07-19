@@ -1,6 +1,10 @@
 package server
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+	"strconv"
+)
 
 const (
 	DefaultListenAddress = "127.0.0.1"
@@ -21,4 +25,15 @@ func NormalizeListenAddress(address string) (string, error) {
 	default:
 		return "", fmt.Errorf("listen address must be %q, %q, or %q", DefaultListenAddress, "localhost", AllInterfacesAddress)
 	}
+}
+
+// socketAddress preserves the explicit 0.0.0.0 operator-facing opt-in while
+// using Go's empty-host wildcard for the actual listener. The latter retains
+// the previous dual-stack behavior on hosts where IPv6 is available.
+func socketAddress(listenAddress string, port int) string {
+	bindHost := listenAddress
+	if bindHost == AllInterfacesAddress {
+		bindHost = ""
+	}
+	return net.JoinHostPort(bindHost, strconv.Itoa(port))
 }

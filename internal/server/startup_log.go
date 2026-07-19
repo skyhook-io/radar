@@ -138,7 +138,11 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 			summary.proxyUserHeader, summary.proxyGroupsHeader)))
 	}
 
-	return append(lines, "──────────────────────────────────────────────────────────")
+	lines = append(lines, "──────────────────────────────────────────────────────────")
+	for i := range lines {
+		lines[i] = sanitizeForLog(lines[i])
+	}
+	return lines
 }
 
 func formatStartupKubeconfig(path string, summary k8s.KubeconfigSummary) string {
