@@ -22,7 +22,7 @@ import (
 
 func scanNodeCgroupCompatibility(input *Input) Check {
 	check := Check{ID: "node-cgroup-v1", Category: "Node compatibility", Title: "Node cgroup compatibility", Status: CheckPassed, Summary: "All inspected nodes use cgroup v2.", Scope: "Kubelet cgroup version metric", AppliesFrom: "1.35", References: append([]Reference(nil), cgroupReferences...)}
-	if input.Nodes == nil {
+	if len(input.Nodes) == 0 {
 		check.Status, check.Summary = CheckUnknown, "Nodes were unavailable; Radar could not inspect cgroup compatibility."
 		return check
 	}
@@ -66,7 +66,7 @@ func scanNodeCgroupCompatibility(input *Input) Check {
 
 func scanContainerRuntimeSupport(input *Input, target *utilversion.Version) Check {
 	check := Check{ID: "container-runtime-support", Category: "Node compatibility", Title: "Container runtime support", Status: CheckPassed, Summary: "All inspected node runtimes are supported by the target version.", Scope: "Kubelet CRI support metric and Node status", AppliesFrom: "1.36", References: append([]Reference(nil), runtimeReferences...)}
-	if input.Nodes == nil {
+	if len(input.Nodes) == 0 {
 		check.Status, check.Summary = CheckUnknown, "Nodes were unavailable; Radar could not inspect container runtime versions."
 		return check
 	}

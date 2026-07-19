@@ -50,6 +50,15 @@ func TestNodeCompatibilityEvidence(t *testing.T) {
 		t.Fatalf("cgroup evidence without node-list access = %+v, want incomplete with no findings", cgroup)
 	}
 
+	input.Nodes = []*corev1.Node{}
+	result, _ = Scan(input, "1.34", "1.36")
+	for _, id := range []string{"node-cgroup-v1", "container-runtime-support"} {
+		check := checkByID(t, result, id)
+		if check.Status != CheckUnknown || len(check.Findings) != 0 {
+			t.Fatalf("%s with an empty node list = %+v, want incomplete with no findings", id, check)
+		}
+	}
+
 	input = completeInput()
 	input.Nodes[0].Status.NodeInfo.ContainerRuntimeVersion = "containerd://1.7.24"
 	result, _ = Scan(input, "1.35", "1.36")
