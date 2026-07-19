@@ -489,7 +489,10 @@ export function CapacityOverview({
                   </div>
                 </div>
                 {signal.action && (
-                  <LinkButton onClick={signal.action.run} className="shrink-0">
+                  <LinkButton
+                    onClick={signal.action.run}
+                    className="shrink-0 self-center"
+                  >
                     {signal.action.label} →
                   </LinkButton>
                 )}
@@ -741,7 +744,21 @@ function GroupRow({
 
   return (
     <>
-      <tr className={ROW_HOVER}>
+      <tr
+        className={`${ROW_HOVER}${hasChildren ? " cursor-pointer" : ""}`}
+        onClick={
+          hasChildren
+            ? (event) => {
+                // The whole row toggles the children, but clicks on inner
+                // links/buttons (pool link, Inspect, tooltips) keep their own
+                // behavior.
+                const target = event.target as HTMLElement;
+                if (target.closest("button, a, [role='link']")) return;
+                setExpanded((value) => !value);
+              }
+            : undefined
+        }
+      >
         <td className={TD}>
           <div className="flex flex-wrap items-center gap-1.5">
             {hasChildren && (
