@@ -70,6 +70,18 @@ func TestNormalizeMessage_PreservesMeaningfulSmallNumbers(t *testing.T) {
 	}
 }
 
+// CronJob/Job pod names are {name}-{unixMinutes}-{rand5}. The long-number
+// placeholder must stay inside [a-z0-9] so podHashPattern still consumes the
+// whole name — an out-of-class token would leave the rand5 tail and split
+// same-shaped events per incarnation (the regression this pins).
+func TestNormalizeMessage_CronJobPodNamesStillCollapse(t *testing.T) {
+	a := normalizeMessage("Back-off restarting failed container in pod mycron-29184720-abcde")
+	b := normalizeMessage("Back-off restarting failed container in pod mycron-29184721-fghij")
+	if a != b {
+		t.Errorf("CronJob pod incarnations split: %q vs %q", a, b)
+	}
+}
+
 // Pattern-order pins. A digit-heavy UUID must still normalize as <uuid> —
 // longNumPattern running first would mangle it into "<n>-1234-…" and split
 // same-shaped messages by UUID composition. IPs keep their <ip> placeholder.

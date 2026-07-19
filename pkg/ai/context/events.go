@@ -53,10 +53,16 @@ func normalizeMessage(msg string) string {
 	// segment or IP would otherwise be eaten before uuidPattern/ipPattern
 	// can recognize it — and BEFORE podHashPattern, whose {5,10} bound is
 	// what leaves the digit tails.
+	//
+	// Its placeholder must stay inside [a-z0-9]: CronJob pod names are
+	// {name}-{unixMinutes}-{rand5}, and an out-of-class token (e.g. "<n>")
+	// in the middle would stop podHashPattern from consuming the whole
+	// name, splitting same-shaped events on the rand5 tail — the exact
+	// per-incarnation splitting this pattern exists to fix.
 	s := uuidPattern.ReplaceAllString(msg, "<uuid>")
 	s = tsPattern.ReplaceAllString(s, "<timestamp>")
 	s = ipPattern.ReplaceAllString(s, "<ip>")
-	s = longNumPattern.ReplaceAllString(s, "<n>")
+	s = longNumPattern.ReplaceAllString(s, "nnnnnn")
 	s = podHashPattern.ReplaceAllString(s, "<pod>")
 	return s
 }
