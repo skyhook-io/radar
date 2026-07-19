@@ -151,7 +151,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Description: "Use for recent Kubernetes Warning events after an overview points " +
 			"at a namespace or resource, or when the symptom is scheduling, pulling images, " +
 			"restarts, failed mounts, readiness, or controller errors. Events are deduplicated " +
-			"and sorted by recency with reason, message, and count. For a ranked issue list " +
+			"and sorted by recency with reason, message, and count. Warning-only by default; " +
+			"set type=Normal or type=all to include lifecycle events (Scheduled, Pulled, " +
+			"Started) as timeline evidence for a specific resource. For a ranked issue list " +
 			"that includes problems/conditions, use issues first.",
 		Annotations: readOnly,
 	}, logToolCall("get_events", handleGetEvents))
@@ -588,6 +590,7 @@ type eventsInput struct {
 	Limit     int    `json:"limit,omitempty" jsonschema:"max 100, default 20"`
 	Kind      string `json:"kind,omitempty" jsonschema:"filter to events involving this resource kind (e.g. Pod, Deployment)"`
 	Name      string `json:"name,omitempty" jsonschema:"filter to events involving this resource name"`
+	Type      string `json:"type,omitempty" jsonschema:"event type: Warning (default), Normal, or all. Normal lifecycle events (Scheduled, Pulled, Started) are useful timeline evidence for a specific resource"`
 }
 
 type getChangesInput struct {
@@ -1602,6 +1605,22 @@ func nodeNamespace(n *topology.Node) string {
 	return "(cluster)"
 }
 
+// resolveEventTypeFilter maps the get_events type input to the corev1 Event
+// Type value to keep ("" = keep everything). Warning is the default — the
+// documented contract of the tool.
+func resolveEventTypeFilter(t string) (string, error) {
+	switch strings.ToLower(t) {
+	case "", "warning":
+		return "Warning", nil
+	case "normal":
+		return "Normal", nil
+	case "all":
+		return "", nil
+	default:
+		return "", fmt.Errorf("invalid type %q: use Warning (default), Normal, or all", t)
+	}
+}
+
 func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input eventsInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -1643,6 +1662,24 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list events: %w", err)
+	}
+
+	// Filter by event type. The tool contract has always documented Warning
+	// events, but this filter was historically missing, so Normal lifecycle
+	// churn silently consumed the dedup window. "all" opts out; "Normal"
+	// selects lifecycle timeline evidence for a specific resource.
+	eventType, err := resolveEventTypeFilter(input.Type)
+	if err != nil {
+		return nil, nil, err
+	}
+	if eventType != "" {
+		filtered := events[:0]
+		for _, e := range events {
+			if e.Type == eventType {
+				filtered = append(filtered, e)
+			}
+		}
+		events = filtered
 	}
 
 	// Filter by InvolvedObject kind/name if specified
