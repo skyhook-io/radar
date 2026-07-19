@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Collapse,
   CollapseChevron,
+  SearchBox,
   WithTooltip,
   formatDuration,
   type CapacityActivityEpisode,
@@ -22,6 +23,7 @@ import {
   LinkButton,
   Notice,
   PageControls,
+  PoolSelector,
   ROW_HOVER,
   ScopeBadges,
   ScrollableContent,
@@ -101,21 +103,43 @@ export function CapacityActivity({
       { replace: true },
     );
   }, [location.pathname, location.search, navigate]);
-  const [activityDrafts, setActivityDrafts] = useState(() => ({
-    key: location.search,
-    pool: poolFilter ?? "",
-    reason: reasonFilter ?? "",
-  }));
-  const drafts =
-    activityDrafts.key === location.search
-      ? activityDrafts
-      : {
-          key: location.search,
-          pool: poolFilter ?? "",
-          reason: reasonFilter ?? "",
-        };
-  const poolDraft = drafts.pool;
-  const reasonDraft = drafts.reason;
+  const [reasonInput, setReasonInput] = useState(reasonFilter ?? "");
+  // Deferred writes (the debounced reason search) must merge onto the CURRENT
+  // params, not a snapshot captured when the timer was armed — otherwise a
+  // window/pool change made mid-type would be dropped when the write lands.
+  const searchRef = useRef(location.search);
+  searchRef.current = location.search;
+  const pathRef = useRef(location.pathname);
+  pathRef.current = location.pathname;
+  const setParam = useCallback(
+    (key: "pool" | "reason" | "since", value: string | undefined) => {
+      const params = new URLSearchParams(searchRef.current);
+      params.delete("workload");
+      const trimmed = value?.trim();
+      if (trimmed) params.set(key, trimmed);
+      else params.delete(key);
+      navigate(
+        {
+          pathname: pathRef.current,
+          search: params.toString() ? `?${params.toString()}` : "",
+        },
+        { replace: true },
+      );
+    },
+    [navigate],
+  );
+  // URL is the source of truth: reflect external param changes (Clear filters,
+  // back/forward) back into the input buffer.
+  useEffect(() => {
+    setReasonInput(reasonFilter ?? "");
+  }, [reasonFilter]);
+  // Typing debounces straight into the URL — no submit. The guard skips a
+  // redundant write once the buffer already matches the committed param.
+  useEffect(() => {
+    if (reasonInput === (reasonFilter ?? "")) return;
+    const timer = setTimeout(() => setParam("reason", reasonInput), 350);
+    return () => clearTimeout(timer);
+  }, [reasonInput, reasonFilter, setParam]);
   const pagination = useCapacityPagination<CapacityActivityResponse>(
     `${location.search}`,
   );
@@ -145,27 +169,6 @@ export function CapacityActivity({
   );
   if (blocked) return blocked;
   const response = responseData as CapacityActivityResponse;
-  const updateFilters = (pool: string, reason: string, since?: string) => {
-    const params = new URLSearchParams(location.search);
-    params.delete("workload");
-    if (pool.trim()) params.set("pool", pool.trim());
-    else params.delete("pool");
-    if (reason.trim()) params.set("reason", reason.trim());
-    else params.delete("reason");
-    if (since) params.set("since", since);
-    else params.delete("since");
-    navigate(
-      {
-        pathname: location.pathname,
-        search: params.toString() ? `?${params.toString()}` : "",
-      },
-      { replace: true },
-    );
-  };
-  const applyFilters = (event: FormEvent) => {
-    event.preventDefault();
-    updateFilters(poolDraft, reasonDraft, sinceFilter);
-  };
   const changeTypeFilter = (type?: CapacityActivityEpisode["type"]) => {
     const params = new URLSearchParams(location.search);
     params.delete("workload");
@@ -205,9 +208,8 @@ export function CapacityActivity({
     );
   };
   const setWindowHours = (hours: number | undefined, now: number) => {
-    updateFilters(
-      poolDraft,
-      reasonDraft,
+    setParam(
+      "since",
       hours ? new Date(now - hours * 60 * 60 * 1000).toISOString() : undefined,
     );
   };
@@ -334,11 +336,8 @@ export function CapacityActivity({
         </Notice>
       )}
 
-      <form
-        className="flex flex-wrap items-end gap-2 rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm"
-        onSubmit={applyFilters}
-      >
-        <div className="flex basis-full flex-wrap items-center gap-1.5 text-xs text-theme-text-tertiary">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-theme-text-tertiary">
           <span>Window</span>
           {WINDOW_PILLS.map(([hours, label]) => (
             <button
@@ -357,43 +356,24 @@ export function CapacityActivity({
           ))}
           {sinceFilter && <span>Since {formatTimestamp(sinceFilter)}</span>}
         </div>
-        <label className="min-w-[180px] flex-1 text-xs font-medium text-theme-text-tertiary">
-          NodePool
-          <input
-            value={poolDraft}
-            onChange={(event) =>
-              setActivityDrafts({ ...drafts, pool: event.target.value })
-            }
-            placeholder="Any pool"
-            className="mt-1 w-full rounded-lg border border-theme-border bg-theme-base px-3 py-1.5 text-sm text-theme-text-primary outline-none focus:border-skyhook-500"
-          />
-        </label>
-        <label className="min-w-[220px] flex-[1.4] text-xs font-medium text-theme-text-tertiary">
-          Filter by reason or message…
-          <input
-            value={reasonDraft}
-            onChange={(event) =>
-              setActivityDrafts({ ...drafts, reason: event.target.value })
-            }
-            placeholder="LaunchFailed, interruption…"
-            className="mt-1 w-full rounded-lg border border-theme-border bg-theme-base px-3 py-1.5 text-sm text-theme-text-primary outline-none focus:border-skyhook-500"
-          />
-        </label>
-        <button type="submit" className="btn-brand px-3 py-1.5 text-sm">
-          Apply
-        </button>
-        {hasActiveFilters && (
-          <button
-            type="button"
-            className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
-            onClick={clearFilters}
-          >
-            Clear filters
-          </button>
-        )}
+        <PoolSelector
+          pool={poolFilter}
+          onChange={(pool) => setParam("pool", pool)}
+          label="NodePool"
+          emptyLabel="Any pool"
+          unavailableLabel="NodePool options unavailable; activity remains available."
+        />
+        <SearchBox
+          value={reasonInput}
+          onChange={setReasonInput}
+          scope="global"
+          shortcutId="capacity-activity-search"
+          placeholder="LaunchFailed, interruption…"
+          className="w-60 2xl:w-72"
+        />
         {(claimFilter || nodeFilter) && (
           <div
-            className="flex basis-full flex-wrap items-center gap-1.5 pt-1"
+            className="flex flex-wrap items-center gap-1.5"
             aria-label="Active resource filters"
           >
             <span className="text-xs text-theme-text-tertiary">
@@ -413,7 +393,16 @@ export function CapacityActivity({
             )}
           </div>
         )}
-      </form>
+        {hasActiveFilters && (
+          <button
+            type="button"
+            className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+            onClick={clearFilters}
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
 
       {(aggregate !== undefined || typeFilter !== undefined) && (
         <div

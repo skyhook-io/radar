@@ -51,6 +51,7 @@ import {
 import {
   isCapacityCursorInvalidError,
   isForbiddenError,
+  useCapacityPools,
 } from "../../api/client";
 import type { SelectedResource } from "../../types";
 import { refToSelectedResource } from "../../utils/navigation";
@@ -1709,6 +1710,105 @@ export function PageControls({
         Next
         <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
       </button>
+    </div>
+  );
+}
+
+// ============================================================================
+// NodePool selector — a paginated <select> shared by Demand ("evaluate against")
+// and Activity ("filter by pool"). The label/empty/error copy differs per caller;
+// the paging behaviour (load-more cursor, invalid-cursor recovery) does not.
+// ============================================================================
+
+const POOL_PAGE_LIMIT = 100;
+const LOAD_MORE_POOLS = "__load_more_nodepools__";
+
+export function PoolSelector({
+  pool,
+  onChange,
+  label,
+  emptyLabel,
+  unavailableLabel,
+}: {
+  pool: string | undefined;
+  onChange: (pool: string | undefined) => void;
+  label: string;
+  emptyLabel: string;
+  unavailableLabel: string;
+}) {
+  const [cursor, setCursor] = useState<string>();
+  const [loadedPools, setLoadedPools] = useState<string[]>([]);
+  const query = useCapacityPools({
+    limit: POOL_PAGE_LIMIT,
+    cursor,
+    refetchInterval: false,
+  });
+  const recoverCursor = useCallback(() => {
+    setCursor(undefined);
+    setLoadedPools([]);
+  }, []);
+  const recoveringCursor = useCapacityCursorRecovery(
+    query.error,
+    cursor,
+    recoverCursor,
+  );
+  const page = query.isPlaceholderData ? undefined : query.data;
+  const pageNames = page?.items.map((item) => item.resource.ref.name) ?? [];
+  const poolNames = Array.from(new Set([...loadedPools, ...pageNames])).sort();
+  if (pool && !poolNames.includes(pool)) poolNames.unshift(pool);
+
+  const loadingMore = Boolean(
+    cursor && query.isFetching && query.isPlaceholderData,
+  );
+  const hasMore = Boolean(page?.page.hasMore && page.page.nextCursor);
+  const statusId = "pool-selector-options-status";
+
+  return (
+    <div className="flex min-w-56 flex-col gap-1">
+      <label className="flex items-center gap-2 text-xs text-theme-text-secondary">
+        <span className="shrink-0 font-medium">{label}</span>
+        <select
+          value={pool ?? ""}
+          aria-describedby={query.error ? statusId : undefined}
+          aria-busy={query.isFetching}
+          onChange={(event) => {
+            if (event.target.value === LOAD_MORE_POOLS) {
+              if (page?.page.nextCursor) {
+                setLoadedPools((current) =>
+                  Array.from(new Set([...current, ...pageNames])).sort(),
+                );
+                setCursor(page.page.nextCursor);
+              }
+              return;
+            }
+            onChange(event.target.value || undefined);
+          }}
+          className="min-w-0 flex-1 rounded-md border border-theme-border bg-theme-elevated px-2 py-1.5 text-xs text-theme-text-primary outline-none focus:border-skyhook-500"
+        >
+          <option value="">{emptyLabel}</option>
+          {poolNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+          {query.isLoading && <option disabled>Loading NodePools…</option>}
+          {loadingMore && <option disabled>Loading more NodePools…</option>}
+          {!loadingMore && hasMore && (
+            <option value={LOAD_MORE_POOLS}>Load more NodePools…</option>
+          )}
+        </select>
+      </label>
+      {query.error && (
+        <span
+          id={statusId}
+          role="status"
+          className="text-right text-xs text-theme-text-tertiary"
+        >
+          {recoveringCursor
+            ? "NodePool list changed; reloading options."
+            : unavailableLabel}
+        </span>
+      )}
     </div>
   );
 }

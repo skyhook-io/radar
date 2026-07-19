@@ -1416,4 +1416,31 @@ describe("CapacityView activity", () => {
     expect(html).not.toContain("Relationship");
     expect(html).toContain("Raw");
   });
+
+  it("filters live through the shared SearchBox and pool selector — no Apply submit", () => {
+    const html = renderCapacity("/capacity/activity", (client) =>
+      client.setQueryData(
+        [
+          "capacity",
+          "activity",
+          50,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+        ],
+        activityResponse(),
+      ),
+    );
+    // Reason/message filter is now the shared SearchBox (live-debounced), keeping
+    // its example placeholder — not a submit-gated <input>.
+    expect(html).toContain("LaunchFailed, interruption");
+    // NodePool filter is the shared PoolSelector with an "Any pool" empty option.
+    expect(html).toContain("Any pool");
+    // The Apply-to-commit flow is gone.
+    expect(html).not.toContain("Apply");
+  });
 });

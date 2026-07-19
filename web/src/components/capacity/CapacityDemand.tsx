@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
 import {
@@ -16,7 +16,6 @@ import {
   isCapacityCursorInvalidError,
   isNotFoundError,
   useCapacityDemand,
-  useCapacityPools,
 } from "../../api/client";
 import type { SelectedResource } from "../../types";
 import { refToSelectedResource } from "../../utils/navigation";
@@ -30,6 +29,7 @@ import {
   Notice,
   PageControls,
   PoolEvaluationBadge,
+  PoolSelector,
   QuantityInline,
   ResourceLink,
   ROW_HOVER,
@@ -63,9 +63,6 @@ const STATE_PILLS: [CapacityDemandState | undefined, string][] = [
   ["blocked", "Blocked"],
   ["unknown", "Unknown"],
 ];
-
-const POOL_PAGE_LIMIT = 100;
-const LOAD_MORE_POOLS = "__load_more_nodepools__";
 
 export function updateDemandSearchParam(
   search: string,
@@ -323,10 +320,13 @@ export function CapacityDemand({
             );
           })}
         </div>
-        <DemandPoolSelector
+        <PoolSelector
           key={`${response.clusterContext.contextName}`}
           pool={poolFilter}
           onChange={(pool) => updateSearchParam("pool", pool)}
+          label="Evaluate against"
+          emptyLabel="All NodePools"
+          unavailableLabel="NodePool options unavailable; demand remains available."
         />
       </div>
 
@@ -379,90 +379,6 @@ export function CapacityDemand({
         />
       )}
     </ScrollableContent>
-  );
-}
-
-function DemandPoolSelector({
-  pool,
-  onChange,
-}: {
-  pool: string | undefined;
-  onChange: (pool: string | undefined) => void;
-}) {
-  const [cursor, setCursor] = useState<string>();
-  const [loadedPools, setLoadedPools] = useState<string[]>([]);
-  const query = useCapacityPools({
-    limit: POOL_PAGE_LIMIT,
-    cursor,
-    refetchInterval: false,
-  });
-  const recoverCursor = useCallback(() => {
-    setCursor(undefined);
-    setLoadedPools([]);
-  }, []);
-  const recoveringCursor = useCapacityCursorRecovery(
-    query.error,
-    cursor,
-    recoverCursor,
-  );
-  const page = query.isPlaceholderData ? undefined : query.data;
-  const pageNames = page?.items.map((item) => item.resource.ref.name) ?? [];
-  const poolNames = Array.from(new Set([...loadedPools, ...pageNames])).sort();
-  if (pool && !poolNames.includes(pool)) poolNames.unshift(pool);
-
-  const loadingMore = Boolean(
-    cursor && query.isFetching && query.isPlaceholderData,
-  );
-  const hasMore = Boolean(page?.page.hasMore && page.page.nextCursor);
-  const statusId = "demand-pool-options-status";
-
-  return (
-    <div className="flex min-w-56 flex-col gap-1">
-      <label className="flex items-center gap-2 text-xs text-theme-text-secondary">
-        <span className="shrink-0 font-medium">Evaluate against</span>
-        <select
-          value={pool ?? ""}
-          aria-describedby={query.error ? statusId : undefined}
-          aria-busy={query.isFetching}
-          onChange={(event) => {
-            if (event.target.value === LOAD_MORE_POOLS) {
-              if (page?.page.nextCursor) {
-                setLoadedPools((current) =>
-                  Array.from(new Set([...current, ...pageNames])).sort(),
-                );
-                setCursor(page.page.nextCursor);
-              }
-              return;
-            }
-            onChange(event.target.value || undefined);
-          }}
-          className="min-w-0 flex-1 rounded-md border border-theme-border bg-theme-elevated px-2 py-1.5 text-xs text-theme-text-primary outline-none focus:border-skyhook-500"
-        >
-          <option value="">All NodePools</option>
-          {poolNames.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-          {query.isLoading && <option disabled>Loading NodePools…</option>}
-          {loadingMore && <option disabled>Loading more NodePools…</option>}
-          {!loadingMore && hasMore && (
-            <option value={LOAD_MORE_POOLS}>Load more NodePools…</option>
-          )}
-        </select>
-      </label>
-      {query.error && (
-        <span
-          id={statusId}
-          role="status"
-          className="text-right text-xs text-theme-text-tertiary"
-        >
-          {recoveringCursor
-            ? "NodePool list changed; reloading options."
-            : "NodePool options unavailable; demand remains available."}
-        </span>
-      )}
-    </div>
   );
 }
 
