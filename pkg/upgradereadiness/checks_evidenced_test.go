@@ -370,13 +370,14 @@ func TestWebhookConfigurationFindingsSurviveMissingBackendEvidence(t *testing.T)
 		t.Fatalf("authentication review references = %+v, want specific scope guidance", got)
 	}
 
-	input.AdmissionWebhookConfigurations[0].Object["webhooks"] = []any{map[string]any{
-		"name": "policy.example", "clientConfig": map[string]any{"service": map[string]any{"namespace": "policy-system", "name": "policy"}},
-	}}
+	input.AdmissionWebhookConfigurations[0].Object["webhooks"] = []any{
+		map[string]any{"name": "policy.example", "clientConfig": map[string]any{"service": map[string]any{"namespace": "policy-system", "name": "policy"}}},
+		map[string]any{"name": "audit.example", "clientConfig": map[string]any{"service": map[string]any{"namespace": "policy-system", "name": "audit"}}},
+	}
 	admission = scanAdmissionWebhookReadiness(input)
 	finalizeCheck(&admission)
-	if admission.Status != CheckUnknown || len(admission.Findings) != 0 || admission.Caveat == "" {
-		t.Fatalf("unverified admission backend = %+v, want incomplete without a false blocker", admission)
+	if admission.Status != CheckUnknown || len(admission.Findings) != 0 || strings.Count(admission.Caveat, "webhook backend readiness could not be verified") != 1 {
+		t.Fatalf("unverified admission backends = %+v, want one incomplete-coverage caveat without false blockers", admission)
 	}
 
 	input.CustomResourceDefinitions = []*unstructured.Unstructured{{Object: map[string]any{
@@ -483,12 +484,20 @@ func TestStrictSourceValidationAndGKEProbeEvidence(t *testing.T) {
 
 	input = completeInput()
 	input.Platform = "gke"
+	input.Namespaces = []string{"default"}
+	result, _ = Scan(input, "1.34", "1.35")
+	gke := checkByID(t, result, "gke-exec-probe-timeout")
+	if gke.Status != CheckPassed || gke.Caveat == "" || !strings.Contains(gke.Summary, "selected namespace scope") {
+		t.Fatalf("scoped GKE scan with no exec probes = %+v, want a scoped pass", gke)
+	}
+
+	input.Namespaces = nil
 	input.Deployments = []*appsv1.Deployment{{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "api", LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"check"}}}}}}}}}}}
 	input.Pods = []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "api-rs", Controller: boolPtr(true)}}}}}
 	input.ReplicaSets = []*appsv1.ReplicaSet{{ObjectMeta: metav1.ObjectMeta{Name: "api-rs", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "api", Controller: boolPtr(true)}}}}}
 	input.Events = []*corev1.Event{{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "default", Name: "api-1"}, Message: "Liveness probe failed: command timed out"}}
 	result, _ = Scan(input, "1.34", "1.35")
-	gke := checkByID(t, result, "gke-exec-probe-timeout")
+	gke = checkByID(t, result, "gke-exec-probe-timeout")
 	if gke.Status != CheckBlocked || gke.Findings[0].Title != "Exec probe already timing out" {
 		t.Fatal("correlated GKE timeout event must block")
 	}

@@ -350,6 +350,7 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 	}
 	check.Inspected = len(input.AdmissionWebhookConfigurations)
 	backendEvidenceAvailable := input.Services != nil && input.EndpointSlices != nil
+	backendEvidenceCaveatAdded := false
 	services := map[string]bool{}
 	for _, svc := range input.Services {
 		if svc != nil {
@@ -388,7 +389,10 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 				svc, _ := service["name"].(string)
 				key := ns + "/" + svc
 				if !backendEvidenceAvailable {
-					check.Caveat = appendCaveat(check.Caveat, "Service or EndpointSlice evidence was unavailable; webhook backend readiness could not be verified.")
+					if !backendEvidenceCaveatAdded {
+						check.Caveat = appendCaveat(check.Caveat, "Service or EndpointSlice evidence was unavailable; webhook backend readiness could not be verified.")
+						backendEvidenceCaveatAdded = true
+					}
 				} else if !services[key] || !ready[key] {
 					level := LevelBlocker
 					title := "Fail-closed webhook backend unavailable"
@@ -810,9 +814,6 @@ func scanGKEExecProbeTimeout(input *Input) Check {
 	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d GKE exec %s rely on a one-second timeout.", len(check.Findings), plural(len(check.Findings), "probe", "probes"))
-	} else if input.Namespaces != nil && configured == 0 {
-		check.Status = CheckUnknown
-		check.Summary = "No risky GKE exec probe was found in the selected namespace scope, but workload and Event coverage is incomplete."
 	}
 	return check
 }
