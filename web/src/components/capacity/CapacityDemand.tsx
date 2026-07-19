@@ -24,6 +24,7 @@ import {
   CapacityIssueEvidence,
   DemandStateBadge,
   EmptyState,
+  FilterTogglePill,
   InlineEmpty,
   LinkButton,
   Notice,
@@ -304,19 +305,13 @@ export function CapacityDemand({
                 : rollup.byState[state]
               : undefined;
             return (
-              <button
+              <FilterTogglePill
                 key={state ?? "all"}
-                type="button"
-                aria-pressed={stateFilter === state}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-                  stateFilter === state
-                    ? "selection border-theme-border text-theme-text-primary"
-                    : "border-theme-border text-theme-text-secondary hover:bg-theme-hover"
-                }`}
+                active={stateFilter === state}
                 onClick={() => changeFilter(state)}
               >
                 {counts ? `${label} · ${counts.podCount}` : label}
-              </button>
+              </FilterTogglePill>
             );
           })}
         </div>

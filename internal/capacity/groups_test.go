@@ -460,9 +460,6 @@ func TestBuildGroupsModelManagerDegradedOnChildBackoff(t *testing.T) {
 	if manager.Detail != "scale-up backoff on gke-pool-a-1234-grp" {
 		t.Fatalf("manager detail = %q, want the backoff reason", manager.Detail)
 	}
-	if manager.AsOf == nil || !manager.AsOf.Equal(probe) {
-		t.Fatalf("manager AsOf = %v, want the payload time passed through", manager.AsOf)
-	}
 }
 
 func TestBuildGroupsModelNoStatusYieldsNoManagerDetected(t *testing.T) {

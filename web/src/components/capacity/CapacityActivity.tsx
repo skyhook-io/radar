@@ -19,6 +19,7 @@ import type { SelectedResource } from "../../types";
 import {
   ActivityStateBadge,
   CapacityFreshness,
+  FilterTogglePill,
   InlineEmpty,
   LinkButton,
   Notice,
@@ -412,20 +413,14 @@ export function CapacityActivity({
           {/* Counts come from the whole-window rollup (stable across the active
             type filter), not the current page. Pills without a rollup (cursor
             pages) never show a fabricated count. */}
-          <button
-            type="button"
-            aria-pressed={typeFilter === undefined}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-              typeFilter === undefined
-                ? "selection border-theme-border text-theme-text-primary"
-                : "border-theme-border text-theme-text-secondary hover:bg-theme-hover"
-            }`}
+          <FilterTogglePill
+            active={typeFilter === undefined}
             onClick={() => changeTypeFilter(undefined)}
           >
             {aggregate
               ? `All · ${formatAggregateCount(aggregate.total)}`
               : "All"}
-          </button>
+          </FilterTogglePill>
           {TYPE_PILL_ORDER.filter(
             (type) =>
               (aggregate?.byType[type]?.total ?? 0) > 0 || type === typeFilter,
@@ -433,15 +428,9 @@ export function CapacityActivity({
             const counts = aggregate?.byType[type];
             const failed = counts?.byState?.failed ?? 0;
             return (
-              <button
+              <FilterTogglePill
                 key={type}
-                type="button"
-                aria-pressed={typeFilter === type}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-                  typeFilter === type
-                    ? "selection border-theme-border text-theme-text-primary"
-                    : "border-theme-border text-theme-text-secondary hover:bg-theme-hover"
-                }`}
+                active={typeFilter === type}
                 onClick={() =>
                   changeTypeFilter(typeFilter === type ? undefined : type)
                 }
@@ -453,7 +442,7 @@ export function CapacityActivity({
                         : ""
                     }`
                   : activityTypeLabel(type)}
-              </button>
+              </FilterTogglePill>
             );
           })}
         </div>

@@ -816,11 +816,11 @@ function WorkloadAttribution({
         <div className="mb-0.5 text-xs text-theme-text-tertiary">
           Pending demand
         </div>
-        {workloads.pendingEligibleGroupsMeta.total > 0 ? (
+        {workloads.pendingEligibleGroupCount > 0 ? (
           <>
             <div className="text-xs text-theme-text-secondary">
-              {workloads.pendingEligibleGroupsMeta.total}{" "}
-              {workloads.pendingEligibleGroupsMeta.total === 1
+              {workloads.pendingEligibleGroupCount}{" "}
+              {workloads.pendingEligibleGroupCount === 1
                 ? "group awaiting capacity is"
                 : "groups awaiting capacity are"}{" "}
               declared eligible for this pool.

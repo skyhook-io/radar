@@ -106,11 +106,10 @@ type DisruptionBudget struct {
 }
 
 type DisruptionPolicy struct {
-	ConsolidationPolicy string                        `json:"consolidationPolicy,omitempty"`
-	ConsolidateAfter    string                        `json:"consolidateAfter,omitempty"`
-	Budgets             []DisruptionBudget            `json:"budgets"`
+	ConsolidationPolicy string             `json:"consolidationPolicy,omitempty"`
+	ConsolidateAfter    string             `json:"consolidateAfter,omitempty"`
+	Budgets             []DisruptionBudget `json:"budgets"`
 }
-
 
 func NewDisruptionPolicy() DisruptionPolicy {
 	return DisruptionPolicy{
@@ -177,14 +176,12 @@ type WorkloadSummary struct {
 	WorkloadCount             int                   `json:"workloadCount"`
 	TopScheduled              []WorkloadAttribution `json:"topScheduled"`
 	TopScheduledMeta          BoundedResultMeta     `json:"topScheduledMeta"`
-	PendingEligibleGroupIDs   []string              `json:"pendingEligibleGroupIds"`
-	PendingEligibleGroupsMeta BoundedResultMeta     `json:"pendingEligibleGroupsMeta"`
+	PendingEligibleGroupCount int                   `json:"pendingEligibleGroupCount"`
 }
 
 func NewWorkloadSummary() WorkloadSummary {
 	return WorkloadSummary{
-		TopScheduled:            []WorkloadAttribution{},
-		PendingEligibleGroupIDs: []string{},
+		TopScheduled: []WorkloadAttribution{},
 	}
 }
 
@@ -199,7 +196,6 @@ type PoolObservation struct {
 	Resource           ResourceIdentity       `json:"resource"`
 	Generation         int64                  `json:"generation"`
 	ObservedGeneration *int64                 `json:"observedGeneration,omitempty"`
-	SpecFingerprint    string                 `json:"specFingerprint"`
 	CreatedAt          *time.Time             `json:"createdAt,omitempty"`
 	UpdatedAt          *time.Time             `json:"updatedAt,omitempty"`
 	Mode               PoolMode               `json:"mode"`

@@ -346,7 +346,7 @@ func TestBuildPendingEligibilityUsesObservedNodeClassReadiness(t *testing.T) {
 	model := Build(snapshot)
 	for _, name := range []string{"class-ready", "class-not-ready", "class-unobserved"} {
 		workloads := capacityTestMustPool(t, model, name).Observation.Workloads
-		if workloads == nil || len(workloads.PendingEligibleGroupIDs) != 0 || workloads.PendingEligibleGroupsMeta.Total != 0 {
+		if workloads == nil || workloads.PendingEligibleGroupCount != 0 {
 			t.Fatalf("Build() eagerly populated pool %q pending eligibility: %+v", name, workloads)
 		}
 	}
@@ -356,12 +356,12 @@ func TestBuildPendingEligibilityUsesObservedNodeClassReadiness(t *testing.T) {
 	AttachPendingEligibilityForPool(&model, snapshot, "class-unobserved")
 
 	ready := capacityTestMustPool(t, model, "class-ready").Observation.Workloads
-	if ready == nil || len(ready.PendingEligibleGroupIDs) != 1 || ready.PendingEligibleGroupsMeta.Total != 1 {
+	if ready == nil || ready.PendingEligibleGroupCount != 1 {
 		t.Fatalf("ready NodeClass pending eligibility = %+v, want one group", ready)
 	}
 	for _, name := range []string{"class-not-ready", "class-unobserved"} {
 		workloads := capacityTestMustPool(t, model, name).Observation.Workloads
-		if workloads == nil || len(workloads.PendingEligibleGroupIDs) != 0 || workloads.PendingEligibleGroupsMeta.Total != 0 {
+		if workloads == nil || workloads.PendingEligibleGroupCount != 0 {
 			t.Errorf("pool %q pending eligibility = %+v, want none", name, workloads)
 		}
 	}

@@ -99,7 +99,6 @@ func TestNestedConstructorsInitializeWireCollections(t *testing.T) {
 	assertCapacityJSONArray(t, marshalCapacityObject(t, NewActivityEvidence()), "refs")
 	assertCapacityJSONArray(t, marshalCapacityObject(t, NewActivityEpisode()), "evidence")
 	assertCapacityJSONArray(t, marshalCapacityObject(t, NewActionSummary()), "pools")
-	assertCapacityJSONArray(t, marshalCapacityObject(t, NewActionSummary()), "demandGroupIds")
 	demandSummary := marshalCapacityObject(t, NewDemandSummary())
 	assertCapacityJSONObject(t, demandSummary, "total")
 	for _, state := range []DemandState{

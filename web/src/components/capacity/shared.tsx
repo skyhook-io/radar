@@ -202,9 +202,7 @@ export function coverageIsDenied(coverage?: CapacitySourceCoverage): boolean {
   return coverage?.status === "denied";
 }
 
-export function nodeMetricsAreStale(
-  coverage?: CapacitySourceCoverage,
-): boolean {
+function nodeMetricsAreStale(coverage?: CapacitySourceCoverage): boolean {
   return coverage?.reasonCode === "node_metrics_stale";
 }
 
@@ -247,7 +245,7 @@ export function coverageMessage(
   return `${subject} is unavailable`;
 }
 
-export function missingUsageMessage(coverage?: CapacitySourceCoverage): string {
+function missingUsageMessage(coverage?: CapacitySourceCoverage): string {
   if (nodeMetricsAreStale(coverage))
     return "The retained node metrics are stale and this pool has no sample";
   if (coverage?.status === "available")
@@ -393,7 +391,7 @@ export function quantityText(
   return shown.join(" · ");
 }
 
-export function sourceLabel(sources: string[]): string {
+function sourceLabel(sources: string[]): string {
   return sources.length > 0 ? sources.join(" + ") : "source not reported";
 }
 
@@ -427,10 +425,7 @@ export function formatTaint(taint: {
   return `${taint.key}${taint.value ? `=${taint.value}` : ""}:${taint.effect}`;
 }
 
-export function generatedAtMillis(
-  generatedAt: string,
-  fallback: number,
-): number {
+function generatedAtMillis(generatedAt: string, fallback: number): number {
   const value = Date.parse(generatedAt);
   return Number.isFinite(value) ? value : fallback;
 }
@@ -728,11 +723,7 @@ export function ConditionBadge({
   );
 }
 
-export function CoverageBadge({
-  coverage,
-}: {
-  coverage?: CapacitySourceCoverage;
-}) {
+function CoverageBadge({ coverage }: { coverage?: CapacitySourceCoverage }) {
   if (!coverage)
     return (
       <Badge severity="neutral" size="sm">
@@ -758,7 +749,7 @@ export function CoverageBadge({
   );
 }
 
-export function UsageCoverageBadge({
+function UsageCoverageBadge({
   coverage,
 }: {
   coverage?: CapacitySourceCoverage;
@@ -786,6 +777,32 @@ export function DeniedBadge({ label = "Unavailable" }: { label?: string }) {
         {`${label} — Pod access denied`}
       </Badge>
     </WithTooltip>
+  );
+}
+
+/** Toggle pill for the demand/activity filter rows — active state reuses `.selection`. */
+export function FilterTogglePill({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+        active
+          ? "selection border-theme-border text-theme-text-primary"
+          : "border-theme-border text-theme-text-secondary hover:bg-theme-hover"
+      }`}
+      onClick={onClick}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -988,52 +1005,6 @@ export function pickWorstPressure(
     if (left.overLimit !== right.overLimit) return left.overLimit ? -1 : 1;
     return (right.percent ?? -1) - (left.percent ?? -1);
   })[0];
-}
-
-/** Compact limit-pressure cell for tables: worst dimension bar + "no limit" note. */
-export function LimitPressureCell({
-  pressure,
-  hasConfiguredLimit,
-}: {
-  pressure?: CapacityLimitPressure;
-  hasConfiguredLimit: boolean;
-}) {
-  if (!hasConfiguredLimit)
-    return (
-      <div>
-        <div className="text-xs text-theme-text-tertiary">
-          No limit configured
-        </div>
-        <div className="text-[10px] text-theme-text-tertiary">
-          provider quota still applies
-        </div>
-      </div>
-    );
-  if (!pressure)
-    return (
-      <span className="text-xs text-theme-text-tertiary">
-        No comparable status value
-      </span>
-    );
-  if (pressure.percent === undefined)
-    return (
-      <div className="font-mono text-xs text-theme-text-secondary">
-        {formatQuantity(pressure.resource, pressure.provisioned)} /{" "}
-        {formatQuantity(pressure.resource, pressure.limit)}
-        <span className="text-theme-text-tertiary"> · ratio unavailable</span>
-      </div>
-    );
-  return (
-    <ResourceBar
-      used={formatQuantity(pressure.resource, pressure.provisioned)}
-      total={formatQuantity(pressure.resource, pressure.limit)}
-      percent={pressure.percent}
-      colorScheme="quiet"
-      layout="inline"
-      label={shortResourceLabel(pressure.resource)}
-      tooltip={`${resourceLabel(pressure.resource)} provisioned: ${formatQuantity(pressure.resource, pressure.provisioned)} of ${formatQuantity(pressure.resource, pressure.limit)} configured limit`}
-    />
-  );
 }
 
 export function PressureDetail({

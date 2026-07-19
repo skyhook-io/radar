@@ -1,8 +1,6 @@
 package server
 
 import (
-	"sort"
-
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 )
@@ -33,17 +31,13 @@ func capacityDemandActions(groups []capacitymodel.DemandGroupModel) []capacityap
 		if len(groupIDs) == 0 {
 			continue
 		}
-		sort.Strings(groupIDs)
 		action := capacityapi.NewActionSummary()
 		action.Code = definition.code
 		action.Count = len(groupIDs)
 		action.HighestSeverity = definition.severity
-		returned := len(groupIDs)
-		if returned > capacityActionSubjectLimit {
-			returned = capacityActionSubjectLimit
+		if len(groupIDs) > capacityActionSubjectLimit {
 			action.Truncated = true
 		}
-		action.DemandGroupIDs = append(action.DemandGroupIDs, groupIDs[:returned]...)
 		actions = append(actions, action)
 	}
 	return actions

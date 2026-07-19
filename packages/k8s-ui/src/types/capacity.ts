@@ -269,8 +269,7 @@ export interface CapacityWorkloadSummary {
   workloadCount: number;
   topScheduled: CapacityWorkloadAttribution[];
   topScheduledMeta: CapacityBoundedResultMeta;
-  pendingEligibleGroupIds: string[];
-  pendingEligibleGroupsMeta: CapacityBoundedResultMeta;
+  pendingEligibleGroupCount: number;
 }
 
 export interface CapacityPostureFact {
@@ -284,7 +283,6 @@ export interface CapacityPoolObservation {
   resource: CapacityResourceIdentity;
   generation: number;
   observedGeneration?: number;
-  specFingerprint: string;
   createdAt?: string;
   updatedAt?: string;
   mode: CapacityPoolMode;
@@ -370,7 +368,6 @@ export interface CapacityActionSummary {
   count: number;
   highestSeverity?: string;
   pools: CapacityResourceIdentity[];
-  demandGroupIds: string[];
   truncated: boolean;
 }
 
@@ -394,10 +391,7 @@ export interface CapacityOverviewSummary {
 }
 
 export type CapacityManager =
-  | "karpenter"
-  | "cluster_autoscaler"
-  | "gke_autoscaler"
-  | "aks_autoscaler";
+  "karpenter" | "cluster_autoscaler" | "gke_autoscaler" | "aks_autoscaler";
 
 export type CapacityManagerRollupStatus = "healthy" | "degraded" | "unknown";
 
@@ -406,7 +400,6 @@ export interface CapacityManagerSummary {
   groupCount: number;
   status: CapacityManagerRollupStatus;
   detail?: string;
-  asOf?: string;
 }
 
 export interface CapacityScalingFact {

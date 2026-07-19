@@ -26,14 +26,6 @@ func ResourceVector(resources corev1.ResourceList) capacityapi.ResourceVector {
 	return vector
 }
 
-func addResourceLists(lists ...corev1.ResourceList) corev1.ResourceList {
-	total := corev1.ResourceList{}
-	for _, resources := range lists {
-		addResources(total, resources)
-	}
-	return total
-}
-
 func subtractResourceLists(left, right corev1.ResourceList) corev1.ResourceList {
 	result := corev1.ResourceList{}
 	for name, quantity := range left {

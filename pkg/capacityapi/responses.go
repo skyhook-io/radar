@@ -7,12 +7,11 @@ type ActionSummary struct {
 	Count           int                `json:"count"`
 	HighestSeverity string             `json:"highestSeverity,omitempty"`
 	Pools           []ResourceIdentity `json:"pools"`
-	DemandGroupIDs  []string           `json:"demandGroupIds"`
 	Truncated       bool               `json:"truncated"`
 }
 
 func NewActionSummary() ActionSummary {
-	return ActionSummary{Pools: []ResourceIdentity{}, DemandGroupIDs: []string{}}
+	return ActionSummary{Pools: []ResourceIdentity{}}
 }
 
 type OverviewSummary struct {

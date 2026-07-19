@@ -93,15 +93,15 @@ func TestCapacityDemandActionsSummarizeActionableStatesDeterministically(t *test
 	want := []capacityapi.ActionSummary{
 		{
 			Code: "pending_demand_blocked", Count: 2, HighestSeverity: "warning",
-			Pools: []capacityapi.ResourceIdentity{}, DemandGroupIDs: []string{"blocked-a", "blocked-b"},
+			Pools: []capacityapi.ResourceIdentity{},
 		},
 		{
 			Code: "pending_demand_resource_pressure", Count: 1, HighestSeverity: "info",
-			Pools: []capacityapi.ResourceIdentity{}, DemandGroupIDs: []string{"pressure"},
+			Pools: []capacityapi.ResourceIdentity{},
 		},
 		{
 			Code: "pending_demand_unclassified", Count: 2, HighestSeverity: "info",
-			Pools: []capacityapi.ResourceIdentity{}, DemandGroupIDs: []string{"unknown-a", "unknown-b"},
+			Pools: []capacityapi.ResourceIdentity{},
 		},
 	}
 	if !reflect.DeepEqual(actions, want) {
@@ -125,13 +125,7 @@ func TestCapacityDemandActionsBoundSubjectsWithoutChangingCount(t *testing.T) {
 	if action.Count != capacityActionSubjectLimit+3 {
 		t.Errorf("Count = %d, want %d", action.Count, capacityActionSubjectLimit+3)
 	}
-	if len(action.DemandGroupIDs) != capacityActionSubjectLimit {
-		t.Errorf("len(DemandGroupIDs) = %d, want %d", len(action.DemandGroupIDs), capacityActionSubjectLimit)
-	}
 	if !action.Truncated {
 		t.Error("Truncated = false, want true")
-	}
-	if first, last := action.DemandGroupIDs[0], action.DemandGroupIDs[len(action.DemandGroupIDs)-1]; first != "blocked-00" || last != "blocked-24" {
-		t.Errorf("bounded IDs = %q ... %q, want blocked-00 ... blocked-24", first, last)
 	}
 }

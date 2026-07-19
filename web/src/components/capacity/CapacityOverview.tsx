@@ -904,6 +904,11 @@ function GroupRow({
                 </span>
               </WithTooltip>
             )}
+            {pool && pool.issueCount > 0 && (
+              <Badge severity="warning" size="sm">
+                {pool.issueCount} {pool.issueCount === 1 ? "issue" : "issues"}
+              </Badge>
+            )}
             {isKarpenter && pool && (
               <LinkButton
                 onClick={() =>

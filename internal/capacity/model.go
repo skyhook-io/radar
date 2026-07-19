@@ -1,9 +1,6 @@
 package capacity
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"sort"
 	"time"
 
@@ -21,7 +18,6 @@ const (
 	zoneLabel                     = "topology.kubernetes.io/zone"
 	architectureLabel             = "kubernetes.io/arch"
 	defaultTopWorkloads           = 10
-	defaultPendingEligibleGroups  = 50
 	defaultWorkloadNodeLimit      = 50
 	defaultCompositionBucketLimit = 20
 )
@@ -312,8 +308,7 @@ func AttachPendingEligibilityForPool(model *Model, snapshot Snapshot, poolName s
 		ResolvePodOwner: snapshot.ResolvePodOwner,
 	})
 	workloads := poolModel.Observation.Workloads
-	workloads.PendingEligibleGroupIDs = []string{}
-	workloads.PendingEligibleGroupsMeta = capacityapi.BoundedResultMeta{}
+	workloads.PendingEligibleGroupCount = 0
 	for _, group := range groups {
 		if group.Group.State != capacityapi.DemandAwaitingCapacity {
 			continue
@@ -321,14 +316,8 @@ func AttachPendingEligibilityForPool(model *Model, snapshot Snapshot, poolName s
 		if evaluateDemandPool(group.scheduling, group.requests, input).Result != capacityapi.PoolDeclaredCompatible {
 			continue
 		}
-		workloads.PendingEligibleGroupsMeta.Total++
-		if len(workloads.PendingEligibleGroupIDs) < defaultPendingEligibleGroups {
-			workloads.PendingEligibleGroupIDs = append(workloads.PendingEligibleGroupIDs, group.Group.ID)
-		} else {
-			workloads.PendingEligibleGroupsMeta.Truncated = true
-		}
+		workloads.PendingEligibleGroupCount++
 	}
-	workloads.PendingEligibleGroupsMeta.Returned = len(workloads.PendingEligibleGroupIDs)
 }
 
 func (m Model) Pool(name string) (*PoolModel, bool) {
@@ -365,7 +354,6 @@ func basePoolObservation(pool *unstructured.Unstructured, snapshot Snapshot) cap
 	observation := capacityapi.NewPoolObservation()
 	observation.Resource = identityForUnstructured(pool)
 	observation.Generation = pool.GetGeneration()
-	observation.SpecFingerprint = specFingerprint(pool)
 	createdTimestamp := pool.GetCreationTimestamp()
 	if !createdTimestamp.IsZero() {
 		created := createdTimestamp.Time
@@ -757,16 +745,6 @@ func identityForUnstructured(resource *unstructured.Unstructured) capacityapi.Re
 
 func identityForNode(node *corev1.Node) capacityapi.ResourceIdentity {
 	return capacityapi.ResourceIdentity{Ref: subject.Ref{Kind: "Node", Name: node.Name}, APIVersion: "v1", UID: string(node.UID)}
-}
-
-func specFingerprint(resource *unstructured.Unstructured) string {
-	spec, _, _ := unstructured.NestedFieldNoCopy(resource.Object, "spec")
-	payload, err := json.Marshal(spec)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:])
 }
 
 func normalizeConditions(conditions []metav1.Condition) []capacityapi.Condition {

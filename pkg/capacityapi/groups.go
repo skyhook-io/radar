@@ -95,5 +95,4 @@ type ManagerSummary struct {
 	GroupCount int                 `json:"groupCount"`
 	Status     ManagerRollupStatus `json:"status"`
 	Detail     string              `json:"detail,omitempty"`
-	AsOf       *time.Time          `json:"asOf,omitempty"`
 }

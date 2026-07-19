@@ -474,13 +474,11 @@ func buildManagers(snapshot Snapshot, status *autoscalerstatus.Status, builders 
 			}
 		}
 		st, detail := autoscalerHealthRollup(status, allChildren)
-		asOf := timePtrCopy(status.Time)
 		managers = append(managers, capacityapi.ManagerSummary{
 			Manager:    manager,
 			GroupCount: groupCount,
 			Status:     st,
 			Detail:     detail,
-			AsOf:       asOf,
 		})
 	}
 
