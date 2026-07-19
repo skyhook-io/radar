@@ -271,6 +271,26 @@ func TestAdmissionAndCRDBackendSemantics(t *testing.T) {
 	}
 }
 
+func TestAdmissionWebhookConfigurationWithoutWebhooksIsInspectedEmpty(t *testing.T) {
+	input := completeInput()
+	input.AdmissionWebhookConfigurations = []*unstructured.Unstructured{{Object: map[string]any{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingWebhookConfiguration", "metadata": map[string]any{"name": "empty-policy"},
+	}}}
+
+	check := scanAdmissionWebhookReadiness(input)
+	finalizeCheck(&check)
+	if check.Status != CheckPassed || len(check.Findings) != 0 || check.Caveat != "" || check.Inspected != 1 {
+		t.Fatalf("empty admission webhook configuration = %+v, want inspected pass without a coverage caveat", check)
+	}
+
+	input.AdmissionWebhookConfigurations[0].Object["webhooks"] = "not-a-list"
+	check = scanAdmissionWebhookReadiness(input)
+	finalizeCheck(&check)
+	if check.Status != CheckUnknown || len(check.Findings) != 0 || check.Caveat == "" {
+		t.Fatalf("malformed admission webhook configuration = %+v, want incomplete coverage", check)
+	}
+}
+
 func TestWebhookConfigurationFindingsSurviveMissingBackendEvidence(t *testing.T) {
 	input := completeInput()
 	input.Services = nil

@@ -351,8 +351,11 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 			continue
 		}
 		webhooks, found, err := unstructured.NestedSlice(config.Object, "webhooks")
-		if err != nil || !found {
+		if err != nil {
 			check.Caveat = appendCaveat(check.Caveat, config.GetName()+" webhooks were unreadable.")
+			continue
+		}
+		if !found {
 			continue
 		}
 		for i, raw := range webhooks {

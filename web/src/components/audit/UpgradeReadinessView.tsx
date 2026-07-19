@@ -195,7 +195,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
         />
       )}
       {data.coverage.state === 'partial' && !data.coverage.scopedNamespaces?.length && !data.coverage.unavailableKinds?.length && (
-        <CoverageNotice headline="Some evidence is incomplete" body="Expand rows with a coverage note to see what Radar could not verify." />
+        <CoverageNotice headline="Some evidence is incomplete" body="Rows marked Partial evidence explain what Radar could not verify." />
       )}
       {data.coverage.state === 'no_access' ? (
         <section className="shrink-0">
@@ -403,6 +403,12 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
           <div className="min-w-0">
             <Badge severity={meta.badgeSeverity}>{meta.label}</Badge>
             {label && <div className="mt-1 text-[11px] text-theme-text-tertiary">{label}</div>}
+            {check.caveat && (
+              <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+                Partial evidence
+              </div>
+            )}
           </div>
           <CollapseChevron open={open} className="h-4 w-4" />
         </div>
