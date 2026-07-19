@@ -320,6 +320,7 @@ export function CapacityOverview({
           managers={summary.managers}
           autoscalerDenied={coverageIsDenied(coverage.autoscalerStatus)}
           nodesObserved={coverageHasObservations(coverage.nodes)}
+          karpenterMode={data.provider.controllerMode}
         />
         <KpiTile
           label="Node groups"
@@ -499,10 +500,12 @@ function ManagersTile({
   managers,
   autoscalerDenied,
   nodesObserved,
+  karpenterMode,
 }: {
   managers: CapacityManagerSummary[];
   autoscalerDenied: boolean;
   nodesObserved: boolean;
+  karpenterMode?: string;
 }) {
   const worst = worstManagerStatus(managers);
   return (
@@ -542,7 +545,11 @@ function ManagersTile({
         ) : (
           <div className="flex flex-col gap-1">
             {managers.map((manager) => (
-              <ManagerLine key={manager.manager} manager={manager} />
+              <ManagerLine
+                key={manager.manager}
+                manager={manager}
+                karpenterMode={karpenterMode}
+              />
             ))}
             {autoscalerDenied && (
               <div className="mt-0.5 text-[11px] text-theme-text-tertiary">
@@ -557,9 +564,21 @@ function ManagersTile({
   );
 }
 
-function ManagerLine({ manager }: { manager: CapacityManagerSummary }) {
+function ManagerLine({
+  manager,
+  karpenterMode,
+}: {
+  manager: CapacityManagerSummary;
+  karpenterMode?: string;
+}) {
   const tone = managerStatusTone(manager.status);
   const showDetail = manager.status === "degraded" && manager.detail;
+  // Auto Mode is the notable case (AWS runs the controller — its logs and
+  // knobs are out of reach); self-managed is the default and earns no ink.
+  const modeSuffix =
+    manager.manager === "karpenter" && karpenterMode === "eks_auto"
+      ? " · EKS Auto Mode"
+      : "";
   return (
     <div>
       <div className="flex items-baseline justify-between gap-2">
@@ -567,6 +586,7 @@ function ManagerLine({ manager }: { manager: CapacityManagerSummary }) {
           <StatusDot tone={tone} />
           <span className="truncate text-sm text-theme-text-primary">
             {capacityManagerLabel(manager.manager)}
+            {modeSuffix}
           </span>
         </span>
         <span className="shrink-0 font-mono text-xs text-theme-text-tertiary">

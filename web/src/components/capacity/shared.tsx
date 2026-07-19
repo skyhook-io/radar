@@ -442,15 +442,6 @@ export function errorMessage(error: unknown): string {
 // Label helpers
 // ============================================================================
 
-export function providerLabel(
-  response: Pick<CapacityResponseMeta, "provider">,
-): string {
-  if (response.provider.controllerMode === "self_managed")
-    return "Self-managed Karpenter";
-  if (response.provider.controllerMode === "eks_auto") return "EKS Auto Mode";
-  return "Controller mode unknown";
-}
-
 export function poolReadinessDetail(
   pools: CapacityPoolSummary[],
   truncated: boolean,

@@ -51,7 +51,6 @@ import {
   PoolReadyBadge,
   POOL_SECTIONS,
   PressureDetail,
-  providerLabel,
   quantityResourceRank,
   quantityText,
   RefreshError,
@@ -260,10 +259,6 @@ export function CapacityPoolDetail({
       {section === "configuration" && (
         <PoolConfigurationTab pool={pool} onOpenResource={onOpenResource} />
       )}
-
-      <p className="text-[11px] text-theme-text-tertiary">
-        {providerLabel(response)} · schema {response.schemaVersion}
-      </p>
     </ScrollableContent>
   );
 }
