@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+
 import { Layers3 } from "lucide-react";
 import {
   Collapse,
@@ -65,6 +66,27 @@ import {
   worstManagerStatus,
   type CapacityConnectionState,
 } from "./shared";
+
+// "View inventory" scrolls — on a page with no overflow the click is a no-op,
+// so the link hides. Unlike per-section visibility, whole-page scrollability
+// is stable while scrolling; it changes only with content or viewport size.
+function usePageHasOverflow(): boolean {
+  const [overflowing, setOverflowing] = useState(true);
+  useEffect(() => {
+    const container = document.getElementById("rk-scroll");
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const measure = () =>
+      setOverflowing(container.scrollHeight > container.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    if (container.firstElementChild) {
+      observer.observe(container.firstElementChild);
+    }
+    return () => observer.disconnect();
+  }, []);
+  return overflowing;
+}
 
 const EXPLAIN_CARDS: { term: string; body: string }[] = [
   {
@@ -209,6 +231,7 @@ export function CapacityOverview({
   const [showExplain, setShowExplain] = useState(false);
   const explainAnchorRef = useRef<HTMLDivElement>(null);
   const inventoryRef = useRef<HTMLDivElement>(null);
+  const pageHasOverflow = usePageHasOverflow();
   const openExplainer = () => {
     setShowExplain(true);
     explainAnchorRef.current?.scrollIntoView({
@@ -358,12 +381,15 @@ export function CapacityOverview({
           certainty={coverageCertainty(coverage.nodes)}
           certaintyTitle={coverageMessage(coverage.nodes, "Node groups")}
           attention={data.pools.some((pool) => pool.ready === false)}
-          linkLabel="View inventory ↓"
-          onClick={() =>
-            inventoryRef.current?.scrollIntoView({
-              behavior: "smooth",
-              block: "start",
-            })
+          linkLabel={pageHasOverflow ? "View inventory ↓" : undefined}
+          onClick={
+            pageHasOverflow
+              ? () =>
+                  inventoryRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start",
+                  })
+              : undefined
           }
         />
         <KpiTile
