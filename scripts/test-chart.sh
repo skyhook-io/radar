@@ -49,6 +49,7 @@ echo "Running chart template tests against $CHART_DIR"
 echo
 
 render "defaults — no self-upgrade footprint"
+assert_contains '--listen-address=0.0.0.0'          "shared listener explicitly enabled"
 assert_not_contains '^kind: Role$'                  "no namespaced Role"
 assert_not_contains '^kind: RoleBinding$'           "no namespaced RoleBinding"
 assert_not_contains 'MY_POD_NAMESPACE'              "no downward-API env var"

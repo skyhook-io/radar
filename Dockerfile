@@ -73,7 +73,7 @@ COPY --from=backend-builder /radar /radar
 EXPOSE 9280
 USER nonroot:nonroot
 ENTRYPOINT ["/radar"]
-CMD ["--no-browser"]
+CMD ["--no-browser", "--listen-address=0.0.0.0"]
 
 # =============================================================================
 # Stage 3b: Release build - uses pre-built binaries from goreleaser
@@ -93,4 +93,4 @@ COPY radar-${TARGETARCH} /radar
 EXPOSE 9280
 USER nonroot:nonroot
 ENTRYPOINT ["/radar"]
-CMD ["--no-browser"]
+CMD ["--no-browser", "--listen-address=0.0.0.0"]

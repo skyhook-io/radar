@@ -65,6 +65,7 @@ type Server struct {
 	broadcaster        *SSEBroadcaster
 	vitalsMetrics      vitalsMetricsMemo
 	port               int
+	listenAddress      string
 	devMode            bool
 	staticFS           fs.FS
 	startTime          time.Time
@@ -132,6 +133,7 @@ type Server struct {
 // Config holds server configuration
 type Config struct {
 	Port               int
+	ListenAddress      string         // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
 	DevMode            bool           // Serve frontend from filesystem instead of embedded
 	StaticFS           embed.FS       // Embedded frontend files
 	StaticRoot         string         // Path within StaticFS
@@ -151,6 +153,7 @@ func New(cfg Config) *Server {
 		router:             chi.NewRouter(),
 		broadcaster:        NewSSEBroadcaster(),
 		port:               cfg.Port,
+		listenAddress:      cfg.ListenAddress,
 		devMode:            cfg.DevMode,
 		startTime:          time.Now(),
 		mcpHandler:         cfg.MCPHandler,
@@ -721,22 +724,35 @@ func (s *Server) Start() error {
 // StartWithReady starts the server and signals on the ready channel once it
 // is accepting connections. If port is 0, an OS-assigned port is used.
 func (s *Server) StartWithReady(ready chan<- struct{}) error {
-	s.broadcaster.Start()
-
-	addr := fmt.Sprintf(":%d", s.port)
+	listenAddress, err := NormalizeListenAddress(s.listenAddress)
+	if err != nil {
+		return err
+	}
+	s.listenAddress = listenAddress
+	addr := net.JoinHostPort(listenAddress, strconv.Itoa(s.port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 	s.listener = ln
+	s.broadcaster.Start()
 
-	log.Printf("Starting Explorer server on http://localhost:%d", s.ActualPort())
+	log.Printf("Starting Explorer server on http://%s", net.JoinHostPort(listenAddress, strconv.Itoa(s.ActualPort())))
+	if cloud.IsLoopbackHostname(listenAddress) {
+		log.Printf("Radar is listening on loopback only; use --listen-address=%s with authentication and network controls to allow remote, VM, or LAN access", AllInterfacesAddress)
+	} else if shouldWarnUnauthenticatedListener(listenAddress, s.authConfig.Enabled()) {
+		log.Printf("WARNING: Radar's HTTP listener is unauthenticated and reachable on %s; enable Radar authentication, restrict network access, or use --listen-address=%s", listenAddress, DefaultListenAddress)
+	}
 
 	if ready != nil {
 		close(ready)
 	}
 
 	return http.Serve(ln, localTCPHandler(s.router))
+}
+
+func shouldWarnUnauthenticatedListener(listenAddress string, authEnabled bool) bool {
+	return !authEnabled && !cloud.IsLoopbackHostname(listenAddress)
 }
 
 // localTCPHandler is the handler exposed on Radar's ordinary pod/host listener.

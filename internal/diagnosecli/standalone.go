@@ -48,6 +48,7 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 	cfg := app.AppConfig{
 		Kubeconfig:      kubeconfig,
 		Port:            0, // random free port
+		ListenAddress:   "127.0.0.1",
 		NoBrowser:       true,
 		HistoryLimit:    1000, // in-memory timeline floor; this instance lives minutes
 		MCPEnabled:      true,

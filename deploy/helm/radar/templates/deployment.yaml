@@ -47,6 +47,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --port={{ .Values.service.port }}
+            - --listen-address=0.0.0.0
             - --no-browser
             - --timeline-storage={{ .Values.timeline.storage }}
             {{- if eq .Values.timeline.storage "sqlite" }}

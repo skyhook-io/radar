@@ -265,6 +265,11 @@ auth:
 
 When deploying Radar in-cluster:
 
+The Helm chart explicitly sets `--listen-address=0.0.0.0` so its ClusterIP
+Service can reach the pod. Unlike the native CLI's loopback-only default, this
+makes Radar reachable on the pod network; the following controls are therefore
+part of the deployment boundary.
+
 1. **Authentication**: Always enable authentication when exposing via ingress. Use [built-in auth](authentication.md) (proxy or OIDC mode) or basic auth (shown above) at minimum.
 
 2. **RBAC scope**: The default ClusterRole grants cluster-wide read access. For namespace-restricted access, set `rbac.create: false` and create a custom Role/RoleBinding. Radar will gracefully adapt to the available permissions.

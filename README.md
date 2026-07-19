@@ -155,6 +155,7 @@ radar
 | `--namespaces` | (all) | Initial namespace filters as a comma-separated list, e.g. `--namespaces ns1,ns2,ns3`. Use this when your identity can list resources in specific namespaces but cannot list namespaces cluster-wide. |
 | `--namespace-scope` | `false` | Pin namespaced informer caches to a **single** namespace for large clusters (scoping to multiple namespaces is not supported yet). Requires `--namespace`, a kubeconfig context namespace, or a saved local single-namespace pick. Local mode can rebuild the cache when switching namespaces; auth/cloud mode locks the shared cache to the startup namespace. |
 | `--port` | `9280` | Server port |
+| `--listen-address` | `127.0.0.1` | HTTP listen address. Use `127.0.0.1` or `localhost` for local-only access; use `0.0.0.0` explicitly for containers, VMs, WSL, or remote/shared access, together with authentication and network controls. |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory` or `sqlite` |

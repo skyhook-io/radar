@@ -185,18 +185,10 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 		localPort = port
 	}
 
-	// Set default listen address
-	listenAddr := req.ListenAddress
-	if listenAddr == "" {
-		listenAddr = "127.0.0.1"
-	}
-	// Validate listen address
-	if listenAddr != "127.0.0.1" && listenAddr != "0.0.0.0" && listenAddr != "localhost" {
-		s.writeError(w, http.StatusBadRequest, "listenAddress must be '127.0.0.1', '0.0.0.0', or 'localhost'")
+	listenAddr, err := NormalizeListenAddress(req.ListenAddress)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
-	}
-	if listenAddr == "localhost" {
-		listenAddr = "127.0.0.1"
 	}
 
 	// Create session

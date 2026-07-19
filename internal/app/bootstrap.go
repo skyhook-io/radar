@@ -37,6 +37,7 @@ type AppConfig struct {
 	Namespace                string
 	Namespaces               []string
 	Port                     int
+	ListenAddress            string
 	NoBrowser                bool
 	Browser                  string
 	DevMode                  bool
@@ -273,6 +274,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 
 	serverCfg := server.Config{
 		Port:            cfg.Port,
+		ListenAddress:   cfg.ListenAddress,
 		DevMode:         cfg.DevMode,
 		StaticFS:        static.FS,
 		StaticRoot:      "dist",
@@ -306,11 +308,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 	if cfg.MCPEnabled {
 		serverCfg.MCPHandler = mcppkg.NewHandler()
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
-		if cfg.Port != 0 {
-			log.Printf("MCP server enabled at http://localhost:%d/mcp", cfg.Port)
-		} else {
-			log.Printf("MCP server enabled (port will be assigned at startup)")
-		}
+		log.Printf("MCP server enabled on the HTTP listener at /mcp")
 	}
 
 	return server.New(serverCfg)
