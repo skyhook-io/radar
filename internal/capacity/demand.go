@@ -163,6 +163,7 @@ func (c *demandEvidenceCollection) merge(other demandEvidenceCollection) {
 
 func BuildDemandGroups(input DemandInput) []capacityapi.DemandGroup {
 	models := BuildDemandGroupModels(input)
+	ClassifyDemandGroupModels(models, input.Pools)
 	return EvaluateDemandGroupModels(models, input.Pools, input.PoolEvaluationLimit)
 }
 
@@ -262,15 +263,15 @@ func EvaluateDemandGroupModels(models []DemandGroupModel, pools []DemandPoolInpu
 	result := make([]capacityapi.DemandGroup, 0, len(models))
 	for _, model := range models {
 		group := model.Group
+		// Evaluation is a perspective, never a state owner: recomputing State
+		// from a ?pool=-narrowed set would turn fleet-wide awaiting_capacity
+		// into blocked. Classification owns State against the whole fleet.
 		group.PoolEvaluations, group.PoolEvaluationsMeta, group.PoolEvaluationCounts = evaluateDemandPools(
 			model.scheduling,
 			model.requests,
 			orderedPools,
 			evaluationLimit,
 		)
-		if pools != nil {
-			group.State = demandStateWithPoolEvaluations(group.State, group.PoolEvaluationCounts, len(orderedPools))
-		}
 		result = append(result, group)
 	}
 	return result
@@ -657,13 +658,6 @@ func evaluateDemandPool(model demandSchedulingModel, requests corev1.ResourceLis
 		}
 	}
 
-	unevaluableToleration := false
-	for _, unknownPredicate := range model.Unknown {
-		if unknownPredicate == "toleration.operator" {
-			unevaluableToleration = true
-			break
-		}
-	}
 	for _, taint := range sortedTaints(spec.Taints) {
 		switch taint.Effect {
 		case corev1.TaintEffectPreferNoSchedule:
@@ -671,9 +665,10 @@ func evaluateDemandPool(model demandSchedulingModel, requests corev1.ResourceLis
 		case corev1.TaintEffectNoSchedule, corev1.TaintEffectNoExecute:
 			if !tolerationsTolerateTaint(model.Tolerations, taint) {
 				// A toleration operator we cannot evaluate makes the miss
-				// unprovable — hard incompatibility evidence would outrank
-				// the unknown and overclaim.
-				if unevaluableToleration {
+				// unprovable — but only for taints that toleration could bind
+				// to. An exotic operator pinned to a different key cannot
+				// tolerate this taint, so the miss stays proven.
+				if unevaluableTolerationCouldMatch(model.Tolerations, taint) {
 					unknown = append(unknown, "nodePool.taints")
 					continue
 				}
@@ -1407,6 +1402,23 @@ func isProviderOfferingLabel(key string) bool {
 		strings.HasPrefix(key, "karpenter.azure.com/") || strings.HasPrefix(key, "cloud.google.com/") ||
 		strings.HasPrefix(key, "topology.gke.io/") || strings.HasPrefix(key, "topology.ebs.csi.aws.com/") ||
 		strings.HasPrefix(key, "topology.disk.csi.azure.com/")
+}
+
+func unevaluableTolerationCouldMatch(tolerations []corev1.Toleration, taint corev1.Taint) bool {
+	for _, toleration := range tolerations {
+		switch toleration.Operator {
+		case "", corev1.TolerationOpEqual, corev1.TolerationOpExists:
+			continue
+		}
+		if toleration.Key != "" && toleration.Key != taint.Key {
+			continue
+		}
+		if toleration.Effect != "" && toleration.Effect != taint.Effect {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func tolerationsTolerateTaint(tolerations []corev1.Toleration, taint corev1.Taint) bool {

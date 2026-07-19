@@ -710,6 +710,63 @@ func TestDemandPoolBoundingKeepsDeclaredCompatiblePools(t *testing.T) {
 	}
 }
 
+func TestDemandEvaluationPerspectiveNeverRewritesFleetWideState(t *testing.T) {
+	ready := true
+	compatible := demandTestPool("compatible", &ready, demandPoolSpec(nil, nil, nil, nil, nil), nil)
+	tainted := demandTestPool("tainted", &ready, demandPoolSpec(nil, []any{
+		demandTaintObject("dedicated", "batch", corev1.TaintEffectNoSchedule),
+	}, nil, nil, nil), nil)
+	pod := demandTestPod("worker", "500m")
+	pod.Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable,
+		Message: "0/3 nodes are available: 3 Insufficient cpu.",
+	}}
+
+	models := BuildDemandGroupModels(DemandInput{GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{pod}})
+	fleet := []DemandPoolInput{{NodePool: compatible}, {NodePool: tainted}}
+	ClassifyDemandGroupModels(models, fleet)
+	if models[0].Group.State != capacityapi.DemandAwaitingCapacity {
+		t.Fatalf("fleet-wide state = %q, want awaiting_capacity", models[0].Group.State)
+	}
+
+	narrowed := EvaluateDemandGroupModels(models, []DemandPoolInput{{NodePool: tainted}}, 0)
+	if narrowed[0].State != capacityapi.DemandAwaitingCapacity {
+		t.Fatalf("state under ?pool= = %q — the narrowed evaluation perspective rewrote fleet-wide state", narrowed[0].State)
+	}
+	if narrowed[0].PoolEvaluationCounts.Incompatible != 1 || len(narrowed[0].PoolEvaluations) != 1 {
+		t.Fatalf("narrowed evaluations = %+v", narrowed[0].PoolEvaluationCounts)
+	}
+}
+
+func TestDemandUnrelatedUnevaluableTolerationKeepsTaintMissProven(t *testing.T) {
+	ready := true
+	tainted := demandPoolSpec(nil, []any{demandTaintObject("dedicated", "batch", corev1.TaintEffectNoSchedule)}, nil, nil, nil)
+
+	pod := demandTestPod("worker", "500m")
+	pod.Spec.Tolerations = []corev1.Toleration{{Key: "unrelated", Operator: corev1.TolerationOperator("Extended"), Value: "x"}}
+	group := BuildDemandGroups(DemandInput{GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{pod}, Pools: []DemandPoolInput{
+		{NodePool: demandTestPool("tainted", &ready, tainted, nil)},
+	}})[0]
+	assertDemandEvaluation(t, group.PoolEvaluations, "tainted", capacityapi.PoolIncompatible, "permanentTaint")
+
+	mismatchedEffect := demandTestPod("effect", "500m")
+	mismatchedEffect.Spec.Tolerations = []corev1.Toleration{{
+		Key: "dedicated", Operator: corev1.TolerationOperator("Extended"), Value: "batch", Effect: corev1.TaintEffectNoExecute,
+	}}
+	group = BuildDemandGroups(DemandInput{GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{mismatchedEffect}, Pools: []DemandPoolInput{
+		{NodePool: demandTestPool("tainted", &ready, tainted, nil)},
+	}})[0]
+	assertDemandEvaluation(t, group.PoolEvaluations, "tainted", capacityapi.PoolIncompatible, "permanentTaint")
+
+	wildcardKey := demandTestPod("wildcard", "500m")
+	wildcardKey.Spec.Tolerations = []corev1.Toleration{{Operator: corev1.TolerationOperator("Extended")}}
+	group = BuildDemandGroups(DemandInput{GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{wildcardKey}, Pools: []DemandPoolInput{
+		{NodePool: demandTestPool("tainted", &ready, tainted, nil)},
+	}})[0]
+	evaluation := assertDemandEvaluation(t, group.PoolEvaluations, "tainted", capacityapi.PoolEvaluationUnknown, "")
+	assertDemandUnknown(t, evaluation, "nodePool.taints")
+}
+
 func TestDemandBoundsEvaluationEvidenceAndSignature(t *testing.T) {
 	pod := demandTestPod("worker", "500m")
 	pod.Spec.NodeSelector = map[string]string{}
