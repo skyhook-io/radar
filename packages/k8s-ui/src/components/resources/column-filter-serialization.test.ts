@@ -93,4 +93,12 @@ describe('column filter include/exclude operator', () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined()
     expect(parseColumnFilterExcludes('__proto__:exclude:Running')).toEqual({})
   })
+
+  it('lets the last segment win the mode when a column repeats', () => {
+    expect(parseColumnFilters('status:exclude:Running|status:Completed')).toEqual({ status: ['Completed'] })
+    expect(parseColumnFilterExcludes('status:exclude:Running|status:Completed')).toEqual({})
+
+    expect(parseColumnFilters('status:Running|status:exclude:Completed')).toEqual({ status: ['Completed'] })
+    expect(parseColumnFilterExcludes('status:Running|status:exclude:Completed')).toEqual({ status: true })
+  })
 })

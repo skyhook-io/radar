@@ -1878,10 +1878,17 @@ export function parseColumnFilterExcludes(filtersParam: string | null): Record<s
     // Guard the dynamic write against prototype-polluting keys from the URL
     // right at the assignment (js/remote-property-injection).
     if (
-      parsed && parsed.exclude && parsed.values.length &&
+      parsed && parsed.values.length &&
       parsed.key !== '__proto__' && parsed.key !== 'prototype' && parsed.key !== 'constructor'
     ) {
-      excludes[parsed.key] = true
+      // Values are last-write-wins per key in parseColumnFilters, so the mode
+      // must track the same final segment: a later include overrides an
+      // earlier exclude for the same column, otherwise the two disagree.
+      if (parsed.exclude) {
+        excludes[parsed.key] = true
+      } else {
+        delete excludes[parsed.key]
+      }
     }
   }
   return excludes
