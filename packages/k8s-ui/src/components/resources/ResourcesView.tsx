@@ -6009,6 +6009,10 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
               const existing = parseColumnFilters(params.get('filters'))
               const existingExcludes = parseColumnFilterExcludes(params.get('filters'))
               existing['node'] = [nodeVal]
+              // Clicking a node means "show pods on this node", so force the
+              // node column back to include mode even if it was previously
+              // set to exclude — otherwise the shortcut would hide those pods.
+              delete existingExcludes['node']
               params.set('filters', serializeColumnFilters(existing, existingExcludes))
               navigate?.(`/resources/pods?${params.toString()}`)
             }}
