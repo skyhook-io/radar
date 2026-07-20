@@ -1833,8 +1833,10 @@ export function formatResources(resources: any): string {
 // Keys and values are URI-encoded so their own delimiters survive; the operator,
 // when present, is the literal token "include" or "exclude".
 export function parseColumnFilters(filtersParam: string | null): Record<string, string[]> {
-  if (!filtersParam) return {}
-  const filters: Record<string, string[]> = {}
+  // Prototype-less accumulator: the keys come from the URL, so a plain object
+  // would expose Object.prototype as a write target (js/remote-property-injection).
+  const filters: Record<string, string[]> = Object.create(null)
+  if (!filtersParam) return filters
   for (const pair of filtersParam.split('|')) {
     const parsed = parseColumnFilterPair(pair)
     // Guard the dynamic write: the key comes from the URL, so reject the
@@ -1868,8 +1870,9 @@ export function serializeColumnFilters(
 // `filters` param so the operator can't drift out of sync with the values it
 // negates — a lone exclude operator with no values is structurally impossible.
 export function parseColumnFilterExcludes(filtersParam: string | null): Record<string, boolean> {
-  if (!filtersParam) return {}
-  const excludes: Record<string, boolean> = {}
+  // Prototype-less accumulator: see parseColumnFilters (js/remote-property-injection).
+  const excludes: Record<string, boolean> = Object.create(null)
+  if (!filtersParam) return excludes
   for (const pair of filtersParam.split('|')) {
     const parsed = parseColumnFilterPair(pair)
     // Guard the dynamic write against prototype-polluting keys from the URL
