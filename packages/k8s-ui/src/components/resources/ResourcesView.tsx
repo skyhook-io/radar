@@ -4884,7 +4884,14 @@ export function ResourcesView({
                                 )}
                               >
                                 <ListFilter className="w-3 h-3" />
-                                {hasActiveFilter && <span className="text-[10px] leading-none font-semibold">{activeFilterValues.length}</span>}
+                                {hasActiveFilter && (
+                                  <span
+                                    className="text-[10px] leading-none font-semibold"
+                                    aria-label={`${activeFilterValues.length} ${columnFilterExcludes[col.key] ? 'excluded' : 'included'} value${activeFilterValues.length === 1 ? '' : 's'}`}
+                                  >
+                                    {columnFilterExcludes[col.key] ? `≠ ${activeFilterValues.length}` : activeFilterValues.length}
+                                  </span>
+                                )}
                               </button>
                               {hasActiveFilter && (
                                 <button
