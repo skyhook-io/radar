@@ -139,6 +139,35 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 		}
 	}
+
+	if cmLister := cache.ConfigMaps(); cmLister != nil {
+		var configMaps []*corev1.ConfigMap
+		if namespace != "" {
+			configMaps, _ = cmLister.ConfigMaps(namespace).List(labels.Everything())
+		} else {
+			configMaps, _ = cmLister.List(labels.Everything())
+		}
+		for _, cm := range configMaps {
+			if det, ok := terminatingProblem("ConfigMap", "", cm, now); ok {
+				problems = append(problems, det)
+			}
+		}
+	}
+
+	if secretLister := cache.Secrets(); secretLister != nil {
+		var secrets []*corev1.Secret
+		if namespace != "" {
+			secrets, _ = secretLister.Secrets(namespace).List(labels.Everything())
+		} else {
+			secrets, _ = secretLister.List(labels.Everything())
+		}
+		for _, secret := range secrets {
+			if det, ok := terminatingProblem("Secret", "", secret, now); ok {
+				problems = append(problems, det)
+			}
+		}
+	}
+
 	podsByNamespace := listPodsByNamespace(cache, namespace)
 
 	// Deployment problems: unavailableReplicas > 0

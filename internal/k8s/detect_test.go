@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1840,8 +1841,47 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 	oldCreated := metav1.NewTime(now.Add(-2 * time.Hour))
 	oldDelete := metav1.NewTime(now.Add(-35 * time.Minute))
 	recentDelete := metav1.NewTime(now.Add(-2 * time.Minute))
+	const secretValue = "must-not-appear-in-detection"
 
 	client := fake.NewClientset(
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "config-stuck",
+				Namespace:         "prod",
+				CreationTimestamp: oldCreated,
+				DeletionTimestamp: &oldDelete,
+				Finalizers:        []string{"example.com/config-finalizer"},
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "secret-stuck",
+				Namespace:         "prod",
+				CreationTimestamp: oldCreated,
+				DeletionTimestamp: &oldDelete,
+				Finalizers:        []string{"example.com/secret-finalizer"},
+			},
+			Data: map[string][]byte{"token": []byte(secretValue)},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "config-recent",
+				Namespace:         "prod",
+				CreationTimestamp: oldCreated,
+				DeletionTimestamp: &recentDelete,
+			},
+		},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config-normal", Namespace: "prod", CreationTimestamp: oldCreated}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "secret-normal", Namespace: "prod", CreationTimestamp: oldCreated}},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "config-other-namespace",
+				Namespace:         "staging",
+				CreationTimestamp: oldCreated,
+				DeletionTimestamp: &oldDelete,
+				Finalizers:        []string{"example.com/finalizer"},
+			},
+		},
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "pod-stuck",
@@ -1884,7 +1924,9 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 	for time.Now().Before(deadline) {
 		problems = DetectProblems(cache, "prod")
 		if hasProblem(problems, "Pod", "pod-stuck", "Terminating stuck") &&
-			hasProblem(problems, "Deployment", "deploy-stuck", "Terminating stuck") {
+			hasProblem(problems, "Deployment", "deploy-stuck", "Terminating stuck") &&
+			hasProblem(problems, "ConfigMap", "config-stuck", "Terminating stuck") &&
+			hasProblem(problems, "Secret", "secret-stuck", "Terminating stuck") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1895,6 +1937,31 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 		t.Fatalf("terminating pod problem = %+v, want finalizer context", p)
 	}
 	assertProblem(t, problems, "Deployment", "deploy-stuck", "Terminating stuck", "critical")
+	assertProblem(t, problems, "ConfigMap", "config-stuck", "Terminating stuck", "critical")
+	if p, ok := lookupProblem(problems, "ConfigMap", "config-stuck", "Terminating stuck"); !ok || !strings.Contains(p.Message, "example.com/config-finalizer") {
+		t.Fatalf("terminating ConfigMap problem = %+v, want finalizer context", p)
+	}
+	assertProblem(t, problems, "Secret", "secret-stuck", "Terminating stuck", "critical")
+	if p, ok := lookupProblem(problems, "Secret", "secret-stuck", "Terminating stuck"); !ok {
+		t.Fatal("terminating Secret problem not found")
+	} else if !strings.Contains(p.Message, "example.com/secret-finalizer") {
+		t.Fatalf("terminating Secret problem = %+v, want finalizer context", p)
+	} else if strings.Contains(fmt.Sprintf("%+v", p), secretValue) {
+		t.Fatalf("terminating Secret problem leaked secret data: %+v", p)
+	}
+	if hasProblem(problems, "ConfigMap", "config-recent", "Terminating stuck") {
+		t.Fatalf("recently deleting ConfigMap should not be flagged: %+v", problems)
+	}
+	if hasProblem(problems, "ConfigMap", "config-normal", "Terminating stuck") ||
+		hasProblem(problems, "Secret", "secret-normal", "Terminating stuck") {
+		t.Fatalf("normal ConfigMap and Secret should not be flagged: %+v", problems)
+	}
+	if hasProblem(problems, "ConfigMap", "config-other-namespace", "Terminating stuck") {
+		t.Fatalf("ConfigMap outside the requested namespace should not be flagged: %+v", problems)
+	}
+	if allProblems := DetectProblems(cache, ""); !hasProblem(allProblems, "ConfigMap", "config-other-namespace", "Terminating stuck") {
+		t.Fatalf("all-namespace scan should include terminating ConfigMap from staging: %+v", allProblems)
+	}
 	if hasProblem(problems, "Service", "svc-recent", "Terminating stuck") {
 		t.Fatalf("recently deleting Service should not be flagged: %+v", problems)
 	}
