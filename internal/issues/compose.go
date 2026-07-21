@@ -177,8 +177,10 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 }
 
 // MergeExternalIssues adds already-shaped issue rows from handler-owned data
-// sources, then applies the public sort/cap. `base` must already have gone
-// through ComposeWithStats with the same filters except Limit=NoLimit.
+// sources, then applies the public filters, sort, and cap. `base` must already
+// have gone through ComposeWithStats with the same structural filters except
+// Limit=NoLimit and Filter=nil; CEL is evaluated here against the final public
+// shape after duplicate-env aggregation and external rows are merged.
 func MergeExternalIssues(base []Issue, baseStats ComposeStats, f Filters, extras []Issue) ([]Issue, ComposeStats) {
 	limit, uncapped := normalizedLimit(f.Limit)
 	f.Limit = limit
@@ -186,24 +188,16 @@ func MergeExternalIssues(base []Issue, baseStats ComposeStats, f Filters, extras
 		base = aggregateDuplicateEnvIssues(base)
 	}
 
-	if len(extras) == 0 {
-		baseStats.TotalMatched = len(base)
-		if !uncapped && len(base) > f.Limit {
-			base = base[:f.Limit]
-		}
-		return base, baseStats
-	}
-
-	filteredExtras, extraStats := filterShapedIssues(append([]Issue(nil), extras...), f)
-	out := make([]Issue, 0, len(base)+len(filteredExtras))
+	out := make([]Issue, 0, len(base)+len(extras))
 	out = append(out, base...)
-	out = append(out, filteredExtras...)
+	out = append(out, extras...)
+	out, mergedStats := filterShapedIssues(out, f)
 	sort.SliceStable(out, func(i, j int) bool { return lessIssue(out[i], out[j]) })
 
 	stats := baseStats
-	stats.FilterErrors += extraStats.FilterErrors
+	stats.FilterErrors += mergedStats.FilterErrors
 	if stats.FilterErrorSample == "" {
-		stats.FilterErrorSample = extraStats.FilterErrorSample
+		stats.FilterErrorSample = mergedStats.FilterErrorSample
 	}
 	stats.TotalMatched = len(out)
 	if !uncapped && len(out) > f.Limit {

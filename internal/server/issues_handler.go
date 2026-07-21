@@ -98,6 +98,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 
 	composeFilters := filters
 	composeFilters.Limit = issues.NoLimit
+	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
 	out, stats = issues.MergeExternalIssues(out, stats, filters, s.nativeHelmIssuesForRequest(r, namespaces, filters))
 	// Shared base response shape (issues.ListResponse); surfaces add their

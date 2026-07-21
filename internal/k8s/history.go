@@ -1324,28 +1324,15 @@ func sanitizeConfigValue(path string, value any) any {
 }
 
 func sensitivePath(path string) bool {
-	if sensitivePathSegment(strings.ToLower(path)) {
+	if aicontext.IsSensitiveEnvName(path) {
 		return true
 	}
 	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '[' || r == ']' || r == '/' || r == '-' || r == '_' }) {
-		if sensitivePathSegment(part) {
+		if aicontext.IsSensitiveEnvName(part) {
 			return true
 		}
 	}
 	return false
-}
-
-func sensitivePathSegment(segment string) bool {
-	segment = strings.ToLower(segment)
-	compact := strings.NewReplacer("-", "", "_", "", ".", "", "/", "").Replace(segment)
-	return strings.Contains(segment, "password") || strings.Contains(segment, "passwd") ||
-		strings.Contains(segment, "token") || strings.Contains(segment, "secret") ||
-		strings.Contains(segment, "credential") ||
-		strings.Contains(segment, "api_key") || strings.Contains(segment, "apikey") ||
-		strings.Contains(segment, "accesskey") || strings.Contains(segment, "privatekey") ||
-		strings.Contains(segment, "private_key") ||
-		strings.Contains(compact, "apikey") || strings.Contains(compact, "accesskey") ||
-		strings.Contains(compact, "privatekey") || strings.Contains(compact, "clientsecret")
 }
 
 func truncateConfigScalar(value string, max int) string {
@@ -3184,7 +3171,7 @@ func commandArgNameLooksSecret(value string) bool {
 	if name == "key" {
 		return true
 	}
-	return sensitivePathSegment(name)
+	return aicontext.IsSensitiveEnvName(name)
 }
 
 func getTotalRestarts(statuses []corev1.ContainerStatus) int32 {

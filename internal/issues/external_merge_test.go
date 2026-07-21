@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -128,6 +129,32 @@ func TestMergeExternalIssuesDuplicateEnvPresentationBoundaries(t *testing.T) {
 	related := RelatedIssues(p, nil, "apps", "Deployment", "apps", "web")
 	if len(related) != 2 {
 		t.Fatalf("RelatedIssues rows=%d, want 2 detailed findings", len(related))
+	}
+}
+
+func TestMergeExternalIssuesFiltersDuplicateEnvAggregatePublicShape(t *testing.T) {
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	members := []Issue{
+		duplicateEnvIssueForMerge("apps", "web", "app", "APP_MODE", now, now),
+		duplicateEnvIssueForMerge("apps", "web", "init", "API_PASSWORD", now, now),
+	}
+
+	memberFilter, err := filter.CompileIssueFilter(`message.contains("APP_MODE")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, stats := MergeExternalIssues(members, ComposeStats{}, Filters{Grouped: true, Limit: NoLimit, Filter: memberFilter}, nil)
+	if len(got) != 0 || stats.TotalMatched != 0 {
+		t.Fatalf("member-only filter matched rewritten aggregate: %+v, TotalMatched=%d", got, stats.TotalMatched)
+	}
+
+	aggregateFilter, err := filter.CompileIssueFilter(`message.contains("definitions in 2 places")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, stats = MergeExternalIssues(members, ComposeStats{}, Filters{Grouped: true, Limit: NoLimit, Filter: aggregateFilter}, nil)
+	if len(got) != 1 || stats.TotalMatched != 1 || got[0].Fingerprint != duplicateEnvAggregateFingerprint {
+		t.Fatalf("aggregate filter result = %+v, TotalMatched=%d", got, stats.TotalMatched)
 	}
 }
 

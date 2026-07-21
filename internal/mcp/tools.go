@@ -2748,6 +2748,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	}
 	composeFilters := filters
 	composeFilters.Limit = issues.NoLimit
+	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
 	out, stats = issues.MergeExternalIssues(out, stats, filters, nativeHelmIssuesForContext(ctx, allowedNamespaces, filters))
 	// Shared base response shape (issues.ListResponse), then MCP-specific
