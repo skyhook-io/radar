@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -96,11 +97,11 @@ func newDuplicateEnvAggregate(members []Issue) Issue {
 func duplicateEnvAggregateMessage(members []Issue) string {
 	detailSet := make(map[string]bool, len(members))
 	for _, member := range members {
-		parts := strings.SplitN(member.Fingerprint, ":", 5)
-		if len(parts) != 5 || parts[0] != "dup-env" {
+		fingerprint, ok := k8s.ParseDuplicateEnvVarFingerprint(member.Fingerprint)
+		if !ok {
 			continue
 		}
-		detailSet[fmt.Sprintf("%s (%s)", parts[4], parts[3])] = true
+		detailSet[fmt.Sprintf("%s (%s)", fingerprint.EnvName, fingerprint.Container)] = true
 	}
 	details := make([]string, 0, len(detailSet))
 	for detail := range detailSet {

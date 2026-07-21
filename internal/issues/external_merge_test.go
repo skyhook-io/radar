@@ -133,8 +133,8 @@ func TestMergeExternalIssuesDuplicateEnvPresentationBoundaries(t *testing.T) {
 	}
 
 	p := &fakeProvider{problems: []k8s.Detection{
-		{Group: "apps", Kind: "Deployment", Namespace: "apps", Name: "web", Severity: "warning", Reason: "DuplicateEnvVar", Message: "APP_MODE in app", Fingerprint: "dup-env:apps:web:app:APP_MODE"},
-		{Group: "apps", Kind: "Deployment", Namespace: "apps", Name: "web", Severity: "warning", Reason: "DuplicateEnvVar", Message: "APP_MODE in init", Fingerprint: "dup-env:apps:web:init:APP_MODE"},
+		{Group: "apps", Kind: "Deployment", Namespace: "apps", Name: "web", Severity: "warning", Reason: "DuplicateEnvVar", Message: "APP_MODE in app", Fingerprint: k8s.FormatDuplicateEnvVarFingerprint("apps", "web", "app", "APP_MODE")},
+		{Group: "apps", Kind: "Deployment", Namespace: "apps", Name: "web", Severity: "warning", Reason: "DuplicateEnvVar", Message: "APP_MODE in init", Fingerprint: k8s.FormatDuplicateEnvVarFingerprint("apps", "web", "init", "APP_MODE")},
 	}}
 	base, baseStats := ComposeWithStats(p, Filters{Grouped: true, Limit: NoLimit})
 	composed, composedStats := MergeExternalIssues(base, baseStats, Filters{Grouped: true, Limit: NoLimit}, nil)
@@ -216,7 +216,7 @@ func duplicateEnvIssueForMerge(namespace, name, container, envName string, first
 		Name:        name,
 		Reason:      "DuplicateEnvVar",
 		Message:     envName + " in " + container,
-		Fingerprint: "dup-env:" + namespace + ":" + name + ":" + container + ":" + envName,
+		Fingerprint: k8s.FormatDuplicateEnvVarFingerprint(namespace, name, container, envName),
 		FirstSeen:   firstSeen,
 		LastSeen:    lastSeen,
 	}

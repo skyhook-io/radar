@@ -168,7 +168,7 @@ func detectDuplicateEnvVars(cache *ResourceCache, namespace string, now time.Tim
 			Message:     check.Message,
 			Age:         FormatAge(time.Duration(check.AgeSeconds) * time.Second),
 			AgeSeconds:  check.AgeSeconds,
-			Fingerprint: fmt.Sprintf("dup-env:%s:%s:%s:%s", check.Namespace, check.WorkloadName, check.Container, check.EnvName),
+			Fingerprint: FormatDuplicateEnvVarFingerprint(check.Namespace, check.WorkloadName, check.Container, check.EnvName),
 		})
 	}
 	return out

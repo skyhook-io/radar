@@ -181,7 +181,7 @@ func TestDetectConfigProblemsIncludesDuplicateEnvVars(t *testing.T) {
 	if detection.Severity != "warning" || detection.Reason != "DuplicateEnvVar" {
 		t.Fatalf("unexpected severity/reason: %+v", detection)
 	}
-	if detection.Fingerprint != "dup-env:prod:web:app:APP_HOST" || detection.AgeSeconds != 7200 {
+	if detection.Fingerprint != FormatDuplicateEnvVarFingerprint("prod", "web", "app", "APP_HOST") || detection.AgeSeconds != 7200 {
 		t.Fatalf("unexpected identity/age: %+v", detection)
 	}
 }
