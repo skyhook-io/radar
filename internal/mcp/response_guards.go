@@ -21,19 +21,21 @@ const (
 )
 
 type multiPodLogBundleCap struct {
-	Truncated       bool
-	ShownLines      int
-	TotalLines      int
-	ShownPods       int
-	TotalPods       int
-	FirstOmittedPod string
+	Truncated             bool
+	ShownLines            int
+	TotalLines            int
+	ShownPods             int
+	TotalPods             int
+	FirstOmittedPod       string
+	FirstOmittedContainer string
+	FirstOmittedBundle    int
 }
 
 // capMultiPodLogBundles keeps aggregate log responses from consuming the
 // agent's context window. Whole lines are selected breadth-first across
 // pod/container streams so one noisy pod cannot monopolize the budget.
 func capMultiPodLogBundles(bundles ...[]podLogEntry) ([][]podLogEntry, multiPodLogBundleCap) {
-	stats := multiPodLogBundleCap{}
+	stats := multiPodLogBundleCap{FirstOmittedBundle: -1}
 	totalBytes := 0
 	totalPods := map[string]struct{}{}
 	for _, bundle := range bundles {
@@ -81,8 +83,10 @@ func capMultiPodLogBundles(bundles ...[]podLogEntry) ([][]podLogEntry, multiPodL
 				lineBytes := len(line) + 1
 				if usedBytes+lineBytes > maxMultiPodLogBundleBytes {
 					blocked[bundleIndex][entryIndex] = true
-					if stats.FirstOmittedPod == "" {
+					if stats.FirstOmittedBundle < 0 {
 						stats.FirstOmittedPod = entry.Pod
+						stats.FirstOmittedContainer = entry.Container
+						stats.FirstOmittedBundle = bundleIndex
 					}
 					continue
 				}
@@ -102,7 +106,7 @@ func capMultiPodLogBundles(bundles ...[]podLogEntry) ([][]podLogEntry, multiPodL
 	return capped, stats
 }
 
-func multiPodLogBundleNarrowHint(namespace string, stats multiPodLogBundleCap) string {
+func multiPodLogBundleNarrowHint(namespace string, stats multiPodLogBundleCap, previous bool) string {
 	scope := fmt.Sprintf(
 		"showing logs from %d of %d pods / %d of %d lines",
 		stats.ShownPods, stats.TotalPods, stats.ShownLines, stats.TotalLines,
@@ -114,8 +118,8 @@ func multiPodLogBundleNarrowHint(namespace string, stats multiPodLogBundleCap) s
 		)
 	}
 	return fmt.Sprintf(
-		"log bundle truncated: %s (%d KiB aggregate log-content cap reached) — use `get_pod_logs namespace=%q name=%q` for the full log of a specific pod, or narrow with since=, grep=, or container=",
-		scope, maxMultiPodLogBundleBytes/1024, namespace, stats.FirstOmittedPod,
+		"log bundle truncated: %s (%d KiB aggregate log-content cap reached) — use `get_pod_logs namespace=%q name=%q container=%q previous=%t` for the full omitted stream, or narrow with since= or grep=",
+		scope, maxMultiPodLogBundleBytes/1024, namespace, stats.FirstOmittedPod, stats.FirstOmittedContainer, previous,
 	)
 }
 

@@ -278,7 +278,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	if capStats.Truncated {
 		// Raising tail_lines cannot recover aggregate-truncated output, so the
 		// bundle-cap guidance supersedes the per-stream tail hint.
-		narrowHint = multiPodLogBundleNarrowHint(input.Namespace, capStats)
+		narrowHint = multiPodLogBundleNarrowHint(input.Namespace, capStats, input.Previous)
 	}
 
 	resp := map[string]any{

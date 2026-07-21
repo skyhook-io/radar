@@ -78,8 +78,8 @@ func TestCapMultiPodLogBundles_BreadthFirstAcrossDiagnoseStreams(t *testing.T) {
 		t.Fatalf("returned line payload is %d bytes, cap is %d", shownBytes, maxMultiPodLogBundleBytes)
 	}
 
-	hint := multiPodLogBundleNarrowHint("prod", stats)
-	for _, want := range []string{"truncated", "showing 8 of 12 lines across 3 pods", "32 KiB", "aggregate log-content cap", "get_pod_logs", `namespace="prod"`, `name="api-2"`, "since=", "grep=", "container="} {
+	hint := multiPodLogBundleNarrowHint("prod", stats, stats.FirstOmittedBundle == 1)
+	for _, want := range []string{"truncated", "showing 8 of 12 lines across 3 pods", "32 KiB", "aggregate log-content cap", "get_pod_logs", `namespace="prod"`, `name="api-2"`, `container="app"`, "previous=true", "since=", "grep="} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("hint %q missing %q", hint, want)
 		}
@@ -102,9 +102,11 @@ func TestCapMultiPodLogBundles_LongLineDoesNotStarveOtherPods(t *testing.T) {
 	if !reflect.DeepEqual(got[0][1].Logs.Lines, logs[1].Logs.Lines) {
 		t.Fatalf("shorter pod lines were starved: %#v", got[0][1].Logs.Lines)
 	}
-	hint := multiPodLogBundleNarrowHint("prod", stats)
-	if !strings.Contains(hint, "showing logs from 1 of 2 pods") {
-		t.Fatalf("hint must report omitted pod coverage: %q", hint)
+	hint := multiPodLogBundleNarrowHint("prod", stats, false)
+	for _, want := range []string{"showing logs from 1 of 2 pods", `container="app"`, "previous=false"} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint %q missing %q", hint, want)
+		}
 	}
 }
 

@@ -305,10 +305,10 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	resp.LogsCurrent = capped[0]
 	resp.LogsPrevious = capped[1]
 	if capStats.Truncated {
-		capHint := multiPodLogBundleNarrowHint(input.Namespace, capStats)
+		capHint := multiPodLogBundleNarrowHint(input.Namespace, capStats, capStats.FirstOmittedBundle == 1)
 		if logsTruncated {
 			resp.NarrowHint = fmt.Sprintf(
-				"workload has %d pods; sampled top %d by restart count for logs; %s",
+				"workload has %d pods; sampled top %d by restart count for logs — for a pod outside the sample, call diagnose with kind=pod and its name; %s",
 				len(pods), len(logPods), capHint,
 			)
 		} else {
