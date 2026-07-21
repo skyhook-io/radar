@@ -443,7 +443,7 @@ func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]
 			continue
 		}
 		for _, field := range event.Diff.Fields {
-			if !isSecretDataChangePath(field.Path) {
+			if !isSecretDataModificationPath(field.Path) {
 				continue
 			}
 			keys := stringValues(field.NewValue)
@@ -464,9 +464,9 @@ func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]
 	return out
 }
 
-func isSecretDataChangePath(path string) bool {
+func isSecretDataModificationPath(path string) bool {
 	switch path {
-	case "data (modified keys)", "data (added keys)", "stringData (modified keys)", "stringData (added keys)":
+	case "data (modified keys)", "stringData (modified keys)":
 		return true
 	default:
 		return false

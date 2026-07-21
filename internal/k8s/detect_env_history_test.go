@@ -173,6 +173,16 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("newly added envFrom key is ignored", func(t *testing.T) {
+		pod := staleSecretEnvPod("env-from-added", startedAt, false)
+		pod.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "db-conn"}}}}
+		cache := envHistoryTestCache(t, pod, secret)
+		added := secretHistoryEvent(changedAt, "shop", "db-conn", "data (added keys)", []string{"password"})
+		if checks := findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{added}); len(checks) != 0 {
+			t.Fatalf("key added after container start is absent, not a stale env value: %+v", checks)
+		}
+	})
+
 	t.Run("different key is ignored", func(t *testing.T) {
 		pod := staleSecretEnvPod("other-key", startedAt, false, secretKeyEnv("DB_HOST", "db-conn", "host"))
 		cache := envHistoryTestCache(t, pod, secret)
