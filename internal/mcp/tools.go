@@ -164,8 +164,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Name: "get_pod_logs",
 		Description: "Use only after narrowing to a specific Pod/container. Returns " +
 			"diagnostically relevant log lines (errors, panics, stack traces, warnings) " +
-			"or falls back to recent tail lines. Set grep to server-side filter like " +
-			"`kubectl logs | grep PATTERN` when you know an error string, request path, " +
+			"or falls back to recent tail lines. When grep is set, it replaces diagnostic " +
+			"filtering and returns only regex matches, like `kubectl logs | grep PATTERN`. " +
+			"Use it when you know an error string, request path, " +
 			"service name, or trace id. For broad incidents, first use issues, " +
 			"get_dashboard, search, list_resources, or get_neighborhood to avoid reading " +
 			"logs from many unrelated pods. If the target is a config value, feature flag, " +
@@ -462,8 +463,8 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Description: "Get aggregated logs from all pods of a workload (Deployment, StatefulSet, " +
 			"DaemonSet, Job, or Argo Workflow). Logs are collected from all matching pods concurrently, then " +
 			"server-side filtered to errors, warnings, panics, and stack traces using " +
-			"deterministic regex patterns and deduplicated. Set grep for additional " +
-			"server-side filtering before that summary stage, like `kubectl logs | grep PATTERN`. " +
+			"deterministic regex patterns and deduplicated. When grep is set, it replaces " +
+			"diagnostic filtering and returns only regex matches, like `kubectl logs --timestamps | grep PATTERN`. " +
 			"More useful than get_pod_logs when you need logs across all replicas of a workload. " +
 			"If the target is a config value, feature flag, CRD field, env ref, or YAML/spec " +
 			"content, use search rather than logs.",
@@ -608,7 +609,7 @@ type podLogsInput struct {
 	Name      string `json:"name" jsonschema:"pod name"`
 	Container string `json:"container,omitempty" jsonschema:"container name, defaults to first container"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"number of lines to fetch from the end (default 200)"`
-	Grep      string `json:"grep,omitempty" jsonschema:"optional regular expression to keep matching log lines before diagnostic filtering, like kubectl logs | grep PATTERN"`
+	Grep      string `json:"grep,omitempty" jsonschema:"optional regex; when set, only matching lines are returned, like kubectl logs | grep PATTERN; when omitted, lines are auto-filtered for diagnostic relevance"`
 	Since     string `json:"since,omitempty" jsonschema:"only return logs newer than this duration (e.g. 30s, 10m, 1h), like kubectl logs --since"`
 	Previous  bool   `json:"previous,omitempty" jsonschema:"return logs from the previous terminated container instance (e.g. for CrashLoopBackOff diagnosis), like kubectl logs -p"`
 }
@@ -1782,9 +1783,8 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 		return nil, nil, fmt.Errorf("failed to read logs: %w", err)
 	}
 
-	// rawLines counts lines BEFORE grep — grep filtering down would make
-	// filtered.TotalLines (post-grep) smaller than tailLines even on a
-	// capped stream, suppressing the hint exactly when the agent needs it.
+	// Warning and narrowing heuristics operate on the fetched stream,
+	// independently of response filtering.
 	rawLines := countLines(string(data))
 	filtered, err := aicontext.FilterLogsByPattern(string(data), input.Grep)
 	if err != nil {

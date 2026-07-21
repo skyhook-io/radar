@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// FilteredLogs contains log lines filtered for diagnostic relevance.
+// FilteredLogs contains selected, bounded log lines.
 type FilteredLogs struct {
 	Lines        []string `json:"lines"`
 	TotalLines   int      `json:"totalLines"`
@@ -30,7 +30,7 @@ func FilterLogs(rawLogs string) FilteredLogs {
 		return FilteredLogs{}
 	}
 
-	allLines := strings.Split(strings.TrimRight(rawLogs, "\n"), "\n")
+	allLines := splitLogLines(rawLogs)
 	totalLines := len(allLines)
 
 	// Match error/warning patterns
@@ -56,7 +56,11 @@ func FilterLogs(rawLogs string) FilteredLogs {
 		}
 	}
 
-	// If too many matched lines, keep first 30 + last 20
+	return formatMatchedLogs(totalLines, matched)
+}
+
+func formatMatchedLogs(totalLines int, matched []string) FilteredLogs {
+	matchedLines := len(matched)
 	if len(matched) > maxFilteredLines {
 		truncated := make([]string, 0, maxFilteredLines+1)
 		truncated = append(truncated, matched[:headLines]...)
@@ -69,14 +73,12 @@ func FilterLogs(rawLogs string) FilteredLogs {
 	return FilteredLogs{
 		Lines:        redactLogLines(lines),
 		TotalLines:   totalLines,
-		MatchedLines: len(matched),
+		MatchedLines: matchedLines,
 		Fallback:     false,
 	}
 }
 
-// FilterLogsByPattern first keeps only lines matching pattern, then applies
-// the usual diagnostic log filtering. This gives agents a server-side
-// equivalent of `kubectl logs ... | grep PATTERN | tail`.
+// FilterLogsByPattern uses pattern instead of the diagnostic filter when set.
 func FilterLogsByPattern(rawLogs, pattern string) (FilteredLogs, error) {
 	if strings.TrimSpace(pattern) == "" {
 		return FilterLogs(rawLogs), nil
@@ -85,13 +87,21 @@ func FilterLogsByPattern(rawLogs, pattern string) (FilteredLogs, error) {
 	if err != nil {
 		return FilteredLogs{}, err
 	}
-	var matched []string
-	for _, line := range strings.Split(strings.TrimRight(rawLogs, "\n"), "\n") {
+	allLines := splitLogLines(rawLogs)
+	matched := make([]string, 0)
+	for _, line := range allLines {
 		if re.MatchString(line) {
 			matched = append(matched, line)
 		}
 	}
-	return FilterLogs(strings.Join(matched, "\n")), nil
+	return formatMatchedLogs(len(allLines), matched), nil
+}
+
+func splitLogLines(rawLogs string) []string {
+	if rawLogs == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(rawLogs, "\n"), "\n")
 }
 
 // deduplicateStackTraces collapses identical consecutive lines with a repeat count.

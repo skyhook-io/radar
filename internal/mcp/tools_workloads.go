@@ -45,7 +45,7 @@ type getWorkloadLogsInput struct {
 	Name      string `json:"name" jsonschema:"workload name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container name, defaults to all containers"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"lines per pod (default 100)"`
-	Grep      string `json:"grep,omitempty" jsonschema:"optional regular expression to keep matching log lines before diagnostic filtering, like kubectl logs | grep PATTERN"`
+	Grep      string `json:"grep,omitempty" jsonschema:"optional regex; when set, only matching timestamp-prefixed lines are returned, like kubectl logs --timestamps | grep PATTERN; when omitted, lines are auto-filtered for diagnostic relevance"`
 	Since     string `json:"since,omitempty" jsonschema:"only return logs newer than this duration (e.g. 30s, 10m, 1h), like kubectl logs --since"`
 	Previous  bool   `json:"previous,omitempty" jsonschema:"return logs from the previous terminated container instance (e.g. for CrashLoopBackOff diagnosis), like kubectl logs -p"`
 }
@@ -479,9 +479,8 @@ func computeWorkloadLogsWarnings(pods []*corev1.Pod, previous bool) []string {
 
 // podLogEntry is the per-pod-per-container log row returned by fetchPodLogs.
 //
-// RawLines is the line count of the pre-grep stream so the workload-logs
-// narrowHint can detect upstream truncation correctly even when grep is
-// active. FilteredLogs.TotalLines reflects the post-grep count.
+// RawLines lets workload-logs detect upstream truncation independently of
+// response filtering.
 type podLogEntry struct {
 	Pod       string                 `json:"pod"`
 	Container string                 `json:"container"`
@@ -492,7 +491,7 @@ type podLogEntry struct {
 
 // fetchPodLogs fans out kubectl-logs requests across the given pods x containers.
 // containerFilter "" includes every container; non-empty restricts to that name.
-// grep is server-side regex applied before diagnostic filtering. previous=true
+// grep replaces diagnostic filtering when set. previous=true
 // fetches the prior terminated container instance (CrashLoopBackOff diagnosis).
 // Returns entries sorted by (pod, container) for deterministic output.
 // Resolves the kube client from ctx so the call still honors per-request RBAC.

@@ -96,13 +96,13 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_pod_logs',
-    desc: 'Filtered log lines from a pod, prioritizing errors and warnings, falling back to recent tail lines. Optional grep, since, and previous-container logs.',
+    desc: 'Pod logs with secret redaction. Without grep, prioritizes errors and warnings and falls back to recent tail lines; grep returns only regex matches instead.',
     params: [
       { arg: 'namespace', required: true, desc: 'pod namespace' },
       { arg: 'name', required: true, desc: 'pod name' },
       { arg: 'container', desc: 'container name (defaults to first)' },
       { arg: 'tail_lines', desc: 'lines from end (default 200)' },
-      { arg: 'grep', desc: 'regex to filter lines, like kubectl logs | grep' },
+      { arg: 'grep', desc: 'regex matches to return instead of diagnostic auto-filtering' },
       { arg: 'since', desc: 'only logs newer than this duration (e.g. 30s, 10m, 1h)' },
       { arg: 'previous', desc: 'logs from the previous terminated container (CrashLoopBackOff)' },
     ],
@@ -237,14 +237,14 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_workload_logs',
-    desc: 'Aggregated, filtered logs across all pods of a workload (Deployment, StatefulSet, DaemonSet, Job, or Argo Workflow) — collected concurrently, filtered for errors/warnings, and deduplicated.',
+    desc: 'Aggregated logs across all pods of a workload. Without grep, filters for diagnostic relevance; grep returns only matching timestamp-prefixed lines instead.',
     params: [
       { arg: 'kind', desc: 'deployment (default), statefulset, daemonset, job, or workflow' },
       { arg: 'namespace', required: true, desc: 'workload namespace' },
       { arg: 'name', required: true, desc: 'workload name' },
       { arg: 'container', desc: 'specific container (defaults to all)' },
       { arg: 'tail_lines', desc: 'lines per pod (default 100)' },
-      { arg: 'grep', desc: 'regex to filter lines, like kubectl logs | grep' },
+      { arg: 'grep', desc: 'regex matches to return instead of diagnostic auto-filtering' },
       { arg: 'since', desc: 'only logs newer than this duration' },
       { arg: 'previous', desc: 'logs from the previous terminated container' },
     ],
