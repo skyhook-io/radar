@@ -3,11 +3,13 @@ package issues
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 const duplicateEnvAggregateFingerprint = "duplicate-env-workload-aggregate"
+const maxDuplicateEnvAggregateDetails = 5
 
 func aggregateDuplicateEnvIssues(in []Issue) []Issue {
 	buckets := make(map[string][]Issue)
@@ -80,7 +82,8 @@ func newDuplicateEnvAggregate(members []Issue) Issue {
 		Namespace:   first.Namespace,
 		Name:        first.Name,
 		Reason:      "DuplicateEnvVar",
-		Message:     fmt.Sprintf("This workload has duplicate environment variable definitions in %d places across its containers. Later declarations hide earlier ones, and apply/patch may drop hidden entries.", len(members)),
+		Message:     duplicateEnvAggregateMessage(members),
+		Action:      "Remove duplicate entries from the workload manifest or chart so each environment variable is declared once per container, then redeploy through the normal delivery path.",
 		Fingerprint: duplicateEnvAggregateFingerprint,
 		FirstSeen:   firstSeen,
 		LastSeen:    lastSeen,
@@ -88,4 +91,30 @@ func newDuplicateEnvAggregate(members []Issue) Issue {
 	classifyIssue(&issue)
 	enrichIdentity(&issue)
 	return issue
+}
+
+func duplicateEnvAggregateMessage(members []Issue) string {
+	detailSet := make(map[string]bool, len(members))
+	for _, member := range members {
+		parts := strings.SplitN(member.Fingerprint, ":", 5)
+		if len(parts) != 5 || parts[0] != "dup-env" {
+			continue
+		}
+		detailSet[fmt.Sprintf("%s (%s)", parts[4], parts[3])] = true
+	}
+	details := make([]string, 0, len(detailSet))
+	for detail := range detailSet {
+		details = append(details, detail)
+	}
+	sort.Strings(details)
+	if len(details) > maxDuplicateEnvAggregateDetails {
+		omitted := len(details) - maxDuplicateEnvAggregateDetails
+		details = append(details[:maxDuplicateEnvAggregateDetails], fmt.Sprintf("+%d more", omitted))
+	}
+
+	summary := "Duplicate environment variables are declared more than once"
+	if len(details) > 0 {
+		summary = "Duplicate environment variables: " + strings.Join(details, ", ")
+	}
+	return summary + ". This is a configuration risk: the workload may be running normally, but later declarations shadow earlier ones and apply/patch can drop shadowed entries."
 }

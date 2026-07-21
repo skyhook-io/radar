@@ -1,7 +1,9 @@
 package issues
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +50,7 @@ func TestMergeExternalIssuesAggregatesDuplicateEnvWithoutExtras(t *testing.T) {
 	members[0].DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleCandidate}
 	members[0].ChangeContext = &issuesapi.ChangeContext{}
 	members[0].IssueTiming = "started_at_resource_creation"
+	members[1].Message = `Container app defines env API_PASSWORD at 1="secret-one", 2="secret-two"`
 	unrelated := testIssueForMerge("Deployment", "apps", "web", SeverityCritical, now.Add(-time.Hour))
 
 	got, stats := MergeExternalIssues(append(append([]Issue(nil), members...), unrelated), ComposeStats{}, Filters{
@@ -67,14 +70,21 @@ func TestMergeExternalIssuesAggregatesDuplicateEnvWithoutExtras(t *testing.T) {
 	if aggregate == nil {
 		t.Fatal("duplicate-env aggregate missing")
 	}
-	wantMessage := "This workload has duplicate environment variable definitions in 3 places across its containers. Later declarations hide earlier ones, and apply/patch may drop hidden entries."
+	wantMessage := "Duplicate environment variables: API_PASSWORD (app), APP_MODE (app), INIT_MODE (init). This is a configuration risk: the workload may be running normally, but later declarations shadow earlier ones and apply/patch can drop shadowed entries."
 	if aggregate.Message != wantMessage {
 		t.Fatalf("message = %q, want %q", aggregate.Message, wantMessage)
+	}
+	if strings.Contains(aggregate.Message, "secret-one") || strings.Contains(aggregate.Message, "secret-two") {
+		t.Fatalf("aggregate message leaked member values: %q", aggregate.Message)
+	}
+	wantAction := "Remove duplicate entries from the workload manifest or chart so each environment variable is declared once per container, then redeploy through the normal delivery path."
+	if aggregate.Action != wantAction {
+		t.Fatalf("action = %q, want %q", aggregate.Action, wantAction)
 	}
 	if !aggregate.FirstSeen.Equal(now.Add(-30*time.Minute)) || !aggregate.LastSeen.Equal(now.Add(2*time.Minute)) {
 		t.Fatalf("aggregate timestamps = %s..%s", aggregate.FirstSeen, aggregate.LastSeen)
 	}
-	if aggregate.Count != 0 || aggregate.Cause != "" || aggregate.Action != "" || aggregate.DiagnosticContext != nil || aggregate.ChangeContext != nil || aggregate.IssueTiming != "" {
+	if aggregate.Count != 0 || aggregate.Cause != "" || aggregate.DiagnosticContext != nil || aggregate.ChangeContext != nil || aggregate.IssueTiming != "" {
 		t.Fatalf("aggregate inherited member-only fields: %+v", *aggregate)
 	}
 	for _, member := range members {
@@ -139,7 +149,7 @@ func TestMergeExternalIssuesFiltersDuplicateEnvAggregatePublicShape(t *testing.T
 		duplicateEnvIssueForMerge("apps", "web", "init", "API_PASSWORD", now, now),
 	}
 
-	memberFilter, err := filter.CompileIssueFilter(`message.contains("APP_MODE")`)
+	memberFilter, err := filter.CompileIssueFilter(`message.contains("APP_MODE in app")`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,13 +158,29 @@ func TestMergeExternalIssuesFiltersDuplicateEnvAggregatePublicShape(t *testing.T
 		t.Fatalf("member-only filter matched rewritten aggregate: %+v, TotalMatched=%d", got, stats.TotalMatched)
 	}
 
-	aggregateFilter, err := filter.CompileIssueFilter(`message.contains("definitions in 2 places")`)
+	aggregateFilter, err := filter.CompileIssueFilter(`message.contains("API_PASSWORD (init)")`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, stats = MergeExternalIssues(members, ComposeStats{}, Filters{Grouped: true, Limit: NoLimit, Filter: aggregateFilter}, nil)
 	if len(got) != 1 || stats.TotalMatched != 1 || got[0].Fingerprint != duplicateEnvAggregateFingerprint {
 		t.Fatalf("aggregate filter result = %+v, TotalMatched=%d", got, stats.TotalMatched)
+	}
+}
+
+func TestDuplicateEnvAggregateBoundsEvidenceSummary(t *testing.T) {
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	members := make([]Issue, 0, 7)
+	for i := range 7 {
+		members = append(members, duplicateEnvIssueForMerge("apps", "web", "app", fmt.Sprintf("VAR_%d", i), now, now))
+	}
+
+	aggregate := newDuplicateEnvAggregate(members)
+	if !strings.Contains(aggregate.Message, "VAR_0 (app), VAR_1 (app), VAR_2 (app), VAR_3 (app), VAR_4 (app), +2 more") {
+		t.Fatalf("bounded aggregate message = %q", aggregate.Message)
+	}
+	if strings.Contains(aggregate.Message, "VAR_5") || strings.Contains(aggregate.Message, "VAR_6") {
+		t.Fatalf("aggregate message exceeded detail cap: %q", aggregate.Message)
 	}
 }
 
