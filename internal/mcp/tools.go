@@ -431,6 +431,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"type=instant returns current values; type=range returns time series for a window " +
 			"(since=1h default). For live top-N snapshots prefer top_resources; for metric/label " +
 			"NAME discovery use discover_metrics first — do not guess metric names. " +
+			"Empty results include a bounded list of related active metric names when a metric family can be inferred. " +
 			"High-cardinality queries must be wrapped in topk(5, ...): oversized results return a " +
 			"summary with a suggested rewrite instead of data.",
 		Annotations: readOnly,
