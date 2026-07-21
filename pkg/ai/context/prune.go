@@ -170,7 +170,7 @@ func sanitizeEnvLists(node any, compact bool) {
 	case map[string]any:
 		for key, child := range value {
 			if key == "env" {
-				if envList, ok := child.([]any); ok {
+				if envList, ok := child.([]any); ok && containsEnvEntry(envList) {
 					value[key] = sanitizeEnvEntries(envList, compact)
 					continue
 				}
@@ -182,6 +182,24 @@ func sanitizeEnvLists(node any, compact bool) {
 			sanitizeEnvLists(child, compact)
 		}
 	}
+}
+
+func containsEnvEntry(items []any) bool {
+	for _, item := range items {
+		env, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := env["name"].(string); !ok {
+			continue
+		}
+		_, hasValue := env["value"]
+		_, hasValueFrom := env["valueFrom"]
+		if hasValue || hasValueFrom || len(env) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func sanitizeEnvEntries(envList []any, compact bool) any {
@@ -229,10 +247,10 @@ func sanitizeEnvEntries(envList []any, compact bool) any {
 			out = append(out, name)
 			continue
 		}
-		if literal, ok := env["value"].(string); ok {
+		if literal, ok := env["value"]; ok {
 			if IsSensitiveEnvName(name) {
 				env["value"] = "[REDACTED]"
-			} else {
+			} else if literal, ok := literal.(string); ok {
 				env["value"] = RedactSecrets(literal)
 			}
 		}

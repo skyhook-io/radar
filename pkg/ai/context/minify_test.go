@@ -400,6 +400,31 @@ func TestMinify_EnvSanitizationCoversCronJobAndNestedUnstructured(t *testing.T) 
 	}
 }
 
+func TestMinifyUnstructured_EnvSanitizationPreservesNonEnvVarListsAndFailsClosed(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.io/v1",
+		"kind":       "Worker",
+		"metadata":   map[string]any{"name": "worker"},
+		"spec": map[string]any{
+			"env": []any{"prod", "staging"},
+			"template": map[string]any{"env": []any{
+				map[string]any{"name": "API_TOKEN", "value": map[string]any{"opaque": "short-secret"}},
+			}},
+		},
+	}}
+
+	for _, level := range []VerbosityLevel{LevelDetail, LevelCompact} {
+		data, _ := json.Marshal(MinifyUnstructured(obj.DeepCopy(), level))
+		output := string(data)
+		if !contains(output, `"env":["prod","staging"]`) {
+			t.Fatalf("non-EnvVar env list changed at level=%d: %s", level, output)
+		}
+		if contains(output, "short-secret") {
+			t.Fatalf("sensitive non-string env value leaked at level=%d: %s", level, output)
+		}
+	}
+}
+
 func TestMinifyUnstructured_Compact(t *testing.T) {
 	obj := &unstructured.Unstructured{
 		Object: map[string]any{

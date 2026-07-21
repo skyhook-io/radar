@@ -104,6 +104,14 @@ func TestMergeExternalIssuesAggregatesDuplicateEnvWithoutExtras(t *testing.T) {
 			t.Fatalf("aggregate ID changed under permutation: %q != %q", again[i].ID, aggregate.ID)
 		}
 	}
+	workerMembers := []Issue{
+		duplicateEnvIssueForMerge("apps", "worker", "app", "APP_MODE", now, now),
+		duplicateEnvIssueForMerge("apps", "worker", "app", "API_PASSWORD", now, now),
+	}
+	workerAggregate := newDuplicateEnvAggregate(workerMembers)
+	if workerAggregate.ID == aggregate.ID {
+		t.Fatalf("aggregate ID %q collides across workloads", aggregate.ID)
+	}
 	if !reflect.DeepEqual(got[0], unrelated) {
 		t.Fatalf("unrelated issue changed:\n got: %+v\nwant: %+v", got[0], unrelated)
 	}
