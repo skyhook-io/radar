@@ -273,10 +273,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryJobFailed
 
 	case "CronJob":
-		// "stale" (no recent run) / "never-scheduled" — the CronJob is not
-		// producing the Jobs it's meant to.
-		switch in.Reason {
-		case "stale", "never-scheduled":
+		// "stale" / "never-scheduled" means expected Jobs are missing;
+		// SidecarBlocksJobCompletion means produced Jobs never finish.
+		if isBatchFailureProblem(in.Kind, in.Reason) {
 			return issuesapi.CategoryCronJobFailed
 		}
 		return issuesapi.CategoryUnknown
@@ -337,7 +336,7 @@ func isBatchFailureProblem(kind, reason string) bool {
 	if kind == "Job" {
 		return true
 	}
-	return kind == "CronJob" && (reason == "stale" || reason == "never-scheduled")
+	return kind == "CronJob" && (reason == "stale" || reason == "never-scheduled" || reason == "SidecarBlocksJobCompletion")
 }
 
 // classifyGitOpsReason maps a GitOps detector/condition reason to a specific
