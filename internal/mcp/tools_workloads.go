@@ -278,7 +278,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 			break
 		}
 	}
-	if w := computeWorkloadLogsWarnings(pods, input.Previous); len(w) > 0 {
+	if w := computeWorkloadLogsWarnings(pods, allLogs, input.Previous); len(w) > 0 {
 		resp["warnings"] = w
 	}
 	return toJSONResult(resp)
@@ -449,11 +449,13 @@ func schedulingBlockerWarnings(kind, namespace, name string) []string {
 	)}
 }
 
-// computeWorkloadLogsWarnings aggregates the not-Running and crashloop logs
-// hints that get_pod_logs surfaces, summarized across all pods of the workload.
-func computeWorkloadLogsWarnings(pods []*corev1.Pod, previous bool) []string {
+// computeWorkloadLogsWarnings aggregates the not-Running, crashloop, and empty
+// previous-log hints that get_pod_logs surfaces across the workload.
+func computeWorkloadLogsWarnings(pods []*corev1.Pod, logs []podLogEntry, previous bool) []string {
 	var notRunning, crashloop int
+	podsByName := make(map[string]*corev1.Pod, len(pods))
 	for _, p := range pods {
+		podsByName[p.Name] = p
 		if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodSucceeded {
 			notRunning++
 		}
@@ -473,6 +475,42 @@ func computeWorkloadLogsWarnings(pods []*corev1.Pod, previous bool) []string {
 			"%d of %d pod(s) have container restarts on record; the error(s) that killed prior containers are in the previous instance's logs — call again with `previous: true` to see them.",
 			crashloop, len(pods),
 		))
+	}
+	if previous {
+		var emptyCrashLogs int
+		var examplePod string
+		var exampleStatus *corev1.ContainerStatus
+		for _, entry := range logs {
+			if entry.RawLines != 0 || entry.Error != "" {
+				continue
+			}
+			pod := podsByName[entry.Pod]
+			if pod == nil {
+				continue
+			}
+			statuses := filterContainerStatuses(pod.Status.ContainerStatuses, entry.Container)
+			if cs := pickCrashIndicator(statuses); cs != nil {
+				emptyCrashLogs++
+				if exampleStatus == nil {
+					examplePod = entry.Pod
+					exampleStatus = cs
+				}
+			}
+		}
+		if emptyCrashLogs > 0 {
+			reason := exampleStatus.LastTerminationState.Terminated.Reason
+			if reason == "" {
+				reason = "(reason unset)"
+			}
+			out = append(out, fmt.Sprintf(
+				"No crash log was captured for %d previous pod/container instance(s) (for example, `%s/%s`; last recorded termination: `%s`, exit code %d). This is an absence of evidence, not evidence of health — do NOT infer a root cause from the empty log. Inspect `get_events`, `diagnose` (recent spec changes), and pod conditions instead.",
+				emptyCrashLogs,
+				examplePod,
+				exampleStatus.Name,
+				reason,
+				exampleStatus.LastTerminationState.Terminated.ExitCode,
+			))
+		}
 	}
 	return out
 }

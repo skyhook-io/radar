@@ -1824,6 +1824,8 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 //     pass previous=true, the current container's logs are likely the
 //     next-crash in progress; the error that killed the last container is in
 //     previous.
+//   - when that previous log is empty, its absence isn't evidence of health
+//     and must not be used to infer a cause.
 //
 // Best-effort — if the pod can't be fetched, return no warnings rather than
 // failing the logs call (the caller already has whatever logs we returned).
@@ -1850,12 +1852,12 @@ func computePodLogsWarnings(namespace, name, container string, previous bool, ra
 		))
 	}
 
-	if !previous {
-		statuses := pod.Status.ContainerStatuses
-		if container != "" {
-			statuses = filterContainerStatuses(statuses, container)
-		}
-		if cs := pickCrashIndicator(statuses); cs != nil {
+	statuses := pod.Status.ContainerStatuses
+	if container != "" {
+		statuses = filterContainerStatuses(statuses, container)
+	}
+	if cs := pickCrashIndicator(statuses); cs != nil {
+		if !previous {
 			reason := cs.LastTerminationState.Terminated.Reason
 			if reason == "" {
 				reason = "(reason unset)"
@@ -1868,6 +1870,8 @@ func computePodLogsWarnings(namespace, name, container string, previous bool, ra
 				cs.LastTerminationState.Terminated.ExitCode,
 				crashloopSuffix(rawLines),
 			))
+		} else if rawLines == 0 {
+			out = append(out, emptyCrashLogWarning(cs))
 		}
 	}
 
@@ -1898,6 +1902,19 @@ func filterContainerStatuses(statuses []corev1.ContainerStatus, name string) []c
 		}
 	}
 	return nil
+}
+
+func emptyCrashLogWarning(cs *corev1.ContainerStatus) string {
+	reason := cs.LastTerminationState.Terminated.Reason
+	if reason == "" {
+		reason = "(reason unset)"
+	}
+	return fmt.Sprintf(
+		"No crash log was captured for the previous instance of container `%s`; the last recorded termination was `%s` (exit code %d). This is an absence of evidence, not evidence of health — do NOT infer a root cause from the empty log. Inspect `get_events`, `diagnose` (recent spec changes), and pod conditions instead.",
+		cs.Name,
+		reason,
+		cs.LastTerminationState.Terminated.ExitCode,
+	)
 }
 
 func crashloopSuffix(rawLines int) string {
