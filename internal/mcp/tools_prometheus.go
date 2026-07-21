@@ -318,6 +318,9 @@ func promMetricFamilyPrefix(query string) string {
 	query = strings.TrimSpace(withoutPromStringLiterals(query))
 	name := query
 	if !promMetricNamePattern.MatchString(query) {
+		if promHasBinaryOperator(query) {
+			return ""
+		}
 		matches := promVectorSelectorPattern.FindAllStringSubmatch(query, -1)
 		if len(matches) != 1 {
 			return ""
@@ -336,6 +339,45 @@ func promMetricFamilyPrefix(query string) string {
 		}
 	}
 	return name
+}
+
+func promHasBinaryOperator(query string) bool {
+	braceDepth := 0
+	for i := 0; i < len(query); {
+		switch query[i] {
+		case '{':
+			braceDepth++
+			i++
+			continue
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+			i++
+			continue
+		}
+		if braceDepth > 0 {
+			i++
+			continue
+		}
+
+		if strings.ContainsRune("+-*/%^><=!", rune(query[i])) {
+			return true
+		}
+		if (query[i] >= 'a' && query[i] <= 'z') || (query[i] >= 'A' && query[i] <= 'Z') || query[i] == '_' {
+			start := i
+			for i < len(query) && ((query[i] >= 'a' && query[i] <= 'z') || (query[i] >= 'A' && query[i] <= 'Z') || (query[i] >= '0' && query[i] <= '9') || query[i] == '_' || query[i] == ':') {
+				i++
+			}
+			switch query[start:i] {
+			case "and", "or", "unless", "atan2":
+				return true
+			}
+			continue
+		}
+		i++
+	}
+	return false
 }
 
 func withoutPromStringLiterals(query string) string {

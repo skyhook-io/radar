@@ -423,7 +423,7 @@ func TestHandleQueryPrometheus_AmbiguousQuerySkipsDiscovery(t *testing.T) {
 	f.queryBody = emptyVectorBody
 	f.labelBody = `{"status":"success","data":["foo_metric_total","bar_metric_total"]}`
 
-	result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "foo_metric + bar_metric"})
+	result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: `foo_metric{job="api"} + bar_metric`})
 	if err != nil {
 		t.Fatalf("ambiguous empty query must not be an error: %v", err)
 	}
@@ -455,8 +455,11 @@ func TestPromMetricFamilyPrefix(t *testing.T) {
 		{name: "prefix grouping", query: `sum by (namespace) (rate(node_cpu_seconds_total{mode!="idle"}[5m]))`, want: "node_cpu"},
 		{name: "binary grouping modifiers", query: `left_metric_total / on (namespace, pod) group_left (node_name) right_metric_total`, want: ""},
 		{name: "plain binary expression", query: `foo_metric + bar_metric`, want: ""},
+		{name: "selector plus bare metric", query: `foo_metric{job="api"} + bar_metric`, want: ""},
+		{name: "bare metric plus range selector", query: `bar_metric + rate(foo_metric[5m])`, want: ""},
 		{name: "bare aggregation", query: `sum(foo_metric)`, want: ""},
 		{name: "multiple explicit selectors", query: `rate(foo_metric[5m]) + rate(bar_metric[5m])`, want: ""},
+		{name: "matcher operator is not binary", query: `rate(http_requests_total{job!="api"}[5m])`, want: "http_requests"},
 		{name: "ambiguous function argument", query: "label_join(actual_metric_total, 'fake_long_metric', `another_fake_metric`, \"third_fake_metric\")", want: ""},
 		{name: "name matcher is ambiguous", query: `{__name__=~"http_.*"}`, want: ""},
 	}
