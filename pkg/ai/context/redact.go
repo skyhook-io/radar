@@ -53,6 +53,19 @@ func isSensitiveKey(key string) bool {
 	return sensitiveValueKeys[norm]
 }
 
+func IsSensitiveEnvName(name string) bool {
+	lower := strings.ToLower(name)
+	compact := strings.NewReplacer("-", "", "_", "", ".", "", "/", "").Replace(lower)
+	return strings.Contains(lower, "password") || strings.Contains(lower, "passwd") ||
+		strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "credential") ||
+		strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") ||
+		strings.Contains(lower, "accesskey") || strings.Contains(lower, "privatekey") ||
+		strings.Contains(lower, "private_key") ||
+		strings.Contains(compact, "apikey") || strings.Contains(compact, "accesskey") ||
+		strings.Contains(compact, "privatekey") || strings.Contains(compact, "clientsecret")
+}
+
 func applyPatterns(text string, patterns []*regexp.Regexp) string {
 	result := text
 	for _, pattern := range patterns {

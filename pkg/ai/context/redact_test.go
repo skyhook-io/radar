@@ -78,6 +78,22 @@ func TestRedactSecrets_EmptyString(t *testing.T) {
 	}
 }
 
+func TestIsSensitiveEnvName(t *testing.T) {
+	for _, name := range []string{
+		"API_PASSWORD", "database-passwd", "AUTH_TOKEN", "client.secret",
+		"cloud_credential", "API_KEY", "AccessKey", "PRIVATE_KEY",
+	} {
+		if !IsSensitiveEnvName(name) {
+			t.Errorf("IsSensitiveEnvName(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"APP_MODE", "LOG_LEVEL", "BUILD_SHA"} {
+		if IsSensitiveEnvName(name) {
+			t.Errorf("IsSensitiveEnvName(%q) = true, want false", name)
+		}
+	}
+}
+
 func TestRedactSecrets_GitHubAppToken(t *testing.T) {
 	input := "token: ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
 	result := RedactSecrets(input)

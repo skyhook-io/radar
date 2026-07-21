@@ -182,6 +182,9 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 func MergeExternalIssues(base []Issue, baseStats ComposeStats, f Filters, extras []Issue) ([]Issue, ComposeStats) {
 	limit, uncapped := normalizedLimit(f.Limit)
 	f.Limit = limit
+	if f.Grouped {
+		base = aggregateDuplicateEnvIssues(base)
+	}
 
 	if len(extras) == 0 {
 		baseStats.TotalMatched = len(base)

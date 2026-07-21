@@ -61,6 +61,7 @@ func pruneMapCompact(m map[string]any) {
 // unconditional key drops ride the shared profiles' Drop + ElementDrops.
 func pruneSpecElementsCompact(m map[string]any) {
 	forEachContainer(m, pruneContainerConditionalCompact)
+	sanitizeSpecEnvLists(m, true)
 }
 
 func minifySecretCompact(secret *corev1.Secret) map[string]any {

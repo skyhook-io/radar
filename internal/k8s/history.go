@@ -3138,7 +3138,7 @@ func valueOrNil(v string, ok bool) any {
 }
 
 func envNameLooksSecret(name string) bool {
-	return sensitivePathSegment(name)
+	return aicontext.IsSensitiveEnvName(name)
 }
 
 func commandArgDisplayValues(values []string) []string {
