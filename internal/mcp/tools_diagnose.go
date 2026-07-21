@@ -301,6 +301,20 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	}
 	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
 	resp.Warnings = k8score.EnrichRuntimeObjectWarnings(obj)
+	capped, capStats := capMultiPodLogBundles(resp.LogsCurrent, resp.LogsPrevious)
+	resp.LogsCurrent = capped[0]
+	resp.LogsPrevious = capped[1]
+	if capStats.Truncated {
+		capHint := multiPodLogBundleNarrowHint(input.Namespace, capStats)
+		if logsTruncated {
+			resp.NarrowHint = fmt.Sprintf(
+				"workload has %d pods; sampled top %d by restart count for logs; %s",
+				len(pods), len(logPods), capHint,
+			)
+		} else {
+			resp.NarrowHint = capHint
+		}
+	}
 	return toJSONResult(resp)
 }
 

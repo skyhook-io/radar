@@ -260,23 +260,34 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	}
 
 	allLogs := fetchPodLogs(ctx, pods, input.Namespace, input.Container, input.Grep, tailLines, sinceSeconds, input.Previous)
+	var narrowHint string
+	// Steering hint when any pod's stream hit its tail cap. Compare against
+	// RawLines (pre-grep) so grep-filtered streams still surface the hint.
+	// Heuristic mirrors handleGetPodLogs.
+	for _, e := range allLogs {
+		if int64(e.RawLines) >= tailLines {
+			narrowHint = fmt.Sprintf(
+				"at least one pod's log stream tailed to %d lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
+				tailLines,
+			)
+			break
+		}
+	}
+	capped, capStats := capMultiPodLogBundles(allLogs)
+	allLogs = capped[0]
+	if capStats.Truncated {
+		// Raising tail_lines cannot recover aggregate-truncated output, so the
+		// bundle-cap guidance supersedes the per-stream tail hint.
+		narrowHint = multiPodLogBundleNarrowHint(input.Namespace, capStats)
+	}
 
 	resp := map[string]any{
 		"workload": fmt.Sprintf("%s/%s/%s", kind, input.Namespace, input.Name),
 		"pods":     len(pods),
 		"logs":     allLogs,
 	}
-	// Steering hint when any pod's stream hit its tail cap. Compare against
-	// RawLines (pre-grep) so grep-filtered streams still surface the hint.
-	// Heuristic mirrors handleGetPodLogs.
-	for _, e := range allLogs {
-		if int64(e.RawLines) >= tailLines {
-			resp["narrowHint"] = fmt.Sprintf(
-				"at least one pod's log stream tailed to %d lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
-				tailLines,
-			)
-			break
-		}
+	if narrowHint != "" {
+		resp["narrowHint"] = narrowHint
 	}
 	if w := computeWorkloadLogsWarnings(pods, input.Previous); len(w) > 0 {
 		resp["warnings"] = w
