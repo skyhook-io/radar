@@ -1,6 +1,9 @@
 package audit
 
-import "github.com/skyhook-io/radar/pkg/checks"
+import (
+	"github.com/skyhook-io/radar/pkg/checks"
+	"github.com/skyhook-io/radar/pkg/rolloutdiag"
+)
 
 // CheckMeta is a check's static definition (human-readable context). Aliased
 // from pkg/checks so the k8s-free Checks rollup and the audit engine share one
@@ -214,6 +217,14 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "A single-replica deployment has no redundancy — any pod disruption (node drain, OOM, crash) causes downtime.",
 		Remediation: "Set replicas: 2 or higher, or configure an HPA for autoscaling.",
 		References:  []Reference{refDeployments, refDisruptions},
+	},
+	"rolloutAvailabilityRisk": {
+		ID:          "rolloutAvailabilityRisk",
+		Title:       "Rolling update permits zero availability",
+		Category:    CategoryReliability,
+		Description: rolloutdiag.Description,
+		Remediation: rolloutdiag.Remediation,
+		References:  []Reference{refDeployments},
 	},
 	"missingPDB": {
 		ID:          "missingPDB",

@@ -599,6 +599,56 @@ func TestSingleReplica_SkippedWithHPA(t *testing.T) {
 	}
 }
 
+func TestRolloutAvailabilityRisk(t *testing.T) {
+	input := &CheckInput{Deployments: []*appsv1.Deployment{
+		rolloutAuditDeployment("risky", 3, appsv1.RollingUpdateDeploymentStrategyType, intstr.FromInt32(0), intstr.FromString("100%")),
+		rolloutAuditDeployment("safe-defaults", 3, "", intstr.IntOrString{}, intstr.IntOrString{}),
+		rolloutAuditDeployment("explicit-recreate", 3, appsv1.RecreateDeploymentStrategyType, intstr.FromInt32(0), intstr.FromString("100%")),
+		rolloutAuditDeployment("single-replica", 1, appsv1.RollingUpdateDeploymentStrategyType, intstr.FromInt32(0), intstr.FromString("100%")),
+	}}
+	input.Deployments[1].Spec.Strategy.RollingUpdate = nil
+
+	results := RunChecks(input)
+	var matching []Finding
+	for _, finding := range results.Findings {
+		if finding.CheckID == "rolloutAvailabilityRisk" {
+			matching = append(matching, finding)
+		}
+	}
+	if len(matching) != 1 {
+		t.Fatalf("rolloutAvailabilityRisk findings = %+v, want exactly one", matching)
+	}
+	finding := matching[0]
+	if finding.Name != "risky" || finding.Namespace != "prod" || finding.Group != "apps" || finding.Severity != SeverityWarning {
+		t.Errorf("finding identity = %+v", finding)
+	}
+	if !strings.Contains(finding.Message, "maxUnavailable=100%") || !strings.Contains(finding.Message, "can drop to zero available pods") {
+		t.Errorf("finding message = %q", finding.Message)
+	}
+	if got, want := results.CheckCounts["rolloutAvailabilityRisk"], (CheckCount{Evaluated: 2, Passed: 1}); got != want {
+		t.Errorf("CheckCounts[rolloutAvailabilityRisk] = %+v, want %+v", got, want)
+	}
+	if got := results.EvaluatedByNamespace["rolloutAvailabilityRisk"]["prod"]; got != 2 {
+		t.Errorf("namespace evaluation count = %d, want 2", got)
+	}
+}
+
+func rolloutAuditDeployment(name string, replicas int32, strategyType appsv1.DeploymentStrategyType, maxSurge, maxUnavailable intstr.IntOrString) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod"},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Strategy: appsv1.DeploymentStrategy{
+				Type: strategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxSurge:       &maxSurge,
+					MaxUnavailable: &maxUnavailable,
+				},
+			},
+		},
+	}
+}
+
 func TestEfficiencyChecks(t *testing.T) {
 	input := &CheckInput{
 		LimitRanges: []*corev1.LimitRange{},

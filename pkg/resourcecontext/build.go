@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -887,13 +888,26 @@ func containerStateSummary(st corev1.ContainerStatus) ContainerStateSummary {
 func buildWorkloadSummary(obj runtime.Object) *WorkloadSummary {
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
-		return &WorkloadSummary{Replicas: &ReplicaSummary{
+		summary := &WorkloadSummary{Replicas: &ReplicaSummary{
 			Desired:     replicasOrZero(v.Spec.Replicas),
 			Ready:       v.Status.ReadyReplicas,
 			Available:   v.Status.AvailableReplicas,
 			Updated:     v.Status.UpdatedReplicas,
 			Unavailable: v.Status.UnavailableReplicas,
 		}}
+		if risk := rolloutdiag.Analyze(v); risk != nil {
+			summary.RolloutRisk = &RolloutRiskSummary{
+				Reason:                 risk.Reason,
+				Replicas:               risk.Replicas,
+				MaxSurge:               risk.MaxSurge,
+				MaxUnavailable:         risk.MaxUnavailable,
+				ResolvedMaxSurge:       risk.ResolvedMaxSurge,
+				ResolvedMaxUnavailable: risk.ResolvedMaxUnavailable,
+				Message:                risk.Message,
+				Action:                 risk.Remediation,
+			}
+		}
+		return summary
 	case *appsv1.StatefulSet:
 		return &WorkloadSummary{Replicas: &ReplicaSummary{
 			Desired:   replicasOrZero(v.Spec.Replicas),

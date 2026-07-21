@@ -188,8 +188,9 @@ type ContainerStateSummary struct {
 }
 
 type WorkloadSummary struct {
-	Replicas   *ReplicaSummary    `json:"replicas,omitempty"`
-	Conditions []ConditionSummary `json:"conditions,omitempty"`
+	Replicas    *ReplicaSummary     `json:"replicas,omitempty"`
+	Conditions  []ConditionSummary  `json:"conditions,omitempty"`
+	RolloutRisk *RolloutRiskSummary `json:"rolloutRisk,omitempty"`
 }
 
 type ReplicaSummary struct {
@@ -198,6 +199,17 @@ type ReplicaSummary struct {
 	Available   int32 `json:"available,omitempty"`
 	Updated     int32 `json:"updated,omitempty"`
 	Unavailable int32 `json:"unavailable,omitempty"`
+}
+
+type RolloutRiskSummary struct {
+	Reason                 string `json:"reason"`
+	Replicas               int32  `json:"replicas"`
+	MaxSurge               string `json:"maxSurge"`
+	MaxUnavailable         string `json:"maxUnavailable"`
+	ResolvedMaxSurge       int32  `json:"resolvedMaxSurge"`
+	ResolvedMaxUnavailable int32  `json:"resolvedMaxUnavailable"`
+	Message                string `json:"message"`
+	Action                 string `json:"action"`
 }
 
 // ServiceSummary adds realized backend state for a Service. The raw Service

@@ -89,6 +89,36 @@ func TestEmptyResourceContextMarshalsStable(t *testing.T) {
 	}
 }
 
+func TestRolloutRiskSummaryRoundTrip(t *testing.T) {
+	orig := WorkloadSummary{RolloutRisk: &RolloutRiskSummary{
+		Reason:                 "all_replicas_unavailable_without_surge",
+		Replicas:               3,
+		MaxSurge:               "0",
+		MaxUnavailable:         "100%",
+		ResolvedMaxSurge:       0,
+		ResolvedMaxUnavailable: 3,
+		Message:                "rollout policy permits a zero-availability gap",
+		Action:                 "increase maxSurge",
+	}}
+
+	wire, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got WorkloadSummary
+	if err := json.Unmarshal(wire, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(orig, got) {
+		t.Fatalf("round-trip mismatch:\nwant %#v\ngot  %#v", orig, got)
+	}
+	for _, want := range []string{`"rolloutRisk"`, `"maxSurge":"0"`, `"maxUnavailable":"100%"`, `"resolvedMaxUnavailable":3`} {
+		if !strings.Contains(string(wire), want) {
+			t.Errorf("wire shape missing %s: %s", want, wire)
+		}
+	}
+}
+
 // TestResourceContextFieldOrdering pins the on-the-wire field order by
 // inspecting the marshaled JSON for a fully populated value. Go's
 // encoder emits struct fields in declaration order, so this guards

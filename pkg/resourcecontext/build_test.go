@@ -3,6 +3,7 @@ package resourcecontext
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -15,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -360,6 +362,71 @@ func TestBuild_Deployment_WorkloadSummaryAndTemplateUses(t *testing.T) {
 	}
 	if rc.Uses.ServiceAccount == nil || rc.Uses.ServiceAccount.Name != "api-sa" {
 		t.Errorf("Uses.ServiceAccount: got %+v", rc.Uses.ServiceAccount)
+	}
+}
+
+func TestBuild_Deployment_RolloutRisk(t *testing.T) {
+	replicas := int32(3)
+	maxSurge := intstr.FromInt32(0)
+	maxUnavailable := intstr.FromString("100%")
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxSurge:       &maxSurge,
+					MaxUnavailable: &maxUnavailable,
+				},
+			},
+		},
+	}
+
+	rc := Build(context.Background(), dep, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	if rc.WorkloadSummary == nil || rc.WorkloadSummary.RolloutRisk == nil {
+		t.Fatalf("WorkloadSummary.RolloutRisk: got nil; rc=%+v", rc)
+	}
+	risk := rc.WorkloadSummary.RolloutRisk
+	if risk.Reason != "all_replicas_unavailable_without_surge" || risk.Replicas != 3 {
+		t.Errorf("identity facts: got %+v", risk)
+	}
+	if risk.MaxSurge != "0" || risk.MaxUnavailable != "100%" || risk.ResolvedMaxSurge != 0 || risk.ResolvedMaxUnavailable != 3 {
+		t.Errorf("strategy facts: got %+v", risk)
+	}
+	if !strings.Contains(risk.Message, "can drop to zero available pods") || !strings.Contains(risk.Action, "maxSurge") {
+		t.Errorf("guidance: got %+v", risk)
+	}
+}
+
+func TestBuild_Deployment_OmitsSafeRolloutRisk(t *testing.T) {
+	replicas := int32(3)
+	maxSurge := intstr.FromString("25%")
+	maxUnavailable := intstr.FromString("100%")
+	dep := &appsv1.Deployment{Spec: appsv1.DeploymentSpec{
+		Replicas: &replicas,
+		Strategy: appsv1.DeploymentStrategy{
+			Type: appsv1.RollingUpdateDeploymentStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateDeployment{
+				MaxSurge:       &maxSurge,
+				MaxUnavailable: &maxUnavailable,
+			},
+		},
+	}}
+
+	rc := Build(context.Background(), dep, Options{Tier: TierBasic})
+	if rc.WorkloadSummary == nil {
+		t.Fatal("WorkloadSummary: got nil")
+	}
+	if rc.WorkloadSummary.RolloutRisk != nil {
+		t.Fatalf("RolloutRisk: got %+v, want nil", rc.WorkloadSummary.RolloutRisk)
+	}
+	wire, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if strings.Contains(string(wire), "rolloutRisk") {
+		t.Fatalf("safe deployment emitted rolloutRisk: %s", wire)
 	}
 }
 
