@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"regexp"
 	"sort"
@@ -66,6 +67,33 @@ func TestSetupDialogCoversAllTools(t *testing.T) {
 	if len(staleInDialog) > 0 {
 		t.Errorf("setup dialog catalog (%s) lists tools that are not registered — remove them: %s",
 			setupDialogCatalogPath, strings.Join(staleInDialog, ", "))
+	}
+}
+
+func TestSearchToolSchemaIncludesNamespace(t *testing.T) {
+	var searchTool *mcpsdk.Tool
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name == "search" {
+			searchTool = tool
+			break
+		}
+	}
+	if searchTool == nil {
+		t.Fatal("search tool is not registered")
+	}
+
+	raw, err := json.Marshal(searchTool.InputSchema)
+	if err != nil {
+		t.Fatalf("marshal search input schema: %v", err)
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal search input schema: %v", err)
+	}
+	if _, ok := schema.Properties["namespace"]; !ok {
+		t.Fatalf("search input schema does not accept namespace: %s", raw)
 	}
 }
 

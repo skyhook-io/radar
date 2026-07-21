@@ -392,7 +392,8 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"metadata, but data values won't appear in snippets to avoid leaking " +
 			"secret material through search results. " +
 			"Examples: `readinessProbe user-service`, `image:flagd`, `kind:Pod label:app=cart error`. " +
-			"Modifiers such as kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
+			"Use the namespace parameter for structured namespace scoping. Modifiers such as " +
+			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
 			"summaryContext. Use CEL filter for structural predicates. Searches typed kinds " +
@@ -615,11 +616,12 @@ type podLogsInput struct {
 }
 
 type searchInput struct {
-	Query   string `json:"query" jsonschema:"search query for unknown resources or broad content scans. Free tokens AND'd. Matches identity plus searchable object content. Examples: adServiceFailure, kind:NetworkChaos delay, kind:ConfigMap flagd, image:flagd. Modifiers: kind:Pod, kind:NetworkChaos, ns:foo, label:k=v, image:redis"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
-	Include string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
-	Filter  string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each candidate K8s object. Bindings: kind, apiVersion, metadata, spec, status, labels, annotations. Use has(x.y) before optional fields. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'labels[\"app\"] == \"cart\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
-	Context string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount) for suspect ranking; 'none' returns bare hits"`
+	Query     string `json:"query" jsonschema:"search query for unknown resources or broad content scans. Free tokens AND'd. Matches identity plus searchable object content. Examples: adServiceFailure, kind:NetworkChaos delay, kind:ConfigMap flagd, image:flagd. Modifiers: kind:Pod, kind:NetworkChaos, ns:foo, label:k=v, image:redis"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace to scope the search; equivalent to an inline ns: modifier. When set, overrides all inline namespace modifiers"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
+	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each candidate K8s object. Bindings: kind, apiVersion, metadata, spec, status, labels, annotations. Use has(x.y) before optional fields. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'labels[\"app\"] == \"cart\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
+	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount) for suspect ranking; 'none' returns bare hits"`
 }
 
 type issuesInput struct {
@@ -2971,6 +2973,9 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		return nil, nil, fmt.Errorf("query is required")
 	}
 	parsed := search.Parse(query)
+	if input.Namespace != "" {
+		parsed.NSFilter = []string{input.Namespace}
+	}
 	allowed := filterNamespacesForUser(ctx, nil)
 	if allowed != nil && len(allowed) == 0 {
 		return toJSONResult(search.Result{Hits: []search.Hit{}})
