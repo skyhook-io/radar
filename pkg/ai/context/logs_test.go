@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFilterLogs_ErrorLines(t *testing.T) {
@@ -141,6 +142,126 @@ func TestFilterLogs_DeduplicatesIdenticalLines(t *testing.T) {
 	}
 	if !strings.Contains(result.Lines[0], "repeated x10") {
 		t.Errorf("Expected repeat count, got: %s", result.Lines[0])
+	}
+}
+
+func TestFilterLogs_DeduplicatesTimestampedRunBeforeTruncation(t *testing.T) {
+	const count = 89
+	start := time.Date(2026, 7, 21, 2, 26, 44, 0, time.UTC)
+	span := 4*time.Minute + 26*time.Second
+	lines := make([]string, count)
+	for i := range lines {
+		timestamp := start.Add(span * time.Duration(i) / (count - 1)).Format(time.RFC3339Nano)
+		lines[i] = timestamp + " ERROR reconciliation failed: HTTP 403 Forbidden"
+	}
+
+	result := FilterLogs(strings.Join(lines, "\n"))
+	want := "2026-07-21T02:26:44Z ERROR reconciliation failed: HTTP 403 Forbidden (repeated ×89, 02:26:44→02:31:10)"
+	if result.MatchedLines != count || !reflect.DeepEqual(result.Lines, []string{want}) {
+		t.Fatalf("Unexpected timestamp-aware dedup result: %#v", result)
+	}
+}
+
+func TestDeduplicateStackTraces_TimestampFormats(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{
+			name: "space-separated application timestamp",
+			lines: []string{
+				"2026/07/20 21:32:22 lookup prometheus.monitoring.svc: no such host",
+				"2026/07/20 21:33:05 lookup prometheus.monitoring.svc: no such host",
+			},
+			want: "2026/07/20 21:32:22 lookup prometheus.monitoring.svc: no such host (repeated ×2, 21:32:22→21:33:05)",
+		},
+		{
+			name: "bracketed RFC3339 timestamp",
+			lines: []string{
+				"[2026-07-20T21:32:22.587Z] WARN retrying",
+				"[2026-07-20T21:33:05.123Z] WARN retrying",
+			},
+			want: "[2026-07-20T21:32:22.587Z] WARN retrying (repeated ×2, 21:32:22→21:33:05)",
+		},
+		{
+			name: "offset and mixed fractional precision",
+			lines: []string{
+				"2026-07-20T21:32:22+02:00 ERROR retrying",
+				"2026-07-20T21:33:05.123456789+02:00 ERROR retrying",
+			},
+			want: "2026-07-20T21:32:22+02:00 ERROR retrying (repeated ×2, 21:32:22→21:33:05)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := deduplicateStackTraces(tt.lines); !reflect.DeepEqual(got, []string{tt.want}) {
+				t.Fatalf("deduplicateStackTraces() = %#v, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeduplicateStackTraces_ConservativeGrouping(t *testing.T) {
+	t.Run("different bodies", func(t *testing.T) {
+		lines := []string{
+			"2026-07-21T02:26:44Z ERROR forbidden for namespace team-a",
+			"2026-07-21T02:26:45Z ERROR forbidden for namespace team-b",
+		}
+		if got := deduplicateStackTraces(lines); !reflect.DeepEqual(got, lines) {
+			t.Fatalf("different bodies were merged: %#v", got)
+		}
+	})
+
+	t.Run("invalid timestamp-like prefix", func(t *testing.T) {
+		lines := []string{
+			"2026-99-21T02:26:44Z ERROR retrying",
+			"2026-99-21T02:26:45Z ERROR retrying",
+		}
+		if got := deduplicateStackTraces(lines); !reflect.DeepEqual(got, lines) {
+			t.Fatalf("invalid timestamp prefixes were stripped: %#v", got)
+		}
+	})
+
+	t.Run("timestamped and raw body", func(t *testing.T) {
+		lines := []string{
+			"ERROR retrying",
+			"2026-07-21T02:26:45Z ERROR retrying",
+		}
+		if got := deduplicateStackTraces(lines); !reflect.DeepEqual(got, lines) {
+			t.Fatalf("timestamped line merged with raw body: %#v", got)
+		}
+	})
+
+	t.Run("non-consecutive runs", func(t *testing.T) {
+		lines := []string{
+			"2026-07-21T02:26:44Z ERROR A",
+			"2026-07-21T02:26:45Z ERROR A",
+			"2026-07-21T02:26:46Z ERROR B",
+			"2026-07-21T02:26:47Z ERROR A",
+			"2026-07-21T02:26:48Z ERROR A",
+		}
+		want := []string{
+			"2026-07-21T02:26:44Z ERROR A (repeated ×2, 02:26:44→02:26:45)",
+			"2026-07-21T02:26:46Z ERROR B",
+			"2026-07-21T02:26:47Z ERROR A (repeated ×2, 02:26:47→02:26:48)",
+		}
+		if got := deduplicateStackTraces(lines); !reflect.DeepEqual(got, want) {
+			t.Fatalf("non-consecutive runs merged globally: %#v", got)
+		}
+	})
+}
+
+func TestFilterLogs_DeduplicatesTimestampedFallback(t *testing.T) {
+	input := strings.Join([]string{
+		"2026-07-21T02:26:44Z retry scheduled",
+		"2026-07-21T02:26:45Z retry scheduled",
+	}, "\n")
+	result := FilterLogs(input)
+	want := []string{"2026-07-21T02:26:44Z retry scheduled (repeated ×2, 02:26:44→02:26:45)"}
+	if !result.Fallback || !reflect.DeepEqual(result.Lines, want) {
+		t.Fatalf("Unexpected fallback result: %#v", result)
 	}
 }
 
@@ -307,6 +428,80 @@ func TestFilterLogsByPattern_DeduplicatesAfterTruncation(t *testing.T) {
 	}
 	if result.MatchedLines != 60 || !reflect.DeepEqual(result.Lines, want) {
 		t.Fatalf("Unexpected result: %#v", result)
+	}
+}
+
+func TestFilterLogsByPattern_DeduplicatesTimestampedMatches(t *testing.T) {
+	input := strings.Join([]string{
+		"2026-07-21T02:26:44Z lookup prometheus: no such host",
+		"2026-07-21T02:26:45Z lookup prometheus: no such host",
+	}, "\n")
+	result, err := FilterLogsByPattern(input, "no such host")
+	if err != nil {
+		t.Fatalf("FilterLogsByPattern returned error: %v", err)
+	}
+	want := []string{"2026-07-21T02:26:44Z lookup prometheus: no such host (repeated ×2, 02:26:44→02:26:45)"}
+	if result.MatchedLines != 2 || !reflect.DeepEqual(result.Lines, want) {
+		t.Fatalf("Unexpected grep result: %#v", result)
+	}
+}
+
+func TestFilterLogsByPattern_DeduplicatesSpaceDateMatches(t *testing.T) {
+	input := strings.Join([]string{
+		"2026/07/20 21:32:22 lookup prometheus: no such host",
+		"2026/07/20 21:33:05 lookup prometheus: no such host",
+	}, "\n")
+	result, err := FilterLogsByPattern(input, "no such host")
+	if err != nil {
+		t.Fatalf("FilterLogsByPattern returned error: %v", err)
+	}
+	want := []string{"2026/07/20 21:32:22 lookup prometheus: no such host (repeated ×2, 21:32:22→21:33:05)"}
+	if result.MatchedLines != 2 || !reflect.DeepEqual(result.Lines, want) {
+		t.Fatalf("Unexpected space-date grep result: %#v", result)
+	}
+}
+
+func TestFilterLogsByPattern_MixedTimestampedAndRawRuns(t *testing.T) {
+	input := strings.Join([]string{
+		"ERROR raw retry",
+		"ERROR raw retry",
+		"2026-07-21T02:26:44Z ERROR timestamped retry",
+		"2026-07-21T02:26:45Z ERROR timestamped retry",
+	}, "\n")
+	result, err := FilterLogsByPattern(input, "ERROR")
+	if err != nil {
+		t.Fatalf("FilterLogsByPattern returned error: %v", err)
+	}
+	want := []string{
+		"ERROR raw retry (repeated x2)",
+		"2026-07-21T02:26:44Z ERROR timestamped retry (repeated ×2, 02:26:44→02:26:45)",
+	}
+	if !reflect.DeepEqual(result.Lines, want) {
+		t.Fatalf("Unexpected mixed dedup result: %#v", result)
+	}
+}
+
+func TestFilterLogsByPattern_CountsRawOmittedTimestampedLines(t *testing.T) {
+	lines := make([]string, 0, 56)
+	for i := 0; i < 30; i++ {
+		lines = append(lines, fmt.Sprintf("2026-07-21T02:26:%02dZ ERROR head %d", i, i))
+	}
+	for i := 0; i < 3; i++ {
+		lines = append(lines, fmt.Sprintf("2026-07-21T02:27:%02dZ ERROR middle A", i))
+	}
+	for i := 0; i < 3; i++ {
+		lines = append(lines, fmt.Sprintf("2026-07-21T02:28:%02dZ ERROR middle B", i))
+	}
+	for i := 0; i < 20; i++ {
+		lines = append(lines, fmt.Sprintf("2026-07-21T02:29:%02dZ ERROR tail %d", i, i))
+	}
+
+	result, err := FilterLogsByPattern(strings.Join(lines, "\n"), "ERROR")
+	if err != nil {
+		t.Fatalf("FilterLogsByPattern returned error: %v", err)
+	}
+	if result.MatchedLines != 56 || result.Lines[30] != "... (6 lines omitted) ..." {
+		t.Fatalf("Unexpected raw line accounting: %#v", result)
 	}
 }
 

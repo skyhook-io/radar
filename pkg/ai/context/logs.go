@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // FilteredLogs contains selected, bounded log lines.
@@ -14,7 +15,22 @@ type FilteredLogs struct {
 	Fallback     bool     `json:"fallback"` // true if no error patterns matched, using last N raw lines
 }
 
-var errorPatterns = regexp.MustCompile(`(?i)(\bERROR\b|\bFATAL\b|\bWARN(?:ING)?\b|\bException\b|\bpanic:\b|\bTraceback\b|\bCRITICAL\b|"level"\s*:\s*"(?:error|fatal|warn)")`)
+type logTimestampPattern struct {
+	re     *regexp.Regexp
+	layout string
+}
+
+var (
+	errorPatterns        = regexp.MustCompile(`(?i)(\bERROR\b|\bFATAL\b|\bWARN(?:ING)?\b|\bException\b|\bpanic:\b|\bTraceback\b|\bCRITICAL\b|"level"\s*:\s*"(?:error|fatal|warn)")`)
+	rfc3339LogPrefix     = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})) (.*)$`)
+	bracketedLogPrefix   = regexp.MustCompile(`^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\] (.*)$`)
+	spaceDateLogPrefix   = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) (.*)$`)
+	logTimestampPatterns = []logTimestampPattern{
+		{rfc3339LogPrefix, time.RFC3339Nano},
+		{bracketedLogPrefix, time.RFC3339Nano},
+		{spaceDateLogPrefix, "2006/01/02 15:04:05"},
+	}
+)
 
 const (
 	maxFilteredLines = 50
@@ -61,15 +77,30 @@ func FilterLogs(rawLogs string) FilteredLogs {
 
 func formatMatchedLogs(totalLines int, matched []string) FilteredLogs {
 	matchedLines := len(matched)
-	if len(matched) > maxFilteredLines {
+	runs := deduplicateLogRuns(matched, true)
+	formatted := make([]string, 0, len(runs))
+	if len(runs) > maxFilteredLines {
+		omittedLines := 0
+		for _, run := range runs[headLines : len(runs)-tailLines] {
+			omittedLines += run.occurrences
+		}
 		truncated := make([]string, 0, maxFilteredLines+1)
-		truncated = append(truncated, matched[:headLines]...)
-		truncated = append(truncated, fmt.Sprintf("... (%d lines omitted) ...", len(matched)-maxFilteredLines))
-		truncated = append(truncated, matched[len(matched)-tailLines:]...)
-		matched = truncated
+		for _, run := range runs[:headLines] {
+			truncated = append(truncated, run.text)
+		}
+		truncated = append(truncated, fmt.Sprintf("... (%d lines omitted) ...", omittedLines))
+		for _, run := range runs[len(runs)-tailLines:] {
+			truncated = append(truncated, run.text)
+		}
+		formatted = truncated
+	} else {
+		for _, run := range runs {
+			formatted = append(formatted, run.text)
+		}
 	}
 
-	lines := deduplicateStackTraces(matched)
+	// The pre-pass deliberately leaves raw duplicates for the legacy post-cap collapse.
+	lines := deduplicateStackTraces(formatted)
 	return FilteredLogs{
 		Lines:        redactLogLines(lines),
 		TotalLines:   totalLines,
@@ -104,36 +135,81 @@ func splitLogLines(rawLogs string) []string {
 	return strings.Split(strings.TrimSuffix(rawLogs, "\n"), "\n")
 }
 
-// deduplicateStackTraces collapses identical consecutive lines with a repeat count.
-func deduplicateStackTraces(lines []string) []string {
-	if len(lines) == 0 {
-		return lines
-	}
+type normalizedLogLine struct {
+	raw          string
+	key          string
+	timestamp    time.Time
+	hasTimestamp bool
+}
 
-	var result []string
-	prev := lines[0]
-	count := 1
+type deduplicatedLogRun struct {
+	text        string
+	occurrences int
+}
 
-	for i := 1; i < len(lines); i++ {
-		if lines[i] == prev {
-			count++
-		} else {
-			if count > 1 {
-				result = append(result, fmt.Sprintf("%s (repeated x%d)", prev, count))
-			} else {
-				result = append(result, prev)
-			}
-			prev = lines[i]
-			count = 1
+func normalizeLogLine(line string) normalizedLogLine {
+	for _, pattern := range logTimestampPatterns {
+		match := pattern.re.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		timestamp, err := time.Parse(pattern.layout, match[1])
+		if err == nil {
+			return normalizedLogLine{raw: line, key: match[2], timestamp: timestamp, hasTimestamp: true}
 		}
 	}
-	// Flush last
-	if count > 1 {
-		result = append(result, fmt.Sprintf("%s (repeated x%d)", prev, count))
-	} else {
-		result = append(result, prev)
+	return normalizedLogLine{raw: line, key: line}
+}
+
+func deduplicateLogRuns(lines []string, timestampedOnly bool) []deduplicatedLogRun {
+	if len(lines) == 0 {
+		return nil
 	}
 
+	result := make([]deduplicatedLogRun, 0, len(lines))
+	first := normalizeLogLine(lines[0])
+	last := first
+	count := 1
+
+	flush := func() {
+		text := first.raw
+		if count > 1 {
+			if first.hasTimestamp {
+				text = fmt.Sprintf("%s (repeated ×%d, %s→%s)", first.raw, count, first.timestamp.Format("15:04:05"), last.timestamp.Format("15:04:05"))
+			} else {
+				text = fmt.Sprintf("%s (repeated x%d)", first.raw, count)
+			}
+		}
+		result = append(result, deduplicatedLogRun{text: text, occurrences: count})
+	}
+
+	for _, line := range lines[1:] {
+		current := normalizeLogLine(line)
+		sameRun := current.key == last.key && current.hasTimestamp == last.hasTimestamp
+		if timestampedOnly {
+			sameRun = sameRun && current.hasTimestamp
+		}
+		if sameRun {
+			last = current
+			count++
+			continue
+		}
+		flush()
+		first = current
+		last = current
+		count = 1
+	}
+	flush()
+	return result
+}
+
+// deduplicateStackTraces strips only validated timestamp prefixes before comparison.
+func deduplicateStackTraces(lines []string) []string {
+	runs := deduplicateLogRuns(lines, false)
+	result := make([]string, 0, len(runs))
+	for _, run := range runs {
+		result = append(result, run.text)
+	}
 	return result
 }
 
