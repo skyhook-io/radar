@@ -433,6 +433,8 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
+			k8s.FindRemovedServiceEnvChecksForObject(r.Context(), cache, obj),
+			k8s.FindStaleSecretEnvChecksForObject(r.Context(), cache, obj),
 		),
 		ServiceBackends: serviceBackendLookup{cache: cache},
 	}

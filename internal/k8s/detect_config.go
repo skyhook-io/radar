@@ -32,6 +32,7 @@ func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time)
 	}
 	out = append(out, detectEnvServiceRefs(cache, namespace, now)...)
 	out = append(out, detectDuplicateEnvVars(cache, namespace, now)...)
+	out = append(out, detectStaleSecretEnv(cache, namespace, now)...)
 	return out
 }
 

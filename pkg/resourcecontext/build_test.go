@@ -824,6 +824,49 @@ func TestBuild_RBACDenied_ServiceReferencePreservesDuplicateEnv(t *testing.T) {
 	}
 }
 
+func TestBuild_RBACDenied_HistoryAppReferences(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "prod"}}
+	t.Run("removed Service", func(t *testing.T) {
+		rc := Build(context.Background(), pod, Options{
+			Tier:          TierBasic,
+			AccessChecker: denyChecker{kind: "Service", namespace: "shared"},
+			AppReferences: &AppReferences{RemovedServiceEnv: []RemovedServiceEnvReference{{
+				Service: ContextRef{Kind: "Service", Namespace: "shared", Name: "cart"},
+			}}},
+		})
+		if rc.AppReferences != nil {
+			t.Fatalf("denied removed-Service fact should be omitted: %+v", rc.AppReferences)
+		}
+		if !hasOmitted(rc.Omitted, "appReferences.removedServiceEnv") {
+			t.Fatalf("missing removed-Service omission marker: %+v", rc.Omitted)
+		}
+	})
+	t.Run("stale Secret", func(t *testing.T) {
+		rc := Build(context.Background(), pod, Options{
+			Tier:          TierBasic,
+			AccessChecker: denyChecker{kind: "Secret", namespace: "prod"},
+			AppReferences: &AppReferences{StaleSecretEnv: []StaleSecretEnvReference{{
+				Secret: ContextRef{Kind: "Secret", Namespace: "prod", Name: "db-conn"},
+			}}},
+		})
+		if rc.AppReferences != nil {
+			t.Fatalf("denied stale-Secret fact should be omitted: %+v", rc.AppReferences)
+		}
+		if !hasOmitted(rc.Omitted, "appReferences.staleSecretEnv") {
+			t.Fatalf("missing stale-Secret omission marker: %+v", rc.Omitted)
+		}
+	})
+}
+
+func hasOmitted(items []OmittedField, field string) bool {
+	for _, item := range items {
+		if item.Field == field && item.Reason == OmittedRBACDenied {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuild_NilObj(t *testing.T) {
 	if rc := Build(context.Background(), nil, Options{}); rc != nil {
 		t.Errorf("Build(nil) = %+v, want nil", rc)

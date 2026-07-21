@@ -1422,7 +1422,29 @@ func filterAppReferences(ctx context.Context, refs *AppReferences, ac RefAccessC
 	if deniedAny {
 		omitted.add("appReferences.serviceEnv", OmittedRBACDenied)
 	}
-	if len(out.ServiceEnv) == 0 && len(out.DuplicateEnv) == 0 {
+	deniedAny = false
+	for _, ref := range refs.RemovedServiceEnv {
+		if !checkRef(ctx, ac, &ref.Service) {
+			deniedAny = true
+			continue
+		}
+		out.RemovedServiceEnv = append(out.RemovedServiceEnv, ref)
+	}
+	if deniedAny {
+		omitted.add("appReferences.removedServiceEnv", OmittedRBACDenied)
+	}
+	deniedAny = false
+	for _, ref := range refs.StaleSecretEnv {
+		if !checkRef(ctx, ac, &ref.Secret) {
+			deniedAny = true
+			continue
+		}
+		out.StaleSecretEnv = append(out.StaleSecretEnv, ref)
+	}
+	if deniedAny {
+		omitted.add("appReferences.staleSecretEnv", OmittedRBACDenied)
+	}
+	if len(out.ServiceEnv) == 0 && len(out.DuplicateEnv) == 0 && len(out.RemovedServiceEnv) == 0 && len(out.StaleSecretEnv) == 0 {
 		return nil
 	}
 	return out

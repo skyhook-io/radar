@@ -16,6 +16,8 @@
 // and for stable, machine-friendly JSON output.
 package resourcecontext
 
+import "time"
+
 // ResourceContext is the top-level enrichment block attached to a resource
 // response. Every field is optional; the zero value is a valid (empty)
 // "basic"-tier context.
@@ -109,8 +111,10 @@ type UsesBlock struct {
 }
 
 type AppReferences struct {
-	ServiceEnv   []ServiceEnvReference      `json:"serviceEnv,omitempty"`
-	DuplicateEnv []DuplicateEnvVarReference `json:"duplicateEnv,omitempty"`
+	ServiceEnv        []ServiceEnvReference        `json:"serviceEnv,omitempty"`
+	DuplicateEnv      []DuplicateEnvVarReference   `json:"duplicateEnv,omitempty"`
+	RemovedServiceEnv []RemovedServiceEnvReference `json:"removedServiceEnv,omitempty"`
+	StaleSecretEnv    []StaleSecretEnvReference    `json:"staleSecretEnv,omitempty"`
 }
 
 type ServiceEnvReference struct {
@@ -136,6 +140,28 @@ type DuplicateEnvVarReference struct {
 type DuplicateEnvVarOccurrence struct {
 	Position int    `json:"position"`
 	Value    string `json:"value"`
+}
+
+type RemovedServiceEnvReference struct {
+	Container      string     `json:"container"`
+	Env            string     `json:"env"`
+	OldValue       string     `json:"oldValue"`
+	Service        ContextRef `json:"service"`
+	ReferencedPort int32      `json:"referencedPort,omitempty"`
+	RemovedAt      time.Time  `json:"removedAt"`
+	Message        string     `json:"message,omitempty"`
+}
+
+type StaleSecretEnvReference struct {
+	Container           string     `json:"container"`
+	Env                 string     `json:"env"`
+	Source              string     `json:"source"`
+	Prefix              string     `json:"prefix,omitempty"`
+	Secret              ContextRef `json:"secret"`
+	Key                 string     `json:"key"`
+	ContainerStartedAt  time.Time  `json:"containerStartedAt"`
+	SecretDataChangedAt time.Time  `json:"secretDataChangedAt"`
+	Message             string     `json:"message,omitempty"`
 }
 
 // ReferencedBy lists workload specs that directly reference the subject

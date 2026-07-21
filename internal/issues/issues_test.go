@@ -222,6 +222,28 @@ func TestCompose_GroupsMemberPodsUnderOwner(t *testing.T) {
 	}
 }
 
+func TestCompose_StaleSecretEnvSurvivesAsStableWorkloadIssue(t *testing.T) {
+	p := &fakeProvider{problems: []k8s.Detection{{
+		Kind: "Pod", Namespace: "shop", Name: "catalog-abc-1", Severity: "warning",
+		Reason: "StaleSecretEnv", Message: "container may hold a stale Secret-backed env value",
+		OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "catalog",
+		Fingerprint: "stale-secret-env",
+	}}}
+	filters := Filters{Grouped: true}
+	first := Compose(p, filters)
+	second := Compose(p, filters)
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("stale Secret env issue was dropped during compose: first=%+v second=%+v", first, second)
+	}
+	issue := first[0]
+	if issue.Category != issuesapi.CategoryInvalidConfiguration || issue.Group != "apps" || issue.Kind != "Deployment" || issue.Namespace != "shop" || issue.Name != "catalog" {
+		t.Fatalf("unexpected grouped stale Secret env issue: %+v", issue)
+	}
+	if issue.ID == "" || issue.ID != second[0].ID || issue.Fingerprint != "stale-secret-env" {
+		t.Fatalf("stale Secret env issue identity is not stable: first=%+v second=%+v", first, second)
+	}
+}
+
 func TestCompose_GroupedKindFilterMatchesSubject(t *testing.T) {
 	// A crashlooping Deployment is evidenced by Pod rows that fold under the
 	// Deployment subject. On the GROUPED surface, kind=Deployment must return

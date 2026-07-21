@@ -1118,6 +1118,8 @@ func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, name
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
+			k8s.FindRemovedServiceEnvChecksForObject(ctx, cache, obj),
+			k8s.FindStaleSecretEnvChecksForObject(ctx, cache, obj),
 		),
 		ServiceBackends: mcpServiceBackendLookup{cache: cache},
 	}

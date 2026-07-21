@@ -6,15 +6,19 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
-const maxDuplicateEnvVarContextOccurrences = 5
+const (
+	maxDuplicateEnvVarContextOccurrences = 5
+	maxStaleSecretEnvContextReferences   = 5
+)
 
-func AppReferencesFromEnvChecks(serviceChecks []k8s.EnvServiceRefCheck, duplicateChecks []k8s.DuplicateEnvVarCheck) *resourcecontext.AppReferences {
-	if len(serviceChecks) == 0 && len(duplicateChecks) == 0 {
+func AppReferencesFromEnvChecks(serviceChecks []k8s.EnvServiceRefCheck, duplicateChecks []k8s.DuplicateEnvVarCheck, removedChecks []k8s.RemovedServiceEnvCheck, staleChecks []k8s.StaleSecretEnvCheck) *resourcecontext.AppReferences {
+	if len(serviceChecks) == 0 && len(duplicateChecks) == 0 && len(removedChecks) == 0 && len(staleChecks) == 0 {
 		return nil
 	}
 	out := &resourcecontext.AppReferences{
-		ServiceEnv:   make([]resourcecontext.ServiceEnvReference, 0, len(serviceChecks)),
-		DuplicateEnv: make([]resourcecontext.DuplicateEnvVarReference, 0, len(duplicateChecks)),
+		ServiceEnv:        make([]resourcecontext.ServiceEnvReference, 0, len(serviceChecks)),
+		DuplicateEnv:      make([]resourcecontext.DuplicateEnvVarReference, 0, len(duplicateChecks)),
+		RemovedServiceEnv: make([]resourcecontext.RemovedServiceEnvReference, 0, len(removedChecks)),
 	}
 	for _, check := range serviceChecks {
 		out.ServiceEnv = append(out.ServiceEnv, resourcecontext.ServiceEnvReference{
@@ -47,6 +51,33 @@ func AppReferencesFromEnvChecks(serviceChecks []k8s.EnvServiceRefCheck, duplicat
 			Occurrences:       occurrences,
 			LastDeclaredValue: aicontext.RedactSecrets(check.LastDeclaredValue),
 			Message:           aicontext.RedactSecrets(check.Message),
+		})
+	}
+	for _, check := range removedChecks {
+		out.RemovedServiceEnv = append(out.RemovedServiceEnv, resourcecontext.RemovedServiceEnvReference{
+			Container:      check.Container,
+			Env:            check.EnvName,
+			OldValue:       aicontext.RedactSecrets(check.OldValue),
+			Service:        resourcecontext.ContextRef{Kind: "Service", Namespace: check.ServiceNamespace, Name: check.ServiceName},
+			ReferencedPort: check.ReferencedPort,
+			RemovedAt:      check.RemovedAt,
+			Message:        aicontext.RedactSecrets(check.Message),
+		})
+	}
+	if len(staleChecks) > maxStaleSecretEnvContextReferences {
+		staleChecks = staleChecks[:maxStaleSecretEnvContextReferences]
+	}
+	for _, check := range staleChecks {
+		out.StaleSecretEnv = append(out.StaleSecretEnv, resourcecontext.StaleSecretEnvReference{
+			Container:           check.Container,
+			Env:                 check.EnvName,
+			Source:              check.Source,
+			Prefix:              check.Prefix,
+			Secret:              resourcecontext.ContextRef{Kind: "Secret", Namespace: check.Namespace, Name: check.SecretName},
+			Key:                 check.Key,
+			ContainerStartedAt:  check.ContainerStartedAt,
+			SecretDataChangedAt: check.SecretDataChangedAt,
+			Message:             aicontext.RedactSecrets(check.Message),
 		})
 	}
 	return out
