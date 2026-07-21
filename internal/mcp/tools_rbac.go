@@ -3,12 +3,16 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	authv1 "k8s.io/api/authorization/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/rbac"
 )
 
@@ -29,9 +33,15 @@ import (
 //   - InheritedFromGroup attribution (the AI can ask follow-up if needed)
 
 type subjectPermissionsInput struct {
-	Kind      string `json:"kind" jsonschema:"subject kind: ServiceAccount, User, or Group"`
-	Namespace string `json:"namespace,omitempty" jsonschema:"namespace (required for ServiceAccount, omit for User/Group)"`
-	Name      string `json:"name" jsonschema:"subject name"`
+	Kind              string  `json:"kind" jsonschema:"subject kind: ServiceAccount, User, or Group; access checks support ServiceAccount only"`
+	Namespace         string  `json:"namespace,omitempty" jsonschema:"subject namespace (required for ServiceAccount, omit for User/Group)"`
+	Name              string  `json:"name" jsonschema:"subject name"`
+	Verb              string  `json:"verb,omitempty" jsonschema:"access check only: Kubernetes API verb; must be supplied together with resource"`
+	Resource          string  `json:"resource,omitempty" jsonschema:"access check only: plural Kubernetes API resource, e.g. configmaps; must be supplied together with verb"`
+	Group             string  `json:"group,omitempty" jsonschema:"access check only: resource API group; omit for core/v1"`
+	ResourceNamespace *string `json:"resource_namespace,omitempty" jsonschema:"access check only: target resource namespace; defaults to the ServiceAccount namespace when omitted; explicitly set to an empty string for a cluster-scoped resource or cluster-wide API request; empty does not aggregate permissions from namespace-local RoleBindings"`
+	Subresource       string  `json:"subresource,omitempty" jsonschema:"access check only: target subresource, e.g. log for pods/log"`
+	ResourceName      string  `json:"resource_name,omitempty" jsonschema:"access check only: specific target resource name; omit to check all names"`
 }
 
 type subjectPermissionsResult struct {
@@ -48,6 +58,24 @@ type mcpSubject struct {
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
+}
+
+type subjectAccessCheckResponse struct {
+	Subject     mcpSubject               `json:"subject"`
+	AccessCheck subjectAccessCheckResult `json:"accessCheck"`
+}
+
+type subjectAccessCheckResult struct {
+	Verb            string `json:"verb"`
+	Group           string `json:"group,omitempty"`
+	Resource        string `json:"resource"`
+	Subresource     string `json:"subresource,omitempty"`
+	Namespace       string `json:"namespace"`
+	ResourceName    string `json:"resourceName,omitempty"`
+	Allowed         bool   `json:"allowed"`
+	Denied          bool   `json:"denied,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	EvaluationError string `json:"evaluationError,omitempty"`
 }
 
 // mcpBindingLite is the per-binding row in the MCP response. Just enough to
@@ -83,6 +111,64 @@ func handleGetSubjectPermissions(ctx context.Context, _ *mcp.CallToolRequest, in
 	}
 	if input.Kind == "ServiceAccount" && input.Namespace == "" {
 		return nil, nil, fmt.Errorf("ServiceAccount requires a namespace")
+	}
+
+	checkRequested := input.Verb != "" || input.Resource != "" || input.Group != "" ||
+		input.ResourceNamespace != nil || input.Subresource != "" || input.ResourceName != ""
+	if checkRequested {
+		if input.Kind != "ServiceAccount" {
+			return nil, nil, fmt.Errorf("access checks support ServiceAccount subjects only")
+		}
+		verb := strings.TrimSpace(input.Verb)
+		resource := strings.TrimSpace(input.Resource)
+		if verb == "" || resource == "" {
+			return nil, nil, fmt.Errorf("verb and resource are both required for an access check")
+		}
+		resourceNamespace := input.Namespace
+		if input.ResourceNamespace != nil {
+			resourceNamespace = *input.ResourceNamespace
+			// Trimming whitespace to empty could silently broaden a namespaced check.
+			if resourceNamespace != strings.TrimSpace(resourceNamespace) {
+				return nil, nil, fmt.Errorf("resource_namespace must not contain surrounding whitespace")
+			}
+		}
+
+		client := k8s.ClientFromContext(ctx)
+		if client == nil {
+			return nil, nil, fmt.Errorf("Kubernetes client unavailable for access check")
+		}
+		attrs := authv1.ResourceAttributes{
+			Namespace:   resourceNamespace,
+			Verb:        verb,
+			Group:       strings.TrimSpace(input.Group),
+			Resource:    resource,
+			Subresource: strings.TrimSpace(input.Subresource),
+			Name:        strings.TrimSpace(input.ResourceName),
+		}
+		username := fmt.Sprintf("system:serviceaccount:%s:%s", input.Namespace, input.Name)
+		status, err := pkgauth.ReviewSubjectAccess(ctx, client, username, rbac.ImplicitGroupsForSA(input.Namespace), attrs)
+		if err != nil {
+			if apierrors.IsForbidden(err) {
+				return nil, nil, fmt.Errorf("forbidden: caller requires create permission on subjectaccessreviews.authorization.k8s.io: %w", err)
+			}
+			return nil, nil, fmt.Errorf("SubjectAccessReview failed: %w", err)
+		}
+
+		return toJSONResult(subjectAccessCheckResponse{
+			Subject: mcpSubject{Kind: input.Kind, Namespace: input.Namespace, Name: input.Name},
+			AccessCheck: subjectAccessCheckResult{
+				Verb:            attrs.Verb,
+				Group:           attrs.Group,
+				Resource:        attrs.Resource,
+				Subresource:     attrs.Subresource,
+				Namespace:       attrs.Namespace,
+				ResourceName:    attrs.Name,
+				Allowed:         status.Allowed,
+				Denied:          status.Denied,
+				Reason:          status.Reason,
+				EvaluationError: status.EvaluationError,
+			},
+		})
 	}
 
 	// Mirror the REST requireRBACReadable gate: both list permissions

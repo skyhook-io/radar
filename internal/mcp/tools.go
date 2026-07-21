@@ -405,13 +405,19 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_subject_permissions",
-		Description: "Get the effective RBAC permissions of a Kubernetes subject " +
-			"(ServiceAccount, User, or Group) — what can this principal do across " +
-			"the cluster. Returns: the bindings that grant access (each pointing at " +
-			"its Role/ClusterRole), a deduplicated flat rule list, and (for " +
-			"ServiceAccounts) the Pods running as this SA. " +
-			"Use this to answer 'is this SA over-privileged?', 'why can X do Y?', " +
-			"or 'what's the blast radius if this Pod is compromised?'. " +
+		Description: "Inspect effective RBAC for a Kubernetes subject. Without verb/resource, " +
+			"returns the existing permissions dump for a ServiceAccount, User, or Group: " +
+			"granting bindings, deduplicated flat rules, and (for ServiceAccounts) Pods " +
+			"running as the subject. Use that mode for over-privilege and blast-radius questions. " +
+			"For a focused ServiceAccount yes/no question, supply both verb and resource; " +
+			"that mode asks the Kubernetes authorizer via SubjectAccessReview and returns only " +
+			"subject + accessCheck, including allowed, denied, reason, and evaluationError. " +
+			"resource_namespace defaults to the ServiceAccount namespace; explicitly pass an " +
+			"empty string for a cluster-scoped resource or cluster-wide API request. This does not " +
+			"aggregate permissions granted by namespace-local RoleBindings. Optional group, " +
+			"subresource, and resource_name refine the target. Access-check mode requires the " +
+			"calling identity itself to have create permission on " +
+			"subjectaccessreviews.authorization.k8s.io; Radar never retries with a privileged identity. " +
 			"For ServiceAccount, namespace is required. For User/Group, omit namespace " +
 			"(those are external identities, not namespaced resources). " +
 			"Inherited grants from implicit group memberships (system:authenticated, " +

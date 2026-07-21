@@ -194,11 +194,17 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_subject_permissions',
-    desc: 'Effective RBAC for a ServiceAccount, User, or Group: the bindings that grant access, a flattened rule list, and (for SAs) the Pods running as it. Answers "what\'s the blast radius if compromised?".',
+    desc: 'Effective RBAC for a ServiceAccount, User, or Group. Returns the full bindings/rules dump by default, or an authoritative SubjectAccessReview answer when verb and resource are supplied for a ServiceAccount.',
     params: [
       { arg: 'kind', required: true, desc: 'ServiceAccount, User, or Group' },
       { arg: 'name', required: true, desc: 'subject name' },
       { arg: 'namespace', desc: 'required for ServiceAccount; omit for User/Group' },
+      { arg: 'verb', desc: 'access check: Kubernetes API verb; requires resource' },
+      { arg: 'resource', desc: 'access check: plural API resource; requires verb' },
+      { arg: 'group', desc: 'access check: API group; omit for core/v1' },
+      { arg: 'resource_namespace', desc: 'access check target; defaults to subject namespace' },
+      { arg: 'subresource', desc: 'access check subresource, e.g. log for pods/log' },
+      { arg: 'resource_name', desc: 'access check target resource name' },
     ],
   },
   {

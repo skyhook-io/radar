@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -342,6 +343,45 @@ func TestDiscoverNamespaces_PropagatesPerNamespaceError(t *testing.T) {
 }
 
 // --- SubjectCanI tests ---
+
+func TestReviewSubjectAccess_PreservesAttributesAndStatus(t *testing.T) {
+	var captured authv1.SubjectAccessReviewSpec
+	wantStatus := authv1.SubjectAccessReviewStatus{
+		Allowed:         false,
+		Denied:          true,
+		Reason:          "resource name is not granted",
+		EvaluationError: "one authorizer returned partial data",
+	}
+	client := fake.NewClientset()
+	client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		sar := action.(k8stesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
+		captured = *sar.Spec.DeepCopy()
+		return true, &authv1.SubjectAccessReview{Status: wantStatus}, nil
+	})
+
+	attrs := authv1.ResourceAttributes{
+		Namespace:   "prod",
+		Verb:        "get",
+		Group:       "apps.example.io",
+		Resource:    "widgets",
+		Subresource: "status",
+		Name:        "frontend",
+	}
+	groups := []string{"system:authenticated", "system:serviceaccounts"}
+	gotStatus, err := ReviewSubjectAccess(context.Background(), client, "system:serviceaccount:ops:controller", groups, attrs)
+	if err != nil {
+		t.Fatalf("ReviewSubjectAccess: %v", err)
+	}
+	if !reflect.DeepEqual(gotStatus, wantStatus) {
+		t.Fatalf("status = %#v, want %#v", gotStatus, wantStatus)
+	}
+	if captured.User != "system:serviceaccount:ops:controller" || !reflect.DeepEqual(captured.Groups, groups) {
+		t.Fatalf("subject = user %q groups %v", captured.User, captured.Groups)
+	}
+	if captured.ResourceAttributes == nil || !reflect.DeepEqual(*captured.ResourceAttributes, attrs) {
+		t.Fatalf("resource attributes = %#v, want %#v", captured.ResourceAttributes, attrs)
+	}
+}
 
 func TestSubjectCanI_Allowed(t *testing.T) {
 	client := fakeClientWithSAR(func(username, namespace, resource, verb string) bool {
