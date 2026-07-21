@@ -79,7 +79,7 @@ func TestCapMultiPodLogBundles_BreadthFirstAcrossDiagnoseStreams(t *testing.T) {
 	}
 
 	hint := multiPodLogBundleNarrowHint("prod", stats, stats.FirstOmittedBundle == 1)
-	for _, want := range []string{"truncated", "showing 8 of 12 lines across 3 pods", "32 KiB", "aggregate log-content cap", "get_pod_logs", `namespace="prod"`, `name="api-2"`, `container="app"`, "previous=true", "since=", "grep="} {
+	for _, want := range []string{"truncated", "showing 8 of 12 lines across 3 pods", "32 KiB", "aggregate log-content cap", "get_pod_logs", `namespace="prod"`, `name="api-2"`, `container="app"`, "previous=true", "inspect the omitted stream", "since=", "grep="} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("hint %q missing %q", hint, want)
 		}

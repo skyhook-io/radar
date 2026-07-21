@@ -118,7 +118,7 @@ func multiPodLogBundleNarrowHint(namespace string, stats multiPodLogBundleCap, p
 		)
 	}
 	return fmt.Sprintf(
-		"log bundle truncated: %s (%d KiB aggregate log-content cap reached) — use `get_pod_logs namespace=%q name=%q container=%q previous=%t` for the full omitted stream, or narrow with since= or grep=",
+		"log bundle truncated: %s (%d KiB aggregate log-content cap reached) — use `get_pod_logs namespace=%q name=%q container=%q previous=%t` to inspect the omitted stream, or narrow with since= or grep=",
 		scope, maxMultiPodLogBundleBytes/1024, namespace, stats.FirstOmittedPod, stats.FirstOmittedContainer, previous,
 	)
 }
