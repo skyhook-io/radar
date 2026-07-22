@@ -278,7 +278,7 @@ func TestFilterLogs_EmptyInput(t *testing.T) {
 func TestFilterLogs_PanicAndTraceback(t *testing.T) {
 	lines := []string{
 		"goroutine 1 [running]:",
-		"panic: runtime error: index out of range",
+		"panic: assignment to entry in nil map",
 		"  /app/main.go:42",
 	}
 	input := strings.Join(lines, "\n")

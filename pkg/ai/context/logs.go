@@ -21,7 +21,7 @@ type logTimestampPattern struct {
 }
 
 var (
-	errorPatterns        = regexp.MustCompile(`(?i)(\bERROR\b|\bFATAL\b|\bWARN(?:ING)?\b|\bException\b|\bpanic:\b|\bTraceback\b|\bCRITICAL\b|"level"\s*:\s*"(?:error|fatal|warn)")`)
+	errorPatterns        = regexp.MustCompile(`(?i)(\bERROR\b|\bFATAL\b|\bWARN(?:ING)?\b|\bException\b|\bpanic:|\bTraceback\b|\bCRITICAL\b|"level"\s*:\s*"(?:error|fatal|warn)")`)
 	rfc3339LogPrefix     = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})) (.*)$`)
 	bracketedLogPrefix   = regexp.MustCompile(`^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\] (.*)$`)
 	spaceDateLogPrefix   = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) (.*)$`)

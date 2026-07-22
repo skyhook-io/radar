@@ -215,6 +215,39 @@ func TestActiveOOMKilledContainers(t *testing.T) {
 	}
 }
 
+func TestActiveCrashLoopContainerStatuses(t *testing.T) {
+	now := time.Now()
+	crash := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}}
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{Name: "active"},
+			{Name: "ready", ReadinessProbe: &corev1.Probe{}},
+			{Name: "stable"},
+			{Name: "oom"},
+		}},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "active", RestartCount: 2, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}, LastTerminationState: crash},
+				{Name: "ready", Ready: true, RestartCount: 2, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-30 * time.Second))}}, LastTerminationState: crash},
+				{Name: "stable", RestartCount: 2, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-10 * time.Minute))}}, LastTerminationState: crash},
+				{Name: "oom", RestartCount: 2, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}, LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137}}},
+			},
+			InitContainerStatuses: []corev1.ContainerStatus{
+				{Name: "init-active", RestartCount: 1, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}, LastTerminationState: crash},
+				{Name: "init-done", RestartCount: 1, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Completed", ExitCode: 0}}, LastTerminationState: crash},
+			},
+		},
+	}
+
+	got := ActiveCrashLoopContainerStatuses(pod, now)
+	if len(got) != 2 || got[0].Name != "active" || got[1].Name != "init-active" {
+		t.Fatalf("active crashloop containers = %+v, want active and init-active", got)
+	}
+	if got := ActiveCrashLoopContainerStatuses(nil, now); got != nil {
+		t.Fatalf("nil pod returned %+v, want nil", got)
+	}
+}
+
 // TestPodCrashLoopDiagnosisOrdersCandidates: the current waiting crashloop wins
 // over a newer running tick.
 func TestPodCrashLoopDiagnosisOrdersCandidates(t *testing.T) {

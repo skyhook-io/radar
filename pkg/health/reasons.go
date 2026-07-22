@@ -73,6 +73,28 @@ func isStableCrashLoop(cs *corev1.ContainerStatus, now time.Time, readyTrusted b
 	return t.ExitCode != 0
 }
 
+// ActiveCrashLoopContainerStatuses returns main and init container statuses
+// that are still in an active crashloop after applying Radar's recovery guards.
+func ActiveCrashLoopContainerStatuses(pod *corev1.Pod, now time.Time) []corev1.ContainerStatus {
+	if pod == nil {
+		return nil
+	}
+	var active []corev1.ContainerStatus
+	for i := range pod.Status.ContainerStatuses {
+		cs := pod.Status.ContainerStatuses[i]
+		if isStableCrashLoop(&cs, now, containerHasReadinessProbe(pod.Spec.Containers, cs.Name)) {
+			active = append(active, cs)
+		}
+	}
+	for i := range pod.Status.InitContainerStatuses {
+		cs := pod.Status.InitContainerStatuses[i]
+		if isStableCrashLoop(&cs, now, false) {
+			active = append(active, cs)
+		}
+	}
+	return active
+}
+
 // podHasStableCrashLoop reports whether any main or init container is in a
 // stable crashloop (see isStableCrashLoop).
 func podHasStableCrashLoop(pod *corev1.Pod, now time.Time) bool {
@@ -83,9 +105,6 @@ func podHasStableCrashLoop(pod *corev1.Pod, now time.Time) bool {
 		}
 	}
 	for i := range pod.Status.InitContainerStatuses {
-		// Init containers carry no readiness probe and their Ready field is not a
-		// serving signal — never trust Ready as recovery there; the Running-window
-		// and clean-exit guards still apply.
 		if isStableCrashLoop(&pod.Status.InitContainerStatuses[i], now, false) {
 			return true
 		}

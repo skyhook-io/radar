@@ -45,13 +45,15 @@ type diagnoseInput struct {
 // NarrowHint is set when the resolved pod set was capped for log fan-out
 // — see capDiagnosePods.
 type diagnoseResponse struct {
-	Resource        any                              `json:"resource"`
-	ResourceContext *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
-	LogsCurrent     []podLogEntry                    `json:"logsCurrent,omitempty"`
-	LogsPrevious    []podLogEntry                    `json:"logsPrevious,omitempty"`
-	LogsError       string                           `json:"logsError,omitempty"`
-	Events          []aicontext.DeduplicatedEvent    `json:"events,omitempty"`
-	EventsError     string                           `json:"eventsError,omitempty"`
+	Resource            any                              `json:"resource"`
+	ResourceContext     *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
+	LogsCurrent         []podLogEntry                    `json:"logsCurrent,omitempty"`
+	LogsPrevious        []podLogEntry                    `json:"logsPrevious,omitempty"`
+	CrashCause          []diagnoseCrashCause             `json:"crashCause,omitempty"`
+	CrashCauseTruncated bool                             `json:"crashCauseTruncated,omitempty"`
+	LogsError           string                           `json:"logsError,omitempty"`
+	Events              []aicontext.DeduplicatedEvent    `json:"events,omitempty"`
+	EventsError         string                           `json:"eventsError,omitempty"`
 	// StartupBlockers carries why the workload can't reach Running when that's
 	// the failure mode, spanning the whole pre-Running path: unschedulable pods
 	// (offending node constraint named), admission rejections (quota/
@@ -270,6 +272,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 			wg.Wait()
 			resp.LogsCurrent = current
 			resp.LogsPrevious = previous
+			resp.CrashCause, resp.CrashCauseTruncated = crashCauseForDiagnose(logPods, current, previous, time.Now())
 		}
 	}
 	if logsTruncated {
