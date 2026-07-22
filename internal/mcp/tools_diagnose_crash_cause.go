@@ -20,10 +20,13 @@ const (
 
 // Crash-class line shapes: runtime panic/abort markers (Go, Rust, JVM, Python,
 // signals) plus conventionally-named exception classes ("KeyError:",
-// "Caused by: java.net.ConnectException:", "(NoMethodError)") — the class-name
-// alternative is case-sensitive so lowercase prose like "an error:" never
-// qualifies as crash-class.
-var fatalCrashLogPattern = regexp.MustCompile(`(?i)(\bpanic:|\bpanicked at\b|\bFATAL\b|\bException\b|\bTraceback\b|\bCRITICAL\b|\bSIG(?:SEGV|ABRT|BUS|ILL|FPE)\b|segmentation fault|(?-i:\b[A-Z][A-Za-z]*(?:Error|Exception)[:)]))`)
+// "Caused by: java.net.ConnectException:", "(NoMethodError)"). The bare
+// Exception word and the class-name alternative are case-sensitive: real
+// crash headers capitalize ("Exception in thread ...", "KeyError:"), while
+// lowercase prose ("caught exception in background thread", "an error:") is
+// commentary that must not outrank a later real crash header. .NET's
+// "Unhandled exception." still qualifies via its exception class name.
+var fatalCrashLogPattern = regexp.MustCompile(`(?i)(\bpanic:|\bpanicked at\b|\bFATAL\b|\bTraceback\b|\bCRITICAL\b|\bSIG(?:SEGV|ABRT|BUS|ILL|FPE)\b|segmentation fault|(?-i:\bException\b|\b[A-Z][A-Za-z]*(?:Error|Exception)[:)]))`)
 
 // How the crash-evidence line was chosen — carried on the response so the
 // agent can weigh the line's confidence itself instead of treating every
