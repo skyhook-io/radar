@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/logsafe"
+	"github.com/skyhook-io/radar/pkg/cronsched"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -19,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 var (
@@ -26,12 +28,25 @@ var (
 )
 
 const (
-	sidecarJobAccumulationThreshold = 2
-	sidecarJobStuckGrace            = 2 * time.Minute
-	sidecarJobRecentSuccessWindow   = 15 * time.Minute
+	sidecarJobAccumulationThreshold      = 2
+	sidecarJobMinimumStuckGrace          = 2 * time.Minute
+	sidecarJobMinimumRecentSuccessWindow = 15 * time.Minute
+	sidecarJobRecentSuccessIntervalCount = 2
 )
 
-func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time) []Detection {
+type sidecarJobTimingResult struct {
+	stuckGrace          time.Duration
+	recentSuccessWindow time.Duration
+	ok                  bool
+}
+
+type sidecarJobTimingCacheKey struct {
+	schedule   string
+	timeZone   string
+	anchorYear int
+}
+
+func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time, podsByNamespace map[string][]*corev1.Pod) []Detection {
 	var out []Detection
 	if namespace == "" {
 		out = append(out, detectSuspiciousCoreDNS(cache, now)...)
@@ -39,11 +54,11 @@ func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time)
 	out = append(out, detectEnvServiceRefs(cache, namespace, now)...)
 	out = append(out, detectDuplicateEnvVars(cache, namespace, now)...)
 	out = append(out, detectStaleSecretEnv(cache, namespace, now)...)
-	out = append(out, detectStuckSidecarJobs(cache, namespace, now)...)
+	out = append(out, detectStuckSidecarJobs(cache, namespace, now, podsByNamespace)...)
 	return out
 }
 
-func detectStuckSidecarJobs(cache *ResourceCache, namespace string, now time.Time) []Detection {
+func detectStuckSidecarJobs(cache *ResourceCache, namespace string, now time.Time, podsByNamespace map[string][]*corev1.Pod) []Detection {
 	if cache == nil || cache.CronJobs() == nil || cache.Jobs() == nil || cache.Pods() == nil {
 		return nil
 	}
@@ -60,26 +75,38 @@ func detectStuckSidecarJobs(cache *ResourceCache, namespace string, now time.Tim
 		return nil
 	}
 
-	podsByNamespace := listPodsByNamespace(cache, namespace)
-	jobsByNamespace := make(map[string][]*batchv1.Job)
+	type cronJobOwnerKey struct {
+		name string
+		uid  types.UID
+	}
+	jobsByOwner := make(map[string]map[cronJobOwnerKey][]*batchv1.Job)
 	loadedJobNamespaces := make(map[string]bool)
+	timingCache := make(map[sidecarJobTimingCacheKey]sidecarJobTimingResult)
 	var out []Detection
 	for _, cj := range cronJobs {
+		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+			continue
+		}
 		if !loadedJobNamespaces[cj.Namespace] {
 			jobs, listErr := cache.Jobs().Jobs(cj.Namespace).List(labels.Everything())
 			if listErr != nil {
 				logConfigListError("Job", cj.Namespace, listErr)
 			} else {
-				jobsByNamespace[cj.Namespace] = jobs
+				byOwner := make(map[cronJobOwnerKey][]*batchv1.Job)
+				for _, job := range jobs {
+					controller := metav1.GetControllerOf(job)
+					if controller == nil || controller.Kind != "CronJob" {
+						continue
+					}
+					key := cronJobOwnerKey{name: controller.Name, uid: controller.UID}
+					byOwner[key] = append(byOwner[key], job)
+				}
+				jobsByOwner[cj.Namespace] = byOwner
 			}
 			loadedJobNamespaces[cj.Namespace] = true
 		}
 
-		ownedJobs := ownedCronJobJobs(cj, jobsByNamespace[cj.Namespace])
-		if cronJobSucceededRecently(cj, ownedJobs, now) {
-			continue
-		}
-
+		ownedJobs := jobsByOwner[cj.Namespace][cronJobOwnerKey{name: cj.Name, uid: cj.UID}]
 		activeJobs := make(map[string]*batchv1.Job)
 		for _, job := range ownedJobs {
 			if job.Status.Succeeded == 0 && job.Status.Active >= 1 {
@@ -90,46 +117,100 @@ func detectStuckSidecarJobs(cache *ResourceCache, namespace string, now time.Tim
 			continue
 		}
 
+		timingKey := sidecarTimingCacheKey(cj)
+		timing, found := timingCache[timingKey]
+		if !found {
+			timing.stuckGrace, timing.recentSuccessWindow, timing.ok = sidecarJobTiming(cj)
+			timingCache[timingKey] = timing
+		}
+		if !timing.ok || cronJobSucceededRecently(cj, ownedJobs, now, timing.recentSuccessWindow) {
+			continue
+		}
+		if !cronJobHasRecordedSuccess(cj, ownedJobs) {
+			// A CronJob may spend most of its life suspended. Start the warmup when
+			// its current active Jobs actually appeared, not when the object did.
+			firstActiveStart, ok := oldestActiveJobStart(activeJobs)
+			if !ok || now.Sub(firstActiveStart) < 2*timing.recentSuccessWindow {
+				continue
+			}
+		}
+
 		// Neither accumulating Jobs nor a completed/running container pair is
 		// diagnostic alone. Requiring both plus a completion drought avoids the
 		// common slow-worker and overlapping-CronJob false positives.
-		completedContainer, runningContainer, podName, found := stuckSidecarEvidence(podsByNamespace[cj.Namespace], activeJobs, now)
+		evidence, found := stuckSidecarEvidence(podsByNamespace[cj.Namespace], activeJobs, now, timing.stuckGrace)
 		if !found {
 			continue
 		}
 
 		age := ageSeconds(now, cj.CreationTimestamp.Time)
+		duration := ageSeconds(now, evidence.startedAt)
 		out = append(out, Detection{
-			Kind:        "CronJob",
-			Group:       "batch",
-			Namespace:   cj.Namespace,
-			Name:        cj.Name,
-			Severity:    "warning",
-			Reason:      "SidecarBlocksJobCompletion",
-			Message:     fmt.Sprintf("CronJob %q has %d active Jobs and no recent successful completions. In pod %q, container %q completed successfully but container %q is still running, preventing the pod and Job from reaching Succeeded.", cj.Name, len(activeJobs), podName, completedContainer, runningContainer),
-			Action:      "If the still-running container is intended as a long-lived sidecar and the cluster runs Kubernetes 1.29+ with SidecarContainers enabled, move it to initContainers with restartPolicy: Always (KEP-753; stable in Kubernetes 1.33) so Kubernetes terminates it after regular containers finish. Then delete the accumulated stuck Jobs. Otherwise, adjust the schedule or make the remaining workload terminate.",
-			Age:         FormatAge(time.Duration(age) * time.Second),
-			AgeSeconds:  age,
-			Fingerprint: fmt.Sprintf("job-sidecar-block:%s:%s", cj.Namespace, cj.Name),
+			Kind:            "CronJob",
+			Group:           "batch",
+			Namespace:       cj.Namespace,
+			Name:            cj.Name,
+			Severity:        "warning",
+			Reason:          "SidecarBlocksJobCompletion",
+			Message:         fmt.Sprintf("CronJob %q has %d active Jobs and no recent successful completions. In pod %q, container %q completed successfully but container %q is still running, preventing the pod and Job from reaching Succeeded.", cj.Name, len(activeJobs), evidence.podName, evidence.completedContainer, evidence.runningContainer),
+			Action:          "If the still-running container is intended as a long-lived sidecar and the cluster runs Kubernetes 1.29+ with SidecarContainers enabled, move it to initContainers with restartPolicy: Always (KEP-753; stable in Kubernetes 1.33) so Kubernetes terminates it after regular containers finish. Then delete the accumulated stuck Jobs. Otherwise, adjust the schedule or make the remaining workload terminate.",
+			Age:             FormatAge(time.Duration(age) * time.Second),
+			AgeSeconds:      age,
+			Duration:        FormatAge(time.Duration(duration) * time.Second),
+			DurationSeconds: duration,
+			Fingerprint:     fmt.Sprintf("job-sidecar-block:%s:%s", cj.Namespace, cj.Name),
 		})
 	}
 	return out
 }
 
-func ownedCronJobJobs(cj *batchv1.CronJob, jobs []*batchv1.Job) []*batchv1.Job {
-	var owned []*batchv1.Job
-	for _, job := range jobs {
-		controller := metav1.GetControllerOf(job)
-		if controller == nil || controller.Kind != "CronJob" || controller.Name != cj.Name || controller.UID != cj.UID {
-			continue
-		}
-		owned = append(owned, job)
+func sidecarTimingCacheKey(cj *batchv1.CronJob) sidecarJobTimingCacheKey {
+	timeZone := "UTC"
+	if cj.Spec.TimeZone != nil && *cj.Spec.TimeZone != "" {
+		timeZone = *cj.Spec.TimeZone
 	}
-	return owned
+	anchor := cj.CreationTimestamp.Time
+	if loc, err := time.LoadLocation(timeZone); err == nil {
+		anchor = anchor.In(loc)
+	}
+	return sidecarJobTimingCacheKey{schedule: cj.Spec.Schedule, timeZone: timeZone, anchorYear: anchor.Year()}
 }
 
-func cronJobSucceededRecently(cj *batchv1.CronJob, jobs []*batchv1.Job, now time.Time) bool {
-	cutoff := now.Add(-sidecarJobRecentSuccessWindow)
+func sidecarJobTiming(cj *batchv1.CronJob) (time.Duration, time.Duration, bool) {
+	if cj.CreationTimestamp.IsZero() {
+		return 0, 0, false
+	}
+	timeZone := ""
+	if cj.Spec.TimeZone != nil {
+		timeZone = *cj.Spec.TimeZone
+	}
+	interval, ok := cronsched.SampledMaxInterval(cj.Spec.Schedule, timeZone, cj.CreationTimestamp.Time)
+	if !ok {
+		return 0, 0, false
+	}
+
+	// The floors absorb short status transitions. Cadence provides the actual
+	// allowance for a legitimate sibling to finish and for prior success to
+	// remain evidence that the template can complete.
+	stuckGrace := max(sidecarJobMinimumStuckGrace, interval)
+	recentSuccessWindow := max(sidecarJobMinimumRecentSuccessWindow, sidecarJobRecentSuccessIntervalCount*interval)
+	return stuckGrace, recentSuccessWindow, true
+}
+
+func cronJobHasRecordedSuccess(cj *batchv1.CronJob, jobs []*batchv1.Job) bool {
+	if cj.Status.LastSuccessfulTime != nil {
+		return true
+	}
+	for _, job := range jobs {
+		if job.Status.Succeeded > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func cronJobSucceededRecently(cj *batchv1.CronJob, jobs []*batchv1.Job, now time.Time, window time.Duration) bool {
+	cutoff := now.Add(-window)
 	if cj.Status.LastSuccessfulTime != nil && !cj.Status.LastSuccessfulTime.Time.Before(cutoff) {
 		return true
 	}
@@ -144,7 +225,32 @@ func cronJobSucceededRecently(cj *batchv1.CronJob, jobs []*batchv1.Job, now time
 	return false
 }
 
-func stuckSidecarEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time) (string, string, string, bool) {
+func oldestActiveJobStart(jobs map[string]*batchv1.Job) (time.Time, bool) {
+	var oldest time.Time
+	for _, job := range jobs {
+		startedAt := job.CreationTimestamp.Time
+		if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
+			startedAt = job.Status.StartTime.Time
+		}
+		if startedAt.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || startedAt.Before(oldest) {
+			oldest = startedAt
+		}
+	}
+	return oldest, !oldest.IsZero()
+}
+
+type sidecarJobEvidence struct {
+	completedContainer string
+	runningContainer   string
+	podName            string
+	startedAt          time.Time
+}
+
+func stuckSidecarEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time, grace time.Duration) (sidecarJobEvidence, bool) {
+	var best sidecarJobEvidence
 	for _, pod := range pods {
 		if pod.Status.Phase == corev1.PodSucceeded {
 			continue
@@ -157,14 +263,24 @@ func stuckSidecarEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job
 		if job == nil || controller.UID != job.UID {
 			continue
 		}
-		if completed, running, ok := stuckRegularContainerPair(pod.Status.ContainerStatuses, now); ok {
-			return completed, running, pod.Name, true
+		completed, running, startedAt, ok := stuckRegularContainerPair(pod.Status.ContainerStatuses, now, grace)
+		if !ok {
+			continue
+		}
+		candidate := sidecarJobEvidence{completedContainer: completed, runningContainer: running, podName: pod.Name, startedAt: startedAt}
+		if best.startedAt.IsZero() || candidate.startedAt.Before(best.startedAt) || (candidate.startedAt.Equal(best.startedAt) && evidenceKey(candidate) < evidenceKey(best)) {
+			best = candidate
 		}
 	}
-	return "", "", "", false
+	return best, !best.startedAt.IsZero()
 }
 
-func stuckRegularContainerPair(statuses []corev1.ContainerStatus, now time.Time) (string, string, bool) {
+func evidenceKey(e sidecarJobEvidence) string {
+	return e.podName + "\x00" + e.completedContainer + "\x00" + e.runningContainer
+}
+
+func stuckRegularContainerPair(statuses []corev1.ContainerStatus, now time.Time, grace time.Duration) (string, string, time.Time, bool) {
+	var best sidecarJobEvidence
 	for _, completed := range statuses {
 		terminated := completed.State.Terminated
 		if terminated == nil || terminated.ExitCode != 0 || terminated.FinishedAt.IsZero() {
@@ -178,14 +294,15 @@ func stuckRegularContainerPair(statuses []corev1.ContainerStatus, now time.Time)
 			if running.State.Running.StartedAt.Time.After(shapeStartedAt) {
 				shapeStartedAt = running.State.Running.StartedAt.Time
 			}
-			// TODO: derive this grace from the CronJob schedule once a cron parser
-			// is available; the fixed grace is intentionally conservative for v1.
-			if now.Sub(shapeStartedAt) >= sidecarJobStuckGrace {
-				return completed.Name, running.Name, true
+			if now.Sub(shapeStartedAt) >= grace {
+				candidate := sidecarJobEvidence{completedContainer: completed.Name, runningContainer: running.Name, startedAt: shapeStartedAt}
+				if best.startedAt.IsZero() || candidate.startedAt.Before(best.startedAt) || (candidate.startedAt.Equal(best.startedAt) && evidenceKey(candidate) < evidenceKey(best)) {
+					best = candidate
+				}
 			}
 		}
 	}
-	return "", "", false
+	return best.completedContainer, best.runningContainer, best.startedAt, !best.startedAt.IsZero()
 }
 
 // DetectSuspiciousCoreDNS returns conservative CoreDNS Corefile findings for

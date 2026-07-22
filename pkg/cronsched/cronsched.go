@@ -1,7 +1,6 @@
-// Package cronsched provides coarse cadence estimation for cron schedules so
-// staleness checks can grade "this CronJob hasn't run recently" against the
-// schedule's own interval instead of a flat daily threshold. A quarterly job
-// that ran on schedule 29 days ago is healthy, not stale.
+// Package cronsched provides sampled and coarse cadence calculations for cron
+// schedules. Sampled intervals support schedule-relative diagnostics; coarse
+// estimates keep rare-cadence staleness checks from using a flat daily limit.
 package cronsched
 
 import (
@@ -9,9 +8,170 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
-const day = 24 * time.Hour
+const (
+	day                               = 24 * time.Hour
+	cadenceCalendarSampleYears        = 8
+	cronSpecStarBit            uint64 = 1 << 63
+)
+
+// SampledMaxInterval returns the longest interval found across eight calendar
+// years of a Kubernetes CronJob schedule. Walking civil dates rather than every
+// firing keeps dense schedules bounded while still seeing overnight, weekend,
+// month-length, leap-year, and daylight-saving boundaries.
+// The separate timeZone argument mirrors CronJob.spec.timeZone. An omitted time
+// zone uses UTC so the machine running Radar cannot change the result. Callers
+// that need a stable threshold must pass a stable anchor.
+func SampledMaxInterval(schedule, timeZone string, anchor time.Time) (time.Duration, bool) {
+	spec := strings.TrimSpace(schedule)
+	if spec == "" {
+		return 0, false
+	}
+	if timeZone == "" {
+		timeZone = "UTC"
+	}
+	loc, err := time.LoadLocation(timeZone)
+	if err != nil {
+		return 0, false
+	}
+	spec = "CRON_TZ=" + timeZone + " " + spec
+
+	parsed, err := cron.ParseStandard(spec)
+	if err != nil {
+		return 0, false
+	}
+	if constant, ok := parsed.(cron.ConstantDelaySchedule); ok {
+		return constant.Delay, constant.Delay > 0
+	}
+	anchorLocal := anchor.In(loc)
+	date := time.Date(anchorLocal.Year(), time.January, 1, 0, 0, 0, 0, loc)
+	first := parsed.Next(date.Add(-time.Second))
+	if first.IsZero() {
+		return 0, false
+	}
+	parsedSpec, ok := parsed.(*cron.SpecSchedule)
+	if !ok {
+		return 0, false
+	}
+	offsets := scheduledMinuteOffsets(parsedSpec)
+	if len(offsets) == 0 {
+		return 0, false
+	}
+
+	longest := maxScheduledMinuteGap(offsets)
+	end := date.AddDate(cadenceCalendarSampleYears, 0, 0)
+	var previousLast time.Time
+	for !date.After(end) {
+		if specMatchesDate(parsedSpec, date) {
+			firstOfDay, lastOfDay, found := scheduledDayBounds(date, offsets)
+			if utcOffsetChangesAcrossDate(date) {
+				var intraDay time.Duration
+				var ok bool
+				firstOfDay, lastOfDay, intraDay, found, ok = actualScheduledDayBounds(parsed, date)
+				if !ok {
+					return 0, false
+				}
+				longest = max(longest, intraDay)
+			}
+			if found && !lastOfDay.Before(first) {
+				if !previousLast.IsZero() {
+					longest = max(longest, firstOfDay.Sub(previousLast))
+				}
+				previousLast = lastOfDay
+			}
+		}
+		date = date.AddDate(0, 0, 1)
+	}
+	return longest, longest > 0
+}
+
+func scheduledMinuteOffsets(schedule *cron.SpecSchedule) []int {
+	var offsets []int
+	for hour := range 24 {
+		if schedule.Hour&(1<<hour) == 0 {
+			continue
+		}
+		for minute := range 60 {
+			if schedule.Minute&(1<<minute) != 0 {
+				offsets = append(offsets, hour*60+minute)
+			}
+		}
+	}
+	return offsets
+}
+
+func maxScheduledMinuteGap(offsets []int) time.Duration {
+	var longest time.Duration
+	for i := 1; i < len(offsets); i++ {
+		longest = max(longest, time.Duration(offsets[i]-offsets[i-1])*time.Minute)
+	}
+	return longest
+}
+
+func specMatchesDate(schedule *cron.SpecSchedule, date time.Time) bool {
+	if schedule.Month&(1<<uint(date.Month())) == 0 {
+		return false
+	}
+	domMatch := schedule.Dom&(1<<uint(date.Day())) != 0
+	dowMatch := schedule.Dow&(1<<uint(date.Weekday())) != 0
+	if schedule.Dom&cronSpecStarBit != 0 || schedule.Dow&cronSpecStarBit != 0 {
+		return domMatch && dowMatch
+	}
+	return domMatch || dowMatch
+}
+
+func scheduledDayBounds(date time.Time, offsets []int) (time.Time, time.Time, bool) {
+	for _, offset := range offsets {
+		first, ok := scheduledTimeOnDate(date, offset)
+		if !ok {
+			continue
+		}
+		for i := len(offsets) - 1; i >= 0; i-- {
+			last, ok := scheduledTimeOnDate(date, offsets[i])
+			if ok {
+				return first, last, true
+			}
+		}
+	}
+	return time.Time{}, time.Time{}, false
+}
+
+func scheduledTimeOnDate(date time.Time, offset int) (time.Time, bool) {
+	hour, minute := offset/60, offset%60
+	candidate := time.Date(date.Year(), date.Month(), date.Day(), hour, minute, 0, 0, date.Location())
+	ok := candidate.Year() == date.Year() && candidate.Month() == date.Month() && candidate.Day() == date.Day() &&
+		candidate.Hour() == hour && candidate.Minute() == minute
+	return candidate, ok
+}
+
+func utcOffsetChangesAcrossDate(date time.Time) bool {
+	_, startOffset := date.Zone()
+	_, endOffset := date.AddDate(0, 0, 1).Zone()
+	return startOffset != endOffset
+}
+
+func actualScheduledDayBounds(schedule cron.Schedule, date time.Time) (time.Time, time.Time, time.Duration, bool, bool) {
+	var first, previous time.Time
+	var longest time.Duration
+	for next := schedule.Next(date.Add(-time.Second)); ; next = schedule.Next(previous) {
+		if next.IsZero() {
+			return time.Time{}, time.Time{}, 0, false, false
+		}
+		local := next.In(date.Location())
+		if local.Year() != date.Year() || local.Month() != date.Month() || local.Day() != date.Day() {
+			return first, previous, longest, !first.IsZero(), true
+		}
+		if first.IsZero() {
+			first = next
+		} else {
+			longest = max(longest, next.Sub(previous))
+		}
+		previous = next
+	}
+}
 
 // MinInterval estimates a representative interval between runs of a standard
 // 5-field cron schedule (minute hour dom month dow), plus the common @-macros.

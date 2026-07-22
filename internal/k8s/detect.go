@@ -143,7 +143,8 @@ func podOwnerKindName(cache *ResourceCache, pod *corev1.Pod) (group, kind, name 
 func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 	var problems []Detection
 	now := time.Now()
-	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
+	podsByNamespace := listPodsByNamespace(cache, namespace)
+	problems = append(problems, detectConfigProblems(cache, namespace, now, podsByNamespace)...)
 
 	if namespace == "" {
 		if nsLister := cache.Namespaces(); nsLister != nil {
@@ -183,8 +184,6 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 		}
 	}
-
-	podsByNamespace := listPodsByNamespace(cache, namespace)
 
 	// Deployment problems: unavailableReplicas > 0
 	if depLister := cache.Deployments(); depLister != nil {

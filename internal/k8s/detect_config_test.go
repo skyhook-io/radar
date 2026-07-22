@@ -174,7 +174,7 @@ func TestDetectConfigProblemsIncludesDuplicateEnvVars(t *testing.T) {
 	t.Cleanup(core.Stop)
 	cache := &ResourceCache{ResourceCache: core}
 
-	got := detectConfigProblems(cache, "prod", now)
+	got := detectConfigProblems(cache, "prod", now, listPodsByNamespace(cache, "prod"))
 	if len(got) != 1 {
 		t.Fatalf("got %d config problems, want 1: %+v", len(got), got)
 	}
@@ -198,6 +198,8 @@ func TestDetectStuckSidecarJobs(t *testing.T) {
 		allNamespaces   bool
 		wantDetections  int
 		wantActiveCount int
+		wantAge         time.Duration
+		wantDuration    time.Duration
 	}{
 		{
 			name:            "accumulating jobs with completed and running containers",
@@ -236,6 +238,14 @@ func TestDetectStuckSidecarJobs(t *testing.T) {
 			name: "recent succeeded owned Job",
 			mutate: func(f *sidecarJobFixture) {
 				f.jobs = append(f.jobs, sidecarTestSucceededJob(f.cronJob, "recent-success", now.Add(-5*time.Minute)))
+			},
+		},
+		{
+			name: "partial success without completion time suppresses conservatively",
+			mutate: func(f *sidecarJobFixture) {
+				job := sidecarTestSucceededJob(f.cronJob, "partial-success", now.Add(-24*time.Hour))
+				job.Status.CompletionTime = nil
+				f.jobs = append(f.jobs, job)
 			},
 		},
 		{
@@ -279,6 +289,109 @@ func TestDetectStuckSidecarJobs(t *testing.T) {
 			},
 		},
 		{
+			name: "container pair at grace boundary fires",
+			mutate: func(f *sidecarJobFixture) {
+				for _, pod := range f.pods {
+					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-2*time.Minute))
+				}
+			},
+			wantDetections:  1,
+			wantActiveCount: 3,
+			wantDuration:    2 * time.Minute,
+		},
+		{
+			name: "hourly schedule requires an hour in the stuck shape",
+			mutate: func(f *sidecarJobFixture) {
+				f.cronJob.Spec.Schedule = "0 * * * *"
+				for _, pod := range f.pods {
+					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-30*time.Minute))
+				}
+			},
+		},
+		{
+			name: "hourly schedule fires after schedule-aware grace",
+			mutate: func(f *sidecarJobFixture) {
+				f.cronJob.Spec.Schedule = "0 * * * *"
+				for _, pod := range f.pods {
+					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-61*time.Minute))
+					pod.Status.ContainerStatuses[1] = sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-2*time.Hour))
+				}
+			},
+			wantDetections:  1,
+			wantActiveCount: 3,
+			wantDuration:    61 * time.Minute,
+		},
+		{
+			name: "hourly schedule uses two intervals for recent success",
+			mutate: func(f *sidecarJobFixture) {
+				f.cronJob.Spec.Schedule = "0 * * * *"
+				recent := metav1.NewTime(now.Add(-90 * time.Minute))
+				f.cronJob.Status.LastSuccessfulTime = &recent
+				for _, pod := range f.pods {
+					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-3*time.Hour))
+					pod.Status.ContainerStatuses[1] = sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-4*time.Hour))
+				}
+			},
+		},
+		{
+			name: "hourly schedule ignores success older than two intervals",
+			mutate: func(f *sidecarJobFixture) {
+				f.cronJob.Spec.Schedule = "0 * * * *"
+				old := metav1.NewTime(now.Add(-121 * time.Minute))
+				f.cronJob.Status.LastSuccessfulTime = &old
+				for _, pod := range f.pods {
+					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-3*time.Hour))
+					pod.Status.ContainerStatuses[1] = sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-4*time.Hour))
+				}
+			},
+			wantDetections:  1,
+			wantActiveCount: 3,
+			wantDuration:    3 * time.Hour,
+		},
+		{
+			name: "invalid schedule fails closed",
+			mutate: func(f *sidecarJobFixture) {
+				f.cronJob.Spec.Schedule = "not a schedule"
+			},
+		},
+		{
+			name: "invalid time zone fails closed",
+			mutate: func(f *sidecarJobFixture) {
+				invalid := "Mars/Olympus_Mons"
+				f.cronJob.Spec.TimeZone = &invalid
+			},
+		},
+		{
+			name: "suspended CronJob is intentionally quiet",
+			mutate: func(f *sidecarJobFixture) {
+				suspended := true
+				f.cronJob.Spec.Suspend = &suspended
+			},
+		},
+		{
+			name: "new CronJob without any success gets a fair startup window",
+			mutate: func(f *sidecarJobFixture) {
+				f.cronJob.CreationTimestamp = metav1.NewTime(now.Add(-29 * time.Minute))
+				setSidecarTestJobStarts(f.jobs, now.Add(-29*time.Minute))
+			},
+		},
+		{
+			name: "new CronJob startup window boundary fires",
+			mutate: func(f *sidecarJobFixture) {
+				f.cronJob.CreationTimestamp = metav1.NewTime(now.Add(-30 * time.Minute))
+				setSidecarTestJobStarts(f.jobs, now.Add(-30*time.Minute))
+			},
+			wantDetections:  1,
+			wantActiveCount: 3,
+			wantAge:         30 * time.Minute,
+		},
+		{
+			name: "old CronJob resumed recently gets a fresh startup window",
+			mutate: func(f *sidecarJobFixture) {
+				setSidecarTestJobStarts(f.jobs, now.Add(-10*time.Minute))
+			},
+		},
+		{
 			name: "running sibling restarted within grace",
 			mutate: func(f *sidecarJobFixture) {
 				for _, pod := range f.pods {
@@ -309,6 +422,14 @@ func TestDetectStuckSidecarJobs(t *testing.T) {
 				}
 				f.jobs = append(f.jobs, completedJob)
 				f.pods = append(f.pods, completedPod)
+			},
+		},
+		{
+			name: "succeeded-phase active Job pods cannot supply evidence",
+			mutate: func(f *sidecarJobFixture) {
+				for _, pod := range f.pods {
+					pod.Status.Phase = corev1.PodSucceeded
+				}
 			},
 		},
 		{
@@ -365,7 +486,7 @@ func TestDetectStuckSidecarJobs(t *testing.T) {
 				namespace = ""
 			}
 			var got []Detection
-			for _, detection := range detectConfigProblems(cache, namespace, now) {
+			for _, detection := range detectConfigProblems(cache, namespace, now, listPodsByNamespace(cache, namespace)) {
 				if detection.Reason == "SidecarBlocksJobCompletion" {
 					got = append(got, detection)
 				}
@@ -394,10 +515,78 @@ func TestDetectStuckSidecarJobs(t *testing.T) {
 					t.Errorf("action %q does not contain %q", detection.Action, want)
 				}
 			}
-			if detection.AgeSeconds != int64((6 * time.Hour).Seconds()) {
-				t.Errorf("AgeSeconds = %d, want %d", detection.AgeSeconds, int64((6 * time.Hour).Seconds()))
+			wantAge := tt.wantAge
+			if wantAge == 0 {
+				wantAge = 6 * time.Hour
+			}
+			if detection.AgeSeconds != int64(wantAge.Seconds()) {
+				t.Errorf("AgeSeconds = %d, want %d", detection.AgeSeconds, int64(wantAge.Seconds()))
+			}
+			wantDuration := tt.wantDuration
+			if wantDuration == 0 {
+				wantDuration = 10 * time.Minute
+			}
+			if detection.DurationSeconds != int64(wantDuration.Seconds()) {
+				t.Errorf("DurationSeconds = %d, want %d", detection.DurationSeconds, int64(wantDuration.Seconds()))
 			}
 		})
+	}
+}
+
+func TestSidecarJobTiming(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 12, 0, 30, 0, time.UTC)
+	fixedTimeZone := "Etc/GMT-2"
+	invalidTimeZone := "Mars/Olympus_Mons"
+	tests := []struct {
+		name       string
+		schedule   string
+		timeZone   *string
+		wantGrace  time.Duration
+		wantWindow time.Duration
+		wantOK     bool
+	}{
+		{name: "per-minute floors", schedule: "* * * * *", wantGrace: 2 * time.Minute, wantWindow: 15 * time.Minute, wantOK: true},
+		{name: "five-minute grace with window floor", schedule: "*/5 * * * *", wantGrace: 5 * time.Minute, wantWindow: 15 * time.Minute, wantOK: true},
+		{name: "hourly cadence", schedule: "0 * * * *", wantGrace: time.Hour, wantWindow: 2 * time.Hour, wantOK: true},
+		{name: "non-uniform cadence uses sampled maximum", schedule: "0 9,17 * * *", wantGrace: 16 * time.Hour, wantWindow: 32 * time.Hour, wantOK: true},
+		{name: "daily cadence with timezone", schedule: "0 2 * * *", timeZone: &fixedTimeZone, wantGrace: 24 * time.Hour, wantWindow: 48 * time.Hour, wantOK: true},
+		{name: "invalid schedule fails closed", schedule: "not a schedule"},
+		{name: "invalid timezone fails closed", schedule: "0 2 * * *", timeZone: &invalidTimeZone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cj := &batchv1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(now.Add(-24 * time.Hour))},
+				Spec:       batchv1.CronJobSpec{Schedule: tt.schedule, TimeZone: tt.timeZone},
+			}
+			grace, window, ok := sidecarJobTiming(cj)
+			if ok != tt.wantOK || grace != tt.wantGrace || window != tt.wantWindow {
+				t.Fatalf("sidecarJobTiming() = (%s, %s, %t), want (%s, %s, %t)", grace, window, ok, tt.wantGrace, tt.wantWindow, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestStuckSidecarEvidenceIsDeterministic(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 12, 0, 0, 0, time.UTC)
+	fixture := newSidecarJobFixture(now, 2)
+	fixture.pods[0].Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-10*time.Minute))
+	fixture.pods[1].Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-20*time.Minute))
+	activeJobs := map[string]*batchv1.Job{
+		fixture.jobs[0].Name: fixture.jobs[0],
+		fixture.jobs[1].Name: fixture.jobs[1],
+	}
+
+	forward, ok := stuckSidecarEvidence(fixture.pods, activeJobs, now, 2*time.Minute)
+	if !ok {
+		t.Fatal("stuckSidecarEvidence() found no evidence")
+	}
+	reverse, ok := stuckSidecarEvidence([]*corev1.Pod{fixture.pods[1], fixture.pods[0]}, activeJobs, now, 2*time.Minute)
+	if !ok {
+		t.Fatal("stuckSidecarEvidence() found no evidence for reversed input")
+	}
+	if forward != reverse || forward.podName != fixture.pods[1].Name {
+		t.Fatalf("evidence changed with input order: forward=%+v reverse=%+v", forward, reverse)
 	}
 }
 
@@ -416,16 +605,19 @@ func newSidecarJobFixture(now time.Time, activeJobs int) *sidecarJobFixture {
 			UID:               types.UID("cronjob-uid"),
 			CreationTimestamp: metav1.NewTime(now.Add(-6 * time.Hour)),
 		},
+		Spec: batchv1.CronJobSpec{Schedule: "* * * * *"},
 	}
 	fixture := &sidecarJobFixture{cronJob: cronJob}
 	for i := 0; i < activeJobs; i++ {
 		name := fmt.Sprintf("audit-log-archiver-%d", i)
 		uid := types.UID("job-" + name)
+		startedAt := metav1.NewTime(now.Add(-6 * time.Hour))
 		job := &batchv1.Job{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: "prod",
-				UID:       uid,
+				Name:              name,
+				Namespace:         "prod",
+				UID:               uid,
+				CreationTimestamp: metav1.NewTime(now.Add(-6 * time.Hour)),
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion: "batch/v1",
 					Kind:       "CronJob",
@@ -434,7 +626,7 @@ func newSidecarJobFixture(now time.Time, activeJobs int) *sidecarJobFixture {
 					Controller: &controller,
 				}},
 			},
-			Status: batchv1.JobStatus{Active: 1},
+			Status: batchv1.JobStatus{Active: 1, StartTime: &startedAt},
 		}
 		pod := &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
@@ -462,6 +654,14 @@ func newSidecarJobFixture(now time.Time, activeJobs int) *sidecarJobFixture {
 		fixture.pods = append(fixture.pods, pod)
 	}
 	return fixture
+}
+
+func setSidecarTestJobStarts(jobs []*batchv1.Job, startedAt time.Time) {
+	for _, job := range jobs {
+		job.CreationTimestamp = metav1.NewTime(startedAt)
+		start := metav1.NewTime(startedAt)
+		job.Status.StartTime = &start
+	}
 }
 
 func sidecarTestSucceededJob(cj *batchv1.CronJob, name string, completedAt time.Time) *batchv1.Job {
