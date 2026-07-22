@@ -1159,9 +1159,8 @@ func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool)
 		return nil, false
 	}
 	state := structuredDiffState{
-		fieldCap:     configMapStructuredFieldCap,
-		nodeCap:      configMapStructuredNodeCap,
-		redactValues: isDotEnvConfigKey(key),
+		fieldCap: configMapStructuredFieldCap,
+		nodeCap:  configMapStructuredNodeCap,
 	}
 	state.diff(fmt.Sprintf("data.%s", key), oldParsed, newParsed, 0)
 	if state.capped {
@@ -1250,6 +1249,11 @@ func isPropertiesConfigKey(key string) bool {
 
 func isDotEnvConfigKey(key string) bool {
 	lower := strings.ToLower(strings.TrimSpace(key))
+	// A structured extension wins: app.env.yaml / app.env.json are YAML/JSON
+	// overlay files that happen to contain ".env.", not dotenv content.
+	if strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".json") {
+		return false
+	}
 	return lower == ".env" || strings.HasPrefix(lower, ".env.") ||
 		strings.HasSuffix(lower, ".env") || strings.Contains(lower, ".env.")
 }
@@ -1329,13 +1333,12 @@ func normalizeStructuredValue(v any) any {
 }
 
 type structuredDiffState struct {
-	changes      []FieldChange
-	fields       int
-	nodes        int
-	fieldCap     int
-	nodeCap      int
-	redactValues bool
-	capped       bool
+	changes  []FieldChange
+	fields   int
+	nodes    int
+	fieldCap int
+	nodeCap  int
+	capped   bool
 }
 
 func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
@@ -1393,22 +1396,16 @@ func (s *structuredDiffState) add(path string, oldVal, newVal any) {
 		return
 	}
 	s.fields++
-	var oldValue, newValue any
-	if s.redactValues {
-		oldValue = redactPresentConfigValue(oldVal)
-		newValue = redactPresentConfigValue(newVal)
-	} else {
-		oldValue = sanitizeConfigValue(path, oldVal)
-		newValue = sanitizeConfigValue(path, newVal)
-	}
-	s.changes = append(s.changes, FieldChange{Path: path, OldValue: oldValue, NewValue: newValue})
-}
-
-func redactPresentConfigValue(value any) any {
-	if value == nil {
-		return nil
-	}
-	return "[REDACTED]"
+	// Dotenv keys get no special blanket redaction: like workload env vars,
+	// sensitive names ([REDACTED] via sensitivePath) and secret-shaped values
+	// (RedactSecrets) are masked, while a changed LOG_LEVEL stays readable —
+	// hiding every value would discard the diagnostic delta this diff exists
+	// to surface.
+	s.changes = append(s.changes, FieldChange{
+		Path:     path,
+		OldValue: sanitizeConfigValue(path, oldVal),
+		NewValue: sanitizeConfigValue(path, newVal),
+	})
 }
 
 func sanitizeConfigValue(path string, value any) any {

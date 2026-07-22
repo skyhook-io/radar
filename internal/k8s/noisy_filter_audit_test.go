@@ -793,7 +793,10 @@ func TestComputeDiff_ConfigMapPropertiesFormats(t *testing.T) {
 	}
 }
 
-func TestComputeDiff_ConfigMapDotEnvRedactsAllValues(t *testing.T) {
+// Dotenv values follow the same discipline as workload env vars: sensitive
+// names redact, everything else stays readable — a changed MODE is exactly the
+// delta this diff exists to surface.
+func TestComputeDiff_ConfigMapDotEnvRedactsSensitiveNamesOnly(t *testing.T) {
 	old := &corev1.ConfigMap{Data: map[string]string{
 		".env": "MODE=old\nDB_PASS=hunter2hunter2",
 	}}
@@ -804,14 +807,36 @@ func TestComputeDiff_ConfigMapDotEnvRedactsAllValues(t *testing.T) {
 	if diff == nil {
 		t.Fatal("ComputeDiff returned nil")
 	}
-	for _, path := range []string{"data..env.MODE", "data..env.DB_PASS"} {
-		change, ok := findChangePath(diff.Fields, path)
-		if !ok {
-			t.Fatalf("expected dotenv change at %q, got %+v", path, diff.Fields)
-		}
-		if change.OldValue != "[REDACTED]" || change.NewValue != "[REDACTED]" {
-			t.Fatalf("dotenv value at %q was not redacted: %#v -> %#v", path, change.OldValue, change.NewValue)
-		}
+	mode, ok := findChangePath(diff.Fields, "data..env.MODE")
+	if !ok || mode.OldValue != "old" || mode.NewValue != "new" {
+		t.Fatalf("non-sensitive dotenv value must stay readable: %+v", diff.Fields)
+	}
+	pass, ok := findChangePath(diff.Fields, "data..env.DB_PASS")
+	if !ok {
+		t.Fatalf("expected dotenv change at data..env.DB_PASS, got %+v", diff.Fields)
+	}
+	if pass.OldValue != "[REDACTED]" || pass.NewValue != "[REDACTED]" {
+		t.Fatalf("sensitive dotenv name was not redacted: %#v -> %#v", pass.OldValue, pass.NewValue)
+	}
+}
+
+// A structured extension beats the dotenv name fragment: app.env.yaml is a
+// YAML overlay whose values must stay visible under normal path/pattern
+// redaction, not be blanket-blanked as dotenv.
+func TestComputeDiff_ConfigMapEnvNamedYAMLKeepsValues(t *testing.T) {
+	old := &corev1.ConfigMap{Data: map[string]string{
+		"app.env.yaml": "log:\n  level: info\nnet:\n  port: 8080",
+	}}
+	updated := &corev1.ConfigMap{Data: map[string]string{
+		"app.env.yaml": "log:\n  level: debug\nnet:\n  port: 8080",
+	}}
+	diff := ComputeDiff("ConfigMap", old, updated)
+	if diff == nil {
+		t.Fatal("ComputeDiff returned nil")
+	}
+	change, ok := findChangePath(diff.Fields, "data.app.env.yaml.log.level")
+	if !ok || change.OldValue != "info" || change.NewValue != "debug" {
+		t.Fatalf("env-named YAML overlay lost its readable field delta: %+v", diff.Fields)
 	}
 }
 
