@@ -141,6 +141,76 @@ func TestCompose_PopulatesCategoryAndGroup(t *testing.T) {
 	}
 }
 
+func TestCompose_OOMDiagnosisEnrichmentPreservesIssueShape(t *testing.T) {
+	problems := []k8s.Detection{
+		{
+			Kind: "Pod", Namespace: "ns", Name: "oom", Severity: "critical",
+			Reason: "CrashLoopBackOff", Message: "back-off restarting failed container",
+			OwnerKind: "Deployment", OwnerName: "web", RestartCount: 4,
+			LastTerminatedReason: "OOMKilled",
+		},
+		{
+			Kind: "Pod", Namespace: "ns", Name: "image", Severity: "critical",
+			Reason: "ImagePullBackOff", Message: "back-off pulling image",
+			OwnerKind: "Deployment", OwnerName: "worker",
+		},
+	}
+	baseline := Compose(&fakeProvider{problems: problems}, Filters{Limit: NoLimit})
+
+	enrichedProblems := append([]k8s.Detection(nil), problems...)
+	enrichedProblems[0].Cause = "Container was OOMKilled below its owning ReplicaSet template limit."
+	enrichedProblems[0].Action = "Inspect the Pod and ReplicaSet resource discrepancy."
+	enriched := Compose(&fakeProvider{problems: enrichedProblems}, Filters{Limit: NoLimit})
+
+	if len(baseline) != len(enriched) || len(enriched) != 2 {
+		t.Fatalf("issue counts changed: baseline=%d enriched=%d", len(baseline), len(enriched))
+	}
+	for i := range baseline {
+		before, after := baseline[i], enriched[i]
+		if before.Name != after.Name {
+			t.Fatalf("issue order changed at %d: baseline=%q enriched=%q", i, before.Name, after.Name)
+		}
+		if before.ID != after.ID || before.Category != after.Category || before.CategoryGroup != after.CategoryGroup || before.Count != after.Count {
+			t.Fatalf("issue identity changed for %q: baseline=%+v enriched=%+v", before.Name, before, after)
+		}
+	}
+
+	var oom Issue
+	for i := range enriched {
+		if enriched[i].Name == "oom" {
+			oom = enriched[i]
+			break
+		}
+	}
+	if oom.Category != issuesapi.CategoryOOMKilled || oom.Cause != enrichedProblems[0].Cause || oom.Action != enrichedProblems[0].Action {
+		t.Fatalf("OOM diagnosis did not propagate: %+v", oom)
+	}
+	response := NewListResponse(enriched, ComposeStats{TotalMatched: len(enriched)})
+	if response.Total != len(enriched) || response.TotalMatched != len(enriched) || len(response.Issues) != len(enriched) {
+		t.Fatalf("response counts changed: %+v", response)
+	}
+	if response.Issues[0].Name != enriched[0].Name || response.Issues[1].Name != enriched[1].Name {
+		t.Fatalf("response order changed: %+v", response.Issues)
+	}
+
+	forbiddenProblems := append([]k8s.Detection(nil), enrichedProblems...)
+	forbiddenProblems[0].Message = `pods is forbidden: User "system:serviceaccount:ns:default" cannot list resource "configmaps"`
+	forbidden := Compose(&fakeProvider{problems: forbiddenProblems}, Filters{Limit: NoLimit})
+	for i := range forbidden {
+		if forbidden[i].Name != "oom" {
+			continue
+		}
+		if forbidden[i].Reason != "RBACForbidden" || forbidden[i].Category != issuesapi.CategoryRBACForbidden {
+			t.Fatalf("forbidden message did not take category precedence: %+v", forbidden[i])
+		}
+		if forbidden[i].Cause != "" || forbidden[i].Action != "" {
+			t.Fatalf("promoted RBAC issue retained diagnosis for the superseded OOM reason: %+v", forbidden[i])
+		}
+		return
+	}
+	t.Fatal("composed forbidden OOM issue not found")
+}
+
 func TestCompose_ClassifiesArgoWorkflowForbiddenMessage(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Detection{{

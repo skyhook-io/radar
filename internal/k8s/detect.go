@@ -430,11 +430,13 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				message = init.message
 				fingerprint = init.fingerprint
 			}
-			var cause, action string
-			if reason == crashLoopReason {
-				cause, action = health.PodCrashLoopDiagnosis(pod, now)
-			} else if c, a := imagePullDiagnosis(reason, message); c != "" {
-				cause, action = c, a
+			cause, action := oomLimitDiagnosis(cache, pod, reason, lastTermReason, now)
+			if cause == "" {
+				if reason == crashLoopReason {
+					cause, action = health.PodCrashLoopDiagnosis(pod, now)
+				} else {
+					cause, action = imagePullDiagnosis(reason, message)
+				}
 			}
 			// IssueTiming: classify whether this pod has been failing since the Deployment
 			// was first created (started_at_resource_creation) or broke after a period of

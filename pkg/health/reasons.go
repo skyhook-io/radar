@@ -164,14 +164,27 @@ func containerRecentlyRecoveredFromOOM(containers []corev1.Container, cs corev1.
 	return cs.State.Waiting != nil || restartedRecently(&cs, now, 5*time.Minute)
 }
 
-func podHasActiveOOMKilled(pod *corev1.Pod, now time.Time) bool {
-	for _, cs := range pod.Status.ContainerStatuses {
+// ActiveOOMKilledContainers returns the regular containers currently affected
+// by an OOM kill. Init containers are excluded so callers can match the result
+// to a workload template's regular containers without conflating the two lists.
+func ActiveOOMKilledContainers(pod *corev1.Pod, now time.Time) []corev1.ContainerStatus {
+	var active []corev1.ContainerStatus
+	for i := range pod.Status.ContainerStatuses {
+		cs := pod.Status.ContainerStatuses[i]
 		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
-			return true
+			active = append(active, cs)
+			continue
 		}
 		if containerRecentlyRecoveredFromOOM(pod.Spec.Containers, cs, now) {
-			return true
+			active = append(active, cs)
 		}
+	}
+	return active
+}
+
+func podHasActiveOOMKilled(pod *corev1.Pod, now time.Time) bool {
+	if len(ActiveOOMKilledContainers(pod, now)) > 0 {
+		return true
 	}
 	for _, cs := range pod.Status.InitContainerStatuses {
 		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {

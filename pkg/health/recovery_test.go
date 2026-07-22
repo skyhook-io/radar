@@ -176,6 +176,45 @@ func TestStableCrashLoopPreservesSpecificReasons(t *testing.T) {
 	}
 }
 
+func TestActiveOOMKilledContainers(t *testing.T) {
+	now := time.Now()
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{Name: "terminated"},
+			{Name: "recent"},
+			{Name: "recovered", ReadinessProbe: &corev1.Probe{}},
+		}},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:  "terminated",
+					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+				},
+				{
+					Name:                 "recent",
+					State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+				},
+				{
+					Name:                 "recovered",
+					Ready:                true,
+					State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-30 * time.Minute))}},
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+				},
+			},
+			InitContainerStatuses: []corev1.ContainerStatus{{
+				Name:  "init",
+				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+			}},
+		},
+	}
+
+	got := ActiveOOMKilledContainers(pod, now)
+	if len(got) != 2 || got[0].Name != "terminated" || got[1].Name != "recent" {
+		t.Fatalf("active regular OOM containers = %+v, want terminated and recent only", got)
+	}
+}
+
 // TestPodCrashLoopDiagnosisOrdersCandidates: the current waiting crashloop wins
 // over a newer running tick.
 func TestPodCrashLoopDiagnosisOrdersCandidates(t *testing.T) {
