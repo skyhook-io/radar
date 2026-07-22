@@ -8,20 +8,20 @@ import (
 )
 
 const (
-	ReasonAllReplicasUnavailableWithoutSurge = "all_replicas_unavailable_without_surge"
+	reasonAllReplicasUnavailableWithoutSurge = "all_replicas_unavailable_without_surge"
 	Description                              = "A RollingUpdate that permits every replica to be unavailable while allowing no surge can remove all old pods before replacements are ready. Workloads that intentionally require no overlap should use Recreate to express full replacement explicitly."
 	Remediation                              = "Set maxSurge to at least 1 (or a positive percentage) and/or lower maxUnavailable below the full replica count; use strategy.type: Recreate only when a full replacement is intentional."
 )
 
 type Risk struct {
-	Reason                 string `json:"reason"`
-	Replicas               int32  `json:"replicas"`
-	MaxSurge               string `json:"maxSurge"`
-	MaxUnavailable         string `json:"maxUnavailable"`
-	ResolvedMaxSurge       int32  `json:"resolvedMaxSurge"`
-	ResolvedMaxUnavailable int32  `json:"resolvedMaxUnavailable"`
-	Message                string `json:"message"`
-	Remediation            string `json:"remediation"`
+	Reason                 string
+	Replicas               int32
+	MaxSurge               string
+	MaxUnavailable         string
+	ResolvedMaxSurge       int32
+	ResolvedMaxUnavailable int32
+	Message                string
+	Remediation            string
 }
 
 func Applicable(deployment *appsv1.Deployment) bool {
@@ -49,7 +49,7 @@ func Analyze(deployment *appsv1.Deployment) *Risk {
 	}
 
 	return &Risk{
-		Reason:                 ReasonAllReplicasUnavailableWithoutSurge,
+		Reason:                 reasonAllReplicasUnavailableWithoutSurge,
 		Replicas:               replicas,
 		MaxSurge:               rollingUpdate.MaxSurge.String(),
 		MaxUnavailable:         rollingUpdate.MaxUnavailable.String(),

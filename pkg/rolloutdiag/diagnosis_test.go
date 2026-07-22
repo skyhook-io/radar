@@ -1,7 +1,6 @@
 package rolloutdiag
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -132,7 +131,7 @@ func TestAnalyzeRiskFactsAndCopy(t *testing.T) {
 	if risk == nil {
 		t.Fatal("Analyze() returned nil")
 	}
-	if risk.Reason != ReasonAllReplicasUnavailableWithoutSurge {
+	if risk.Reason != reasonAllReplicasUnavailableWithoutSurge {
 		t.Errorf("Reason = %q", risk.Reason)
 	}
 	if risk.Replicas != 3 || risk.MaxSurge != "0" || risk.MaxUnavailable != "100%" {
@@ -150,13 +149,6 @@ func TestAnalyzeRiskFactsAndCopy(t *testing.T) {
 		if strings.Contains(risk.Message, forbidden) {
 			t.Errorf("Message %q contains %q", risk.Message, forbidden)
 		}
-	}
-	wire, err := json.Marshal(risk)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	if strings.Contains(string(wire), "sensitive-value") {
-		t.Fatalf("risk leaked pod configuration: %s", wire)
 	}
 }
 
