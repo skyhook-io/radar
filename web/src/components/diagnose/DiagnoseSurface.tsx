@@ -23,7 +23,7 @@ import {
   agentLabelFor,
   openDiagnoseSettings,
 } from "./DiagnoseContext";
-import { useDiagnoseConsentCopy } from "../../context/DiagnoseCustomization";
+import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
 import { InvestigationView } from "./InvestigationView";
 import { RecentList } from "./Home";
 import { ConsentCard } from "./parts";
@@ -137,7 +137,11 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
 // Helm drawers, so it no longer floats viewport-fixed or DOM-measures the chrome.
 export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
   const d = useDiagnose();
-  const consentCopy = useDiagnoseConsentCopy();
+  // Injected settings action: undefined = Radar's own Settings dialog;
+  // null = hide the gear + links.
+  const { consentCopy, onOpenSettings: hostOpenSettings } = useDiagnoseCustomization();
+  const openSettings =
+    hostOpenSettings === undefined ? openDiagnoseSettings : hostOpenSettings;
   const {
     maximized,
     setMaximized,
@@ -206,7 +210,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
           agent={d.selectedAgent}
           isolated={d.isolated}
           copy={consentCopy}
-          onOpenSettings={openDiagnoseSettings}
+          onOpenSettings={openSettings ?? undefined}
           onApprove={d.approveConsent}
           onCancel={d.cancelConsent}
         />
@@ -306,15 +310,17 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
             </div>
             <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
               <span className="truncate">{configLine}</span>
-              <Tooltip content="AI settings" position="bottom">
-                <button
-                  onClick={openDiagnoseSettings}
-                  className="shrink-0 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
-                  aria-label="AI settings"
-                >
-                  <Settings2 className="h-3 w-3" />
-                </button>
-              </Tooltip>
+              {openSettings && (
+                <Tooltip content="AI settings" position="bottom">
+                  <button
+                    onClick={openSettings}
+                    className="shrink-0 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
+                    aria-label="AI settings"
+                  >
+                    <Settings2 className="h-3 w-3" />
+                  </button>
+                </Tooltip>
+              )}
             </div>
           </div>
         </div>

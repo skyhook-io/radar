@@ -9,7 +9,7 @@
 //
 // Default (no provider): Radar renders no Diagnose button — OSS stays
 // agent-free.
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 import type { ReactNode } from 'react';
 
 /** Render prop for the resource-level Diagnose action. */
@@ -46,31 +46,48 @@ export type DiagnoseConsentCopy = {
   approveLabel?: string;
 };
 
-const DiagnoseCustomizationContext = createContext<RenderDiagnoseAction | undefined>(undefined);
-const DiagnoseConsentCopyContext = createContext<DiagnoseConsentCopy | undefined>(undefined);
+// One context for the whole customization seam — the values are host config
+// set once at mount, so per-value re-render isolation buys nothing.
+export interface DiagnoseCustomization {
+  renderAction: RenderDiagnoseAction | undefined;
+  consentCopy: DiagnoseConsentCopy | undefined;
+  // undefined = default (CustomEvent → Radar's own Settings dialog);
+  // null = hide the settings affordances.
+  onOpenSettings: (() => void) | null | undefined;
+}
+
+const DEFAULTS: DiagnoseCustomization = {
+  renderAction: undefined,
+  consentCopy: undefined,
+  onOpenSettings: undefined,
+};
+
+const DiagnoseCustomizationContext = createContext<DiagnoseCustomization>(DEFAULTS);
 
 export function DiagnoseCustomizationProvider({
   value,
   consentCopy,
+  onOpenSettings,
   children,
 }: {
   value: RenderDiagnoseAction | undefined;
   consentCopy?: DiagnoseConsentCopy;
+  /** Where "AI settings" affordances lead. Omit for Radar's own Settings
+   *  dialog; pass `null` to hide them. */
+  onOpenSettings?: (() => void) | null;
   children: ReactNode;
 }) {
+  const ctx = useMemo(
+    () => ({ renderAction: value, consentCopy, onOpenSettings }),
+    [value, consentCopy, onOpenSettings],
+  );
   return (
-    <DiagnoseCustomizationContext.Provider value={value}>
-      <DiagnoseConsentCopyContext.Provider value={consentCopy}>
-        {children}
-      </DiagnoseConsentCopyContext.Provider>
+    <DiagnoseCustomizationContext.Provider value={ctx}>
+      {children}
     </DiagnoseCustomizationContext.Provider>
   );
 }
 
-export function useDiagnoseCustomization(): RenderDiagnoseAction | undefined {
+export function useDiagnoseCustomization(): DiagnoseCustomization {
   return useContext(DiagnoseCustomizationContext);
-}
-
-export function useDiagnoseConsentCopy(): DiagnoseConsentCopy | undefined {
-  return useContext(DiagnoseConsentCopyContext);
 }

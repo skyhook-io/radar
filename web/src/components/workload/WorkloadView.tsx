@@ -288,7 +288,7 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
   const uncordonMutation = useUncordonNode()
   const drainMutation = useDrainNode()
 
-  const renderDiagnose = useDiagnoseCustomization()
+  const { renderAction: renderDiagnose } = useDiagnoseCustomization()
 
   return {
     canExec,

@@ -30,6 +30,24 @@ export type {
   RenderDiagnoseAction,
   DiagnoseConsentCopy,
 } from './context/DiagnoseCustomization';
+
+// Standalone AI-diagnose surface — mount the investigation panel outside a
+// full <RadarApp>. No router dependency, no client-side cluster state: the
+// backend set via setApiBase() picks the cluster, so hosts remount
+// <DiagnoseProvider key={cluster}> to switch. Mount order: ThemeProvider >
+// DiagnoseCustomizationProvider > DiagnoseProvider > DiagnoseSurface, under a
+// @tanstack/react-query QueryClientProvider.
+export {
+  DiagnoseProvider,
+  useDiagnose,
+  useDiagnoseLayout,
+} from './components/diagnose/DiagnoseContext';
+export type { Target as DiagnoseTarget } from './components/diagnose/DiagnoseContext';
+export { DiagnoseSurface } from './components/diagnose/DiagnoseSurface';
+export { DiagnoseCustomizationProvider } from './context/DiagnoseCustomization';
+// The panel reads Radar's ThemeContext (throws unprovided). It follows
+// localStorage['radar-theme'], so host and panel flip together.
+export { ThemeProvider } from './context/ThemeContext';
 export { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay';
 
 // Shared cluster-switcher primitive — re-exported from @skyhook-io/k8s-ui so
