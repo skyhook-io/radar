@@ -20,6 +20,8 @@ var highConfidenceSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\$(?:apr1|2[aby]|5|6)\$[./A-Za-z0-9$]{8,}`), // htpasswd/crypt hashes (basicAuth users)
 }
 
+var credentialURLPattern = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://[^:/@\s]*:)[^/\s?#]+@`)
+
 // base64SecretPattern is a broad catch-all for base64 blobs. It earns its keep
 // in free-text (logs, env values) but over-redacts when applied to arbitrary
 // CRD fields (it eats SHA-like IDs, config hashes, generated names), so the
@@ -67,7 +69,21 @@ func IsSensitiveEnvName(name string) bool {
 }
 
 func applyPatterns(text string, patterns []*regexp.Regexp) string {
-	result := text
+	result := credentialURLPattern.ReplaceAllStringFunc(text, func(match string) string {
+		schemeEnd := strings.Index(match, "://")
+		if schemeEnd < 0 {
+			return match
+		}
+		scheme := strings.ToLower(match[:schemeEnd])
+		if scheme == "docker" || scheme == "docker-pullable" || scheme == "oci" {
+			return match
+		}
+		parts := credentialURLPattern.FindStringSubmatch(match)
+		if len(parts) != 2 {
+			return match
+		}
+		return parts[1] + "[REDACTED]@"
+	})
 	for _, pattern := range patterns {
 		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
 			// For Bearer tokens, preserve the "Bearer " prefix

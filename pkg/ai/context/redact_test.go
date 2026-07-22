@@ -71,6 +71,43 @@ func TestRedactSecrets_SafeContent(t *testing.T) {
 	}
 }
 
+func TestRedactSecrets_CredentialURLs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "postgres", in: "postgres://user:pass@db.example/app?ssl=require", want: "postgres://user:[REDACTED]@db.example/app?ssl=require"},
+		{name: "empty username", in: "redis://:p@host", want: "redis://:[REDACTED]@host"},
+		{name: "compound scheme", in: "mongodb+srv://u:p@host", want: "mongodb+srv://u:[REDACTED]@host"},
+		{name: "percent encoded", in: "amqp://user:p%40ss@host", want: "amqp://user:[REDACTED]@host"},
+		{name: "colon in password", in: "mysql://user:p:a:ss@host/db", want: "mysql://user:[REDACTED]@host/db"},
+		{name: "unencoded at in password", in: "mongodb://user:p@ss@host/db", want: "mongodb://user:[REDACTED]@host/db"},
+		{name: "at in query", in: "postgres://user:pass@host?email=a@b", want: "postgres://user:[REDACTED]@host?email=a@b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RedactSecrets(tc.in); got != tc.want {
+				t.Fatalf("RedactSecrets(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRedactSecrets_PreservesURLsWithoutCredentials(t *testing.T) {
+	for _, input := range []string{
+		"https://api.example.com/v1",
+		"ssh://user@host/repo",
+		"git@github.com:org/repo",
+		"docker://nginx:1.21@sha256:0123456789abcdef",
+		"docker-pullable://nginx:1.21@sha256:0123456789abcdef",
+		"oci://registry.example/app:1.2@sha256:0123456789abcdef",
+	} {
+		if got := RedactSecrets(input); got != input {
+			t.Errorf("RedactSecrets(%q) = %q", input, got)
+		}
+	}
+}
+
 func TestRedactSecrets_EmptyString(t *testing.T) {
 	result := RedactSecrets("")
 	if result != "" {
@@ -153,6 +190,16 @@ func TestRedactInlineSecrets_HighConfidenceValueAnywhere(t *testing.T) {
 	RedactInlineSecrets(spec)
 	if strings.Contains(spec["address"].(string), "ghp_0123456789") {
 		t.Errorf("GitHub PAT in a non-sensitive field not redacted: %v", spec["address"])
+	}
+}
+
+func TestRedactInlineSecrets_CredentialURL(t *testing.T) {
+	spec := map[string]any{
+		"connection": "postgres://user:pass@db.example/app",
+	}
+	RedactInlineSecrets(spec)
+	if got := spec["connection"]; got != "postgres://user:[REDACTED]@db.example/app" {
+		t.Errorf("credential URL redaction = %q", got)
 	}
 }
 

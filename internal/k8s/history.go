@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"reflect"
 	"sort"
@@ -21,7 +22,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/yaml"
+	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
 // Type aliases — canonical definitions live in pkg/k8score.
@@ -978,7 +979,8 @@ func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
 
-	// Check data keys (not values for security)
+	// Parseable structured values are path- and pattern-redacted before
+	// emission; all other values remain key-only.
 	oldKeys := getMapKeys(oldCM.Data)
 	newKeys := getMapKeys(newCM.Data)
 
@@ -1151,12 +1153,16 @@ func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool)
 	if !shouldParseStructuredConfigValue(key, oldVal, newVal) {
 		return nil, false
 	}
-	oldParsed, okOld := parseStructuredConfigValue(oldVal)
-	newParsed, okNew := parseStructuredConfigValue(newVal)
+	oldParsed, okOld := parseStructuredConfigValue(key, oldVal)
+	newParsed, okNew := parseStructuredConfigValue(key, newVal)
 	if !okOld || !okNew {
 		return nil, false
 	}
-	state := structuredDiffState{fieldCap: configMapStructuredFieldCap, nodeCap: configMapStructuredNodeCap}
+	state := structuredDiffState{
+		fieldCap:     configMapStructuredFieldCap,
+		nodeCap:      configMapStructuredNodeCap,
+		redactValues: isDotEnvConfigKey(key),
+	}
 	state.diff(fmt.Sprintf("data.%s", key), oldParsed, newParsed, 0)
 	if state.capped {
 		return nil, false
@@ -1166,7 +1172,7 @@ func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool)
 
 func shouldParseStructuredConfigValue(key, oldVal, newVal string) bool {
 	lowerKey := strings.ToLower(strings.TrimSpace(key))
-	if strings.HasSuffix(lowerKey, ".json") || strings.HasSuffix(lowerKey, ".yaml") || strings.HasSuffix(lowerKey, ".yml") {
+	if strings.HasSuffix(lowerKey, ".json") || strings.HasSuffix(lowerKey, ".yaml") || strings.HasSuffix(lowerKey, ".yml") || isPropertiesConfigKey(lowerKey) {
 		return true
 	}
 	return looksLikeStructuredConfigValue(oldVal) && looksLikeStructuredConfigValue(newVal)
@@ -1174,22 +1180,118 @@ func shouldParseStructuredConfigValue(key, oldVal, newVal string) bool {
 
 func looksLikeStructuredConfigValue(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return true
+	}
+
+	// A block threshold avoids common one-line prose; structuredRoot remains
+	// the fail-closed guard after YAML parsing.
+	significantLines := 0
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		significantLines++
+		if significantLines >= 2 {
+			return true
+		}
+	}
+	return false
 }
 
-func parseStructuredConfigValue(value string) (any, bool) {
+func parseStructuredConfigValue(key, value string) (any, bool) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return nil, false
+	}
+	if isPropertiesConfigKey(key) {
+		if parsed, ok := parsePropertiesConfigValue(trimmed); ok {
+			return parsed, true
+		}
 	}
 	var parsed any
 	if json.Unmarshal([]byte(trimmed), &parsed) == nil && structuredRoot(parsed) {
 		return normalizeStructuredValue(parsed), true
 	}
-	if yaml.Unmarshal([]byte(trimmed), &parsed) == nil && structuredRoot(parsed) {
-		return normalizeStructuredValue(parsed), true
+	// YAML parsers may accept a leading flow collection while ignoring trailing
+	// format-specific text, so bracketed values must be valid JSON.
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return nil, false
+	}
+	if parsed, ok := parseSingleStructuredYAML(trimmed); ok {
+		return parsed, true
 	}
 	return nil, false
+}
+
+func parseSingleStructuredYAML(value string) (any, bool) {
+	decoder := k8syaml.NewYAMLOrJSONDecoder(strings.NewReader(value), 4096)
+	var parsed any
+	if err := decoder.Decode(&parsed); err != nil || !structuredRoot(parsed) {
+		return nil, false
+	}
+	for {
+		var extra any
+		err := decoder.Decode(&extra)
+		if err == io.EOF {
+			return normalizeStructuredValue(parsed), true
+		}
+		if err != nil || extra != nil {
+			return nil, false
+		}
+	}
+}
+
+func isPropertiesConfigKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	return strings.HasSuffix(lower, ".properties") || isDotEnvConfigKey(lower)
+}
+
+func isDotEnvConfigKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	return lower == ".env" || strings.HasPrefix(lower, ".env.") ||
+		strings.HasSuffix(lower, ".env") || strings.Contains(lower, ".env.")
+}
+
+func parsePropertiesConfigValue(value string) (any, bool) {
+	parsed := map[string]any{}
+	for _, rawLine := range strings.Split(value, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#!") || strings.HasSuffix(line, "\\") {
+			return nil, false
+		}
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
+		if !ok || !validPropertiesKey(key) {
+			return nil, false
+		}
+		if _, duplicate := parsed[key]; duplicate {
+			return nil, false
+		}
+		parsed[key] = strings.TrimSpace(val)
+	}
+	return parsed, len(parsed) > 0
+}
+
+func validPropertiesKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, ch := range key {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' ||
+			ch == '_' || ch == '-' || ch == '.' || ch == '/' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func structuredRoot(value any) bool {
@@ -1227,12 +1329,13 @@ func normalizeStructuredValue(v any) any {
 }
 
 type structuredDiffState struct {
-	changes  []FieldChange
-	fields   int
-	nodes    int
-	fieldCap int
-	nodeCap  int
-	capped   bool
+	changes      []FieldChange
+	fields       int
+	nodes        int
+	fieldCap     int
+	nodeCap      int
+	redactValues bool
+	capped       bool
 }
 
 func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
@@ -1290,11 +1393,22 @@ func (s *structuredDiffState) add(path string, oldVal, newVal any) {
 		return
 	}
 	s.fields++
-	s.changes = append(s.changes, FieldChange{
-		Path:     path,
-		OldValue: sanitizeConfigValue(path, oldVal),
-		NewValue: sanitizeConfigValue(path, newVal),
-	})
+	var oldValue, newValue any
+	if s.redactValues {
+		oldValue = redactPresentConfigValue(oldVal)
+		newValue = redactPresentConfigValue(newVal)
+	} else {
+		oldValue = sanitizeConfigValue(path, oldVal)
+		newValue = sanitizeConfigValue(path, newVal)
+	}
+	s.changes = append(s.changes, FieldChange{Path: path, OldValue: oldValue, NewValue: newValue})
+}
+
+func redactPresentConfigValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	return "[REDACTED]"
 }
 
 func sanitizeConfigValue(path string, value any) any {
@@ -1327,12 +1441,40 @@ func sensitivePath(path string) bool {
 	if aicontext.IsSensitiveEnvName(path) {
 		return true
 	}
-	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '[' || r == ']' || r == '/' || r == '-' || r == '_' }) {
-		if aicontext.IsSensitiveEnvName(part) {
+	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '[' || r == ']' || r == '/' || r == '-' || r == '_' })
+	for i, part := range parts {
+		if aicontext.IsSensitiveEnvName(part) || sensitiveConfigPathPart(parts, i) {
 			return true
 		}
 	}
 	return false
+}
+
+func sensitiveConfigPathPart(parts []string, index int) bool {
+	part := strings.ToLower(parts[index])
+	switch part {
+	case "pass", "pw", "pwd", "cred", "creds":
+		return true
+	case "key":
+		if index > 0 && sensitiveConfigKeyQualifier(parts[index-1]) {
+			return true
+		}
+	}
+	for _, suffix := range []string{"pass", "pwd", "pw", "key"} {
+		if qualifier, ok := strings.CutSuffix(part, suffix); ok && qualifier != "" && sensitiveConfigKeyQualifier(qualifier) {
+			return true
+		}
+	}
+	return false
+}
+
+func sensitiveConfigKeyQualifier(part string) bool {
+	switch strings.ToLower(part) {
+	case "access", "admin", "api", "auth", "client", "database", "db", "encryption", "hmac", "license", "master", "mongo", "mongodb", "mysql", "pg", "postgres", "postgresql", "private", "redis", "secret", "signing", "smtp", "ssh", "stripe", "tls", "user":
+		return true
+	default:
+		return false
+	}
 }
 
 func truncateConfigScalar(value string, max int) string {
