@@ -44,6 +44,7 @@ import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/Capabil
 import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
+import { PWAUpdatePrompt } from './components/ui/PWAUpdatePrompt'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
@@ -2352,6 +2353,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
       {/* Update notification — hidden in embedded mode (OSS download nudge). */}
       {!navCustomization.embedded && <UpdateNotification />}
+      <PWAUpdatePrompt />
 
       {/* Bottom Dock for Terminal/Logs */}
       <BottomDock />
