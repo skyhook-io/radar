@@ -153,7 +153,7 @@ func detectStuckSidecarJobs(cache *ResourceCache, namespace string, now time.Tim
 			Severity:        "warning",
 			Reason:          "SidecarBlocksJobCompletion",
 			Message:         fmt.Sprintf("CronJob %q has %d active Jobs and no recent successful completions. In pod %q, container %q completed successfully but container %q is still running, preventing the pod and Job from reaching Succeeded.", cj.Name, len(activeJobs), evidence.podName, evidence.completedContainer, evidence.runningContainer),
-			Action:          "If the still-running container is intended as a long-lived sidecar and the cluster runs Kubernetes 1.29+ with SidecarContainers enabled, move it to initContainers with restartPolicy: Always (KEP-753; stable in Kubernetes 1.33) so Kubernetes terminates it after regular containers finish. Then delete the accumulated stuck Jobs. Otherwise, adjust the schedule or make the remaining workload terminate.",
+			Action:          "If the still-running container is intended as a long-lived sidecar and the cluster runs Kubernetes 1.29+ with SidecarContainers enabled, move it to initContainers with restartPolicy: Always (KEP-753; stable in Kubernetes 1.33) so Kubernetes terminates it after regular containers finish; for injected sidecars such as istio-proxy, enable the mesh's native sidecar mode instead of editing the pod spec. Then delete the accumulated stuck Jobs. Otherwise, adjust the schedule or make the remaining workload terminate.",
 			Age:             FormatAge(time.Duration(age) * time.Second),
 			AgeSeconds:      age,
 			Duration:        FormatAge(time.Duration(duration) * time.Second),
