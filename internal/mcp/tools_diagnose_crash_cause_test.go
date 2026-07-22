@@ -219,6 +219,47 @@ func TestSelectCrashLogLineSkipsOmissionSentinel(t *testing.T) {
 	}
 }
 
+func TestSelectCrashLogLinePythonTraceback(t *testing.T) {
+	t.Run("bare header loses to the later informative exception line", func(t *testing.T) {
+		lines := []string{
+			"Traceback (most recent call last):",
+			`  File "/app/main.py", line 12, in <module>`,
+			"redis.exceptions.ConnectionError: Error 111 connecting to redis:6379",
+		}
+		if got := selectCrashLogLine(lines); got != "redis.exceptions.ConnectionError: Error 111 connecting to redis:6379" {
+			t.Fatalf("selected %q, want the exception line, not the bare Traceback header", got)
+		}
+	})
+	t.Run("chained tracebacks skip every bare header", func(t *testing.T) {
+		lines := []string{
+			"2026-07-22T10:00:00Z Traceback (most recent call last):",
+			"2026-07-22T10:00:00Z Traceback (most recent call last):",
+			"2026-07-22T10:00:01Z FATAL worker cannot start",
+		}
+		if got := selectCrashLogLine(lines); got != "2026-07-22T10:00:01Z FATAL worker cannot start" {
+			t.Fatalf("selected %q, want the fatal line past both chained headers", got)
+		}
+	})
+	t.Run("truncated block falls back to its last line, not the header", func(t *testing.T) {
+		lines := []string{"Traceback (most recent call last):", `  File "/app/main.py", line 12, in <module>`}
+		if got := selectCrashLogLine(lines); got != `File "/app/main.py", line 12, in <module>` {
+			t.Fatalf("selected %q, want the block tail over the bare header", got)
+		}
+	})
+	t.Run("header alone is returned when its block is empty", func(t *testing.T) {
+		lines := []string{"INFO starting worker", "Traceback (most recent call last):"}
+		if got := selectCrashLogLine(lines); got != "Traceback (most recent call last):" {
+			t.Fatalf("selected %q, want the header — a line preceding the traceback is unrelated", got)
+		}
+	})
+	t.Run("go panic header still wins over later matches", func(t *testing.T) {
+		lines := []string{"panic: runtime error: index out of range", "goroutine 1 [running]:", "ERROR shutdown hook failed"}
+		if got := selectCrashLogLine(lines); got != "panic: runtime error: index out of range" {
+			t.Fatalf("selected %q, want the earliest panic header", got)
+		}
+	})
+}
+
 func activeCrashLoopPod(name, container string, now time.Time) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name},

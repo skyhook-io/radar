@@ -86,6 +86,9 @@ func ActiveCrashLoopContainerStatuses(pod *corev1.Pod, now time.Time) []corev1.C
 			active = append(active, cs)
 		}
 	}
+	// Init containers carry no readiness probe and their Ready field is not a
+	// serving signal — never trust Ready as recovery there; the Running-window
+	// and clean-exit guards still apply.
 	for i := range pod.Status.InitContainerStatuses {
 		cs := pod.Status.InitContainerStatuses[i]
 		if isStableCrashLoop(&cs, now, false) {

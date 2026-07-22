@@ -155,19 +155,42 @@ func isCrashTermination(term *corev1.ContainerStateTerminated) bool {
 }
 
 func selectCrashLogLine(lines []string) string {
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" && !isOmittedLogSentinel(line) && fatalCrashLogPattern.MatchString(line) {
-			return line
+	// Earliest fatal-class match wins: for Go panics and JVM exceptions the
+	// first matched line is the block header that names the failure, while
+	// later matches are nested exceptions or cleanup noise. The exception is
+	// Python's bare "Traceback (most recent call last):" header, which names
+	// nothing — there the informative line sits LATER (a chained traceback's
+	// real error, or the exception on the block's last line), so bare headers
+	// only win when nothing after them qualifies.
+	header, headerIdx := "", -1
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || isOmittedLogSentinel(line) || !fatalCrashLogPattern.MatchString(line) {
+			continue
 		}
+		if isBareTracebackHeader(line) {
+			if header == "" {
+				header, headerIdx = line, i
+			}
+			continue
+		}
+		return line
 	}
-	for i := len(lines) - 1; i >= 0; i-- {
+	// Generic tail fallback; with a bare header, only lines inside its block
+	// (after it) qualify — a line preceding the traceback is unrelated.
+	for i := len(lines) - 1; i > headerIdx; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line != "" && !isOmittedLogSentinel(line) {
 			return line
 		}
 	}
-	return ""
+	return header
+}
+
+// isBareTracebackHeader matches Python's "Traceback (most recent call last):"
+// line (possibly timestamp-prefixed), which carries no failure information.
+func isBareTracebackHeader(line string) bool {
+	return strings.HasSuffix(line, "(most recent call last):") && strings.Contains(line, "Traceback ")
 }
 
 func isOmittedLogSentinel(line string) bool {
