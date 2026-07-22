@@ -18,9 +18,12 @@ const (
 	envHistoryLookback                  = time.Hour
 	maxStaleSecretEnvChecksPerContainer = 5
 	// A mass Secret rotation coinciding with a rollout can leave many pods
-	// simultaneously not-Ready with in-window key changes; the sweep must not
-	// turn that into an unbounded warning burst.
-	maxStaleSecretEnvDetectionsPerSweep = 20
+	// simultaneously not-Ready with in-window key changes; a sweep must not
+	// turn that into an unbounded warning burst. The bound is per detector
+	// invocation, which is per namespace: the cluster-wide sweep (namespace
+	// "") is a single invocation and thus globally bounded, while an
+	// N-namespace query is bounded at N times this cap.
+	maxStaleSecretEnvDetectionsPerNamespace = 20
 )
 
 type RemovedServiceEnvCheck struct {
@@ -244,8 +247,8 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 		}
 		return out[i].Name < out[j].Name
 	})
-	if len(out) > maxStaleSecretEnvDetectionsPerSweep {
-		out = out[:maxStaleSecretEnvDetectionsPerSweep]
+	if len(out) > maxStaleSecretEnvDetectionsPerNamespace {
+		out = out[:maxStaleSecretEnvDetectionsPerNamespace]
 	}
 	return out
 }

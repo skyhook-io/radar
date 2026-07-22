@@ -232,19 +232,19 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 	t.Run("promotion sweep is capped", func(t *testing.T) {
 		objects := []runtime.Object{secret}
 		var pods []*corev1.Pod
-		for i := 0; i < maxStaleSecretEnvDetectionsPerSweep+5; i++ {
+		for i := 0; i < maxStaleSecretEnvDetectionsPerNamespace+5; i++ {
 			pod := staleSecretEnvPod(fmt.Sprintf("burst-%02d", i), startedAt, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
 			pods = append(pods, pod)
 			objects = append(objects, pod)
 		}
 		cache := envHistoryTestCache(t, objects...)
 		setEnvHistoryEvents(t, change)
-		if checks := findStaleSecretEnvChecks(cache, pods, []timeline.TimelineEvent{change}); len(checks) != maxStaleSecretEnvDetectionsPerSweep+5 {
+		if checks := findStaleSecretEnvChecks(cache, pods, []timeline.TimelineEvent{change}); len(checks) != maxStaleSecretEnvDetectionsPerNamespace+5 {
 			t.Fatalf("precondition: every burst pod should produce a fact, got %d", len(checks))
 		}
 		detections := detectStaleSecretEnv(cache, "shop", now)
-		if len(detections) != maxStaleSecretEnvDetectionsPerSweep {
-			t.Fatalf("mass rotation + rollout must not burst past the sweep cap: got %d, want %d", len(detections), maxStaleSecretEnvDetectionsPerSweep)
+		if len(detections) != maxStaleSecretEnvDetectionsPerNamespace {
+			t.Fatalf("mass rotation + rollout must not burst past the sweep cap: got %d, want %d", len(detections), maxStaleSecretEnvDetectionsPerNamespace)
 		}
 	})
 }
