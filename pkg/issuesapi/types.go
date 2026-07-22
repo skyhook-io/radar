@@ -438,6 +438,9 @@ type Response struct {
 	ClusterContext      *ClusterContext `json:"cluster_context,omitempty"`
 	RecentChanges       []RecentChange  `json:"recent_changes,omitempty"`
 	RecentChangesReason string          `json:"recent_changes_reason,omitempty"`
+	// A missing change under truncation is unknown, not evidence that no
+	// relevant change occurred in the lookback window.
+	RecentChangesTruncated bool `json:"recent_changes_truncated,omitempty"`
 	// CorrelationTruncated is set when per-issue change correlation skipped
 	// some critical or warning issues (shared cap reached; criticals are
 	// checked first). Under truncation, an issue without correlation markers

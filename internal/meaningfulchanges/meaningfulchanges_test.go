@@ -22,15 +22,15 @@ func TestShouldAttachIssueChanges(t *testing.T) {
 	if !ShouldAttachIssueChanges(nil) {
 		t.Fatalf("zero critical issues should allow the recent-changes attachment")
 	}
-	if got := IssueChangesReason(nil); got != ChangesReasonNoCriticalIssues {
-		t.Fatalf("IssueChangesReason(nil) = %q, want %q", got, ChangesReasonNoCriticalIssues)
+	if got, want := IssueChangesReason(nil), "no_critical_issues"; got != want {
+		t.Fatalf("IssueChangesReason(nil) = %q, want %q", got, want)
 	}
 	baseline := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, IssueTiming: "started_at_resource_creation"}}
 	if !ShouldAttachIssueChanges(baseline) {
-		t.Fatalf("baseline-dominated critical issues should allow the recent-changes attachment")
+		t.Fatalf("creation-time critical issues should allow the recent-changes attachment")
 	}
-	if got := IssueChangesReason(baseline); got != ChangesReasonAllCriticalStartedAtCreation {
-		t.Fatalf("IssueChangesReason(baseline) = %q, want %q", got, ChangesReasonAllCriticalStartedAtCreation)
+	if got, want := IssueChangesReason(baseline), "recent_changes_with_all_critical_issues_at_creation"; got != want {
+		t.Fatalf("IssueChangesReason(baseline) = %q, want %q", got, want)
 	}
 	runtime := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, IssueTiming: "started_after_resource_was_healthy"}}
 	if ShouldAttachIssueChanges(runtime) {
@@ -38,6 +38,10 @@ func TestShouldAttachIssueChanges(t *testing.T) {
 	}
 	if got := IssueChangesReason(runtime); got != "" {
 		t.Fatalf("IssueChangesReason(runtime) = %q, want empty", got)
+	}
+	mixed := append(append([]issuesapi.Issue{}, baseline...), runtime...)
+	if got := IssueChangesReason(mixed); got != "" {
+		t.Fatalf("IssueChangesReason(mixed) = %q, want empty", got)
 	}
 	unknown := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical}}
 	if ShouldAttachIssueChanges(unknown) {

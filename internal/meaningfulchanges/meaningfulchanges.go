@@ -27,8 +27,8 @@ const (
 )
 
 const (
-	ChangesReasonNoCriticalIssues             = "no_critical_issues"
-	ChangesReasonAllCriticalStartedAtCreation = "all_critical_issues_started_at_resource_creation"
+	ChangesReasonNoCriticalIssues                  = "no_critical_issues"
+	ChangesReasonWithAllCreationTimeCriticalIssues = "recent_changes_with_all_critical_issues_at_creation"
 )
 
 var (
@@ -189,7 +189,7 @@ func IssueChangesReason(issues []issuesapi.Issue) string {
 	if criticalCount == 0 {
 		return ChangesReasonNoCriticalIssues
 	}
-	return ChangesReasonAllCriticalStartedAtCreation
+	return ChangesReasonWithAllCreationTimeCriticalIssues
 }
 
 func ConfigMapKind(kind string) bool {

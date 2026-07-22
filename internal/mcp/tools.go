@@ -346,9 +346,18 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"distinct same-confidence roots leave it unset). Use these links to walk from a " +
 			"symptom to its likely " +
 			"root, but confirm a medium link before acting on it. " +
-			"When `recent_changes` is present, consider it if the issue list does not " +
-			"explain the reported symptom; `recent_changes_reason` says why Radar " +
-			"attached it. It lists recent spec/config changes that may explain failures " +
+			"When `recent_changes` is present, inspect it before concluding the current " +
+			"issues explain the reported symptom. `recent_changes_reason` says why Radar " +
+			"attached it. `recent_changes_with_all_critical_issues_at_creation` means " +
+			"Radar's best-effort timing evidence places every returned critical row's " +
+			"failure at resource creation. That timing describes those rows only: it does " +
+			"not make recent changes irrelevant to other issues or application-layer " +
+			"symptoms. A bad config change can itself cause a failure during creation. " +
+			"The token does not " +
+			"claim the changes are causal. `no_critical_issues` means no critical rows " +
+			"were returned. `recent_changes_truncated=true` means the feed is incomplete, " +
+			"so absence from it is not evidence that a relevant change did not occur. " +
+			"The feed lists recent spec/config changes that may explain failures " +
 			"not yet visible as runtime issues, or help distinguish creation-time " +
 			"baseline failures from the active incident. " +
 			"Single-namespace responses may add per-issue change evidence to eligible " +
@@ -2785,7 +2794,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	})
 	if len(allowedNamespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueChangesQueryEligible(input.Kind, input.Filter, input.Severity) {
 		if recentChangesReason := meaningfulchanges.IssueChangesReason(out); recentChangesReason != "" {
-			if changes, _, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
+			if changes, truncated, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
 				Namespaces: []string{allowedNamespaces[0]},
 				Since:      meaningfulchanges.DefaultSince,
 				Limit:      meaningfulchanges.IssueChangesLimit,
@@ -2793,6 +2802,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 			}); err == nil && len(changes) > 0 {
 				resp.RecentChanges = changes
 				resp.RecentChangesReason = recentChangesReason
+				resp.RecentChangesTruncated = truncated
 			}
 		}
 	}

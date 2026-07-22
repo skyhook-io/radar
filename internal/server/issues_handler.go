@@ -109,7 +109,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	})
 	if len(namespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueChangesQueryEligible(q.Get("kind"), q.Get("filter"), q.Get("severity")) {
 		if recentChangesReason := meaningfulchanges.IssueChangesReason(out); recentChangesReason != "" {
-			if changes, _, err := meaningfulchanges.Recent(r.Context(), meaningfulchanges.Query{
+			if changes, truncated, err := meaningfulchanges.Recent(r.Context(), meaningfulchanges.Query{
 				Namespaces: []string{namespaces[0]},
 				Since:      meaningfulchanges.DefaultSince,
 				Limit:      meaningfulchanges.IssueChangesLimit,
@@ -117,6 +117,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 			}); err == nil && len(changes) > 0 {
 				resp.RecentChanges = changes
 				resp.RecentChangesReason = recentChangesReason
+				resp.RecentChangesTruncated = truncated
 			}
 		}
 	}

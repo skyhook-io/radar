@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 )
 
 // setupDialogCatalogPath is the human-facing tool catalog rendered by the MCP
@@ -67,6 +69,30 @@ func TestSetupDialogCoversAllTools(t *testing.T) {
 	if len(staleInDialog) > 0 {
 		t.Errorf("setup dialog catalog (%s) lists tools that are not registered — remove them: %s",
 			setupDialogCatalogPath, strings.Join(staleInDialog, ", "))
+	}
+}
+
+func TestIssuesToolDocumentsRecentChangesReasons(t *testing.T) {
+	var description string
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name == "issues" {
+			description = tool.Description
+			break
+		}
+	}
+	if description == "" {
+		t.Fatal("issues tool is not registered or has no description")
+	}
+	for _, reason := range []string{
+		meaningfulchanges.ChangesReasonNoCriticalIssues,
+		meaningfulchanges.ChangesReasonWithAllCreationTimeCriticalIssues,
+	} {
+		if !strings.Contains(description, reason) {
+			t.Errorf("issues tool description does not document recent_changes_reason %q", reason)
+		}
+	}
+	if !strings.Contains(description, "recent_changes_truncated") {
+		t.Error("issues tool description does not document recent_changes_truncated")
 	}
 }
 
