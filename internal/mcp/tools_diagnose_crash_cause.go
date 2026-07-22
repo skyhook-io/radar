@@ -224,8 +224,17 @@ func selectCrashLogLine(lines []string, unfiltered bool) (string, string) {
 
 // isBareTracebackHeader matches Python's "Traceback (most recent call last):"
 // line (possibly timestamp-prefixed), which carries no failure information.
+// FilterLogs collapses consecutive identical lines by appending a
+// " (repeated xN…)" annotation — a decorated header is still a bare header,
+// and crashloops are exactly where headers repeat.
 func isBareTracebackHeader(line string) bool {
-	return strings.HasSuffix(line, "(most recent call last):") && strings.Contains(line, "Traceback ")
+	const marker = "(most recent call last):"
+	idx := strings.Index(line, marker)
+	if idx < 0 || !strings.Contains(line[:idx], "Traceback ") {
+		return false
+	}
+	rest := strings.TrimSpace(line[idx+len(marker):])
+	return rest == "" || strings.HasPrefix(rest, "(repeated ")
 }
 
 func isOmittedLogSentinel(line string) bool {
