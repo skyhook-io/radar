@@ -21,7 +21,13 @@ type logTimestampPattern struct {
 }
 
 var (
-	errorPatterns        = regexp.MustCompile(`(?i)(\bERROR\b|\bFATAL\b|\bWARN(?:ING)?\b|\bException\b|\bpanic:|\bTraceback\b|\bCRITICAL\b|"level"\s*:\s*"(?:error|fatal|warn)")`)
+	// Beyond level words and structured-log levels: `panicked at` is Rust's
+	// stable panic marker; SIG*/segmentation fault mark signal deaths; the
+	// case-sensitive class alternative catches conventionally-named exception
+	// finals ("KeyError: ...", "Caused by: java.net.ConnectException: ...",
+	// "(NoMethodError)") that carry no standalone level word — case-sensitive
+	// so lowercase prose such as "an error:" never matches.
+	errorPatterns        = regexp.MustCompile(`(?i)(\bERROR\b|\bFATAL\b|\bWARN(?:ING)?\b|\bException\b|\bpanic:|\bpanicked at\b|\bTraceback\b|\bCRITICAL\b|\bSIG(?:SEGV|ABRT|BUS|ILL|FPE)\b|segmentation fault|"level"\s*:\s*"(?:error|fatal|warn)"|(?-i:\b[A-Z][A-Za-z]*(?:Error|Exception)[:)]))`)
 	rfc3339LogPrefix     = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})) (.*)$`)
 	bracketedLogPrefix   = regexp.MustCompile(`^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\] (.*)$`)
 	spaceDateLogPrefix   = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) (.*)$`)

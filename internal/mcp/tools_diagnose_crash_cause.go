@@ -18,16 +18,33 @@ const (
 	maxCrashCauseBytes     = 8 * 1024
 )
 
-var fatalCrashLogPattern = regexp.MustCompile(`(?i)(\bpanic:|\bFATAL\b|\bException\b|\bTraceback\b|\bCRITICAL\b)`)
+// Crash-class line shapes: runtime panic/abort markers (Go, Rust, JVM, Python,
+// signals) plus conventionally-named exception classes ("KeyError:",
+// "Caused by: java.net.ConnectException:", "(NoMethodError)") — the class-name
+// alternative is case-sensitive so lowercase prose like "an error:" never
+// qualifies as crash-class.
+var fatalCrashLogPattern = regexp.MustCompile(`(?i)(\bpanic:|\bpanicked at\b|\bFATAL\b|\bException\b|\bTraceback\b|\bCRITICAL\b|\bSIG(?:SEGV|ABRT|BUS|ILL|FPE)\b|segmentation fault|(?-i:\b[A-Z][A-Za-z]*(?:Error|Exception)[:)]))`)
+
+// How the crash-evidence line was chosen — carried on the response so the
+// agent can weigh the line's confidence itself instead of treating every
+// selection as a verified cause.
+const (
+	crashLineFatalPattern  = "fatal_pattern"   // matched a crash-class marker
+	crashLineBlockTail     = "crash_block_tail" // tail of a traceback block whose header carried no info
+	crashLineLastErrorLine = "last_error_line" // no crash-class marker; latest matched error line
+	crashLineLogTail       = "log_tail"        // log had no matched error lines at all; raw tail
+)
 
 type diagnoseCrashCause struct {
-	Pods       []string `json:"pods"`
-	Container  string   `json:"container"`
-	Reason     string   `json:"reason,omitempty"`
-	ExitCode   int32    `json:"exitCode"`
-	LogLine    string   `json:"logLine"`
-	LogSource  string   `json:"logSource"`
-	BestEffort bool     `json:"bestEffort,omitempty"`
+	Pods      []string `json:"pods"`
+	Container string   `json:"container"`
+	Reason    string   `json:"reason,omitempty"`
+	ExitCode  int32    `json:"exitCode"`
+	LogLine   string   `json:"logLine"`
+	LogSource string   `json:"logSource"`
+	// LineSelection states how LogLine was picked (fatal_pattern,
+	// crash_block_tail, last_error_line, log_tail) — descending confidence.
+	LineSelection string `json:"logLineSelection"`
 }
 
 type diagnoseLogKey struct {
@@ -36,12 +53,12 @@ type diagnoseLogKey struct {
 }
 
 type diagnoseCrashCauseKey struct {
-	container  string
-	reason     string
-	exitCode   int32
-	logLine    string
-	logSource  string
-	bestEffort bool
+	container     string
+	reason        string
+	exitCode      int32
+	logLine       string
+	logSource     string
+	lineSelection string
 }
 
 func crashCauseForDiagnose(pods []*corev1.Pod, current, previous []podLogEntry, now time.Time) ([]diagnoseCrashCause, bool) {
@@ -83,18 +100,18 @@ func crashCauseForDiagnose(pods []*corev1.Pod, current, previous []podLogEntry, 
 			if term == nil || logs == nil || logs.Error != "" {
 				continue
 			}
-			line := selectCrashLogLine(logs.Logs.Lines)
+			line, selection := selectCrashLogLine(logs.Logs.Lines, logs.Logs.Fallback)
 			if line == "" {
 				continue
 			}
 			line = truncateCrashLogLine(line, maxCrashCauseRunes)
 			key := diagnoseCrashCauseKey{
-				container:  status.Name,
-				reason:     term.Reason,
-				exitCode:   term.ExitCode,
-				logLine:    line,
-				logSource:  logSource,
-				bestEffort: logs.Logs.Fallback,
+				container:     status.Name,
+				reason:        term.Reason,
+				exitCode:      term.ExitCode,
+				logLine:       line,
+				logSource:     logSource,
+				lineSelection: selection,
 			}
 			if i, ok := causeIndex[key]; ok {
 				updated := causes[i]
@@ -109,13 +126,13 @@ func crashCauseForDiagnose(pods []*corev1.Pod, current, previous []podLogEntry, 
 				continue
 			}
 			cause := diagnoseCrashCause{
-				Pods:       []string{pod.Name},
-				Container:  status.Name,
-				Reason:     term.Reason,
-				ExitCode:   term.ExitCode,
-				LogLine:    line,
-				LogSource:  logSource,
-				BestEffort: logs.Logs.Fallback,
+				Pods:          []string{pod.Name},
+				Container:     status.Name,
+				Reason:        term.Reason,
+				ExitCode:      term.ExitCode,
+				LogLine:       line,
+				LogSource:     logSource,
+				LineSelection: selection,
 			}
 			rowBytes := diagnoseCrashCauseJSONSize(cause)
 			if len(causes) > 0 {
@@ -154,7 +171,9 @@ func isCrashTermination(term *corev1.ContainerStateTerminated) bool {
 	return term.ExitCode != 0 || term.Reason == "Error" || term.Reason == "CrashLoopBackOff"
 }
 
-func selectCrashLogLine(lines []string) string {
+// selectCrashLogLine picks the crash-evidence line and reports how it was
+// chosen (the crashLine* tokens, descending confidence).
+func selectCrashLogLine(lines []string, unfiltered bool) (string, string) {
 	// Earliest fatal-class match wins: for Go panics and JVM exceptions the
 	// first matched line is the block header that names the failure, while
 	// later matches are nested exceptions or cleanup noise. The exception is
@@ -174,17 +193,24 @@ func selectCrashLogLine(lines []string) string {
 			}
 			continue
 		}
-		return line
+		return line, crashLineFatalPattern
+	}
+	tailSelection := crashLineLastErrorLine
+	if unfiltered {
+		tailSelection = crashLineLogTail
+	}
+	if header != "" {
+		tailSelection = crashLineBlockTail
 	}
 	// Generic tail fallback; with a bare header, only lines inside its block
 	// (after it) qualify — a line preceding the traceback is unrelated.
 	for i := len(lines) - 1; i > headerIdx; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line != "" && !isOmittedLogSentinel(line) {
-			return line
+			return line, tailSelection
 		}
 	}
-	return header
+	return header, crashLineFatalPattern
 }
 
 // isBareTracebackHeader matches Python's "Traceback (most recent call last):"

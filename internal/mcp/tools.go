@@ -184,7 +184,10 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"causal links + a confidence tier to walk symptom→root) + current AND previous container logs across the " +
 			"workload's pods + crashCause evidence that pairs active crashloop status with " +
 			"one highest-signal line from the crashed instance's already-filtered logs " +
-			"(evidence, not a root-cause verdict) + recent Warning events filtered to this resource + a " +
+			"(evidence, not a root-cause verdict; its logLineSelection field states how the " +
+			"line was chosen — fatal_pattern, crash_block_tail, last_error_line, log_tail, " +
+			"in descending confidence — weigh the line accordingly and read the full logs " +
+			"when confidence is low) + recent Warning events filtered to this resource + a " +
 			"recentChanges section for the workload and directly referenced " +
 			"ConfigMaps (no Secret content) + a " +
 			"startupBlockers section when the workload can't reach Running (unschedulable " +

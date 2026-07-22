@@ -38,7 +38,7 @@ func TestCrashCauseForDiagnoseSelectsAndDeduplicatesEvidence(t *testing.T) {
 	if cause.Container != "app" || cause.Reason != "Error" || cause.ExitCode != 1 {
 		t.Fatalf("status attribution = %+v, want app/Error/1", cause)
 	}
-	if cause.LogLine != "panic: assignment to entry in nil map" || cause.LogSource != "previous" || cause.BestEffort {
+	if cause.LogLine != "panic: assignment to entry in nil map" || cause.LogSource != "previous" || cause.LineSelection != crashLineFatalPattern {
 		t.Fatalf("selected evidence = %+v, want matched previous panic", cause)
 	}
 }
@@ -75,7 +75,7 @@ func TestCrashCauseForDiagnoseFallbackAndRedaction(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("crash causes = %+v, want two", got)
 	}
-	if got[0].LogLine != "connection closed" || !got[0].BestEffort {
+	if got[0].LogLine != "connection closed" || got[0].LineSelection != crashLineLogTail {
 		t.Fatalf("fallback evidence = %+v", got[0])
 	}
 	if strings.Contains(got[1].LogLine, secret) || !strings.Contains(got[1].LogLine, "[REDACTED]") {
@@ -212,52 +212,79 @@ func TestDiagnoseResponseKeepsRelatedIssuesWithCrashCause(t *testing.T) {
 	}
 }
 
-func TestSelectCrashLogLineSkipsOmissionSentinel(t *testing.T) {
-	lines := []string{"ERROR first", "... (42 lines omitted) ...", "WARN last"}
-	if got := selectCrashLogLine(lines); got != "WARN last" {
-		t.Fatalf("selected %q, want last real generic line", got)
+// TestSelectCrashLogLineCorpus pins the selected evidence line and its
+// selection token across real-world crash-log shapes.
+func TestSelectCrashLogLineCorpus(t *testing.T) {
+	cases := []struct {
+		name       string
+		lines      []string
+		unfiltered bool
+		want       string
+		selection  string
+	}{
+		{"go panic header beats later noise",
+			[]string{"panic: runtime error: index out of range", "goroutine 1 [running]:", "ERROR shutdown hook failed"},
+			false, "panic: runtime error: index out of range", crashLineFatalPattern},
+		{"go runtime fatal error",
+			[]string{"fatal error: concurrent map read and map write", "goroutine 7 [running]:"},
+			false, "fatal error: concurrent map read and map write", crashLineFatalPattern},
+		{"rust panicked at (1.73+ format)",
+			[]string{"thread 'main' panicked at src/main.rs:4:6:", "note: run with `RUST_BACKTRACE=1`"},
+			false, "thread 'main' panicked at src/main.rs:4:6:", crashLineFatalPattern},
+		{"rust panicked at (pre-1.73 format)",
+			[]string{"thread 'main' panicked at 'called Option::unwrap() on a None value', src/main.rs:5:20"},
+			false, "thread 'main' panicked at 'called Option::unwrap() on a None value', src/main.rs:5:20", crashLineFatalPattern},
+		{"python exception final beats bare traceback header",
+			[]string{"Traceback (most recent call last):", `  File "/app/main.py", line 12, in <module>`, "redis.exceptions.ConnectionError: Error 111 connecting to redis:6379"},
+			false, "redis.exceptions.ConnectionError: Error 111 connecting to redis:6379", crashLineFatalPattern},
+		{"python bare KeyError final is crash-class",
+			[]string{"Traceback (most recent call last):", `  File "/app/main.py", line 12, in <module>`, "KeyError: 'FLAG'"},
+			false, "KeyError: 'FLAG'", crashLineFatalPattern},
+		{"python chained tracebacks skip every bare header",
+			[]string{"2026-07-22T10:00:00Z Traceback (most recent call last):", "2026-07-22T10:00:00Z Traceback (most recent call last):", "2026-07-22T10:00:01Z FATAL worker cannot start"},
+			false, "2026-07-22T10:00:01Z FATAL worker cannot start", crashLineFatalPattern},
+		{"python truncated block falls back to its tail, not the header",
+			[]string{"Traceback (most recent call last):", `  File "/app/main.py", line 12, in <module>`},
+			false, `File "/app/main.py", line 12, in <module>`, crashLineBlockTail},
+		{"header alone wins over a line preceding the traceback",
+			[]string{"INFO starting worker", "Traceback (most recent call last):"},
+			false, "Traceback (most recent call last):", crashLineFatalPattern},
+		{"jvm exception in thread",
+			[]string{`Exception in thread "main" java.lang.NullPointerException`, "\tat com.example.Main.main(Main.java:4)"},
+			false, `Exception in thread "main" java.lang.NullPointerException`, crashLineFatalPattern},
+		{"jvm caused-by class suffix",
+			[]string{"Caused by: java.net.ConnectException: Connection refused"},
+			false, "Caused by: java.net.ConnectException: Connection refused", crashLineFatalPattern},
+		{"dotnet unhandled exception",
+			[]string{"Unhandled exception. System.InvalidOperationException: Sequence contains no elements"},
+			false, "Unhandled exception. System.InvalidOperationException: Sequence contains no elements", crashLineFatalPattern},
+		{"node stack top",
+			[]string{"TypeError: Cannot read properties of undefined (reading 'foo')", "    at Object.<anonymous> (/app/index.js:3:1)"},
+			false, "TypeError: Cannot read properties of undefined (reading 'foo')", crashLineFatalPattern},
+		{"ruby exception class suffix",
+			[]string{"main.rb:4:in 'foo': undefined method 'bar' (NoMethodError)"},
+			false, "main.rb:4:in 'foo': undefined method 'bar' (NoMethodError)", crashLineFatalPattern},
+		{"signal death",
+			[]string{"WARN latency high", "SIGSEGV: segmentation violation code=0x1 addr=0x18"},
+			false, "SIGSEGV: segmentation violation code=0x1 addr=0x18", crashLineFatalPattern},
+		{"fatal beats earlier generic error regardless of position",
+			[]string{"ERROR connection pool exhausted", "FATAL shutting down"},
+			false, "FATAL shutting down", crashLineFatalPattern},
+		{"generic errors only pick the latest, labeled as such",
+			[]string{"ERROR db timeout", "... (42 lines omitted) ...", "WARN db retry gave up"},
+			false, "WARN db retry gave up", crashLineLastErrorLine},
+		{"no matches at all fall to the raw tail, labeled as such",
+			[]string{"INFO starting", "connection closed"},
+			true, "connection closed", crashLineLogTail},
 	}
-}
-
-func TestSelectCrashLogLinePythonTraceback(t *testing.T) {
-	t.Run("bare header loses to the later informative exception line", func(t *testing.T) {
-		lines := []string{
-			"Traceback (most recent call last):",
-			`  File "/app/main.py", line 12, in <module>`,
-			"redis.exceptions.ConnectionError: Error 111 connecting to redis:6379",
-		}
-		if got := selectCrashLogLine(lines); got != "redis.exceptions.ConnectionError: Error 111 connecting to redis:6379" {
-			t.Fatalf("selected %q, want the exception line, not the bare Traceback header", got)
-		}
-	})
-	t.Run("chained tracebacks skip every bare header", func(t *testing.T) {
-		lines := []string{
-			"2026-07-22T10:00:00Z Traceback (most recent call last):",
-			"2026-07-22T10:00:00Z Traceback (most recent call last):",
-			"2026-07-22T10:00:01Z FATAL worker cannot start",
-		}
-		if got := selectCrashLogLine(lines); got != "2026-07-22T10:00:01Z FATAL worker cannot start" {
-			t.Fatalf("selected %q, want the fatal line past both chained headers", got)
-		}
-	})
-	t.Run("truncated block falls back to its last line, not the header", func(t *testing.T) {
-		lines := []string{"Traceback (most recent call last):", `  File "/app/main.py", line 12, in <module>`}
-		if got := selectCrashLogLine(lines); got != `File "/app/main.py", line 12, in <module>` {
-			t.Fatalf("selected %q, want the block tail over the bare header", got)
-		}
-	})
-	t.Run("header alone is returned when its block is empty", func(t *testing.T) {
-		lines := []string{"INFO starting worker", "Traceback (most recent call last):"}
-		if got := selectCrashLogLine(lines); got != "Traceback (most recent call last):" {
-			t.Fatalf("selected %q, want the header — a line preceding the traceback is unrelated", got)
-		}
-	})
-	t.Run("go panic header still wins over later matches", func(t *testing.T) {
-		lines := []string{"panic: runtime error: index out of range", "goroutine 1 [running]:", "ERROR shutdown hook failed"}
-		if got := selectCrashLogLine(lines); got != "panic: runtime error: index out of range" {
-			t.Fatalf("selected %q, want the earliest panic header", got)
-		}
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, selection := selectCrashLogLine(tc.lines, tc.unfiltered)
+			if got != tc.want || selection != tc.selection {
+				t.Fatalf("selected %q (%s), want %q (%s)", got, selection, tc.want, tc.selection)
+			}
+		})
+	}
 }
 
 func activeCrashLoopPod(name, container string, now time.Time) *corev1.Pod {

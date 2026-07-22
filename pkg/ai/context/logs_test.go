@@ -293,6 +293,37 @@ func TestFilterLogs_PanicAndTraceback(t *testing.T) {
 	}
 }
 
+// TestFilterLogs_CrashClassPatterns pins the crash-shape alternatives beyond
+// bare level words: Rust panics, signal deaths, and conventionally-named
+// exception classes — and that the class alternative stays case-sensitive so
+// lowercase prose never rides it into the matched set.
+func TestFilterLogs_CrashClassPatterns(t *testing.T) {
+	matched := []string{
+		"thread 'main' panicked at src/main.rs:4:6:",
+		"thread 'main' panicked at 'called Option::unwrap() on a None value', src/main.rs:5:20",
+		"KeyError: 'FLAG'",
+		"Caused by: java.net.ConnectException: Connection refused",
+		"main.rb:4:in 'foo': undefined method 'bar' (NoMethodError)",
+		"SIGSEGV: segmentation violation code=0x1",
+		"Segmentation fault (core dumped)",
+	}
+	for _, line := range matched {
+		if result := FilterLogs(line + "\nplain line"); result.Fallback || len(result.Lines) != 1 {
+			t.Errorf("expected %q to match the crash-class patterns, got fallback=%v lines=%v", line, result.Fallback, result.Lines)
+		}
+	}
+	unmatched := []string{
+		"keyerror: retrying soon",       // lowercase — the class alternative must not match
+		`{"panic": true, "mode": "on"}`, // JSON field, not a panic marker
+		"connection closed by peer",
+	}
+	for _, line := range unmatched {
+		if result := FilterLogs(line + "\nplain line"); !result.Fallback {
+			t.Errorf("expected %q to stay unmatched, got lines=%v", line, result.Lines)
+		}
+	}
+}
+
 func TestFilterLogs_RedactsSecrets(t *testing.T) {
 	lines := []string{
 		"ERROR failed to auth with key sk-abc123def456ghi789jkl012mno345pqr678stu901",
