@@ -17,6 +17,10 @@ import (
 const (
 	envHistoryLookback                  = time.Hour
 	maxStaleSecretEnvChecksPerContainer = 5
+	// A mass Secret rotation coinciding with a rollout can leave many pods
+	// simultaneously not-Ready with in-window key changes; the sweep must not
+	// turn that into an unbounded warning burst.
+	maxStaleSecretEnvDetectionsPerSweep = 20
 )
 
 type RemovedServiceEnvCheck struct {
@@ -240,6 +244,9 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 		}
 		return out[i].Name < out[j].Name
 	})
+	if len(out) > maxStaleSecretEnvDetectionsPerSweep {
+		out = out[:maxStaleSecretEnvDetectionsPerSweep]
+	}
 	return out
 }
 
@@ -515,6 +522,9 @@ func staleSecretEnvBitingChecks(pod *corev1.Pod, checks []StaleSecretEnvCheck) [
 	if !readyKnown || ready {
 		return nil
 	}
+	// Only a Running-but-not-Ready container can be holding a stale value: a
+	// Waiting or crashlooping container re-reads Secret-backed env on its next
+	// (re)start, so it is deliberately outside this gate.
 	bitingContainers := make(map[string]bool)
 	for _, status := range pod.Status.ContainerStatuses {
 		if status.State.Running != nil && !status.Ready {

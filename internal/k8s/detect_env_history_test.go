@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -201,6 +202,49 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		}
 		if !podHasSecretEnvReference(pod) {
 			t.Fatal("envFrom Secret must pass the timeline-query precheck")
+		}
+	})
+
+	t.Run("newly added secretKeyRef key is ignored", func(t *testing.T) {
+		pod := staleSecretEnvPod("key-ref-added", startedAt, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, secret)
+		added := secretHistoryEvent(changedAt, "shop", "db-conn", "data (added keys)", []string{"password"})
+		if checks := findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{added}); len(checks) != 0 {
+			t.Fatalf("added-key event must not mark a secretKeyRef env stale: %+v", checks)
+		}
+	})
+
+	// Known accepted limitation: the promotion gate corroborates on the same
+	// container being Running-and-not-Ready, but cannot distinguish "not Ready
+	// because of the stale value" from "not Ready for an unrelated reason while
+	// a consumed key happened to change in-window." The hedged message wording
+	// ("may be running a stale env value") is the mitigation.
+	t.Run("unrelated not-Ready with coincidental change still promotes (documented limitation)", func(t *testing.T) {
+		pod := staleSecretEnvPod("coincidental", startedAt, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, secret)
+		setEnvHistoryEvents(t, change)
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || !strings.Contains(detections[0].Message, "may be running a stale env value") {
+			t.Fatalf("expected one hedged warning for the coincidental case: %+v", detections)
+		}
+	})
+
+	t.Run("promotion sweep is capped", func(t *testing.T) {
+		objects := []runtime.Object{secret}
+		var pods []*corev1.Pod
+		for i := 0; i < maxStaleSecretEnvDetectionsPerSweep+5; i++ {
+			pod := staleSecretEnvPod(fmt.Sprintf("burst-%02d", i), startedAt, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+			pods = append(pods, pod)
+			objects = append(objects, pod)
+		}
+		cache := envHistoryTestCache(t, objects...)
+		setEnvHistoryEvents(t, change)
+		if checks := findStaleSecretEnvChecks(cache, pods, []timeline.TimelineEvent{change}); len(checks) != maxStaleSecretEnvDetectionsPerSweep+5 {
+			t.Fatalf("precondition: every burst pod should produce a fact, got %d", len(checks))
+		}
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != maxStaleSecretEnvDetectionsPerSweep {
+			t.Fatalf("mass rotation + rollout must not burst past the sweep cap: got %d, want %d", len(detections), maxStaleSecretEnvDetectionsPerSweep)
 		}
 	})
 }
