@@ -65,7 +65,7 @@
     "@vitejs/plugin-react": "^6.0.2",
     "@xyflow/react": "^12.11.2",
     "clsx": "^2.1.1",
-    "elkjs": "^0.11.1",
+    "elkjs": "^0.12.0",
     "eslint": "^10.6.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
