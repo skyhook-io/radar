@@ -57,11 +57,18 @@ func TestShouldAttachIssueChanges(t *testing.T) {
 // reason and no other, and must steer without claiming causation.
 func TestIssueChangesGuidance(t *testing.T) {
 	guidance := IssueChangesGuidance(ChangesReasonWithAllCreationTimeCriticalIssues)
-	if !strings.Contains(guidance, "does not clear the changes") || !strings.Contains(guidance, "Review the changes") {
+	if !strings.Contains(guidance, "does not clear the listed changes") || !strings.Contains(guidance, "Review the changes") {
 		t.Fatalf("collision-reason guidance must steer toward the feed, got %q", guidance)
 	}
 	if strings.Contains(strings.ToLower(guidance), "caused the") {
 		t.Fatalf("guidance must not claim causation, got %q", guidance)
+	}
+	// The timing classification is per-resource ("failing since creation"); it
+	// establishes no ordering against the change feed, so the prose must never
+	// claim the issues predate the changes — a resource created after a bad
+	// change fails from creation because of that change.
+	if strings.Contains(strings.ToLower(guidance), "predate") {
+		t.Fatalf("guidance must not claim an issue-vs-change ordering, got %q", guidance)
 	}
 	if got := IssueChangesGuidance(ChangesReasonNoCriticalIssues); got != "" {
 		t.Fatalf("no_critical_issues carries no landmine and needs no guidance, got %q", got)
