@@ -52,6 +52,25 @@ func TestShouldAttachIssueChanges(t *testing.T) {
 	}
 }
 
+// The creation-timing collision is the exact spot where the old dismissive
+// token steered agents away from the change feed; the guidance must ride that
+// reason and no other, and must steer without claiming causation.
+func TestIssueChangesGuidance(t *testing.T) {
+	guidance := IssueChangesGuidance(ChangesReasonWithAllCreationTimeCriticalIssues)
+	if !strings.Contains(guidance, "does not clear the changes") || !strings.Contains(guidance, "Review the changes") {
+		t.Fatalf("collision-reason guidance must steer toward the feed, got %q", guidance)
+	}
+	if strings.Contains(strings.ToLower(guidance), "caused the") {
+		t.Fatalf("guidance must not claim causation, got %q", guidance)
+	}
+	if got := IssueChangesGuidance(ChangesReasonNoCriticalIssues); got != "" {
+		t.Fatalf("no_critical_issues carries no landmine and needs no guidance, got %q", got)
+	}
+	if got := IssueChangesGuidance(""); got != "" {
+		t.Fatalf("empty reason must yield empty guidance, got %q", got)
+	}
+}
+
 func TestIssueChangesQueryEligible(t *testing.T) {
 	cases := []struct {
 		name     string

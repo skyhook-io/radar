@@ -117,6 +117,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 			}); err == nil && len(changes) > 0 {
 				resp.RecentChanges = changes
 				resp.RecentChangesReason = recentChangesReason
+				resp.RecentChangesGuidance = meaningfulchanges.IssueChangesGuidance(recentChangesReason)
 				resp.RecentChangesTruncated = truncated
 			}
 		}

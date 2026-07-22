@@ -354,7 +354,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"not make recent changes irrelevant to other issues or application-layer " +
 			"symptoms. A bad config change can itself cause a failure during creation. " +
 			"The token does not " +
-			"claim the changes are causal. `no_critical_issues` means no critical rows " +
+			"claim the changes are causal. `recent_changes_guidance`, when present, states " +
+			"how to treat the feed for this response — follow it. `no_critical_issues` " +
+			"means no critical rows " +
 			"were returned. `recent_changes_truncated=true` means the feed is incomplete, " +
 			"so absence from it is not evidence that a relevant change did not occur. " +
 			"The feed lists recent spec/config changes that may explain failures " +
@@ -2802,6 +2804,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 			}); err == nil && len(changes) > 0 {
 				resp.RecentChanges = changes
 				resp.RecentChangesReason = recentChangesReason
+				resp.RecentChangesGuidance = meaningfulchanges.IssueChangesGuidance(recentChangesReason)
 				resp.RecentChangesTruncated = truncated
 			}
 		}

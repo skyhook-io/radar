@@ -438,6 +438,7 @@ export interface IssuesResponse {
   total_matched?: number
   recent_changes?: IssueRecentChange[]
   recent_changes_reason?: string
+  recent_changes_guidance?: string
   recent_changes_truncated?: boolean
   // Present only when RBAC visibility is incomplete (absent = full access).
   // state 'degraded' means core workload reads are denied, so an empty list may

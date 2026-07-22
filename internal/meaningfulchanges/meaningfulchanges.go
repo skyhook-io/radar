@@ -31,6 +31,21 @@ const (
 	ChangesReasonWithAllCreationTimeCriticalIssues = "recent_changes_with_all_critical_issues_at_creation"
 )
 
+// IssueChangesGuidance returns response-level steering prose for reason tokens
+// whose timing evidence could otherwise read as "the changes are irrelevant."
+// The steer rides the response — not just the tool description — because the
+// response is what the model attends to at decision time; the description may
+// be skimmed once or never loaded. It is advice about how to treat the feed,
+// never a causal claim about any specific change.
+func IssueChangesGuidance(reason string) string {
+	if reason != ChangesReasonWithAllCreationTimeCriticalIssues {
+		return ""
+	}
+	return "These critical issues predate the listed changes, but that does not clear the changes: " +
+		"a recent config change can cause application-layer symptoms that produce no issue row. " +
+		"Review the changes before concluding the listed issues explain the reported problem."
+}
+
 var (
 	configKinds = []string{"ConfigMap"}
 	specKinds   = []string{

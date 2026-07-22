@@ -94,6 +94,9 @@ func TestIssuesToolDocumentsRecentChangesReasons(t *testing.T) {
 	if !strings.Contains(description, "recent_changes_truncated") {
 		t.Error("issues tool description does not document recent_changes_truncated")
 	}
+	if !strings.Contains(description, "recent_changes_guidance") {
+		t.Error("issues tool description does not document recent_changes_guidance")
+	}
 }
 
 func TestSearchToolSchemaIncludesNamespace(t *testing.T) {
