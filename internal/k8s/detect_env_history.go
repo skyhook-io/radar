@@ -465,6 +465,7 @@ func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]
 }
 
 func isSecretDataModificationPath(path string) bool {
+	// Added keys were absent from existing envFrom environments, so they cannot make an injected value stale.
 	switch path {
 	case "data (modified keys)", "stringData (modified keys)":
 		return true
