@@ -29,10 +29,10 @@ var fatalCrashLogPattern = regexp.MustCompile(`(?i)(\bpanic:|\bpanicked at\b|\bF
 // agent can weigh the line's confidence itself instead of treating every
 // selection as a verified cause.
 const (
-	crashLineFatalPattern  = "fatal_pattern"   // matched a crash-class marker
-	crashLineBlockTail     = "crash_block_tail" // tail of a traceback block whose header carried no info
-	crashLineLastErrorLine = "last_error_line" // no crash-class marker; latest matched error line
-	crashLineLogTail       = "log_tail"        // log had no matched error lines at all; raw tail
+	crashLineFatalPattern    = "fatal_pattern"         // matched a crash-class marker
+	crashLineHeaderOnly      = "traceback_header_only" // a traceback occurred but its informative line was not captured; read the full logs
+	crashLineLastMatchedLine = "last_matched_line"     // no crash-class marker; latest line matching the log filter (may be ERROR or WARN)
+	crashLineLogTail         = "log_tail"              // nothing matched the log filter at all; raw tail
 )
 
 type diagnoseCrashCause struct {
@@ -43,7 +43,8 @@ type diagnoseCrashCause struct {
 	LogLine   string   `json:"logLine"`
 	LogSource string   `json:"logSource"`
 	// LineSelection states how LogLine was picked (fatal_pattern,
-	// crash_block_tail, last_error_line, log_tail) — descending confidence.
+	// traceback_header_only, last_matched_line, log_tail) — descending
+	// confidence.
 	LineSelection string `json:"logLineSelection"`
 }
 
@@ -195,22 +196,27 @@ func selectCrashLogLine(lines []string, unfiltered bool) (string, string) {
 		}
 		return line, crashLineFatalPattern
 	}
-	tailSelection := crashLineLastErrorLine
+	tailSelection := crashLineLastMatchedLine
 	if unfiltered {
 		tailSelection = crashLineLogTail
 	}
-	if header != "" {
-		tailSelection = crashLineBlockTail
-	}
-	// Generic tail fallback; with a bare header, only lines inside its block
-	// (after it) qualify — a line preceding the traceback is unrelated.
+	// Generic tail fallback; with a bare header, only lines after it qualify —
+	// a line preceding the traceback is unrelated. Lines after the header get
+	// no special block claim: in the filtered stream they are just later
+	// matched lines, not traceback content.
 	for i := len(lines) - 1; i > headerIdx; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line != "" && !isOmittedLogSentinel(line) {
 			return line, tailSelection
 		}
 	}
-	return header, crashLineFatalPattern
+	// Only the bare header matched: a crash signature exists but the log
+	// filter did not capture its informative line — say so instead of
+	// presenting the header as high-confidence evidence.
+	if header != "" {
+		return header, crashLineHeaderOnly
+	}
+	return "", ""
 }
 
 // isBareTracebackHeader matches Python's "Traceback (most recent call last):"
