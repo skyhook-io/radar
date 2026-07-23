@@ -49,14 +49,17 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		"limitranges":              true,
 	}
 
-	secretWriteTimes := &sync.Map{}
+	secretWriteTimes := newSecretDataManagerWriteIndex()
 	cfg := k8score.CacheConfig{
 		Client:        client,
 		ResourceTypes: enabled,
 		// No deferred types for tests — all sync immediately
 		DeferredTypes: map[string]bool{},
 		OnTransform: func(obj any) {
-			captureSecretDataManagerWriteTime(secretWriteTimes, obj)
+			secretWriteTimes.capture(obj)
+		},
+		OnChange: func(change k8score.ResourceChange, obj, _ any) {
+			secretWriteTimes.reconcile(change, obj)
 		},
 	}
 

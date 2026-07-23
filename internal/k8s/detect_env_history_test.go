@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -16,7 +15,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestRemovedServiceEnvExposureAndPrecision(t *testing.T) {
@@ -297,6 +298,30 @@ func TestStaleSecretEnvManagedFieldsFallback(t *testing.T) {
 		}
 	})
 
+	t.Run("metadata write preserves the prior data timestamp in diagnosis", func(t *testing.T) {
+		pod := staleSecretEnvPod("catalog", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		secret := newSecret()
+		secret.UID = types.UID("secret-uid")
+		secret.ResourceVersion = "1"
+		cache := envHistoryTestCache(t, pod, secret)
+
+		metadataOnly := secret.DeepCopy()
+		metadataOnly.ResourceVersion = "2"
+		metadataOnly.Annotations = map[string]string{"rotation": "checked"}
+		metadataOnly.ManagedFields[0].Time = &metav1.Time{Time: now}
+		cache.secretWriteTimes.capture(metadataOnly)
+		cache.secretWriteTimes.reconcile(k8score.ResourceChange{
+			Kind: "Secret", Namespace: "shop", Name: "db-conn", UID: "secret-uid",
+			Operation: k8score.OpUpdate,
+			Diff:      &k8score.DiffInfo{Fields: []k8score.FieldChange{{Path: "metadata.annotations"}}},
+		}, metadataOnly)
+
+		checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, nil)
+		if len(checks) != 1 || !checks[0].SecretChangedAt.Equal(changedAt) {
+			t.Fatalf("metadata-only write replaced the real data timestamp in diagnosis: %+v", checks)
+		}
+	})
+
 	t.Run("precise timeline evidence wins for the whole Secret", func(t *testing.T) {
 		pod := staleSecretEnvPod("catalog", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
 		cache := envHistoryTestCache(t, pod, newSecret())
@@ -462,47 +487,311 @@ func TestStaleSecretEnvManagedFieldsFallback(t *testing.T) {
 func TestSecretDataManagerWriteIndex(t *testing.T) {
 	dataWrite := time.Date(2026, time.July, 23, 8, 0, 0, 0, time.UTC)
 	metadataWrite := dataWrite.Add(time.Hour)
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name: "credentials", Namespace: "shop", UID: types.UID("old"),
-		ManagedFields: []metav1.ManagedFieldsEntry{
-			{
-				Manager: "secret-controller", Operation: metav1.ManagedFieldsOperationUpdate,
-				Time: &metav1.Time{Time: dataWrite}, FieldsType: "FieldsV1",
-				FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:password":{}}}`)},
-			},
-			{
-				Manager: "metadata-controller", Operation: metav1.ManagedFieldsOperationUpdate,
-				Time: &metav1.Time{Time: metadataWrite}, FieldsType: "FieldsV1",
-				FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:metadata":{"f:annotations":{"f:data":{}}}}`)},
-			},
-		},
-	}}
-	index := &sync.Map{}
-	captureSecretDataManagerWriteTime(index, secret)
-	value, ok := index.Load(secretWriteKey("shop", "credentials"))
-	write, typed := value.(secretDataManagerWrite)
-	if !ok || !typed || write.uid != "old" || !write.at.Equal(dataWrite) {
-		t.Fatalf("index captured (%+v, %v), want old UID at %v", value, ok, dataWrite)
+	dataField := func(manager string, at time.Time) metav1.ManagedFieldsEntry {
+		return metav1.ManagedFieldsEntry{
+			Manager: manager, Operation: metav1.ManagedFieldsOperationUpdate,
+			Time: &metav1.Time{Time: at}, FieldsType: "FieldsV1",
+			FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:password":{}}}`)},
+		}
+	}
+	metadataField := func(manager string, at time.Time) metav1.ManagedFieldsEntry {
+		return metav1.ManagedFieldsEntry{
+			Manager: manager, Operation: metav1.ManagedFieldsOperationUpdate,
+			Time: &metav1.Time{Time: at}, FieldsType: "FieldsV1",
+			FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:metadata":{"f:annotations":{"f:data":{}}}}`)},
+		}
+	}
+	secret := func(uid, resourceVersion string, fields ...metav1.ManagedFieldsEntry) *corev1.Secret {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name: "credentials", Namespace: "shop", UID: types.UID(uid),
+			ResourceVersion: resourceVersion, ManagedFields: fields,
+		}}
+	}
+	change := func(uid, operation string, diff *k8score.DiffInfo) k8score.ResourceChange {
+		return k8score.ResourceChange{
+			Kind: "Secret", Namespace: "shop", Name: "credentials",
+			UID: uid, Operation: operation, Diff: diff,
+		}
+	}
+	dataDiff := &k8score.DiffInfo{Fields: []k8score.FieldChange{{Path: "data (modified keys)"}}}
+	metadataDiff := &k8score.DiffInfo{Fields: []k8score.FieldChange{{Path: "metadata.annotations"}}}
+	assertWrite := func(t *testing.T, index *secretDataManagerWriteIndex, uid string, at time.Time) {
+		t.Helper()
+		write, ok := index.load("shop", "credentials")
+		if !ok || write.uid != uid || !write.at.Equal(at) {
+			t.Fatalf("indexed write = (%+v, %v), want UID %s at %v", write, ok, uid, at)
+		}
 	}
 
-	recreated := secret.DeepCopy()
-	recreated.UID = types.UID("new")
-	recreated.ManagedFields[0].Time = &metav1.Time{Time: dataWrite.Add(2 * time.Hour)}
-	captureSecretDataManagerWriteTime(index, recreated)
-	deleteSecretDataManagerWriteTime(index, k8score.ResourceChange{
-		Kind: "Secret", Namespace: "shop", Name: "credentials", UID: "old", Operation: k8score.OpDelete,
+	t.Run("metadata-only update with no prior state stays suppressed", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		metadataOnly := secret("old", "2", dataField("secret-controller", metadataWrite))
+		index.capture(metadataOnly)
+		index.reconcile(change("old", k8score.OpUpdate, metadataDiff), metadataOnly)
+		if write, ok := index.load("shop", "credentials"); ok {
+			t.Fatalf("metadata-only update created a write timestamp without prior state: %+v", write)
+		}
 	})
-	value, ok = index.Load(secretWriteKey("shop", "credentials"))
-	write, typed = value.(secretDataManagerWrite)
-	if !ok || !typed || write.uid != "new" {
-		t.Fatalf("old delete removed the recreated Secret's timestamp: %+v", value)
+
+	t.Run("same data-owning manager metadata write preserves real data timestamp", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		initial := secret("old", "1", dataField("secret-controller", dataWrite))
+		index.capture(initial)
+		index.reconcile(change("old", k8score.OpAdd, nil), initial)
+
+		metadataOnly := secret("old", "2", dataField("secret-controller", metadataWrite))
+		index.capture(metadataOnly)
+		index.reconcile(change("old", k8score.OpUpdate, metadataDiff), metadataOnly)
+		assertWrite(t, index, "old", dataWrite)
+	})
+
+	t.Run("different manager metadata update preserves prior timestamp", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		initial := secret("old", "1", dataField("secret-controller", dataWrite))
+		index.capture(initial)
+		index.reconcile(change("old", k8score.OpAdd, nil), initial)
+
+		metadataOnly := secret("old", "2",
+			dataField("secret-controller", dataWrite),
+			metadataField("metadata-controller", metadataWrite),
+		)
+		index.capture(metadataOnly)
+		index.reconcile(change("old", k8score.OpUpdate, metadataDiff), metadataOnly)
+		assertWrite(t, index, "old", dataWrite)
+	})
+
+	t.Run("later data write publishes only on exact object version", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		actualWrite := secret("old", "3", dataField("secret-controller", metadataWrite))
+		index.capture(actualWrite)
+
+		wrongVersion := actualWrite.DeepCopy()
+		wrongVersion.ResourceVersion = "4"
+		index.reconcile(change("old", k8score.OpUpdate, dataDiff), wrongVersion)
+		if write, ok := index.load("shop", "credentials"); ok {
+			t.Fatalf("mismatched resourceVersion published staged timestamp: %+v", write)
+		}
+
+		index.reconcile(change("old", k8score.OpUpdate, dataDiff), actualWrite)
+		assertWrite(t, index, "old", metadataWrite)
+	})
+
+	t.Run("queued data then metadata callbacks preserve the real write", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		dataUpdate := secret("old", "2", dataField("secret-controller", dataWrite))
+		metadataUpdate := secret("old", "3", dataField("secret-controller", metadataWrite))
+		index.capture(dataUpdate)
+		index.capture(metadataUpdate)
+
+		index.reconcile(change("old", k8score.OpUpdate, dataDiff), dataUpdate)
+		index.reconcile(change("old", k8score.OpUpdate, metadataDiff), metadataUpdate)
+		assertWrite(t, index, "old", dataWrite)
+	})
+
+	t.Run("unmatched callbacks remain globally bounded", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		index.pendingLimit = 2
+		for _, resourceVersion := range []string{"1", "2", "3"} {
+			index.capture(secret("old", resourceVersion, dataField("secret-controller", dataWrite)))
+		}
+		index.mu.Lock()
+		pending := len(index.pending)
+		index.mu.Unlock()
+		if pending != 1 {
+			t.Fatalf("pending candidates = %d after bounded reset, want 1", pending)
+		}
+
+		stale := secret("old", "2", dataField("secret-controller", dataWrite))
+		index.reconcile(change("old", k8score.OpUpdate, dataDiff), stale)
+		if write, ok := index.load("shop", "credentials"); ok {
+			t.Fatalf("evicted stale callback published a timestamp: %+v", write)
+		}
+		latest := secret("old", "3", dataField("secret-controller", metadataWrite))
+		index.reconcile(change("old", k8score.OpUpdate, dataDiff), latest)
+		assertWrite(t, index, "old", dataWrite)
+		index.mu.Lock()
+		pending = len(index.pending)
+		index.mu.Unlock()
+		if pending != 0 {
+			t.Fatalf("pending candidates = %d after exact callback, want 0", pending)
+		}
+	})
+
+	t.Run("recreate and late old callbacks are UID safe", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		oldSecret := secret("old", "1", dataField("secret-controller", dataWrite))
+		index.capture(oldSecret)
+		index.reconcile(change("old", k8score.OpAdd, nil), oldSecret)
+
+		recreatedAt := dataWrite.Add(2 * time.Hour)
+		recreated := secret("new", "1", dataField("secret-controller", recreatedAt))
+		index.capture(recreated)
+		index.reconcile(change("new", k8score.OpAdd, nil), recreated)
+		index.reconcile(change("old", k8score.OpDelete, nil), oldSecret)
+		assertWrite(t, index, "new", recreatedAt)
+
+		lateOld := secret("old", "2", dataField("secret-controller", recreatedAt.Add(time.Hour)))
+		index.capture(lateOld)
+		index.reconcile(change("old", k8score.OpUpdate, dataDiff), lateOld)
+		assertWrite(t, index, "new", recreatedAt)
+	})
+
+	t.Run("Helm release payload clears only its matching UID", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		recreated := secret("new", "1", dataField("secret-controller", dataWrite))
+		index.capture(recreated)
+		index.reconcile(change("new", k8score.OpAdd, nil), recreated)
+
+		helmRelease := recreated.DeepCopy()
+		helmRelease.ResourceVersion = "2"
+		helmRelease.Type = corev1.SecretType("helm.sh/release.v1")
+		index.capture(helmRelease)
+		index.reconcile(change("new", k8score.OpUpdate, metadataDiff), helmRelease)
+		if write, ok := index.load("shop", "credentials"); ok {
+			t.Fatalf("Helm release payload Secret occupied the diagnostic timestamp index: %+v", write)
+		}
+	})
+}
+
+func TestSecretDataManagerWriteIndexInformerLifecycle(t *testing.T) {
+	dataWrite := time.Date(2026, time.July, 23, 8, 0, 0, 0, time.UTC)
+	metadataWrite := dataWrite.Add(time.Hour)
+	actualWrite := metadataWrite.Add(time.Hour)
+	managedData := func(at time.Time) []metav1.ManagedFieldsEntry {
+		return []metav1.ManagedFieldsEntry{{
+			Manager: "secret-controller", Operation: metav1.ManagedFieldsOperationUpdate,
+			Time: &metav1.Time{Time: at}, FieldsType: "FieldsV1",
+			FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:password":{}}}`)},
+		}}
+	}
+	newCache := func(t *testing.T, secret *corev1.Secret) (*k8score.ResourceCache, *secretDataManagerWriteIndex, *watch.RaceFreeFakeWatcher) {
+		t.Helper()
+		index := newSecretDataManagerWriteIndex()
+		client := fake.NewClientset(secret)
+		watcher := watch.NewRaceFreeFake()
+		client.PrependWatchReactor("secrets", func(k8stesting.Action) (bool, watch.Interface, error) {
+			return true, watcher, nil
+		})
+		core, err := k8score.NewResourceCache(k8score.CacheConfig{
+			Client:        client,
+			ResourceTypes: map[string]bool{k8score.Secrets: true},
+			DeferredTypes: map[string]bool{},
+			OnTransform: func(obj any) {
+				index.capture(obj)
+			},
+			OnChange: func(change k8score.ResourceChange, obj, _ any) {
+				index.reconcile(change, obj)
+			},
+			ComputeDiff: func(kind string, oldObj, newObj any) *k8score.DiffInfo {
+				return ComputeDiff(kind, oldObj, newObj)
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewResourceCache: %v", err)
+		}
+		t.Cleanup(core.Stop)
+		return core, index, watcher
+	}
+	waitReconciled := func(t *testing.T, core *k8score.ResourceCache, index *secretDataManagerWriteIndex, secret *corev1.Secret) {
+		t.Helper()
+		version := secretDataManagerWriteVersion{
+			namespace:       secret.Namespace,
+			name:            secret.Name,
+			uid:             string(secret.UID),
+			resourceVersion: secret.ResourceVersion,
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			cached, err := core.Secrets().Secrets(secret.Namespace).Get(secret.Name)
+			index.mu.Lock()
+			_, pending := index.pending[version]
+			index.mu.Unlock()
+			if err == nil && cached.ResourceVersion == secret.ResourceVersion && !pending {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("Secret %s/%s rv=%s was not reconciled", secret.Namespace, secret.Name, secret.ResourceVersion)
 	}
 
-	helmRelease := recreated.DeepCopy()
-	helmRelease.Type = corev1.SecretType("helm.sh/release.v1")
-	captureSecretDataManagerWriteTime(index, helmRelease)
-	if _, ok := index.Load(secretWriteKey("shop", "credentials")); ok {
-		t.Fatal("Helm release payload Secret should not occupy the diagnostic timestamp index")
+	t.Run("metadata-only update rolls back advanced owner time", func(t *testing.T) {
+		initial := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "credentials", Namespace: "shop", UID: types.UID("secret-uid"),
+				ResourceVersion: "1", ManagedFields: managedData(dataWrite),
+			},
+			Data: map[string][]byte{"password": []byte("old")},
+		}
+		core, index, watcher := newCache(t, initial)
+		waitReconciled(t, core, index, initial)
+
+		metadataOnly := initial.DeepCopy()
+		metadataOnly.ResourceVersion = "2"
+		metadataOnly.ManagedFields = managedData(metadataWrite)
+		metadataOnly.Annotations = map[string]string{"rotation": "checked"}
+		watcher.Modify(metadataOnly.DeepCopy())
+		waitReconciled(t, core, index, metadataOnly)
+		write, ok := index.load("shop", "credentials")
+		if !ok || !write.at.Equal(dataWrite) {
+			t.Fatalf("metadata-only informer update indexed %+v, want prior data timestamp %v", write, dataWrite)
+		}
+	})
+
+	t.Run("no prior stays suppressed until later data write", func(t *testing.T) {
+		initial := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "credentials", Namespace: "shop", UID: types.UID("secret-uid"),
+				ResourceVersion: "1",
+			},
+			Data: map[string][]byte{"password": []byte("old")},
+		}
+		core, index, watcher := newCache(t, initial)
+		waitReconciled(t, core, index, initial)
+
+		metadataOnly := initial.DeepCopy()
+		metadataOnly.ResourceVersion = "2"
+		metadataOnly.ManagedFields = managedData(metadataWrite)
+		metadataOnly.Annotations = map[string]string{"rotation": "checked"}
+		watcher.Modify(metadataOnly.DeepCopy())
+		waitReconciled(t, core, index, metadataOnly)
+		if write, ok := index.load("shop", "credentials"); ok {
+			t.Fatalf("metadata-only informer update created timestamp without prior state: %+v", write)
+		}
+
+		dataUpdate := metadataOnly.DeepCopy()
+		dataUpdate.ResourceVersion = "3"
+		dataUpdate.ManagedFields = managedData(actualWrite)
+		dataUpdate.Data = map[string][]byte{"password": []byte("new")}
+		watcher.Modify(dataUpdate.DeepCopy())
+		waitReconciled(t, core, index, dataUpdate)
+		write, ok := index.load("shop", "credentials")
+		if !ok || !write.at.Equal(actualWrite) {
+			t.Fatalf("later data write indexed %+v, want %v", write, actualWrite)
+		}
+	})
+}
+
+func TestSecretChangeWritesData(t *testing.T) {
+	for _, path := range []string{
+		"data (added keys)", "data (removed keys)", "data (modified keys)",
+		"stringData (added keys)", "stringData (removed keys)", "stringData (modified keys)",
+	} {
+		t.Run(path, func(t *testing.T) {
+			change := k8score.ResourceChange{Diff: &k8score.DiffInfo{
+				Fields: []k8score.FieldChange{{Path: path}},
+			}}
+			if !secretChangeWritesData(change) {
+				t.Fatalf("%q was not recognized as a Secret payload write", path)
+			}
+		})
+	}
+	for _, change := range []k8score.ResourceChange{
+		{},
+		{Diff: &k8score.DiffInfo{Fields: []k8score.FieldChange{{Path: "metadata.annotations"}}}},
+	} {
+		if secretChangeWritesData(change) {
+			t.Fatalf("non-data change was recognized as a Secret payload write: %+v", change)
+		}
 	}
 }
 
@@ -527,7 +816,7 @@ func TestStaleSecretEnvDetectionResolvesWorkloadOwner(t *testing.T) {
 
 func envHistoryTestCache(t *testing.T, objects ...runtime.Object) *ResourceCache {
 	t.Helper()
-	secretWriteTimes := &sync.Map{}
+	secretWriteTimes := newSecretDataManagerWriteIndex()
 	core, err := k8score.NewResourceCache(k8score.CacheConfig{
 		Client: fake.NewClientset(objects...),
 		ResourceTypes: map[string]bool{
@@ -536,7 +825,10 @@ func envHistoryTestCache(t *testing.T, objects ...runtime.Object) *ResourceCache
 		},
 		DeferredTypes: map[string]bool{},
 		OnTransform: func(obj any) {
-			captureSecretDataManagerWriteTime(secretWriteTimes, obj)
+			secretWriteTimes.capture(obj)
+		},
+		OnChange: func(change k8score.ResourceChange, obj, _ any) {
+			secretWriteTimes.reconcile(change, obj)
 		},
 	})
 	if err != nil {

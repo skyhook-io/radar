@@ -615,16 +615,12 @@ func secretDataManagerWriteTime(cache *ResourceCache, namespace, name string) (t
 	if cache == nil || cache.secretWriteTimes == nil || cache.Secrets() == nil {
 		return time.Time{}, false
 	}
-	value, ok := cache.secretWriteTimes.Load(secretWriteKey(namespace, name))
-	if !ok {
-		return time.Time{}, false
-	}
-	write, ok := value.(secretDataManagerWrite)
+	write, ok := cache.secretWriteTimes.load(namespace, name)
 	if !ok || write.at.IsZero() {
 		return time.Time{}, false
 	}
 	secret, err := cache.Secrets().Secrets(namespace).Get(name)
-	if err != nil || secret == nil || string(secret.UID) != write.uid {
+	if err != nil || secret == nil || secret.Type == corev1.SecretType("helm.sh/release.v1") || string(secret.UID) != write.uid {
 		return time.Time{}, false
 	}
 	return write.at, true
@@ -637,9 +633,7 @@ func secretsWithObservedDataWrites(events []timeline.TimelineEvent) map[string]b
 			continue
 		}
 		for _, field := range event.Diff.Fields {
-			switch field.Path {
-			case "data (added keys)", "data (removed keys)", "data (modified keys)",
-				"stringData (added keys)", "stringData (removed keys)", "stringData (modified keys)":
+			if isSecretDataWritePath(field.Path) {
 				out[event.Namespace+"\x00"+event.Name] = true
 			}
 		}
