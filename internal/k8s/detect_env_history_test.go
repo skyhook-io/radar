@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -197,7 +198,7 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		pod.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{Prefix: "DB_", SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "db-conn"}}}}
 		cache := envHistoryTestCache(t, pod, secret)
 		checks := findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{change})
-		if len(checks) != 1 || checks[0].Source != "envFrom" || checks[0].EnvName != "DB_password" || checks[0].Key != "password" {
+		if len(checks) != 1 || checks[0].ReferenceKind != "envFrom" || checks[0].EvidenceSource != staleSecretEvidenceObservedChange || checks[0].EnvName != "DB_password" || checks[0].Key != "password" {
 			t.Fatalf("unexpected envFrom fact: %+v", checks)
 		}
 		if !podHasSecretEnvReference(pod) {
@@ -249,6 +250,262 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 	})
 }
 
+func TestStaleSecretEnvManagedFieldsFallback(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	startedAt := now.Add(-2 * time.Minute)
+	changedAt := now.Add(-time.Minute)
+	newSecret := func() *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "db-conn",
+				Namespace: "shop",
+				ManagedFields: []metav1.ManagedFieldsEntry{{
+					Manager:    "secret-controller",
+					Operation:  metav1.ManagedFieldsOperationUpdate,
+					Time:       &metav1.Time{Time: changedAt},
+					FieldsType: "FieldsV1",
+					FieldsV1:   &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:password":{}},"f:metadata":{"f:annotations":{"f:sync":{}}}}`)},
+				}},
+			},
+			Data: map[string][]byte{"password": []byte("sentinel-secret-value")},
+		}
+	}
+
+	t.Run("empty timeline emits hedged FYI without a key", func(t *testing.T) {
+		pod := staleSecretEnvPod("catalog", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, newSecret())
+		if checks := FindStaleSecretEnvChecksForObject(context.Background(), cache, pod); len(checks) != 0 {
+			t.Fatalf("basic object context must not emit coarse managedFields evidence: %+v", checks)
+		}
+		checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, nil)
+		if len(checks) != 1 {
+			t.Fatalf("got %d managedFields checks, want 1: %+v", len(checks), checks)
+		}
+		check := checks[0]
+		if check.EvidenceSource != staleSecretEvidenceManagedFields || check.ReferenceKind != "secretKeyRef" || check.Key != "" || check.EnvName != "" || !check.SecretChangedAt.Equal(changedAt) {
+			t.Fatalf("unexpected managedFields check: %+v", check)
+		}
+		if !strings.Contains(check.Message, "managedFields cannot identify which field changed") || !strings.Contains(check.Message, "if the write touched a consumed key") || strings.Contains(check.Message, "password") {
+			t.Fatalf("fallback wording is not properly hedged: %q", check.Message)
+		}
+		encoded, err := json.Marshal(checks)
+		if err != nil {
+			t.Fatalf("marshal checks: %v", err)
+		}
+		if strings.Contains(string(encoded), "sentinel-secret-value") {
+			t.Fatalf("Secret value leaked into fallback output: %s", encoded)
+		}
+	})
+
+	t.Run("precise timeline evidence wins for the whole Secret", func(t *testing.T) {
+		pod := staleSecretEnvPod("catalog", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, newSecret())
+		precise := secretHistoryEvent(changedAt, "shop", "db-conn", "data (modified keys)", []string{"password"})
+		checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{precise})
+		if len(checks) != 1 || checks[0].EvidenceSource != staleSecretEvidenceObservedChange || checks[0].Key != "password" {
+			t.Fatalf("precise evidence must replace the fallback: %+v", checks)
+		}
+
+		otherKey := secretHistoryEvent(changedAt, "shop", "db-conn", "data (modified keys)", []string{"host"})
+		if checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{otherKey}); len(checks) != 0 {
+			t.Fatalf("any precise in-window evidence for the Secret must suppress coarse fallback: %+v", checks)
+		}
+
+		addedKey := secretHistoryEvent(changedAt, "shop", "db-conn", "data (added keys)", []string{"new-flag"})
+		if checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{addedKey}); len(checks) != 0 {
+			t.Fatalf("an observed added-key-only write must suppress the coarse fallback without claiming staleness: %+v", checks)
+		}
+	})
+
+	t.Run("diagnostic history reaches back to the running container start", func(t *testing.T) {
+		oldStart := now.Add(-2 * time.Hour)
+		oldChange := now.Add(-90 * time.Minute)
+		pod := staleSecretEnvPod("long-running", oldStart, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		secret := newSecret()
+		secret.ManagedFields[0].Time = &metav1.Time{Time: oldChange}
+		cache := envHistoryTestCache(t, pod, secret)
+		setEnvHistoryEvents(t, secretHistoryEvent(oldChange, "shop", "db-conn", "data (modified keys)", []string{"password"}))
+		checks := FindStaleSecretEnvChecksForPods(context.Background(), cache, []*corev1.Pod{pod})
+		if len(checks) != 1 || checks[0].EvidenceSource != staleSecretEvidenceObservedChange || checks[0].Key != "password" {
+			t.Fatalf("older precise evidence should win over managedFields fallback: %+v", checks)
+		}
+	})
+
+	t.Run("pre-start write and restart suppress", func(t *testing.T) {
+		secret := newSecret()
+		secret.ManagedFields[0].Time = &metav1.Time{Time: startedAt.Add(-time.Second)}
+		pod := staleSecretEnvPod("pre-start", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, secret)
+		if checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, nil); len(checks) != 0 {
+			t.Fatalf("pre-start Secret write must not produce a check: %+v", checks)
+		}
+
+		restarted := staleSecretEnvPod("restarted", changedAt.Add(time.Second), true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		restartedCache := envHistoryTestCache(t, restarted, newSecret())
+		if checks := findStaleSecretEnvChecksWithManagedFields(restartedCache, []*corev1.Pod{restarted}, nil); len(checks) != 0 {
+			t.Fatalf("container restart after the Secret write must suppress: %+v", checks)
+		}
+	})
+
+	t.Run("waiting container and volume-only use are ignored", func(t *testing.T) {
+		waiting := staleSecretEnvPod("waiting", startedAt, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		waiting.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
+		waitingCache := envHistoryTestCache(t, waiting, newSecret())
+		if checks := findStaleSecretEnvChecksWithManagedFields(waitingCache, []*corev1.Pod{waiting}, nil); len(checks) != 0 {
+			t.Fatalf("waiting container must not produce a managedFields fallback: %+v", checks)
+		}
+		precise := secretHistoryEvent(changedAt, "shop", "db-conn", "data (modified keys)", []string{"password"})
+		if checks := findStaleSecretEnvChecks(waitingCache, []*corev1.Pod{waiting}, []timeline.TimelineEvent{precise}); len(checks) != 0 {
+			t.Fatalf("waiting container must not produce a precise stale-env FYI: %+v", checks)
+		}
+
+		volume := staleSecretEnvPod("volume", startedAt, true)
+		volume.Spec.Volumes = []corev1.Volume{{Name: "creds", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "db-conn"}}}}
+		volumeCache := envHistoryTestCache(t, volume, newSecret())
+		if checks := findStaleSecretEnvChecksWithManagedFields(volumeCache, []*corev1.Pod{volume}, nil); len(checks) != 0 {
+			t.Fatalf("Secret volume must not produce a managedFields fallback: %+v", checks)
+		}
+	})
+
+	t.Run("metadata-only caveat remains FYI-only", func(t *testing.T) {
+		pod := staleSecretEnvPod("not-ready", startedAt, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, newSecret())
+		checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, nil)
+		if len(checks) != 1 {
+			t.Fatalf("data-owning manager write should produce one hedged FYI: %+v", checks)
+		}
+		if biting := staleSecretEnvBitingChecks(pod, checks); len(biting) != 0 {
+			t.Fatalf("managedFields fallback must never enter issue promotion: %+v", biting)
+		}
+	})
+
+	t.Run("envFrom is eligible but unavailable metadata fails closed", func(t *testing.T) {
+		pod := staleSecretEnvPod("env-from", startedAt, true)
+		pod.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{
+			Prefix:    "DB_",
+			SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "db-conn"}},
+		}}
+		cache := envHistoryTestCache(t, pod, newSecret())
+		checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, nil)
+		if len(checks) != 1 || checks[0].ReferenceKind != "envFrom" || checks[0].Prefix != "DB_" || checks[0].Key != "" {
+			t.Fatalf("unexpected envFrom managedFields check: %+v", checks)
+		}
+
+		withoutManagedFields := newSecret()
+		withoutManagedFields.ManagedFields = nil
+		noSignalCache := envHistoryTestCache(t, pod, withoutManagedFields)
+		if checks := findStaleSecretEnvChecksWithManagedFields(noSignalCache, []*corev1.Pod{pod}, nil); len(checks) != 0 {
+			t.Fatalf("missing managedFields must fail closed: %+v", checks)
+		}
+	})
+
+	t.Run("precise evidence wins the per-container cap", func(t *testing.T) {
+		pod := staleSecretEnvPod("many-secrets", startedAt, true, secretKeyEnv("PRECISE", "precise", "password"))
+		objects := []runtime.Object{pod}
+		preciseSecret := newSecret()
+		preciseSecret.Name = "precise"
+		objects = append(objects, preciseSecret)
+		for i := 0; i < maxStaleSecretEnvChecksPerContainer; i++ {
+			name := fmt.Sprintf("coarse-%d", i)
+			pod.Spec.Containers[0].Env = append(pod.Spec.Containers[0].Env, secretKeyEnv(fmt.Sprintf("COARSE_%d", i), name, "password"))
+			secret := newSecret()
+			secret.Name = name
+			objects = append(objects, secret)
+		}
+		cache := envHistoryTestCache(t, objects...)
+		precise := secretHistoryEvent(changedAt, "shop", "precise", "data (modified keys)", []string{"password"})
+		checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{precise})
+		if len(checks) != maxStaleSecretEnvChecksPerContainer {
+			t.Fatalf("checks = %d, want per-container cap %d: %+v", len(checks), maxStaleSecretEnvChecksPerContainer, checks)
+		}
+		if checks[0].EvidenceSource != staleSecretEvidenceObservedChange || checks[0].SecretName != "precise" {
+			t.Fatalf("precise evidence was displaced by coarse fallback: %+v", checks)
+		}
+	})
+
+	t.Run("workload replicas are grouped before the cap", func(t *testing.T) {
+		objects := []runtime.Object{newSecret()}
+		var pods []*corev1.Pod
+		for i := 0; i < maxStaleSecretEnvDetectionsPerNamespace+5; i++ {
+			pod := staleSecretEnvPod(fmt.Sprintf("catalog-%02d", i), startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+			pods = append(pods, pod)
+			objects = append(objects, pod)
+		}
+		cache := envHistoryTestCache(t, objects...)
+		setEnvHistoryEvents(t)
+		checks := FindStaleSecretEnvChecksForPods(context.Background(), cache, pods)
+		if len(checks) != 1 || checks[0].AffectedPods != maxStaleSecretEnvDetectionsPerNamespace+5 {
+			t.Fatalf("replica checks were not grouped before bounding: %+v", checks)
+		}
+	})
+
+	t.Run("workload-sized distinct fallback is capped", func(t *testing.T) {
+		var objects []runtime.Object
+		var pods []*corev1.Pod
+		for i := 0; i < maxStaleSecretEnvDetectionsPerNamespace+5; i++ {
+			name := fmt.Sprintf("db-conn-%02d", i)
+			pod := staleSecretEnvPod(fmt.Sprintf("catalog-%02d", i), startedAt, true, secretKeyEnv("DB_PASSWORD", name, "password"))
+			secret := newSecret()
+			secret.Name = name
+			pods = append(pods, pod)
+			objects = append(objects, pod, secret)
+		}
+		cache := envHistoryTestCache(t, objects...)
+		setEnvHistoryEvents(t)
+		checks := FindStaleSecretEnvChecksForPods(context.Background(), cache, pods)
+		if len(checks) != maxStaleSecretEnvDetectionsPerNamespace {
+			t.Fatalf("managedFields workload checks = %d, want cap %d", len(checks), maxStaleSecretEnvDetectionsPerNamespace)
+		}
+	})
+}
+
+func TestSecretDataManagerWriteIndex(t *testing.T) {
+	dataWrite := time.Date(2026, time.July, 23, 8, 0, 0, 0, time.UTC)
+	metadataWrite := dataWrite.Add(time.Hour)
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: "credentials", Namespace: "shop", UID: types.UID("old"),
+		ManagedFields: []metav1.ManagedFieldsEntry{
+			{
+				Manager: "secret-controller", Operation: metav1.ManagedFieldsOperationUpdate,
+				Time: &metav1.Time{Time: dataWrite}, FieldsType: "FieldsV1",
+				FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:password":{}}}`)},
+			},
+			{
+				Manager: "metadata-controller", Operation: metav1.ManagedFieldsOperationUpdate,
+				Time: &metav1.Time{Time: metadataWrite}, FieldsType: "FieldsV1",
+				FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:metadata":{"f:annotations":{"f:data":{}}}}`)},
+			},
+		},
+	}}
+	index := &sync.Map{}
+	captureSecretDataManagerWriteTime(index, secret)
+	value, ok := index.Load(secretWriteKey("shop", "credentials"))
+	write, typed := value.(secretDataManagerWrite)
+	if !ok || !typed || write.uid != "old" || !write.at.Equal(dataWrite) {
+		t.Fatalf("index captured (%+v, %v), want old UID at %v", value, ok, dataWrite)
+	}
+
+	recreated := secret.DeepCopy()
+	recreated.UID = types.UID("new")
+	recreated.ManagedFields[0].Time = &metav1.Time{Time: dataWrite.Add(2 * time.Hour)}
+	captureSecretDataManagerWriteTime(index, recreated)
+	deleteSecretDataManagerWriteTime(index, k8score.ResourceChange{
+		Kind: "Secret", Namespace: "shop", Name: "credentials", UID: "old", Operation: k8score.OpDelete,
+	})
+	value, ok = index.Load(secretWriteKey("shop", "credentials"))
+	write, typed = value.(secretDataManagerWrite)
+	if !ok || !typed || write.uid != "new" {
+		t.Fatalf("old delete removed the recreated Secret's timestamp: %+v", value)
+	}
+
+	helmRelease := recreated.DeepCopy()
+	helmRelease.Type = corev1.SecretType("helm.sh/release.v1")
+	captureSecretDataManagerWriteTime(index, helmRelease)
+	if _, ok := index.Load(secretWriteKey("shop", "credentials")); ok {
+		t.Fatal("Helm release payload Secret should not occupy the diagnostic timestamp index")
+	}
+}
+
 func TestStaleSecretEnvDetectionResolvesWorkloadOwner(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	controller := true
@@ -270,6 +527,7 @@ func TestStaleSecretEnvDetectionResolvesWorkloadOwner(t *testing.T) {
 
 func envHistoryTestCache(t *testing.T, objects ...runtime.Object) *ResourceCache {
 	t.Helper()
+	secretWriteTimes := &sync.Map{}
 	core, err := k8score.NewResourceCache(k8score.CacheConfig{
 		Client: fake.NewClientset(objects...),
 		ResourceTypes: map[string]bool{
@@ -277,12 +535,15 @@ func envHistoryTestCache(t *testing.T, objects ...runtime.Object) *ResourceCache
 			k8score.Deployments: true, k8score.ReplicaSets: true,
 		},
 		DeferredTypes: map[string]bool{},
+		OnTransform: func(obj any) {
+			captureSecretDataManagerWriteTime(secretWriteTimes, obj)
+		},
 	})
 	if err != nil {
 		t.Fatalf("NewResourceCache: %v", err)
 	}
 	t.Cleanup(core.Stop)
-	return &ResourceCache{ResourceCache: core, secretsEnabled: true}
+	return &ResourceCache{ResourceCache: core, secretsEnabled: true, secretWriteTimes: secretWriteTimes}
 }
 
 func setEnvHistoryEvents(t *testing.T, events ...timeline.TimelineEvent) {

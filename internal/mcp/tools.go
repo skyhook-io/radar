@@ -1095,6 +1095,18 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 // (which applies KindForGVK so cross-group CRDs map to the right
 // topology node).
 func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier) *resourcecontext.ResourceContext {
+	return buildMCPResourceContextWithStaleChecks(
+		ctx,
+		obj,
+		kind,
+		namespace,
+		name,
+		tier,
+		k8s.FindStaleSecretEnvChecksForObject(ctx, k8s.GetResourceCache(), obj),
+	)
+}
+
+func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck) *resourcecontext.ResourceContext {
 	if obj == nil {
 		return nil
 	}
@@ -1119,7 +1131,7 @@ func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, name
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
 			k8s.FindRemovedServiceEnvChecksForObject(ctx, cache, obj),
-			k8s.FindStaleSecretEnvChecksForObject(ctx, cache, obj),
+			staleChecks,
 		),
 		ServiceBackends: mcpServiceBackendLookup{cache: cache},
 	}

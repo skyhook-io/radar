@@ -1441,6 +1441,9 @@ func filterAppReferences(ctx context.Context, refs *AppReferences, ac RefAccessC
 		}
 		out.StaleSecretEnv = append(out.StaleSecretEnv, ref)
 	}
+	if len(out.StaleSecretEnv) > 0 {
+		out.StaleSecretEnvTruncated = refs.StaleSecretEnvTruncated
+	}
 	if deniedAny {
 		omitted.add("appReferences.staleSecretEnv", OmittedRBACDenied)
 	}

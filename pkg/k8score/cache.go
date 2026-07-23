@@ -129,10 +129,6 @@ func newPagedInformer(
 		WatchFuncWithContext: watchFn,
 	}
 	inf := cache.NewSharedIndexInformer(lw, example, 0, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
-	// Factory informers get DropManagedFields via WithTransform; these are built
-	// outside the factory, so apply the same transform directly. SetTransform
-	// only errors once started, which hasn't happened yet.
-	_ = inf.SetTransform(DropManagedFields)
 	return inf
 }
 
@@ -385,10 +381,16 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	// Build one factory per unique scope. The cluster-wide factory is
 	// always created so cluster-scoped kinds (nodes, namespaces, PV…)
 	// have a home; namespace-scoped factories are created on demand.
+	transform := func(obj any) (any, error) {
+		if cfg.OnTransform != nil {
+			cfg.OnTransform(obj)
+		}
+		return DropManagedFields(obj)
+	}
 	clusterFactory := informers.NewSharedInformerFactoryWithOptions(
 		cfg.Client,
 		0, // no resync — updates come via watch
-		informers.WithTransform(DropManagedFields),
+		informers.WithTransform(transform),
 	)
 	nsFactories := make(map[string]informers.SharedInformerFactory)
 	for key, s := range scopes {
@@ -403,7 +405,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			nsFactories[namespace] = informers.NewSharedInformerFactoryWithOptions(
 				cfg.Client,
 				0,
-				informers.WithTransform(DropManagedFields),
+				informers.WithTransform(transform),
 				informers.WithNamespace(namespace),
 			)
 		}
@@ -478,7 +480,11 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 
 	buildInformer := func(s informerSetup, factory informers.SharedInformerFactory, namespace string) cache.SharedIndexInformer {
 		if cfg.ListPageSize > 0 && s.pagedSetup != nil {
-			return s.pagedSetup(cfg.Client, namespace, cfg.ListPageSize)
+			inf := s.pagedSetup(cfg.Client, namespace, cfg.ListPageSize)
+			// Paged informers are built outside the factories, so they need the
+			// same caller hook and managed-fields stripping transform here.
+			_ = inf.SetTransform(transform)
+			return inf
 		}
 		return s.setup(factory)
 	}

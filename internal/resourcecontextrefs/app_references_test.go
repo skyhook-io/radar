@@ -2,6 +2,7 @@ package resourcecontextrefs
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -52,8 +53,8 @@ func TestAppReferencesFromEnvChecks_HistoryFacts(t *testing.T) {
 		ServiceNamespace: "shop", ServiceName: "cart", ReferencedPort: 8080, RemovedAt: removedAt,
 		Message: "removed cart:8080 with password=sentinel-secret-value",
 	}}, []k8s.StaleSecretEnvCheck{{
-		Namespace: "shop", PodName: "catalog-1", Container: "app", EnvName: "DB_PASSWORD", Source: "secretKeyRef",
-		SecretName: "db-conn", Key: "password", ContainerStartedAt: startedAt, SecretDataChangedAt: changedAt,
+		Namespace: "shop", PodName: "catalog-1", Container: "app", EnvName: "DB_PASSWORD", ReferenceKind: "secretKeyRef", EvidenceSource: "observed_change",
+		SecretName: "db-conn", Key: "password", ContainerStartedAt: startedAt, SecretChangedAt: changedAt,
 		Message: "Secret key changed; password=sentinel-secret-value",
 	}})
 	if got == nil || len(got.RemovedServiceEnv) != 1 || len(got.StaleSecretEnv) != 1 {
@@ -64,7 +65,7 @@ func TestAppReferencesFromEnvChecks_HistoryFacts(t *testing.T) {
 		t.Fatalf("unexpected removed env mapping: %+v", removed)
 	}
 	stale := got.StaleSecretEnv[0]
-	if stale.Secret.Kind != "Secret" || stale.Secret.Name != "db-conn" || stale.Key != "password" || !stale.ContainerStartedAt.Equal(startedAt) || !stale.SecretDataChangedAt.Equal(changedAt) {
+	if stale.Pod != "catalog-1" || stale.AffectedPods != 1 || stale.Secret.Kind != "Secret" || stale.Secret.Name != "db-conn" || stale.Key != "password" || stale.ReferenceKind != "secretKeyRef" || stale.EvidenceSource != "observed_change" || !stale.ContainerStartedAt.Equal(startedAt) || !stale.SecretChangedAt.Equal(changedAt) {
 		t.Fatalf("unexpected stale Secret mapping: %+v", stale)
 	}
 	encoded, err := json.Marshal(got)
@@ -73,6 +74,54 @@ func TestAppReferencesFromEnvChecks_HistoryFacts(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "sentinel-secret-value") {
 		t.Fatalf("sensitive value leaked through AppReferences: %s", encoded)
+	}
+}
+
+func TestAppReferencesFromEnvChecks_GroupsReplicaFactsAndMarksTruncation(t *testing.T) {
+	startedAt := time.Date(2026, time.July, 22, 6, 47, 0, 0, time.UTC)
+	changedAt := startedAt.Add(time.Minute)
+	var checks []k8s.StaleSecretEnvCheck
+	for i := 0; i < maxStaleSecretEnvContextReferences+1; i++ {
+		checks = append(checks, k8s.StaleSecretEnvCheck{
+			Namespace: "shop", PodName: "catalog-b", Container: "app",
+			ReferenceKind: "secretKeyRef", EvidenceSource: "managed_fields_mtime",
+			SecretName: fmt.Sprintf("secret-%d", i), ContainerStartedAt: startedAt, SecretChangedAt: changedAt,
+		})
+	}
+	checks = append(checks, k8s.StaleSecretEnvCheck{
+		Namespace: "shop", PodName: "catalog-a", Container: "app",
+		ReferenceKind: "secretKeyRef", EvidenceSource: "managed_fields_mtime",
+		SecretName: "secret-0", ContainerStartedAt: startedAt.Add(time.Second), SecretChangedAt: changedAt,
+	})
+	got := AppReferencesFromEnvChecks(nil, nil, nil, checks)
+	if got == nil || len(got.StaleSecretEnv) != maxStaleSecretEnvContextReferences || !got.StaleSecretEnvTruncated {
+		t.Fatalf("unexpected grouped/truncated stale Secret refs: %+v", got)
+	}
+	first := got.StaleSecretEnv[0]
+	if first.Secret.Name != "secret-0" || first.Pod != "catalog-a" || first.AffectedPods != 2 {
+		t.Fatalf("replica facts were not grouped with deterministic sample pod: %+v", first)
+	}
+}
+
+func TestAppReferencesFromEnvChecks_ManagedFieldsFallbackOmitsUnknownKey(t *testing.T) {
+	startedAt := time.Date(2026, time.July, 22, 6, 47, 0, 0, time.UTC)
+	changedAt := startedAt.Add(time.Minute)
+	got := AppReferencesFromEnvChecks(nil, nil, nil, []k8s.StaleSecretEnvCheck{{
+		Namespace: "shop", PodName: "catalog-1", Container: "app",
+		ReferenceKind: "envFrom", EvidenceSource: "managed_fields_mtime", Prefix: "DB_",
+		SecretName: "db-conn", ContainerStartedAt: startedAt, SecretChangedAt: changedAt,
+		Message: "if the write touched a consumed key the env value may be stale",
+	}})
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal AppReferences: %v", err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, `"referenceKind":"envFrom"`) || !strings.Contains(text, `"evidenceSource":"managed_fields_mtime"`) {
+		t.Fatalf("managedFields provenance missing from AppReferences: %s", text)
+	}
+	if strings.Contains(text, `"key"`) || strings.Contains(text, `"env"`) {
+		t.Fatalf("unknown fallback key/env must be omitted, not serialized empty: %s", text)
 	}
 }
 

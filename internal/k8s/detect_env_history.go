@@ -16,6 +16,7 @@ import (
 
 const (
 	envHistoryLookback                  = time.Hour
+	envHistoryContextMaxLookback        = 24 * time.Hour
 	maxStaleSecretEnvChecksPerContainer = 5
 	// A mass Secret rotation coinciding with a rollout can leave many pods
 	// simultaneously not-Ready with in-window key changes; a sweep must not
@@ -42,18 +43,25 @@ type RemovedServiceEnvCheck struct {
 }
 
 type StaleSecretEnvCheck struct {
-	Namespace           string
-	PodName             string
-	Container           string
-	EnvName             string
-	Source              string
-	Prefix              string
-	SecretName          string
-	Key                 string
-	ContainerStartedAt  time.Time
-	SecretDataChangedAt time.Time
-	Message             string
+	Namespace          string
+	PodName            string
+	Container          string
+	EnvName            string
+	ReferenceKind      string
+	EvidenceSource     string
+	Prefix             string
+	SecretName         string
+	Key                string
+	AffectedPods       int
+	ContainerStartedAt time.Time
+	SecretChangedAt    time.Time
+	Message            string
 }
+
+const (
+	staleSecretEvidenceObservedChange = "observed_change"
+	staleSecretEvidenceManagedFields  = "managed_fields_mtime"
+)
 
 // FindRemovedServiceEnvChecksForObject returns recent env-removal facts for a
 // workload. It deliberately consumes only the already-redacted timeline diff;
@@ -172,8 +180,68 @@ func FindStaleSecretEnvChecksForObject(ctx context.Context, cache *ResourceCache
 	if !ok || pod == nil || !podHasSecretEnvReference(pod) {
 		return nil
 	}
-	events := querySecretDataHistory(ctx, pod.Namespace, time.Now())
-	return findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, events)
+	now := time.Now()
+	return findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, querySecretDataHistory(ctx, pod.Namespace, staleSecretEnvHistorySince([]*corev1.Pod{pod}, now)))
+}
+
+// FindStaleSecretEnvChecksForPods aggregates the Pod-level facts needed by a
+// workload diagnosis, including the managedFields fallback that is deliberately
+// confined to this diagnostic path.
+func FindStaleSecretEnvChecksForPods(ctx context.Context, cache *ResourceCache, pods []*corev1.Pod) []StaleSecretEnvCheck {
+	if cache == nil {
+		return nil
+	}
+	podsByNamespace := make(map[string][]*corev1.Pod)
+	for _, pod := range pods {
+		if pod != nil && podHasSecretEnvReference(pod) {
+			podsByNamespace[pod.Namespace] = append(podsByNamespace[pod.Namespace], pod)
+		}
+	}
+	namespaces := make([]string, 0, len(podsByNamespace))
+	for namespace := range podsByNamespace {
+		namespaces = append(namespaces, namespace)
+	}
+	sort.Strings(namespaces)
+	var out []StaleSecretEnvCheck
+	for _, namespace := range namespaces {
+		now := time.Now()
+		events := querySecretDataHistory(ctx, namespace, staleSecretEnvHistorySince(podsByNamespace[namespace], now))
+		checks := groupStaleSecretEnvChecks(findStaleSecretEnvChecksWithManagedFields(cache, podsByNamespace[namespace], events))
+		if len(checks) > maxStaleSecretEnvDetectionsPerNamespace {
+			checks = checks[:maxStaleSecretEnvDetectionsPerNamespace]
+		}
+		out = append(out, checks...)
+	}
+	return out
+}
+
+func groupStaleSecretEnvChecks(checks []StaleSecretEnvCheck) []StaleSecretEnvCheck {
+	type group struct {
+		check StaleSecretEnvCheck
+		pods  map[string]bool
+	}
+	byKey := make(map[string]*group)
+	for _, check := range checks {
+		key := check.Namespace + "\x00" + check.Container + "\x00" + check.EnvName + "\x00" +
+			check.ReferenceKind + "\x00" + check.EvidenceSource + "\x00" + check.Prefix + "\x00" +
+			check.SecretName + "\x00" + check.Key
+		current := byKey[key]
+		if current == nil {
+			current = &group{check: check, pods: make(map[string]bool)}
+			byKey[key] = current
+		}
+		current.pods[check.PodName] = true
+		if check.PodName < current.check.PodName {
+			current.check = check
+		}
+	}
+	out := make([]StaleSecretEnvCheck, 0, len(byKey))
+	for _, current := range byKey {
+		current.check.AffectedPods = len(current.pods)
+		out = append(out, current.check)
+	}
+	sortStaleSecretEnvChecks(out)
+	return out
 }
 
 func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time) []Detection {
@@ -201,7 +269,7 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 	if !usesSecretEnv {
 		return nil
 	}
-	checks := findStaleSecretEnvChecks(cache, pods, querySecretDataHistory(context.Background(), namespace, now))
+	checks := findStaleSecretEnvChecks(cache, pods, querySecretDataHistory(context.Background(), namespace, now.Add(-envHistoryLookback)))
 	checksByPod := make(map[string][]StaleSecretEnvCheck)
 	for _, check := range checks {
 		key := check.Namespace + "\x00" + check.PodName
@@ -214,10 +282,10 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 		if len(bitingChecks) == 0 {
 			continue
 		}
-		changedAt := bitingChecks[0].SecretDataChangedAt
+		changedAt := bitingChecks[0].SecretChangedAt
 		for _, check := range bitingChecks[1:] {
-			if check.SecretDataChangedAt.Before(changedAt) {
-				changedAt = check.SecretDataChangedAt
+			if check.SecretChangedAt.Before(changedAt) {
+				changedAt = check.SecretChangedAt
 			}
 		}
 		age := ageSeconds(now, changedAt)
@@ -272,10 +340,10 @@ func podHasSecretEnvReference(pod *corev1.Pod) bool {
 	return false
 }
 
-func querySecretDataHistory(ctx context.Context, namespace string, now time.Time) []timeline.TimelineEvent {
+func querySecretDataHistory(ctx context.Context, namespace string, since time.Time) []timeline.TimelineEvent {
 	opts := timeline.QueryOptions{
 		Kinds:          []string{"Secret"},
-		Since:          now.Add(-envHistoryLookback),
+		Since:          since,
 		Sources:        []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:     []timeline.EventType{timeline.EventTypeUpdate},
 		ClusterContext: ActiveClusterContext(),
@@ -285,6 +353,33 @@ func querySecretDataHistory(ctx context.Context, namespace string, now time.Time
 		opts.Namespaces = []string{namespace}
 	}
 	return queryEnvHistory(ctx, opts)
+}
+
+func staleSecretEnvHistorySince(pods []*corev1.Pod, now time.Time) time.Time {
+	floor := now.Add(-envHistoryContextMaxLookback)
+	var earliest time.Time
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
+				continue
+			}
+			startedAt := status.State.Running.StartedAt.Time
+			if earliest.IsZero() || startedAt.Before(earliest) {
+				earliest = startedAt
+			}
+		}
+	}
+	if earliest.IsZero() || earliest.Before(floor) {
+		return floor
+	}
+	since := earliest.Add(-time.Second)
+	if since.Before(floor) {
+		return floor
+	}
+	return since
 }
 
 func queryEnvHistory(ctx context.Context, opts timeline.QueryOptions) []timeline.TimelineEvent {
@@ -326,13 +421,10 @@ func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events [
 		}
 		for _, container := range pod.Spec.Containers {
 			status, ok := statuses[container.Name]
-			if !ok {
+			if !ok || status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
 				continue
 			}
-			startedAt, ok := latestContainerStart(status)
-			if !ok {
-				continue
-			}
+			startedAt := status.State.Running.StartedAt.Time
 			containerChecks := 0
 			for _, env := range container.Env {
 				if containerChecks >= maxStaleSecretEnvChecksPerContainer {
@@ -370,7 +462,79 @@ func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events [
 			}
 		}
 	}
+	sortStaleSecretEnvChecks(out)
+	return out
+}
+
+func findStaleSecretEnvChecksWithManagedFields(cache *ResourceCache, pods []*corev1.Pod, events []timeline.TimelineEvent) []StaleSecretEnvCheck {
+	out := findStaleSecretEnvChecks(cache, pods, events)
+	if cache == nil || cache.Secrets() == nil {
+		return out
+	}
+
+	observedSecrets := secretsWithObservedDataWrites(events)
+	checksPerContainer := make(map[string]int)
+	for _, check := range out {
+		checksPerContainer[check.Namespace+"\x00"+check.PodName+"\x00"+check.Container]++
+	}
+	exists := make(map[string]bool)
+	checked := make(map[string]bool)
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		statuses := make(map[string]corev1.ContainerStatus, len(pod.Status.ContainerStatuses))
+		for _, status := range pod.Status.ContainerStatuses {
+			statuses[status.Name] = status
+		}
+		for _, container := range pod.Spec.Containers {
+			status, ok := statuses[container.Name]
+			if !ok || status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
+				continue
+			}
+			startedAt := status.State.Running.StartedAt.Time
+			containerIdentity := pod.Namespace + "\x00" + pod.Name + "\x00" + container.Name
+			seenSecrets := make(map[string]bool)
+			addFallback := func(referenceKind, prefix, secretName string) {
+				if checksPerContainer[containerIdentity] >= maxStaleSecretEnvChecksPerContainer || secretName == "" {
+					return
+				}
+				secretIdentity := pod.Namespace + "\x00" + secretName
+				if seenSecrets[secretIdentity] {
+					return
+				}
+				seenSecrets[secretIdentity] = true
+				if observedSecrets[secretIdentity] || !secretExists(cache, pod.Namespace, secretName, exists, checked) {
+					return
+				}
+				changedAt, ok := secretDataManagerWriteTime(cache, pod.Namespace, secretName)
+				if !ok || !startedAt.Before(changedAt) {
+					return
+				}
+				out = append(out, newManagedFieldsStaleSecretEnvCheck(pod, container.Name, referenceKind, prefix, secretName, startedAt, changedAt))
+				checksPerContainer[containerIdentity]++
+			}
+			for _, env := range container.Env {
+				if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
+					addFallback("secretKeyRef", "", env.ValueFrom.SecretKeyRef.Name)
+				}
+			}
+			for _, envFrom := range container.EnvFrom {
+				if envFrom.SecretRef != nil {
+					addFallback("envFrom", envFrom.Prefix, envFrom.SecretRef.Name)
+				}
+			}
+		}
+	}
+	sortStaleSecretEnvChecks(out)
+	return out
+}
+
+func sortStaleSecretEnvChecks(out []StaleSecretEnvCheck) {
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].EvidenceSource != out[j].EvidenceSource {
+			return out[i].EvidenceSource == staleSecretEvidenceObservedChange
+		}
 		if out[i].Namespace != out[j].Namespace {
 			return out[i].Namespace < out[j].Namespace
 		}
@@ -385,7 +549,6 @@ func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events [
 		}
 		return out[i].Key < out[j].Key
 	})
-	return out
 }
 
 type secretDataChange struct {
@@ -405,19 +568,35 @@ func secretDataChangesBySecret(changes map[secretDataKey]time.Time) map[string][
 	return out
 }
 
-func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, source, prefix, secretName, key string, startedAt, changedAt time.Time) StaleSecretEnvCheck {
+func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, prefix, secretName, key string, startedAt, changedAt time.Time) StaleSecretEnvCheck {
 	return StaleSecretEnvCheck{
-		Namespace:           pod.Namespace,
-		PodName:             pod.Name,
-		Container:           container,
-		EnvName:             envName,
-		Source:              source,
-		Prefix:              prefix,
-		SecretName:          secretName,
-		Key:                 key,
-		ContainerStartedAt:  startedAt,
-		SecretDataChangedAt: changedAt,
-		Message:             fmt.Sprintf("Container %s started at %s, before Radar observed Secret/%s key %s change at %s; env %s may hold a stale value until the container restarts.", container, startedAt.UTC().Format(time.RFC3339), secretName, key, changedAt.UTC().Format(time.RFC3339), envName),
+		Namespace:          pod.Namespace,
+		PodName:            pod.Name,
+		Container:          container,
+		EnvName:            envName,
+		ReferenceKind:      referenceKind,
+		EvidenceSource:     staleSecretEvidenceObservedChange,
+		Prefix:             prefix,
+		SecretName:         secretName,
+		Key:                key,
+		ContainerStartedAt: startedAt,
+		SecretChangedAt:    changedAt,
+		Message:            fmt.Sprintf("Container %s started at %s, before Radar observed Secret/%s key %s change at %s; env %s may hold a stale value until the container restarts.", container, startedAt.UTC().Format(time.RFC3339), secretName, key, changedAt.UTC().Format(time.RFC3339), envName),
+	}
+}
+
+func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKind, prefix, secretName string, startedAt, changedAt time.Time) StaleSecretEnvCheck {
+	return StaleSecretEnvCheck{
+		Namespace:          pod.Namespace,
+		PodName:            pod.Name,
+		Container:          container,
+		ReferenceKind:      referenceKind,
+		EvidenceSource:     staleSecretEvidenceManagedFields,
+		Prefix:             prefix,
+		SecretName:         secretName,
+		ContainerStartedAt: startedAt,
+		SecretChangedAt:    changedAt,
+		Message:            fmt.Sprintf("Secret/%s was modified at %s by a field manager that owns Secret data, after container %s started at %s; managedFields cannot identify which field changed, so if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, changedAt.UTC().Format(time.RFC3339), container, startedAt.UTC().Format(time.RFC3339)),
 	}
 }
 
@@ -432,18 +611,40 @@ func secretExists(cache *ResourceCache, namespace, name string, exists, checked 
 	return exists[identity]
 }
 
-func latestContainerStart(status corev1.ContainerStatus) (time.Time, bool) {
-	var latest time.Time
-	if status.State.Running != nil {
-		latest = status.State.Running.StartedAt.Time
+func secretDataManagerWriteTime(cache *ResourceCache, namespace, name string) (time.Time, bool) {
+	if cache == nil || cache.secretWriteTimes == nil || cache.Secrets() == nil {
+		return time.Time{}, false
 	}
-	if status.State.Terminated != nil && status.State.Terminated.StartedAt.Time.After(latest) {
-		latest = status.State.Terminated.StartedAt.Time
+	value, ok := cache.secretWriteTimes.Load(secretWriteKey(namespace, name))
+	if !ok {
+		return time.Time{}, false
 	}
-	if status.LastTerminationState.Terminated != nil && status.LastTerminationState.Terminated.StartedAt.Time.After(latest) {
-		latest = status.LastTerminationState.Terminated.StartedAt.Time
+	write, ok := value.(secretDataManagerWrite)
+	if !ok || write.at.IsZero() {
+		return time.Time{}, false
 	}
-	return latest, !latest.IsZero()
+	secret, err := cache.Secrets().Secrets(namespace).Get(name)
+	if err != nil || secret == nil || string(secret.UID) != write.uid {
+		return time.Time{}, false
+	}
+	return write.at, true
+}
+
+func secretsWithObservedDataWrites(events []timeline.TimelineEvent) map[string]bool {
+	out := make(map[string]bool)
+	for _, event := range events {
+		if event.Kind != "Secret" || event.Source != timeline.SourceInformer || event.EventType != timeline.EventTypeUpdate || event.Diff == nil {
+			continue
+		}
+		for _, field := range event.Diff.Fields {
+			switch field.Path {
+			case "data (added keys)", "data (removed keys)", "data (modified keys)",
+				"stringData (added keys)", "stringData (removed keys)", "stringData (modified keys)":
+				out[event.Namespace+"\x00"+event.Name] = true
+			}
+		}
+	}
+	return out
 }
 
 func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]time.Time {
@@ -536,7 +737,7 @@ func staleSecretEnvBitingChecks(pod *corev1.Pod, checks []StaleSecretEnvCheck) [
 	}
 	var out []StaleSecretEnvCheck
 	for _, check := range checks {
-		if bitingContainers[check.Container] {
+		if check.EvidenceSource == staleSecretEvidenceObservedChange && bitingContainers[check.Container] {
 			out = append(out, check)
 		}
 	}

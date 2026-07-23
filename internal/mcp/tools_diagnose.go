@@ -204,12 +204,19 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		return nil, nil, fmt.Errorf("failed to minify: %w", err)
 	}
 
-	resCtx := buildMCPResourceContext(ctx, obj, kindNorm, input.Namespace, input.Name, resourcecontext.TierDiagnostic)
-
 	pods, err := resolveDiagnosePods(cache, kindNorm, input.Namespace, input.Name, obj)
 	if err != nil {
 		return nil, nil, err
 	}
+	resCtx := buildMCPResourceContextWithStaleChecks(
+		ctx,
+		obj,
+		kindNorm,
+		input.Namespace,
+		input.Name,
+		resourcecontext.TierDiagnostic,
+		k8s.FindStaleSecretEnvChecksForPods(ctx, cache, pods),
+	)
 
 	tailLines := int64(100)
 	if input.TailLines > 0 {

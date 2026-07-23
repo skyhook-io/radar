@@ -3,6 +3,7 @@ package mcp
 import (
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -25,6 +26,8 @@ func setupFakeCacheForDiagnoseTests(t *testing.T) {
 		deployName = "cart"
 	)
 	selector := map[string]string{"app": "cart"}
+	startedAt := time.Now().UTC().Add(-2 * time.Minute)
+	secretChangedAt := startedAt.Add(time.Minute)
 
 	fakeClient := fake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
@@ -44,9 +47,41 @@ func setupFakeCacheForDiagnoseTests(t *testing.T) {
 				Labels:    selector,
 			},
 			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{Name: "cart"}},
+				Containers: []corev1.Container{{
+					Name: "cart",
+					Env: []corev1.EnvVar{{
+						Name: "DB_PASSWORD",
+						ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "cart-db"},
+							Key:                  "password",
+						}},
+					}},
+				}},
 			},
-			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  "cart",
+					Ready: true,
+					State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{
+						StartedAt: metav1.NewTime(startedAt),
+					}},
+				}},
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "cart-db",
+				Namespace: ns,
+				ManagedFields: []metav1.ManagedFieldsEntry{{
+					Manager:    "secret-controller",
+					Operation:  metav1.ManagedFieldsOperationUpdate,
+					Time:       &metav1.Time{Time: secretChangedAt},
+					FieldsType: "FieldsV1",
+					FieldsV1:   &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:password":{}}}`)},
+				}},
+			},
+			Data: map[string][]byte{"password": []byte("diagnose-secret-sentinel")},
 		},
 	)
 
@@ -326,6 +361,12 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	// No kube client on ctx in tests — diagnose surfaces this distinctly.
 	if !strings.Contains(body, "logsError") {
 		t.Errorf("expected logsError when no kube client present: %s", body)
+	}
+	if !strings.Contains(body, `"evidenceSource":"managed_fields_mtime"`) || !strings.Contains(body, `"name":"cart-db"`) {
+		t.Errorf("expected workload diagnosis to aggregate the Pod's stale Secret env FYI: %s", body)
+	}
+	if strings.Contains(body, "diagnose-secret-sentinel") || strings.Contains(body, `"key":"password"`) {
+		t.Errorf("managedFields fallback leaked Secret data or claimed a specific stale key: %s", body)
 	}
 }
 

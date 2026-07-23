@@ -1,7 +1,9 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -116,6 +118,73 @@ type ResourceCache struct {
 	// continuously OutOfSync. Lives here so its lifecycle is the cache's:
 	// recreated per cluster, dropped on a kubeconfig context switch.
 	argoDrift *argoDriftTracker
+	// secretWriteTimes preserves one metadata-only signal that the shared
+	// informer transform intentionally strips before objects enter the cache.
+	secretWriteTimes *sync.Map
+}
+
+type secretDataManagerWrite struct {
+	uid string
+	at  time.Time
+}
+
+func secretWriteKey(namespace, name string) string {
+	return namespace + "\x00" + name
+}
+
+func captureSecretDataManagerWriteTime(index *sync.Map, obj any) {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok || secret == nil || index == nil {
+		return
+	}
+	key := secretWriteKey(secret.Namespace, secret.Name)
+	if secret.Type == corev1.SecretType("helm.sh/release.v1") {
+		index.Delete(key)
+		return
+	}
+	var latest time.Time
+	for _, entry := range secret.ManagedFields {
+		if entry.Time == nil || entry.FieldsV1 == nil ||
+			(entry.Operation != metav1.ManagedFieldsOperationApply && entry.Operation != metav1.ManagedFieldsOperationUpdate) {
+			continue
+		}
+		raw := entry.FieldsV1.Raw
+		if !bytes.Contains(raw, []byte(`"f:data"`)) && !bytes.Contains(raw, []byte(`"f:stringData"`)) {
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil {
+			continue
+		}
+		if _, ownsData := fields["f:data"]; !ownsData {
+			if _, ownsStringData := fields["f:stringData"]; !ownsStringData {
+				continue
+			}
+		}
+		if entry.Time.Time.After(latest) {
+			latest = entry.Time.Time
+		}
+	}
+	if latest.IsZero() {
+		index.Delete(key)
+		return
+	}
+	index.Store(key, secretDataManagerWrite{uid: string(secret.UID), at: latest})
+}
+
+func deleteSecretDataManagerWriteTime(index *sync.Map, change k8score.ResourceChange) {
+	if index == nil || change.Kind != "Secret" || change.Operation != k8score.OpDelete {
+		return
+	}
+	key := secretWriteKey(change.Namespace, change.Name)
+	value, ok := index.Load(key)
+	if !ok {
+		return
+	}
+	write, ok := value.(secretDataManagerWrite)
+	if ok && write.uid == change.UID {
+		index.Delete(key)
+	}
 }
 
 var (
@@ -174,6 +243,7 @@ func InitResourceCache(ctx context.Context) error {
 		// wiring-time value keeps late events truthfully attributed to the
 		// cluster they came from.
 		recordClusterContext := ActiveClusterContext()
+		secretWriteTimes := &sync.Map{}
 
 		cfg := k8score.CacheConfig{
 			Client:                  k8sClient,
@@ -193,7 +263,12 @@ func InitResourceCache(ctx context.Context) error {
 				timeline.IncrementReceived(kind)
 			},
 
+			OnTransform: func(obj any) {
+				captureSecretDataManagerWriteTime(secretWriteTimes, obj)
+			},
+
 			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
+				deleteSecretDataManagerWriteTime(secretWriteTimes, change)
 				if DebugEvents && change.Operation == "add" &&
 					(change.Kind == "Pod" || change.Kind == "Deployment" || change.Kind == "Service") {
 					log.Printf("[DEBUG] enqueueChange: %s add %s/%s", change.Kind, change.Namespace, change.Name)
@@ -235,9 +310,10 @@ func InitResourceCache(ctx context.Context) error {
 		initialSyncComplete = core.IsSyncComplete()
 
 		resourceCache = &ResourceCache{
-			ResourceCache:  core,
-			secretsEnabled: scopes["secrets"].Enabled,
-			argoDrift:      newArgoDriftTracker(),
+			ResourceCache:    core,
+			secretsEnabled:   scopes["secrets"].Enabled,
+			argoDrift:        newArgoDriftTracker(),
+			secretWriteTimes: secretWriteTimes,
 		}
 	})
 	return initErr
