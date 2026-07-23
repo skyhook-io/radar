@@ -23,6 +23,11 @@ const probeFailureWindow = 10 * time.Minute
 
 const livenessProbeFailedReason = "LivenessProbeFailed"
 
+// Core ConfigMaps and Secrets have no kind-specific graceful termination phase.
+// Once deletion starts, a remaining finalizer is the only thing keeping the
+// object present, so delayed cleanup is actionable sooner than workload drain.
+const configMapSecretTerminatingWarningAfter = 2 * time.Minute
+
 const terminatingWarningAfter = 10 * time.Minute
 const terminatingCriticalAfter = 30 * time.Minute
 
@@ -1460,8 +1465,13 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	if obj.GetDeletionTimestamp() == nil {
 		return Detection{}, false
 	}
+	finalizers := obj.GetFinalizers()
+	warningAfter := terminatingWarningAfter
+	if group == "" && (kind == "ConfigMap" || kind == "Secret") && hasNonGarbageCollectionFinalizer(finalizers) {
+		warningAfter = configMapSecretTerminatingWarningAfter
+	}
 	duration := now.Sub(obj.GetDeletionTimestamp().Time)
-	if duration < terminatingWarningAfter {
+	if duration < warningAfter {
 		return Detection{}, false
 	}
 	severity := "high"
@@ -1469,7 +1479,7 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		severity = "critical"
 	}
 	msg := "Resource is still present after deletion started"
-	if finalizers := obj.GetFinalizers(); len(finalizers) > 0 {
+	if len(finalizers) > 0 {
 		msg = "Waiting on finalizers: " + strings.Join(finalizers, ", ")
 	}
 	// The stuck-termination issue began when deletion was requested — run the
@@ -1496,6 +1506,17 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		IssueTiming:      timingR.IssueTiming,
 		IssueTimingBasis: timingR.Basis,
 	}, true
+}
+
+func hasNonGarbageCollectionFinalizer(finalizers []string) bool {
+	for _, finalizer := range finalizers {
+		// Garbage collection may legitimately wait for dependents to finish
+		// terminating, so it keeps the generic grace period.
+		if finalizer != metav1.FinalizerDeleteDependents && finalizer != metav1.FinalizerOrphanDependents {
+			return true
+		}
+	}
+	return false
 }
 
 func namespaceTerminatingProblem(ns *corev1.Namespace, now time.Time) (Detection, bool) {
