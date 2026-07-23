@@ -8,7 +8,7 @@ import Editor, {
 } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
 import { AlertCircle, AlertTriangle, ChevronDown, ChevronRight, Info } from 'lucide-react'
-import { parseDocument } from 'yaml'
+import { parseAllDocuments, parseDocument } from 'yaml'
 import { isMac } from '../../utils/platform'
 import { splitYamlDocuments } from '../../utils/yaml'
 import { PaneLoader } from './PaneLoader'
@@ -126,6 +126,24 @@ function documentIndexForLine(documents: YamlDocumentIdentity[], line: number) {
     index = document.index
   }
   return index
+}
+
+export function parseFallbackYamlDiagnostics(value: string): YamlDiagnostic[] {
+  const documents = parseYamlDocumentIdentities(value)
+  return parseAllDocuments(value).flatMap((document) =>
+    document.errors.map((error) => {
+      const start = error.linePos?.[0]
+      const line = start?.line ?? 1
+      return {
+        severity: 'error',
+        message: error.message,
+        line,
+        column: start?.col ?? 1,
+        documentIndex: documentIndexForLine(documents, line),
+        blocking: true,
+      }
+    }),
+  )
 }
 
 function useDocumentMonacoTheme() {
@@ -251,6 +269,18 @@ export function YamlEditor({
       active = false
     }
   }, [runtimeAttempt])
+
+  useEffect(() => {
+    if (!runtimeError) return
+    const next = parseFallbackYamlDiagnostics(value)
+    setDiagnostics(next)
+    if (next.length > 0) setProblemsOpen(true)
+    onDiagnosticsRef.current?.(next)
+    onValidateRef.current?.(
+      next.length === 0,
+      next.map((diagnostic) => `Line ${diagnostic.line}: ${diagnostic.message}`),
+    )
+  }, [runtimeError, value])
 
   useEffect(() => {
     return () => {
@@ -556,8 +586,8 @@ export function YamlEditor({
             >
               <AlertTriangle className="h-4 w-4 shrink-0 text-warning-text" />
               <span>
-                Rich YAML editing is unavailable. Basic editing remains available without
-                completion or inline validation.
+                Rich YAML editing is unavailable. Basic editing and syntax validation remain
+                available without completion or cluster schema guidance.
               </span>
               <button
                 type="button"

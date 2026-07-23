@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isBlockingYamlDiagnostic,
+  parseFallbackYamlDiagnostics,
   parseYamlDocumentIdentities,
   shouldAutoTriggerYamlSuggestions,
 } from './YamlEditor'
@@ -96,6 +97,36 @@ describe('isBlockingYamlDiagnostic', () => {
         '[radar-advisory:deprecated] Use spec.newField instead.',
       ),
     ).toBe(false)
+  })
+})
+
+describe('parseFallbackYamlDiagnostics', () => {
+  it('accepts valid multi-document YAML', () => {
+    expect(
+      parseFallbackYamlDiagnostics(`apiVersion: v1
+kind: ConfigMap
+---
+apiVersion: apps/v1
+kind: Deployment
+`),
+    ).toEqual([])
+  })
+
+  it('reports a blocking syntax error against the correct document', () => {
+    const diagnostics = parseFallbackYamlDiagnostics(`apiVersion: v1
+kind: ConfigMap
+---
+apiVersion: v1
+kind: [`)
+
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]).toMatchObject({
+      severity: 'error',
+      line: 5,
+      column: 8,
+      documentIndex: 1,
+      blocking: true,
+    })
   })
 })
 
