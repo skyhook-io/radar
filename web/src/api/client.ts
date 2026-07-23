@@ -1,5 +1,11 @@
 import { useEffect, useRef } from 'react'
-import type { AppHistory, AppRow, ArgoSyncOpts } from '@skyhook-io/k8s-ui'
+import type {
+  AppHistory,
+  AppRow,
+  ArgoSyncOpts,
+  YamlDocumentIdentity,
+  YamlSchemaLoadResult,
+} from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
@@ -2629,12 +2635,16 @@ export function useUpdateResource() {
       name,
       yaml,
       force = true,
+      reviewedResourceVersion,
+      reviewedContext,
     }: {
       kind: string
       namespace: string
       name: string
       yaml: string
       force?: boolean
+      reviewedResourceVersion?: string
+      reviewedContext?: string
     }) => {
       const url = new URL(
         `${getApiBase()}/resources/${kind}/${namespace}/${name}`,
@@ -2642,6 +2652,12 @@ export function useUpdateResource() {
       )
       if (!force) {
         url.searchParams.set('force', 'false')
+      }
+      if (reviewedResourceVersion) {
+        url.searchParams.set('resourceVersion', reviewedResourceVersion)
+      }
+      if (reviewedContext) {
+        url.searchParams.set('reviewedContext', reviewedContext)
       }
       const response = await apiFetch(url.toString(), {
         method: 'PUT',
@@ -2981,6 +2997,144 @@ export interface ApplyResourceResult {
   created: boolean
 }
 
+interface ApplyResourceErrorResponse {
+  error?: string
+  results?: ApplyResourceResult[]
+  failedIndex?: number
+  total?: number
+}
+
+export class ApplyResourceError extends Error {
+  readonly appliedResults: ApplyResourceResult[]
+  readonly failedIndex?: number
+  readonly total?: number
+
+  constructor(payload: ApplyResourceErrorResponse, status: number) {
+    super(formatApplyResourceError(payload, status))
+    this.name = 'ApplyResourceError'
+    this.appliedResults = payload.results ?? []
+    this.failedIndex = payload.failedIndex
+    this.total = payload.total
+  }
+}
+
+export function formatApplyResourceError(
+  payload: ApplyResourceErrorResponse,
+  status: number,
+): string {
+  const message = payload.error || `HTTP ${status}`
+  const applied = payload.results ?? []
+  if (applied.length === 0 || payload.failedIndex === undefined) return message
+
+  const total = payload.total ?? applied.length + 1
+  const appliedLabel = applied.length === 1 ? 'resource was' : 'resources were'
+  const names = applied
+    .slice(0, 3)
+    .map(({ kind, namespace, name }) => `${kind} ${namespace ? `${namespace}/` : ''}${name}`)
+    .join(', ')
+  const more = applied.length > 3 ? ` and ${applied.length - 3} more` : ''
+  const cause = message.replace(/^document \d+:\s*/i, '')
+  return `${applied.length} of ${total} ${appliedLabel} applied before document ${payload.failedIndex + 1} failed. Applied: ${names}${more}. ${cause}`
+}
+
+interface YamlSchemaResponse {
+  documents: Array<{
+    index: number
+    status: 'available' | 'unavailable'
+    bundleKey?: string
+    schemaRef?: string
+    error?: string
+  }>
+  bundles: Record<string, { definitions: Record<string, unknown> }>
+}
+
+export async function fetchYamlSchemas(
+  documents: YamlDocumentIdentity[],
+): Promise<YamlSchemaLoadResult> {
+  const response = await apiFetch(`${getApiBase()}/resources/schemas`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      documents: documents.map(({ index, apiVersion, kind }) => ({
+        index,
+        apiVersion,
+        kind,
+      })),
+    }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Cluster schemas are unavailable' }))
+    throw new Error(error.error || `HTTP ${response.status}`)
+  }
+  const result = (await response.json()) as YamlSchemaResponse
+  const schemas: Array<Record<string, unknown> | null> = documents.map(() => null)
+  const unavailable: Array<{ index: number; reason: string }> = []
+  for (const document of result.documents) {
+    const position = documents.findIndex(({ index }) => index === document.index)
+    if (position < 0) continue
+    const bundle = document.bundleKey ? result.bundles[document.bundleKey] : undefined
+    if (document.status === 'available' && document.schemaRef && bundle) {
+      schemas[position] = {
+        $ref: document.schemaRef,
+        definitions: bundle.definitions,
+      }
+    } else {
+      unavailable.push({
+        index: document.index,
+        reason: document.error || 'Schema unavailable',
+      })
+    }
+  }
+  return { schemas, unavailable }
+}
+
+export interface YamlPreviewDocument {
+  index: number
+  status: 'accepted' | 'rejected' | 'unavailable'
+  apiVersion?: string
+  kind?: string
+  namespace?: string
+  name?: string
+  action?: 'create' | 'update' | 'unknown'
+  submittedYaml?: string
+  baselineYaml?: string
+  predictedYaml?: string
+  warnings?: string[]
+  error?: string
+  reviewedResourceVersion?: string
+  redacted?: boolean
+}
+
+export interface YamlPreviewResponse {
+  documents: YamlPreviewDocument[]
+  nonAtomic: boolean
+  context: string
+}
+
+export interface YamlPreviewRequest {
+  yaml: string
+  mode: 'apply' | 'create' | 'update'
+  force: boolean
+  target?: { kind: string; namespace: string; name: string }
+}
+
+export function usePreviewResources() {
+  return useMutation({
+    mutationFn: async (request: YamlPreviewRequest) => {
+      const response = await apiFetch(`${getApiBase()}/resources/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Preview failed' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json() as Promise<YamlPreviewResponse>
+    },
+  })
+}
+
 export function useApplyResource() {
   const queryClient = useQueryClient()
 
@@ -2990,11 +3144,15 @@ export function useApplyResource() {
       mode = 'apply',
       dryRun = false,
       force = false,
+      reviewedResourceVersions,
+      reviewedContext,
     }: {
       yaml: string
       mode?: 'apply' | 'create'
       dryRun?: boolean
       force?: boolean
+      reviewedResourceVersions?: Record<number, string>
+      reviewedContext?: string
     }) => {
       const url = new URL(`${getApiBase()}/resources/apply`, window.location.origin)
       url.searchParams.set('mode', mode)
@@ -3004,20 +3162,28 @@ export function useApplyResource() {
       if (force) {
         url.searchParams.set('force', 'true')
       }
+      if (reviewedResourceVersions && Object.keys(reviewedResourceVersions).length > 0) {
+        url.searchParams.set('reviewedVersions', JSON.stringify(reviewedResourceVersions))
+      }
+      if (reviewedContext) {
+        url.searchParams.set('reviewedContext', reviewedContext)
+      }
       const response = await apiFetch(url.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body: yaml,
       })
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(error.error || `HTTP ${response.status}`)
+        const error = (await response
+          .json()
+          .catch(() => ({ error: 'Unknown error' }))) as ApplyResourceErrorResponse
+        throw new ApplyResourceError(error, response.status)
       }
       return response.json() as Promise<ApplyResourceResult[]>
     },
     // No meta errorMessage/successMessage — the CreateResourceDialog
     // handles all feedback inline to avoid duplicate toasts.
-    onSuccess: () => {
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['resources'] })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },

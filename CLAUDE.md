@@ -127,7 +127,7 @@ Use `/visual-test` command for the full workflow (cluster check, Playwright MCP,
 ## API Endpoints & CLI Flags
 
 **You MUST read `internal/server/server.go` before adding or modifying any endpoint** — it is the single source of truth for all routes. CLI flags live in `cmd/explorer/main.go`. Key URL patterns:
-- REST resources: `/api/resources/{kind}`, `/api/resources/{kind}/{ns}/{name}`, `/api/resources/apply` (POST)
+- REST resources: `/api/resources/{kind}`, `/api/resources/{kind}/{ns}/{name}`, `/api/resources/apply` (POST), `/api/resources/preview` (POST, server-dry-run review), `/api/resources/schemas` (POST, connected-cluster OpenAPI schemas)
 - SSE streaming: `/api/events/stream`, `/api/traffic/flows/stream`
 - WebSocket: `/api/pods/{ns}/{name}/exec`
 - MCP: `/mcp` (Streamable HTTP — POST for JSON-RPC, GET for SSE)

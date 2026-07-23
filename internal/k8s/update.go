@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"log"
+	"regexp"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -14,6 +15,7 @@ import (
 // Re-export types from pkg/k8score for backward compatibility.
 type WorkloadRevision = k8score.WorkloadRevision
 type UpdateResourceOptions = k8score.UpdateResourceOptions
+type PreviewUpdateResourceResult = k8score.PreviewUpdateResourceResult
 type DeleteResourceOptions = k8score.DeleteResourceOptions
 type ApplyResourceOptions = k8score.ApplyResourceOptions
 type ApplyResourceResult = k8score.ApplyResourceResult
@@ -52,6 +54,10 @@ func UpdateResourceWithClient(ctx context.Context, opts UpdateResourceOptions, c
 	return getWorkloadManagerWithClient(client).UpdateResource(ctx, opts)
 }
 
+func PreviewUpdateResourceWithClient(ctx context.Context, opts UpdateResourceOptions, client dynamic.Interface) (*PreviewUpdateResourceResult, error) {
+	return getWorkloadManagerWithClient(client).PreviewUpdateResource(ctx, opts)
+}
+
 // DeleteResource deletes a Kubernetes resource.
 func DeleteResource(ctx context.Context, opts DeleteResourceOptions) error {
 	return getWorkloadManager().DeleteResource(ctx, opts)
@@ -73,12 +79,15 @@ func ApplyResourceWithClient(ctx context.Context, opts ApplyResourceOptions, cli
 	return getWorkloadManagerWithClient(client).ApplyResource(ctx, opts)
 }
 
-// SplitYAMLDocuments splits multi-document YAML on "---" separators.
+var yamlDocumentSeparator = regexp.MustCompile(`(?m)^---(?:[ \t]+#.*|[ \t]*)\r?$`)
+
+// SplitYAMLDocuments preserves each manifest exactly apart from surrounding
+// whitespace so preview and apply use identical document indices and content.
 func SplitYAMLDocuments(content string) []string {
 	var docs []string
-	for _, doc := range strings.Split(content, "\n---") {
+	for _, doc := range yamlDocumentSeparator.Split(content, -1) {
 		doc = strings.TrimSpace(doc)
-		if doc != "" && doc != "---" {
+		if doc != "" {
 			docs = append(docs, doc)
 		}
 	}

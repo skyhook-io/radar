@@ -168,6 +168,12 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	k8s.InvalidateUserCapabilitiesCache()
 	clearPackagesCache()
 	clearApplicationsCache()
+	s.yamlSchemaMu.Lock()
+	clear(s.yamlSchemaCache)
+	clear(s.yamlSchemaPathCache)
+	clear(s.yamlSchemaBundleCache)
+	s.yamlSchemaCacheBytes = 0
+	s.yamlSchemaMu.Unlock()
 	s.vitalsMetrics.clear()
 	gitopstree.ResetUnknownKindLogDedup()
 }

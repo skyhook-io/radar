@@ -28,6 +28,15 @@ export { ForceDeleteConfirmDialog } from './ForceDeleteConfirmDialog'
 export { ToastProvider, useToast, showApiError, showApiSuccess } from './Toast'
 export { CodeViewer } from './CodeViewer'
 export { YamlEditor, YamlDiffEditor } from './YamlEditor'
+export type {
+  YamlDiagnostic,
+  YamlDocumentIdentity,
+  YamlEditorProps,
+  YamlSchemaLoader,
+  YamlSchemaLoadResult,
+} from './YamlEditor'
+export { YamlReview } from './YamlReview'
+export type { YamlPreviewResult, YamlReviewProps } from './YamlReview'
 export { RowActionMenu } from './RowActionMenu'
 export type { RowActionItem } from './RowActionMenu'
 
