@@ -207,10 +207,8 @@ func TestPodGoldenVectors(t *testing.T) {
 	}
 }
 
-// TestPodStableCrashLoopAcrossPhases pins crashloop monotonicity: a crashlooping
-// container's instantaneous State flaps Waiting → Running → Waiting poll-to-poll,
-// but the Verdict (Level + Reason) must stay fixed because it reads the stable
-// history fields.
+// TestPodStableCrashLoopAcrossPhases pins a non-serving crashloop's continuity
+// while its instantaneous State flaps Waiting → Running → Waiting.
 func TestPodStableCrashLoopAcrossPhases(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
 	crashHistory := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}}

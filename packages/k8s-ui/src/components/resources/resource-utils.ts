@@ -171,6 +171,63 @@ function firstFatalContainer(pod: any): { name: string; reason: string } | null 
   return null
 }
 
+const CRASH_SETTLE_MS = 5 * 60 * 1000
+const STALE_CRASH_STATE_GAP_MS = 2 * CRASH_SETTLE_MS
+
+function stableCrashHistory(cs: any): boolean {
+  if (!cs?.restartCount) return false
+
+  const startedAt = cs?.state?.running?.startedAt
+  const finishedAt = cs?.lastState?.terminated?.finishedAt
+  if (startedAt) {
+    const startedAtMs = new Date(startedAt).getTime()
+    if (Number.isFinite(startedAtMs) && Date.now() - startedAtMs >= CRASH_SETTLE_MS) return false
+    if (finishedAt) {
+      const finishedAtMs = new Date(finishedAt).getTime()
+      if (
+        Number.isFinite(startedAtMs)
+        && Number.isFinite(finishedAtMs)
+        && startedAtMs - finishedAtMs > STALE_CRASH_STATE_GAP_MS
+      ) return false
+    }
+  } else if (cs?.state?.running && finishedAt) {
+    const finishedAtMs = new Date(finishedAt).getTime()
+    if (Number.isFinite(finishedAtMs) && Date.now() - finishedAtMs >= CRASH_SETTLE_MS) return false
+  }
+  if (cs?.state?.terminated?.exitCode === 0) return false
+
+  const term = cs?.lastState?.terminated
+  if (!term || term.reason === 'OOMKilled') return false
+  return term.reason === 'CrashLoopBackOff' || term.reason === 'Error' || Number(term.exitCode ?? 0) !== 0
+}
+
+function podCrashHistoryLevel(pod: any): 'degraded' | 'unhealthy' | null {
+  let degraded = false
+  for (const cs of pod?.status?.containerStatuses || []) {
+    if (!stableCrashHistory(cs)) continue
+    if (!(cs?.state?.running && cs?.ready)) return 'unhealthy'
+    degraded = true
+  }
+
+  const initContainers = pod?.spec?.initContainers || []
+  for (const cs of pod?.status?.initContainerStatuses || []) {
+    const spec = initContainers.find((c: any) => c?.name === cs?.name)
+    const restartable = spec?.restartPolicy === 'Always'
+    if (!stableCrashHistory(cs)) continue
+    if (!(restartable && cs?.state?.running && cs?.ready)) return 'unhealthy'
+    degraded = true
+  }
+  return degraded ? 'degraded' : null
+}
+
+function podCrashRestartTotal(pod: any): number {
+  const main = pod?.status?.containerStatuses || []
+  const init = pod?.status?.initContainerStatuses || []
+  return [...main, ...init]
+    .filter(stableCrashHistory)
+    .reduce((sum, cs) => sum + (cs?.restartCount || 0), 0)
+}
+
 export function getPodStatus(pod: any): StatusBadge {
   const phase = pod.status?.phase || 'Unknown'
   const containerStatuses = pod.status?.containerStatuses || []
@@ -194,6 +251,17 @@ export function getPodStatus(pod: any): StatusBadge {
     return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
   }
 
+  const crashHistoryLevel = phase !== 'Succeeded' && phase !== 'Unknown'
+    ? podCrashHistoryLevel(pod)
+    : null
+  if (crashHistoryLevel === 'unhealthy') {
+    return {
+      text: 'CrashLoopBackOff',
+      color: healthColors.unhealthy,
+      level: 'unhealthy',
+    }
+  }
+
   // Terminating: neutral while gracefully shutting down, degraded once stuck
   // (a wedged finalizer / preStop hook holding the pod open).
   if (pod.metadata?.deletionTimestamp) {
@@ -201,6 +269,16 @@ export function getPodStatus(pod: any): StatusBadge {
       return { text: 'Terminating', color: healthColors.degraded, level: 'degraded' }
     }
     return { text: 'Terminating', color: healthColors.neutral, level: 'neutral' }
+  }
+
+  const hasUnsettledMainContainer = containerStatuses.some((c: any) => !containerSettledOk(c))
+  if (crashHistoryLevel === 'degraded' && !hasUnsettledMainContainer) {
+    const restarts = podCrashRestartTotal(pod)
+    return {
+      text: `Restarted (${restarts})`,
+      color: healthColors.degraded,
+      level: 'degraded',
+    }
   }
 
   switch (phase) {
@@ -288,6 +366,18 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
     return { phase, text: 'Failed', level: 'unhealthy' }
   }
 
+  const crashHistoryLevel = phase !== 'Succeeded' && phase !== 'Unknown'
+    ? podCrashHistoryLevel(pod)
+    : null
+  if (crashHistoryLevel === 'unhealthy') {
+    return {
+      phase,
+      text: `${phase} — CrashLoopBackOff`,
+      level: 'unhealthy',
+      hint: 'At least one container has crash history and is not serving now.',
+    }
+  }
+
   // Terminating: neutral while gracefully shutting down, degraded once stuck.
   if (pod?.metadata?.deletionTimestamp) {
     const stuck = minutesSince(pod.metadata.deletionTimestamp) >= TERMINATING_STUCK_MINUTES
@@ -298,6 +388,17 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
       hint: stuck
         ? 'Pod has been terminating for a while — a finalizer or preStop hook may be wedged.'
         : 'Pod has a deletionTimestamp set; awaiting graceful termination.',
+    }
+  }
+
+  const hasUnsettledMainContainer = containerStatuses.some((c) => !containerSettledOk(c))
+  if (crashHistoryLevel === 'degraded' && !hasUnsettledMainContainer) {
+    const crashRestarts = podCrashRestartTotal(pod)
+    return {
+      phase,
+      text: `${phase} — Recently restarted (${crashRestarts} restart${crashRestarts === 1 ? '' : 's'})`,
+      level: 'degraded',
+      hint: 'Containers are ready now but remain in the crash settle window.',
     }
   }
 
