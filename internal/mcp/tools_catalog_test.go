@@ -97,8 +97,45 @@ func TestIssuesToolDocumentsRecentChangesReasons(t *testing.T) {
 	if !strings.Contains(description, "recent_changes_guidance") {
 		t.Error("issues tool description does not document recent_changes_guidance")
 	}
-	if !strings.Contains(description, "prime_suspect") || !strings.Contains(description, "not proof of cause") {
-		t.Error("issues tool description does not bound salience markers as investigative leads")
+	if !strings.Contains(description, "not_linked_to_returned_issues") ||
+		!strings.Contains(description, "response is unfiltered") ||
+		!strings.Contains(description, "did not evaluate linkage") ||
+		!strings.Contains(description, "first within `recent_changes`") ||
+		!strings.Contains(description, "not evidence of cause") {
+		t.Error("issues tool description does not scope the relational change marker as a non-causal lead")
+	}
+	if !strings.Contains(description, "application_configuration_change") ||
+		!strings.Contains(description, "static classification") ||
+		!strings.Contains(description, "not a causal") ||
+		!strings.Contains(description, "does not strengthen") {
+		t.Error("issues tool description does not scope the application-configuration marker as a non-causal ranking hint")
+	}
+}
+
+func TestToolsEmittingApplicationConfigurationMarkerDocumentRankingBoundary(t *testing.T) {
+	descriptions := map[string]string{}
+	for _, tool := range listRegisteredTools(t) {
+		switch tool.Name {
+		case "get_changes", "get_resource", "diagnose", "issues":
+			descriptions[tool.Name] = tool.Description
+		}
+	}
+	for _, name := range []string{"get_changes", "get_resource", "diagnose", "issues"} {
+		description := descriptions[name]
+		if description == "" {
+			t.Fatalf("%s tool is not registered or has no description", name)
+		}
+		for _, want := range []string{
+			"application_configuration_change",
+			"not a causal or universal relevance verdict",
+		} {
+			if !strings.Contains(description, want) {
+				t.Errorf("%s tool description does not document %q", name, want)
+			}
+		}
+	}
+	if !strings.Contains(descriptions["get_changes"], "Helm operation entries rank by category and recency") {
+		t.Error("get_changes tool description does not document Helm ranking")
 	}
 }
 

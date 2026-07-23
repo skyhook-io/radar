@@ -35,13 +35,21 @@ const (
 	ChangesReasonWithAllCreationTimeCriticalIssues = "recent_changes_with_all_critical_issues_at_creation"
 )
 
-// IssueChangesGuidance returns response-level steering prose for reason tokens
+const (
+	filteredIssueSetGuidance      = "This response is severity-filtered, so Radar did not promote changes based on links to returned issues; omitted issue rows may explain them."
+	truncatedIssueMembersGuidance = "Radar did not promote changes based on issue linkage because at least one returned grouped issue omitted members; an omitted member may explain a change."
+	// FetchSaturatedGuidance distinguishes an incomplete candidate query from
+	// a complete window whose lower-ranked results were omitted from output.
+	FetchSaturatedGuidance = "Radar's change query hit its candidate cap, so this window may contain changes the query never saw; absence from this feed is not evidence a change did not occur."
+)
+
+// issueChangesGuidance returns response-level steering prose for reason tokens
 // whose timing evidence could otherwise read as "the changes are irrelevant."
 // The steer rides the response — not just the tool description — because the
 // response is what the model attends to at decision time; the description may
 // be skimmed once or never loaded. It is advice about how to treat the feed,
 // never a causal claim about any specific change.
-func IssueChangesGuidance(reason string) string {
+func issueChangesGuidance(reason string) string {
 	if reason != ChangesReasonWithAllCreationTimeCriticalIssues {
 		return ""
 	}
@@ -55,35 +63,92 @@ func IssueChangesGuidance(reason string) string {
 		"Review the changes before concluding the listed issues explain the reported problem."
 }
 
-func PrioritizeIssueChanges(changes []issuesapi.RecentChange, activeIssues []issuesapi.Issue, reason string, limit int) ([]issuesapi.RecentChange, string, bool) {
+type IssueChangePriorityOptions struct {
+	Reason             string
+	Limit              int
+	UnfilteredIssueSet bool
+	FetchSaturated     bool
+}
+
+func PrioritizeIssueChanges(changes []issuesapi.RecentChange, activeIssues []issuesapi.Issue, opts IssueChangePriorityOptions) ([]issuesapi.RecentChange, string, bool) {
 	originalLen := len(changes)
 	for i := range changes {
-		applyPerEntrySalience(&changes[i])
+		changes[i].NotLinkedToReturnedIssues = false
+		classifyApplicationConfigurationChange(&changes[i])
 	}
-	if reason == ChangesReasonWithAllCreationTimeCriticalIssues {
-		markPrimeSuspects(changes, activeIssues)
+	completeIssueLinks := issueLinksComplete(activeIssues)
+	if opts.Reason == ChangesReasonWithAllCreationTimeCriticalIssues && opts.UnfilteredIssueSet && completeIssueLinks {
+		markChangesNotLinkedToReturnedIssues(changes, activeIssues)
 	}
-	RankAndCap(&changes, limit)
+	RankAndCap(&changes, opts.Limit)
 
-	guidance := IssueChangesGuidance(reason)
-	var suspects []string
+	guidance := issueChangesGuidance(opts.Reason)
+	var unlinked []string
 	for _, change := range changes {
-		if change.Salience == issuesapi.ChangeSaliencePrimeSuspect {
-			suspects = append(suspects, changeRef(change))
+		if change.NotLinkedToReturnedIssues {
+			unlinked = append(unlinked, changeRef(change))
 		}
 	}
-	if len(suspects) > 0 && len(suspects) <= 2 {
-		if len(suspects) == 1 {
-			guidance += " The change feed marks " + suspects[0] +
-				" as a prime suspect because no listed issue explains that configuration edit; " +
-				"treat it as a lead to verify, not proof of cause."
+	if len(unlinked) > 0 && len(unlinked) <= 2 {
+		if len(unlinked) == 1 {
+			guidance += " Radar could not link " + unlinked[0] +
+				"'s application-configuration change to an issue in this response, so it appears first within `recent_changes`. " +
+				"Verify it against runtime evidence; this is a lead, not evidence of cause."
 		} else {
-			guidance += " The change feed marks " + strings.Join(suspects, " and ") +
-				" as prime suspects because no listed issue explains those configuration edits; " +
-				"treat them as leads to verify, not proof of cause."
+			guidance += " Radar could not link the application-configuration changes on " +
+				strings.Join(unlinked, " and ") +
+				" to issues in this response, so they appear first within `recent_changes`. " +
+				"Verify them against runtime evidence; these are leads, not evidence of cause."
+		}
+	} else if len(unlinked) > 2 {
+		guidance += fmt.Sprintf(" Radar could not link %d application-configuration changes to issues in "+
+			"this response, so they appear first within `recent_changes`. "+
+			"Verify them against runtime evidence; these are leads, not evidence of cause.", len(unlinked))
+	}
+	if !opts.UnfilteredIssueSet {
+		guidance = appendGuidance(guidance, filteredIssueSetGuidance)
+	}
+	if opts.Reason == ChangesReasonWithAllCreationTimeCriticalIssues && opts.UnfilteredIssueSet && !completeIssueLinks {
+		guidance = appendGuidance(guidance, truncatedIssueMembersGuidance)
+	}
+	if opts.FetchSaturated {
+		guidance = appendGuidance(guidance, FetchSaturatedGuidance)
+	}
+	return changes, guidance, opts.Limit > 0 && originalLen > len(changes)
+}
+
+func appendGuidance(current, addition string) string {
+	if current == "" {
+		return addition
+	}
+	return current + " " + addition
+}
+
+func issueLinksComplete(activeIssues []issuesapi.Issue) bool {
+	for _, issue := range activeIssues {
+		if issue.MembersTruncated {
+			return false
 		}
 	}
-	return changes, guidance, limit > 0 && originalLen > len(changes)
+	return true
+}
+
+// IssueSeveritySetComplete reports whether a parsed severity filter can omit
+// any issue row from the current critical|warning public vocabulary.
+func IssueSeveritySetComplete(severities []issuesapi.Severity) bool {
+	if len(severities) == 0 {
+		return true
+	}
+	var critical, warning bool
+	for _, severity := range severities {
+		switch severity {
+		case issuesapi.SeverityCritical:
+			critical = true
+		case issuesapi.SeverityWarning:
+			warning = true
+		}
+	}
+	return critical && warning
 }
 
 func IssueChangesFetchLimit(reason string) int {
@@ -120,9 +185,19 @@ type Query struct {
 	FieldLimit int
 }
 
-func Recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, error) {
+type RecentResult struct {
+	Changes        []issuesapi.RecentChange
+	OutputCapped   bool
+	FetchSaturated bool
+}
+
+func Recent(ctx context.Context, q Query) (RecentResult, error) {
 	changes, outputCapped, fetchSaturated, err := recent(ctx, q)
-	return changes, outputCapped || fetchSaturated, err
+	return RecentResult{
+		Changes:        changes,
+		OutputCapped:   outputCapped,
+		FetchSaturated: fetchSaturated,
+	}, err
 }
 
 // recent returns ranked changes plus two distinct truncation signals:
@@ -547,7 +622,7 @@ func configMapKey(namespace, name string) string {
 	return namespace + "\x00" + name
 }
 
-func markPrimeSuspects(changes []issuesapi.RecentChange, activeIssues []issuesapi.Issue) {
+func markChangesNotLinkedToReturnedIssues(changes []issuesapi.RecentChange, activeIssues []issuesapi.Issue) {
 	explained := map[string]bool{}
 	addRef := func(ref issuesapi.Ref) {
 		if ref.Kind != "" && ref.Name != "" {
@@ -562,7 +637,7 @@ func markPrimeSuspects(changes []issuesapi.RecentChange, activeIssues []issuesap
 		}
 	}
 	for i := range changes {
-		if changes[i].Salience != issuesapi.ChangeSalienceConfigEdit {
+		if !changes[i].ApplicationConfigurationChange {
 			continue
 		}
 		isExplained := explained[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)]
@@ -581,17 +656,19 @@ func markPrimeSuspects(changes []issuesapi.RecentChange, activeIssues []issuesap
 			}
 		}
 		if !isExplained {
-			changes[i].Salience = issuesapi.ChangeSaliencePrimeSuspect
+			changes[i].NotLinkedToReturnedIssues = true
 			if changes[i].ChangeType == string(timeline.EventTypeAdd) {
-				changes[i].RankReason = "recreated with configuration changes not explained by any listed issue"
+				changes[i].RankReason = "recreated with application configuration changes not linked to any returned issue"
 			} else {
-				changes[i].RankReason = "configuration edit not explained by any listed issue"
+				changes[i].RankReason = "application configuration change not linked to any returned issue"
 			}
 		}
 	}
 }
 
 func resourceKey(kind, namespace, name string) string {
+	// Omitting API group is conservative here: a collision can only enlarge
+	// the explained set and suppress a lead, never create a false lead.
 	return strings.ToLower(strings.TrimSpace(kind)) + "\x00" + namespace + "\x00" + name
 }
 
@@ -655,7 +732,7 @@ func RankAndCap(changes *[]issuesapi.RecentChange, limit int) {
 		return
 	}
 	for i := range *changes {
-		applyPerEntrySalience(&(*changes)[i])
+		classifyApplicationConfigurationChange(&(*changes)[i])
 	}
 	sort.SliceStable(*changes, func(i, j int) bool {
 		a, b := (*changes)[i], (*changes)[j]
@@ -691,15 +768,15 @@ func fromEvent(e timeline.TimelineEvent, fieldLimit int) issuesapi.RecentChange 
 	}
 	if e.Diff != nil {
 		if hasApplicationConfigField(e.Kind, e.Diff.Fields) {
-			change.Salience = issuesapi.ChangeSalienceConfigEdit
+			change.ApplicationConfigurationChange = true
 		}
 		fields := e.Diff.Fields
 		if fieldLimit > 0 && len(fields) > fieldLimit {
 			fields = append([]timeline.FieldChange(nil), fields[:fieldLimit]...)
-			// Keep the evidence for an elevated rank visible even when the
-			// ordinary display cap would otherwise hide it.
+			// Reserve the final display slot for evidence supporting the
+			// ranking hint when the ordinary field cap would hide it.
 			if !hasApplicationConfigField(e.Kind, fields) &&
-				change.Salience == issuesapi.ChangeSalienceConfigEdit {
+				change.ApplicationConfigurationChange {
 				for _, field := range e.Diff.Fields[fieldLimit:] {
 					if isApplicationConfigPath(e.Kind, field.Path) {
 						fields[len(fields)-1] = field
@@ -789,10 +866,10 @@ func hasRuntimeStatusField(e timeline.TimelineEvent) bool {
 }
 
 func score(c issuesapi.RecentChange) int {
-	switch c.Salience {
-	case issuesapi.ChangeSaliencePrimeSuspect:
+	if c.NotLinkedToReturnedIssues {
 		return 120
-	case issuesapi.ChangeSalienceConfigEdit:
+	}
+	if c.ApplicationConfigurationChange {
 		return 105
 	}
 	if isGenerationOnly(c) {
@@ -812,20 +889,20 @@ func score(c issuesapi.RecentChange) int {
 
 const generationOnlyRankReason = "generation changed; specific fields were not tracked"
 
-func applyPerEntrySalience(change *issuesapi.RecentChange) {
-	if change == nil || change.Salience == issuesapi.ChangeSaliencePrimeSuspect {
+func classifyApplicationConfigurationChange(change *issuesapi.RecentChange) {
+	if change == nil || change.NotLinkedToReturnedIssues {
 		return
 	}
-	if change.Salience == issuesapi.ChangeSalienceConfigEdit {
+	if change.ApplicationConfigurationChange {
 		if change.Kind != "ConfigMap" || len(change.ConsumedBy) > 0 {
 			change.RankReason = appConfigRankReason(*change)
 			return
 		}
-		change.Salience = ""
+		change.ApplicationConfigurationChange = false
 		change.RankReason = genericSpecRankReason(*change)
 	}
-	if isAppConfigEdit(*change) {
-		change.Salience = issuesapi.ChangeSalienceConfigEdit
+	if isApplicationConfigurationChange(*change) {
+		change.ApplicationConfigurationChange = true
 		change.RankReason = appConfigRankReason(*change)
 		return
 	}
@@ -848,7 +925,7 @@ func genericSpecRankReason(change issuesapi.RecentChange) string {
 	return "desired-state or configuration field changed"
 }
 
-func isAppConfigEdit(change issuesapi.RecentChange) bool {
+func isApplicationConfigurationChange(change issuesapi.RecentChange) bool {
 	if change.ChangeCategory != issuesapi.ChangeCategorySpecConfig {
 		return false
 	}
@@ -902,20 +979,35 @@ func hasWorkloadConfigChange(fields []issuesapi.ChangeField) bool {
 }
 
 func isWorkloadConfigPath(path string) bool {
-	const prefix = "spec.template.spec.containers["
-	if !strings.HasPrefix(path, prefix) {
+	var rest string
+	for _, prefix := range []string{
+		"spec.template.spec.containers[",
+		"spec.template.spec.initContainers[",
+	} {
+		if strings.HasPrefix(path, prefix) {
+			rest = strings.TrimPrefix(path, prefix)
+			break
+		}
+	}
+	if rest == "" {
 		return false
 	}
-	rest := strings.TrimPrefix(path, prefix)
-	end := strings.Index(rest, "].")
-	if end < 0 {
+	end := strings.IndexByte(rest, ']')
+	if end <= 0 {
+		return false
+	}
+	if end == len(rest)-1 {
+		return true
+	}
+	if rest[end+1] != '.' {
 		return false
 	}
 	field := rest[end+2:]
 	return strings.HasPrefix(field, "env[") ||
 		field == "envFrom" ||
 		field == "command" ||
-		field == "args"
+		field == "args" ||
+		field == "image"
 }
 
 func isGenerationOnly(change issuesapi.RecentChange) bool {

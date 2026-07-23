@@ -343,21 +343,9 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("replicas: %d→%d", oldReplicas, newReplicas))
 	}
 
-	// Check container images
-	oldImages := getContainerImages(oldDep.Spec.Template.Spec.Containers)
-	newImages := getContainerImages(newDep.Spec.Template.Spec.Containers)
-	if !equalStringMaps(oldImages, newImages) {
-		for name, oldImg := range oldImages {
-			if newImg, ok := newImages[name]; ok && oldImg != newImg {
-				changes = append(changes, FieldChange{
-					Path:     fmt.Sprintf("spec.template.spec.containers[%s].image", name),
-					OldValue: oldImg,
-					NewValue: newImg,
-				})
-				summary = append(summary, fmt.Sprintf("image(%s): %s→%s", name, truncateImage(oldImg), truncateImage(newImg)))
-			}
-		}
-	}
+	imageChanges, imageSummary := diffContainerImages(oldDep.Spec.Template.Spec, newDep.Spec.Template.Spec)
+	changes = append(changes, imageChanges...)
+	summary = append(summary, imageSummary...)
 
 	// Check resource limits/requests
 	oldResources := getContainerResources(oldDep.Spec.Template.Spec.Containers)
@@ -1699,21 +1687,9 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
 
-	// Check container images
-	oldImages := getContainerImages(oldDS.Spec.Template.Spec.Containers)
-	newImages := getContainerImages(newDS.Spec.Template.Spec.Containers)
-	if !equalStringMaps(oldImages, newImages) {
-		for name, oldImg := range oldImages {
-			if newImg, ok := newImages[name]; ok && oldImg != newImg {
-				changes = append(changes, FieldChange{
-					Path:     fmt.Sprintf("spec.template.spec.containers[%s].image", name),
-					OldValue: oldImg,
-					NewValue: newImg,
-				})
-				summary = append(summary, fmt.Sprintf("image(%s): %s→%s", name, truncateImage(oldImg), truncateImage(newImg)))
-			}
-		}
-	}
+	imageChanges, imageSummary := diffContainerImages(oldDS.Spec.Template.Spec, newDS.Spec.Template.Spec)
+	changes = append(changes, imageChanges...)
+	summary = append(summary, imageSummary...)
 
 	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldDS.Spec.Template.Spec, newDS.Spec.Template.Spec)
 	changes = append(changes, podTemplateChanges...)
@@ -1806,21 +1782,9 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("replicas: %d→%d", oldReplicas, newReplicas))
 	}
 
-	// Check container images
-	oldImages := getContainerImages(oldSTS.Spec.Template.Spec.Containers)
-	newImages := getContainerImages(newSTS.Spec.Template.Spec.Containers)
-	if !equalStringMaps(oldImages, newImages) {
-		for name, oldImg := range oldImages {
-			if newImg, ok := newImages[name]; ok && oldImg != newImg {
-				changes = append(changes, FieldChange{
-					Path:     fmt.Sprintf("spec.template.spec.containers[%s].image", name),
-					OldValue: oldImg,
-					NewValue: newImg,
-				})
-				summary = append(summary, fmt.Sprintf("image(%s): %s→%s", name, truncateImage(oldImg), truncateImage(newImg)))
-			}
-		}
-	}
+	imageChanges, imageSummary := diffContainerImages(oldSTS.Spec.Template.Spec, newSTS.Spec.Template.Spec)
+	changes = append(changes, imageChanges...)
+	summary = append(summary, imageSummary...)
 
 	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldSTS.Spec.Template.Spec, newSTS.Spec.Template.Spec)
 	changes = append(changes, podTemplateChanges...)
@@ -2928,14 +2892,6 @@ func getPVCConditionStatus(pvc *corev1.PersistentVolumeClaim, condType corev1.Pe
 
 // Helper functions
 
-func getContainerImages(containers []corev1.Container) map[string]string {
-	images := make(map[string]string)
-	for _, c := range containers {
-		images[c.Name] = c.Image
-	}
-	return images
-}
-
 func getContainerResources(containers []corev1.Container) map[string]any {
 	resources := make(map[string]any)
 	for _, c := range containers {
@@ -2945,6 +2901,33 @@ func getContainerResources(containers []corev1.Container) map[string]any {
 		}
 	}
 	return resources
+}
+
+func diffContainerImages(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []string) {
+	oldContainers := containerConfigMap(oldSpec)
+	newContainers := containerConfigMap(newSpec)
+	names := make([]string, 0, len(oldContainers))
+	for name := range oldContainers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var changes []FieldChange
+	var summary []string
+	for _, name := range names {
+		oldContainer := oldContainers[name]
+		newContainer, ok := newContainers[name]
+		if !ok || oldContainer.pathPrefix != newContainer.pathPrefix || oldContainer.Image == newContainer.Image {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     newContainer.fieldPath(name, "image"),
+			OldValue: oldContainer.Image,
+			NewValue: newContainer.Image,
+		})
+		summary = append(summary, fmt.Sprintf("image(%s): %s→%s", name, truncateImage(oldContainer.Image), truncateImage(newContainer.Image)))
+	}
+	return changes, summary
 }
 
 func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []string) {
@@ -2972,60 +2955,71 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 		// row naming it (with its image), not a per-field fan-out of its
 		// entire config against nothing.
 		if !oldOK {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s]", name), OldValue: nil, NewValue: newC.Image})
-			summary = append(summary, fmt.Sprintf("container %s added (%s)", name, truncateImage(newC.Image)))
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, ""), OldValue: nil, NewValue: newC.Image})
+			summary = append(summary, fmt.Sprintf("%s %s added (%s)", newC.summaryKind(), name, truncateImage(newC.Image)))
 			continue
 		}
 		if !newOK {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s]", name), OldValue: oldC.Image, NewValue: nil})
-			summary = append(summary, fmt.Sprintf("container %s removed", name))
+			changes = append(changes, FieldChange{Path: oldC.fieldPath(name, ""), OldValue: oldC.Image, NewValue: nil})
+			summary = append(summary, fmt.Sprintf("%s %s removed", oldC.summaryKind(), name))
 			continue
 		}
-		for _, change := range diffContainerEnv(name, oldC.Env, newC.Env) {
+		if oldC.pathPrefix != newC.pathPrefix {
+			changes = append(changes,
+				FieldChange{Path: oldC.fieldPath(name, ""), OldValue: oldC.Image, NewValue: nil},
+				FieldChange{Path: newC.fieldPath(name, ""), OldValue: nil, NewValue: newC.Image},
+			)
+			summary = append(summary,
+				fmt.Sprintf("%s %s removed", oldC.summaryKind(), name),
+				fmt.Sprintf("%s %s added (%s)", newC.summaryKind(), name, truncateImage(newC.Image)),
+			)
+			continue
+		}
+		for _, change := range diffContainerEnv(newC.fieldPath(name, ""), oldC.Env, newC.Env) {
 			changes = append(changes, change)
 			summary = append(summary, envChangeSummary(change, name))
 		}
 		if oldEnvFrom, newEnvFrom := envFromRefs(oldC.EnvFrom), envFromRefs(newC.EnvFrom); !equalStringSlices(oldEnvFrom, newEnvFrom) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].envFrom", name), OldValue: oldEnvFrom, NewValue: newEnvFrom})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "envFrom"), OldValue: oldEnvFrom, NewValue: newEnvFrom})
 			summary = append(summary, fmt.Sprintf("envFrom(%s) changed", name))
 		}
 		if oldC.ImagePullPolicy != newC.ImagePullPolicy {
 			changes = append(changes, FieldChange{
-				Path:     fmt.Sprintf("spec.template.spec.containers[%s].imagePullPolicy", name),
+				Path:     newC.fieldPath(name, "imagePullPolicy"),
 				OldValue: string(oldC.ImagePullPolicy),
 				NewValue: string(newC.ImagePullPolicy),
 			})
 			summary = append(summary, fmt.Sprintf("imagePullPolicy(%s): %s→%s", name, oldC.ImagePullPolicy, newC.ImagePullPolicy))
 		}
 		for _, probeName := range []string{"readinessProbe", "livenessProbe", "startupProbe"} {
-			oldProbe := normalizedProbe(probeForName(oldC, probeName))
-			newProbe := normalizedProbe(probeForName(newC, probeName))
+			oldProbe := normalizedProbe(probeForName(oldC.Container, probeName))
+			newProbe := normalizedProbe(probeForName(newC.Container, probeName))
 			if !reflect.DeepEqual(oldProbe, newProbe) {
-				changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].%s", name, probeName), OldValue: oldProbe, NewValue: newProbe})
+				changes = append(changes, FieldChange{Path: newC.fieldPath(name, probeName), OldValue: oldProbe, NewValue: newProbe})
 				summary = append(summary, fmt.Sprintf("%s(%s) changed", probeName, name))
 			}
 		}
 		if !equalStringSlices(oldC.Command, newC.Command) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].command", name), OldValue: commandArgDisplayValues(oldC.Command), NewValue: commandArgDisplayValues(newC.Command)})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "command"), OldValue: commandArgDisplayValues(oldC.Command), NewValue: commandArgDisplayValues(newC.Command)})
 			summary = append(summary, fmt.Sprintf("command(%s) changed", name))
 		}
 		if !equalStringSlices(oldC.Args, newC.Args) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].args", name), OldValue: commandArgDisplayValues(oldC.Args), NewValue: commandArgDisplayValues(newC.Args)})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "args"), OldValue: commandArgDisplayValues(oldC.Args), NewValue: commandArgDisplayValues(newC.Args)})
 			summary = append(summary, fmt.Sprintf("args(%s) changed", name))
 		}
 		if oldMounts, newMounts := volumeMountRefs(oldC.VolumeMounts), volumeMountRefs(newC.VolumeMounts); !equalStringSlices(oldMounts, newMounts) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].volumeMounts", name), OldValue: oldMounts, NewValue: newMounts})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "volumeMounts"), OldValue: oldMounts, NewValue: newMounts})
 			summary = append(summary, fmt.Sprintf("volumeMounts(%s) changed", name))
 		}
 		if oldPorts, newPorts := containerPortRefs(oldC.Ports), containerPortRefs(newC.Ports); !equalStringSlices(oldPorts, newPorts) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].ports", name), OldValue: oldPorts, NewValue: newPorts})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "ports"), OldValue: oldPorts, NewValue: newPorts})
 			summary = append(summary, fmt.Sprintf("ports(%s) changed", name))
 		}
 		// Boolean-level only: securityContext values (capabilities, uids,
 		// seccomp profiles) are deep structures whose exact contents rarely
 		// matter to triage — that something changed does.
 		if !reflect.DeepEqual(oldC.SecurityContext, newC.SecurityContext) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].securityContext", name), OldValue: "changed", NewValue: "changed"})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "securityContext"), OldValue: "changed", NewValue: "changed"})
 			summary = append(summary, fmt.Sprintf("securityContext(%s) changed", name))
 		}
 	}
@@ -3148,18 +3142,38 @@ func emptyAsNone(s string) string {
 	return s
 }
 
-func containerConfigMap(spec corev1.PodSpec) map[string]corev1.Container {
-	out := make(map[string]corev1.Container, len(spec.InitContainers)+len(spec.Containers))
+type podTemplateContainer struct {
+	corev1.Container
+	pathPrefix string
+}
+
+func (c podTemplateContainer) fieldPath(name, field string) string {
+	path := fmt.Sprintf("%s[%s]", c.pathPrefix, name)
+	if field != "" {
+		path += "." + field
+	}
+	return path
+}
+
+func (c podTemplateContainer) summaryKind() string {
+	if c.pathPrefix == "spec.template.spec.initContainers" {
+		return "init container"
+	}
+	return "container"
+}
+
+func containerConfigMap(spec corev1.PodSpec) map[string]podTemplateContainer {
+	out := make(map[string]podTemplateContainer, len(spec.InitContainers)+len(spec.Containers))
 	for _, c := range spec.InitContainers {
-		out[c.Name] = c
+		out[c.Name] = podTemplateContainer{Container: c, pathPrefix: "spec.template.spec.initContainers"}
 	}
 	for _, c := range spec.Containers {
-		out[c.Name] = c
+		out[c.Name] = podTemplateContainer{Container: c, pathPrefix: "spec.template.spec.containers"}
 	}
 	return out
 }
 
-func diffContainerEnv(container string, oldEnv, newEnv []corev1.EnvVar) []FieldChange {
+func diffContainerEnv(containerPath string, oldEnv, newEnv []corev1.EnvVar) []FieldChange {
 	oldMap := envVarMap(oldEnv)
 	newMap := envVarMap(newEnv)
 	keys := make(map[string]struct{}, len(oldMap)+len(newMap))
@@ -3183,7 +3197,7 @@ func diffContainerEnv(container string, oldEnv, newEnv []corev1.EnvVar) []FieldC
 			continue
 		}
 		changes = append(changes, FieldChange{
-			Path:     fmt.Sprintf("spec.template.spec.containers[%s].env[%s]", container, name),
+			Path:     fmt.Sprintf("%s.env[%s]", containerPath, name),
 			OldValue: valueOrNil(oldVal, oldOK),
 			NewValue: valueOrNil(newVal, newOK),
 		})

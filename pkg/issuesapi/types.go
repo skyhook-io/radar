@@ -293,13 +293,6 @@ const (
 	ChangeCategoryRuntimeStatus ChangeCategory = "runtime_status"
 )
 
-type ChangeSalience string
-
-const (
-	ChangeSalienceConfigEdit   ChangeSalience = "config_edit"
-	ChangeSaliencePrimeSuspect ChangeSalience = "prime_suspect"
-)
-
 type RecentChange struct {
 	Source         string         `json:"source,omitempty"`
 	Kind           string         `json:"kind"`
@@ -310,8 +303,14 @@ type RecentChange struct {
 	Timestamp      string         `json:"timestamp"`
 	ChangeCategory ChangeCategory `json:"change_category,omitempty"`
 	RankReason     string         `json:"rank_reason,omitempty"`
-	Salience       ChangeSalience `json:"salience,omitempty"`
-	Fields         []ChangeField  `json:"fields,omitempty"`
+	// ApplicationConfigurationChange is a ranking hint for workload runtime
+	// configuration (including the image) or data changes on a directly
+	// consumed ConfigMap, not a causal claim.
+	ApplicationConfigurationChange bool `json:"application_configuration_change,omitempty"`
+	// NotLinkedToReturnedIssues is set only on top-level recent_changes in an
+	// eligible, unfiltered issues response with complete linkage evidence.
+	NotLinkedToReturnedIssues bool          `json:"not_linked_to_returned_issues,omitempty"`
+	Fields                    []ChangeField `json:"fields,omitempty"`
 	// ConsumedBy lists workloads that mount or reference this ConfigMap via
 	// their pod spec (volumes, envFrom, env valueFrom). Direct references
 	// only — runtime consumers reading through an intermediary service are

@@ -110,7 +110,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"get_resource for the exact object. If you are looking for a string across " +
 			"ConfigMaps, CRD specs, env refs, or object content, use search instead of " +
 			"fetching resources one by one. Use the group parameter for ambiguous " +
-			"kinds such as Knative Service vs core Service.",
+			"kinds such as Knative Service vs core Service. When recentChanges entries " +
+			"carry `application_configuration_change: true`, it is a factual edit " +
+			"classification and narrow ranking hint, not a causal or universal relevance verdict.",
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
@@ -191,7 +193,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"signature exists but its informative line was not captured) + recent Warning " +
 			"events filtered to this resource + a " +
 			"recentChanges section for the workload and directly referenced " +
-			"ConfigMaps (no Secret content) + a " +
+			"ConfigMaps (no Secret content); `application_configuration_change: true` " +
+			"is a factual edit classification and narrow ranking hint, not a causal or " +
+			"universal relevance verdict. Also returns a " +
 			"startupBlockers section when the workload can't reach Running (unschedulable " +
 			"with the offending node constraint named, admission/quota rejection, or a " +
 			"post-bind CNI/volume stall). For Application/Kustomization/Flux HelmRelease, returns " +
@@ -219,8 +223,11 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Description: "Use when the symptom is 'this worked earlier' or 'something broke " +
 			"after a deploy/config change.' Returns recent meaningful changes ranked with " +
 			"spec/config changes first, including field-level diffs for Deployment env/probes " +
-			"and structured ConfigMap data when available. `salience=config_edit` is a narrow " +
-			"tiebreak for application-configuration edits, not a claim of causation. This is " +
+			"and structured ConfigMap data when available. " +
+			"`application_configuration_change: true` identifies a workload-runtime or " +
+			"consumed-ConfigMap edit and supplies a narrow ranking hint, not a causal or " +
+			"universal relevance verdict. Helm operation entries rank by category and recency " +
+			"and are not raised by this flag. This is " +
 			"often faster than reading " +
 			"ReplicaSet histories or individual audit/log streams, especially when issues " +
 			"are empty or dominated by baseline failures. Pair with since to bound the window; " +
@@ -364,16 +371,26 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"symptoms. A bad config change can itself cause a failure during creation. " +
 			"The token does not " +
 			"claim the changes are causal. `recent_changes_guidance`, when present, states " +
-			"how to treat the feed for this response — follow it. A change's `salience` " +
-			"may be `config_edit` for a narrow application-configuration tiebreak or " +
-			"`prime_suspect` when that edit is not explained by any listed issue; both " +
-			"are investigation leads, not proof of cause. `no_critical_issues` " +
+			"how to treat the feed for this response — follow it. " +
+			"`not_linked_to_returned_issues` is computed only when " +
+			"`recent_changes_reason` is `recent_changes_with_all_critical_issues_at_creation`, " +
+			"the response is unfiltered, and issue linkage evidence is complete. In any " +
+			"other response, its absence means Radar did not evaluate linkage, not that " +
+			"every change is linked. When computed, `not_linked_to_returned_issues: true` marks an " +
+			"application-configuration change Radar could not link to an issue returned in " +
+			"that response; it appears first within `recent_changes` as a lead to verify, " +
+			"not evidence of cause. `no_critical_issues` " +
 			"means no critical rows " +
 			"were returned. `recent_changes_truncated=true` means the feed is incomplete, " +
 			"so absence from it is not evidence that a relevant change did not occur. " +
 			"The feed lists recent spec/config changes that may explain failures " +
 			"not yet visible as runtime issues, or help distinguish creation-time " +
 			"baseline failures from the active incident. " +
+			"`application_configuration_change: true` is a static classification " +
+			"of the edit itself — workload runtime configuration or data in a " +
+			"directly consumed ConfigMap — used as a narrow ranking hint, not a causal " +
+			"or universal relevance verdict. Its presence inside `correlated_changes` does not strengthen " +
+			"that entry's causal claim. " +
 			"Single-namespace responses may add per-issue change evidence to eligible " +
 			"critical and warning issues: `correlated_changes` lists recent non-status " +
 			"changes on the issue subject (and, for workloads, its directly referenced " +
@@ -1360,10 +1377,11 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		query.Kinds = []string{input.Kind}
 	}
 
-	changes, capped, err := meaningfulchanges.Recent(ctx, query)
+	recentResult, err := meaningfulchanges.Recent(ctx, query)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
 	}
+	changes := recentResult.Changes
 	var sourcesErrored []string
 	helmChanges, err := helmRecentChangesForContext(ctx, input, since)
 	if err != nil {
@@ -1381,10 +1399,11 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		Changes:        changes,
 		SourcesErrored: sourcesErrored,
 	}
-	if capped || totalMatched > len(changes) {
-		resp.NarrowHint = fmt.Sprintf(
-			"meaningful change results were capped or candidate queries saturated — narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50)",
-		)
+	narrowAdvice := " Narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50)."
+	if recentResult.FetchSaturated {
+		resp.NarrowHint = meaningfulchanges.FetchSaturatedGuidance + narrowAdvice
+	} else if recentResult.OutputCapped || totalMatched > len(changes) {
+		resp.NarrowHint = "Radar observed the full requested window but returned only its highest-ranked changes; lower-ranked changes were omitted." + narrowAdvice
 	}
 	return toJSONResult(resp)
 }
@@ -2808,19 +2827,24 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	})
 	if len(allowedNamespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueChangesQueryEligible(input.Kind, input.Filter, input.Severity) {
 		if recentChangesReason := meaningfulchanges.IssueChangesReason(out); recentChangesReason != "" {
-			if changes, truncated, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
+			if recentResult, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
 				Namespaces: []string{allowedNamespaces[0]},
 				Since:      meaningfulchanges.DefaultSince,
 				Limit:      meaningfulchanges.IssueChangesFetchLimit(recentChangesReason),
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
-			}); err == nil && len(changes) > 0 {
-				var recapped bool
-				changes, resp.RecentChangesGuidance, recapped = meaningfulchanges.PrioritizeIssueChanges(
-					changes, out, recentChangesReason, meaningfulchanges.IssueChangesLimit,
+			}); err == nil && len(recentResult.Changes) > 0 {
+				changes, guidance, recapped := meaningfulchanges.PrioritizeIssueChanges(
+					recentResult.Changes, out, meaningfulchanges.IssueChangePriorityOptions{
+						Reason:             recentChangesReason,
+						Limit:              meaningfulchanges.IssueChangesLimit,
+						UnfilteredIssueSet: meaningfulchanges.IssueSeveritySetComplete(severities),
+						FetchSaturated:     recentResult.FetchSaturated,
+					},
 				)
 				resp.RecentChanges = changes
 				resp.RecentChangesReason = recentChangesReason
-				resp.RecentChangesTruncated = truncated || recapped
+				resp.RecentChangesGuidance = guidance
+				resp.RecentChangesTruncated = recentResult.OutputCapped || recentResult.FetchSaturated || recapped
 			}
 		}
 	}

@@ -56,7 +56,7 @@ func TestShouldAttachIssueChanges(t *testing.T) {
 // token steered agents away from the change feed; the guidance must ride that
 // reason and no other, and must steer without claiming causation.
 func TestIssueChangesGuidance(t *testing.T) {
-	guidance := IssueChangesGuidance(ChangesReasonWithAllCreationTimeCriticalIssues)
+	guidance := issueChangesGuidance(ChangesReasonWithAllCreationTimeCriticalIssues)
 	if !strings.Contains(guidance, "does not clear the listed changes") || !strings.Contains(guidance, "Review the changes") {
 		t.Fatalf("collision-reason guidance must steer toward the feed, got %q", guidance)
 	}
@@ -70,10 +70,10 @@ func TestIssueChangesGuidance(t *testing.T) {
 	if strings.Contains(strings.ToLower(guidance), "predate") {
 		t.Fatalf("guidance must not claim an issue-vs-change ordering, got %q", guidance)
 	}
-	if got := IssueChangesGuidance(ChangesReasonNoCriticalIssues); got != "" {
+	if got := issueChangesGuidance(ChangesReasonNoCriticalIssues); got != "" {
 		t.Fatalf("no_critical_issues carries no landmine and needs no guidance, got %q", got)
 	}
-	if got := IssueChangesGuidance(""); got != "" {
+	if got := issueChangesGuidance(""); got != "" {
 		t.Fatalf("empty reason must yield empty guidance, got %q", got)
 	}
 }
@@ -137,10 +137,11 @@ func TestRecentRanksSpecConfigAboveStatusChurn(t *testing.T) {
 		t.Fatalf("append config: %v", err)
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Limit: 2})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Limit: 2})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 2 {
 		t.Fatalf("changes length = %d, want 2", len(changes))
 	}
@@ -177,10 +178,11 @@ func TestRecentSurfacesWebhookConfigUpdate(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Limit: 5})
+	recentResult, err := Recent(context.Background(), Query{Limit: 5})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 1 {
 		t.Fatalf("changes = %d, want the webhook update: %+v", len(changes), changes)
 	}
@@ -233,10 +235,11 @@ func TestRecentLifecycleEventSurvivesUpdateChurn(t *testing.T) {
 		}
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	found := false
 	for _, c := range changes {
 		if c.Kind == "Service" && c.Name == "user-service" && c.ChangeType == "delete" {
@@ -354,6 +357,64 @@ func TestRecentForResourceReportsSaturation(t *testing.T) {
 	}
 }
 
+func TestRecentSeparatesOutputCapFromFetchSaturation(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		eventCount         int
+		wantOutputCapped   bool
+		wantFetchSaturated bool
+	}{
+		{
+			name:             "fully observed window recapped by output limit",
+			eventCount:       6,
+			wantOutputCapped: true,
+		},
+		{
+			name:               "candidate query reaches its cap",
+			eventCount:         100,
+			wantOutputCapped:   true,
+			wantFetchSaturated: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			timeline.ResetStore()
+			t.Cleanup(timeline.ResetStore)
+			if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: tt.eventCount + 10}); err != nil {
+				t.Fatalf("InitStore: %v", err)
+			}
+			store := timeline.GetStore()
+			for i := 0; i < tt.eventCount; i++ {
+				if err := store.Append(context.Background(), timeline.TimelineEvent{
+					ID: fmt.Sprintf("spec-%d", i), Timestamp: time.Now().Add(-time.Duration(i) * time.Second),
+					Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+					Kind: "Deployment", Namespace: "shop", Name: fmt.Sprintf("web-%d", i),
+					EventType: timeline.EventTypeUpdate,
+					Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{
+						Path: "spec.replicas", OldValue: int32(1), NewValue: int32(2),
+					}}},
+				}); err != nil {
+					t.Fatalf("append %d: %v", i, err)
+				}
+			}
+
+			result, err := Recent(context.Background(), Query{
+				Namespaces: []string{"shop"},
+				Limit:      5,
+			})
+			if err != nil {
+				t.Fatalf("Recent: %v", err)
+			}
+			if result.OutputCapped != tt.wantOutputCapped || result.FetchSaturated != tt.wantFetchSaturated {
+				t.Fatalf(
+					"truncation state = outputCapped %v fetchSaturated %v, want %v/%v",
+					result.OutputCapped, result.FetchSaturated,
+					tt.wantOutputCapped, tt.wantFetchSaturated,
+				)
+			}
+		})
+	}
+}
+
 // A recreate (delete + ReasonRecreated add carrying the cross-recreate diff)
 // must surface as exactly ONE entry — the diff-bearing add, classified
 // spec_config — with the paired delete coalesced away. Entry count strictly
@@ -407,10 +468,11 @@ func TestRecentCoalescesRecreatePairs(t *testing.T) {
 		t.Fatalf("append final delete: %v", err)
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 3 {
 		t.Fatalf("changes = %d entries %+v, want exactly 3 (recreate add + final delete + true delete)", len(changes), changes)
 	}
@@ -486,10 +548,11 @@ func TestRecentExcludesOtherClusterEvents(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Since: time.Hour, Limit: 5, FieldLimit: 5})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Since: time.Hour, Limit: 5, FieldLimit: 5})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 0 {
 		t.Fatalf("another cluster's events leaked into Recent: %+v", changes)
 	}
@@ -517,10 +580,11 @@ func TestRecentSecretDeleteOnly(t *testing.T) {
 		}
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 1 {
 		t.Fatalf("changes = %+v, want exactly the Secret delete", changes)
 	}
@@ -586,10 +650,11 @@ func TestRecentAnnotatesConfigMapConsumers(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 1 {
 		t.Fatalf("changes = %+v, want 1", changes)
 	}
@@ -597,8 +662,8 @@ func TestRecentAnnotatesConfigMapConsumers(t *testing.T) {
 	if len(got) != 2 || got[0] != "Deployment/flagd" || got[1] != "Job/seed" {
 		t.Fatalf("consumed_by = %v, want [Deployment/flagd Job/seed]", got)
 	}
-	if changes[0].Salience != issuesapi.ChangeSalienceConfigEdit {
-		t.Fatalf("salience = %q, want config_edit", changes[0].Salience)
+	if !changes[0].ApplicationConfigurationChange {
+		t.Fatalf("change = %+v, want application_configuration_change", changes[0])
 	}
 }
 
@@ -626,8 +691,11 @@ func TestRankAndCapApplicationConfigTiebreak(t *testing.T) {
 
 	RankAndCap(&changes, 5)
 
-	if got := changes[0]; got.Name != "flagd-config" || got.Salience != issuesapi.ChangeSalienceConfigEdit {
-		t.Fatalf("first change = %+v, want the consumed structured ConfigMap edit", got)
+	if got := changes[0]; got.Name != "ad" || !got.ApplicationConfigurationChange {
+		t.Fatalf("first change = %+v, want the newer image edit", got)
+	}
+	if got := changes[1]; got.Name != "flagd-config" || !got.ApplicationConfigurationChange {
+		t.Fatalf("second change = %+v, want the consumed structured ConfigMap edit", got)
 	}
 	if got := changes[len(changes)-1]; got.Name != "flagd" || !strings.Contains(got.RankReason, "generation") {
 		t.Fatalf("last change = %+v, want generation-only below real spec changes", got)
@@ -637,7 +705,7 @@ func TestRankAndCapApplicationConfigTiebreak(t *testing.T) {
 	}
 }
 
-func TestBenchmarkFlagEditsBecomePrimeSuspects(t *testing.T) {
+func TestBenchmarkFlagEditsAreMarkedNotLinkedToReturnedIssues(t *testing.T) {
 	for _, flag := range []string{"adFailure", "cartFailure"} {
 		t.Run(flag, func(t *testing.T) {
 			at := time.Now()
@@ -659,15 +727,18 @@ func TestBenchmarkFlagEditsBecomePrimeSuspects(t *testing.T) {
 					Kind: "Deployment", Namespace: "shop", Name: "product-catalog",
 					Severity: issuesapi.SeverityCritical,
 				}},
-				ChangesReasonWithAllCreationTimeCriticalIssues,
-				IssueChangesLimit,
+				IssueChangePriorityOptions{
+					Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+					Limit:              IssueChangesLimit,
+					UnfilteredIssueSet: true,
+				},
 			)
 
-			if got[0].Name != "flagd-config" || got[0].Salience != issuesapi.ChangeSaliencePrimeSuspect {
+			if got[0].Name != "flagd-config" || !got[0].ApplicationConfigurationChange || !got[0].NotLinkedToReturnedIssues {
 				t.Fatalf("first change = %+v, want issue-less flag edit", got[0])
 			}
 			if !strings.Contains(guidance, "ConfigMap/shop/flagd-config") ||
-				!strings.Contains(guidance, "not proof of cause") {
+				!strings.Contains(guidance, "not evidence of cause") {
 				t.Fatalf("guidance did not name and hedge the flag edit: %q", guidance)
 			}
 		})
@@ -678,27 +749,42 @@ func TestApplicationConfigClassifierFalsePositiveGuards(t *testing.T) {
 	tests := []struct {
 		name      string
 		change    issuesapi.RecentChange
-		want      issuesapi.ChangeSalience
+		want      bool
 		wantScore int
 	}{
 		{
 			name: "workload env", change: recentChange("Deployment", "shop", "frontend", time.Now(),
 				"spec.template.spec.containers[frontend].env[CART_ADDR]"),
-			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+			want: true, wantScore: 105,
 		},
 		{
-			name: "init container is represented by the same producer path", change: recentChange("Deployment", "shop", "frontend", time.Now(),
-				"spec.template.spec.containers[migrate].envFrom"),
-			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+			name: "init container", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.initContainers[migrate].envFrom"),
+			want: true, wantScore: 105,
 		},
 		{
 			name: "command", change: recentChange("StatefulSet", "shop", "db", time.Now(),
 				"spec.template.spec.containers[db].command"),
-			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+			want: true, wantScore: 105,
 		},
 		{
 			name: "image", change: recentChange("Deployment", "shop", "frontend", time.Now(),
 				"spec.template.spec.containers[frontend].image"),
+			want: true, wantScore: 105,
+		},
+		{
+			name: "whole container add or removal", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.containers[sidecar]"),
+			want: true, wantScore: 105,
+		},
+		{
+			name: "whole init container add or removal", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.initContainers[setup]"),
+			want: true, wantScore: 105,
+		},
+		{
+			name: "malformed whole container path", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.containers[sidecar][image]"),
 			wantScore: 100,
 		},
 		{
@@ -728,7 +814,7 @@ func TestApplicationConfigClassifierFalsePositiveGuards(t *testing.T) {
 				Fields:         []issuesapi.ChangeField{{Path: "data (modified keys)"}},
 				ConsumedBy:     []string{"Deployment/flagd"},
 			},
-			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+			want: true, wantScore: 105,
 		},
 		{
 			name: "consumed ConfigMap key removal", change: issuesapi.RecentChange{
@@ -737,7 +823,7 @@ func TestApplicationConfigClassifierFalsePositiveGuards(t *testing.T) {
 				Fields:         []issuesapi.ChangeField{{Path: "data (removed keys)"}},
 				ConsumedBy:     []string{"Deployment/frontend"},
 			},
-			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+			want: true, wantScore: 105,
 		},
 		{
 			name: "ConfigMap binary data", change: issuesapi.RecentChange{
@@ -762,13 +848,36 @@ func TestApplicationConfigClassifierFalsePositiveGuards(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			changes := []issuesapi.RecentChange{tt.change}
 			RankAndCap(&changes, 1)
-			if got := changes[0].Salience; got != tt.want {
-				t.Fatalf("salience = %q, want %q", got, tt.want)
+			if got := changes[0].ApplicationConfigurationChange; got != tt.want {
+				t.Fatalf("application_configuration_change = %v, want %v", got, tt.want)
 			}
 			if got := score(changes[0]); got != tt.wantScore {
 				t.Fatalf("score = %d, want %d", got, tt.wantScore)
 			}
 		})
+	}
+}
+
+func TestRankAndCapKeepsRecentImageAheadOfOlderConsumedConfigMapEdits(t *testing.T) {
+	at := time.Now()
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "frontend", at,
+			"spec.template.spec.containers[frontend].image"),
+	}
+	for i := 0; i < 3; i++ {
+		changes = append(changes, issuesapi.RecentChange{
+			Kind: "ConfigMap", Namespace: "shop", Name: fmt.Sprintf("frontend-config-%d", i),
+			Timestamp:      at.Add(-time.Duration(40+i*5) * time.Minute).Format(time.RFC3339),
+			ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+			Fields:         []issuesapi.ChangeField{{Path: "data (modified keys)"}},
+			ConsumedBy:     []string{"Deployment/frontend"},
+		})
+	}
+
+	RankAndCap(&changes, 3)
+
+	if len(changes) != 3 || changes[0].Kind != "Deployment" || changes[0].Name != "frontend" {
+		t.Fatalf("ranked changes = %+v, want recent image change retained first", changes)
 	}
 }
 
@@ -799,24 +908,143 @@ func TestPrioritizeIssueChangesMarksOnlyUnexplainedEdits(t *testing.T) {
 	}
 
 	got, guidance, capped := PrioritizeIssueChanges(
-		changes, issues, ChangesReasonWithAllCreationTimeCriticalIssues, 5,
+		changes, issues, IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
 	)
 
 	if capped {
 		t.Fatal("three entries must not report a five-entry cap")
 	}
-	if got[0].Name != "checkout" || got[0].Salience != issuesapi.ChangeSaliencePrimeSuspect {
+	if got[0].Name != "checkout" || !got[0].NotLinkedToReturnedIssues {
 		t.Fatalf("first change = %+v, want sole unexplained edit", got[0])
 	}
-	if got[1].Name == "checkout" || got[1].Salience != issuesapi.ChangeSalienceConfigEdit {
+	if got[1].Name == "checkout" || !got[1].ApplicationConfigurationChange || got[1].NotLinkedToReturnedIssues {
 		t.Fatalf("explained edit was promoted: %+v", got[1])
 	}
-	if got[2].Salience != issuesapi.ChangeSalienceConfigEdit {
+	if !got[2].ApplicationConfigurationChange || got[2].NotLinkedToReturnedIssues {
 		t.Fatalf("ConfigMap explained through its consumer was promoted: %+v", got[2])
 	}
 	if !strings.Contains(guidance, "Deployment/shop/checkout") ||
-		!strings.Contains(guidance, "a lead to verify, not proof") {
+		!strings.Contains(guidance, "a lead, not evidence") {
 		t.Fatalf("guidance did not name and hedge the sole returned suspect: %q", guidance)
+	}
+}
+
+func TestPrioritizeIssueChangesUsesWarningLinksAndFailsClosedWhenSeverityFiltered(t *testing.T) {
+	change := recentChange(
+		"Deployment", "shop", "frontend", time.Now(),
+		"spec.template.spec.containers[frontend].env[CART_ADDR]",
+	)
+	critical := issuesapi.Issue{
+		Kind:        "Deployment",
+		Namespace:   "shop",
+		Name:        "product-catalog",
+		Severity:    issuesapi.SeverityCritical,
+		IssueTiming: "started_at_resource_creation",
+	}
+	warning := issuesapi.Issue{
+		Kind:      "Deployment",
+		Namespace: "shop",
+		Name:      "frontend",
+		Severity:  issuesapi.SeverityWarning,
+	}
+	if got := IssueChangesReason([]issuesapi.Issue{critical, warning}); got != ChangesReasonWithAllCreationTimeCriticalIssues {
+		t.Fatalf("warning issue suppressed creation-time branch: %q", got)
+	}
+
+	full, _, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{change},
+		[]issuesapi.Issue{critical, warning},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
+	)
+	if !full[0].ApplicationConfigurationChange || full[0].NotLinkedToReturnedIssues || score(full[0]) != 105 {
+		t.Fatalf("warning-linked change = %+v, want static classification at score 105", full[0])
+	}
+
+	filtered, guidance, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{change},
+		[]issuesapi.Issue{critical},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: false,
+		},
+	)
+	if filtered[0].NotLinkedToReturnedIssues || score(filtered[0]) != 105 {
+		t.Fatalf("severity-filtered change = %+v, want fail-closed score 105", filtered[0])
+	}
+	if !strings.Contains(guidance, filteredIssueSetGuidance) || strings.Contains(guidance, "appears first") {
+		t.Fatalf("severity-filtered guidance is misleading: %q", guidance)
+	}
+}
+
+func TestIssueSeveritySetComplete(t *testing.T) {
+	tests := []struct {
+		name       string
+		severities []issuesapi.Severity
+		want       bool
+	}{
+		{name: "omitted means all", want: true},
+		{name: "critical only", severities: []issuesapi.Severity{issuesapi.SeverityCritical}},
+		{name: "warning only", severities: []issuesapi.Severity{issuesapi.SeverityWarning}},
+		{
+			name: "both explicit",
+			severities: []issuesapi.Severity{
+				issuesapi.SeverityCritical,
+				issuesapi.SeverityWarning,
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IssueSeveritySetComplete(tt.severities); got != tt.want {
+				t.Fatalf("IssueSeveritySetComplete(%v) = %v, want %v", tt.severities, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrioritizeIssueChangesNamesTwoUnlinkedChanges(t *testing.T) {
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "frontend", time.Now(),
+			"spec.template.spec.containers[frontend].env[CART_ADDR]"),
+		recentChange("Deployment", "shop", "checkout", time.Now().Add(-time.Second),
+			"spec.template.spec.containers[checkout].args"),
+	}
+
+	got, guidance, _ := PrioritizeIssueChanges(
+		changes,
+		[]issuesapi.Issue{{
+			Kind: "Deployment", Namespace: "shop", Name: "unrelated",
+			Severity: issuesapi.SeverityCritical,
+		}},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
+	)
+
+	if !got[0].NotLinkedToReturnedIssues || !got[1].NotLinkedToReturnedIssues {
+		t.Fatalf("unlinked changes were not both marked: %+v", got)
+	}
+	for _, want := range []string{
+		"Deployment/shop/frontend",
+		"Deployment/shop/checkout",
+		"they appear first within `recent_changes`",
+		"not evidence of cause",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("two-change guidance missing %q: %q", want, guidance)
+		}
 	}
 }
 
@@ -838,10 +1066,14 @@ func TestPrioritizeIssueChangesDoesNotMarkHealthyClusterEdits(t *testing.T) {
 			"spec.template.spec.containers[frontend].env[CART_ADDR]"),
 	}
 
-	got, guidance, _ := PrioritizeIssueChanges(changes, nil, ChangesReasonNoCriticalIssues, 5)
+	got, guidance, _ := PrioritizeIssueChanges(changes, nil, IssueChangePriorityOptions{
+		Reason:             ChangesReasonNoCriticalIssues,
+		Limit:              5,
+		UnfilteredIssueSet: true,
+	})
 
-	if got[0].Salience != issuesapi.ChangeSalienceConfigEdit {
-		t.Fatalf("healthy-cluster edit salience = %q, want config_edit only", got[0].Salience)
+	if !got[0].ApplicationConfigurationChange || got[0].NotLinkedToReturnedIssues {
+		t.Fatalf("healthy-cluster edit = %+v, want static classification only", got[0])
 	}
 	if guidance != "" {
 		t.Fatalf("healthy-cluster guidance = %q, want none", guidance)
@@ -858,17 +1090,24 @@ func TestPrioritizeIssueChangesSuppressesCrowdedNamedGuidance(t *testing.T) {
 	got, guidance, _ := PrioritizeIssueChanges(
 		changes,
 		[]issuesapi.Issue{{Kind: "Deployment", Namespace: "shop", Name: "unrelated", Severity: issuesapi.SeverityCritical}},
-		ChangesReasonWithAllCreationTimeCriticalIssues,
-		5,
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
 	)
 
 	for _, change := range got {
-		if change.Salience != issuesapi.ChangeSaliencePrimeSuspect {
+		if !change.NotLinkedToReturnedIssues {
 			t.Fatalf("unexplained edit not marked: %+v", change)
 		}
 	}
-	if strings.Contains(guidance, "marks ") {
+	if strings.Contains(guidance, "frontend") || strings.Contains(guidance, "checkout") || strings.Contains(guidance, "payment") {
 		t.Fatalf("crowded suspect set must suppress named guidance: %q", guidance)
+	}
+	if !strings.Contains(guidance, "3 application-configuration changes") ||
+		!strings.Contains(guidance, "not evidence of cause") {
+		t.Fatalf("crowded suspect set must retain count-only verification guidance: %q", guidance)
 	}
 	if !strings.Contains(guidance, "does not clear the listed changes") {
 		t.Fatalf("base timing guidance must remain: %q", guidance)
@@ -888,12 +1127,46 @@ func TestPrioritizeIssueChangesFailsClosedOnCappedConsumers(t *testing.T) {
 	got, _, _ := PrioritizeIssueChanges(
 		[]issuesapi.RecentChange{change},
 		[]issuesapi.Issue{{Kind: "Deployment", Namespace: "shop", Name: "unrelated", Severity: issuesapi.SeverityCritical}},
-		ChangesReasonWithAllCreationTimeCriticalIssues,
-		5,
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
 	)
 
-	if got[0].Salience != issuesapi.ChangeSalienceConfigEdit {
+	if !got[0].ApplicationConfigurationChange || got[0].NotLinkedToReturnedIssues {
 		t.Fatalf("capped consumer evidence must fail closed instead of claiming unexplained: %+v", got[0])
+	}
+}
+
+func TestPrioritizeIssueChangesFailsClosedOnTruncatedIssueMembers(t *testing.T) {
+	change := recentChange(
+		"Deployment", "shop", "member-eleven", time.Now(),
+		"spec.template.spec.containers[app].env[DATABASE_URL]",
+	)
+	issue := issuesapi.Issue{
+		Kind: "Deployment", Namespace: "shop", Name: "group-subject",
+		Severity:         issuesapi.SeverityCritical,
+		Members:          []issuesapi.Ref{{Kind: "Deployment", Namespace: "shop", Name: "member-one"}},
+		MembersTruncated: true,
+	}
+
+	got, guidance, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{change},
+		[]issuesapi.Issue{issue},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
+	)
+
+	if !got[0].ApplicationConfigurationChange || got[0].NotLinkedToReturnedIssues {
+		t.Fatalf("truncated issue membership must fail closed instead of claiming unexplained: %+v", got[0])
+	}
+	if !strings.Contains(guidance, truncatedIssueMembersGuidance) ||
+		strings.Contains(guidance, "appears first") {
+		t.Fatalf("truncated-members guidance is misleading: %q", guidance)
 	}
 }
 
@@ -906,14 +1179,40 @@ func TestPrioritizeIssueChangesReportsSecondStageCap(t *testing.T) {
 		))
 	}
 
-	got, _, capped := PrioritizeIssueChanges(changes, nil, ChangesReasonNoCriticalIssues, IssueChangesLimit)
+	got, guidance, capped := PrioritizeIssueChanges(changes, nil, IssueChangePriorityOptions{
+		Reason:             ChangesReasonNoCriticalIssues,
+		Limit:              IssueChangesLimit,
+		UnfilteredIssueSet: true,
+	})
 
 	if len(got) != IssueChangesLimit || !capped {
 		t.Fatalf("second-stage cap = len %d capped %v, want %d/true", len(got), capped, IssueChangesLimit)
 	}
+	if strings.Contains(guidance, "candidate cap") {
+		t.Fatalf("output recap must not claim the candidate query saturated: %q", guidance)
+	}
 }
 
-func TestFromEventClassifiesSalienceBeforeFieldDisplayCap(t *testing.T) {
+func TestPrioritizeIssueChangesWarnsOnlyForFetchSaturation(t *testing.T) {
+	_, guidance, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{recentChange(
+			"Deployment", "shop", "frontend", time.Now(),
+			"spec.template.spec.containers[frontend].env[CART_ADDR]",
+		)},
+		nil,
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonNoCriticalIssues,
+			Limit:              IssueChangesLimit,
+			UnfilteredIssueSet: true,
+			FetchSaturated:     true,
+		},
+	)
+	if guidance != FetchSaturatedGuidance {
+		t.Fatalf("fetch-saturation guidance = %q, want %q", guidance, FetchSaturatedGuidance)
+	}
+}
+
+func TestFromEventClassifiesApplicationConfigurationBeforeFieldDisplayCap(t *testing.T) {
 	change := fromEvent(timeline.TimelineEvent{
 		Source: timeline.SourceInformer, Kind: "Deployment", Namespace: "shop", Name: "frontend",
 		EventType: timeline.EventTypeUpdate,
@@ -928,11 +1227,11 @@ func TestFromEventClassifiesSalienceBeforeFieldDisplayCap(t *testing.T) {
 	if len(changes[0].Fields) != 1 {
 		t.Fatalf("display fields = %d, want cap 1", len(changes[0].Fields))
 	}
-	if changes[0].Salience != issuesapi.ChangeSalienceConfigEdit {
+	if !changes[0].ApplicationConfigurationChange {
 		t.Fatalf("full producer evidence did not survive display cap: %+v", changes[0])
 	}
 	if got := changes[0].Fields[0].Path; got != "spec.template.spec.containers[frontend].env[CART_ADDR]" {
-		t.Fatalf("displayed field = %q, want the evidence supporting salience", got)
+		t.Fatalf("displayed field = %q, want the evidence supporting the classification", got)
 	}
 }
 
@@ -959,7 +1258,7 @@ func TestFromEventDoesNotDemoteTruncatedRealSpecChangeAsGenerationOnly(t *testin
 	}
 }
 
-func TestRecreatedConfigEditKeepsRecreateContext(t *testing.T) {
+func TestRecreatedApplicationConfigurationChangeKeepsRecreateContext(t *testing.T) {
 	changes := []issuesapi.RecentChange{{
 		Kind: "Deployment", Namespace: "shop", Name: "frontend",
 		ChangeType:     string(timeline.EventTypeAdd),
@@ -972,7 +1271,7 @@ func TestRecreatedConfigEditKeepsRecreateContext(t *testing.T) {
 
 	RankAndCap(&changes, 1)
 
-	if changes[0].Salience != issuesapi.ChangeSalienceConfigEdit ||
+	if !changes[0].ApplicationConfigurationChange ||
 		!strings.Contains(changes[0].RankReason, "recreated") {
 		t.Fatalf("recreate context was lost: %+v", changes[0])
 	}
@@ -983,12 +1282,15 @@ func TestRecreatedConfigEditKeepsRecreateContext(t *testing.T) {
 			Kind: "Deployment", Namespace: "shop", Name: "unrelated",
 			Severity: issuesapi.SeverityCritical,
 		}},
-		ChangesReasonWithAllCreationTimeCriticalIssues,
-		1,
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              1,
+			UnfilteredIssueSet: true,
+		},
 	)
-	if got[0].Salience != issuesapi.ChangeSaliencePrimeSuspect ||
+	if !got[0].NotLinkedToReturnedIssues ||
 		!strings.Contains(got[0].RankReason, "recreated") {
-		t.Fatalf("Tier B lost recreate context: %+v", got[0])
+		t.Fatalf("unlinked change lost recreate context: %+v", got[0])
 	}
 }
 
@@ -1010,14 +1312,15 @@ func TestRecentDemotesRealGenericCRDGenerationOnlyChange(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	changes, _, err := Recent(context.Background(), Query{
+	recentResult, err := Recent(context.Background(), Query{
 		Namespaces: []string{"shop"}, Kinds: []string{"Widget"}, Limit: 5,
 	})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
-	if len(changes) != 1 || score(changes[0]) != 80 || changes[0].Salience != "" {
-		t.Fatalf("generic CRD generation change = %+v, want retained score 80 without salience", changes)
+	changes := recentResult.Changes
+	if len(changes) != 1 || score(changes[0]) != 80 || changes[0].ApplicationConfigurationChange || changes[0].NotLinkedToReturnedIssues {
+		t.Fatalf("generic CRD generation change = %+v, want retained score 80 without configuration markers", changes)
 	}
 }
 

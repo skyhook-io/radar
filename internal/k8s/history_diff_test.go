@@ -6,11 +6,126 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
+
+func TestWorkloadDiffsIncludeInitContainerImageChanges(t *testing.T) {
+	oldSpec := corev1.PodSpec{
+		InitContainers: []corev1.Container{{Name: "migrate", Image: "migrate:v1"}},
+		Containers:     []corev1.Container{{Name: "app", Image: "app:v1"}},
+	}
+	newSpec := oldSpec.DeepCopy()
+	newSpec.InitContainers[0].Image = "migrate:v2"
+
+	tests := []struct {
+		name string
+		old  any
+		new  any
+		diff func(any, any) ([]FieldChange, []string)
+	}{
+		{
+			name: "Deployment",
+			old:  &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: oldSpec}}},
+			new:  &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: *newSpec}}},
+			diff: diffDeployment,
+		},
+		{
+			name: "DaemonSet",
+			old:  &appsv1.DaemonSet{Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: oldSpec}}},
+			new:  &appsv1.DaemonSet{Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: *newSpec}}},
+			diff: diffDaemonSet,
+		},
+		{
+			name: "StatefulSet",
+			old:  &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: oldSpec}}},
+			new:  &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: *newSpec}}},
+			diff: diffStatefulSet,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changes, summary := tt.diff(tt.old, tt.new)
+			if !hasChangePath(changes, "spec.template.spec.initContainers[migrate].image") {
+				t.Fatalf("init-container image change missing: %+v", changes)
+			}
+			if !strings.Contains(strings.Join(summary, "; "), "image(migrate): migrate:v1→migrate:v2") {
+				t.Fatalf("init-container image summary missing: %v", summary)
+			}
+		})
+	}
+}
+
+func TestDiffPodTemplateConfigUsesRealInitContainerPaths(t *testing.T) {
+	oldSpec := corev1.PodSpec{InitContainers: []corev1.Container{{
+		Name:            "migrate",
+		Image:           "migrate:v1",
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Env:             []corev1.EnvVar{{Name: "MODE", Value: "safe"}},
+		EnvFrom:         []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "old-config"}}}},
+		Command:         []string{"migrate"},
+		Args:            []string{"--safe"},
+		ReadinessProbe:  &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/ready", Port: intstr.FromInt32(8080)}}},
+		VolumeMounts:    []corev1.VolumeMount{{Name: "work", MountPath: "/work"}},
+		Ports:           []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
+	}}}
+	newSpec := oldSpec.DeepCopy()
+	initContainer := &newSpec.InitContainers[0]
+	initContainer.ImagePullPolicy = corev1.PullAlways
+	initContainer.Env[0].Value = "fast"
+	initContainer.EnvFrom[0].ConfigMapRef.Name = "new-config"
+	initContainer.Command = []string{"migrate-v2"}
+	initContainer.Args = []string{"--fast"}
+	initContainer.ReadinessProbe.HTTPGet.Path = "/healthz"
+	initContainer.VolumeMounts[0].MountPath = "/workspace"
+	initContainer.Ports[0].ContainerPort = 9090
+
+	changes, _ := diffPodTemplateConfig(oldSpec, *newSpec)
+	for _, field := range []string{
+		"env[MODE]",
+		"envFrom",
+		"imagePullPolicy",
+		"readinessProbe",
+		"command",
+		"args",
+		"volumeMounts",
+		"ports",
+	} {
+		path := "spec.template.spec.initContainers[migrate]." + field
+		if !hasChangePath(changes, path) {
+			t.Errorf("missing %s in %+v", path, changes)
+		}
+	}
+	for _, change := range changes {
+		if strings.HasPrefix(change.Path, "spec.template.spec.containers[migrate]") {
+			t.Errorf("init-container change used ordinary-container path: %+v", change)
+		}
+	}
+}
+
+func TestDiffPodTemplateConfigTreatsContainerListMoveAsRemoveAndAdd(t *testing.T) {
+	oldSpec := corev1.PodSpec{Containers: []corev1.Container{{Name: "worker", Image: "worker:v1"}}}
+	newSpec := corev1.PodSpec{InitContainers: []corev1.Container{{Name: "worker", Image: "worker:v1"}}}
+
+	changes, summary := diffPodTemplateConfig(oldSpec, newSpec)
+	for _, path := range []string{
+		"spec.template.spec.containers[worker]",
+		"spec.template.spec.initContainers[worker]",
+	} {
+		if !hasChangePath(changes, path) {
+			t.Errorf("container-list move missing %s: %+v", path, changes)
+		}
+	}
+	joined := strings.Join(summary, "; ")
+	if !strings.Contains(joined, "container worker removed") ||
+		!strings.Contains(joined, "init container worker added") {
+		t.Fatalf("container-list move summary = %q", joined)
+	}
+}
 
 // Added/removed containers must surface as a single row naming the container
 // (with its image) — not vanish because per-field diffs only cover containers
