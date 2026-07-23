@@ -1957,11 +1957,11 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 		t.Fatalf("terminating pod problem = %+v, want finalizer context", p)
 	}
 	assertProblem(t, problems, "Deployment", "deploy-stuck", "Terminating stuck", "critical")
-	assertProblem(t, problems, "ConfigMap", "config-stuck", "Terminating stuck", "high")
+	assertProblem(t, problems, "ConfigMap", "config-stuck", "Terminating stuck", "medium")
 	if p, ok := lookupProblem(problems, "ConfigMap", "config-stuck", "Terminating stuck"); !ok || !strings.Contains(p.Message, "example.com/config-finalizer") || p.Fingerprint != "lifecycle:terminating" {
 		t.Fatalf("terminating ConfigMap problem = %+v, want finalizer context", p)
 	}
-	assertProblem(t, problems, "Secret", "secret-stuck", "Terminating stuck", "high")
+	assertProblem(t, problems, "Secret", "secret-stuck", "Terminating stuck", "medium")
 	if p, ok := lookupProblem(problems, "Secret", "secret-stuck", "Terminating stuck"); !ok {
 		t.Fatal("terminating Secret problem not found")
 	} else if !strings.Contains(p.Message, "example.com/secret-finalizer") {
@@ -2017,16 +2017,22 @@ func TestTerminatingProblem_ConfigMapSecretFinalizerThreshold(t *testing.T) {
 		want       bool
 		wantLevel  string
 	}{
-		{name: "ConfigMap at short threshold", kind: "ConfigMap", deletedAgo: 2 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "high"},
-		{name: "Secret at short threshold", kind: "Secret", deletedAgo: 2 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "high"},
+		{name: "ConfigMap at short threshold", kind: "ConfigMap", deletedAgo: 2 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "medium"},
+		{name: "Secret at short threshold", kind: "Secret", deletedAgo: 2 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "medium"},
 		{name: "ConfigMap below short threshold", kind: "ConfigMap", deletedAgo: 2*time.Minute - time.Nanosecond, finalizers: []string{"example.com/cleanup"}},
+		{name: "ConfigMap below generic threshold", kind: "ConfigMap", deletedAgo: 10*time.Minute - time.Nanosecond, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "medium"},
+		{name: "ConfigMap at generic threshold", kind: "ConfigMap", deletedAgo: 10 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "high"},
+		{name: "ConfigMap below critical threshold", kind: "ConfigMap", deletedAgo: 30*time.Minute - time.Nanosecond, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "high"},
+		{name: "ConfigMap at critical threshold", kind: "ConfigMap", deletedAgo: 30 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "critical"},
 		{name: "ConfigMap without finalizer", kind: "ConfigMap", deletedAgo: 3 * time.Minute},
 		{name: "ConfigMap with foreground garbage collection keeps generic threshold", kind: "ConfigMap", deletedAgo: 3 * time.Minute, finalizers: []string{metav1.FinalizerDeleteDependents}},
+		{name: "ConfigMap with foreground garbage collection emits at generic threshold", kind: "ConfigMap", deletedAgo: 10 * time.Minute, finalizers: []string{metav1.FinalizerDeleteDependents}, want: true, wantLevel: "high"},
 		{name: "Secret with orphan garbage collection keeps generic threshold", kind: "Secret", deletedAgo: 3 * time.Minute, finalizers: []string{metav1.FinalizerOrphanDependents}},
-		{name: "ConfigMap with controller and garbage collection finalizers uses short threshold", kind: "ConfigMap", deletedAgo: 3 * time.Minute, finalizers: []string{metav1.FinalizerDeleteDependents, "example.com/cleanup"}, want: true, wantLevel: "high"},
+		{name: "ConfigMap with controller and garbage collection finalizers uses short threshold", kind: "ConfigMap", deletedAgo: 3 * time.Minute, finalizers: []string{metav1.FinalizerDeleteDependents, "example.com/cleanup"}, want: true, wantLevel: "medium"},
 		{name: "Pod keeps generic threshold", kind: "Pod", deletedAgo: 3 * time.Minute, finalizers: []string{"example.com/cleanup"}},
+		{name: "Pod below generic threshold", kind: "Pod", deletedAgo: 10*time.Minute - time.Nanosecond, finalizers: []string{"example.com/cleanup"}},
+		{name: "Pod at generic threshold", kind: "Pod", deletedAgo: 10 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "high"},
 		{name: "colliding CRD kind keeps generic threshold", kind: "ConfigMap", group: "example.com", deletedAgo: 3 * time.Minute, finalizers: []string{"example.com/cleanup"}},
-		{name: "ConfigMap keeps critical threshold", kind: "ConfigMap", deletedAgo: 30 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "critical"},
 	}
 
 	for _, tt := range tests {

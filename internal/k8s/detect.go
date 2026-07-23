@@ -1466,8 +1466,11 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		return Detection{}, false
 	}
 	finalizers := obj.GetFinalizers()
+	usesShortWarningWindow := group == "" &&
+		(kind == "ConfigMap" || kind == "Secret") &&
+		hasNonGarbageCollectionFinalizer(finalizers)
 	warningAfter := terminatingWarningAfter
-	if group == "" && (kind == "ConfigMap" || kind == "Secret") && hasNonGarbageCollectionFinalizer(finalizers) {
+	if usesShortWarningWindow {
 		warningAfter = configMapSecretTerminatingWarningAfter
 	}
 	duration := now.Sub(obj.GetDeletionTimestamp().Time)
@@ -1475,7 +1478,9 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		return Detection{}, false
 	}
 	severity := "high"
-	if duration >= terminatingCriticalAfter {
+	if usesShortWarningWindow && duration < terminatingWarningAfter {
+		severity = "medium"
+	} else if duration >= terminatingCriticalAfter {
 		severity = "critical"
 	}
 	msg := "Resource is still present after deletion started"
