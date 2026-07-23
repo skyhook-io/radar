@@ -112,13 +112,16 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 			if changes, truncated, err := meaningfulchanges.Recent(r.Context(), meaningfulchanges.Query{
 				Namespaces: []string{namespaces[0]},
 				Since:      meaningfulchanges.DefaultSince,
-				Limit:      meaningfulchanges.IssueChangesLimit,
+				Limit:      meaningfulchanges.IssueChangesFetchLimit(recentChangesReason),
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
 			}); err == nil && len(changes) > 0 {
+				var recapped bool
+				changes, resp.RecentChangesGuidance, recapped = meaningfulchanges.PrioritizeIssueChanges(
+					changes, out, recentChangesReason, meaningfulchanges.IssueChangesLimit,
+				)
 				resp.RecentChanges = changes
 				resp.RecentChangesReason = recentChangesReason
-				resp.RecentChangesGuidance = meaningfulchanges.IssueChangesGuidance(recentChangesReason)
-				resp.RecentChangesTruncated = truncated
+				resp.RecentChangesTruncated = truncated || recapped
 			}
 		}
 	}

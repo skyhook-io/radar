@@ -97,6 +97,9 @@ func TestIssuesToolDocumentsRecentChangesReasons(t *testing.T) {
 	if !strings.Contains(description, "recent_changes_guidance") {
 		t.Error("issues tool description does not document recent_changes_guidance")
 	}
+	if !strings.Contains(description, "prime_suspect") || !strings.Contains(description, "not proof of cause") {
+		t.Error("issues tool description does not bound salience markers as investigative leads")
+	}
 }
 
 func TestSearchToolSchemaIncludesNamespace(t *testing.T) {

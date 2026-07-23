@@ -128,6 +128,7 @@ export interface IssueRecentChange {
   timestamp: string;
   change_category?: 'spec_config' | 'lifecycle' | 'runtime_status' | string;
   rank_reason?: string;
+  salience?: 'config_edit' | 'prime_suspect' | string;
   fields?: IssueRecentChangeField[];
   /** Workloads that mount/reference this ConfigMap directly ("Deployment/flagd").
    *  Direct spec references only — runtime consumers via an intermediary

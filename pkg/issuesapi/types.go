@@ -293,6 +293,13 @@ const (
 	ChangeCategoryRuntimeStatus ChangeCategory = "runtime_status"
 )
 
+type ChangeSalience string
+
+const (
+	ChangeSalienceConfigEdit   ChangeSalience = "config_edit"
+	ChangeSaliencePrimeSuspect ChangeSalience = "prime_suspect"
+)
+
 type RecentChange struct {
 	Source         string         `json:"source,omitempty"`
 	Kind           string         `json:"kind"`
@@ -303,6 +310,7 @@ type RecentChange struct {
 	Timestamp      string         `json:"timestamp"`
 	ChangeCategory ChangeCategory `json:"change_category,omitempty"`
 	RankReason     string         `json:"rank_reason,omitempty"`
+	Salience       ChangeSalience `json:"salience,omitempty"`
 	Fields         []ChangeField  `json:"fields,omitempty"`
 	// ConsumedBy lists workloads that mount or reference this ConfigMap via
 	// their pod spec (volumes, envFrom, env valueFrom). Direct references

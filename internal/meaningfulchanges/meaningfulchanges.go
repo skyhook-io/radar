@@ -22,8 +22,12 @@ const (
 	DefaultLimit      = 20
 	DefaultFieldLimit = 10
 	IssueChangesLimit = 5
-	ResourceLimit     = 3
-	maxCandidateLimit = 100
+	// IssueChangesCandidateLimit leaves a small amount of room for the
+	// issue-aware pass to distinguish several otherwise tied config edits
+	// before the public response is capped.
+	IssueChangesCandidateLimit = 10
+	ResourceLimit              = 3
+	maxCandidateLimit          = 100
 )
 
 const (
@@ -49,6 +53,44 @@ func IssueChangesGuidance(reason string) string {
 		"That does not clear the listed changes: a change can break a resource created after it, " +
 		"and can cause application-layer symptoms that produce no issue row. " +
 		"Review the changes before concluding the listed issues explain the reported problem."
+}
+
+func PrioritizeIssueChanges(changes []issuesapi.RecentChange, activeIssues []issuesapi.Issue, reason string, limit int) ([]issuesapi.RecentChange, string, bool) {
+	originalLen := len(changes)
+	for i := range changes {
+		applyPerEntrySalience(&changes[i])
+	}
+	if reason == ChangesReasonWithAllCreationTimeCriticalIssues {
+		markPrimeSuspects(changes, activeIssues)
+	}
+	RankAndCap(&changes, limit)
+
+	guidance := IssueChangesGuidance(reason)
+	var suspects []string
+	for _, change := range changes {
+		if change.Salience == issuesapi.ChangeSaliencePrimeSuspect {
+			suspects = append(suspects, changeRef(change))
+		}
+	}
+	if len(suspects) > 0 && len(suspects) <= 2 {
+		if len(suspects) == 1 {
+			guidance += " The change feed marks " + suspects[0] +
+				" as a prime suspect because no listed issue explains that configuration edit; " +
+				"treat it as a lead to verify, not proof of cause."
+		} else {
+			guidance += " The change feed marks " + strings.Join(suspects, " and ") +
+				" as prime suspects because no listed issue explains those configuration edits; " +
+				"treat them as leads to verify, not proof of cause."
+		}
+	}
+	return changes, guidance, limit > 0 && originalLen > len(changes)
+}
+
+func IssueChangesFetchLimit(reason string) int {
+	if reason == ChangesReasonWithAllCreationTimeCriticalIssues {
+		return IssueChangesCandidateLimit
+	}
+	return IssueChangesLimit
 }
 
 var (
@@ -395,93 +437,169 @@ func rankedChanges(events []timeline.TimelineEvent, name string, limit, fieldLim
 		out = append(out, change)
 	}
 	capped := len(out) > limit
-	RankAndCap(&out, limit)
 	annotateConfigMapConsumers(out)
+	RankAndCap(&out, limit)
 	return out, capped, nil
 }
 
 // maxConsumersPerEntry bounds the consumed_by list on a ConfigMap entry.
 const maxConsumersPerEntry = 5
 
-// annotateConfigMapConsumers fills ConsumedBy on ConfigMap change entries by
-// scanning the cached workload listers for direct spec references (volumes,
-// envFrom, env valueFrom). Runs after ranking/capping, so at most one feed's
-// worth of entries triggers the scan. Direct references only: a workload that
-// reads this ConfigMap's data through an intermediary service is invisible
-// here, and ConsumedBy deliberately makes no claim about it.
+// annotateConfigMapConsumers fills ConsumedBy on ConfigMap change entries from
+// a single workload-cache pass. Direct references only: a workload that reads
+// this ConfigMap's data through an intermediary service is invisible here, and
+// ConsumedBy deliberately makes no claim about it.
 func annotateConfigMapConsumers(changes []issuesapi.RecentChange) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return
 	}
+	needsIndex := false
+	for i := range changes {
+		if changes[i].Kind == "ConfigMap" && changes[i].Namespace != "" {
+			needsIndex = true
+			break
+		}
+	}
+	if !needsIndex {
+		return
+	}
+	namespaces := map[string]bool{}
+	for _, change := range changes {
+		if change.Kind == "ConfigMap" && change.Namespace != "" {
+			namespaces[change.Namespace] = true
+		}
+	}
+	index := configMapConsumerIndex(cache, namespaces)
 	for i := range changes {
 		if changes[i].Kind != "ConfigMap" || changes[i].Namespace == "" {
 			continue
 		}
-		changes[i].ConsumedBy = consumersOfConfigMap(cache, changes[i].Namespace, changes[i].Name)
+		changes[i].ConsumedBy = index[configMapKey(changes[i].Namespace, changes[i].Name)]
 	}
 }
 
-func consumersOfConfigMap(cache *k8s.ResourceCache, namespace, name string) []string {
-	var out []string
-	referencesConfigMap := func(obj any) bool {
+func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool) map[string][]string {
+	index := map[string][]string{}
+	add := func(namespace, kind, name string, obj any) {
 		for _, cm := range DirectConfigMapNames(obj) {
-			if cm == name {
-				return true
-			}
+			key := configMapKey(namespace, cm)
+			index[key] = append(index[key], kind+"/"+name)
 		}
-		return false
 	}
 	if lister := cache.Deployments(); lister != nil {
-		if items, err := lister.Deployments(namespace).List(labels.Everything()); err == nil {
-			for _, d := range items {
-				if referencesConfigMap(d) {
-					out = append(out, "Deployment/"+d.Name)
+		for namespace := range namespaces {
+			if items, err := lister.Deployments(namespace).List(labels.Everything()); err == nil {
+				for _, item := range items {
+					add(namespace, "Deployment", item.Name, item)
 				}
 			}
 		}
 	}
 	if lister := cache.StatefulSets(); lister != nil {
-		if items, err := lister.StatefulSets(namespace).List(labels.Everything()); err == nil {
-			for _, s := range items {
-				if referencesConfigMap(s) {
-					out = append(out, "StatefulSet/"+s.Name)
+		for namespace := range namespaces {
+			if items, err := lister.StatefulSets(namespace).List(labels.Everything()); err == nil {
+				for _, item := range items {
+					add(namespace, "StatefulSet", item.Name, item)
 				}
 			}
 		}
 	}
 	if lister := cache.DaemonSets(); lister != nil {
-		if items, err := lister.DaemonSets(namespace).List(labels.Everything()); err == nil {
-			for _, d := range items {
-				if referencesConfigMap(d) {
-					out = append(out, "DaemonSet/"+d.Name)
+		for namespace := range namespaces {
+			if items, err := lister.DaemonSets(namespace).List(labels.Everything()); err == nil {
+				for _, item := range items {
+					add(namespace, "DaemonSet", item.Name, item)
 				}
 			}
 		}
 	}
 	if lister := cache.Jobs(); lister != nil {
-		if items, err := lister.Jobs(namespace).List(labels.Everything()); err == nil {
-			for _, j := range items {
-				if referencesConfigMap(j) {
-					out = append(out, "Job/"+j.Name)
+		for namespace := range namespaces {
+			if items, err := lister.Jobs(namespace).List(labels.Everything()); err == nil {
+				for _, item := range items {
+					add(namespace, "Job", item.Name, item)
 				}
 			}
 		}
 	}
 	if lister := cache.CronJobs(); lister != nil {
-		if items, err := lister.CronJobs(namespace).List(labels.Everything()); err == nil {
-			for _, cj := range items {
-				if referencesConfigMap(cj) {
-					out = append(out, "CronJob/"+cj.Name)
+		for namespace := range namespaces {
+			if items, err := lister.CronJobs(namespace).List(labels.Everything()); err == nil {
+				for _, item := range items {
+					add(namespace, "CronJob", item.Name, item)
 				}
 			}
 		}
 	}
-	sort.Strings(out)
-	if len(out) > maxConsumersPerEntry {
-		out = out[:maxConsumersPerEntry]
+	for key, consumers := range index {
+		sort.Strings(consumers)
+		if len(consumers) > maxConsumersPerEntry {
+			index[key] = consumers[:maxConsumersPerEntry]
+		} else {
+			index[key] = consumers
+		}
 	}
-	return out
+	return index
+}
+
+func configMapKey(namespace, name string) string {
+	return namespace + "\x00" + name
+}
+
+func markPrimeSuspects(changes []issuesapi.RecentChange, activeIssues []issuesapi.Issue) {
+	explained := map[string]bool{}
+	addRef := func(ref issuesapi.Ref) {
+		if ref.Kind != "" && ref.Name != "" {
+			explained[resourceKey(ref.Kind, ref.Namespace, ref.Name)] = true
+		}
+	}
+	for _, issue := range activeIssues {
+		addRef(issuesapi.Ref{Kind: issue.Kind, Namespace: issue.Namespace, Name: issue.Name})
+		addRef(issue.Owner)
+		for _, member := range issue.Members {
+			addRef(member)
+		}
+	}
+	for i := range changes {
+		if changes[i].Salience != issuesapi.ChangeSalienceConfigEdit {
+			continue
+		}
+		isExplained := explained[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)]
+		if changes[i].Kind == "ConfigMap" {
+			// consumed_by is capped. At the cap, an omitted consumer may carry
+			// the issue, so absence is not strong enough to promote this entry.
+			if len(changes[i].ConsumedBy) >= maxConsumersPerEntry {
+				continue
+			}
+			for _, consumer := range changes[i].ConsumedBy {
+				kind, name, ok := strings.Cut(consumer, "/")
+				if ok && explained[resourceKey(kind, changes[i].Namespace, name)] {
+					isExplained = true
+					break
+				}
+			}
+		}
+		if !isExplained {
+			changes[i].Salience = issuesapi.ChangeSaliencePrimeSuspect
+			if changes[i].ChangeType == string(timeline.EventTypeAdd) {
+				changes[i].RankReason = "recreated with configuration changes not explained by any listed issue"
+			} else {
+				changes[i].RankReason = "configuration edit not explained by any listed issue"
+			}
+		}
+	}
+}
+
+func resourceKey(kind, namespace, name string) string {
+	return strings.ToLower(strings.TrimSpace(kind)) + "\x00" + namespace + "\x00" + name
+}
+
+func changeRef(change issuesapi.RecentChange) string {
+	if change.Namespace == "" {
+		return change.Kind + "/" + change.Name
+	}
+	return change.Kind + "/" + change.Namespace + "/" + change.Name
 }
 
 // TrackedKind reports whether the change feed tracks this kind's updates —
@@ -536,6 +654,9 @@ func RankAndCap(changes *[]issuesapi.RecentChange, limit int) {
 	if changes == nil {
 		return
 	}
+	for i := range *changes {
+		applyPerEntrySalience(&(*changes)[i])
+	}
 	sort.SliceStable(*changes, func(i, j int) bool {
 		a, b := (*changes)[i], (*changes)[j]
 		if score(a) != score(b) {
@@ -569,9 +690,34 @@ func fromEvent(e timeline.TimelineEvent, fieldLimit int) issuesapi.RecentChange 
 		RankReason:     reason,
 	}
 	if e.Diff != nil {
+		if hasApplicationConfigField(e.Kind, e.Diff.Fields) {
+			change.Salience = issuesapi.ChangeSalienceConfigEdit
+		}
 		fields := e.Diff.Fields
 		if fieldLimit > 0 && len(fields) > fieldLimit {
-			fields = fields[:fieldLimit]
+			fields = append([]timeline.FieldChange(nil), fields[:fieldLimit]...)
+			// Keep the evidence for an elevated rank visible even when the
+			// ordinary display cap would otherwise hide it.
+			if !hasApplicationConfigField(e.Kind, fields) &&
+				change.Salience == issuesapi.ChangeSalienceConfigEdit {
+				for _, field := range e.Diff.Fields[fieldLimit:] {
+					if isApplicationConfigPath(e.Kind, field.Path) {
+						fields[len(fields)-1] = field
+						break
+					}
+				}
+			}
+			// A display cap must not make a multi-field change look like a
+			// content-free generation bump.
+			if isGenerationOnlyTimelineFields(fields) &&
+				!isGenerationOnlyTimelineFields(e.Diff.Fields) {
+				for _, field := range e.Diff.Fields[fieldLimit:] {
+					if !isGenerationPath(field.Path) {
+						fields[len(fields)-1] = field
+						break
+					}
+				}
+			}
 		}
 		for _, f := range fields {
 			change.Fields = append(change.Fields, issuesapi.ChangeField{
@@ -643,6 +789,15 @@ func hasRuntimeStatusField(e timeline.TimelineEvent) bool {
 }
 
 func score(c issuesapi.RecentChange) int {
+	switch c.Salience {
+	case issuesapi.ChangeSaliencePrimeSuspect:
+		return 120
+	case issuesapi.ChangeSalienceConfigEdit:
+		return 105
+	}
+	if isGenerationOnly(c) {
+		return 80
+	}
 	switch c.ChangeCategory {
 	case issuesapi.ChangeCategorySpecConfig:
 		return 100
@@ -653,6 +808,129 @@ func score(c issuesapi.RecentChange) int {
 	default:
 		return 0
 	}
+}
+
+const generationOnlyRankReason = "generation changed; specific fields were not tracked"
+
+func applyPerEntrySalience(change *issuesapi.RecentChange) {
+	if change == nil || change.Salience == issuesapi.ChangeSaliencePrimeSuspect {
+		return
+	}
+	if change.Salience == issuesapi.ChangeSalienceConfigEdit {
+		if change.Kind != "ConfigMap" || len(change.ConsumedBy) > 0 {
+			change.RankReason = appConfigRankReason(*change)
+			return
+		}
+		change.Salience = ""
+		change.RankReason = genericSpecRankReason(*change)
+	}
+	if isAppConfigEdit(*change) {
+		change.Salience = issuesapi.ChangeSalienceConfigEdit
+		change.RankReason = appConfigRankReason(*change)
+		return
+	}
+	if isGenerationOnly(*change) {
+		change.RankReason = generationOnlyRankReason
+	}
+}
+
+func appConfigRankReason(change issuesapi.RecentChange) string {
+	if change.ChangeType == string(timeline.EventTypeAdd) {
+		return "recreated with application configuration changes"
+	}
+	return "application configuration field changed"
+}
+
+func genericSpecRankReason(change issuesapi.RecentChange) string {
+	if change.ChangeType == string(timeline.EventTypeAdd) {
+		return "recreated with desired-state or configuration changes"
+	}
+	return "desired-state or configuration field changed"
+}
+
+func isAppConfigEdit(change issuesapi.RecentChange) bool {
+	if change.ChangeCategory != issuesapi.ChangeCategorySpecConfig {
+		return false
+	}
+	if change.Kind == "ConfigMap" {
+		return len(change.ConsumedBy) > 0 && hasApplicationConfigChange(change.Fields)
+	}
+	return isWorkloadKind(change.Kind) && hasWorkloadConfigChange(change.Fields)
+}
+
+func hasApplicationConfigField(kind string, fields []timeline.FieldChange) bool {
+	for _, field := range fields {
+		if isApplicationConfigPath(kind, field.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+func isApplicationConfigPath(kind, path string) bool {
+	if kind == "ConfigMap" {
+		return isConfigMapDataPath(path)
+	}
+	return isWorkloadKind(kind) && isWorkloadConfigPath(path)
+}
+
+func hasApplicationConfigChange(fields []issuesapi.ChangeField) bool {
+	for _, field := range fields {
+		if isConfigMapDataPath(field.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+func isConfigMapDataPath(path string) bool {
+	switch path {
+	case "data (added keys)", "data (removed keys)", "data (modified keys)":
+		return true
+	default:
+		return strings.HasPrefix(path, "data.")
+	}
+}
+
+func hasWorkloadConfigChange(fields []issuesapi.ChangeField) bool {
+	for _, field := range fields {
+		if isWorkloadConfigPath(field.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWorkloadConfigPath(path string) bool {
+	const prefix = "spec.template.spec.containers["
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	end := strings.Index(rest, "].")
+	if end < 0 {
+		return false
+	}
+	field := rest[end+2:]
+	return strings.HasPrefix(field, "env[") ||
+		field == "envFrom" ||
+		field == "command" ||
+		field == "args"
+}
+
+func isGenerationOnly(change issuesapi.RecentChange) bool {
+	return change.ChangeCategory == issuesapi.ChangeCategorySpecConfig &&
+		len(change.Fields) == 1 &&
+		isGenerationPath(change.Fields[0].Path)
+}
+
+func isGenerationOnlyTimelineFields(fields []timeline.FieldChange) bool {
+	return len(fields) == 1 &&
+		isGenerationPath(fields[0].Path)
+}
+
+func isGenerationPath(path string) bool {
+	return strings.EqualFold(strings.TrimSpace(path), "metadata.generation")
 }
 
 func eventSummary(e timeline.TimelineEvent) string {

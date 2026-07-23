@@ -581,7 +581,7 @@ func TestRecentAnnotatesConfigMapConsumers(t *testing.T) {
 		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
 		Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
 		EventType: timeline.EventTypeUpdate,
-		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.flags.adHighCpu.defaultVariant", OldValue: "off", NewValue: "on"}}, Summary: "flag changed"},
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data (modified keys)", OldValue: []string{"LOG_LEVEL"}, NewValue: []string{"LOG_LEVEL"}}}, Summary: "modified keys: [LOG_LEVEL]"},
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -596,5 +596,436 @@ func TestRecentAnnotatesConfigMapConsumers(t *testing.T) {
 	got := changes[0].ConsumedBy
 	if len(got) != 2 || got[0] != "Deployment/flagd" || got[1] != "Job/seed" {
 		t.Fatalf("consumed_by = %v, want [Deployment/flagd Job/seed]", got)
+	}
+	if changes[0].Salience != issuesapi.ChangeSalienceConfigEdit {
+		t.Fatalf("salience = %q, want config_edit", changes[0].Salience)
+	}
+}
+
+func TestRankAndCapApplicationConfigTiebreak(t *testing.T) {
+	at := time.Now()
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "ad", at, "spec.template.spec.containers[ad].image"),
+		recentChange("Deployment", "shop", "flagd", at.Add(-time.Second), "metadata.generation"),
+		{
+			Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
+			Timestamp:      at.Add(-2 * time.Second).Format(time.RFC3339),
+			ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+			Fields:         []issuesapi.ChangeField{{Path: "data.demo.flagd.json.flags.adFailure.defaultVariant"}},
+			ConsumedBy:     []string{"Deployment/flagd"},
+		},
+		{
+			Kind: "Service", Namespace: "shop", Name: "jaeger",
+			Timestamp:      at.Add(-3 * time.Second).Format(time.RFC3339),
+			ChangeType:     string(timeline.EventTypeAdd),
+			ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+			RankReason:     "recreated with desired-state or configuration changes",
+			Fields:         []issuesapi.ChangeField{{Path: "spec.type"}},
+		},
+	}
+
+	RankAndCap(&changes, 5)
+
+	if got := changes[0]; got.Name != "flagd-config" || got.Salience != issuesapi.ChangeSalienceConfigEdit {
+		t.Fatalf("first change = %+v, want the consumed structured ConfigMap edit", got)
+	}
+	if got := changes[len(changes)-1]; got.Name != "flagd" || !strings.Contains(got.RankReason, "generation") {
+		t.Fatalf("last change = %+v, want generation-only below real spec changes", got)
+	}
+	if got := changes[len(changes)-2]; got.Name != "jaeger" || !strings.Contains(got.RankReason, "recreated") {
+		t.Fatalf("jaeger recreate = %+v, want retained as real spec change", got)
+	}
+}
+
+func TestBenchmarkFlagEditsBecomePrimeSuspects(t *testing.T) {
+	for _, flag := range []string{"adFailure", "cartFailure"} {
+		t.Run(flag, func(t *testing.T) {
+			at := time.Now()
+			changes := []issuesapi.RecentChange{
+				recentChange("Deployment", "shop", "ad", at, "metadata.generation"),
+				recentChange("Deployment", "shop", "flagd", at.Add(-time.Second), "metadata.generation"),
+				{
+					Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
+					Timestamp:      at.Add(-2 * time.Second).Format(time.RFC3339),
+					ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+					Fields:         []issuesapi.ChangeField{{Path: "data.demo.flagd.json.flags." + flag + ".defaultVariant"}},
+					ConsumedBy:     []string{"Deployment/flagd"},
+				},
+			}
+
+			got, guidance, _ := PrioritizeIssueChanges(
+				changes,
+				[]issuesapi.Issue{{
+					Kind: "Deployment", Namespace: "shop", Name: "product-catalog",
+					Severity: issuesapi.SeverityCritical,
+				}},
+				ChangesReasonWithAllCreationTimeCriticalIssues,
+				IssueChangesLimit,
+			)
+
+			if got[0].Name != "flagd-config" || got[0].Salience != issuesapi.ChangeSaliencePrimeSuspect {
+				t.Fatalf("first change = %+v, want issue-less flag edit", got[0])
+			}
+			if !strings.Contains(guidance, "ConfigMap/shop/flagd-config") ||
+				!strings.Contains(guidance, "not proof of cause") {
+				t.Fatalf("guidance did not name and hedge the flag edit: %q", guidance)
+			}
+		})
+	}
+}
+
+func TestApplicationConfigClassifierFalsePositiveGuards(t *testing.T) {
+	tests := []struct {
+		name      string
+		change    issuesapi.RecentChange
+		want      issuesapi.ChangeSalience
+		wantScore int
+	}{
+		{
+			name: "workload env", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.containers[frontend].env[CART_ADDR]"),
+			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+		},
+		{
+			name: "init container is represented by the same producer path", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.containers[migrate].envFrom"),
+			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+		},
+		{
+			name: "command", change: recentChange("StatefulSet", "shop", "db", time.Now(),
+				"spec.template.spec.containers[db].command"),
+			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+		},
+		{
+			name: "image", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.containers[frontend].image"),
+			wantScore: 100,
+		},
+		{
+			name: "replicas", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.replicas"),
+			wantScore: 100,
+		},
+		{
+			name: "HPA target", change: recentChange("HorizontalPodAutoscaler", "shop", "frontend", time.Now(),
+				"spec.maxReplicas"),
+			wantScore: 100,
+		},
+		{
+			name: "envoy substring", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.metadata.annotations.envoy.io/config"),
+			wantScore: 100,
+		},
+		{
+			name: "unrelated CRD prose", change: recentChange("Widget", "shop", "frontend", time.Now(),
+				"spec.sql.command"),
+			wantScore: 100,
+		},
+		{
+			name: "consumed ConfigMap scalar value fallback", change: issuesapi.RecentChange{
+				Kind: "ConfigMap", Namespace: "shop", Name: "flags",
+				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+				Fields:         []issuesapi.ChangeField{{Path: "data (modified keys)"}},
+				ConsumedBy:     []string{"Deployment/flagd"},
+			},
+			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+		},
+		{
+			name: "consumed ConfigMap key removal", change: issuesapi.RecentChange{
+				Kind: "ConfigMap", Namespace: "shop", Name: "frontend-env",
+				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+				Fields:         []issuesapi.ChangeField{{Path: "data (removed keys)"}},
+				ConsumedBy:     []string{"Deployment/frontend"},
+			},
+			want: issuesapi.ChangeSalienceConfigEdit, wantScore: 105,
+		},
+		{
+			name: "ConfigMap binary data", change: issuesapi.RecentChange{
+				Kind: "ConfigMap", Namespace: "shop", Name: "assets",
+				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+				Fields:         []issuesapi.ChangeField{{Path: "binaryData (modified keys)"}},
+				ConsumedBy:     []string{"Deployment/frontend"},
+			},
+			wantScore: 100,
+		},
+		{
+			name: "unconsumed ConfigMap", change: issuesapi.RecentChange{
+				Kind: "ConfigMap", Namespace: "shop", Name: "flags",
+				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+				Fields:         []issuesapi.ChangeField{{Path: "data.flags.enabled"}},
+			},
+			wantScore: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changes := []issuesapi.RecentChange{tt.change}
+			RankAndCap(&changes, 1)
+			if got := changes[0].Salience; got != tt.want {
+				t.Fatalf("salience = %q, want %q", got, tt.want)
+			}
+			if got := score(changes[0]); got != tt.wantScore {
+				t.Fatalf("score = %d, want %d", got, tt.wantScore)
+			}
+		})
+	}
+}
+
+func TestPrioritizeIssueChangesMarksOnlyUnexplainedEdits(t *testing.T) {
+	at := time.Now()
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "frontend", at, "spec.template.spec.containers[frontend].env[CART_ADDR]"),
+		{
+			Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
+			Timestamp:      at.Add(-time.Second).Format(time.RFC3339),
+			ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+			Fields:         []issuesapi.ChangeField{{Path: "data.demo.flagd.json.flags.cartFailure.defaultVariant"}},
+			ConsumedBy:     []string{"Deployment/flagd"},
+		},
+		recentChange("Deployment", "shop", "checkout", at.Add(-2*time.Second),
+			"spec.template.spec.containers[checkout].env[PAYMENT_ADDR]"),
+	}
+	issues := []issuesapi.Issue{
+		{
+			Kind: "Deployment", Namespace: "shop", Name: "frontend",
+			Severity: issuesapi.SeverityCritical,
+		},
+		{
+			Kind: "Pod", Namespace: "shop", Name: "flagd-abc",
+			Owner:    issuesapi.Ref{Kind: "Deployment", Namespace: "shop", Name: "flagd"},
+			Severity: issuesapi.SeverityCritical,
+		},
+	}
+
+	got, guidance, capped := PrioritizeIssueChanges(
+		changes, issues, ChangesReasonWithAllCreationTimeCriticalIssues, 5,
+	)
+
+	if capped {
+		t.Fatal("three entries must not report a five-entry cap")
+	}
+	if got[0].Name != "checkout" || got[0].Salience != issuesapi.ChangeSaliencePrimeSuspect {
+		t.Fatalf("first change = %+v, want sole unexplained edit", got[0])
+	}
+	if got[1].Name == "checkout" || got[1].Salience != issuesapi.ChangeSalienceConfigEdit {
+		t.Fatalf("explained edit was promoted: %+v", got[1])
+	}
+	if got[2].Salience != issuesapi.ChangeSalienceConfigEdit {
+		t.Fatalf("ConfigMap explained through its consumer was promoted: %+v", got[2])
+	}
+	if !strings.Contains(guidance, "Deployment/shop/checkout") ||
+		!strings.Contains(guidance, "a lead to verify, not proof") {
+		t.Fatalf("guidance did not name and hedge the sole returned suspect: %q", guidance)
+	}
+}
+
+func TestIssueChangesFetchLimitOnlyWidensForIssueAwareRanking(t *testing.T) {
+	if got := IssueChangesFetchLimit(ChangesReasonNoCriticalIssues); got != IssueChangesLimit {
+		t.Fatalf("no-critical fetch limit = %d, want %d", got, IssueChangesLimit)
+	}
+	if got := IssueChangesFetchLimit(ChangesReasonWithAllCreationTimeCriticalIssues); got != IssueChangesCandidateLimit {
+		t.Fatalf("issue-aware fetch limit = %d, want %d", got, IssueChangesCandidateLimit)
+	}
+	if got := IssueChangesFetchLimit(""); got != IssueChangesLimit {
+		t.Fatalf("unknown-reason fetch limit = %d, want %d", got, IssueChangesLimit)
+	}
+}
+
+func TestPrioritizeIssueChangesDoesNotMarkHealthyClusterEdits(t *testing.T) {
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "frontend", time.Now(),
+			"spec.template.spec.containers[frontend].env[CART_ADDR]"),
+	}
+
+	got, guidance, _ := PrioritizeIssueChanges(changes, nil, ChangesReasonNoCriticalIssues, 5)
+
+	if got[0].Salience != issuesapi.ChangeSalienceConfigEdit {
+		t.Fatalf("healthy-cluster edit salience = %q, want config_edit only", got[0].Salience)
+	}
+	if guidance != "" {
+		t.Fatalf("healthy-cluster guidance = %q, want none", guidance)
+	}
+}
+
+func TestPrioritizeIssueChangesSuppressesCrowdedNamedGuidance(t *testing.T) {
+	var changes []issuesapi.RecentChange
+	for _, name := range []string{"frontend", "checkout", "payment"} {
+		changes = append(changes, recentChange("Deployment", "shop", name, time.Now(),
+			"spec.template.spec.containers["+name+"].args"))
+	}
+
+	got, guidance, _ := PrioritizeIssueChanges(
+		changes,
+		[]issuesapi.Issue{{Kind: "Deployment", Namespace: "shop", Name: "unrelated", Severity: issuesapi.SeverityCritical}},
+		ChangesReasonWithAllCreationTimeCriticalIssues,
+		5,
+	)
+
+	for _, change := range got {
+		if change.Salience != issuesapi.ChangeSaliencePrimeSuspect {
+			t.Fatalf("unexplained edit not marked: %+v", change)
+		}
+	}
+	if strings.Contains(guidance, "marks ") {
+		t.Fatalf("crowded suspect set must suppress named guidance: %q", guidance)
+	}
+	if !strings.Contains(guidance, "does not clear the listed changes") {
+		t.Fatalf("base timing guidance must remain: %q", guidance)
+	}
+}
+
+func TestPrioritizeIssueChangesFailsClosedOnCappedConsumers(t *testing.T) {
+	change := issuesapi.RecentChange{
+		Kind: "ConfigMap", Namespace: "shop", Name: "shared-config",
+		ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+		Fields:         []issuesapi.ChangeField{{Path: "data.flags.enabled"}},
+		ConsumedBy: []string{
+			"Deployment/a", "Deployment/b", "Deployment/c", "Deployment/d", "Deployment/e",
+		},
+	}
+
+	got, _, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{change},
+		[]issuesapi.Issue{{Kind: "Deployment", Namespace: "shop", Name: "unrelated", Severity: issuesapi.SeverityCritical}},
+		ChangesReasonWithAllCreationTimeCriticalIssues,
+		5,
+	)
+
+	if got[0].Salience != issuesapi.ChangeSalienceConfigEdit {
+		t.Fatalf("capped consumer evidence must fail closed instead of claiming unexplained: %+v", got[0])
+	}
+}
+
+func TestPrioritizeIssueChangesReportsSecondStageCap(t *testing.T) {
+	var changes []issuesapi.RecentChange
+	for i := 0; i < IssueChangesCandidateLimit; i++ {
+		changes = append(changes, recentChange(
+			"Deployment", "shop", fmt.Sprintf("workload-%d", i), time.Now().Add(-time.Duration(i)*time.Second),
+			"spec.replicas",
+		))
+	}
+
+	got, _, capped := PrioritizeIssueChanges(changes, nil, ChangesReasonNoCriticalIssues, IssueChangesLimit)
+
+	if len(got) != IssueChangesLimit || !capped {
+		t.Fatalf("second-stage cap = len %d capped %v, want %d/true", len(got), capped, IssueChangesLimit)
+	}
+}
+
+func TestFromEventClassifiesSalienceBeforeFieldDisplayCap(t *testing.T) {
+	change := fromEvent(timeline.TimelineEvent{
+		Source: timeline.SourceInformer, Kind: "Deployment", Namespace: "shop", Name: "frontend",
+		EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{
+			{Path: "spec.replicas"},
+			{Path: "spec.template.spec.containers[frontend].env[CART_ADDR]"},
+		}},
+	}, 1)
+	changes := []issuesapi.RecentChange{change}
+	RankAndCap(&changes, 1)
+
+	if len(changes[0].Fields) != 1 {
+		t.Fatalf("display fields = %d, want cap 1", len(changes[0].Fields))
+	}
+	if changes[0].Salience != issuesapi.ChangeSalienceConfigEdit {
+		t.Fatalf("full producer evidence did not survive display cap: %+v", changes[0])
+	}
+	if got := changes[0].Fields[0].Path; got != "spec.template.spec.containers[frontend].env[CART_ADDR]" {
+		t.Fatalf("displayed field = %q, want the evidence supporting salience", got)
+	}
+}
+
+func TestFromEventDoesNotDemoteTruncatedRealSpecChangeAsGenerationOnly(t *testing.T) {
+	change := fromEvent(timeline.TimelineEvent{
+		Source: timeline.SourceInformer, Kind: "Widget", Namespace: "shop", Name: "example",
+		EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{
+			{Path: "metadata.generation"},
+			{Path: "spec.mode"},
+		}},
+	}, 1)
+	changes := []issuesapi.RecentChange{change}
+	RankAndCap(&changes, 1)
+
+	if len(changes[0].Fields) != 1 {
+		t.Fatalf("display fields = %d, want cap 1", len(changes[0].Fields))
+	}
+	if got := score(changes[0]); got != 100 {
+		t.Fatalf("multi-field spec change score = %d, want 100: %+v", got, changes[0])
+	}
+	if got := changes[0].Fields[0].Path; got != "spec.mode" {
+		t.Fatalf("displayed field = %q, want non-generation evidence", got)
+	}
+}
+
+func TestRecreatedConfigEditKeepsRecreateContext(t *testing.T) {
+	changes := []issuesapi.RecentChange{{
+		Kind: "Deployment", Namespace: "shop", Name: "frontend",
+		ChangeType:     string(timeline.EventTypeAdd),
+		ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+		RankReason:     "recreated with desired-state or configuration changes",
+		Fields: []issuesapi.ChangeField{{
+			Path: "spec.template.spec.containers[frontend].env[CART_ADDR]",
+		}},
+	}}
+
+	RankAndCap(&changes, 1)
+
+	if changes[0].Salience != issuesapi.ChangeSalienceConfigEdit ||
+		!strings.Contains(changes[0].RankReason, "recreated") {
+		t.Fatalf("recreate context was lost: %+v", changes[0])
+	}
+
+	got, _, _ := PrioritizeIssueChanges(
+		changes,
+		[]issuesapi.Issue{{
+			Kind: "Deployment", Namespace: "shop", Name: "unrelated",
+			Severity: issuesapi.SeverityCritical,
+		}},
+		ChangesReasonWithAllCreationTimeCriticalIssues,
+		1,
+	)
+	if got[0].Salience != issuesapi.ChangeSaliencePrimeSuspect ||
+		!strings.Contains(got[0].RankReason, "recreated") {
+		t.Fatalf("Tier B lost recreate context: %+v", got[0])
+	}
+}
+
+func TestRecentDemotesRealGenericCRDGenerationOnlyChange(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+		ID: "widget-gen", Timestamp: time.Now(),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Widget", Namespace: "shop", Name: "example",
+		EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{
+			Fields: []timeline.FieldChange{{Path: "metadata.generation", OldValue: int64(1), NewValue: int64(2)}},
+		},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	changes, _, err := Recent(context.Background(), Query{
+		Namespaces: []string{"shop"}, Kinds: []string{"Widget"}, Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(changes) != 1 || score(changes[0]) != 80 || changes[0].Salience != "" {
+		t.Fatalf("generic CRD generation change = %+v, want retained score 80 without salience", changes)
+	}
+}
+
+func recentChange(kind, namespace, name string, at time.Time, fieldPath string) issuesapi.RecentChange {
+	return issuesapi.RecentChange{
+		Kind: kind, Namespace: namespace, Name: name,
+		Timestamp:      at.Format(time.RFC3339),
+		ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+		Fields:         []issuesapi.ChangeField{{Path: fieldPath}},
 	}
 }

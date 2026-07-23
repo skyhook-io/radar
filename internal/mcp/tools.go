@@ -219,7 +219,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Description: "Use when the symptom is 'this worked earlier' or 'something broke " +
 			"after a deploy/config change.' Returns recent meaningful changes ranked with " +
 			"spec/config changes first, including field-level diffs for Deployment env/probes " +
-			"and structured ConfigMap data when available. This is often faster than reading " +
+			"and structured ConfigMap data when available. `salience=config_edit` is a narrow " +
+			"tiebreak for application-configuration edits, not a claim of causation. This is " +
+			"often faster than reading " +
 			"ReplicaSet histories or individual audit/log streams, especially when issues " +
 			"are empty or dominated by baseline failures. Pair with since to bound the window; " +
 			"filter by namespace, kind, or name when you know the scope. Omit namespace when " +
@@ -362,7 +364,10 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"symptoms. A bad config change can itself cause a failure during creation. " +
 			"The token does not " +
 			"claim the changes are causal. `recent_changes_guidance`, when present, states " +
-			"how to treat the feed for this response — follow it. `no_critical_issues` " +
+			"how to treat the feed for this response — follow it. A change's `salience` " +
+			"may be `config_edit` for a narrow application-configuration tiebreak or " +
+			"`prime_suspect` when that edit is not explained by any listed issue; both " +
+			"are investigation leads, not proof of cause. `no_critical_issues` " +
 			"means no critical rows " +
 			"were returned. `recent_changes_truncated=true` means the feed is incomplete, " +
 			"so absence from it is not evidence that a relevant change did not occur. " +
@@ -2806,13 +2811,16 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 			if changes, truncated, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
 				Namespaces: []string{allowedNamespaces[0]},
 				Since:      meaningfulchanges.DefaultSince,
-				Limit:      meaningfulchanges.IssueChangesLimit,
+				Limit:      meaningfulchanges.IssueChangesFetchLimit(recentChangesReason),
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
 			}); err == nil && len(changes) > 0 {
+				var recapped bool
+				changes, resp.RecentChangesGuidance, recapped = meaningfulchanges.PrioritizeIssueChanges(
+					changes, out, recentChangesReason, meaningfulchanges.IssueChangesLimit,
+				)
 				resp.RecentChanges = changes
 				resp.RecentChangesReason = recentChangesReason
-				resp.RecentChangesGuidance = meaningfulchanges.IssueChangesGuidance(recentChangesReason)
-				resp.RecentChangesTruncated = truncated
+				resp.RecentChangesTruncated = truncated || recapped
 			}
 		}
 	}
