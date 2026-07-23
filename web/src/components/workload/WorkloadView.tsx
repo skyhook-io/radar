@@ -81,6 +81,7 @@ import {
   useCanNodeWrite,
   useNamespacedCapabilities,
   useIsLocalDeployment,
+  useCapabilitiesContext,
 } from '../../contexts/CapabilitiesContext'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs, useOpenNodeTerminal } from '../dock'
 import { PortForwardButton, PortForwardInlineButton } from '../portforward/PortForwardButton'
@@ -653,6 +654,7 @@ export function WorkloadView({
 
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()
+  const { features } = useCapabilitiesContext()
   const { canPortForward } = useNamespacedCapabilities(namespace)
   const isLocalDeployment = useIsLocalDeployment()
   const showServingPortForward = canPortForward || !isLocalDeployment
@@ -909,10 +911,10 @@ export function WorkloadView({
         onUpdateResource={handleUpdateResource}
         isUpdatingResource={updateResource.isPending}
         updateResourceError={updateResource.error?.message ?? null}
-        onPreviewResource={handlePreviewResource}
+        onPreviewResource={features?.yamlReview ? handlePreviewResource : undefined}
         isPreviewingResource={previewResources.isPending}
         previewResourceError={previewResources.error?.message ?? null}
-        yamlSchemaLoader={fetchYamlSchemas}
+        yamlSchemaLoader={features?.yamlSchemas ? fetchYamlSchemas : undefined}
         // Tab state (URL-synced)
         activeTab={migratedTab}
         onTabChange={handleTabChange}
