@@ -41,6 +41,7 @@ const (
 type diagnoseCrashCause struct {
 	Pods      []string `json:"pods"`
 	Container string   `json:"container"`
+	State     string   `json:"state"`
 	Reason    string   `json:"reason,omitempty"`
 	ExitCode  int32    `json:"exitCode"`
 	LogLine   string   `json:"logLine"`
@@ -58,6 +59,7 @@ type diagnoseLogKey struct {
 
 type diagnoseCrashCauseKey struct {
 	container     string
+	state         string
 	reason        string
 	exitCode      int32
 	logLine       string
@@ -88,6 +90,10 @@ func crashCauseForDiagnose(pods []*corev1.Pod, current, previous []podLogEntry, 
 			continue
 		}
 		for _, status := range health.ActiveCrashLoopContainerStatuses(pod, now) {
+			state := "down"
+			if health.IsCrashLoopContainerServing(pod, status) {
+				state = "recovering"
+			}
 			term := status.LastTerminationState.Terminated
 			logs := previousByContainer[diagnoseLogKey{pod: pod.Name, container: status.Name}]
 			logSource := "previous"
@@ -111,6 +117,7 @@ func crashCauseForDiagnose(pods []*corev1.Pod, current, previous []podLogEntry, 
 			line = truncateCrashLogLine(line, maxCrashCauseRunes)
 			key := diagnoseCrashCauseKey{
 				container:     status.Name,
+				state:         state,
 				reason:        term.Reason,
 				exitCode:      term.ExitCode,
 				logLine:       line,
@@ -132,6 +139,7 @@ func crashCauseForDiagnose(pods []*corev1.Pod, current, previous []podLogEntry, 
 			cause := diagnoseCrashCause{
 				Pods:          []string{pod.Name},
 				Container:     status.Name,
+				State:         state,
 				Reason:        term.Reason,
 				ExitCode:      term.ExitCode,
 				LogLine:       line,

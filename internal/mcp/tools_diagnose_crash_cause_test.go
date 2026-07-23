@@ -38,6 +38,9 @@ func TestCrashCauseForDiagnoseSelectsAndDeduplicatesEvidence(t *testing.T) {
 	if cause.Container != "app" || cause.Reason != "Error" || cause.ExitCode != 1 {
 		t.Fatalf("status attribution = %+v, want app/Error/1", cause)
 	}
+	if cause.State != "down" {
+		t.Fatalf("state = %q, want down", cause.State)
+	}
 	if cause.LogLine != "panic: assignment to entry in nil map" || cause.LogSource != "previous" || cause.LineSelection != crashLineFatalPattern {
 		t.Fatalf("selected evidence = %+v, want matched previous panic", cause)
 	}
@@ -83,25 +86,69 @@ func TestCrashCauseForDiagnoseFallbackAndRedaction(t *testing.T) {
 	}
 }
 
-func TestCrashCauseForDiagnoseFailsClosed(t *testing.T) {
+func TestCrashCauseForDiagnoseIncludesRecentServingWarning(t *testing.T) {
 	now := time.Now()
 	recovered := activeCrashLoopPod("recovered", "app", now)
 	recovered.Spec.Containers[0].ReadinessProbe = &corev1.Probe{}
 	recovered.Status.ContainerStatuses[0].Ready = true
-	recovered.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-time.Minute))}}
+	recovered.Status.ContainerStatuses[0].State = corev1.ContainerState{
+		Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-time.Minute))},
+	}
+	previous := []podLogEntry{{
+		Pod: "recovered", Container: "app", Logs: aicontext.FilterLogs("FATAL startup dependency unavailable"),
+	}}
+
+	got, truncated := crashCauseForDiagnose([]*corev1.Pod{recovered}, nil, previous, now)
+	if truncated || len(got) != 1 {
+		t.Fatalf("recent serving crash causes=%+v truncated=%v, want one warning-context cause", got, truncated)
+	}
+	if strings.Join(got[0].Pods, ",") != "recovered" || got[0].LogLine != "FATAL startup dependency unavailable" {
+		t.Fatalf("recent serving crash cause = %+v", got[0])
+	}
+	if got[0].State != "recovering" {
+		t.Fatalf("recent serving crash state = %q, want recovering", got[0].State)
+	}
+}
+
+func TestCrashCauseForDiagnoseKeepsRecoveringAndDownEvidenceSeparate(t *testing.T) {
+	now := time.Now()
+	down := activeCrashLoopPod("down", "app", now)
+	recovering := activeCrashLoopPod("recovering", "app", now)
+	recovering.Status.ContainerStatuses[0].Ready = true
+	recovering.Status.ContainerStatuses[0].State = corev1.ContainerState{
+		Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-time.Minute))},
+	}
+	previous := []podLogEntry{
+		{Pod: "down", Container: "app", Logs: aicontext.FilterLogs("FATAL shared startup failure")},
+		{Pod: "recovering", Container: "app", Logs: aicontext.FilterLogs("FATAL shared startup failure")},
+	}
+
+	got, truncated := crashCauseForDiagnose([]*corev1.Pod{recovering, down}, nil, previous, now)
+	if truncated || len(got) != 2 {
+		t.Fatalf("crash causes=%+v truncated=%v, want distinct down and recovering rows", got, truncated)
+	}
+	if got[0].State != "down" || strings.Join(got[0].Pods, ",") != "down" {
+		t.Fatalf("down crash cause = %+v", got[0])
+	}
+	if got[1].State != "recovering" || strings.Join(got[1].Pods, ",") != "recovering" {
+		t.Fatalf("recovering crash cause = %+v", got[1])
+	}
+}
+
+func TestCrashCauseForDiagnoseFailsClosed(t *testing.T) {
+	now := time.Now()
 	failedOnce := activeCrashLoopPod("failed-once", "app", now)
 	failedOnce.Status.ContainerStatuses[0].RestartCount = 0
 	missing := activeCrashLoopPod("missing", "app", now)
 	errored := activeCrashLoopPod("errored", "app", now)
 	empty := activeCrashLoopPod("empty", "app", now)
 	previous := []podLogEntry{
-		{Pod: "recovered", Container: "app", Logs: aicontext.FilterLogs("FATAL stale")},
 		{Pod: "failed-once", Container: "app", Logs: aicontext.FilterLogs("FATAL not a crashloop")},
 		{Pod: "errored", Container: "app", Error: "previous container not found"},
 		{Pod: "empty", Container: "app", Logs: aicontext.FilterLogs("")},
 	}
 
-	got, truncated := crashCauseForDiagnose([]*corev1.Pod{recovered, failedOnce, missing, errored, empty}, nil, previous, now)
+	got, truncated := crashCauseForDiagnose([]*corev1.Pod{failedOnce, missing, errored, empty}, nil, previous, now)
 	if truncated || len(got) != 0 {
 		t.Fatalf("fail-closed cases returned causes=%+v truncated=%v", got, truncated)
 	}

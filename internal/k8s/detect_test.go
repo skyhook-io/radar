@@ -1840,7 +1840,8 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 	now := time.Now()
 	oldCreated := metav1.NewTime(now.Add(-2 * time.Hour))
 	oldDelete := metav1.NewTime(now.Add(-35 * time.Minute))
-	recentDelete := metav1.NewTime(now.Add(-2 * time.Minute))
+	pastShortWindowDelete := metav1.NewTime(now.Add(-3 * time.Minute))
+	recentDelete := metav1.NewTime(now.Add(-1 * time.Minute))
 	const secretValue = "must-not-appear-in-detection"
 
 	client := fake.NewClientset(
@@ -1849,7 +1850,7 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 				Name:              "config-stuck",
 				Namespace:         "prod",
 				CreationTimestamp: oldCreated,
-				DeletionTimestamp: &oldDelete,
+				DeletionTimestamp: &pastShortWindowDelete,
 				Finalizers:        []string{"example.com/config-finalizer"},
 			},
 		},
@@ -1858,7 +1859,7 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 				Name:              "secret-stuck",
 				Namespace:         "prod",
 				CreationTimestamp: oldCreated,
-				DeletionTimestamp: &oldDelete,
+				DeletionTimestamp: &pastShortWindowDelete,
 				Finalizers:        []string{"example.com/secret-finalizer"},
 			},
 			Data: map[string][]byte{"token": []byte(secretValue)},
@@ -1868,7 +1869,16 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 				Name:              "config-recent",
 				Namespace:         "prod",
 				CreationTimestamp: oldCreated,
+				DeletionTimestamp: &pastShortWindowDelete,
+			},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "config-finalizer-recent",
+				Namespace:         "prod",
+				CreationTimestamp: oldCreated,
 				DeletionTimestamp: &recentDelete,
+				Finalizers:        []string{"example.com/config-finalizer"},
 			},
 		},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config-normal", Namespace: "prod", CreationTimestamp: oldCreated}},
@@ -1888,6 +1898,16 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 				Namespace:         "prod",
 				CreationTimestamp: oldCreated,
 				DeletionTimestamp: &oldDelete,
+				Finalizers:        []string{"example.com/finalizer"},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "pod-recent",
+				Namespace:         "prod",
+				CreationTimestamp: oldCreated,
+				DeletionTimestamp: &pastShortWindowDelete,
 				Finalizers:        []string{"example.com/finalizer"},
 			},
 			Status: corev1.PodStatus{Phase: corev1.PodRunning},
@@ -1937,20 +1957,25 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 		t.Fatalf("terminating pod problem = %+v, want finalizer context", p)
 	}
 	assertProblem(t, problems, "Deployment", "deploy-stuck", "Terminating stuck", "critical")
-	assertProblem(t, problems, "ConfigMap", "config-stuck", "Terminating stuck", "critical")
-	if p, ok := lookupProblem(problems, "ConfigMap", "config-stuck", "Terminating stuck"); !ok || !strings.Contains(p.Message, "example.com/config-finalizer") {
+	assertProblem(t, problems, "ConfigMap", "config-stuck", "Terminating stuck", "medium")
+	if p, ok := lookupProblem(problems, "ConfigMap", "config-stuck", "Terminating stuck"); !ok || !strings.Contains(p.Message, "example.com/config-finalizer") || p.Fingerprint != "lifecycle:terminating" {
 		t.Fatalf("terminating ConfigMap problem = %+v, want finalizer context", p)
 	}
-	assertProblem(t, problems, "Secret", "secret-stuck", "Terminating stuck", "critical")
+	assertProblem(t, problems, "Secret", "secret-stuck", "Terminating stuck", "medium")
 	if p, ok := lookupProblem(problems, "Secret", "secret-stuck", "Terminating stuck"); !ok {
 		t.Fatal("terminating Secret problem not found")
 	} else if !strings.Contains(p.Message, "example.com/secret-finalizer") {
 		t.Fatalf("terminating Secret problem = %+v, want finalizer context", p)
+	} else if p.Fingerprint != "lifecycle:terminating" {
+		t.Fatalf("terminating Secret fingerprint = %q, want lifecycle:terminating", p.Fingerprint)
 	} else if strings.Contains(fmt.Sprintf("%+v", p), secretValue) {
 		t.Fatalf("terminating Secret problem leaked secret data: %+v", p)
 	}
 	if hasProblem(problems, "ConfigMap", "config-recent", "Terminating stuck") {
-		t.Fatalf("recently deleting ConfigMap should not be flagged: %+v", problems)
+		t.Fatalf("ConfigMap without finalizers should keep the generic threshold: %+v", problems)
+	}
+	if hasProblem(problems, "ConfigMap", "config-finalizer-recent", "Terminating stuck") {
+		t.Fatalf("ConfigMap below the short finalizer window should not be flagged: %+v", problems)
 	}
 	if hasProblem(problems, "ConfigMap", "config-normal", "Terminating stuck") ||
 		hasProblem(problems, "Secret", "secret-normal", "Terminating stuck") {
@@ -1964,6 +1989,62 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 	}
 	if hasProblem(problems, "Service", "svc-recent", "Terminating stuck") {
 		t.Fatalf("recently deleting Service should not be flagged: %+v", problems)
+	}
+	if hasProblem(problems, "Pod", "pod-recent", "Terminating stuck") {
+		t.Fatalf("recently deleting Pod should keep the generic threshold: %+v", problems)
+	}
+}
+
+func TestTerminatingProblem_ConfigMapSecretFinalizerThreshold(t *testing.T) {
+	now := time.Now()
+	object := func(deletedAgo time.Duration, finalizers ...string) metav1.Object {
+		deleted := metav1.NewTime(now.Add(-deletedAgo))
+		return &metav1.ObjectMeta{
+			Name:              "target",
+			Namespace:         "prod",
+			CreationTimestamp: metav1.NewTime(now.Add(-time.Hour)),
+			DeletionTimestamp: &deleted,
+			Finalizers:        finalizers,
+		}
+	}
+
+	tests := []struct {
+		name       string
+		kind       string
+		group      string
+		deletedAgo time.Duration
+		finalizers []string
+		want       bool
+		wantLevel  string
+	}{
+		{name: "ConfigMap at short threshold", kind: "ConfigMap", deletedAgo: 2 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "medium"},
+		{name: "Secret at short threshold", kind: "Secret", deletedAgo: 2 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "medium"},
+		{name: "ConfigMap below short threshold", kind: "ConfigMap", deletedAgo: 2*time.Minute - time.Nanosecond, finalizers: []string{"example.com/cleanup"}},
+		{name: "ConfigMap below generic threshold", kind: "ConfigMap", deletedAgo: 10*time.Minute - time.Nanosecond, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "medium"},
+		{name: "ConfigMap at generic threshold", kind: "ConfigMap", deletedAgo: 10 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "high"},
+		{name: "ConfigMap below critical threshold", kind: "ConfigMap", deletedAgo: 30*time.Minute - time.Nanosecond, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "high"},
+		{name: "ConfigMap at critical threshold", kind: "ConfigMap", deletedAgo: 30 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "critical"},
+		{name: "ConfigMap without finalizer", kind: "ConfigMap", deletedAgo: 3 * time.Minute},
+		{name: "ConfigMap with foreground garbage collection keeps generic threshold", kind: "ConfigMap", deletedAgo: 3 * time.Minute, finalizers: []string{metav1.FinalizerDeleteDependents}},
+		{name: "ConfigMap with foreground garbage collection emits at generic threshold", kind: "ConfigMap", deletedAgo: 10 * time.Minute, finalizers: []string{metav1.FinalizerDeleteDependents}, want: true, wantLevel: "high"},
+		{name: "Secret with orphan garbage collection keeps generic threshold", kind: "Secret", deletedAgo: 3 * time.Minute, finalizers: []string{metav1.FinalizerOrphanDependents}},
+		{name: "ConfigMap with controller and garbage collection finalizers uses short threshold", kind: "ConfigMap", deletedAgo: 3 * time.Minute, finalizers: []string{metav1.FinalizerDeleteDependents, "example.com/cleanup"}, want: true, wantLevel: "medium"},
+		{name: "Pod keeps generic threshold", kind: "Pod", deletedAgo: 3 * time.Minute, finalizers: []string{"example.com/cleanup"}},
+		{name: "Pod below generic threshold", kind: "Pod", deletedAgo: 10*time.Minute - time.Nanosecond, finalizers: []string{"example.com/cleanup"}},
+		{name: "Pod at generic threshold", kind: "Pod", deletedAgo: 10 * time.Minute, finalizers: []string{"example.com/cleanup"}, want: true, wantLevel: "high"},
+		{name: "colliding CRD kind keeps generic threshold", kind: "ConfigMap", group: "example.com", deletedAgo: 3 * time.Minute, finalizers: []string{"example.com/cleanup"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detection, got := terminatingProblem(tt.kind, tt.group, object(tt.deletedAgo, tt.finalizers...), now)
+			if got != tt.want {
+				t.Fatalf("terminatingProblem() emitted = %v, want %v; detection=%+v", got, tt.want, detection)
+			}
+			if got && detection.Severity != tt.wantLevel {
+				t.Fatalf("terminatingProblem() severity = %q, want %q", detection.Severity, tt.wantLevel)
+			}
+		})
 	}
 }
 

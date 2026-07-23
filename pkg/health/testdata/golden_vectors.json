@@ -26,6 +26,42 @@
       "object": { "status": { "phase": "Running", "containerStatuses": [{ "ready": false, "state": { "waiting": { "reason": "CrashLoopBackOff" } } }] } }
     },
     {
+      "name": "pod serving inside crash settle window is degraded",
+      "kind": "Pod",
+      "level": "degraded",
+      "object": { "status": { "phase": "Running", "containerStatuses": [{ "name": "app", "ready": true, "restartCount": 2, "state": { "running": {} }, "lastState": { "terminated": { "reason": "Error", "exitCode": 1 } } }] } }
+    },
+    {
+      "name": "pod recovered crash history does not mask sibling image pull",
+      "kind": "Pod",
+      "level": "unhealthy",
+      "object": { "status": { "phase": "Running", "containerStatuses": [{ "name": "app", "ready": true, "restartCount": 2, "state": { "running": {} }, "lastState": { "terminated": { "reason": "Error", "exitCode": 1 } } }, { "name": "image", "ready": false, "state": { "waiting": { "reason": "ImagePullBackOff" } } }] } }
+    },
+    {
+      "name": "pod recovered crash history does not mask sibling oom",
+      "kind": "Pod",
+      "level": "unhealthy",
+      "object": { "status": { "phase": "Running", "containerStatuses": [{ "name": "app", "ready": true, "restartCount": 2, "state": { "running": {} }, "lastState": { "terminated": { "reason": "Error", "exitCode": 1 } } }, { "name": "memory", "ready": false, "state": { "terminated": { "reason": "OOMKilled", "exitCode": 137 } } }] } }
+    },
+    {
+      "name": "pod recovered crash history does not mask fatal init",
+      "kind": "Pod",
+      "level": "unhealthy",
+      "object": { "status": { "phase": "Running", "containerStatuses": [{ "name": "app", "ready": true, "restartCount": 2, "state": { "running": {} }, "lastState": { "terminated": { "reason": "Error", "exitCode": 1 } } }], "initContainerStatuses": [{ "name": "setup", "ready": false, "state": { "waiting": { "reason": "CreateContainerConfigError" } } }] } }
+    },
+    {
+      "name": "pod serving native sidecar inside crash settle window is degraded",
+      "kind": "Pod",
+      "level": "degraded",
+      "object": { "spec": { "initContainers": [{ "name": "sidecar", "restartPolicy": "Always" }] }, "status": { "phase": "Running", "initContainerStatuses": [{ "name": "sidecar", "ready": true, "restartCount": 2, "state": { "running": {} }, "lastState": { "terminated": { "reason": "Error", "exitCode": 1 } } }] } }
+    },
+    {
+      "name": "pod ordinary init with crash history is unhealthy",
+      "kind": "Pod",
+      "level": "unhealthy",
+      "object": { "spec": { "initContainers": [{ "name": "setup" }] }, "status": { "phase": "Pending", "initContainerStatuses": [{ "name": "setup", "ready": true, "restartCount": 2, "state": { "running": {} }, "lastState": { "terminated": { "reason": "Error", "exitCode": 1 } } }] } }
+    },
+    {
       "name": "pod node-lost (phase Unknown) is unknown",
       "kind": "Pod",
       "level": "unknown",

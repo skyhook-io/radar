@@ -79,8 +79,11 @@ func TestRecoveredAfterCrashIsHealthy(t *testing.T) {
 
 	looping := recovered.DeepCopy()
 	looping.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.NewTime(now.Add(-30 * time.Second))
-	if got := legacy(looping, now); got != "error" {
-		t.Errorf("just-restarted crashloop (Running 30s) = %q, want error", got)
+	if got := legacy(looping, now); got != "warning" {
+		t.Errorf("just-restarted crashloop (Running+Ready 30s) = %q, want warning", got)
+	}
+	if got := PodProblemReason(looping, now); got != "CrashLoopBackOff" {
+		t.Errorf("just-restarted crashloop reason = %q, want CrashLoopBackOff", got)
 	}
 
 	completedInit := &corev1.Pod{Status: corev1.PodStatus{
@@ -130,12 +133,14 @@ func TestRecoveredAfterOOMIsHealthy(t *testing.T) {
 	}
 }
 
-// TestProbeGatedReadyClearsCrashLoop: Ready clears a crashloop only when a
-// readiness probe backs it.
-func TestProbeGatedReadyClearsCrashLoop(t *testing.T) {
+func TestReadyContainerRemainsWarningUntilSettleWindow(t *testing.T) {
 	now := time.Now()
-	crash := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}}
-	probedRecovered := &corev1.Pod{
+	crash := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+		Reason:     "Error",
+		ExitCode:   1,
+		FinishedAt: metav1.NewTime(now.Add(-90 * time.Second)),
+	}}
+	probedFlapper := &corev1.Pod{
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", ReadinessProbe: &corev1.Probe{}}}},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
@@ -146,13 +151,267 @@ func TestProbeGatedReadyClearsCrashLoop(t *testing.T) {
 			}},
 		},
 	}
-	if got := legacy(probedRecovered, now); got != "healthy" {
-		t.Errorf("probed Ready pod recovered 90s = %q, want healthy", got)
+	if got := legacy(probedFlapper, now); got != "warning" {
+		t.Errorf("probed Ready pod restarted 90s ago = %q, want warning", got)
 	}
-	probelessLooping := probedRecovered.DeepCopy()
+	probelessLooping := probedFlapper.DeepCopy()
 	probelessLooping.Spec.Containers[0].ReadinessProbe = nil
-	if got := legacy(probelessLooping, now); got != "error" {
-		t.Errorf("probe-less Ready pod Running 90s = %q, want error (Ready untrusted)", got)
+	if got := legacy(probelessLooping, now); got != "warning" {
+		t.Errorf("probe-less Ready pod Running 90s = %q, want warning during settle window", got)
+	}
+	settled := probedFlapper.DeepCopy()
+	settled.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.NewTime(now.Add(-6 * time.Minute))
+	if got := legacy(settled, now); got != "healthy" {
+		t.Errorf("probed Ready pod Running 6m = %q, want healthy", got)
+	}
+	settledWithoutStartedAt := probedFlapper.DeepCopy()
+	settledWithoutStartedAt.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.Time{}
+	settledWithoutStartedAt.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt = metav1.NewTime(now.Add(-6 * time.Minute))
+	if got := legacy(settledWithoutStartedAt, now); got != "healthy" {
+		t.Errorf("probed Ready pod with old termination fallback = %q, want healthy", got)
+	}
+}
+
+func TestCrashLoopLevelTracksCurrentState(t *testing.T) {
+	now := time.Now()
+	crash := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+		Reason:     "Error",
+		ExitCode:   1,
+		FinishedAt: metav1.NewTime(now.Add(-30 * time.Second)),
+	}}
+	base := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(now.Add(-10 * time.Minute))},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:                 "app",
+				Ready:                true,
+				RestartCount:         2,
+				State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-30 * time.Second))}},
+				LastTerminationState: crash,
+			}},
+		},
+	}
+
+	tests := []struct {
+		name string
+		edit func(*corev1.Pod)
+		want string
+	}{
+		{
+			name: "recently up",
+			edit: func(*corev1.Pod) {},
+			want: "warning",
+		},
+		{
+			name: "high cumulative restarts stay warning while up",
+			edit: func(pod *corev1.Pod) {
+				pod.Status.ContainerStatuses[0].RestartCount = 40
+			},
+			want: "warning",
+		},
+		{
+			name: "waiting now",
+			edit: func(pod *corev1.Pod) {
+				cs := &pod.Status.ContainerStatuses[0]
+				cs.Ready = false
+				cs.State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
+			},
+			want: "error",
+		},
+		{
+			name: "running but not ready",
+			edit: func(pod *corev1.Pod) {
+				pod.Status.ContainerStatuses[0].Ready = false
+			},
+			want: "error",
+		},
+		{
+			name: "stable beyond settle window",
+			edit: func(pod *corev1.Pod) {
+				pod.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.NewTime(now.Add(-6 * time.Minute))
+			},
+			want: "healthy",
+		},
+		{
+			name: "old crash history separated by node outage is healthy",
+			edit: func(pod *corev1.Pod) {
+				pod.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt =
+					metav1.NewTime(now.Add(-3 * time.Hour))
+			},
+			want: "healthy",
+		},
+		{
+			name: "maximum backoff gap keeps a real loop visible",
+			edit: func(pod *corev1.Pod) {
+				pod.Status.ContainerStatuses[0].State.Running.StartedAt =
+					metav1.NewTime(now.Add(-time.Minute))
+				pod.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt =
+					metav1.NewTime(now.Add(-6 * time.Minute))
+			},
+			want: "warning",
+		},
+		{
+			name: "missing running timestamp fails closed as warning",
+			edit: func(pod *corev1.Pod) {
+				pod.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.Time{}
+			},
+			want: "warning",
+		},
+		{
+			name: "readiness gate does not make ready container down",
+			edit: func(pod *corev1.Pod) {
+				pod.Status.Conditions = []corev1.PodCondition{{
+					Type:   corev1.PodReady,
+					Status: corev1.ConditionFalse,
+					Reason: "ReadinessGatesNotReady",
+				}}
+			},
+			want: "warning",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := base.DeepCopy()
+			tt.edit(pod)
+			if got := legacy(pod, now); got != tt.want {
+				t.Fatalf("health = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCrashLoopLevelUsesWorstContainerState(t *testing.T) {
+	now := time.Now()
+	crash := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}}
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodRunning,
+		ContainerStatuses: []corev1.ContainerStatus{
+			{
+				Name:                 "serving",
+				Ready:                true,
+				RestartCount:         1,
+				State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-time.Minute))}},
+				LastTerminationState: crash,
+			},
+			{
+				Name:                 "down",
+				RestartCount:         1,
+				State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+				LastTerminationState: crash,
+			},
+		},
+	}}
+
+	if got := legacy(pod, now); got != "error" {
+		t.Fatalf("one recovered + one down container = %q, want error", got)
+	}
+}
+
+func TestRecoveredCrashHistoryDoesNotMaskOtherFailures(t *testing.T) {
+	now := time.Now()
+	recovered := corev1.ContainerStatus{
+		Name:         "app",
+		Ready:        true,
+		RestartCount: 2,
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{
+			StartedAt: metav1.NewTime(now.Add(-time.Minute)),
+		}},
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+			Reason: "Error", ExitCode: 1,
+		}},
+	}
+	tests := []struct {
+		name       string
+		addFailure func(*corev1.Pod)
+		wantReason string
+	}{
+		{
+			name: "sibling image pull",
+			addFailure: func(pod *corev1.Pod) {
+				pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, corev1.ContainerStatus{
+					Name:  "image",
+					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"}},
+				})
+			},
+			wantReason: "ImagePullBackOff",
+		},
+		{
+			name: "sibling oom",
+			addFailure: func(pod *corev1.Pod) {
+				pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, corev1.ContainerStatus{
+					Name: "memory",
+					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						Reason: "OOMKilled", ExitCode: 137,
+					}},
+				})
+			},
+			wantReason: "OOMKilled",
+		},
+		{
+			name: "fatal init",
+			addFailure: func(pod *corev1.Pod) {
+				pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+					Name:  "setup",
+					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CreateContainerConfigError"}},
+				}}
+			},
+			wantReason: "CreateContainerConfigError",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := &corev1.Pod{Status: corev1.PodStatus{
+				Phase:             corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{recovered},
+			}}
+			tt.addFailure(pod)
+			if got := legacy(pod, now); got != "error" {
+				t.Fatalf("health = %q, want error", got)
+			}
+			if got := PodProblemReason(pod, now); got != tt.wantReason {
+				t.Fatalf("reason = %q, want %q", got, tt.wantReason)
+			}
+		})
+	}
+}
+
+func TestRestartableInitCrashLoopUsesServingState(t *testing.T) {
+	now := time.Now()
+	always := corev1.ContainerRestartPolicyAlways
+	crash := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}}
+	sidecar := &corev1.Pod{
+		Spec: corev1.PodSpec{InitContainers: []corev1.Container{{
+			Name:          "sidecar",
+			RestartPolicy: &always,
+		}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			InitContainerStatuses: []corev1.ContainerStatus{{
+				Name:                 "sidecar",
+				Ready:                true,
+				RestartCount:         1,
+				State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-time.Minute))}},
+				LastTerminationState: crash,
+			}},
+		},
+	}
+	if got := legacy(sidecar, now); got != "warning" {
+		t.Errorf("probe-less serving sidecar = %q, want warning", got)
+	}
+
+	probed := sidecar.DeepCopy()
+	probed.Spec.InitContainers[0].ReadinessProbe = &corev1.Probe{}
+	if got := legacy(probed, now); got != "warning" {
+		t.Errorf("probe-gated Ready sidecar = %q, want warning during settle window", got)
+	}
+
+	ordinaryInit := sidecar.DeepCopy()
+	ordinaryInit.Spec.InitContainers[0].RestartPolicy = nil
+	if got := legacy(ordinaryInit, now); got != "error" {
+		t.Errorf("ordinary running init with crash history = %q, want error", got)
 	}
 }
 
@@ -240,8 +499,8 @@ func TestActiveCrashLoopContainerStatuses(t *testing.T) {
 	}
 
 	got := ActiveCrashLoopContainerStatuses(pod, now)
-	if len(got) != 2 || got[0].Name != "active" || got[1].Name != "init-active" {
-		t.Fatalf("active crashloop containers = %+v, want active and init-active", got)
+	if len(got) != 3 || got[0].Name != "active" || got[1].Name != "ready" || got[2].Name != "init-active" {
+		t.Fatalf("active crashloop containers = %+v, want active, ready flapper, and init-active", got)
 	}
 	if got := ActiveCrashLoopContainerStatuses(nil, now); got != nil {
 		t.Fatalf("nil pod returned %+v, want nil", got)
@@ -272,6 +531,32 @@ func TestPodCrashLoopDiagnosisOrdersCandidates(t *testing.T) {
 	cause, _ := PodCrashLoopDiagnosis(pod, now)
 	if !strings.Contains(cause, `container "waiting-older"`) || !strings.Contains(cause, "code 126") {
 		t.Fatalf("cause = %q, want current waiting crashloop to win over newer running tick", cause)
+	}
+}
+
+func TestPodCrashLoopDiagnosisUsesServingCopyDuringSettleWindow(t *testing.T) {
+	now := time.Now()
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodRunning,
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name:         "app",
+			Ready:        true,
+			RestartCount: 2,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{
+				StartedAt: metav1.NewTime(now.Add(-time.Minute)),
+			}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				Reason: "Error", ExitCode: 1, FinishedAt: metav1.NewTime(now.Add(-time.Minute)),
+			}},
+		}},
+	}}
+
+	cause, action := PodCrashLoopDiagnosis(pod, now)
+	if !strings.Contains(cause, "is serving again") || strings.Contains(cause, "is crashlooping") {
+		t.Fatalf("cause = %q, want recovered serving language", cause)
+	}
+	if !strings.Contains(action, "Watch for another restart") {
+		t.Fatalf("action = %q, want repeat-crash guidance", action)
 	}
 }
 
