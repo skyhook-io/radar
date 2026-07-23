@@ -77,7 +77,7 @@ func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name
 		signal.TopFinding = auditSum.TopFinding
 		for _, row := range auditRows[:min(len(auditRows), maxHealthAuditLines)] {
 			signal.AuditFindings = append(signal.AuditFindings, ai.HealthLine{
-				Severity: normalizeAuditSeverity(row.Severity),
+				Severity: row.Severity,
 				Reason:   row.CheckID,
 				Message:  capHealthMessage(row.Message),
 			})

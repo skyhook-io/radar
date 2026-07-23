@@ -104,7 +104,10 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
 			"(relationships, refs, issue/audit/policy rollups — issues carry " +
-			"diagnostic_context with cross-subject causal links + a confidence tier). This is the drill-down " +
+			"diagnostic_context with cross-subject causal links + a confidence tier; " +
+			"audit findings are static posture risk, not proof of a live outage; " +
+			"auditSummary.highestSeverity uses danger|warning, separate from " +
+			"issueSummary critical|warning). This is the drill-down " +
 			"tool, not the best first call for broad incidents. Start with issues, " +
 			"get_dashboard, search, or list_resources to rank candidates; then call " +
 			"get_resource for the exact object. If you are looking for a string across " +
@@ -181,7 +184,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"Pod/Deployment/StatefulSet/DaemonSet, bundles: the resource (Kubernetes-shaped detail) + diagnostic " +
 			"resourceContext (managedBy, exposes, selectedBy, uses, runsOn, " +
 			"issue/audit/policy rollups — issues carry diagnostic_context with cross-subject " +
-			"causal links + a confidence tier to walk symptom→root) + current AND previous container logs across the " +
+			"causal links + a confidence tier to walk symptom→root; audit findings are " +
+			"static posture risk, not proof of a live outage; auditSummary.highestSeverity " +
+			"uses danger|warning, separate from issueSummary critical|warning) + current AND previous container logs across the " +
 			"workload's pods + crashCause evidence that pairs active crashloop status with " +
 			"one highest-signal line from the crashed instance's already-filtered logs " +
 			"(evidence, not a root-cause verdict; its logLineSelection field states how the " +
@@ -246,7 +251,8 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"under/over-utilization). Each finding has remediation guidance. " +
 			"INDEPENDENT of operational health: a healthy pod can have many audit findings " +
 			"(badly configured but working), a crashing pod can have zero (cleanly " +
-			"configured but failing). For 'what's broken right now?' use the issues tool. " +
+			"configured but failing). summary.critical counts danger-severity posture " +
+			"findings; it is not the live-issue critical scale. For 'what's broken right now?' use the issues tool. " +
 			"Respects user's audit settings (ignored namespaces, disabled checks). Filter " +
 			"by namespace, category, or severity. Resources absent from findings should " +
 			"NOT be reported as non-compliant — empty findings for a scope means no " +
@@ -605,7 +611,7 @@ type getResourceInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes. include=changes follows the existing comma-separated include pattern. Separate from context. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
-	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
+	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). issueSummary uses live-operational critical|warning; auditSummary uses static-posture danger|warning and is not proof of an outage. For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
 }
 
 type topologyInput struct {

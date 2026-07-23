@@ -41,7 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/skyhook-io/radar/internal/audit"
+	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
@@ -537,7 +537,7 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, group, kind, namespace
 	}
 	// Sort by (severity desc, Reason asc) so TopReason is deterministic
 	// across runs even when multiple rows tie on severity. Mirrors the
-	// stable sort applied in computeAuditSummaryForResource.
+	// stable sort applied in auditcontext.SummarizeResource.
 	sort.Slice(matched, func(i, j int) bool {
 		ri, rj := issues.SeverityRank(matched[i].Severity), issues.SeverityRank(matched[j].Severity)
 		if ri != rj {
@@ -556,87 +556,11 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, group, kind, namespace
 	}, matched
 }
 
-// computeAuditSummaryForResource looks up audit findings for the subject
-// resource via the canonical (Kind/ns/name) tuple. kind MUST be the Pascal
-// singular form the audit check runner writes into Finding.Kind (e.g. "Pod",
-// not "pod" or "pods") — the caller derives it from obj's TypeMeta. Without
-// a Kind-aware key, a Deployment "web" in "prod" would inherit findings
-// from a Service "web" in the same namespace, since map iteration in the
-// previous implementation only compared (namespace, name).
-//
-// TopFinding is selected deterministically: highest severity wins, with
-// CheckID as the ascending tiebreaker. Map iteration ordering does NOT
-// influence the choice — agents pinning regression tests on
-// resourceContext output rely on stable field values across runs.
 func computeAuditSummaryForResource(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
-	sum, _ := computeAuditSummaryAndRows(cache, group, kind, namespace, name)
+	sum, _ := auditcontext.SummarizeResource(cache, group, kind, namespace, name)
 	return sum
 }
 
 func computeAuditSummaryAndRows(cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
-	if cache == nil || kind == "" {
-		return nil, nil
-	}
-	// Match computeIssueSummaryForResource's guard: passing []string{""} to
-	// RunFromCache would filter to literally namespace="" resources instead
-	// of scanning all namespaces. Latent today since the audit suite
-	// doesn't cover cluster-scoped kinds, but the inconsistency would
-	// silently miss findings the moment a cluster-scoped check lands.
-	var namespaces []string
-	if namespace != "" {
-		namespaces = []string{namespace}
-	}
-	results := audit.RunFromCache(cache, namespaces, nil)
-	if results == nil || len(results.Findings) == 0 {
-		return nil, nil
-	}
-	idx := bpaudit.IndexByResource(results.Findings)
-	match := idx[bpaudit.ResourceKey(group, kind, namespace, name)]
-	if len(match) == 0 {
-		return nil, nil
-	}
-
-	// Sort by (severity desc, CheckID asc) so TopFinding is deterministic
-	// across runs even when multiple findings tie on severity.
-	sort.Slice(match, func(i, j int) bool {
-		ri, rj := auditSeverityRank(match[i].Severity), auditSeverityRank(match[j].Severity)
-		if ri != rj {
-			return ri > rj
-		}
-		return match[i].CheckID < match[j].CheckID
-	})
-	topFinding := match[0].CheckID
-	return &resourcecontext.AuditSummary{
-		Count:           len(match),
-		HighestSeverity: normalizeAuditSeverity(match[0].Severity),
-		TopFinding:      topFinding,
-	}, match
-}
-
-// normalizeAuditSeverity maps the audit suite's emission vocabulary
-// ("danger" / "warning") onto the unified resourceContext severity
-// scale ("critical" / "warning") used by issueSummary. Two sibling
-// fields in the same response reporting severity in different
-// vocabularies — "danger" vs "critical" — is a wire-shape footgun for
-// consumers. Empty / unknown severities pass through unchanged so the
-// contract stays explicit if the audit suite ever grows new values.
-func normalizeAuditSeverity(s string) string {
-	switch s {
-	case bpaudit.SeverityDanger:
-		return string(issues.SeverityCritical)
-	case bpaudit.SeverityWarning:
-		return string(issues.SeverityWarning)
-	}
-	return s
-}
-
-// auditSeverityRank orders audit finding severities ("danger" > "warning").
-func auditSeverityRank(s string) int {
-	switch s {
-	case bpaudit.SeverityDanger:
-		return 2
-	case bpaudit.SeverityWarning:
-		return 1
-	}
-	return 0
+	return auditcontext.SummarizeResource(cache, group, kind, namespace, name)
 }

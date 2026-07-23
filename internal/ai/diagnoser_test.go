@@ -148,17 +148,39 @@ func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
 	auditOnly := taskPrompt(Request{
 		Kind: "Pod", Namespace: "prod", Name: "api-7",
 		Health: &ResourceHealthSignal{
-			Health: "healthy", AuditCount: 1, AuditSeverity: "warning", TopFinding: "missingResourceRequests",
+			Health: "healthy", AuditCount: 1, AuditSeverity: "danger", TopFinding: "runAsRoot",
 		},
 	})
 	for _, want := range []string{
 		"static posture finding",
+		"highest severity danger",
 		"not proof of a live outage",
 		"Verify quickly",
 	} {
 		if !strings.Contains(auditOnly, want) {
 			t.Errorf("audit-only prompt missing %q:\n%s", want, auditOnly)
 		}
+	}
+
+	coexisting := taskPrompt(Request{
+		Kind: "Deployment", Namespace: "prod", Name: "api",
+		Health: &ResourceHealthSignal{
+			IssueCount: 1, HighestSeverity: "critical", TopReason: "CrashLoopBackOff",
+			AuditCount: 1, AuditSeverity: "danger", TopFinding: "runAsRoot",
+		},
+	})
+	for _, want := range []string{
+		"highest severity critical: CrashLoopBackOff",
+		"static posture finding; highest severity danger: runAsRoot",
+		"not proof of a live outage",
+		"Find the specific root cause",
+	} {
+		if !strings.Contains(coexisting, want) {
+			t.Errorf("coexisting issue/audit prompt missing %q:\n%s", want, coexisting)
+		}
+	}
+	if strings.Contains(coexisting, "Verify quickly") {
+		t.Errorf("coexisting issue/audit prompt used audit-only healthy framing:\n%s", coexisting)
 	}
 }
 
