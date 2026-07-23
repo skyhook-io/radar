@@ -1132,7 +1132,7 @@ func diffConfigMapModifiedKeys(oldData, newData map[string]string, keys []string
 	var fallback []string
 	for _, key := range keys {
 		structured, ok := structuredConfigValueDiff(key, oldData[key], newData[key])
-		if !ok || len(structured) == 0 {
+		if !ok || len(structured) == 0 || len(changes)+len(structured) > configMapStructuredFieldCap {
 			fallback = append(fallback, key)
 			continue
 		}
@@ -1159,8 +1159,9 @@ func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool)
 		return nil, false
 	}
 	state := structuredDiffState{
-		fieldCap: configMapStructuredFieldCap,
-		nodeCap:  configMapStructuredNodeCap,
+		fieldCap:     configMapStructuredFieldCap,
+		nodeCap:      configMapStructuredNodeCap,
+		redactValues: isPropertiesConfigKey(key),
 	}
 	state.diff(fmt.Sprintf("data.%s", key), oldParsed, newParsed, 0)
 	if state.capped {
@@ -1333,12 +1334,13 @@ func normalizeStructuredValue(v any) any {
 }
 
 type structuredDiffState struct {
-	changes  []FieldChange
-	fields   int
-	nodes    int
-	fieldCap int
-	nodeCap  int
-	capped   bool
+	changes      []FieldChange
+	fields       int
+	nodes        int
+	fieldCap     int
+	nodeCap      int
+	redactValues bool
+	capped       bool
 }
 
 func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
@@ -1376,7 +1378,7 @@ func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
 	newSlice, newIsSlice := newVal.([]any)
 	if oldIsSlice && newIsSlice {
 		if len(oldSlice) != len(newSlice) {
-			s.add(path, oldVal, newVal)
+			s.add(path, oldVal, newVal, depth)
 			return
 		}
 		for i := range oldSlice {
@@ -1386,29 +1388,48 @@ func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
 	}
 
 	if !reflect.DeepEqual(oldVal, newVal) {
-		s.add(path, oldVal, newVal)
+		s.add(path, oldVal, newVal, depth)
 	}
 }
 
-func (s *structuredDiffState) add(path string, oldVal, newVal any) {
+func (s *structuredDiffState) add(path string, oldVal, newVal any, depth int) {
 	if s.fields >= s.fieldCap {
 		s.capped = true
 		return
 	}
 	s.fields++
-	// Dotenv keys get no special blanket redaction: like workload env vars,
-	// sensitive names ([REDACTED] via sensitivePath) and secret-shaped values
-	// (RedactSecrets) are masked, while a changed LOG_LEVEL stays readable —
-	// hiding every value would discard the diagnostic delta this diff exists
-	// to surface.
+	if s.redactValues {
+		oldVal = redactPresentConfigValue(oldVal)
+		newVal = redactPresentConfigValue(newVal)
+	}
+	oldSanitized := s.sanitizeConfigValue(path, oldVal, depth)
+	newSanitized := s.sanitizeConfigValue(path, newVal, depth)
+	if s.capped {
+		return
+	}
 	s.changes = append(s.changes, FieldChange{
 		Path:     path,
-		OldValue: sanitizeConfigValue(path, oldVal),
-		NewValue: sanitizeConfigValue(path, newVal),
+		OldValue: oldSanitized,
+		NewValue: newSanitized,
 	})
 }
 
-func sanitizeConfigValue(path string, value any) any {
+func redactPresentConfigValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	return "[REDACTED]"
+}
+
+func (s *structuredDiffState) sanitizeConfigValue(path string, value any, depth int) any {
+	if s.capped {
+		return nil
+	}
+	s.nodes++
+	if s.nodes > s.nodeCap || depth > configMapStructuredDepthCap {
+		s.capped = true
+		return nil
+	}
 	if sensitivePath(path) {
 		return "[REDACTED]"
 	}
@@ -1418,13 +1439,18 @@ func sanitizeConfigValue(path string, value any) any {
 	case map[string]any:
 		out := make(map[string]any, len(typed))
 		for k, child := range typed {
-			out[k] = sanitizeConfigValue(path+"."+k, child)
+			if s.fields >= s.fieldCap {
+				s.capped = true
+				return nil
+			}
+			s.fields++
+			out[k] = s.sanitizeConfigValue(path+"."+k, child, depth+1)
 		}
 		return out
 	case []any:
 		out := make([]any, len(typed))
 		for i, child := range typed {
-			out[i] = sanitizeConfigValue(fmt.Sprintf("%s[%d]", path, i), child)
+			out[i] = s.sanitizeConfigValue(fmt.Sprintf("%s[%d]", path, i), child, depth+1)
 		}
 		return out
 	case nil:
@@ -1450,8 +1476,10 @@ func sensitivePath(path string) bool {
 func sensitiveConfigPathPart(parts []string, index int) bool {
 	part := strings.ToLower(parts[index])
 	switch part {
-	case "pass", "pw", "pwd", "cred", "creds":
+	case "pass", "pw", "pwd", "passphrase", "cred", "creds":
 		return true
+	case "auth", "dsn", "webhook":
+		return terminalConfigPathPart(parts, index)
 	case "key":
 		if index > 0 && sensitiveConfigKeyQualifier(parts[index-1]) {
 			return true
@@ -1465,9 +1493,23 @@ func sensitiveConfigPathPart(parts []string, index int) bool {
 	return false
 }
 
+func terminalConfigPathPart(parts []string, index int) bool {
+	for _, part := range parts[index+1:] {
+		if part == "" {
+			return false
+		}
+		for _, char := range part {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func sensitiveConfigKeyQualifier(part string) bool {
 	switch strings.ToLower(part) {
-	case "access", "admin", "api", "auth", "client", "database", "db", "encryption", "hmac", "license", "master", "mongo", "mongodb", "mysql", "pg", "postgres", "postgresql", "private", "redis", "secret", "signing", "smtp", "ssh", "stripe", "tls", "user":
+	case "access", "admin", "api", "app", "auth", "client", "database", "db", "encryption", "hmac", "jwt", "license", "master", "mongo", "mongodb", "mysql", "pg", "postgres", "postgresql", "private", "redis", "secret", "signing", "smtp", "ssh", "stripe", "tls", "user":
 		return true
 	default:
 		return false
@@ -3354,6 +3396,7 @@ func getModifiedKeys(old, new map[string]string) []string {
 			modified = append(modified, k)
 		}
 	}
+	sort.Strings(modified)
 	return modified
 }
 

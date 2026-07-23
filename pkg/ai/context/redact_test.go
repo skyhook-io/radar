@@ -84,6 +84,14 @@ func TestRedactSecrets_CredentialURLs(t *testing.T) {
 		{name: "colon in password", in: "mysql://user:p:a:ss@host/db", want: "mysql://user:[REDACTED]@host/db"},
 		{name: "unencoded at in password", in: "mongodb://user:p@ss@host/db", want: "mongodb://user:[REDACTED]@host/db"},
 		{name: "at in query", in: "postgres://user:pass@host?email=a@b", want: "postgres://user:[REDACTED]@host?email=a@b"},
+		{name: "empty host path", in: "amqp://guest:secret@/vhost", want: "amqp://guest:[REDACTED]@/vhost"},
+		{name: "empty host query", in: "amqp://user:pass@?heartbeat=30", want: "amqp://user:[REDACTED]@?heartbeat=30"},
+		{name: "trailing at", in: "mysql://user:pass@", want: "mysql://user:[REDACTED]@"},
+		{name: "multiple JSON fields", in: `{"primary":"postgres://svc:p1@db1","replica":"postgres://svc:p2@db2"}`, want: `{"primary":"postgres://svc:[REDACTED]@db1","replica":"postgres://svc:[REDACTED]@db2"}`},
+		{name: "multiple comma separated", in: "https://u:p1@e1,https://u:p2@e2", want: "https://u:[REDACTED]@e1,https://u:[REDACTED]@e2"},
+		{name: "docker", in: "docker://user:pass@registry.example/repo", want: "docker://user:[REDACTED]@registry.example/repo"},
+		{name: "docker pullable", in: "docker-pullable://user:pass@registry.example/repo", want: "docker-pullable://user:[REDACTED]@registry.example/repo"},
+		{name: "oci", in: "oci://user:pass@registry.example/repo", want: "oci://user:[REDACTED]@registry.example/repo"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := RedactSecrets(tc.in); got != tc.want {
@@ -98,12 +106,29 @@ func TestRedactSecrets_PreservesURLsWithoutCredentials(t *testing.T) {
 		"https://api.example.com/v1",
 		"ssh://user@host/repo",
 		"git@github.com:org/repo",
-		"docker://nginx:1.21@sha256:0123456789abcdef",
-		"docker-pullable://nginx:1.21@sha256:0123456789abcdef",
-		"oci://registry.example/app:1.2@sha256:0123456789abcdef",
+		"docker://nginx:1.21@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"docker-pullable://nginx:1.21@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"oci://registry.example/app:1.2@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"docker.io/library/nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"docker://0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"containerd://0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"cri-o://0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	} {
 		if got := RedactSecrets(input); got != input {
 			t.Errorf("RedactSecrets(%q) = %q", input, got)
+		}
+	}
+}
+
+func TestRedactSecrets_DoesNotTreatUnanchoredHexAsDigest(t *testing.T) {
+	hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	for input, want := range map[string]string{
+		hash:                "[REDACTED]",
+		"notsha256:" + hash: "notsha256:[REDACTED]",
+	} {
+		if got := RedactSecrets(input); got != want {
+			t.Errorf("RedactSecrets(%q) = %q, want %q", input, got, want)
 		}
 	}
 }
@@ -117,7 +142,7 @@ func TestRedactSecrets_EmptyString(t *testing.T) {
 
 func TestIsSensitiveEnvName(t *testing.T) {
 	for _, name := range []string{
-		"API_PASSWORD", "database-passwd", "AUTH_TOKEN", "client.secret",
+		"API_PASSWORD", "database-passwd", "KEY_PASSPHRASE", "AUTH_TOKEN", "client.secret",
 		"cloud_credential", "API_KEY", "AccessKey", "PRIVATE_KEY",
 	} {
 		if !IsSensitiveEnvName(name) {

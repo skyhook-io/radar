@@ -12,6 +12,7 @@ package k8s
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -710,6 +711,7 @@ func TestComputeDiff_ConfigMapStructuredValuesRedactCredentialURLs(t *testing.T)
 		oldVal string
 		newVal string
 		path   string
+		want   string
 	}{
 		{
 			name:   "yaml",
@@ -717,6 +719,7 @@ func TestComputeDiff_ConfigMapStructuredValuesRedactCredentialURLs(t *testing.T)
 			oldVal: "database:\n  connection: postgres://user:oldpass@db.example/app\n",
 			newVal: "database:\n  connection: postgres://user:newpass@db.example/app\n",
 			path:   "data.database.conf.database.connection",
+			want:   "postgres://user:[REDACTED]@db.example/app",
 		},
 		{
 			name:   "json",
@@ -724,6 +727,7 @@ func TestComputeDiff_ConfigMapStructuredValuesRedactCredentialURLs(t *testing.T)
 			oldVal: `{"database":{"connection":"postgres://user:oldpass@db.example/app"}}`,
 			newVal: `{"database":{"connection":"postgres://user:newpass@db.example/app"}}`,
 			path:   "data.database.json.database.connection",
+			want:   "postgres://user:[REDACTED]@db.example/app",
 		},
 		{
 			name:   "properties",
@@ -731,6 +735,7 @@ func TestComputeDiff_ConfigMapStructuredValuesRedactCredentialURLs(t *testing.T)
 			oldVal: "database.url=postgres://user:oldpass@db.example/app",
 			newVal: "database.url=postgres://user:newpass@db.example/app",
 			path:   "data.application.properties.database.url",
+			want:   "[REDACTED]",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -744,9 +749,8 @@ func TestComputeDiff_ConfigMapStructuredValuesRedactCredentialURLs(t *testing.T)
 			if !ok {
 				t.Fatalf("expected credential URL change at %q, got %+v", tc.path, diff.Fields)
 			}
-			want := "postgres://user:[REDACTED]@db.example/app"
-			if change.OldValue != want || change.NewValue != want {
-				t.Fatalf("credential URL redaction = %#v -> %#v, want %q", change.OldValue, change.NewValue, want)
+			if change.OldValue != tc.want || change.NewValue != tc.want {
+				t.Fatalf("credential URL redaction = %#v -> %#v, want %q", change.OldValue, change.NewValue, tc.want)
 			}
 		})
 	}
@@ -793,50 +797,63 @@ func TestComputeDiff_ConfigMapPropertiesFormats(t *testing.T) {
 	}
 }
 
-// Dotenv values follow the same discipline as workload env vars: sensitive
-// names redact, everything else stays readable — a changed MODE is exactly the
-// delta this diff exists to surface.
-func TestComputeDiff_ConfigMapDotEnvRedactsSensitiveNamesOnly(t *testing.T) {
+func TestComputeDiff_ConfigMapDotEnvRedactsAllValues(t *testing.T) {
 	old := &corev1.ConfigMap{Data: map[string]string{
-		".env": "MODE=old\nDB_PASS=hunter2hunter2",
+		".env": "MODE=old\nDB_PASS=hunter2hunter2\nSENDGRID_KEY=old-vendor-secret\nREMOVED=old-value",
 	}}
 	updated := &corev1.ConfigMap{Data: map[string]string{
-		".env": "MODE=new\nDB_PASS=s3cr3ts3cr3t",
+		".env": "MODE=new\nDB_PASS=s3cr3ts3cr3t\nSENDGRID_KEY=new-vendor-secret\nADDED=new-value",
 	}}
 	diff := ComputeDiff("ConfigMap", old, updated)
 	if diff == nil {
 		t.Fatal("ComputeDiff returned nil")
 	}
 	mode, ok := findChangePath(diff.Fields, "data..env.MODE")
-	if !ok || mode.OldValue != "old" || mode.NewValue != "new" {
-		t.Fatalf("non-sensitive dotenv value must stay readable: %+v", diff.Fields)
+	if !ok || mode.OldValue != "[REDACTED]" || mode.NewValue != "[REDACTED]" {
+		t.Fatalf("dotenv value was not redacted: %+v", diff.Fields)
 	}
-	pass, ok := findChangePath(diff.Fields, "data..env.DB_PASS")
-	if !ok {
-		t.Fatalf("expected dotenv change at data..env.DB_PASS, got %+v", diff.Fields)
+	for _, path := range []string{"data..env.DB_PASS", "data..env.SENDGRID_KEY"} {
+		change, ok := findChangePath(diff.Fields, path)
+		if !ok {
+			t.Fatalf("expected dotenv change at %s, got %+v", path, diff.Fields)
+		}
+		if change.OldValue != "[REDACTED]" || change.NewValue != "[REDACTED]" {
+			t.Fatalf("dotenv value at %s was not redacted: %#v -> %#v", path, change.OldValue, change.NewValue)
+		}
 	}
-	if pass.OldValue != "[REDACTED]" || pass.NewValue != "[REDACTED]" {
-		t.Fatalf("sensitive dotenv name was not redacted: %#v -> %#v", pass.OldValue, pass.NewValue)
+	removed, ok := findChangePath(diff.Fields, "data..env.REMOVED")
+	if !ok || removed.OldValue != "[REDACTED]" || removed.NewValue != nil {
+		t.Fatalf("removed dotenv value was not safely represented: %+v", diff.Fields)
+	}
+	added, ok := findChangePath(diff.Fields, "data..env.ADDED")
+	if !ok || added.OldValue != nil || added.NewValue != "[REDACTED]" {
+		t.Fatalf("added dotenv value was not safely represented: %+v", diff.Fields)
 	}
 }
 
-// A structured extension beats the dotenv name fragment: app.env.yaml is a
-// YAML overlay whose values must stay visible under normal path/pattern
-// redaction, not be blanket-blanked as dotenv.
-func TestComputeDiff_ConfigMapEnvNamedYAMLKeepsValues(t *testing.T) {
-	old := &corev1.ConfigMap{Data: map[string]string{
-		"app.env.yaml": "log:\n  level: info\nnet:\n  port: 8080",
-	}}
-	updated := &corev1.ConfigMap{Data: map[string]string{
-		"app.env.yaml": "log:\n  level: debug\nnet:\n  port: 8080",
-	}}
-	diff := ComputeDiff("ConfigMap", old, updated)
-	if diff == nil {
-		t.Fatal("ComputeDiff returned nil")
-	}
-	change, ok := findChangePath(diff.Fields, "data.app.env.yaml.log.level")
-	if !ok || change.OldValue != "info" || change.NewValue != "debug" {
-		t.Fatalf("env-named YAML overlay lost its readable field delta: %+v", diff.Fields)
+func TestComputeDiff_ConfigMapEnvNamedStructuredFilesKeepValues(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		key    string
+		oldVal string
+		newVal string
+		path   string
+	}{
+		{name: "yaml", key: "app.env.yaml", oldVal: "log:\n  level: info\nnet:\n  port: 8080", newVal: "log:\n  level: debug\nnet:\n  port: 8080", path: "data.app.env.yaml.log.level"},
+		{name: "json", key: "app.env.json", oldVal: `{"log":{"level":"info"}}`, newVal: `{"log":{"level":"debug"}}`, path: "data.app.env.json.log.level"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &corev1.ConfigMap{Data: map[string]string{tc.key: tc.oldVal}}
+			updated := &corev1.ConfigMap{Data: map[string]string{tc.key: tc.newVal}}
+			diff := ComputeDiff("ConfigMap", old, updated)
+			if diff == nil {
+				t.Fatal("ComputeDiff returned nil")
+			}
+			change, ok := findChangePath(diff.Fields, tc.path)
+			if !ok || change.OldValue != "info" || change.NewValue != "debug" {
+				t.Fatalf("env-named structured file lost its readable field delta: %+v", diff.Fields)
+			}
+		})
 	}
 }
 
@@ -865,7 +882,7 @@ func TestComputeDiff_ConfigMapPropertiesRedactsSensitiveAliases(t *testing.T) {
 	}
 }
 
-func TestComputeDiff_ConfigMapPropertiesKeepsNonSecretKeys(t *testing.T) {
+func TestComputeDiff_ConfigMapPropertiesRedactsAllValues(t *testing.T) {
 	old := &corev1.ConfigMap{Data: map[string]string{
 		"application.properties": "cache_key=old-cache\nauth_mode=optional",
 	}}
@@ -876,16 +893,16 @@ func TestComputeDiff_ConfigMapPropertiesKeepsNonSecretKeys(t *testing.T) {
 	if diff == nil {
 		t.Fatal("ComputeDiff returned nil")
 	}
-	for path, want := range map[string][2]string{
-		"data.application.properties.cache_key": {"old-cache", "new-cache"},
-		"data.application.properties.auth_mode": {"optional", "required"},
+	for _, path := range []string{
+		"data.application.properties.cache_key",
+		"data.application.properties.auth_mode",
 	} {
 		change, ok := findChangePath(diff.Fields, path)
 		if !ok {
 			t.Fatalf("expected properties change at %q, got %+v", path, diff.Fields)
 		}
-		if change.OldValue != want[0] || change.NewValue != want[1] {
-			t.Fatalf("properties value at %q = %#v -> %#v, want %q -> %q", path, change.OldValue, change.NewValue, want[0], want[1])
+		if change.OldValue != "[REDACTED]" || change.NewValue != "[REDACTED]" {
+			t.Fatalf("properties value at %q was not redacted: %#v -> %#v", path, change.OldValue, change.NewValue)
 		}
 	}
 }
@@ -909,6 +926,67 @@ func TestComputeDiff_ConfigMapYAMLRedactsCompactSecretNames(t *testing.T) {
 		}
 		if change.OldValue != "[REDACTED]" || change.NewValue != "[REDACTED]" {
 			t.Fatalf("compact secret at %q was not redacted: %#v -> %#v", path, change.OldValue, change.NewValue)
+		}
+	}
+}
+
+func TestComputeDiff_ConfigMapYAMLRedactsStructuredSecretAliases(t *testing.T) {
+	old := &corev1.ConfigMap{Data: map[string]string{
+		"app.yaml": "keystore:\n  passphrase: old-passphrase\njwt:\n  key: old-jwt\nsentry_dsn: old-dsn\nslack_webhook: old-hook\ndatadog:\n  app_key: old-app-key\ntwilio_auth: old-auth\nauth_mode: optional\ncache_key: old-cache\n",
+	}}
+	updated := &corev1.ConfigMap{Data: map[string]string{
+		"app.yaml": "keystore:\n  passphrase: new-passphrase\njwt:\n  key: new-jwt\nsentry_dsn: new-dsn\nslack_webhook: new-hook\ndatadog:\n  app_key: new-app-key\ntwilio_auth: new-auth\nauth_mode: required\ncache_key: new-cache\n",
+	}}
+	diff := ComputeDiff("ConfigMap", old, updated)
+	if diff == nil {
+		t.Fatal("ComputeDiff returned nil")
+	}
+	for _, path := range []string{
+		"data.app.yaml.keystore.passphrase",
+		"data.app.yaml.jwt.key",
+		"data.app.yaml.sentry_dsn",
+		"data.app.yaml.slack_webhook",
+		"data.app.yaml.datadog.app_key",
+		"data.app.yaml.twilio_auth",
+	} {
+		change, ok := findChangePath(diff.Fields, path)
+		if !ok {
+			t.Fatalf("expected YAML change at %q, got %+v", path, diff.Fields)
+		}
+		if change.OldValue != "[REDACTED]" || change.NewValue != "[REDACTED]" {
+			t.Fatalf("structured secret at %q was not redacted: %#v -> %#v", path, change.OldValue, change.NewValue)
+		}
+	}
+	for path, want := range map[string][2]string{
+		"data.app.yaml.auth_mode": {"optional", "required"},
+		"data.app.yaml.cache_key": {"old-cache", "new-cache"},
+	} {
+		change, ok := findChangePath(diff.Fields, path)
+		if !ok || change.OldValue != want[0] || change.NewValue != want[1] {
+			t.Fatalf("non-secret YAML value at %q was over-redacted: %+v", path, diff.Fields)
+		}
+	}
+}
+
+func TestComputeDiff_ConfigMapYAMLRedactsSecretArrays(t *testing.T) {
+	old := &corev1.ConfigMap{Data: map[string]string{
+		"app.yaml": "receivers:\n  webhook:\n    - old-hook\n  dsn:\n    - old-dsn\n  auth:\n    - old-auth\n",
+	}}
+	updated := &corev1.ConfigMap{Data: map[string]string{
+		"app.yaml": "receivers:\n  webhook:\n    - new-hook\n  dsn:\n    - new-dsn\n  auth:\n    - new-auth\n",
+	}}
+	diff := ComputeDiff("ConfigMap", old, updated)
+	if diff == nil {
+		t.Fatal("ComputeDiff returned nil")
+	}
+	for _, path := range []string{
+		"data.app.yaml.receivers.webhook[0]",
+		"data.app.yaml.receivers.dsn[0]",
+		"data.app.yaml.receivers.auth[0]",
+	} {
+		change, ok := findChangePath(diff.Fields, path)
+		if !ok || change.OldValue != "[REDACTED]" || change.NewValue != "[REDACTED]" {
+			t.Fatalf("secret array value at %q was not redacted: %+v", path, diff.Fields)
 		}
 	}
 }
@@ -1023,6 +1101,88 @@ func TestComputeDiff_ConfigMapStructuredCapsFallBack(t *testing.T) {
 		updated := &corev1.ConfigMap{Data: map[string]string{"deep.json": newVal}}
 		assertKeyOnlyDiff(t, ComputeDiff("ConfigMap", old, updated), "data (modified keys)", "deep.json")
 	})
+
+	t.Run("added subtree field count", func(t *testing.T) {
+		added := make(map[string]any, configMapStructuredFieldCap+1)
+		for i := 0; i <= configMapStructuredFieldCap; i++ {
+			added[fmt.Sprintf("field-%02d", i)] = "value"
+		}
+		oldVal := `{"stable":true}`
+		newVal, err := json.Marshal(map[string]any{"stable": true, "added": added})
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := &corev1.ConfigMap{Data: map[string]string{"added-wide.json": oldVal}}
+		updated := &corev1.ConfigMap{Data: map[string]string{"added-wide.json": string(newVal)}}
+		assertKeyOnlyDiff(t, ComputeDiff("ConfigMap", old, updated), "data (modified keys)", "added-wide.json")
+	})
+
+	t.Run("added subtree node count", func(t *testing.T) {
+		oldVal := `{"stable":true}`
+		newVal, err := json.Marshal(map[string]any{"stable": true, "added": make([]string, configMapStructuredNodeCap+1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := &corev1.ConfigMap{Data: map[string]string{"added-large-tree.json": oldVal}}
+		updated := &corev1.ConfigMap{Data: map[string]string{"added-large-tree.json": string(newVal)}}
+		assertKeyOnlyDiff(t, ComputeDiff("ConfigMap", old, updated), "data (modified keys)", "added-large-tree.json")
+	})
+
+	t.Run("added subtree depth", func(t *testing.T) {
+		added := any("value")
+		for range configMapStructuredDepthCap + 1 {
+			added = map[string]any{"nested": added}
+		}
+		oldVal := `{"stable":true}`
+		newVal, err := json.Marshal(map[string]any{"stable": true, "added": added})
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := &corev1.ConfigMap{Data: map[string]string{"added-deep.json": oldVal}}
+		updated := &corev1.ConfigMap{Data: map[string]string{"added-deep.json": string(newVal)}}
+		assertKeyOnlyDiff(t, ComputeDiff("ConfigMap", old, updated), "data (modified keys)", "added-deep.json")
+	})
+}
+
+func TestComputeDiff_ConfigMapStructuredFieldCapSpansModifiedKeys(t *testing.T) {
+	oldData := map[string]string{}
+	newData := map[string]string{}
+	for _, configKey := range []string{"a.json", "b.json"} {
+		oldFields := make(map[string]string, 30)
+		newFields := make(map[string]string, 30)
+		for i := range 30 {
+			field := fmt.Sprintf("field-%02d", i)
+			oldFields[field] = "old"
+			newFields[field] = "new"
+		}
+		oldVal, err := json.Marshal(oldFields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		newVal, err := json.Marshal(newFields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldData[configKey] = string(oldVal)
+		newData[configKey] = string(newVal)
+	}
+
+	diff := ComputeDiff("ConfigMap", &corev1.ConfigMap{Data: oldData}, &corev1.ConfigMap{Data: newData})
+	if diff == nil {
+		t.Fatal("ComputeDiff returned nil")
+	}
+	if len(diff.Fields) > configMapStructuredFieldCap+1 {
+		t.Fatalf("aggregate structured field cap exceeded: %d fields", len(diff.Fields))
+	}
+	fallback, ok := findChangePath(diff.Fields, "data (modified keys)")
+	if !ok || !reflect.DeepEqual(fallback.OldValue, []string{"b.json"}) || !reflect.DeepEqual(fallback.NewValue, []string{"b.json"}) {
+		t.Fatalf("expected the over-budget key to fall back, got %+v", diff.Fields)
+	}
+	for _, field := range diff.Fields {
+		if strings.HasPrefix(field.Path, "data.b.json.") {
+			t.Fatalf("over-budget key also emitted a structured field: %+v", field)
+		}
+	}
 }
 
 func TestComputeDiff_ConfigMapBinaryData_ReportsModifiedKeyOnly(t *testing.T) {
@@ -1071,6 +1231,9 @@ func assertKeyOnlyDiff(t *testing.T, diff *DiffInfo, path, key string) {
 	t.Helper()
 	if diff == nil {
 		t.Fatal("ComputeDiff returned nil")
+	}
+	if len(diff.Fields) != 1 {
+		t.Fatalf("expected exactly one key-only field for %q, got %+v", key, diff.Fields)
 	}
 	for _, field := range diff.Fields {
 		if field.Path != path {
