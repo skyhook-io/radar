@@ -164,6 +164,90 @@ func detectStuckSidecarJobs(cache *ResourceCache, namespace string, now time.Tim
 	return out
 }
 
+// RunningPastCompletionShape is a NEUTRAL, fact-only observation for a CronJob: an
+// active, never-Succeeded Job has a pod where one container finished (exit 0) while a
+// sibling is still running. It is a LEAD, never a verdict — the running container may
+// be a stuck long-lived sidecar (a bug) OR a container still doing work (a slow-but-
+// healthy Job). It deliberately does NOT reuse the confident SidecarBlocksJobCompletion
+// detector's completion-drought warmup / Job-accumulation gates; it surfaces the raw
+// container split so an agent already inspecting the CronJob can read the running
+// container's image/logs and decide. To keep the false-positive surface small it fires
+// only after the SAME cadence-aware grace the detector uses (max(2m, schedule interval)),
+// so a Job that just entered a fresh cycle is not reported, and it makes no claim of
+// "blocked" or remediation — that stays with the time-gated detection.
+type RunningPastCompletionShape struct {
+	Pod                string
+	Job                string
+	CompletedContainer string
+	RunningContainer   string
+	ActiveJobs         int
+	SinceSeconds       int64
+}
+
+// FindRunningPastCompletionForObject returns the neutral container-split observation
+// for a CronJob object (nil for any other kind, a suspended CronJob, an unparseable
+// schedule, or when no active Job shows the split past the cadence-aware grace).
+func FindRunningPastCompletionForObject(cache *ResourceCache, obj runtime.Object, now time.Time) *RunningPastCompletionShape {
+	if cache == nil || obj == nil || cache.Jobs() == nil || cache.Pods() == nil {
+		return nil
+	}
+	cj, ok := obj.(*batchv1.CronJob)
+	if !ok || cj == nil {
+		return nil
+	}
+	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+		return nil
+	}
+	// Same cadence-aware grace as the confident detector (max(2m, interval)); fail
+	// closed on an unparseable schedule so a broken CronJob never trips the lead.
+	grace, _, ok := sidecarJobTiming(cj)
+	if !ok {
+		return nil
+	}
+	jobs, err := cache.Jobs().Jobs(cj.Namespace).List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	activeJobs := make(map[string]*batchv1.Job)
+	for _, job := range jobs {
+		controller := metav1.GetControllerOf(job)
+		if controller == nil || controller.Kind != "CronJob" || controller.Name != cj.Name || controller.UID != cj.UID {
+			continue
+		}
+		if job.Status.Succeeded == 0 && job.Status.Active >= 1 {
+			activeJobs[job.Name] = job
+		}
+	}
+	if len(activeJobs) == 0 {
+		return nil
+	}
+	pods, err := cache.Pods().Pods(cj.Namespace).List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	evidence, found := stuckSidecarEvidence(pods, activeJobs, now, grace)
+	if !found {
+		return nil
+	}
+	jobName := ""
+	for _, pod := range pods {
+		if pod.Name == evidence.podName {
+			if controller := metav1.GetControllerOf(pod); controller != nil {
+				jobName = controller.Name
+			}
+			break
+		}
+	}
+	return &RunningPastCompletionShape{
+		Pod:                evidence.podName,
+		Job:                jobName,
+		CompletedContainer: evidence.completedContainer,
+		RunningContainer:   evidence.runningContainer,
+		ActiveJobs:         len(activeJobs),
+		SinceSeconds:       ageSeconds(now, evidence.startedAt),
+	}
+}
+
 func sidecarTimingCacheKey(cj *batchv1.CronJob) sidecarJobTimingCacheKey {
 	timeZone := "UTC"
 	if cj.Spec.TimeZone != nil && *cj.Spec.TimeZone != "" {

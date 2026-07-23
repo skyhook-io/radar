@@ -533,6 +533,103 @@ func TestDetectStuckSidecarJobs(t *testing.T) {
 	}
 }
 
+// sidecarDetectionCount runs the config detectors and counts SidecarBlocksJobCompletion
+// rows — used to prove the neutral lead fires in windows where the confident detection
+// (correctly) does not.
+func sidecarDetectionCount(cache *ResourceCache, now time.Time) int {
+	n := 0
+	for _, d := range detectConfigProblems(cache, "prod", now, listPodsByNamespace(cache, "prod")) {
+		if d.Reason == "SidecarBlocksJobCompletion" {
+			n++
+		}
+	}
+	return n
+}
+
+func TestFindRunningPastCompletionForObject(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 12, 0, 0, 0, time.UTC)
+
+	t.Run("fires below the confident detector's accumulation threshold", func(t *testing.T) {
+		fixture := newSidecarJobFixture(now, 1) // 1 active Job < sidecarJobAccumulationThreshold (2)
+		cache := sidecarJobTestCache(t, fixture)
+		if got := sidecarDetectionCount(cache, now); got != 0 {
+			t.Fatalf("precondition: confident detector fired %d times, want 0 (below accumulation)", got)
+		}
+		shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now)
+		if shape == nil {
+			t.Fatal("lead is nil; want a neutral completion-blocked observation")
+		}
+		if shape.CompletedContainer != "archiver" || shape.RunningContainer != "fluent-bit-sidecar" {
+			t.Errorf("container split = %q/%q, want archiver/fluent-bit-sidecar", shape.CompletedContainer, shape.RunningContainer)
+		}
+		if shape.ActiveJobs != 1 || shape.Pod == "" {
+			t.Errorf("ActiveJobs=%d Pod=%q, want 1 and a pod name", shape.ActiveJobs, shape.Pod)
+		}
+	})
+
+	t.Run("fires within the never-succeeded warmup window (the bench gap)", func(t *testing.T) {
+		// Fresh deploy: 2 accumulating Jobs, but the CronJob has never recorded a
+		// success and its Jobs are only 5m old — under the confident detector's
+		// 2×recentSuccessWindow (30m) warmup. The lead must still surface the shape.
+		fixture := newSidecarJobFixture(now, 2)
+		fixture.cronJob.CreationTimestamp = metav1.NewTime(now.Add(-5 * time.Minute))
+		setSidecarTestJobStarts(fixture.jobs, now.Add(-5*time.Minute))
+		for _, pod := range fixture.pods {
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+				sidecarTestCompletedStatus("archiver", 0, now.Add(-3*time.Minute)),
+				sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-4*time.Minute)),
+			}
+		}
+		cache := sidecarJobTestCache(t, fixture)
+		if got := sidecarDetectionCount(cache, now); got != 0 {
+			t.Fatalf("precondition: confident detector fired %d times, want 0 (warmup not met)", got)
+		}
+		if shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now); shape == nil {
+			t.Fatal("lead is nil; want it to surface before the 30m warmup lets the detection fire")
+		}
+	})
+
+	t.Run("respects the short grace (no transient startup split)", func(t *testing.T) {
+		fixture := newSidecarJobFixture(now, 2)
+		for _, pod := range fixture.pods {
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+				sidecarTestCompletedStatus("archiver", 0, now.Add(-30*time.Second)),
+				sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-30*time.Second)),
+			}
+		}
+		cache := sidecarJobTestCache(t, fixture)
+		if shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now); shape != nil {
+			t.Fatalf("lead fired within grace; want nil, got %+v", shape)
+		}
+	})
+
+	t.Run("suspended CronJob is quiet", func(t *testing.T) {
+		fixture := newSidecarJobFixture(now, 2)
+		suspended := true
+		fixture.cronJob.Spec.Suspend = &suspended
+		cache := sidecarJobTestCache(t, fixture)
+		if shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now); shape != nil {
+			t.Fatalf("suspended CronJob produced a lead: %+v", shape)
+		}
+	})
+
+	t.Run("no active Jobs is quiet", func(t *testing.T) {
+		fixture := newSidecarJobFixture(now, 0)
+		cache := sidecarJobTestCache(t, fixture)
+		if shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now); shape != nil {
+			t.Fatalf("no-active-Jobs CronJob produced a lead: %+v", shape)
+		}
+	})
+
+	t.Run("non-CronJob object is quiet", func(t *testing.T) {
+		fixture := newSidecarJobFixture(now, 2)
+		cache := sidecarJobTestCache(t, fixture)
+		if shape := FindRunningPastCompletionForObject(cache, fixture.pods[0], now); shape != nil {
+			t.Fatalf("non-CronJob object produced a lead: %+v", shape)
+		}
+	})
+}
+
 func TestSidecarJobTiming(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 12, 0, 30, 0, time.UTC)
 	fixedTimeZone := "Etc/GMT-2"

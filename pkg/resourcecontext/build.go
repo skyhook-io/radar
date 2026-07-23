@@ -63,6 +63,11 @@ type Options struct {
 	AuditSummary  *AuditSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
 	AppReferences *AppReferences
+	// RunningPastCompletion is a neutral container-split observation for CronJob
+	// resources (nil otherwise). Attached to CronJobSummary as a lead, not a verdict,
+	// and only when the caller may read the evidence Job and Pod (see the access gate
+	// at the attach site).
+	RunningPastCompletion *RunningPastCompletion
 
 	// Optional kind-specific lookups. ServiceBackends is used only for
 	// Service resources to attach realized pod-selection state. The raw
@@ -272,6 +277,10 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.PVCSummary = buildPVCSummary(obj)
 	rc.JobSummary = buildJobSummary(obj)
 	rc.CronJobSummary = buildCronJobSummary(ctx, obj, opts.AccessChecker, omitted)
+	if rc.CronJobSummary != nil && opts.RunningPastCompletion != nil {
+		rc.CronJobSummary.RunningPastCompletion = gateRunningPastCompletion(
+			ctx, opts.AccessChecker, obj, opts.RunningPastCompletion, omitted)
+	}
 	rc.HPASummary = buildHPASummary(obj)
 	rc.StatusSummary = buildStatusSummary(obj)
 
@@ -1474,6 +1483,29 @@ func checkRef(ctx context.Context, ac RefAccessChecker, r *ContextRef) bool {
 		return true
 	}
 	return ac.CanRead(ctx, r.Group, r.Kind, r.Namespace)
+}
+
+// gateRunningPastCompletion omits the neutral container-split observation unless the
+// caller may read BOTH evidence resources (the Pod and its Job) in the CronJob's
+// namespace — mirroring how CronJobSummary.ActiveJobs is passed through filterRefs.
+// Namespace access is not get/list access for every kind, so serializing pod/container
+// names and active-Job counts here without the check would leak related-resource state
+// a CronJob-only reader cannot otherwise see.
+func gateRunningPastCompletion(ctx context.Context, ac RefAccessChecker, obj runtime.Object, obs *RunningPastCompletion, omitted *omittedTracker) *RunningPastCompletion {
+	if obs == nil {
+		return nil
+	}
+	cj, ok := obj.(*batchv1.CronJob)
+	if !ok || cj == nil {
+		return nil
+	}
+	podRef := ContextRef{Kind: "Pod", Namespace: cj.Namespace, Name: obs.Pod}
+	jobRef := ContextRef{Kind: "Job", Group: "batch", Namespace: cj.Namespace, Name: obs.Job}
+	if !checkRef(ctx, ac, &podRef) || !checkRef(ctx, ac, &jobRef) {
+		omitted.add("cronJobSummary.runningPastCompletion", OmittedRBACDenied)
+		return nil
+	}
+	return obs
 }
 
 // ---------------------------------------------------------------------------

@@ -1315,3 +1315,51 @@ func indexOf(s, sub string) int {
 var (
 	_ = policyv1.PodDisruptionBudget{}
 )
+
+// TestBuild_RunningPastCompletion_GatedByAccess proves the neutral container-split
+// observation is attached only when the caller may read BOTH evidence resources
+// (the Pod and its Job), and is otherwise omitted with an rbac_denied marker — the
+// same discipline CronJobSummary.ActiveJobs follows via filterRefs.
+func TestBuild_RunningPastCompletion_GatedByAccess(t *testing.T) {
+	cj := &batchv1.CronJob{
+		TypeMeta:   metav1.TypeMeta{Kind: "CronJob", APIVersion: "batch/v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "audit-log-archiver", Namespace: "prod"},
+		Spec:       batchv1.CronJobSpec{Schedule: "* * * * *"},
+	}
+	obs := &RunningPastCompletion{
+		Pod: "audit-log-archiver-1-pod", Job: "audit-log-archiver-1",
+		CompletedContainer: "archiver", RunningContainer: "fluent-bit-sidecar", ActiveJobs: 2,
+	}
+
+	t.Run("attached when Pod and Job are readable", func(t *testing.T) {
+		rc := Build(context.Background(), cj, Options{
+			Tier: TierBasic, AccessChecker: allowAllChecker{}, RunningPastCompletion: obs,
+		})
+		if rc.CronJobSummary == nil || rc.CronJobSummary.RunningPastCompletion == nil {
+			t.Fatalf("want RunningPastCompletion attached, got %+v", rc.CronJobSummary)
+		}
+	})
+
+	for _, denied := range []denyChecker{
+		{group: "", kind: "Pod", namespace: "prod"},
+		{group: "batch", kind: "Job", namespace: "prod"},
+	} {
+		t.Run("omitted when "+denied.kind+" read is denied", func(t *testing.T) {
+			rc := Build(context.Background(), cj, Options{
+				Tier: TierBasic, AccessChecker: denied, RunningPastCompletion: obs,
+			})
+			if rc.CronJobSummary != nil && rc.CronJobSummary.RunningPastCompletion != nil {
+				t.Fatalf("want RunningPastCompletion omitted when %s read denied", denied.kind)
+			}
+			found := false
+			for _, o := range rc.Omitted {
+				if o.Field == "cronJobSummary.runningPastCompletion" && o.Reason == OmittedRBACDenied {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("want omitted [cronJobSummary.runningPastCompletion, rbac_denied]; got %+v", rc.Omitted)
+			}
+		})
+	}
+}

@@ -341,11 +341,30 @@ type JobSummary struct {
 }
 
 type CronJobSummary struct {
-	Schedule           string       `json:"schedule,omitempty"`
-	Suspended          bool         `json:"suspended,omitempty"`
-	ActiveJobs         []ContextRef `json:"activeJobs,omitempty"`
-	LastScheduleTime   string       `json:"lastScheduleTime,omitempty"`
-	LastSuccessfulTime string       `json:"lastSuccessfulTime,omitempty"`
+	Schedule              string                 `json:"schedule,omitempty"`
+	Suspended             bool                   `json:"suspended,omitempty"`
+	ActiveJobs            []ContextRef           `json:"activeJobs,omitempty"`
+	LastScheduleTime      string                 `json:"lastScheduleTime,omitempty"`
+	LastSuccessfulTime    string                 `json:"lastSuccessfulTime,omitempty"`
+	RunningPastCompletion *RunningPastCompletion `json:"runningPastCompletion,omitempty"`
+}
+
+// RunningPastCompletion is a NEUTRAL, fact-only observation: an active Job of this
+// CronJob has a pod where one container finished (exit 0) while a sibling is still
+// running. It is a LEAD for an agent already inspecting the CronJob — NOT a verdict.
+// It deliberately states only the observed fact (which container finished, which is
+// still running, for how long) and how to disambiguate; it makes no "blocked" claim
+// and recommends no remediation. Whether this is a stuck sidecar or a slow-but-healthy
+// Job is for the reader to decide by inspecting the running container. The confident,
+// time-gated causal claim lives in the SidecarBlocksJobCompletion issue, not here.
+type RunningPastCompletion struct {
+	Pod                string `json:"pod,omitempty"`
+	Job                string `json:"job,omitempty"`
+	CompletedContainer string `json:"completedContainer,omitempty"`
+	RunningContainer   string `json:"runningContainer,omitempty"`
+	ActiveJobs         int    `json:"activeJobs,omitempty"`
+	SinceSeconds       int64  `json:"sinceSeconds,omitempty"`
+	Note               string `json:"note,omitempty"`
 }
 
 type HPASummary struct {
