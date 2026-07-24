@@ -16,15 +16,26 @@ type piAgent struct{ bin string }
 
 func (a *piAgent) Name() string { return "pi" }
 
-func (a *piAgent) SigninCmd() string { return "pi auth" }
+func (a *piAgent) SigninCmd() string { return "pi config" }
 
 func (a *piAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
-	args := []string{}
-	prompt := s.prompt
-	if s.systemPrompt != "" {
-		prompt = s.systemPrompt + "\n\n" + prompt
+	args := []string{"-p"} // Run in non-interactive print mode and exit
+
+	if s.sessionID != "" {
+		args = append(args, "--session", s.sessionID)
+	} else if s.apply {
+		args = append(args, "--continue")
 	}
-	args = append(args, prompt)
+
+	if s.model != "" {
+		args = append(args, "--model", s.model)
+	}
+
+	if s.systemPrompt != "" {
+		args = append(args, "--system-prompt", s.systemPrompt)
+	}
+
+	args = append(args, s.prompt)
 
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Env = scrubbedEnv()
