@@ -35,11 +35,12 @@ func (a *piAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), e
 		args = append(args, "--model", s.model)
 	}
 
+	prompt := s.prompt
 	if s.systemPrompt != "" {
-		args = append(args, "--system-prompt", s.systemPrompt)
+		prompt = s.systemPrompt + "\n\n" + prompt
 	}
 
-	args = append(args, s.prompt)
+	args = append(args, prompt)
 
 	workdir := s.workdir
 	cleanup := func() {}
@@ -59,7 +60,7 @@ func (a *piAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), e
 
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Dir = workdir
-	cmd.Env = append(scrubbedEnv(), "PI_CODING_AGENT_DIR="+workdir)
+	cmd.Env = scrubbedEnv()
 
 	return cmd, cleanup, nil
 }
@@ -73,12 +74,17 @@ func writePiConfig(workdir, mcpURL string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(workdir, "mcp.json"), b, 0o600)
+	if err := os.WriteFile(filepath.Join(workdir, "mcp.json"), b, 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(workdir, ".mcp.json"), b, 0o600)
 }
 
 func (a *piAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	var sb strings.Builder
 	sc := bufio.NewScanner(r)
+	buf := make([]byte, 64*1024)
+	sc.Buffer(buf, 10*1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
 		sb.WriteString(line + "\n")

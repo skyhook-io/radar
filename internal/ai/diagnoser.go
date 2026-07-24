@@ -620,7 +620,7 @@ var (
 		// AWS creds are passed through so BYO-Bedrock works; the user opted in.
 		"AWS_PROFILE": true, "AWS_REGION": true, "AWS_DEFAULT_REGION": true,
 	}
-	envAllowPrefix = []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_"}
+	envAllowPrefix = []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_", "OPENAI_", "GEMINI_", "MISTRAL_", "DEEPSEEK_", "GROQ_", "OPENROUTER_", "PI_", "GITHUB_"}
 )
 
 // scrubbedEnv returns a minimal environment: the CLI ingests untrusted cluster

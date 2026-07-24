@@ -37,12 +37,12 @@ func (a *antigravityAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, 
 	}
 
 	if s.apply {
-		args = append(args, "--mode", "accept-edits", "--dangerously-skip-permissions")
+		args = append(args, "--mode", "accept-edits")
 	} else {
 		args = append(args, "--mode", "plan")
 	}
 
-	args = append(args, "--sandbox")
+	args = append(args, "--sandbox", "--dangerously-skip-permissions")
 
 	prompt := s.prompt
 	if s.systemPrompt != "" {
@@ -79,7 +79,7 @@ func writeAntigravityConfig(workdir, mcpURL string) error {
 		return err
 	}
 
-	// Write standard mcp.json
+	// Write standard mcp.json and .mcp.json
 	cfg := map[string]any{"mcpServers": map[string]any{"radar": map[string]any{"url": mcpURL}}}
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -88,8 +88,19 @@ func writeAntigravityConfig(workdir, mcpURL string) error {
 	if err := os.WriteFile(filepath.Join(workdir, "mcp.json"), b, 0o600); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(workdir, ".mcp.json"), b, 0o600); err != nil {
+		return err
+	}
 
-	// Also write .cursor/mcp.json for tools that fall back to it
+	// Also write .gemini/mcp.json and .cursor/mcp.json for tools that check subfolders
+	geminiDir := filepath.Join(workdir, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(geminiDir, "mcp.json"), b, 0o600); err != nil {
+		return err
+	}
+
 	cursorDir := filepath.Join(workdir, ".cursor")
 	if err := os.MkdirAll(cursorDir, 0o700); err != nil {
 		return err
@@ -100,6 +111,8 @@ func writeAntigravityConfig(workdir, mcpURL string) error {
 func (a *antigravityAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	var sb strings.Builder
 	sc := bufio.NewScanner(r)
+	buf := make([]byte, 64*1024)
+	sc.Buffer(buf, 10*1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
 		sb.WriteString(line + "\n")

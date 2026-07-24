@@ -74,11 +74,9 @@ func writeOpencodeConfig(workdir, mcpURL string) error {
 	// Write local project opencode.json pointing to Radar's local MCP
 	cfg := map[string]any{
 		"mcp": map[string]any{
-			"servers": map[string]any{
-				"radar": map[string]any{
-					"type": "remote",
-					"url":  mcpURL,
-				},
+			"radar": map[string]any{
+				"type": "remote",
+				"url":  mcpURL,
 			},
 		},
 	}
@@ -92,6 +90,8 @@ func writeOpencodeConfig(workdir, mcpURL string) error {
 func (a *opencodeAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	var sb strings.Builder
 	sc := bufio.NewScanner(r)
+	buf := make([]byte, 64*1024)
+	sc.Buffer(buf, 10*1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
 		sb.WriteString(line + "\n")
