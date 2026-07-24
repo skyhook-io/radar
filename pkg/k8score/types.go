@@ -141,6 +141,12 @@ type CacheConfig struct {
 	// the object. May be nil.
 	OnTransform func(obj any)
 
+	// OnObservedChange is called for every non-Event resource change after diff
+	// computation, including changes excluded by noisy filtering or initial-add
+	// suppression. It is intended for internal state reconciliation that must
+	// follow every transformed informer version. May be nil.
+	OnObservedChange func(change ResourceChange, obj, oldObj any)
+
 	// OnChange is called for each non-Event resource change after the
 	// change is sent to the changes channel. It receives the change plus
 	// the raw new and old objects for application-specific processing

@@ -379,8 +379,11 @@ func InitResourceCache(ctx context.Context) error {
 				secretWriteTimes.capture(obj)
 			},
 
-			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
+			OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
 				secretWriteTimes.reconcile(change, obj)
+			},
+
+			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
 				if DebugEvents && change.Operation == "add" &&
 					(change.Kind == "Pod" || change.Kind == "Deployment" || change.Kind == "Service") {
 					log.Printf("[DEBUG] enqueueChange: %s add %s/%s", change.Kind, change.Namespace, change.Name)

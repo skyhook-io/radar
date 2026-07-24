@@ -58,7 +58,7 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
-		OnChange: func(change k8score.ResourceChange, obj, _ any) {
+		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
 			secretWriteTimes.reconcile(change, obj)
 		},
 	}

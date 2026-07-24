@@ -700,6 +700,47 @@ func TestNewResourceCache_OnReceived(t *testing.T) {
 	}
 }
 
+func TestNewResourceCache_OnObservedChangeSurvivesFiltering(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "test-pod", Namespace: "default", UID: "test-uid",
+	}}
+	client := fake.NewSimpleClientset(pod)
+
+	var mu sync.Mutex
+	var observed, delivered []ResourceChange
+	rc, err := NewResourceCache(CacheConfig{
+		Client:        client,
+		ResourceTypes: map[string]bool{Pods: true},
+		IsNoisyResource: func(string, string, string) bool {
+			return true
+		},
+		OnObservedChange: func(change ResourceChange, _, _ any) {
+			mu.Lock()
+			observed = append(observed, change)
+			mu.Unlock()
+		},
+		OnChange: func(change ResourceChange, _, _ any) {
+			mu.Lock()
+			delivered = append(delivered, change)
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache failed: %v", err)
+	}
+	defer rc.Stop()
+
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(observed) != 1 || observed[0].Kind != "Pod" || observed[0].Name != "test-pod" {
+		t.Fatalf("observed changes = %+v, want filtered Pod add", observed)
+	}
+	if len(delivered) != 0 {
+		t.Fatalf("OnChange received filtered changes: %+v", delivered)
+	}
+}
+
 func TestNewResourceCache_NamespaceScopedValidation(t *testing.T) {
 	client := fake.NewSimpleClientset()
 

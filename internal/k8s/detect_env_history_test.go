@@ -815,8 +815,11 @@ func TestSecretDataManagerWriteIndexInformerLifecycle(t *testing.T) {
 			OnTransform: func(obj any) {
 				index.capture(obj)
 			},
-			OnChange: func(change k8score.ResourceChange, obj, _ any) {
+			OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
 				index.reconcile(change, obj)
+			},
+			IsNoisyResource: func(kind, _ string, _ string) bool {
+				return kind == "Secret"
 			},
 			ComputeDiff: func(kind string, oldObj, newObj any) *k8score.DiffInfo {
 				return ComputeDiff(kind, oldObj, newObj)
@@ -963,7 +966,7 @@ func envHistoryTestCache(t *testing.T, objects ...runtime.Object) *ResourceCache
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
-		OnChange: func(change k8score.ResourceChange, obj, _ any) {
+		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
 			secretWriteTimes.reconcile(change, obj)
 		},
 	})

@@ -1268,6 +1268,10 @@ func (rc *ResourceCache) enqueueChange(ch chan<- ResourceChange, kind string, ob
 		Diff:      diff,
 	}
 
+	if rc.config.OnObservedChange != nil {
+		rc.safeCallback("OnObservedChange", func() { rc.config.OnObservedChange(change, obj, oldObj) })
+	}
+
 	// Fire OnChange callback (before channel send, matching existing behavior)
 	if !skipCallback && rc.config.OnChange != nil {
 		rc.safeCallback("OnChange", func() { rc.config.OnChange(change, obj, oldObj) })
