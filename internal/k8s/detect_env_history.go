@@ -120,7 +120,7 @@ func findRemovedServiceEnvChecks(cache *ResourceCache, wl envServiceWorkload, ui
 				continue
 			}
 			seenPaths[change.Path] = true
-			if change.NewValue != nil {
+			if change.NewValue != nil || workloadSpecHasEnv(wl.spec, container, envName) {
 				continue
 			}
 			oldValue, ok := change.OldValue.(string)
@@ -158,6 +158,22 @@ func findRemovedServiceEnvChecks(cache *ResourceCache, wl envServiceWorkload, ui
 		return out[i].EnvName < out[j].EnvName
 	})
 	return out
+}
+
+func workloadSpecHasEnv(spec corev1.PodSpec, containerName, envName string) bool {
+	for _, containers := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
+		for _, container := range containers {
+			if container.Name != containerName {
+				continue
+			}
+			for _, env := range container.Env {
+				if env.Name == envName {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func parseWorkloadEnvPath(path string) (container, envName string, ok bool) {
@@ -736,9 +752,10 @@ func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]
 }
 
 func isSecretDataModificationPath(path string) bool {
-	// Added keys were absent from existing envFrom environments, so they cannot make an injected value stale.
+	// Added keys were absent from existing environments, so they cannot make an injected value stale.
 	switch path {
-	case "data (modified keys)", "stringData (modified keys)":
+	case "data (modified keys)", "data (removed keys)",
+		"stringData (modified keys)", "stringData (removed keys)":
 		return true
 	default:
 		return false

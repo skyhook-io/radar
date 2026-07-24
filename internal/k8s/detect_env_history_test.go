@@ -74,6 +74,15 @@ func TestRemovedServiceEnvExposureAndPrecision(t *testing.T) {
 		}
 	})
 
+	t.Run("current env suppresses removal hidden by container re-add", func(t *testing.T) {
+		restoredDeployment := deployment.DeepCopy()
+		restoredDeployment.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "CART_ADDR", Value: "cart:8080"}}
+		restoredCache := envHistoryTestCache(t, restoredDeployment, service)
+		if checks := findRemovedServiceEnvChecks(restoredCache, envServiceWorkloadForDeployment(restoredDeployment), "", []timeline.TimelineEvent{removal}); len(checks) != 0 {
+			t.Fatalf("current env should suppress historical removal hidden by container-level diffs: %+v", checks)
+		}
+	})
+
 	t.Run("init container Service env removal is recorded", func(t *testing.T) {
 		initDeployment := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "shop"},
@@ -199,6 +208,50 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		added := secretHistoryEvent(changedAt, "shop", "db-conn", "data (added keys)", []string{"password"})
 		if checks := findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{added}); len(checks) != 0 {
 			t.Fatalf("key added after container start is absent, not a stale env value: %+v", checks)
+		}
+	})
+
+	t.Run("removed consumed keys are stale evidence", func(t *testing.T) {
+		tests := []struct {
+			name          string
+			path          string
+			pod           *corev1.Pod
+			referenceKind string
+			envName       string
+		}{
+			{
+				name:          "secretKeyRef data",
+				path:          "data (removed keys)",
+				pod:           staleSecretEnvPod("key-ref-removed", startedAt, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password")),
+				referenceKind: "secretKeyRef",
+				envName:       "DB_PASSWORD",
+			},
+			{
+				name: "envFrom stringData",
+				path: "stringData (removed keys)",
+				pod: func() *corev1.Pod {
+					pod := staleSecretEnvPod("env-from-removed", startedAt, false)
+					pod.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{
+						Prefix:    "DB_",
+						SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "db-conn"}},
+					}}
+					return pod
+				}(),
+				referenceKind: "envFrom",
+				envName:       "DB_password",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				secretAfterRemoval := secret.DeepCopy()
+				delete(secretAfterRemoval.Data, "password")
+				cache := envHistoryTestCache(t, tt.pod, secretAfterRemoval)
+				removed := envHistoryEvent(changedAt, "Secret", "shop", "db-conn", tt.path, []string{"password"}, nil)
+				checks := findStaleSecretEnvChecks(cache, []*corev1.Pod{tt.pod}, []timeline.TimelineEvent{removed})
+				if len(checks) != 1 || checks[0].ReferenceKind != tt.referenceKind || checks[0].EnvName != tt.envName || checks[0].Key != "password" {
+					t.Fatalf("removed consumed key was not reported as stale evidence: %+v", checks)
+				}
+			})
 		}
 	})
 
