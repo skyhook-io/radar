@@ -68,11 +68,11 @@ func TestAntigravityConfigAndCommand(t *testing.T) {
 	defer cleanup()
 
 	args := strings.Join(cmd.Args, " ")
-	if !strings.Contains(args, "--prompt") || !strings.Contains(args, "investigate") {
-		t.Errorf("expected prompt flag and prompt in args; got %q", args)
+	if !strings.Contains(args, "-p") || !strings.Contains(args, "investigate") {
+		t.Errorf("expected -p flag and prompt in args; got %q", args)
 	}
 
-	for _, relPath := range []string{"mcp.json", ".mcp.json", ".gemini/mcp.json", ".cursor/mcp.json"} {
+	for _, relPath := range []string{"mcp.json", ".mcp.json", ".gemini/mcp.json", ".cursor/mcp.json", ".antigravity/mcp.json", ".antigravitycli/mcp.json"} {
 		cfgPath := filepath.Join(dir, relPath)
 		b, err := os.ReadFile(cfgPath)
 		if err != nil {

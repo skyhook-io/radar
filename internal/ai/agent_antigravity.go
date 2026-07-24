@@ -23,7 +23,7 @@ func (a *antigravityAgent) Name() string { return "antigravity" }
 func (a *antigravityAgent) SigninCmd() string { return "agy auth login" }
 
 func (a *antigravityAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
-	args := []string{}
+	args := []string{"-p"}
 
 	if s.sessionID != "" {
 		args = append(args, "--conversation", s.sessionID)
@@ -38,18 +38,16 @@ func (a *antigravityAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, 
 
 	if s.apply {
 		args = append(args, "--mode", "accept-edits")
-	} else {
-		args = append(args, "--mode", "plan")
 	}
 
-	args = append(args, "--sandbox", "--dangerously-skip-permissions")
+	args = append(args, "--dangerously-skip-permissions")
 
 	prompt := s.prompt
 	if s.systemPrompt != "" {
 		prompt = s.systemPrompt + "\n\n" + prompt
 	}
 
-	args = append(args, "--prompt", prompt)
+	args = append(args, prompt)
 
 	workdir := s.workdir
 	cleanup := func() {}
@@ -85,27 +83,23 @@ func writeAntigravityConfig(workdir, mcpURL string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(workdir, "mcp.json"), b, 0o600); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(workdir, ".mcp.json"), b, 0o600); err != nil {
-		return err
+
+	for _, name := range []string{"mcp.json", ".mcp.json"} {
+		if err := os.WriteFile(filepath.Join(workdir, name), b, 0o600); err != nil {
+			return err
+		}
 	}
 
-	// Also write .gemini/mcp.json and .cursor/mcp.json for tools that check subfolders
-	geminiDir := filepath.Join(workdir, ".gemini")
-	if err := os.MkdirAll(geminiDir, 0o700); err != nil {
-		return err
+	for _, sub := range []string{".gemini", ".cursor", ".antigravity", ".antigravitycli"} {
+		dir := filepath.Join(workdir, sub)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "mcp.json"), b, 0o600); err != nil {
+			return err
+		}
 	}
-	if err := os.WriteFile(filepath.Join(geminiDir, "mcp.json"), b, 0o600); err != nil {
-		return err
-	}
-
-	cursorDir := filepath.Join(workdir, ".cursor")
-	if err := os.MkdirAll(cursorDir, 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(cursorDir, "mcp.json"), b, 0o600)
+	return nil
 }
 
 func (a *antigravityAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
