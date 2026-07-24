@@ -5,15 +5,18 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+var antigravityConvRe = regexp.MustCompile(`(?i)Conversation ID:\s*([a-zA-Z0-9-]+)`)
 
 // antigravityAgent drives the Antigravity CLI (`agy`).
 type antigravityAgent struct{ bin string }
 
 func (a *antigravityAgent) Name() string { return "antigravity" }
 
-func (a *antigravityAgent) SigninCmd() string { return "agy update" }
+func (a *antigravityAgent) SigninCmd() string { return "agy auth login" }
 
 func (a *antigravityAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
 	args := []string{}
@@ -58,5 +61,9 @@ func (a *antigravityAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) D
 		sb.WriteString(line + "\n")
 		onEvent(StreamEvent{Type: "thinking", Token: line + "\n"})
 	}
-	return diagnosisFromText(sb.String())
+	d := diagnosisFromText(sb.String())
+	if m := antigravityConvRe.FindStringSubmatch(sb.String()); len(m) > 1 {
+		d.SessionID = m[1]
+	}
+	return d
 }

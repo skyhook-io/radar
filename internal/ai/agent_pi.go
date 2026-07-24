@@ -5,8 +5,11 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+var piSessionRe = regexp.MustCompile(`(?i)Session(?: ID)?:\s*([a-zA-Z0-9-]+)`)
 
 // piAgent drives the Pi CLI.
 type piAgent struct{ bin string }
@@ -37,5 +40,9 @@ func (a *piAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis 
 		sb.WriteString(line + "\n")
 		onEvent(StreamEvent{Type: "thinking", Token: line + "\n"})
 	}
-	return diagnosisFromText(sb.String())
+	d := diagnosisFromText(sb.String())
+	if m := piSessionRe.FindStringSubmatch(sb.String()); len(m) > 1 {
+		d.SessionID = m[1]
+	}
+	return d
 }

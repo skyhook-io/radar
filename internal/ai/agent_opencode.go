@@ -5,8 +5,11 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+var opencodeSessionRe = regexp.MustCompile(`(?i)Session(?: ID)?:\s*([a-zA-Z0-9-]+)`)
 
 // opencodeAgent drives the OpenCode CLI (`opencode`).
 type opencodeAgent struct{ bin string }
@@ -49,5 +52,9 @@ func (a *opencodeAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diag
 		sb.WriteString(line + "\n")
 		onEvent(StreamEvent{Type: "thinking", Token: line + "\n"})
 	}
-	return diagnosisFromText(sb.String())
+	d := diagnosisFromText(sb.String())
+	if m := opencodeSessionRe.FindStringSubmatch(sb.String()); len(m) > 1 {
+		d.SessionID = m[1]
+	}
+	return d
 }
