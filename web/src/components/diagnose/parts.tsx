@@ -375,10 +375,8 @@ export function AgentControls({
               : isCodex
                 ? "Default (e.g. gpt-5-codex, o3)"
                 : selectedAgent === "antigravity"
-                  ? "Default (e.g. gemini-2.5-pro, gemini-2.5-flash)"
-                  : selectedAgent === "opencode"
-                    ? "Default (e.g. opencode-1.5-pro)"
-                    : "Default model"
+                  ? "Default (e.g. gemini-*-flash)"
+                  : "Default"
           }
           onChange={onSetModel}
           hint={
