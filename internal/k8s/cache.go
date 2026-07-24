@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -456,6 +457,21 @@ func getGeneration(obj any) int64 {
 	return m.GetGeneration()
 }
 
+func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
+	if kind != "Deployment" {
+		return true
+	}
+	oldDeployment, oldOK := oldObj.(*appsv1.Deployment)
+	newDeployment, newOK := newObj.(*appsv1.Deployment)
+	if !oldOK || !newOK {
+		return true
+	}
+
+	// The Deployment API increments generation for top-level annotation
+	// changes because those annotations are copied to ReplicaSets.
+	return !apiequality.Semantic.DeepEqual(oldDeployment.Spec, newDeployment.Spec)
+}
+
 // recordToTimelineStore records a resource change to the timeline.
 // clusterContext is the wiring-time capture (see InitResourceCache), not the
 // live active context — a late callback must stamp the cluster it came from.
@@ -541,12 +557,9 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		} else if KindHasDiffer(kind) || isUnstructuredUpdate(oldObj, newObj) {
 			// Diff handling found nothing observable — usually a heartbeat,
 			// managedFields-only update, or reconcile counter.
-			// Before dropping, check metadata.generation: it bumps only on
-			// spec changes (status updates don't touch it), so a generation
-			// flip with a nil diff means our diff function missed a real spec
-			// field. Record those with a fallback summary instead of silently
-			// losing them — diff coverage gaps shouldn't become silent drops.
-			if oldGen, newGen := getGeneration(oldObj), getGeneration(newObj); oldGen != newGen && oldGen > 0 && newGen > 0 {
+			// Before dropping, use metadata.generation to catch spec fields our
+			// audited differ does not yet track.
+			if oldGen, newGen := getGeneration(oldObj), getGeneration(newObj); oldGen != newGen && oldGen > 0 && newGen > 0 && generationBumpSignalsSpecChange(kind, oldObj, newObj) {
 				diff = &timeline.DiffInfo{
 					Fields: []timeline.FieldChange{{
 						Path:     "metadata.generation",

@@ -85,3 +85,54 @@ func TestRecordToTimelineStore_PreservesDNSFieldPath(t *testing.T) {
 		t.Fatalf("timeline diff lost DNS values: %+v", *dnsPolicyChange)
 	}
 }
+
+func TestRecordToTimelineStore_DeploymentGenerationFallbackRequiresSpecChange(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     func(*appsv1.Deployment)
+		wantEvents int
+	}{
+		{
+			name: "top-level annotation only",
+			mutate: func(deployment *appsv1.Deployment) {
+				deployment.Annotations = map[string]string{"example.com/revision": "2"}
+			},
+		},
+		{
+			name: "untracked spec field",
+			mutate: func(deployment *appsv1.Deployment) {
+				deployment.Spec.MinReadySeconds = 5
+			},
+			wantEvents: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now()
+			oldDeployment := testDeployment("uid-1", "nginx:1.0", now)
+			oldDeployment.Generation = 1
+			newDeployment := oldDeployment.DeepCopy()
+			newDeployment.Generation = 2
+			tt.mutate(newDeployment)
+
+			timeline.ResetStore()
+			if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+				t.Fatalf("InitStore: %v", err)
+			}
+			t.Cleanup(timeline.ResetStore)
+
+			recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "update", oldDeployment, newDeployment, nil, false)
+			events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Deployment"}})
+			if err != nil {
+				t.Fatalf("Query: %v", err)
+			}
+			if len(events) != tt.wantEvents {
+				t.Fatalf("recorded %d events, want %d: %+v", len(events), tt.wantEvents, events)
+			}
+			if tt.wantEvents == 1 && (events[0].Diff == nil || len(events[0].Diff.Fields) != 1 || events[0].Diff.Fields[0].Path != "metadata.generation") {
+				t.Fatalf("expected generation fallback for untracked spec change, got %+v", events[0].Diff)
+			}
+		})
+	}
+}
