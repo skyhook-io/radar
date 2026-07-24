@@ -11,6 +11,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 )
 
@@ -72,43 +73,211 @@ func TestSetupDialogCoversAllTools(t *testing.T) {
 	}
 }
 
-func TestIssuesToolDocumentsRecentChangesReasons(t *testing.T) {
-	var description string
+func TestIssuesToolPreservesEvidenceBoundaries(t *testing.T) {
+	// Exact reason-token behavior is covered by meaningfulchanges tests. This
+	// pins the agent-facing interpretation that must survive copy reductions.
+	var issuesTool *mcpsdk.Tool
 	for _, tool := range listRegisteredTools(t) {
 		if tool.Name == "issues" {
-			description = tool.Description
+			issuesTool = tool
 			break
 		}
 	}
-	if description == "" {
+	if issuesTool == nil || issuesTool.Description == "" {
 		t.Fatal("issues tool is not registered or has no description")
 	}
-	for _, reason := range []string{
+	for _, token := range []string{
 		meaningfulchanges.ChangesReasonNoCriticalIssues,
 		meaningfulchanges.ChangesReasonWithAllCreationTimeCriticalIssues,
+		"`recent_changes`",
+		"`recent_changes_guidance`",
+		"`not_linked_to_returned_issues`",
+		"`recent_changes_truncated=true`",
+		"`no_recent_changes.window_seconds`",
+		"`correlated_changes`",
+		"`diagnostic_context.role`",
+		"`related_issues[].count`",
 	} {
-		if !strings.Contains(description, reason) {
-			t.Errorf("issues tool description does not document recent_changes_reason %q", reason)
+		if !strings.Contains(issuesTool.Description, token) {
+			t.Errorf("issues tool description lost response contract %q", token)
 		}
 	}
-	if !strings.Contains(description, "recent_changes_truncated") {
-		t.Error("issues tool description does not document recent_changes_truncated")
+	for _, boundary := range []string{
+		"not healthy",
+		"linkage was not evaluated",
+		"not evidence of cause",
+		"does not strengthen causality",
+		"absence from the feed is not evidence",
+		"evidence against, not disproof",
+		"external dependencies",
+		"correlation is unknown",
+		"affected subset",
+		"not the linked issue total",
+	} {
+		if !strings.Contains(issuesTool.Description, boundary) {
+			t.Errorf("issues tool description lost interpretation boundary %q", boundary)
+		}
 	}
-	if !strings.Contains(description, "recent_changes_guidance") {
-		t.Error("issues tool description does not document recent_changes_guidance")
+
+	schema, err := json.Marshal(issuesTool.InputSchema)
+	if err != nil {
+		t.Fatalf("marshal issues input schema: %v", err)
 	}
-	if !strings.Contains(description, "not_linked_to_returned_issues") ||
-		!strings.Contains(description, "response is unfiltered") ||
-		!strings.Contains(description, "did not evaluate linkage") ||
-		!strings.Contains(description, "first within `recent_changes`") ||
-		!strings.Contains(description, "not evidence of cause") {
-		t.Error("issues tool description does not scope the relational change marker as a non-causal lead")
+	for label, text := range map[string]string{
+		"description":  issuesTool.Description,
+		"input schema": string(schema),
+	} {
+		for _, want := range []string{
+			"started_at_resource_creation",
+			"started_after_resource_was_healthy",
+			"timing evidence",
+			"root-cause verdict",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("issues %s lost issue_timing contract %q", label, want)
+			}
+		}
 	}
-	if !strings.Contains(description, "application_configuration_change") ||
-		!strings.Contains(description, "static classification") ||
-		!strings.Contains(description, "not a causal") ||
-		!strings.Contains(description, "does not strengthen") {
-		t.Error("issues tool description does not scope the application-configuration marker as a non-causal ranking hint")
+}
+
+func TestTrimmedToolsPreserveLoadBearingSteers(t *testing.T) {
+	descriptions := map[string]string{}
+	for _, tool := range listRegisteredTools(t) {
+		descriptions[tool.Name] = tool.Description
+	}
+
+	for _, want := range []string{
+		"CrashLoopBackOff",
+		"OOMKilled",
+		"image-pull",
+		"readiness",
+		"scheduling",
+		"one round-trip",
+		"`crashCause`",
+		"`" + crashLineFatalPattern + "`",
+		"`" + crashLineHeaderOnly + "`",
+		"`" + crashLineLastMatchedLine + "`",
+		"`" + crashLineLogTail + "`",
+		"`auditSummary.highestSeverity`",
+		"critical|high|medium|low",
+		"`issueSummary` critical|warning",
+	} {
+		if !strings.Contains(descriptions["diagnose"], want) {
+			t.Errorf("diagnose tool description lost interpretation boundary %q", want)
+		}
+	}
+	for _, boundary := range []string{
+		"not a root-cause verdict",
+		"capped sample",
+		"exhaustive set",
+		"low-confidence",
+	} {
+		if !strings.Contains(descriptions["diagnose"], boundary) {
+			t.Errorf("diagnose tool description lost evidence boundary %q", boundary)
+		}
+	}
+
+	for _, want := range []string{
+		"`sourcesErrored`",
+		"results are partial",
+		"missing packages",
+		"not installed",
+		"not source errors",
+		"manually merging list_helm_releases and list_resources",
+		"Helm-only deployment debugging",
+	} {
+		if !strings.Contains(descriptions["list_packages"], want) {
+			t.Errorf("list_packages tool description lost partial-result boundary %q", want)
+		}
+	}
+
+	for _, want := range []string{
+		"Supply both verb and resource",
+		"`usedByPods`",
+		"For ServiceAccount subjects",
+		"`system:authenticated`",
+		"`system:serviceaccounts`",
+		"`inheritedFromGroup`",
+		"`flatRules`",
+		"without provenance",
+		"User and Group subjects",
+		"bindings that name them directly",
+		"empty string for cluster-scoped or cluster-wide access",
+		"create SubjectAccessReviews",
+	} {
+		if !strings.Contains(descriptions["get_subject_permissions"], want) {
+			t.Errorf("get_subject_permissions tool description lost authorization boundary %q", want)
+		}
+	}
+	for _, boundary := range []string{"best-effort", "absence is not proof", "never retries"} {
+		if !strings.Contains(descriptions["get_subject_permissions"], boundary) {
+			t.Errorf("get_subject_permissions tool description lost uncertainty boundary %q", boundary)
+		}
+	}
+
+	for _, want := range []string{
+		"Helm storage namespace",
+		"`storageNamespace`",
+		"release namespace",
+		"key-aware redacted",
+	} {
+		if !strings.Contains(descriptions["get_helm_release"], want) {
+			t.Errorf("get_helm_release tool description lost call or secrecy boundary %q", want)
+		}
+	}
+}
+
+func TestToolCatalogContextBudget(t *testing.T) {
+	// These caps guard against description accretion, not against new tools or
+	// load-bearing routing and uncertainty contracts. Raise them deliberately.
+	const (
+		maxCatalogBytes         = 49000
+		maxToolDescriptionBytes = 3000
+	)
+
+	total := 0
+	for _, tool := range listRegisteredTools(t) {
+		if len(tool.Description) > maxToolDescriptionBytes {
+			t.Errorf("%s description uses %d bytes, per-tool budget is %d; trim field-by-field manuals but preserve routing, uncertainty, and response fields that need interpretation",
+				tool.Name, len(tool.Description), maxToolDescriptionBytes)
+		}
+		schema, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal %s input schema: %v", tool.Name, err)
+		}
+		total += len(tool.Description) + len(schema)
+	}
+	if total > maxCatalogBytes {
+		t.Fatalf("MCP tool descriptions and schemas use %d bytes, budget is %d; raise deliberately for new tools or load-bearing contracts, and trim response-field manuals rather than routing or uncertainty boundaries",
+			total, maxCatalogBytes)
+	}
+}
+
+func TestToolDescriptionsPreserveCrossSurfaceRouting(t *testing.T) {
+	descriptions := map[string]string{}
+	for _, tool := range listRegisteredTools(t) {
+		descriptions[tool.Name] = tool.Description
+	}
+
+	for _, want := range []string{
+		"`group=" + issues.NativeHelmGroup + "` routes to get_helm_release",
+		"`group=helm.toolkit.fluxcd.io` routes to diagnose",
+		"`correlated_changes`",
+		"tracked edits on the issue subject",
+		"directly referenced ConfigMaps",
+	} {
+		if !strings.Contains(descriptions["issues"], want) {
+			t.Errorf("issues tool description lost routing or evidence scope %q", want)
+		}
+	}
+	for _, want := range []string{
+		"Kyverno PolicyReport",
+		"not included",
+		"resourceContext",
+	} {
+		if !strings.Contains(descriptions["get_cluster_audit"], want) {
+			t.Errorf("get_cluster_audit tool description lost policy-report boundary %q", want)
+		}
 	}
 }
 

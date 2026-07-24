@@ -13,7 +13,7 @@ import (
 // listPackagesInput mirrors the /api/packages query params.
 type listPackagesInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"limit to packages in this namespace (release-namespace match). Default: all namespaces."`
-	Source    string `json:"source,omitempty" jsonschema:"limit to rows where this source contributed. Stable response codes are H (Helm API), L (workload labels), C (CRDs), A (Argo Application), F (Flux HelmRelease/Kustomization); this MCP tool also accepts verbose aliases helm, labels, crds, argocd, and fluxcd. The response includes sourceLegend so agents do not have to remember the single-letter codes. The response field sourcesErrored lists sources that failed (e.g. RBAC denied for Helm release secrets) — fewer rows than expected may mean a source dropped out, not that nothing is installed."`
+	Source    string `json:"source,omitempty" jsonschema:"limit to rows contributed by one source: H/helm, L/labels, C/crds, A/argocd, or F/fluxcd. The response sourceLegend expands stable codes."`
 	Chart     string `json:"chart,omitempty" jsonschema:"case-insensitive substring filter on chart name."`
 }
 

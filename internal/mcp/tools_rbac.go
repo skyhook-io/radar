@@ -30,7 +30,6 @@ import (
 // We drop:
 //   - per-binding rule blowup (use the dedicated `get_resource` on the
 //     specific Role/ClusterRole to inspect)
-//   - InheritedFromGroup attribution (the AI can ask follow-up if needed)
 
 type subjectPermissionsInput struct {
 	Kind              string  `json:"kind" jsonschema:"subject kind: ServiceAccount, User, or Group; access checks support ServiceAccount only"`

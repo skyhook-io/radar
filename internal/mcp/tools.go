@@ -38,6 +38,11 @@ import (
 // setup dialog catalog (web/src/components/home/mcpToolCatalog.ts) must list
 // the same set — TestSetupDialogCoversAllTools fails CI when they diverge, so
 // add/remove the catalog entry alongside any change here.
+//
+// Keep descriptions about tool choice, important limitations, and reasoning
+// steers. Put conditional advice in response guidance so it arrives when
+// relevant; otherwise describe only fields whose names are insufficient for
+// correct interpretation, not every response field.
 func registerTools(server *mcp.Server, includeWrites bool) {
 	boolPtr := func(b bool) *bool { return &b }
 	// All radar tools operate against the connected cluster (closed world),
@@ -182,40 +187,27 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "diagnose",
-		Description: "Use when the agent's decision is 'this workload or GitOps reconciler " +
-			"is broken — find the root cause / localize the failure'. For a single " +
-			"Pod/Deployment/StatefulSet/DaemonSet, bundles: the resource (Kubernetes-shaped detail) + diagnostic " +
-			"resourceContext (managedBy, exposes, selectedBy, uses, runsOn, " +
-			"issue/audit/policy rollups — issues carry diagnostic_context with cross-subject " +
-			"causal links + a confidence tier to walk symptom→root; audit findings are static " +
-			"posture and remediation priority, not evidence of an active outage; " +
-			"auditSummary.highestSeverity uses the Checks ladder (critical|high|medium|low; " +
-			"current built-ins are high|medium), separate from issueSummary's live-operational " +
-			"critical|warning) + current AND previous container logs across the " +
-			"workload's pods + crashCause evidence that pairs active crashloop status with " +
-			"one highest-signal line from the crashed instance's already-filtered logs " +
-			"(evidence, not a root-cause verdict; its logLineSelection field states how the " +
-			"line was chosen — fatal_pattern, traceback_header_only, last_matched_line, " +
-			"log_tail, in descending confidence — weigh the line accordingly and read the " +
-			"full logs when confidence is low; traceback_header_only means a crash " +
-			"signature exists but its informative line was not captured) + recent Warning " +
-			"events filtered to this resource + a " +
-			"recentChanges section for the workload and directly referenced " +
-			"ConfigMaps (no Secret content); `application_configuration_change: true` " +
-			"is a factual edit classification and narrow ranking hint, not a causal or " +
-			"universal relevance verdict. Also returns a " +
-			"startupBlockers section when the workload can't reach Running (unschedulable " +
-			"with the offending node constraint named, admission/quota rejection, or a " +
-			"post-bind CNI/volume stall). For Application/Kustomization/Flux HelmRelease, returns " +
-			"the reconciler resource + GitOps status summary + related parsed issues " +
-			"(cause/action/remediation), without pod-log fan-out. Use for " +
-			"CrashLoopBackOff, OOMKills, failed deploys, image-pull errors, readiness " +
-			"flaps, scheduling failures, error-spewing services, GitOps sync/health failures, or any workload " +
-			"root-causing where you would otherwise call get_resource → events → " +
-			"get_pod_logs → get_pod_logs(previous=true) in sequence — this returns the " +
-			"same data in one round-trip. If you only need ONE facet (e.g. just spec, " +
-			"just logs), prefer the targeted tool. For other CRDs or non-workload kinds, " +
-			"use get_resource (with optional include=events).",
+		Description: "Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, " +
+			"or GitOps sync/health symptoms after narrowing to one broken workload or reconciler. " +
+			"For workload symptoms, it replaces a get_resource → get_events(type=Warning) → " +
+			"current/previous-log chain in one round-trip. For a Pod, " +
+			"Deployment, StatefulSet, or DaemonSet, it " +
+			"bundles resource context, current and previous logs across pods, Warning events, " +
+			"startup blockers, related issues, and recent workload/ConfigMap changes. " +
+			"Warning events are a capped sample; use get_events for the exhaustive set. " +
+			"`crashCause` is evidence, not a root-cause verdict: `logLineSelection` ranks " +
+			"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
+			crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "` " +
+			"by confidence. Read the full logs for low-confidence selections; " +
+			"`traceback_header_only` means the informative traceback line was not captured. " +
+			"Audit findings are static posture, not active-outage evidence: " +
+			"`auditSummary.highestSeverity` uses critical|high|medium|low (built-ins " +
+			"high|medium), separate from live `issueSummary` critical|warning. " +
+			"`application_configuration_change: true` is a factual edit classification " +
+			"and narrow ranking hint, not a causal or universal relevance verdict. " +
+			"For Application, Kustomization, or Flux HelmRelease, returns reconciler status " +
+			"and parsed issues without pod-log fan-out. Prefer a targeted resource/log/event " +
+			"tool when you need only one facet; use get_resource for other kinds.",
 		Annotations: readOnly,
 	}, logToolCall("diagnose", handleDiagnose))
 
@@ -267,6 +259,8 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"summary counts are posture remediation priority; current built-in checks emit high " +
 			"or medium. They are not the live-issue severity scale. For 'what's broken right now?' " +
 			"use the issues tool. " +
+			"Kyverno PolicyReport findings are not included; inspect a resource with get_resource " +
+			"or diagnose to see its resourceContext policy rollup. " +
 			"Respects user's audit settings (ignored namespaces, disabled checks). Filter " +
 			"by namespace, category, or severity. Resources absent from findings should " +
 			"NOT be reported as non-compliant — empty findings for a scope means no " +
@@ -290,18 +284,12 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_helm_release",
-		Description: "Get detailed information about a specific Helm release including owned resources " +
-			"and their status. The namespace parameter is the Helm storage namespace: use storageNamespace " +
-			"from list_helm_releases when present, otherwise use namespace. The default response includes " +
-			"storageNamespace, managedByFluxHelmRelease, resource health, operationInsight, and lastOperation when Helm history " +
-			"indicates a current failed upgrade, rollback-after-failure, rollback, or stuck pending operation, " +
-			"where operationInsight gives active-vs-recovered state, the likely resource to inspect, and suggested revision comparison when available, " +
-			"plus hooks and failed/running hookDiagnostics with live Job/Pod/Event/redacted-log evidence when available. " +
-			"Optionally include values, revision history, operation history, manifest diff, values diff, " +
-			"notes diff, or rendered-resource set diff between revisions using the 'include' parameter. " +
-			"Values returned through MCP are key-aware redacted. " +
-			"(comma-separated: values, history, operations, diff, values_diff, notes_diff, resource_diff). " +
-			"diff_revision_1 and diff_revision_2 are used when include contains any *_diff or diff token.",
+		Description: "Use after identifying a specific native Helm release to inspect owned " +
+			"resources, health, current or recovered operation failures, and hook diagnostics. " +
+			"The namespace argument is the Helm storage namespace: use `storageNamespace` " +
+			"from list_helm_releases when present, otherwise use the release namespace. " +
+			"Request values, history, operations, or " +
+			"revision comparisons with `include`; returned values are key-aware redacted.",
 		Annotations: readOnly,
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
 
@@ -317,26 +305,15 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 	// are interpretable without external docs.
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_packages",
-		Description: "List installed packages (Helm releases, label-managed workloads, CRDs, " +
-			"Argo Applications, Flux HelmReleases + Kustomizations) with their sources, " +
-			"versions, and health. Each row carries a `sources` array (H=Helm API, " +
-			"L=workload labels, C=CRD registrations, A=Argo declaration, F=Flux declaration) " +
-			"so the caller can see WHY this package is detected; the MCP response also includes " +
-			"`sourceLegend` mapping those stable codes to readable meanings, plus a `contributors` " +
-			"array with per-source detail (each source's view of health/version, plus the " +
-			"GitOps controller resource identity in declarationName/declarationNamespace " +
-			"for sources A and F). Aggregated row-level health is worst-of contributors; " +
-			"row-level version is first-source-priority — read `contributors` to detect " +
-			"same-cluster disagreement. Use to answer 'what's installed?' / 'what version " +
-			"of cert-manager is running?' / 'are there orphaned operators?' in a single " +
-			"call instead of combining list_helm_releases + list_resources + manual merge. " +
-			"Filter by namespace, source, or chart substring. Response includes " +
-			"`sourcesErrored` listing any sources that failed (e.g. RBAC denied for Helm " +
-			"release secrets, Helm client not initialized, GitOps informer errors other " +
-			"than the controller's CRDs being absent). When this is non-empty, results " +
-			"are still returned but are partial — fewer rows than expected may indicate a " +
-			"dropped source rather than nothing installed. ArgoCD/FluxCD CRDs that are " +
-			"simply not installed in the cluster do NOT appear in sourcesErrored.",
+		Description: "Use for a unified inventory of installed packages, versions, and health " +
+			"across Helm, workload labels, CRDs, Argo, and Flux. `sources` and the returned " +
+			"`sourceLegend` explain why each row exists; inspect `contributors` when sources " +
+			"disagree because aggregate health is worst-of while version follows source " +
+			"priority. Use this instead of manually merging list_helm_releases and " +
+			"list_resources when the question spans package sources; use list_helm_releases " +
+			"for Helm-only deployment debugging. Filter by namespace, source, or chart substring. Non-empty " +
+			"`sourcesErrored` means results are partial, not proof that missing packages are " +
+			"absent. Argo or Flux CRDs simply not installed are not source errors.",
 		Annotations: readOnly,
 	}, logToolCall("list_packages", handleListPackages))
 
@@ -344,91 +321,50 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "issues",
-		Description: "Use when the agent's decision is 'what's broken right now?' — LIVE " +
-			"OPERATIONAL STATE, not config posture. Returns a ranked list of currently " +
-			"failing resources: failing Deployments/StatefulSets/CronJobs/HPAs/Nodes/Jobs/" +
-			"PVCs, active native Helm release failures or stuck pending operations, " +
-			"dangling-reference errors like Pod→missing PVC/CM/Secret/SA, HPA→missing " +
-			"scaleTargetRef, Ingress→missing backend Service, RoleBinding→missing Role, " +
-			"webhook→missing Service, pod startup blockers — why a Pod can't reach Running: " +
-			"unschedulable (arch/taint/resources/affinity), admission-rejected " +
-			"(quota/PodSecurity/webhook), or stuck post-bind (CNI/volume), and False " +
-			".status.conditions on CRDs from Argo/Flux/Knative/Crossplane/cert-manager/KEDA. " +
-			"Severity normalized to critical/warning. This is one curated stream — there is " +
-			"no source filter; each row carries a `source` label (problem|missing_ref|" +
-			"scheduling|condition) you can slice on via the CEL filter= if needed. Some " +
-			"rows include `diagnostic_context`: deterministic facts AND cross-subject " +
-			"causal links — a failing root (Node under resource pressure, broken PVC, " +
-			"Service with no endpoints, unavailable metrics APIService) annotated with the " +
-			"downstream issues it may explain, in `facts[].related_issues` (each `count` " +
-			"is how many affected resources fold into that linked issue). Each causal link " +
-			"carries a `confidence`: `high` = a declared structural edge (selector, owner, " +
-			"claimName) — treat as fact; `medium` = inferred/co-located (e.g. pods ON a " +
-			"pressured node) — a lead to verify, NOT proof; `low` = heuristic. The fact's " +
-			"`role` (candidate = possible cause, affected, rollup, context) places the row " +
-			"in the causal picture. The REVERSE is also provided: a symptom row may carry " +
-			"`incident_parent` (the root issue that explains it — id + ref + confidence + " +
-			"fact_type), so you can walk symptom→root directly without scanning every root's " +
-			"facts. It is set only when a single root is unambiguous (high beats medium; " +
-			"distinct same-confidence roots leave it unset). Use these links to walk from a " +
-			"symptom to its likely " +
-			"root, but confirm a medium link before acting on it. " +
-			"When `recent_changes` is present, inspect it before concluding the current " +
-			"issues explain the reported symptom. `recent_changes_reason` says why Radar " +
-			"attached it. `recent_changes_with_all_critical_issues_at_creation` means " +
-			"Radar's best-effort timing evidence places every returned critical row's " +
-			"failure at resource creation. That timing describes those rows only: it does " +
-			"not make recent changes irrelevant to other issues or application-layer " +
-			"symptoms. A bad config change can itself cause a failure during creation. " +
-			"The token does not " +
-			"claim the changes are causal. `recent_changes_guidance`, when present, states " +
-			"how to treat the feed for this response — follow it. " +
-			"`not_linked_to_returned_issues` is computed only when " +
-			"`recent_changes_reason` is `recent_changes_with_all_critical_issues_at_creation`, " +
-			"the response is unfiltered, and issue linkage evidence is complete. In any " +
-			"other response, its absence means Radar did not evaluate linkage, not that " +
-			"every change is linked. When computed, `not_linked_to_returned_issues: true` marks an " +
-			"application-configuration change Radar could not link to an issue returned in " +
-			"that response; it appears first within `recent_changes` as a lead to verify, " +
-			"not evidence of cause. `no_critical_issues` " +
-			"means no critical rows " +
-			"were returned. `recent_changes_truncated=true` means the feed is incomplete, " +
-			"so absence from it is not evidence that a relevant change did not occur. " +
-			"The feed lists recent spec/config changes that may explain failures " +
-			"not yet visible as runtime issues, or help distinguish creation-time " +
-			"baseline failures from the active incident. " +
-			"`application_configuration_change: true` is a static classification " +
-			"of the edit itself — workload runtime configuration or data in a " +
-			"directly consumed ConfigMap — used as a narrow ranking hint, not a causal " +
-			"or universal relevance verdict. Its presence inside `correlated_changes` does not strengthen " +
-			"that entry's causal claim. " +
-			"Single-namespace responses may add per-issue change evidence to eligible " +
-			"critical and warning issues: `correlated_changes` lists recent non-status " +
-			"changes on the issue subject (and, for workloads, its directly referenced " +
-			"ConfigMaps); `no_recent_changes.window_seconds` means Radar observed no such " +
-			"tracked change in that window. Treat that as evidence against, not disproof " +
-			"of, a recent tracked-change cause — Secret values and external dependencies " +
-			"may still have changed. If neither field is present, correlation is unknown, " +
-			"not 'no changes'. " +
-			"When present on a ConfigMap change, `consumed_by` identifies workloads that " +
-			"directly reference it. " +
-			"For raw Kubernetes Warning events use get_events; for static best-practice / " +
-			"security-posture findings (runAsRoot, missing PDB, no probes, missing resource " +
-			"limits) use get_cluster_audit — a separate axis that must never be conflated (a " +
-			"healthy pod can have many audit findings; a crashing pod can have zero). Kyverno " +
-			"PolicyReport violations are not in either — they surface per-resource via " +
-			"get_resource's resourceContext policy rollup. " +
-			"Recovered Helm rollbacks are deploy history, not live issues; use get_changes for " +
-			"Kubernetes timeline changes plus Helm deployment history, and get_helm_release for " +
-			"full Helm revision/history/hook diagnostics. " +
-			"After identifying a suspect issue, call diagnose when the affected resource " +
-			"is a workload (Pod/Deployment/StatefulSet/DaemonSet) or GitOps reconciler " +
-			"(Application/Kustomization/HelmRelease with group=helm.toolkit.fluxcd.io). " +
-			"For native Helm issues (kind=HelmRelease, group=helm.sh), call get_helm_release " +
-			"with include=history,operations. For other non-workload kinds, call get_resource. " +
-			"Use get_neighborhood when the failure likely crosses " +
-			"Services/workloads/Pods/dependencies. Use namespace for app-local triage; " +
-			"omit it when the root may be cluster-scoped or outside the app namespace.",
+		Description: "Use for 'what's broken right now?': live operational state, not static " +
+			"posture. Returns a ranked, grouped stream " +
+			"of current failures across workloads, Jobs/CronJobs, HPAs, PVCs, and Nodes; " +
+			"dangling references; pod startup blockers; active native Helm failures; " +
+			"and False controller conditions, " +
+			"normalized to critical or warning. Use the CEL `filter` for source or taxonomy " +
+			"slices; there is no separate source parameter. " +
+			"`diagnostic_context.role` identifies candidate roots, rollups, affected symptoms, " +
+			"or context; `related_issues[].count` is this root's affected subset, not the linked " +
+			"issue total. Confidence `high` is a " +
+			"declared structural edge, `medium` is an inferred or co-located lead to verify, " +
+			"and `low` is heuristic. A symptom's `incident_parent` points back to one " +
+			"unambiguous best root; absence can mean competing roots, not no relationship. " +
+			"`issue_timing` distinguishes `started_at_resource_creation` from " +
+			"`started_after_resource_was_healthy`; it is timing evidence, not a root-cause " +
+			"verdict, and absence means unknown. " +
+			"When `recent_changes` is present, inspect it before concluding the returned " +
+			"issues explain the symptom. Follow `recent_changes_guidance` when present. " +
+			"`recent_changes_reason=" + meaningfulchanges.ChangesReasonNoCriticalIssues +
+			"` means no critical row, not healthy. The `" +
+			meaningfulchanges.ChangesReasonWithAllCreationTimeCriticalIssues +
+			"` reason always carries guidance. " +
+			"The automatic feed is limited to eligible single-namespace issue queries; use " +
+			"get_changes for other scopes. Only a complete, unfiltered creation-time issue " +
+			"set evaluates `not_linked_to_returned_issues`; otherwise absence means linkage " +
+			"was not evaluated, not that every change is linked. A marked change ranks first " +
+			"as a lead to verify, not evidence of cause. " +
+			"`application_configuration_change: true` is a factual edit classification and " +
+			"narrow ranking hint, not a causal or universal relevance verdict; its presence " +
+			"inside `correlated_changes` does not strengthen causality. " +
+			"`recent_changes_truncated=true` makes the feed incomplete, so absence from the " +
+			"feed is not evidence that a relevant change did not occur. Per-issue " +
+			"`no_recent_changes.window_seconds` is the observed window with no tracked change; " +
+			"treat it as evidence against, not disproof of, that cause. Secret values and " +
+			"external dependencies may still have changed. If " +
+			"neither `correlated_changes` nor `no_recent_changes` is present, correlation is " +
+			"unknown. `correlated_changes` covers tracked edits on the issue subject and, for " +
+			"workloads, directly referenced ConfigMaps. " +
+			"For raw events use get_events; for posture findings use get_cluster_audit. " +
+			"After finding a suspect, use diagnose for workloads or GitOps reconcilers. For " +
+			"HelmRelease rows, `group=" + issues.NativeHelmGroup + "` routes to get_helm_release and " +
+			"`group=helm.toolkit.fluxcd.io` routes to diagnose. Use get_resource for other kinds, and " +
+			"get_neighborhood for cross-resource failures. Scope to a namespace for app " +
+			"triage; omit it when the root may be cluster-scoped or elsewhere.",
 		Annotations: readOnly,
 	}, logToolCall("issues", handleIssuesTool))
 
@@ -456,25 +392,20 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_subject_permissions",
-		Description: "Inspect effective RBAC for a Kubernetes subject. Without verb/resource, " +
-			"returns the existing permissions dump for a ServiceAccount, User, or Group: " +
-			"granting bindings, deduplicated flat rules, and (for ServiceAccounts) Pods " +
-			"running as the subject. Use that mode for over-privilege and blast-radius questions. " +
-			"For a focused ServiceAccount yes/no question, supply both verb and resource; " +
-			"that mode asks the Kubernetes authorizer via SubjectAccessReview and returns only " +
-			"subject + accessCheck, including allowed, denied, reason, and evaluationError. " +
-			"resource_namespace defaults to the ServiceAccount namespace; explicitly pass an " +
-			"empty string for a cluster-scoped resource or cluster-wide API request. This does not " +
-			"aggregate permissions granted by namespace-local RoleBindings. Optional group, " +
-			"subresource, and resource_name refine the target. Access-check mode requires the " +
-			"calling identity itself to have create permission on " +
-			"subjectaccessreviews.authorization.k8s.io; Radar never retries with a privileged identity. " +
-			"For ServiceAccount, namespace is required. For User/Group, omit namespace " +
-			"(those are external identities, not namespaced resources). " +
-			"Inherited grants from implicit group memberships (system:authenticated, " +
-			"system:serviceaccounts) are included for ServiceAccount subjects with the " +
-			"`inheritedFromGroup` field set per binding so you can distinguish direct " +
-			"from inherited grants.",
+		Description: "Use without verb/resource to inspect effective RBAC, granting bindings, " +
+			"flat rules, and, for ServiceAccounts, Pods running under it (`usedByPods`). " +
+			"`usedByPods` is best-effort and omitted when unavailable; absence is not proof " +
+			"no Pod uses the ServiceAccount. For ServiceAccount subjects, effective permissions " +
+			"include implicit-group grants such as `system:authenticated` and " +
+			"`system:serviceaccounts`; `inheritedFromGroup` identifies those bindings, while " +
+			"`flatRules` merges them without provenance. User and Group subjects include only " +
+			"bindings that name them directly. Supply both verb and resource for a focused " +
+			"ServiceAccount authorizer " +
+			"check. In that mode, `resource_namespace` defaults to the ServiceAccount " +
+			"namespace; set it to an empty string for cluster-scoped or cluster-wide access. " +
+			"The caller must be allowed to create SubjectAccessReviews. Radar never retries " +
+			"with a privileged identity, so authorization errors are explicit. ServiceAccounts " +
+			"require a subject namespace; omit it for Users and Groups.",
 		Annotations: readOnly,
 	}, logToolCall("get_subject_permissions", handleGetSubjectPermissions))
 
