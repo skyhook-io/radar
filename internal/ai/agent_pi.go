@@ -65,6 +65,9 @@ func (a *piAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), e
 }
 
 func writePiConfig(workdir, mcpURL string) error {
+	if err := os.MkdirAll(workdir, 0o700); err != nil {
+		return err
+	}
 	cfg := map[string]any{"mcpServers": map[string]any{"radar": map[string]any{"url": mcpURL}}}
 	b, err := json.Marshal(cfg)
 	if err != nil {

@@ -75,6 +75,10 @@ func (a *antigravityAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, 
 }
 
 func writeAntigravityConfig(workdir, mcpURL string) error {
+	if err := os.MkdirAll(workdir, 0o700); err != nil {
+		return err
+	}
+
 	// Write standard mcp.json
 	cfg := map[string]any{"mcpServers": map[string]any{"radar": map[string]any{"url": mcpURL}}}
 	b, err := json.Marshal(cfg)

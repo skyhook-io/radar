@@ -67,6 +67,10 @@ func (a *opencodeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, fun
 }
 
 func writeOpencodeConfig(workdir, mcpURL string) error {
+	if err := os.MkdirAll(workdir, 0o700); err != nil {
+		return err
+	}
+
 	// Write local project opencode.json pointing to Radar's local MCP
 	cfg := map[string]any{
 		"mcp": map[string]any{
