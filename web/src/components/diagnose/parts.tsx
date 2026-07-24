@@ -372,7 +372,13 @@ export function AgentControls({
           placeholder={
             isCursor
               ? "Default (e.g. auto, gpt-5.2, composer-2.5)"
-              : "Default (e.g. gpt-5-codex, o3)"
+              : isCodex
+                ? "Default (e.g. gpt-5-codex, o3)"
+                : selectedAgent === "antigravity"
+                  ? "Default (e.g. gemini-2.5-pro, gemini-2.5-flash)"
+                  : selectedAgent === "opencode"
+                    ? "Default (e.g. opencode-1.5-pro)"
+                    : "Default model"
           }
           onChange={onSetModel}
           hint={
