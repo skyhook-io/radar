@@ -210,6 +210,103 @@ func TestDiffPodTemplateConfig_PortsSAandScheduling(t *testing.T) {
 	}
 }
 
+func TestDiffPodTemplateConfig_DNS(t *testing.T) {
+	oldNDots := "2"
+	newNDots := "5"
+	oldSpec := corev1.PodSpec{
+		DNSPolicy: corev1.DNSClusterFirst,
+		DNSConfig: &corev1.PodDNSConfig{
+			Nameservers: []string{"10.96.0.10"},
+			Searches:    []string{"default.svc.cluster.local"},
+			Options:     []corev1.PodDNSConfigOption{{Name: "ndots", Value: &oldNDots}, {Name: "single-request-reopen"}},
+		},
+	}
+	newSpec := corev1.PodSpec{
+		DNSPolicy: corev1.DNSNone,
+		DNSConfig: &corev1.PodDNSConfig{
+			Nameservers: []string{"1.1.1.1", "8.8.8.8"},
+			Searches:    []string{"svc.cluster.local", "cluster.local"},
+			Options:     []corev1.PodDNSConfigOption{{Name: "ndots", Value: &newNDots}, {Name: "rotate"}},
+		},
+	}
+
+	changes, summary := diffPodTemplateConfig(oldSpec, newSpec)
+	expected := map[string]struct {
+		old any
+		new any
+	}{
+		"spec.template.spec.dnsPolicy":             {old: "ClusterFirst", new: "None"},
+		"spec.template.spec.dnsConfig.nameservers": {old: []string{"10.96.0.10"}, new: []string{"1.1.1.1", "8.8.8.8"}},
+		"spec.template.spec.dnsConfig.searches":    {old: []string{"default.svc.cluster.local"}, new: []string{"svc.cluster.local", "cluster.local"}},
+		"spec.template.spec.dnsConfig.options":     {old: []string{"ndots=2", "single-request-reopen"}, new: []string{"ndots=5", "rotate"}},
+	}
+	if len(changes) != len(expected) {
+		t.Fatalf("changes = %+v, want exactly the four DNS fields", changes)
+	}
+	for path, want := range expected {
+		change, ok := findChangePath(changes, path)
+		if !ok {
+			t.Fatalf("missing %s in %+v", path, changes)
+		}
+		if !reflect.DeepEqual(change.OldValue, want.old) || !reflect.DeepEqual(change.NewValue, want.new) {
+			t.Fatalf("%s = %#v→%#v, want %#v→%#v", path, change.OldValue, change.NewValue, want.old, want.new)
+		}
+	}
+	joined := strings.Join(summary, "; ")
+	for _, fragment := range []string{"dnsPolicy: ClusterFirst→None", "dnsConfig.nameservers changed", "dnsConfig.searches changed", "dnsConfig.options changed"} {
+		if !strings.Contains(joined, fragment) {
+			t.Fatalf("summary %q missing %q", joined, fragment)
+		}
+	}
+}
+
+func TestDiffPodTemplateConfig_DNSOrderRemainsObservable(t *testing.T) {
+	oldSpec := corev1.PodSpec{DNSConfig: &corev1.PodDNSConfig{
+		Nameservers: []string{"1.1.1.1", "8.8.8.8"},
+		Searches:    []string{"svc.cluster.local", "cluster.local"},
+		Options:     []corev1.PodDNSConfigOption{{Name: "rotate"}, {Name: "single-request-reopen"}},
+	}}
+	newSpec := corev1.PodSpec{DNSConfig: &corev1.PodDNSConfig{
+		Nameservers: []string{"8.8.8.8", "1.1.1.1"},
+		Searches:    []string{"cluster.local", "svc.cluster.local"},
+		Options:     []corev1.PodDNSConfigOption{{Name: "single-request-reopen"}, {Name: "rotate"}},
+	}}
+
+	changes, _ := diffPodTemplateConfig(oldSpec, newSpec)
+	for _, path := range []string{
+		"spec.template.spec.dnsConfig.nameservers",
+		"spec.template.spec.dnsConfig.searches",
+		"spec.template.spec.dnsConfig.options",
+	} {
+		change, ok := findChangePath(changes, path)
+		if !ok {
+			t.Fatalf("order-only change at %s was lost: %+v", path, changes)
+		}
+		oldValues := change.OldValue.([]string)
+		newValues := change.NewValue.([]string)
+		if len(oldValues) != 2 || len(newValues) != 2 || oldValues[0] == newValues[0] {
+			t.Fatalf("order-only change at %s lost ordered values: %#v→%#v", path, oldValues, newValues)
+		}
+	}
+}
+
+func TestDiffPodTemplateConfig_DNSDefaultsAndEmptyCollectionsAreEquivalent(t *testing.T) {
+	oldSpec := corev1.PodSpec{}
+	newSpec := corev1.PodSpec{
+		DNSPolicy: corev1.DNSClusterFirst,
+		DNSConfig: &corev1.PodDNSConfig{
+			Nameservers: []string{},
+			Searches:    []string{},
+			Options:     []corev1.PodDNSConfigOption{},
+		},
+	}
+
+	changes, summary := diffPodTemplateConfig(oldSpec, newSpec)
+	if len(changes) != 0 || len(summary) != 0 {
+		t.Fatalf("API defaults and empty DNS collections produced noise: changes=%+v summary=%+v", changes, summary)
+	}
+}
+
 func TestDiffApplicationCleansFailedOperationMessage(t *testing.T) {
 	rawMessage := `rpc error: code = Unknown desc = app path does not exist`
 	tests := []struct {

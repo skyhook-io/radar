@@ -373,6 +373,46 @@ func TestComputeDiff_StatefulSetEnvRemoval_Detected(t *testing.T) {
 	}
 }
 
+func TestComputeDiff_WorkloadDNSConfig_Detected(t *testing.T) {
+	oldSpec := corev1.PodSpec{DNSPolicy: corev1.DNSClusterFirst}
+	newSpec := corev1.PodSpec{
+		DNSPolicy: corev1.DNSNone,
+		DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{"1.1.1.1"}},
+	}
+	tests := []struct {
+		kind string
+		old  any
+		new  any
+	}{
+		{
+			kind: "Deployment",
+			old:  &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: oldSpec}}},
+			new:  &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: newSpec}}},
+		},
+		{
+			kind: "StatefulSet",
+			old:  &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: oldSpec}}},
+			new:  &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: newSpec}}},
+		},
+		{
+			kind: "DaemonSet",
+			old:  &appsv1.DaemonSet{Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: oldSpec}}},
+			new:  &appsv1.DaemonSet{Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: newSpec}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			diff := ComputeDiff(tt.kind, tt.old, tt.new)
+			for _, path := range []string{"spec.template.spec.dnsPolicy", "spec.template.spec.dnsConfig.nameservers"} {
+				if diff == nil || !containsPath(diff, path) {
+					t.Fatalf("expected %s change at %s, got %+v", tt.kind, path, diff)
+				}
+			}
+		})
+	}
+}
+
 func TestComputeDiff_FluxKustomizationStalled_Detected(t *testing.T) {
 	mk := func(stalledStatus string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{Object: map[string]any{

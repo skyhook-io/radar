@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/timeline"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // The cache layer computes the update diff once and hands it to
@@ -46,5 +48,40 @@ func TestRecordToTimelineStore_PrecomputedDiffMatchesRecompute(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("precomputed-diff timeline output differs from recompute:\n got=%+v\nwant=%+v", got, want)
+	}
+}
+
+func TestRecordToTimelineStore_PreservesDNSFieldPath(t *testing.T) {
+	timeline.ResetStore()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	t.Cleanup(timeline.ResetStore)
+
+	oldDep := &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{DNSPolicy: corev1.DNSClusterFirst}}}}
+	newDep := oldDep.DeepCopy()
+	newDep.Spec.Template.Spec.DNSPolicy = corev1.DNSNone
+	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "update", oldDep, newDep, nil, false)
+
+	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Deployment"}})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 1 || events[0].Diff == nil {
+		t.Fatalf("expected one timeline event with a diff, got %+v", events)
+	}
+	var dnsPolicyChange *timeline.FieldChange
+	for _, change := range events[0].Diff.Fields {
+		if change.Path == "spec.template.spec.dnsPolicy" {
+			changeCopy := change
+			dnsPolicyChange = &changeCopy
+			break
+		}
+	}
+	if dnsPolicyChange == nil {
+		t.Fatalf("timeline diff lost exact DNS field path: %+v", events[0].Diff.Fields)
+	}
+	if dnsPolicyChange.OldValue != "ClusterFirst" || dnsPolicyChange.NewValue != "None" {
+		t.Fatalf("timeline diff lost DNS values: %+v", *dnsPolicyChange)
 	}
 }

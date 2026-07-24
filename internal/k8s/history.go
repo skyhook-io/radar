@@ -3033,6 +3033,26 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 	// Pod-level fields. Volume diffs carry source references only (never
 	// contents); tolerations are summarized to compact strings; affinity is a
 	// bare "changed" marker — its tree is too large to diff usefully.
+	oldDNSPolicy := normalizedDNSPolicy(oldSpec.DNSPolicy)
+	newDNSPolicy := normalizedDNSPolicy(newSpec.DNSPolicy)
+	if oldDNSPolicy != newDNSPolicy {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.dnsPolicy", OldValue: oldDNSPolicy, NewValue: newDNSPolicy})
+		summary = append(summary, fmt.Sprintf("dnsPolicy: %s→%s", oldDNSPolicy, newDNSPolicy))
+	}
+	oldNameservers, oldSearches, oldDNSOptions := dnsConfigValues(oldSpec.DNSConfig)
+	newNameservers, newSearches, newDNSOptions := dnsConfigValues(newSpec.DNSConfig)
+	if !equalStringSlices(oldNameservers, newNameservers) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.dnsConfig.nameservers", OldValue: oldNameservers, NewValue: newNameservers})
+		summary = append(summary, "dnsConfig.nameservers changed")
+	}
+	if !equalStringSlices(oldSearches, newSearches) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.dnsConfig.searches", OldValue: oldSearches, NewValue: newSearches})
+		summary = append(summary, "dnsConfig.searches changed")
+	}
+	if !equalStringSlices(oldDNSOptions, newDNSOptions) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.dnsConfig.options", OldValue: oldDNSOptions, NewValue: newDNSOptions})
+		summary = append(summary, "dnsConfig.options changed")
+	}
 	if oldVols, newVols := volumeSourceRefs(oldSpec.Volumes), volumeSourceRefs(newSpec.Volumes); !equalStringSlices(oldVols, newVols) {
 		changes = append(changes, FieldChange{Path: "spec.template.spec.volumes", OldValue: oldVols, NewValue: newVols})
 		summary = append(summary, "volumes changed")
@@ -3058,6 +3078,32 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 		summary = append(summary, "pod securityContext changed")
 	}
 	return changes, summary
+}
+
+func normalizedDNSPolicy(policy corev1.DNSPolicy) string {
+	if policy == "" {
+		return string(corev1.DNSClusterFirst)
+	}
+	return string(policy)
+}
+
+func dnsConfigValues(config *corev1.PodDNSConfig) (nameservers, searches, options []string) {
+	nameservers = []string{}
+	searches = []string{}
+	options = []string{}
+	if config == nil {
+		return nameservers, searches, options
+	}
+	nameservers = append(nameservers, config.Nameservers...)
+	searches = append(searches, config.Searches...)
+	for _, option := range config.Options {
+		value := option.Name
+		if option.Value != nil {
+			value += "=" + *option.Value
+		}
+		options = append(options, value)
+	}
+	return nameservers, searches, options
 }
 
 // volumeSourceRefs renders volumes as "name:sourceType/sourceName" references
