@@ -270,15 +270,27 @@ export function AgentControls({
   return (
     <div className="space-y-3">
       {agents.length >= 2 && (
-        <Segmented
-          label="Agent"
-          value={selectedAgent}
-          onChange={onSelectAgent}
-          options={agents.map((a) => ({
-            value: a.name,
-            label: a.label || a.name,
-          }))}
-        />
+        agents.length > 3 ? (
+          <SelectMenu
+            label="Agent"
+            value={selectedAgent}
+            onChange={onSelectAgent}
+            options={agents.map((a) => ({
+              value: a.name,
+              label: a.label || a.name,
+            }))}
+          />
+        ) : (
+          <Segmented
+            label="Agent"
+            value={selectedAgent}
+            onChange={onSelectAgent}
+            options={agents.map((a) => ({
+              value: a.name,
+              label: a.label || a.name,
+            }))}
+          />
+        )
       )}
       {profiles.length > 0 && (
         <div>
