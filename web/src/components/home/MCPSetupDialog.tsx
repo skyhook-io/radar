@@ -257,7 +257,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               { icon: Code2, name: 'JetBrains AI', path: 'Settings → Tools → AI Assistant → MCP', config: jetbrainsConfig },
               { icon: Terminal, name: 'OpenAI Codex', path: '~/.codex/config.toml', config: codexConfig },
               { icon: Terminal, name: 'Gemini CLI', path: '~/.gemini/settings.json', config: geminiConfig },
-              { icon: Terminal, name: 'Antigravity', path: '~/.gemini/antigravity-cli/config.json', config: antigravityConfig },
+              { icon: Terminal, name: 'Antigravity', path: '~/.gemini/antigravity-cli/mcp_config.json', config: antigravityConfig },
               { icon: Terminal, name: 'OpenCode', path: '~/.config/opencode/opencode.json', config: opencodeConfig },
               { icon: Terminal, name: 'Pi CLI', path: '~/.pi/agent/mcp.json', config: piConfig },
             ].map((agent) => (

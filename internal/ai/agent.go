@@ -63,11 +63,11 @@ func resolveAgent(bin string) Agent {
 		return &cursorAgent{bin: bin}
 	case strings.Contains(base, "codex"):
 		return &codexAgent{bin: bin}
-	case strings.Contains(base, "agy") || strings.Contains(base, "antigravity"):
+	case base == "agy" || base == "antigravity" || strings.HasPrefix(base, "agy-") || strings.HasPrefix(base, "antigravity-"):
 		return &antigravityAgent{bin: bin}
-	case strings.Contains(base, "opencode"):
+	case base == "opencode" || strings.HasPrefix(base, "opencode-"):
 		return &opencodeAgent{bin: bin}
-	case strings.Contains(base, "pi"):
+	case base == "pi" || base == "pi-coding-agent":
 		return &piAgent{bin: bin}
 	default:
 		return &claudeAgent{bin: bin}

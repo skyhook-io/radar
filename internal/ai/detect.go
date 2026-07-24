@@ -35,6 +35,7 @@ var agentLabels = map[string]string{
 // Probing stops at the first binary name that resolves.
 var agentBinaries = map[string][]string{
 	"antigravity": {"agy", "antigravity"},
+	"pi":          {"pi", "pi-coding-agent"},
 }
 
 // AgentLabel is the display name for an agent CLI — the ONE table every

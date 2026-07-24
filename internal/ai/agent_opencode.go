@@ -27,8 +27,6 @@ func (a *opencodeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, fun
 
 	if s.sessionID != "" {
 		args = append(args, "--session", s.sessionID)
-	} else if s.apply {
-		args = append(args, "--continue")
 	}
 
 	if s.model != "" {
