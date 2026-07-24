@@ -28,7 +28,6 @@ function deepMerge(base: Record<string, unknown>, overrides: Record<string, unkn
   }
   return result
 }
-
 interface InstallWizardProps {
   repo: string
   chartName: string
@@ -757,6 +756,7 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
               <YamlEditor
                 value={valuesYaml}
                 onChange={setValuesYaml}
+                showProblems={false}
                 height="300px"
                 onValidate={(isValid, errors) => {
                   setYamlError(isValid ? null : errors[0] || 'Invalid YAML')

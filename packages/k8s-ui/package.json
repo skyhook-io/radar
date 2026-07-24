@@ -69,6 +69,7 @@
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "html-to-image": "^1.11.0",
+    "monaco-yaml": "5.5.1",
     "react-virtuoso": "^4.18.11",
     "shiki": "^4.2.0"
   },
@@ -81,6 +82,7 @@
     "diff": ">=5.0.0",
     "elkjs": ">=0.9.0",
     "lucide-react": ">=0.400.0",
+    "monaco-editor": "0.55.1",
     "react": ">=18.0.0",
     "react-dom": ">=18.0.0",
     "yaml": ">=2.0.0"
@@ -97,6 +99,7 @@
     "diff": "^9.0.0",
     "elkjs": "^0.11.1",
     "lucide-react": "^1.24.0",
+    "monaco-editor": "0.55.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^6.0.2",

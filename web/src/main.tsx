@@ -1,14 +1,8 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { configureBundledMonaco } from './monaco-setup'
 import { RadarApp } from './RadarApp'
 import { openExternal } from './utils/navigation'
 import './index.css'
-
-// Keep this as an explicit call: side-effect-only imports of the Monaco setup can
-// be dropped by production tree-shaking, which makes offline desktop builds fall
-// back to Monaco's CDN loader.
-configureBundledMonaco()
 
 // Intercept external link clicks in the Wails desktop app.
 // <a target="_blank"> is swallowed by WKWebView/WebView2 — route through openExternal()

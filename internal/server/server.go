@@ -25,6 +25,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"golang.org/x/sync/singleflight"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -124,6 +125,13 @@ type Server struct {
 	// no semantic effect.
 	rbacMemo *rbac.Memoizer
 
+	yamlSchemaMu          sync.Mutex
+	yamlSchemaCache       map[string][]byte
+	yamlSchemaPathCache   map[string]yamlSchemaPathCacheEntry
+	yamlSchemaBundleCache map[string]yamlSchemaBundleCacheEntry
+	yamlSchemaCacheBytes  int
+	yamlSchemaFetchGroup  singleflight.Group
+
 	// aiDiagnoser drives a local agent CLI for "Diagnose with AI" (nil when no
 	// CLI is on PATH — the endpoints then 501). Resolved once at startup.
 	aiDiagnoser *ai.Diagnoser
@@ -154,21 +162,24 @@ func New(cfg Config) *Server {
 	cfg.AuthConfig.Defaults()
 
 	s := &Server{
-		router:             chi.NewRouter(),
-		broadcaster:        NewSSEBroadcaster(),
-		port:               cfg.Port,
-		listenAddress:      cfg.ListenAddress,
-		startupLog:         cfg.StartupLog,
-		remoteAccessHint:   cfg.RemoteAccessHint,
-		devMode:            cfg.DevMode,
-		startTime:          time.Now(),
-		mcpHandler:         cfg.MCPHandler,
-		mcpReadOnlyHandler: cfg.MCPReadOnlyHandler,
-		diagConfig:         cfg.DiagConfig,
-		effectiveConfig:    cfg.EffectiveConfig,
-		authConfig:         cfg.AuthConfig,
-		topoMemo:           topology.NewMemoizer(5 * time.Second),
-		rbacMemo:           rbac.NewMemoizer(5 * time.Second),
+		router:                chi.NewRouter(),
+		broadcaster:           NewSSEBroadcaster(),
+		port:                  cfg.Port,
+		listenAddress:         cfg.ListenAddress,
+		startupLog:            cfg.StartupLog,
+		remoteAccessHint:      cfg.RemoteAccessHint,
+		devMode:               cfg.DevMode,
+		startTime:             time.Now(),
+		mcpHandler:            cfg.MCPHandler,
+		mcpReadOnlyHandler:    cfg.MCPReadOnlyHandler,
+		diagConfig:            cfg.DiagConfig,
+		effectiveConfig:       cfg.EffectiveConfig,
+		authConfig:            cfg.AuthConfig,
+		topoMemo:              topology.NewMemoizer(5 * time.Second),
+		rbacMemo:              rbac.NewMemoizer(5 * time.Second),
+		yamlSchemaCache:       make(map[string][]byte),
+		yamlSchemaPathCache:   make(map[string]yamlSchemaPathCacheEntry),
+		yamlSchemaBundleCache: make(map[string]yamlSchemaBundleCacheEntry),
 	}
 
 	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
@@ -410,6 +421,8 @@ func (s *Server) setupRoutes() {
 			r.Get("/resource-counts", s.handleResourceCounts)
 			r.Get("/resources/{kind}", s.handleListResources)
 			r.Get("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
+			r.Post("/resources/preview", s.handlePreviewResources)
+			r.Post("/resources/schemas", s.handleResourceSchemas)
 			r.Post("/resources/apply", s.handleApplyResource)
 			r.Put("/resources/{kind}/{namespace}/{name}", s.handleUpdateResource)
 			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
@@ -914,6 +927,10 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	caps.MCPEnabled = s.mcpHandler != nil
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
+	caps.Features = k8s.FeatureCapabilities{
+		YAMLReview:  true,
+		YAMLSchemas: true,
+	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		caps.Username = user.Username
@@ -3175,15 +3192,37 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 	}
 	dryRun := r.URL.Query().Get("dryRun") == "true"
 	force := r.URL.Query().Get("force") == "true"
+	reviewedContext := r.URL.Query().Get("reviewedContext")
+	reviewedResourceVersions := make(map[int]string)
+	if encoded := r.URL.Query().Get("reviewedVersions"); encoded != "" {
+		if dryRun {
+			s.writeError(w, http.StatusBadRequest, "reviewed resource versions require a non-dry-run request")
+			return
+		}
+		if err := json.Unmarshal([]byte(encoded), &reviewedResourceVersions); err != nil {
+			s.writeError(w, http.StatusBadRequest, "reviewedVersions must be a document-index to resourceVersion map")
+			return
+		}
+	}
 
-	client := s.getDynamicClientForRequest(r)
+	client, contextName := s.getDynamicClientSnapshotForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	if reviewedContext != "" && reviewedContext != contextName {
+		s.writeError(w, http.StatusConflict, "cluster context changed after review; review the YAML again before applying")
 		return
 	}
 
 	// Split multi-document YAML
 	docs := k8s.SplitYAMLDocuments(yamlContent)
+	for index := range reviewedResourceVersions {
+		if index < 0 || index >= len(docs) {
+			s.writeError(w, http.StatusBadRequest, "reviewedVersions contains an invalid document index")
+			return
+		}
+	}
 
 	var results []k8s.ApplyResourceResult
 	for i, doc := range docs {
@@ -3192,11 +3231,14 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		reviewedResourceVersion, reviewed := reviewedResourceVersions[i]
 		result, err := k8s.ApplyResourceWithClient(r.Context(), k8s.ApplyResourceOptions{
-			YAML:   doc,
-			Mode:   mode,
-			DryRun: dryRun,
-			Force:  force,
+			YAML:                    doc,
+			Mode:                    mode,
+			DryRun:                  dryRun,
+			Force:                   force,
+			ExpectedResourceVersion: reviewedResourceVersion,
+			ExpectedResourceAbsent:  reviewed && reviewedResourceVersion == "",
 		}, client)
 		if err != nil {
 			errMsg := err.Error()
@@ -3204,27 +3246,27 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 				errMsg = fmt.Sprintf("document %d: %s", i+1, errMsg)
 			}
 			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
-				s.writeError(w, http.StatusConflict, errMsg)
+				s.writeApplyResourceError(w, http.StatusConflict, errMsg, results, i, len(docs))
 				return
 			}
 			if apierrors.IsForbidden(err) {
-				s.writeError(w, http.StatusForbidden, errMsg)
+				s.writeApplyResourceError(w, http.StatusForbidden, errMsg, results, i, len(docs))
 				return
 			}
 			if apierrors.IsNotFound(err) {
-				s.writeError(w, http.StatusNotFound, errMsg)
+				s.writeApplyResourceError(w, http.StatusNotFound, errMsg, results, i, len(docs))
 				return
 			}
 			if apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
-				s.writeError(w, http.StatusUnprocessableEntity, errMsg)
+				s.writeApplyResourceError(w, http.StatusUnprocessableEntity, errMsg, results, i, len(docs))
 				return
 			}
 			if strings.Contains(err.Error(), "invalid YAML") || strings.Contains(err.Error(), "must include") {
-				s.writeError(w, http.StatusBadRequest, errMsg)
+				s.writeApplyResourceError(w, http.StatusBadRequest, errMsg, results, i, len(docs))
 				return
 			}
 			log.Printf("[apply] Failed to apply resource: %v", err)
-			s.writeError(w, http.StatusInternalServerError, errMsg)
+			s.writeApplyResourceError(w, http.StatusInternalServerError, errMsg, results, i, len(docs))
 			return
 		}
 		auth.AuditLog(r, result.Namespace, result.Name)
@@ -3255,7 +3297,7 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 
 	// Update the resource (use impersonated client when auth is enabled)
 	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
+	client, contextName := s.getDynamicClientSnapshotForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
@@ -3264,14 +3306,25 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 	// conflict on every field owned by Helm/Flux/Argo/a controller. Default to
 	// force; the editor's checkbox sends force=false to opt out.
 	force := r.URL.Query().Get("force") != "false"
+	expectedResourceVersion := r.URL.Query().Get("resourceVersion")
+	reviewedContext := r.URL.Query().Get("reviewedContext")
+	if reviewedContext != "" && reviewedContext != contextName {
+		s.writeError(w, http.StatusConflict, "cluster context changed after review; review the YAML again before saving")
+		return
+	}
 	result, err := k8s.UpdateResourceWithClient(r.Context(), k8s.UpdateResourceOptions{
-		Kind:      kind,
-		Namespace: namespace,
-		Name:      name,
-		YAML:      string(body),
-		Force:     force,
+		Kind:                    kind,
+		Namespace:               namespace,
+		Name:                    name,
+		YAML:                    string(body),
+		Force:                   force,
+		ExpectedResourceVersion: expectedResourceVersion,
 	}, client)
 	if err != nil {
+		if apierrors.IsConflict(err) {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -3989,6 +4042,25 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	}
 }
 
+func (s *Server) writeApplyResourceError(w http.ResponseWriter, status int, message string, results []k8s.ApplyResourceResult, failedIndex, total int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	payload := struct {
+		Error       string                    `json:"error"`
+		Results     []k8s.ApplyResourceResult `json:"results,omitempty"`
+		FailedIndex int                       `json:"failedIndex"`
+		Total       int                       `json:"total"`
+	}{
+		Error:       message,
+		Results:     results,
+		FailedIndex: failedIndex,
+		Total:       total,
+	}
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("Failed to encode apply error response: %v", err)
+	}
+}
+
 // writeErrorCode is writeError plus a stable machine-readable `error_code`
 // the frontend branches on (e.g. cloud_role_insufficient → "your role can't do
 // this" instead of a generic auth failure).
@@ -4077,30 +4149,40 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 // or the shared client when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount client). Callers must handle nil.
 func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
+	client, _ := s.getDynamicClientSnapshotForRequest(r)
+	return client
+}
+
+func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.Interface, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		client, err := k8s.ImpersonatedDynamicClient(user.Username, user.Groups)
+		client, contextName, err := k8s.ImpersonatedDynamicClientSnapshot(user.Username, user.Groups)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
-			return nil
+			return nil, contextName
 		}
-		return client
+		return client, contextName
 	}
-	return k8s.GetDynamicClient()
+	return k8s.GetDynamicClientSnapshot()
 }
 
 // getConfigForRequest returns an impersonated REST config when auth is enabled,
 // or the shared config when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount config). Callers must handle nil.
 func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
+	config, _ := s.getConfigSnapshotForRequest(r)
+	return config
+}
+
+func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		cfg, err := k8s.ImpersonatedConfig(user.Username, user.Groups)
+		cfg, contextName, err := k8s.ImpersonatedConfigSnapshot(user.Username, user.Groups)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
-			return nil
+			return nil, contextName
 		}
-		return cfg
+		return cfg, contextName
 	}
-	return k8s.GetConfig()
+	return k8s.GetConfigSnapshot()
 }
 
 // getClientForRequest returns an impersonated typed client when auth is enabled,

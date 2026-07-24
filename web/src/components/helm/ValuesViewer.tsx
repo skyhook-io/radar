@@ -25,7 +25,6 @@ interface ValuesViewerProps {
   currentRevision?: number
   onApplySuccess?: () => void
 }
-
 export function ValuesViewer({
   values,
   isLoading,
@@ -297,6 +296,7 @@ export function ValuesViewer({
           <YamlEditor
             value={editedYaml}
             onChange={setEditedYaml}
+            showProblems={false}
             height="calc(100vh - 400px)"
             onValidate={(isValid, errors) => {
               setYamlError(isValid ? null : errors[0] || 'Invalid YAML')

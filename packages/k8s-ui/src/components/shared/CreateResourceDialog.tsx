@@ -1,7 +1,12 @@
-import { useState, useCallback, useEffect } from 'react'
-import { X, Loader2, Check, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Loader2, X } from 'lucide-react'
 import { DialogPortal } from '../ui/DialogPortal'
-import { YamlEditor } from '../ui/YamlEditor'
+import { YamlEditor, type YamlSchemaLoader } from '../ui/YamlEditor'
+import {
+  reviewedResourceVersionsForPreview,
+  YamlReview,
+  type YamlPreviewResult,
+} from '../ui/YamlReview'
 import { Tooltip } from '../ui/Tooltip'
 import { formatApplyError } from '../../utils/k8s-errors'
 
@@ -17,14 +22,39 @@ export interface CreateResourceDialogProps {
   onClose: () => void
   initialYaml?: string
   title?: string
-  // Injected by platform (decouples from data-fetching hooks)
-  onApply: (params: { yaml: string; mode: 'apply' | 'create'; dryRun: boolean; force: boolean }) => Promise<ApplyResult[]>
+  onApply: (params: {
+    yaml: string
+    mode: 'apply' | 'create'
+    dryRun: boolean
+    force: boolean
+    reviewedResourceVersions?: Record<number, string>
+    reviewedContext?: string
+  }) => Promise<ApplyResult[]>
   isApplying: boolean
-  /** Called after a successful non-dry-run apply with the first created resource */
+  onPreview?: (params: { yaml: string; mode: 'apply' | 'create'; force: boolean }) => Promise<{
+    documents: YamlPreviewResult[]
+    nonAtomic: boolean
+    context?: string
+  }>
+  isPreviewing?: boolean
+  previewError?: string | null
+  schemaLoader?: YamlSchemaLoader
   onCreated?: (result: ApplyResult) => void
 }
 
-export function CreateResourceDialog({ open, onClose, initialYaml = '', title, onApply, isApplying, onCreated }: CreateResourceDialogProps) {
+export function CreateResourceDialog({
+  open,
+  onClose,
+  initialYaml = '',
+  title,
+  onApply,
+  isApplying,
+  onPreview,
+  isPreviewing = false,
+  previewError,
+  schemaLoader,
+  onCreated,
+}: CreateResourceDialogProps) {
   const [yaml, setYaml] = useState(initialYaml)
   const [mode, setMode] = useState<'apply' | 'create'>('apply')
   const [dryRun, setDryRun] = useState(false)
@@ -32,30 +62,65 @@ export function CreateResourceDialog({ open, onClose, initialYaml = '', title, o
   const [yamlValid, setYamlValid] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{
+    yaml: string
+    mode: 'apply' | 'create'
+    force: boolean
+    documents: YamlPreviewResult[]
+    nonAtomic: boolean
+    context?: string
+  } | null>(null)
 
-  // Reset state when dialog opens or initialYaml changes
   useEffect(() => {
-    if (open) {
-      setYaml(initialYaml)
-      setMode('apply')
-      setDryRun(false)
-      setForce(false)
-      setError(null)
-      setSuccess(null)
-    }
-  }, [open, initialYaml])
-
-  const handleClose = useCallback(() => {
-    if (isApplying) return
+    if (!open) return
+    setYaml(initialYaml)
+    setMode('apply')
+    setDryRun(false)
+    setForce(false)
+    setYamlValid(true)
     setError(null)
     setSuccess(null)
+    setPreview(null)
+  }, [open, initialYaml])
+
+  const pending = isApplying || isPreviewing
+  const closeNow = useCallback(() => {
+    setError(null)
+    setSuccess(null)
+    setPreview(null)
     setYaml('')
     onClose()
-  }, [onClose, isApplying])
+  }, [onClose])
+  const handleClose = useCallback(() => {
+    if (!pending) closeNow()
+  }, [closeNow, pending])
 
   const handleValidate = useCallback((_isValid: boolean, errors: string[]) => {
     setYamlValid(errors.length === 0)
   }, [])
+
+  const finishApply = useCallback(
+    (results: ApplyResult[], appliedMode: 'apply' | 'create', wasDryRun: boolean) => {
+      const action = appliedMode === 'create' ? 'Created' : 'Applied'
+      const dryRunLabel = wasDryRun ? ' (dry run)' : ''
+      if (results.length === 1) {
+        const result = results[0]
+        setSuccess(
+          `${action} ${result.kind} ${result.namespace ? `${result.namespace}/` : ''}${result.name}${dryRunLabel}`,
+        )
+      } else {
+        setSuccess(`${action} ${results.length} resources${dryRunLabel}`)
+      }
+      if (wasDryRun) return
+      if (onCreated && results.length > 0) {
+        closeNow()
+        onCreated(results[0])
+      } else {
+        window.setTimeout(closeNow, 1200)
+      }
+    },
+    [closeNow, onCreated],
+  )
 
   const handleSubmit = useCallback(async () => {
     if (!yaml.trim()) {
@@ -64,167 +129,238 @@ export function CreateResourceDialog({ open, onClose, initialYaml = '', title, o
     }
     setError(null)
     setSuccess(null)
-
     try {
-      const results = await onApply({ yaml, mode, dryRun, force: mode === 'apply' && force })
-      const action = mode === 'create' ? 'Created' : 'Applied'
-      const dryRunLabel = dryRun ? ' (dry run)' : ''
-
-      if (results.length === 1) {
-        const r = results[0]
-        setSuccess(`${action} ${r.kind} ${r.namespace ? r.namespace + '/' : ''}${r.name}${dryRunLabel}`)
-      } else {
-        setSuccess(`${action} ${results.length} resources${dryRunLabel}`)
+      if (onPreview) {
+        const reviewedForce = mode === 'apply' && force
+        const result = await onPreview({ yaml, mode, force: reviewedForce })
+        setPreview({
+          yaml,
+          mode,
+          force: reviewedForce,
+          documents: result.documents,
+          nonAtomic: result.nonAtomic,
+          context: result.context,
+        })
+        return
       }
+      const results = await onApply({
+        yaml,
+        mode,
+        dryRun,
+        force: mode === 'apply' && force,
+      })
+      finishApply(results, mode, dryRun)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unknown error')
+    }
+  }, [yaml, mode, dryRun, force, onApply, onPreview, finishApply])
 
-      if (!dryRun) {
-        if (onCreated && results.length > 0) {
-          // Close immediately and navigate to the created resource
-          handleClose()
-          onCreated(results[0])
-        } else {
-          setTimeout(handleClose, 1200)
+  const handleApplyReviewed = useCallback(async () => {
+    if (!preview) return
+    setError(null)
+    try {
+      const reviewedResourceVersions = reviewedResourceVersionsForPreview(preview.documents)
+      const results = await onApply({
+        yaml: preview.yaml,
+        mode: preview.mode,
+        dryRun: false,
+        force: preview.force,
+        reviewedResourceVersions,
+        reviewedContext: preview.context,
+      })
+      finishApply(results, preview.mode, false)
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : 'Unknown error'
+      const appliedResults =
+        caught instanceof Error &&
+        'appliedResults' in caught &&
+        Array.isArray(caught.appliedResults)
+          ? caught.appliedResults
+          : []
+      if (preview.mode === 'create' && appliedResults.length > 0) {
+        setYaml(preview.yaml)
+        setMode('apply')
+        setPreview(null)
+        setError(
+          `${message} Radar switched to Apply mode so you can review and continue from the current cluster state.`,
+        )
+        return
+      }
+      setError(message)
+      if (onPreview) {
+        try {
+          const refreshed = await onPreview({
+            yaml: preview.yaml,
+            mode: preview.mode,
+            force: preview.force,
+          })
+          setPreview({
+            ...preview,
+            documents: refreshed.documents,
+            nonAtomic: refreshed.nonAtomic,
+            context: refreshed.context,
+          })
+        } catch {
+          // Keep the last review visible when refresh is unavailable.
         }
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
     }
-  }, [yaml, mode, dryRun, force, onApply, onCreated, handleClose])
+  }, [preview, onApply, onPreview, finishApply])
 
   const dialogTitle = title || 'Create Resource'
-  const submitLabel = mode === 'create' ? 'Create' : 'Apply'
+  const submitLabel = onPreview ? 'Review' : mode === 'create' ? 'Create' : 'Apply'
 
   return (
-    <DialogPortal open={open} onClose={handleClose} closable={!isApplying} className="w-[700px] max-h-[85vh] flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-theme-border shrink-0">
-        <h2 className="text-sm font-semibold text-theme-text-primary">{dialogTitle}</h2>
-        <Tooltip content="Close">
-          <button
-            onClick={handleClose}
-            className="p-1 rounded hover:bg-theme-hover text-theme-text-secondary transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </Tooltip>
-      </div>
-
-      {/* Editor */}
-      <div className="flex-1 min-h-0 px-5 py-3">
-        <YamlEditor
-          value={yaml}
-          onChange={setYaml}
-          height="400px"
-          onValidate={handleValidate}
+    <DialogPortal
+      open={open}
+      onClose={handleClose}
+      closable={!pending}
+      className={
+        preview
+          ? 'w-[min(1200px,calc(100vw-2rem))] h-[min(860px,calc(100vh-2rem))] flex flex-col'
+          : 'w-[700px] max-h-[85vh] flex flex-col'
+      }
+    >
+      {preview ? (
+        <YamlReview
+          submittedYaml={preview.yaml}
+          documents={preview.documents}
+          nonAtomic={preview.nonAtomic}
+          force={preview.force}
+          isApplying={isApplying}
+          applyError={error}
+          applyLabel={
+            preview.mode === 'create' ? 'Create reviewed resources' : 'Apply reviewed changes'
+          }
+          onClose={handleClose}
+          onBack={() => {
+            setError(null)
+            setPreview(null)
+          }}
+          onApply={handleApplyReviewed}
         />
-      </div>
-
-      {/* Status messages — single location for feedback (no toast) */}
-      {error && <ApplyErrorBanner error={error} />}
-      {success && (
-        <div className="mx-5 mb-2 px-3 py-2 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-center gap-2">
-          <Check className="w-3.5 h-3.5 shrink-0" />
-          <span>{success}</span>
-        </div>
-      )}
-
-      {/* Footer */}
-      <div className="flex items-center justify-between px-5 py-3 border-t border-theme-border shrink-0">
-        <div className="flex items-center gap-3">
-          {/* Mode toggle — pill segmented control */}
-          <Tooltip content="Apply: create or update (idempotent). Create: fail if exists." position="bottom">
-            <div className="flex items-center rounded-md bg-theme-base border border-theme-border p-0.5" role="radiogroup" aria-label="Apply mode">
+      ) : (
+        <>
+          <div className="flex shrink-0 items-center justify-between border-b border-theme-border px-5 py-3.5">
+            <h2 className="text-sm font-semibold text-theme-text-primary">{dialogTitle}</h2>
+            <Tooltip content="Close">
               <button
-                onClick={() => setMode('apply')}
-                role="radio"
-                aria-checked={mode === 'apply'}
-                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                  mode === 'apply'
-                    ? 'bg-theme-elevated text-theme-text-primary shadow-sm'
-                    : 'text-theme-text-tertiary hover:text-theme-text-secondary'
-                }`}
+                type="button"
+                onClick={handleClose}
+                className="rounded p-1 text-theme-text-secondary transition-colors hover:bg-theme-hover"
               >
-                Apply
+                <X className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          </div>
+
+          <div className="min-h-0 flex-1 px-5 py-3">
+            <YamlEditor
+              value={yaml}
+              onChange={setYaml}
+              height="400px"
+              onValidate={handleValidate}
+              schemaLoader={schemaLoader}
+            />
+          </div>
+
+          {(error || previewError) && (
+            <ApplyErrorBanner error={error || previewError || 'Preview failed'} />
+          )}
+          {success && (
+            <div className="mx-5 mb-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
+              <Check className="h-3.5 w-3.5 shrink-0" />
+              <span>{success}</span>
+            </div>
+          )}
+
+          <div className="flex shrink-0 items-center justify-between border-t border-theme-border px-5 py-3">
+            <div className="flex items-center gap-3">
+              <Tooltip
+                content="Apply: create or update (idempotent). Create: fail if exists."
+                position="bottom"
+              >
+                <div
+                  className="flex items-center rounded-md border border-theme-border bg-theme-base p-0.5"
+                  role="radiogroup"
+                  aria-label="Apply mode"
+                >
+                  {(['apply', 'create'] as const).map((option) => (
+                    <button
+                      type="button"
+                      key={option}
+                      onClick={() => setMode(option)}
+                      role="radio"
+                      aria-checked={mode === option}
+                      className={`rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
+                        mode === option
+                          ? 'bg-theme-elevated text-theme-text-primary shadow-theme-sm'
+                          : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </Tooltip>
+
+              {!onPreview && (
+                <Tooltip
+                  content="Validate against the cluster without persisting changes"
+                  position="bottom"
+                >
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-theme-text-secondary">
+                    <input
+                      type="checkbox"
+                      checked={dryRun}
+                      onChange={(event) => setDryRun(event.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-theme-border bg-theme-base"
+                    />
+                    Dry run
+                  </label>
+                </Tooltip>
+              )}
+
+              <Tooltip
+                content="Override field ownership conflicts. An active controller may reconcile those fields back."
+                position="bottom"
+              >
+                <label
+                  className={`flex items-center gap-1.5 text-xs ${mode === 'apply' ? 'cursor-pointer text-theme-text-secondary' : 'cursor-not-allowed text-theme-text-tertiary'}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={mode === 'apply' && force}
+                    disabled={mode !== 'apply'}
+                    onChange={(event) => setForce(event.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-theme-border bg-theme-base"
+                  />
+                  Force
+                </label>
+              </Tooltip>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="rounded-lg px-3 py-1.5 text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover"
+              >
+                Cancel
               </button>
               <button
-                onClick={() => setMode('create')}
-                role="radio"
-                aria-checked={mode === 'create'}
-                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                  mode === 'create'
-                    ? 'bg-theme-elevated text-theme-text-primary shadow-sm'
-                    : 'text-theme-text-tertiary hover:text-theme-text-secondary'
-                }`}
+                type="button"
+                onClick={handleSubmit}
+                disabled={pending || !yaml.trim() || !yamlValid}
+                className="btn-brand flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-medium disabled:cursor-not-allowed"
               >
-                Create
+                {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {isPreviewing ? 'Previewing…' : isApplying ? `${submitLabel}…` : submitLabel}
               </button>
             </div>
-          </Tooltip>
-
-          {/* Dry run checkbox */}
-          <Tooltip content="Validate against the cluster without persisting changes" position="bottom">
-            <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary cursor-pointer">
-            <input
-              type="checkbox"
-              checked={dryRun}
-              onChange={(e) => setDryRun(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-theme-border bg-theme-base"
-            />
-            Dry run
-          </label>
-          </Tooltip>
-
-          {/* Force checkbox — only meaningful for server-side apply */}
-          <Tooltip
-            content={
-              <div className="space-y-1.5 max-w-[19rem]">
-                <p>Override field ownership (server-side apply).</p>
-                <p>
-                  <span className="font-medium text-theme-text-primary">Off (default):</span> if a field is owned by Helm/Flux/Argo/kubectl, the whole apply is rejected with a conflict instead of overwriting.
-                </p>
-                <p>
-                  <span className="font-medium text-theme-text-primary">On:</span> your manifest overwrites those fields — but an active controller may reconcile them back on its next sync.
-                </p>
-              </div>
-            }
-            position="bottom"
-          >
-            <label className={`flex items-center gap-1.5 text-xs cursor-pointer ${mode === 'apply' ? 'text-theme-text-secondary' : 'text-theme-text-tertiary cursor-not-allowed'}`}>
-            <input
-              type="checkbox"
-              checked={mode === 'apply' && force}
-              disabled={mode !== 'apply'}
-              onChange={(e) => setForce(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-theme-border bg-theme-base"
-            />
-            Force
-          </label>
-          </Tooltip>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleClose}
-            className="px-3 py-1.5 text-xs rounded-lg hover:bg-theme-hover text-theme-text-secondary transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={isApplying || !yaml.trim() || !yamlValid}
-            className="px-4 py-1.5 text-xs rounded-lg btn-brand font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-          >
-            {isApplying ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                {submitLabel === 'Apply' ? 'Applying...' : 'Creating...'}
-              </>
-            ) : (
-              submitLabel
-            )}
-          </button>
-        </div>
-      </div>
+          </div>
+        </>
+      )}
     </DialogPortal>
   )
 }
@@ -232,31 +368,30 @@ export function CreateResourceDialog({ open, onClose, initialYaml = '', title, o
 function ApplyErrorBanner({ error }: { error: string }) {
   const [expanded, setExpanded] = useState(false)
   const parsed = formatApplyError(error)
-  const hasFriendly = !!parsed.suggestion
-
+  const hasFriendly = Boolean(parsed.suggestion)
   return (
-    <div className="mx-5 mb-2 rounded-md bg-red-500/10 border border-red-500/30 text-xs">
-      <div className="px-3 py-2 flex items-start gap-2 text-red-400">
-        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+    <div className="mx-5 mb-2 rounded-md border border-red-500/30 bg-red-500/10 text-xs">
+      <div className="flex items-start gap-2 px-3 py-2 text-red-600 dark:text-red-400">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <div className="min-w-0 flex-1">
           <span className="font-medium">{parsed.summary}</span>
           {parsed.suggestion && (
-            <p className="mt-1 text-red-400/80">{parsed.suggestion}</p>
+            <p className="mt-1 text-red-500/80 dark:text-red-400/80">{parsed.suggestion}</p>
           )}
         </div>
       </div>
       {hasFriendly && (
         <button
           type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1 px-3 pb-2 text-red-400/60 hover:text-red-400/80 transition-colors"
+          onClick={() => setExpanded((value) => !value)}
+          className="flex items-center gap-1 px-3 pb-2 text-red-500/60 hover:text-red-500/80 dark:text-red-400/60 dark:hover:text-red-400/80"
         >
-          {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-          <span>Details</span>
+          {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          Details
         </button>
       )}
-      {(expanded || !hasFriendly) && hasFriendly && (
-        <div className="px-3 pb-2 text-red-400/60 break-all font-mono leading-relaxed">
+      {expanded && hasFriendly && (
+        <div className="break-all px-3 pb-2 font-mono leading-relaxed text-red-500/60 dark:text-red-400/60">
           {parsed.raw}
         </div>
       )}

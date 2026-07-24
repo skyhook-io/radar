@@ -283,22 +283,26 @@ func isLocalAPIServer(server string) bool {
 // material — service-account tokens, bootstrap tokens, the last-applied dump).
 // Key names stay visible so the operator still sees what changed.
 func redactSecretManifest(desired, live map[string]any) {
+	redactSecretManifestWithMarkers(desired, live, redactedChanged, redactedChanged)
+}
+
+func redactSecretManifestWithMarkers(desired, live map[string]any, desiredChanged, liveChanged string) {
 	// data + stringData are the canonical Secret payload fields; binaryData is
 	// masked too as defense-in-depth — it isn't valid on a core Secret, but a
 	// hand-crafted manifest could still stash bytes there, and masking a field
 	// that should always be empty costs nothing.
 	for _, field := range []string{"data", "stringData", "binaryData"} {
-		maskSecretField(desired, live, field)
+		maskSecretFieldWithMarkers(desired, live, field, desiredChanged, liveChanged)
 	}
-	maskSecretAnnotations(desired, live)
+	maskSecretAnnotationsWithMarkers(desired, live, desiredChanged, liveChanged)
 }
 
-// maskSecretField masks a data/stringData field. When the field is a map, it
+// maskSecretFieldWithMarkers masks a data/stringData field. When the field is a map, it
 // masks per key with changed/unchanged markers; when it is any OTHER shape (a
 // scalar or list — a malformed manifest, but still potential secret material),
 // it replaces the whole field with the changed marker. The field is never
 // emitted with a real value.
-func maskSecretField(desired, live map[string]any, field string) {
+func maskSecretFieldWithMarkers(desired, live map[string]any, field, desiredChanged, liveChanged string) {
 	dRaw, dPresent := desired[field]
 	lRaw, lPresent := live[field]
 	if !dPresent && !lPresent {
@@ -310,42 +314,42 @@ func maskSecretField(desired, live map[string]any, field string) {
 		// A non-map data field is malformed; mask the whole thing rather than
 		// risk emitting a scalar secret.
 		if dPresent {
-			desired[field] = redactedChanged
+			desired[field] = desiredChanged
 		}
 		if lPresent {
-			live[field] = redactedChanged
+			live[field] = liveChanged
 		}
 		return
 	}
-	maskMapValuesInPlace(desiredData, liveData)
+	maskMapValuesInPlaceWithMarkers(desiredData, liveData, desiredChanged, liveChanged)
 }
 
-// maskMapValuesInPlace replaces every value across the union of keys with a
+// maskMapValuesInPlaceWithMarkers replaces every value across the union of keys with a
 // redaction marker, using the unchanged marker only when both sides are present
 // and deep-equal. This is the shared Secret-redaction primitive — keeping it in
 // one place stops the data-field and annotation maskers from silently diverging.
-func maskMapValuesInPlace(desired, live map[string]any) {
+func maskMapValuesInPlaceWithMarkers(desired, live map[string]any, desiredChanged, liveChanged string) {
 	for k := range unionMapKeys(desired, live) {
 		dv, dok := desired[k]
 		lv, lok := live[k]
-		marker := redactedChanged
-		if dok && lok && reflect.DeepEqual(dv, lv) {
-			marker = redactedUnchanged
-		}
 		if dok {
-			desired[k] = marker
+			desired[k] = desiredChanged
 		}
 		if lok {
-			live[k] = marker
+			live[k] = liveChanged
+		}
+		if dok && lok && reflect.DeepEqual(dv, lv) {
+			desired[k] = redactedUnchanged
+			live[k] = redactedUnchanged
 		}
 	}
 }
 
-// maskSecretAnnotations masks every annotation VALUE on both manifests (keys
+// maskSecretAnnotationsWithMarkers masks every annotation VALUE on both manifests (keys
 // preserved) so nothing sensitive stashed in an annotation — including the
 // last-applied dump that embeds the full data — survives into the response.
-func maskSecretAnnotations(desired, live map[string]any) {
-	maskMapValuesInPlace(nestedAnnotations(desired), nestedAnnotations(live))
+func maskSecretAnnotationsWithMarkers(desired, live map[string]any, desiredChanged, liveChanged string) {
+	maskMapValuesInPlaceWithMarkers(nestedAnnotations(desired), nestedAnnotations(live), desiredChanged, liveChanged)
 }
 
 // nestedAnnotations returns metadata.annotations as a map, or nil when absent

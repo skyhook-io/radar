@@ -74,9 +74,17 @@ export interface Capabilities {
   // doesn't crash against an older backend that hasn't shipped the field yet —
   // consumers should default to { mode: 'local' } when absent.
   deployment?: Deployment
+  // Optional because Radar Hub can embed a newer frontend against an older
+  // in-cluster Radar agent. Features require an explicit server advertisement.
+  features?: FeatureCapabilities
   resources?: ResourcePermissions // Per-resource-type permissions
   authEnabled?: boolean   // Auth is enabled on the backend
   username?: string       // Authenticated user's username (when auth enabled)
+}
+
+export interface FeatureCapabilities {
+  yamlReview?: boolean
+  yamlSchemas?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
