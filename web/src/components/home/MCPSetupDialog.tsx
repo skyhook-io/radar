@@ -139,8 +139,17 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
   const clineConfig = makeMcpConfig({ url: mcpUrl })
   const jetbrainsConfig = makeMcpConfig({ url: mcpUrl })
   const antigravityConfig = makeMcpConfig({ type: "http", url: mcpUrl })
-  const opencodeConfig = makeMcpConfig({ type: "http", url: mcpUrl })
-  const piConfig = makeMcpConfig({ type: "http", url: mcpUrl })
+  const opencodeConfig = JSON.stringify({
+    mcp: {
+      servers: {
+        radar: {
+          type: "remote",
+          url: mcpUrl,
+        }
+      }
+    }
+  }, null, 2)
+  const piConfig = makeMcpConfig({ url: mcpUrl })
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -251,8 +260,8 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               { icon: Terminal, name: 'OpenAI Codex', path: '~/.codex/config.toml', config: codexConfig },
               { icon: Terminal, name: 'Gemini CLI', path: '~/.gemini/settings.json', config: geminiConfig },
               { icon: Terminal, name: 'Antigravity', path: '~/.gemini/antigravity-cli/config.json', config: antigravityConfig },
-              { icon: Terminal, name: 'OpenCode', path: '~/.opencode/config.json', config: opencodeConfig },
-              { icon: Terminal, name: 'Pi CLI', path: '~/.pi/config.json', config: piConfig },
+              { icon: Terminal, name: 'OpenCode', path: '~/.config/opencode/opencode.json', config: opencodeConfig },
+              { icon: Terminal, name: 'Pi CLI', path: '~/.pi/agent/mcp.json', config: piConfig },
             ].map((agent) => (
               <details key={agent.name} className="group rounded-md border border-theme-border/50 bg-theme-base/30">
                 <summary className="flex items-center gap-2 px-3 py-2 select-none list-none hover:bg-theme-hover/50 rounded-md transition-colors [&::-webkit-details-marker]:hidden">
