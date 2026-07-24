@@ -141,11 +141,9 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
   const antigravityConfig = makeMcpConfig({ type: "http", url: mcpUrl })
   const opencodeConfig = JSON.stringify({
     mcp: {
-      servers: {
-        radar: {
-          type: "remote",
-          url: mcpUrl,
-        }
+      radar: {
+        type: "remote",
+        url: mcpUrl,
       }
     }
   }, null, 2)

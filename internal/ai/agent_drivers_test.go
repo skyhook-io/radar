@@ -110,7 +110,7 @@ func TestPiConfigAndCommand(t *testing.T) {
 		t.Errorf("expected -p flag and prompt in args; got %q", args)
 	}
 
-	for _, relPath := range []string{"mcp.json", ".mcp.json"} {
+	for _, relPath := range []string{"mcp.json", ".mcp.json", ".pi/mcp.json"} {
 		cfgPath := filepath.Join(dir, relPath)
 		b, err := os.ReadFile(cfgPath)
 		if err != nil {

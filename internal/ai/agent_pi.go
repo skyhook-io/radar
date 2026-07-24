@@ -77,7 +77,14 @@ func writePiConfig(workdir, mcpURL string) error {
 	if err := os.WriteFile(filepath.Join(workdir, "mcp.json"), b, 0o600); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(workdir, ".mcp.json"), b, 0o600)
+	if err := os.WriteFile(filepath.Join(workdir, ".mcp.json"), b, 0o600); err != nil {
+		return err
+	}
+	piDir := filepath.Join(workdir, ".pi")
+	if err := os.MkdirAll(piDir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(piDir, "mcp.json"), b, 0o600)
 }
 
 func (a *piAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
