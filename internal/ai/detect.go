@@ -31,6 +31,12 @@ var agentLabels = map[string]string{
 	"antigravity": "Antigravity", "opencode": "OpenCode", "pi": "Pi CLI",
 }
 
+// agentBinaries maps known agent identifiers to their candidate binary names on PATH.
+// Probing stops at the first binary name that resolves.
+var agentBinaries = map[string][]string{
+	"antigravity": {"agy", "antigravity"},
+}
+
 // AgentLabel is the display name for an agent CLI — the ONE table every
 // surface (API, CLI header, consent prompts) reads, so labels can't drift.
 func AgentLabel(name string) string {
@@ -144,9 +150,12 @@ func DetectAgents(ctx context.Context, withVersions bool) []AgentInfo {
 	var out []AgentInfo
 	for _, name := range knownAgents {
 		binName := name
-		if name == "antigravity" {
-			if _, err := exec.LookPath("agy"); err == nil {
-				binName = "agy"
+		if binaries, ok := agentBinaries[name]; ok {
+			for _, bin := range binaries {
+				if _, err := exec.LookPath(bin); err == nil {
+					binName = bin
+					break
+				}
 			}
 		}
 		path, err := exec.LookPath(binName)

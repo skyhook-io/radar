@@ -115,30 +115,15 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
 
   const currentPort = Number(window.location.port) || 80
 
-  const claudeDesktopConfig = JSON.stringify({
+  const makeMcpConfig = (fields: Record<string, string>) => JSON.stringify({
     mcpServers: {
-      radar: {
-        type: "http",
-        url: mcpUrl,
-      }
+      radar: fields
     }
   }, null, 2)
 
-  const cursorConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const windsurfConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        serverUrl: mcpUrl,
-      }
-    }
-  }, null, 2)
+  const claudeDesktopConfig = makeMcpConfig({ type: "http", url: mcpUrl })
+  const cursorConfig = makeMcpConfig({ url: mcpUrl })
+  const windsurfConfig = makeMcpConfig({ serverUrl: mcpUrl })
 
   const vsCodeConfig = JSON.stringify({
     servers: {
@@ -149,58 +134,13 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
     }
   }, null, 2)
 
-  const geminiConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        httpUrl: mcpUrl,
-      }
-    }
-  }, null, 2)
-
+  const geminiConfig = makeMcpConfig({ httpUrl: mcpUrl })
   const codexConfig = `[mcp_servers.radar]\nurl = "${mcpUrl}"`
-
-  const clineConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const jetbrainsConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const antigravityConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        type: "http",
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const opencodeConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        type: "http",
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const piConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        type: "http",
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
+  const clineConfig = makeMcpConfig({ url: mcpUrl })
+  const jetbrainsConfig = makeMcpConfig({ url: mcpUrl })
+  const antigravityConfig = makeMcpConfig({ type: "http", url: mcpUrl })
+  const opencodeConfig = makeMcpConfig({ type: "http", url: mcpUrl })
+  const piConfig = makeMcpConfig({ type: "http", url: mcpUrl })
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
