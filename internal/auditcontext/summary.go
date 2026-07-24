@@ -6,14 +6,16 @@ import (
 	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/k8s"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/checks"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // SummarizeResource returns the audit findings scoped to one resource and
-// their deterministic rollup. The severity remains in the audit engine's
-// posture vocabulary; callers must not reinterpret it as live health. kind
-// must be the Pascal singular form stored in Finding.Kind; a mismatch returns
-// the same empty result as a resource with no findings.
+// their deterministic rollup. The rollup uses the public Checks severity
+// ladder; the returned findings retain the audit engine's raw severity for
+// callers that need finding detail. kind must be the Pascal singular form
+// stored in Finding.Kind; a mismatch returns the same empty result as a
+// resource with no findings.
 func SummarizeResource(cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
 	if cache == nil || kind == "" {
 		return nil, nil
@@ -42,7 +44,8 @@ func summarizeFindings(findings []bpaudit.Finding, group, kind, namespace, name 
 	}
 
 	sort.Slice(matched, func(i, j int) bool {
-		left, right := severityRank(matched[i].Severity), severityRank(matched[j].Severity)
+		left := checks.SeverityRank(checks.MapSeverity(matched[i].Severity))
+		right := checks.SeverityRank(checks.MapSeverity(matched[j].Severity))
 		if left != right {
 			return left > right
 		}
@@ -51,18 +54,7 @@ func summarizeFindings(findings []bpaudit.Finding, group, kind, namespace, name 
 
 	return &resourcecontext.AuditSummary{
 		Count:           len(matched),
-		HighestSeverity: matched[0].Severity,
+		HighestSeverity: string(checks.MapSeverity(matched[0].Severity)),
 		TopFinding:      matched[0].CheckID,
 	}, matched
-}
-
-func severityRank(severity string) int {
-	switch severity {
-	case bpaudit.SeverityDanger:
-		return 2
-	case bpaudit.SeverityWarning:
-		return 1
-	default:
-		return 0
-	}
 }

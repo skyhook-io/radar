@@ -99,6 +99,44 @@ func TestIssuesToolDocumentsRecentChangesReasons(t *testing.T) {
 	}
 }
 
+func TestClusterAuditToolAndSetupCatalogUseCanonicalSeverity(t *testing.T) {
+	var auditTool *mcpsdk.Tool
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name == "get_cluster_audit" {
+			auditTool = tool
+			break
+		}
+	}
+	if auditTool == nil {
+		t.Fatal("get_cluster_audit tool is not registered")
+	}
+	schema, err := json.Marshal(auditTool.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, text := range map[string]string{
+		"tool description": auditTool.Description,
+		"input schema":     string(schema),
+	} {
+		if !strings.Contains(text, "critical") || !strings.Contains(text, "high") ||
+			!strings.Contains(text, "medium") || !strings.Contains(text, "low") {
+			t.Errorf("%s does not document the canonical severity ladder: %s", label, text)
+		}
+		if strings.Contains(text, "danger-severity") || strings.Contains(text, "danger or warning") {
+			t.Errorf("%s exposes raw audit severity vocabulary: %s", label, text)
+		}
+	}
+
+	catalog, err := os.ReadFile(setupDialogCatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "posture priority: critical, high, medium, or low (built-ins use high or medium)"
+	if !strings.Contains(string(catalog), want) {
+		t.Fatalf("setup dialog catalog does not contain exact audit severity copy %q", want)
+	}
+}
+
 func TestSearchToolSchemaIncludesNamespace(t *testing.T) {
 	var searchTool *mcpsdk.Tool
 	for _, tool := range listRegisteredTools(t) {

@@ -211,7 +211,7 @@ func TestResourceContextRoundTrip(t *testing.T) {
 		},
 		AuditSummary: &AuditSummary{
 			Count:           4,
-			HighestSeverity: "warning",
+			HighestSeverity: "medium",
 			TopFinding:      "CKV_K8S_8",
 		},
 		PolicySummary: &PolicySummary{

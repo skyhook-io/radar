@@ -7,12 +7,12 @@
 //
 // Mirrors Radar OSS's resource-key convention (radar/pkg/audit.ResourceKey).
 
-/** Canonical Checks severity ladder — distinct from the raw detector severity
- *  (danger/warning) so operational criticality and compliance risk stay
- *  separate axes. */
+/** Canonical user-facing Checks severity ladder. Live issues remain a separate
+ *  operational-health axis even where the same severity word appears. */
 export type CheckSeverity = 'critical' | 'high' | 'medium' | 'low';
 
-/** Raw detector severity Radar emits. */
+/** Raw detector values retained by existing audit transport/public-prop
+ *  compatibility contracts. Checks presentation maps them before display. */
 export type RadarSeverity = 'danger' | 'warning';
 
 /** Ordered worst→least, for rendering severity filters/sorts consistently. */

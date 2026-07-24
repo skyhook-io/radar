@@ -515,7 +515,7 @@ func healthFrame(target string, health *ResourceHealthSignal) string {
 			}
 			b.WriteString(".")
 		}
-		b.WriteString(" Treat audit findings as configuration risk, not proof of a live outage.")
+		b.WriteString(" Treat audit findings as static posture and remediation priority, not evidence of an active outage.")
 	}
 	return b.String()
 }

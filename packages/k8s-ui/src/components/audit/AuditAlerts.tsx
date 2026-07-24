@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { ClipboardCheck, ChevronRight, ShieldAlert, AlertTriangle, ArrowRight } from 'lucide-react'
 import { clsx } from 'clsx'
-import { SEVERITY_TEXT, BP_CATEGORY_BADGE, DEFAULT_BADGE_COLOR } from '../../utils/badge-colors'
+import { BP_CATEGORY_BADGE, DEFAULT_BADGE_COLOR } from '../../utils/badge-colors'
+import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 
 export interface AuditFinding {
   kind: string
@@ -13,6 +14,7 @@ export interface AuditFinding {
   name: string
   checkID: string
   category: string
+  /** Raw detector compatibility value: danger renders as High, warning as Medium. */
   severity: string
   message: string
   /** Cluster context — set when findings come from multiple clusters
@@ -37,8 +39,8 @@ export function AuditAlerts({ findings, onViewAll }: AuditAlertsProps) {
 
   if (findings.length === 0) return null
 
-  const dangers = findings.filter(f => f.severity === 'danger').length
-  const warnings = findings.filter(f => f.severity === 'warning').length
+  const highCount = findings.filter(f => f.severity === 'danger').length
+  const mediumCount = findings.filter(f => f.severity === 'warning').length
 
   return (
     <section className="rounded-lg border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
@@ -51,11 +53,11 @@ export function AuditAlerts({ findings, onViewAll }: AuditAlertsProps) {
         <ClipboardCheck className="w-4 h-4 text-theme-text-secondary" />
         <span className="text-sm font-semibold text-theme-text-primary">Audit Findings</span>
         <div className="flex items-center gap-2 ml-1">
-          {dangers > 0 && (
-            <span className={clsx('text-xs font-medium tabular-nums', SEVERITY_TEXT.error)}>{dangers} critical</span>
+          {highCount > 0 && (
+            <span className={clsx('text-xs font-medium tabular-nums', SEVERITY_TEXT_CLASS.high)}>{highCount} high</span>
           )}
-          {warnings > 0 && (
-            <span className={clsx('text-xs font-medium tabular-nums', SEVERITY_TEXT.warning)}>{warnings} warning</span>
+          {mediumCount > 0 && (
+            <span className={clsx('text-xs font-medium tabular-nums', SEVERITY_TEXT_CLASS.medium)}>{mediumCount} medium</span>
           )}
         </div>
       </button>
@@ -67,13 +69,13 @@ export function AuditAlerts({ findings, onViewAll }: AuditAlertsProps) {
         <div className="overflow-hidden">
           <div className="flex flex-col gap-0.5 pt-3">
             {findings.map((f, i) => {
-              const isDanger = f.severity === 'danger'
+              const isHigh = f.severity === 'danger'
               return (
                 <div key={`${f.checkID}-${i}`} className="flex items-start gap-2 py-1">
-                  {isDanger ? (
-                    <ShieldAlert className={clsx('w-3.5 h-3.5 shrink-0 mt-0.5', SEVERITY_TEXT.error)} />
+                  {isHigh ? (
+                    <ShieldAlert className={clsx('w-3.5 h-3.5 shrink-0 mt-0.5', SEVERITY_TEXT_CLASS.high)} />
                   ) : (
-                    <AlertTriangle className={clsx('w-3.5 h-3.5 shrink-0 mt-0.5', SEVERITY_TEXT.warning)} />
+                    <AlertTriangle className={clsx('w-3.5 h-3.5 shrink-0 mt-0.5', SEVERITY_TEXT_CLASS.medium)} />
                   )}
                   <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
                     <span className="text-xs text-theme-text-secondary">{f.message}</span>

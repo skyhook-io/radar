@@ -1,8 +1,9 @@
 import { ShieldAlert, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
-import { SEVERITY_TEXT } from '../../utils/badge-colors'
+import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 
 export interface AuditBadgeMessage {
+  /** Raw detector compatibility value: danger renders as High, warning as Medium. */
   severity: string
   message: string
 }
@@ -17,21 +18,23 @@ interface AuditBadgeTooltipProps {
 
 /**
  * Inline tooltip body for an audit badge: lists the actual finding messages
- * (danger-first) so the operator reads WHAT is wrong on hover, instead of a
+ * (High-first) so the operator reads WHAT is wrong on hover, instead of a
  * content-free "N findings". Shared by the resource-list and topology-node
  * badges so the two can't drift.
  */
 export function AuditBadgeTooltip({ messages, max = 3, clickHint = true }: AuditBadgeTooltipProps) {
-  const shown = messages.slice(0, max)
+  const shown = [...messages]
+    .sort((a, b) => Number(b.severity === 'danger') - Number(a.severity === 'danger'))
+    .slice(0, max)
   const overflow = messages.length - shown.length
   return (
     <div className="flex flex-col gap-1 text-left">
       {shown.map((m, i) => {
-        const isDanger = m.severity === 'danger'
-        const Icon = isDanger ? ShieldAlert : AlertTriangle
+        const isHigh = m.severity === 'danger'
+        const Icon = isHigh ? ShieldAlert : AlertTriangle
         return (
           <div key={i} className="flex items-start gap-1.5">
-            <Icon className={clsx('w-3 h-3 shrink-0 mt-0.5', isDanger ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning)} />
+            <Icon className={clsx('w-3 h-3 shrink-0 mt-0.5', isHigh ? SEVERITY_TEXT_CLASS.high : SEVERITY_TEXT_CLASS.medium)} />
             <span>{m.message}</span>
           </div>
         )

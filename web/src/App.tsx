@@ -1512,10 +1512,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }, [displayedTopology, visibleKinds, namespaces, topologyMode])
 
   // Cluster Audit findings, joined onto topology nodes by the audit key the
-  // backend stamps on each node (data.auditKey). The graph surfaces DANGER only
-  // (warnings would turn a dense graph into a heatmap); the node component reads
-  // data.auditDanger. Re-runs only when findings change, and copies nodes only
-  // when there are findings to attach — no overhead on clusters with none.
+  // backend stamps on each node (data.auditKey). Only badge-worthy findings
+  // reach the graph; the raw auditDanger/auditWarning property names remain at
+  // this compatibility boundary while the node presents them as High/Medium.
   const audit = useAudit(namespaces)
   const auditSeverityMap = useMemo(
     () => buildAuditSeverityMap(audit.data?.findings, audit.data?.checks),

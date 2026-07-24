@@ -8,7 +8,7 @@ export interface AuditBadgeMessage {
 export interface AuditSeverityCounts {
   danger: number
   warning: number
-  /** The finding messages behind the counts, danger-first, for inline tooltips.
+  /** The finding messages behind the counts, High-first, for inline tooltips.
    *  Lets a badge say WHAT is wrong on hover instead of just a count. */
   messages: AuditBadgeMessage[]
 }

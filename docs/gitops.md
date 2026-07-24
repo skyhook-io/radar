@@ -81,7 +81,7 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 - **Severity ramp**: info <5min, warning 5-30min, alert >30min. Past 30min the Issue's Cause line names the controller responsible for the finalizer and reports its pod state ("helm-controller is not running in flux-system")
 - **Fleet view**: `—` in Sync/Health columns, orange row stripe, `[TERMINATING]` chip in the leftmost slot, `Pending Nago` instead of "Last Sync"
 - **Topology**: orange left-stripe on the root + children; stale sync/health chips suppressed
-- **Cluster Audit**: `stuckTerminating` check across all typed K8s resources with the same warning/alert thresholds
+- **Cluster Audit**: `stuckTerminating` check across all typed K8s resources with the same 5-minute/30-minute thresholds, presented as Medium/High posture priority
 - **Mutating ops** (`Sync`, `Reconcile`, `Rollback`, `SetAutoSync`, `SyncWithSource`) return `ErrResourceTerminating` (HTTP 409) on zombies, including over MCP
 
 ## Operations

@@ -9,10 +9,9 @@
 // the per-surface adapters (Level → timeline.HealthState etc.) live on the
 // consumer side so the dependency arrow only ever points inward.
 //
-// Health LEVEL (this package) is distinct from issue/finding SEVERITY
-// (critical/alert/warning/info — owned by the Problems, Audit, and GitOps
-// Insights subsystems). This package classifies "how is this resource doing";
-// it does not rank findings.
+// Health LEVEL (this package) is distinct from issue/finding SEVERITY, whose
+// vocabulary is owned by the Problems, Checks, and GitOps Insights domains.
+// This package classifies "how is this resource doing"; it does not rank findings.
 package health
 
 // Level is the canonical resource-health vocabulary. Five tiers, ordered from

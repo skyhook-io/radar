@@ -16,6 +16,7 @@ import (
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/checks"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -77,7 +78,7 @@ func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name
 		signal.TopFinding = auditSum.TopFinding
 		for _, row := range auditRows[:min(len(auditRows), maxHealthAuditLines)] {
 			signal.AuditFindings = append(signal.AuditFindings, ai.HealthLine{
-				Severity: row.Severity,
+				Severity: string(checks.MapSeverity(row.Severity)),
 				Reason:   row.CheckID,
 				Message:  capHealthMessage(row.Message),
 			})

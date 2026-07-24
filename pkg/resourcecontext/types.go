@@ -361,9 +361,8 @@ type IssueSummary struct {
 }
 
 // AuditSummary is a rollup of static posture findings scoped to the subject
-// resource. HighestSeverity uses the audit engine's danger|warning vocabulary,
-// not IssueSummary's live-operational critical|warning scale. A danger finding
-// can exist on a healthy resource and is not proof of an outage.
+// resource. HighestSeverity uses the canonical Checks severity ladder; it is
+// remediation priority, not proof of an active outage.
 type AuditSummary struct {
 	Count           int    `json:"count"`
 	HighestSeverity string `json:"highestSeverity,omitempty"`

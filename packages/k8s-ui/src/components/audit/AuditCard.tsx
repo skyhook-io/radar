@@ -1,11 +1,14 @@
 import { ClipboardCheck, ArrowRight, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_TEXT, SEVERITY_DOT } from '../../utils/badge-colors'
+import { SEVERITY_FILL_CLASS, SEVERITY_TEXT_CLASS } from '../checks/severity'
 
 export interface AuditCardData {
   passing: number
+  /** Raw compatibility counts; warning renders as Medium and danger as High. */
   warning: number
   danger: number
+  /** Nested warning/danger counts follow the same Medium/High mapping. */
   categories: Record<string, { passing: number; warning: number; danger: number }>
 }
 
@@ -14,20 +17,19 @@ interface AuditCardProps {
   onNavigate: () => void
 }
 
-type SeverityLevel = 'success' | 'warning' | 'error'
+type SeverityLevel = 'success' | 'high' | 'medium'
 
 function getSeverityLevel(data: AuditCardData): SeverityLevel {
   if (data.warning + data.danger === 0) return 'success'
-  const dangerRatio = data.danger / (data.warning + data.danger)
-  if (dangerRatio > 0.2) return 'error'
-  return 'warning'
+  const highRatio = data.danger / (data.warning + data.danger)
+  if (highRatio > 0.2) return 'high'
+  return 'medium'
 }
 
-// Card-specific accent backgrounds (light opacity variants, work in both themes)
 const ACCENT_BG: Record<SeverityLevel, string> = {
   success: 'bg-green-500/10',
-  warning: 'bg-yellow-500/10',
-  error: 'bg-red-500/10',
+  high: 'bg-orange-500/10',
+  medium: 'bg-yellow-500/10',
 }
 
 export function AuditCard({ data, onNavigate }: AuditCardProps) {
@@ -35,7 +37,7 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
   const issueCount = data.warning + data.danger
   const allPassing = issueCount === 0
   const level = getSeverityLevel(data)
-  const accentColor = SEVERITY_TEXT[level]
+  const accentColor = level === 'success' ? SEVERITY_TEXT.success : SEVERITY_TEXT_CLASS[level]
   const accentBg = ACCENT_BG[level]
 
   return (
@@ -77,10 +79,10 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
                   <div className="flex-1 h-3 rounded-full overflow-hidden bg-theme-hover flex">
                     <div className={clsx('h-full', SEVERITY_DOT.success)} style={{ width: `${(data.passing / total) * 100}%` }} />
                     {data.warning > 0 && (
-                      <div className={clsx('h-full', SEVERITY_DOT.warning)} style={{ width: `${(data.warning / total) * 100}%` }} />
+                      <div className={clsx('h-full', SEVERITY_FILL_CLASS.medium)} style={{ width: `${(data.warning / total) * 100}%` }} />
                     )}
                     {data.danger > 0 && (
-                      <div className={clsx('h-full', SEVERITY_DOT.error)} style={{ width: `${(data.danger / total) * 100}%` }} />
+                      <div className={clsx('h-full', SEVERITY_FILL_CLASS.high)} style={{ width: `${(data.danger / total) * 100}%` }} />
                     )}
                   </div>
                 </div>
@@ -90,7 +92,7 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
               <div className="grid grid-cols-1 gap-y-2 mt-4 w-full">
                 {Object.entries(data.categories).map(([category, counts]) => {
                   const catIssues = counts.warning + counts.danger
-                  const dotColor = counts.danger > 0 ? SEVERITY_DOT.error : counts.warning > 0 ? SEVERITY_DOT.warning : SEVERITY_DOT.success
+                  const dotColor = counts.danger > 0 ? SEVERITY_FILL_CLASS.high : counts.warning > 0 ? SEVERITY_FILL_CLASS.medium : SEVERITY_DOT.success
                   return (
                     <div key={category} className="flex items-center gap-2">
                       <span className={clsx('w-2 h-2 rounded-full shrink-0', dotColor)} />
@@ -98,10 +100,10 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
                       {catIssues > 0 ? (
                         <div className="flex items-center gap-2">
                           {counts.danger > 0 && (
-                            <span className={clsx('text-xs font-semibold tabular-nums', SEVERITY_TEXT.error)}>{counts.danger} critical</span>
+                            <span className={clsx('text-xs font-semibold tabular-nums', SEVERITY_TEXT_CLASS.high)}>{counts.danger} high</span>
                           )}
                           {counts.warning > 0 && (
-                            <span className={clsx('text-xs font-semibold tabular-nums', SEVERITY_TEXT.warning)}>{counts.warning} warning</span>
+                            <span className={clsx('text-xs font-semibold tabular-nums', SEVERITY_TEXT_CLASS.medium)}>{counts.warning} medium</span>
                           )}
                         </div>
                       ) : (

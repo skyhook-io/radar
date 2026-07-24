@@ -148,13 +148,13 @@ func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
 	auditOnly := taskPrompt(Request{
 		Kind: "Pod", Namespace: "prod", Name: "api-7",
 		Health: &ResourceHealthSignal{
-			Health: "healthy", AuditCount: 1, AuditSeverity: "danger", TopFinding: "runAsRoot",
+			Health: "healthy", AuditCount: 1, AuditSeverity: "high", TopFinding: "runAsRoot",
 		},
 	})
 	for _, want := range []string{
 		"static posture finding",
-		"highest severity danger",
-		"not proof of a live outage",
+		"highest severity high",
+		"not evidence of an active outage",
 		"Verify quickly",
 	} {
 		if !strings.Contains(auditOnly, want) {
@@ -166,13 +166,13 @@ func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
 		Kind: "Deployment", Namespace: "prod", Name: "api",
 		Health: &ResourceHealthSignal{
 			IssueCount: 1, HighestSeverity: "critical", TopReason: "CrashLoopBackOff",
-			AuditCount: 1, AuditSeverity: "danger", TopFinding: "runAsRoot",
+			AuditCount: 1, AuditSeverity: "high", TopFinding: "runAsRoot",
 		},
 	})
 	for _, want := range []string{
 		"highest severity critical: CrashLoopBackOff",
-		"static posture finding; highest severity danger: runAsRoot",
-		"not proof of a live outage",
+		"static posture finding; highest severity high: runAsRoot",
+		"not evidence of an active outage",
 		"Find the specific root cause",
 	} {
 		if !strings.Contains(coexisting, want) {

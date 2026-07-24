@@ -141,7 +141,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     params: [
       { arg: 'namespace', desc: 'filter to a specific namespace' },
       { arg: 'category', desc: 'Security, Reliability, or Efficiency' },
-      { arg: 'severity', desc: 'danger or warning' },
+      { arg: 'severity', desc: 'posture priority: critical, high, medium, or low (built-ins use high or medium)' },
       { arg: 'limit', desc: 'max findings (default 30, max 100)' },
     ],
   },

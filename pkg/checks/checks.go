@@ -15,10 +15,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// Severity is the canonical Checks severity ladder. Distinct from the raw
-// detector severity (the "warning"/"danger" Radar emits): operational
-// criticality and compliance risk are different axes, so Checks gets its own
-// 4-tier vocabulary.
+// Severity is the canonical user-facing Checks severity ladder. Live issues
+// remain a separate operational-health axis even when both domains use a
+// familiar severity word.
 type Severity string
 
 const (
@@ -28,7 +27,9 @@ const (
 	SeverityLow      Severity = "low"
 )
 
-// Raw detector severities Radar emits (mirrors pkg/audit.Severity{Danger,Warning}).
+// Raw detector severities remain in scanner provenance and existing audit
+// transport/public-property compatibility contracts (mirrors pkg/audit).
+// Checks and agent-facing surfaces map them before exposure.
 const (
 	rawDanger  = "danger"
 	rawWarning = "warning"

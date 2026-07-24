@@ -105,9 +105,10 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
 			"(relationships, refs, issue/audit/policy rollups — issues carry " +
 			"diagnostic_context with cross-subject causal links + a confidence tier; " +
-			"audit findings are static posture risk, not proof of a live outage; " +
-			"auditSummary.highestSeverity uses danger|warning, separate from " +
-			"issueSummary critical|warning). This is the drill-down " +
+			"audit findings are static posture and remediation priority, not evidence " +
+			"of an active outage; auditSummary.highestSeverity uses the Checks ladder " +
+			"(critical|high|medium|low; current built-ins are high|medium), separate " +
+			"from issueSummary's live-operational critical|warning). This is the drill-down " +
 			"tool, not the best first call for broad incidents. Start with issues, " +
 			"get_dashboard, search, or list_resources to rank candidates; then call " +
 			"get_resource for the exact object. If you are looking for a string across " +
@@ -184,9 +185,11 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"Pod/Deployment/StatefulSet/DaemonSet, bundles: the resource (Kubernetes-shaped detail) + diagnostic " +
 			"resourceContext (managedBy, exposes, selectedBy, uses, runsOn, " +
 			"issue/audit/policy rollups — issues carry diagnostic_context with cross-subject " +
-			"causal links + a confidence tier to walk symptom→root; audit findings are " +
-			"static posture risk, not proof of a live outage; auditSummary.highestSeverity " +
-			"uses danger|warning, separate from issueSummary critical|warning) + current AND previous container logs across the " +
+			"causal links + a confidence tier to walk symptom→root; audit findings are static " +
+			"posture and remediation priority, not evidence of an active outage; " +
+			"auditSummary.highestSeverity uses the Checks ladder (critical|high|medium|low; " +
+			"current built-ins are high|medium), separate from issueSummary's live-operational " +
+			"critical|warning) + current AND previous container logs across the " +
 			"workload's pods + crashCause evidence that pairs active crashloop status with " +
 			"one highest-signal line from the crashed instance's already-filtered logs " +
 			"(evidence, not a root-cause verdict; its logLineSelection field states how the " +
@@ -251,8 +254,10 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"under/over-utilization). Each finding has remediation guidance. " +
 			"INDEPENDENT of operational health: a healthy pod can have many audit findings " +
 			"(badly configured but working), a crashing pod can have zero (cleanly " +
-			"configured but failing). summary.critical counts danger-severity posture " +
-			"findings; it is not the live-issue critical scale. For 'what's broken right now?' use the issues tool. " +
+			"configured but failing). Finding severity and the explicit critical/high/medium/low " +
+			"summary counts are posture remediation priority; current built-in checks emit high " +
+			"or medium. They are not the live-issue severity scale. For 'what's broken right now?' " +
+			"use the issues tool. " +
 			"Respects user's audit settings (ignored namespaces, disabled checks). Filter " +
 			"by namespace, category, or severity. Resources absent from findings should " +
 			"NOT be reported as non-compliant — empty findings for a scope means no " +
@@ -611,7 +616,7 @@ type getResourceInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes. include=changes follows the existing comma-separated include pattern. Separate from context. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
-	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). issueSummary uses live-operational critical|warning; auditSummary uses static-posture danger|warning and is not proof of an outage. For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
+	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is not evidence of an active outage. For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
 }
 
 type topologyInput struct {
@@ -2030,28 +2035,28 @@ func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input s
 // Dashboard builder for MCP (simplified version of server/dashboard.go)
 
 type mcpDashboard struct {
-	Cluster            mcpClusterInfo         `json:"cluster"`
-	Nodes              mcpNodeSummary         `json:"nodes"`
-	VersionSkew        []string               `json:"versionSkew,omitempty"`
-	Health             mcpHealthSummary       `json:"health"`
-	Problems           []mcpProblem           `json:"problems"`
-	TotalProblems      int                    `json:"totalProblems"`                // count before the dashboard cap was applied
-	ProblemsBySeverity map[string]int         `json:"problemsBySeverity,omitempty"` // critical/high/medium/warning counts across the full set
-	RecentChanges      []mcpChange            `json:"recentChanges,omitempty"`
-	WarningEvents      int                    `json:"warningEvents"`
-	WarningGroups      []mcpWarning           `json:"warningGroups"`
+	Cluster            mcpClusterInfo   `json:"cluster"`
+	Nodes              mcpNodeSummary   `json:"nodes"`
+	VersionSkew        []string         `json:"versionSkew,omitempty"`
+	Health             mcpHealthSummary `json:"health"`
+	Problems           []mcpProblem     `json:"problems"`
+	TotalProblems      int              `json:"totalProblems"`                // count before the dashboard cap was applied
+	ProblemsBySeverity map[string]int   `json:"problemsBySeverity,omitempty"` // critical/high/medium/warning counts across the full set
+	RecentChanges      []mcpChange      `json:"recentChanges,omitempty"`
+	WarningEvents      int              `json:"warningEvents"`
+	WarningGroups      []mcpWarning     `json:"warningGroups"`
 	// TotalWarningGroups counts distinct deduped groups before the
 	// dashboardWarningGroupCap; WarningGroupsTruncated flags that groups
 	// beyond the cap exist, so the consumer knows to narrow via get_events
 	// rather than assume it saw everything.
-	TotalWarningGroups     int  `json:"totalWarningGroups,omitempty"`
-	WarningGroupsTruncated bool `json:"warningGroupsTruncated,omitempty"`
-	HelmReleases       mcpHelmSummary         `json:"helmReleases"`
-	Metrics            *mcpMetrics            `json:"metrics,omitempty"`
-	TopologyNodes      int                    `json:"topologyNodes"`
-	TopologyEdges      int                    `json:"topologyEdges"`
-	ResourceCounts     map[string]int         `json:"resourceCounts"`
-	Visibility         *k8s.VisibilitySummary `json:"visibility,omitempty"`
+	TotalWarningGroups     int                    `json:"totalWarningGroups,omitempty"`
+	WarningGroupsTruncated bool                   `json:"warningGroupsTruncated,omitempty"`
+	HelmReleases           mcpHelmSummary         `json:"helmReleases"`
+	Metrics                *mcpMetrics            `json:"metrics,omitempty"`
+	TopologyNodes          int                    `json:"topologyNodes"`
+	TopologyEdges          int                    `json:"topologyEdges"`
+	ResourceCounts         map[string]int         `json:"resourceCounts"`
+	Visibility             *k8s.VisibilitySummary `json:"visibility,omitempty"`
 }
 
 type mcpChange = issuesapi.RecentChange
