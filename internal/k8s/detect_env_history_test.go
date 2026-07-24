@@ -73,6 +73,22 @@ func TestRemovedServiceEnvExposureAndPrecision(t *testing.T) {
 			t.Fatalf("restored env should suppress older removal: %+v", checks)
 		}
 	})
+
+	t.Run("init container Service env removal is recorded", func(t *testing.T) {
+		initDeployment := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "shop"},
+			Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{{Name: "wait-for-cart"}},
+				Containers:     []corev1.Container{{Name: "frontend"}},
+			}}},
+		}
+		initCache := envHistoryTestCache(t, initDeployment, service)
+		initRemoval := envHistoryEvent(now.Add(-time.Minute), "Deployment", "shop", "frontend", "spec.template.spec.initContainers[wait-for-cart].env[CART_ADDR]", "cart:8080", nil)
+		checks := findRemovedServiceEnvChecks(initCache, envServiceWorkloadForDeployment(initDeployment), "", []timeline.TimelineEvent{initRemoval})
+		if len(checks) != 1 || checks[0].Container != "wait-for-cart" || checks[0].EnvName != "CART_ADDR" || checks[0].ServiceName != "cart" {
+			t.Fatalf("init container Service env removal was not recorded: %+v", checks)
+		}
+	})
 }
 
 func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
@@ -228,6 +244,73 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		detections := detectStaleSecretEnv(cache, "shop", now)
 		if len(detections) != 1 || !strings.Contains(detections[0].Message, "may be running a stale env value") {
 			t.Fatalf("expected one hedged warning for the coincidental case: %+v", detections)
+		}
+	})
+
+	t.Run("issue sweep reaches past the one-hour window to container start", func(t *testing.T) {
+		oldStart := now.Add(-3 * time.Hour)
+		oldChange := now.Add(-2 * time.Hour)
+		pod := staleSecretEnvPod("long-running-broken", oldStart, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, secret)
+		setEnvHistoryEvents(t, secretHistoryEvent(oldChange, "shop", "db-conn", "data (modified keys)", []string{"password"}))
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" {
+			t.Fatalf("a 2h-old key change on a container started 3h ago must still promote to an issue: %+v", detections)
+		}
+	})
+
+	t.Run("restartable init sidecar promotes", func(t *testing.T) {
+		pod := staleSecretEnvPod("sidecar-broken", startedAt, false)
+		pod.Spec.Containers = []corev1.Container{{Name: "app"}}
+		pod.Spec.InitContainers = []corev1.Container{{
+			Name:          "vault-agent",
+			RestartPolicy: alwaysRestartPolicy(),
+			Env:           []corev1.EnvVar{secretKeyEnv("DB_PASSWORD", "db-conn", "password")},
+		}}
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name: "app", Ready: true,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}},
+		}}
+		pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+			Name: "vault-agent", Ready: false,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}},
+		}}
+		cache := envHistoryTestCache(t, pod, secret)
+		setEnvHistoryEvents(t, change)
+		if !podHasSecretEnvReference(pod) {
+			t.Fatal("restartable init sidecar Secret env must pass the timeline-query precheck")
+		}
+		checks := FindStaleSecretEnvChecksForObject(context.Background(), cache, pod)
+		if len(checks) != 1 || checks[0].Container != "vault-agent" {
+			t.Fatalf("restartable init sidecar lost its stale env fact: %+v", checks)
+		}
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || !strings.Contains(detections[0].Message, "Container vault-agent") {
+			t.Fatalf("not-Ready restartable init sidecar must promote: %+v", detections)
+		}
+	})
+
+	t.Run("regular init container is not detected", func(t *testing.T) {
+		pod := staleSecretEnvPod("init-only", startedAt, false)
+		pod.Spec.Containers = []corev1.Container{{Name: "app"}}
+		pod.Spec.InitContainers = []corev1.Container{{
+			Name: "migrate", // no RestartPolicy => runs once, re-reads env on next pod start
+			Env:  []corev1.EnvVar{secretKeyEnv("DB_PASSWORD", "db-conn", "password")},
+		}}
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name: "app", Ready: false,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}},
+		}}
+		pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+			Name: "migrate", Ready: false,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}},
+		}}
+		cache := envHistoryTestCache(t, pod, secret)
+		if podHasSecretEnvReference(pod) {
+			t.Fatal("a regular init container's Secret env must not trigger the timeline-query precheck")
+		}
+		if checks := findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{change}); len(checks) != 0 {
+			t.Fatalf("a regular init container must be excluded from the stale-env walk: %+v", checks)
 		}
 	})
 
@@ -868,6 +951,11 @@ func secretHistoryEvent(timestamp time.Time, namespace, name, path string, value
 		EventType: timeline.EventTypeUpdate,
 		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: path, NewValue: value}}},
 	}
+}
+
+func alwaysRestartPolicy() *corev1.ContainerRestartPolicy {
+	policy := corev1.ContainerRestartPolicyAlways
+	return &policy
 }
 
 func secretKeyEnv(envName, secretName, key string) corev1.EnvVar {

@@ -161,8 +161,20 @@ func findRemovedServiceEnvChecks(cache *ResourceCache, wl envServiceWorkload, ui
 }
 
 func parseWorkloadEnvPath(path string) (container, envName string, ok bool) {
-	const prefix = "spec.template.spec.containers["
-	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, "]") {
+	const (
+		containersPrefix     = "spec.template.spec.containers["
+		initContainersPrefix = "spec.template.spec.initContainers["
+	)
+	var prefix string
+	switch {
+	case strings.HasPrefix(path, containersPrefix):
+		prefix = containersPrefix
+	case strings.HasPrefix(path, initContainersPrefix):
+		prefix = initContainersPrefix
+	default:
+		return "", "", false
+	}
+	if !strings.HasSuffix(path, "]") {
 		return "", "", false
 	}
 	rest := strings.TrimSuffix(strings.TrimPrefix(path, prefix), "]")
@@ -269,7 +281,7 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 	if !usesSecretEnv {
 		return nil
 	}
-	checks := findStaleSecretEnvChecks(cache, pods, querySecretDataHistory(context.Background(), namespace, now.Add(-envHistoryLookback)))
+	checks := findStaleSecretEnvChecks(cache, pods, querySecretDataHistory(context.Background(), namespace, staleSecretEnvHistorySince(pods, now)))
 	checksByPod := make(map[string][]StaleSecretEnvCheck)
 	for _, check := range checks {
 		key := check.Namespace + "\x00" + check.PodName
@@ -325,7 +337,7 @@ func podHasSecretEnvReference(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false
 	}
-	for _, container := range pod.Spec.Containers {
+	for _, container := range staleSecretEnvContainers(pod) {
 		for _, env := range container.Env {
 			if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
 				return true
@@ -338,6 +350,57 @@ func podHasSecretEnvReference(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// staleSecretEnvContainers returns the containers whose Secret-backed env can go
+// stale until restart: all regular containers plus restartable init containers
+// (native sidecars, restartPolicy=Always), which run for the pod's lifetime.
+// Regular init containers run once to completion and re-read env on the next pod
+// start, so they can never hold a stale-until-restart value and are excluded.
+func staleSecretEnvContainers(pod *corev1.Pod) []corev1.Container {
+	out := make([]corev1.Container, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
+	for _, container := range pod.Spec.InitContainers {
+		if isRestartableInitContainer(container) {
+			out = append(out, container)
+		}
+	}
+	return append(out, pod.Spec.Containers...)
+}
+
+// staleSecretEnvContainerStatuses indexes the statuses of the containers that
+// staleSecretEnvContainers walks: regular containers plus restartable init
+// containers. Container names are unique across a Pod's regular and init
+// containers, so merging the two status lists cannot collide, and only the
+// runtime containers above are ever looked up.
+func staleSecretEnvContainerStatuses(pod *corev1.Pod) map[string]corev1.ContainerStatus {
+	statuses := make(map[string]corev1.ContainerStatus, len(pod.Status.ContainerStatuses)+len(pod.Status.InitContainerStatuses))
+	restartable := restartableInitContainerNames(pod)
+	for _, status := range pod.Status.InitContainerStatuses {
+		if restartable[status.Name] {
+			statuses[status.Name] = status
+		}
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		statuses[status.Name] = status
+	}
+	return statuses
+}
+
+func restartableInitContainerNames(pod *corev1.Pod) map[string]bool {
+	var names map[string]bool
+	for _, container := range pod.Spec.InitContainers {
+		if isRestartableInitContainer(container) {
+			if names == nil {
+				names = make(map[string]bool)
+			}
+			names[container.Name] = true
+		}
+	}
+	return names
+}
+
+func isRestartableInitContainer(container corev1.Container) bool {
+	return container.RestartPolicy != nil && *container.RestartPolicy == corev1.ContainerRestartPolicyAlways
 }
 
 func querySecretDataHistory(ctx context.Context, namespace string, since time.Time) []timeline.TimelineEvent {
@@ -358,18 +421,27 @@ func querySecretDataHistory(ctx context.Context, namespace string, since time.Ti
 func staleSecretEnvHistorySince(pods []*corev1.Pod, now time.Time) time.Time {
 	floor := now.Add(-envHistoryContextMaxLookback)
 	var earliest time.Time
+	consider := func(status corev1.ContainerStatus) {
+		if status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
+			return
+		}
+		startedAt := status.State.Running.StartedAt.Time
+		if earliest.IsZero() || startedAt.Before(earliest) {
+			earliest = startedAt
+		}
+	}
 	for _, pod := range pods {
 		if pod == nil {
 			continue
 		}
+		restartable := restartableInitContainerNames(pod)
+		for _, status := range pod.Status.InitContainerStatuses {
+			if restartable[status.Name] {
+				consider(status)
+			}
+		}
 		for _, status := range pod.Status.ContainerStatuses {
-			if status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
-				continue
-			}
-			startedAt := status.State.Running.StartedAt.Time
-			if earliest.IsZero() || startedAt.Before(earliest) {
-				earliest = startedAt
-			}
+			consider(status)
 		}
 	}
 	if earliest.IsZero() || earliest.Before(floor) {
@@ -415,11 +487,8 @@ func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events [
 		if pod == nil {
 			continue
 		}
-		statuses := make(map[string]corev1.ContainerStatus, len(pod.Status.ContainerStatuses))
-		for _, status := range pod.Status.ContainerStatuses {
-			statuses[status.Name] = status
-		}
-		for _, container := range pod.Spec.Containers {
+		statuses := staleSecretEnvContainerStatuses(pod)
+		for _, container := range staleSecretEnvContainers(pod) {
 			status, ok := statuses[container.Name]
 			if !ok || status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
 				continue
@@ -483,11 +552,8 @@ func findStaleSecretEnvChecksWithManagedFields(cache *ResourceCache, pods []*cor
 		if pod == nil {
 			continue
 		}
-		statuses := make(map[string]corev1.ContainerStatus, len(pod.Status.ContainerStatuses))
-		for _, status := range pod.Status.ContainerStatuses {
-			statuses[status.Name] = status
-		}
-		for _, container := range pod.Spec.Containers {
+		statuses := staleSecretEnvContainerStatuses(pod)
+		for _, container := range staleSecretEnvContainers(pod) {
 			status, ok := statuses[container.Name]
 			if !ok || status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
 				continue
@@ -722,8 +788,17 @@ func staleSecretEnvBitingChecks(pod *corev1.Pod, checks []StaleSecretEnvCheck) [
 	}
 	// Only a Running-but-not-Ready container can be holding a stale value: a
 	// Waiting or crashlooping container re-reads Secret-backed env on its next
-	// (re)start, so it is deliberately outside this gate.
+	// (re)start, so it is deliberately outside this gate. Restartable init
+	// containers (native sidecars) run for the pod's lifetime and their
+	// readiness feeds the Pod Ready condition, so a not-Ready one bites exactly
+	// like a regular container; pure init containers are already excluded.
 	bitingContainers := make(map[string]bool)
+	restartable := restartableInitContainerNames(pod)
+	for _, status := range pod.Status.InitContainerStatuses {
+		if restartable[status.Name] && status.State.Running != nil && !status.Ready {
+			bitingContainers[status.Name] = true
+		}
+	}
 	for _, status := range pod.Status.ContainerStatuses {
 		if status.State.Running != nil && !status.Ready {
 			bitingContainers[status.Name] = true
