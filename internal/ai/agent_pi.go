@@ -3,8 +3,12 @@ package ai
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -37,10 +41,36 @@ func (a *piAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), e
 
 	args = append(args, s.prompt)
 
-	cmd := exec.CommandContext(ctx, a.bin, args...)
-	cmd.Env = scrubbedEnv()
+	workdir := s.workdir
+	cleanup := func() {}
+	if workdir == "" {
+		dir, err := os.MkdirTemp("", "radar-pi-")
+		if err != nil {
+			return nil, nil, fmt.Errorf("ai: pi workdir: %w", err)
+		}
+		workdir = dir
+		cleanup = func() { _ = os.RemoveAll(dir) }
+	}
 
-	return cmd, func() {}, nil
+	if err := writePiConfig(workdir, s.mcpURL); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, a.bin, args...)
+	cmd.Dir = workdir
+	cmd.Env = append(scrubbedEnv(), "PI_CODING_AGENT_DIR="+workdir)
+
+	return cmd, cleanup, nil
+}
+
+func writePiConfig(workdir, mcpURL string) error {
+	cfg := map[string]any{"mcpServers": map[string]any{"radar": map[string]any{"url": mcpURL}}}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(workdir, "mcp.json"), b, 0o600)
 }
 
 func (a *piAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {

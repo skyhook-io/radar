@@ -3,8 +3,12 @@ package ai
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -47,10 +51,46 @@ func (a *antigravityAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, 
 
 	args = append(args, "--prompt", prompt)
 
+	workdir := s.workdir
+	cleanup := func() {}
+	if workdir == "" {
+		dir, err := os.MkdirTemp("", "radar-antigravity-")
+		if err != nil {
+			return nil, nil, fmt.Errorf("ai: antigravity workdir: %w", err)
+		}
+		workdir = dir
+		cleanup = func() { _ = os.RemoveAll(dir) }
+	}
+
+	if err := writeAntigravityConfig(workdir, s.mcpURL); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+
 	cmd := exec.CommandContext(ctx, a.bin, args...)
+	cmd.Dir = workdir
 	cmd.Env = scrubbedEnv()
 
-	return cmd, func() {}, nil
+	return cmd, cleanup, nil
+}
+
+func writeAntigravityConfig(workdir, mcpURL string) error {
+	// Write standard mcp.json
+	cfg := map[string]any{"mcpServers": map[string]any{"radar": map[string]any{"url": mcpURL}}}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "mcp.json"), b, 0o600); err != nil {
+		return err
+	}
+
+	// Also write .cursor/mcp.json for tools that fall back to it
+	cursorDir := filepath.Join(workdir, ".cursor")
+	if err := os.MkdirAll(cursorDir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(cursorDir, "mcp.json"), b, 0o600)
 }
 
 func (a *antigravityAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {

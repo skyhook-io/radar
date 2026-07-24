@@ -3,8 +3,12 @@ package ai
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -36,12 +40,49 @@ func (a *opencodeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, fun
 		prompt = s.systemPrompt + "\n\n" + prompt
 	}
 
-	args = append(args, "--prompt", prompt)
+	// OpenCode expects the prompt message as positional arguments, not --prompt
+	args = append(args, prompt)
+
+	workdir := s.workdir
+	cleanup := func() {}
+	if workdir == "" {
+		dir, err := os.MkdirTemp("", "radar-opencode-")
+		if err != nil {
+			return nil, nil, fmt.Errorf("ai: opencode workdir: %w", err)
+		}
+		workdir = dir
+		cleanup = func() { _ = os.RemoveAll(dir) }
+	}
+
+	if err := writeOpencodeConfig(workdir, s.mcpURL); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 
 	cmd := exec.CommandContext(ctx, a.bin, args...)
+	cmd.Dir = workdir
 	cmd.Env = scrubbedEnv()
 
-	return cmd, func() {}, nil
+	return cmd, cleanup, nil
+}
+
+func writeOpencodeConfig(workdir, mcpURL string) error {
+	// Write local project opencode.json pointing to Radar's local MCP
+	cfg := map[string]any{
+		"mcp": map[string]any{
+			"servers": map[string]any{
+				"radar": map[string]any{
+					"type": "remote",
+					"url":  mcpURL,
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(workdir, "opencode.json"), b, 0o600)
 }
 
 func (a *opencodeAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
