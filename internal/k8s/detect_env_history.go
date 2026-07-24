@@ -17,6 +17,8 @@ import (
 const (
 	envHistoryLookback                  = time.Hour
 	envHistoryContextMaxLookback        = 24 * time.Hour
+	staleSecretEnvRolloutEvidenceWindow = 10 * time.Minute
+	maxSecretDataHistoryEvents          = 1000
 	maxStaleSecretEnvChecksPerContainer = 5
 	// A mass Secret rotation coinciding with a rollout can leave many pods
 	// simultaneously not-Ready with in-window key changes; a sweep must not
@@ -209,7 +211,8 @@ func FindStaleSecretEnvChecksForObject(ctx context.Context, cache *ResourceCache
 		return nil
 	}
 	now := time.Now()
-	return findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, querySecretDataHistory(ctx, pod.Namespace, staleSecretEnvHistorySince([]*corev1.Pod{pod}, now)))
+	pods := []*corev1.Pod{pod}
+	return findStaleSecretEnvChecks(cache, pods, querySecretDataHistory(ctx, pod.Namespace, pods, staleSecretEnvHistorySince(pods, now)))
 }
 
 // FindStaleSecretEnvChecksForPods aggregates the Pod-level facts needed by a
@@ -233,8 +236,9 @@ func FindStaleSecretEnvChecksForPods(ctx context.Context, cache *ResourceCache, 
 	var out []StaleSecretEnvCheck
 	for _, namespace := range namespaces {
 		now := time.Now()
-		events := querySecretDataHistory(ctx, namespace, staleSecretEnvHistorySince(podsByNamespace[namespace], now))
-		checks := groupStaleSecretEnvChecks(findStaleSecretEnvChecksWithManagedFields(cache, podsByNamespace[namespace], events))
+		pods := podsByNamespace[namespace]
+		events := querySecretDataHistory(ctx, namespace, pods, staleSecretEnvHistorySince(pods, now))
+		checks := groupStaleSecretEnvChecks(findStaleSecretEnvChecksWithManagedFields(cache, pods, events))
 		if len(checks) > maxStaleSecretEnvDetectionsPerNamespace {
 			checks = checks[:maxStaleSecretEnvDetectionsPerNamespace]
 		}
@@ -287,66 +291,366 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 		logConfigListError("Pod", namespace, err)
 		return nil
 	}
-	usesSecretEnv := false
+	var secretEnvPods []*corev1.Pod
 	for _, pod := range pods {
 		if podHasSecretEnvReference(pod) {
-			usesSecretEnv = true
-			break
+			secretEnvPods = append(secretEnvPods, pod)
 		}
 	}
-	if !usesSecretEnv {
+	if len(secretEnvPods) == 0 {
 		return nil
 	}
-	checks := findStaleSecretEnvChecks(cache, pods, querySecretDataHistory(context.Background(), namespace, staleSecretEnvHistorySince(pods, now)))
+	events := querySecretDataHistory(context.Background(), namespace, secretEnvPods, staleSecretEnvHistorySince(secretEnvPods, now))
+	checks := findStaleSecretEnvChecks(cache, secretEnvPods, events)
 	checksByPod := make(map[string][]StaleSecretEnvCheck)
 	for _, check := range checks {
 		key := check.Namespace + "\x00" + check.PodName
 		checksByPod[key] = append(checksByPod[key], check)
 	}
-	var out []Detection
+
+	subjectByPod := make(map[string]staleSecretEnvSubject, len(pods))
+	podsBySubject := make(map[string][]*corev1.Pod)
+	for _, pod := range pods {
+		subject := staleSecretEnvSubjectForPod(cache, pod)
+		podKey := pod.Namespace + "\x00" + pod.Name
+		subjectByPod[podKey] = subject
+		podsBySubject[subject.key()] = append(podsBySubject[subject.key()], pod)
+	}
+
+	var notReadyOut []Detection
+	readyGroups := make(map[string]*staleSecretEnvReadyGroup)
+	notReadySubjects := make(map[string]bool)
 	for _, pod := range pods {
 		podChecks := checksByPod[pod.Namespace+"\x00"+pod.Name]
-		bitingChecks := staleSecretEnvBitingChecks(pod, podChecks)
-		if len(bitingChecks) == 0 {
+		issueChecks, podReady := staleSecretEnvIssueChecks(pod, podChecks)
+		if len(issueChecks) == 0 {
 			continue
 		}
-		changedAt := bitingChecks[0].SecretChangedAt
-		for _, check := range bitingChecks[1:] {
-			if check.SecretChangedAt.Before(changedAt) {
-				changedAt = check.SecretChangedAt
+		subject := subjectByPod[pod.Namespace+"\x00"+pod.Name]
+		if podReady {
+			group := readyGroups[subject.key()]
+			if group == nil {
+				group = &staleSecretEnvReadyGroup{subject: subject}
+				readyGroups[subject.key()] = group
+			}
+			group.checks = append(group.checks, issueChecks...)
+			continue
+		}
+
+		notReadySubjects[subject.key()] = true
+		ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
+		notReadyOut = append(notReadyOut, Detection{
+			Kind:        "Pod",
+			Namespace:   pod.Namespace,
+			Name:        pod.Name,
+			Severity:    "warning",
+			Reason:      "StaleSecretEnv",
+			Message:     staleSecretEnvDetectionMessage(issueChecks),
+			OwnerGroup:  ownerGroup,
+			OwnerKind:   ownerKind,
+			OwnerName:   ownerName,
+			Fingerprint: "stale-secret-env",
+			Cause:       "A running container loaded a Secret-backed environment value before Radar observed that Secret key change.",
+			Action:      "Restart the pod so its containers re-read Secret-backed environment variables.",
+		})
+		setStaleSecretEnvDetectionAge(&notReadyOut[len(notReadyOut)-1], issueChecks, now)
+	}
+
+	readyKeys := make([]string, 0, len(readyGroups))
+	for key := range readyGroups {
+		readyKeys = append(readyKeys, key)
+	}
+	sort.Strings(readyKeys)
+	var readyOut []Detection
+	for _, key := range readyKeys {
+		if notReadySubjects[key] {
+			continue
+		}
+		group := readyGroups[key]
+		rolloutEvidence := newStaleSecretEnvRolloutEvidence(group.subject, podsBySubject[key], now)
+		var currentChecks []StaleSecretEnvCheck
+		for _, check := range group.checks {
+			if !rolloutEvidence.supersedes(check) {
+				currentChecks = append(currentChecks, check)
 			}
 		}
-		age := ageSeconds(now, changedAt)
-		ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
-		out = append(out, Detection{
-			Kind:            "Pod",
-			Namespace:       pod.Namespace,
-			Name:            pod.Name,
-			Severity:        "warning",
-			Reason:          "StaleSecretEnv",
-			Message:         staleSecretEnvDetectionMessage(bitingChecks),
-			Age:             FormatAge(time.Duration(age) * time.Second),
-			AgeSeconds:      age,
-			Duration:        FormatAge(time.Duration(age) * time.Second),
-			DurationSeconds: age,
-			OwnerGroup:      ownerGroup,
-			OwnerKind:       ownerKind,
-			OwnerName:       ownerName,
-			Fingerprint:     "stale-secret-env",
-			Cause:           "A running container loaded a Secret-backed environment value before Radar observed that Secret key change.",
-			Action:          "Restart the pod so its containers re-read Secret-backed environment variables.",
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Namespace != out[j].Namespace {
-			return out[i].Namespace < out[j].Namespace
+		if len(currentChecks) == 0 {
+			continue
 		}
-		return out[i].Name < out[j].Name
+		affectedPods := make(map[string]bool)
+		for _, check := range currentChecks {
+			affectedPods[check.PodName] = true
+		}
+		detection := Detection{
+			Group:       group.subject.group,
+			Kind:        group.subject.kind,
+			Namespace:   group.subject.namespace,
+			Name:        group.subject.name,
+			Severity:    "warning",
+			Reason:      "StaleSecretEnv",
+			Message:     staleSecretEnvReadyDetectionMessage(group.subject, len(affectedPods), len(currentChecks)),
+			Fingerprint: "stale-secret-env",
+			Cause:       "Radar observed consumed Secret keys change after these Ready container instances started; Kubernetes does not refresh Secret-backed environment variables in running containers.",
+			Action:      staleSecretEnvReadyAction(group.subject),
+		}
+		setStaleSecretEnvDetectionAge(&detection, currentChecks, now)
+		readyOut = append(readyOut, detection)
+	}
+
+	sort.Slice(notReadyOut, func(i, j int) bool {
+		if notReadyOut[i].Namespace != notReadyOut[j].Namespace {
+			return notReadyOut[i].Namespace < notReadyOut[j].Namespace
+		}
+		return notReadyOut[i].Name < notReadyOut[j].Name
 	})
+	sort.Slice(readyOut, func(i, j int) bool {
+		if readyOut[i].Namespace != readyOut[j].Namespace {
+			return readyOut[i].Namespace < readyOut[j].Namespace
+		}
+		if readyOut[i].Kind != readyOut[j].Kind {
+			return readyOut[i].Kind < readyOut[j].Kind
+		}
+		return readyOut[i].Name < readyOut[j].Name
+	})
+	out := append(notReadyOut, readyOut...)
 	if len(out) > maxStaleSecretEnvDetectionsPerNamespace {
 		out = out[:maxStaleSecretEnvDetectionsPerNamespace]
 	}
 	return out
+}
+
+type staleSecretEnvSubject struct {
+	group       string
+	kind        string
+	namespace   string
+	name        string
+	restartable bool
+}
+
+func staleSecretEnvSubjectForPod(cache *ResourceCache, pod *corev1.Pod) staleSecretEnvSubject {
+	group, kind, name := podOwnerKindName(cache, pod)
+	if kind == "" {
+		kind = "Pod"
+		name = pod.Name
+	}
+	return staleSecretEnvSubject{
+		group: group, kind: kind, namespace: pod.Namespace, name: name,
+		restartable: staleSecretEnvRestartableOwner(group, kind),
+	}
+}
+
+func staleSecretEnvRestartableOwner(group, kind string) bool {
+	switch kind {
+	case "Deployment", "StatefulSet", "DaemonSet":
+		return group == "apps"
+	case "Rollout":
+		return group == "argoproj.io"
+	default:
+		return false
+	}
+}
+
+func (s staleSecretEnvSubject) key() string {
+	return s.group + "\x00" + s.kind + "\x00" + s.namespace + "\x00" + s.name
+}
+
+type staleSecretEnvReadyGroup struct {
+	subject staleSecretEnvSubject
+	checks  []StaleSecretEnvCheck
+}
+
+type staleSecretEnvConsumption struct {
+	container string
+	secret    string
+	key       string
+}
+
+type staleSecretEnvReplacement struct {
+	revision  string
+	startedAt time.Time
+}
+
+type staleSecretEnvRolloutEvidence struct {
+	revisionByPod map[string]string
+	replacements  map[staleSecretEnvConsumption][]staleSecretEnvReplacement
+}
+
+func newStaleSecretEnvRolloutEvidence(subject staleSecretEnvSubject, pods []*corev1.Pod, now time.Time) staleSecretEnvRolloutEvidence {
+	evidence := staleSecretEnvRolloutEvidence{}
+	if (subject.group != "apps" || subject.kind != "Deployment") &&
+		(subject.group != "argoproj.io" || subject.kind != "Rollout") {
+		return evidence
+	}
+	evidence.revisionByPod = make(map[string]string, len(pods))
+	evidence.replacements = make(map[staleSecretEnvConsumption][]staleSecretEnvReplacement)
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		revisionRef := controllerOwnerRef(pod.OwnerReferences)
+		if revisionRef == nil || revisionRef.Kind != "ReplicaSet" {
+			continue
+		}
+		revision := ownerReferenceIdentity(revisionRef)
+		evidence.revisionByPod[pod.Name] = revision
+		if pod.DeletionTimestamp != nil || !isPodReadyForProblem(pod) {
+			continue
+		}
+		statusByContainer := staleSecretEnvContainerStatuses(pod)
+		for _, container := range staleSecretEnvContainers(pod) {
+			status, ok := statusByContainer[container.Name]
+			if !ok || !status.Ready || status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
+				continue
+			}
+			startedAt := status.State.Running.StartedAt.Time
+			if startedAt.After(now) || now.Sub(startedAt) > staleSecretEnvRolloutEvidenceWindow {
+				continue
+			}
+			replacement := staleSecretEnvReplacement{revision: revision, startedAt: startedAt}
+			for _, env := range container.Env {
+				if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+					continue
+				}
+				ref := env.ValueFrom.SecretKeyRef
+				evidence.add(staleSecretEnvConsumption{container: container.Name, secret: ref.Name, key: ref.Key}, replacement)
+			}
+			for _, envFrom := range container.EnvFrom {
+				if envFrom.SecretRef != nil {
+					evidence.add(staleSecretEnvConsumption{container: container.Name, secret: envFrom.SecretRef.Name}, replacement)
+				}
+			}
+		}
+	}
+	return evidence
+}
+
+func (e *staleSecretEnvRolloutEvidence) add(consumption staleSecretEnvConsumption, replacement staleSecretEnvReplacement) {
+	candidates := e.replacements[consumption]
+	for i := range candidates {
+		if candidates[i].revision == replacement.revision {
+			if replacement.startedAt.After(candidates[i].startedAt) {
+				candidates[i] = replacement
+			}
+			e.replacements[consumption] = candidates
+			return
+		}
+	}
+	candidates = append(candidates, replacement)
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].startedAt.After(candidates[j].startedAt)
+	})
+	if len(candidates) > 2 {
+		candidates = candidates[:2]
+	}
+	e.replacements[consumption] = candidates
+}
+
+func (e staleSecretEnvRolloutEvidence) supersedes(check StaleSecretEnvCheck) bool {
+	staleRevision := e.revisionByPod[check.PodName]
+	if staleRevision == "" {
+		return false
+	}
+	consumptions := [...]staleSecretEnvConsumption{
+		{container: check.Container, secret: check.SecretName, key: check.Key},
+		{container: check.Container, secret: check.SecretName},
+	}
+	for _, consumption := range consumptions {
+		for _, replacement := range e.replacements[consumption] {
+			if replacement.revision != staleRevision && !replacement.startedAt.Before(check.SecretChangedAt) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ownerReferenceIdentity(ref *metav1.OwnerReference) string {
+	if ref.UID != "" {
+		return string(ref.UID)
+	}
+	return ref.APIVersion + "\x00" + ref.Kind + "\x00" + ref.Name
+}
+
+func secretEnvReferenceNames(pods []*corev1.Pod) []string {
+	names := make(map[string]bool)
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		for _, container := range staleSecretEnvContainers(pod) {
+			for _, env := range container.Env {
+				if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil && env.ValueFrom.SecretKeyRef.Name != "" {
+					names[env.ValueFrom.SecretKeyRef.Name] = true
+				}
+			}
+			for _, envFrom := range container.EnvFrom {
+				if envFrom.SecretRef != nil && envFrom.SecretRef.Name != "" {
+					names[envFrom.SecretRef.Name] = true
+				}
+			}
+		}
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func secretEnvReferenceNamespaces(pods []*corev1.Pod) []string {
+	namespaces := make(map[string]bool)
+	for _, pod := range pods {
+		if pod != nil && pod.Namespace != "" {
+			namespaces[pod.Namespace] = true
+		}
+	}
+	out := make([]string, 0, len(namespaces))
+	for namespace := range namespaces {
+		out = append(out, namespace)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func setStaleSecretEnvDetectionAge(detection *Detection, checks []StaleSecretEnvCheck, now time.Time) {
+	changedAt := checks[0].SecretChangedAt
+	for _, check := range checks[1:] {
+		if check.SecretChangedAt.Before(changedAt) {
+			changedAt = check.SecretChangedAt
+		}
+	}
+	age := ageSeconds(now, changedAt)
+	detection.Age = FormatAge(time.Duration(age) * time.Second)
+	detection.AgeSeconds = age
+	detection.Duration = FormatAge(time.Duration(age) * time.Second)
+	detection.DurationSeconds = age
+}
+
+func staleSecretEnvReadyDetectionMessage(subject staleSecretEnvSubject, podCount, checkCount int) string {
+	if podCount == 1 {
+		if checkCount == 1 {
+			if subject.kind != "Pod" {
+				return fmt.Sprintf("%s/%s has a Ready pod whose running container loaded a Secret-backed environment value before Radar observed its consumed Secret key change; it may still hold the pre-change value.", subject.kind, subject.name)
+			}
+			return fmt.Sprintf("%s/%s is Ready, but a running container loaded a Secret-backed environment value before Radar observed its consumed Secret key change; it may still hold the pre-change value.", subject.kind, subject.name)
+		}
+		if subject.kind != "Pod" {
+			return fmt.Sprintf("%s/%s has a Ready pod whose running containers loaded %d Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values.", subject.kind, subject.name, checkCount)
+		}
+		return fmt.Sprintf("%s/%s is Ready, but its running containers loaded %d Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values.", subject.kind, subject.name, checkCount)
+	}
+	return fmt.Sprintf("%s/%s has %d Ready pods whose running containers loaded %d Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values.", subject.kind, subject.name, podCount, checkCount)
+}
+
+func staleSecretEnvReadyAction(subject staleSecretEnvSubject) string {
+	if subject.restartable {
+		return fmt.Sprintf("Confirm no rollout is already replacing the affected pods, then restart %s/%s so its containers re-read Secret-backed environment variables.", subject.kind, subject.name)
+	}
+	if subject.kind == "Pod" {
+		return fmt.Sprintf("Confirm no replacement is already in progress, then replace Pod/%s through its owning controller (or recreate it if standalone) so its containers re-read Secret-backed environment variables.", subject.name)
+	}
+	return fmt.Sprintf("Confirm no replacement is already in progress, then use %s/%s's normal controller workflow to replace the affected pods so they re-read Secret-backed environment variables.", subject.kind, subject.name)
 }
 
 func podHasSecretEnvReference(pod *corev1.Pod) bool {
@@ -419,19 +723,31 @@ func isRestartableInitContainer(container corev1.Container) bool {
 	return container.RestartPolicy != nil && *container.RestartPolicy == corev1.ContainerRestartPolicyAlways
 }
 
-func querySecretDataHistory(ctx context.Context, namespace string, since time.Time) []timeline.TimelineEvent {
+func querySecretDataHistory(ctx context.Context, namespace string, pods []*corev1.Pod, since time.Time) []timeline.TimelineEvent {
+	names := secretEnvReferenceNames(pods)
+	if len(names) == 0 {
+		return nil
+	}
 	opts := timeline.QueryOptions{
 		Kinds:          []string{"Secret"},
+		Names:          names,
 		Since:          since,
 		Sources:        []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:     []timeline.EventType{timeline.EventTypeUpdate},
 		ClusterContext: ActiveClusterContext(),
-		Limit:          1000,
+		IncludeManaged: true,
+		Limit:          maxSecretDataHistoryEvents,
 	}
 	if namespace != "" {
 		opts.Namespaces = []string{namespace}
+	} else {
+		opts.Namespaces = secretEnvReferenceNamespaces(pods)
 	}
-	return queryEnvHistory(ctx, opts)
+	events := queryEnvHistory(ctx, opts)
+	if len(events) >= maxSecretDataHistoryEvents {
+		return nil
+	}
+	return events
 }
 
 func staleSecretEnvHistorySince(pods []*corev1.Pod, now time.Time) time.Time {
@@ -788,9 +1104,9 @@ func sortTimelineEventsNewestFirst(events []timeline.TimelineEvent) {
 	})
 }
 
-func staleSecretEnvBitingChecks(pod *corev1.Pod, checks []StaleSecretEnvCheck) []StaleSecretEnvCheck {
-	if pod == nil || pod.Status.Phase != corev1.PodRunning {
-		return nil
+func staleSecretEnvIssueChecks(pod *corev1.Pod, checks []StaleSecretEnvCheck) ([]StaleSecretEnvCheck, bool) {
+	if pod == nil || pod.Status.Phase != corev1.PodRunning || pod.DeletionTimestamp != nil {
+		return nil, false
 	}
 	readyKnown, ready := false, false
 	for _, condition := range pod.Status.Conditions {
@@ -800,34 +1116,31 @@ func staleSecretEnvBitingChecks(pod *corev1.Pod, checks []StaleSecretEnvCheck) [
 			break
 		}
 	}
-	if !readyKnown || ready {
-		return nil
+	if !readyKnown {
+		return nil, false
 	}
-	// Only a Running-but-not-Ready container can be holding a stale value: a
-	// Waiting or crashlooping container re-reads Secret-backed env on its next
-	// (re)start, so it is deliberately outside this gate. Restartable init
-	// containers (native sidecars) run for the pod's lifetime and their
-	// readiness feeds the Pod Ready condition, so a not-Ready one bites exactly
-	// like a regular container; pure init containers are already excluded.
-	bitingContainers := make(map[string]bool)
+	// Waiting containers re-read Secret-backed env on their next start. Running
+	// containers can retain it; for a not-Ready pod, only a not-Ready container
+	// is evidence that the stale value is biting.
+	eligibleContainers := make(map[string]bool)
 	restartable := restartableInitContainerNames(pod)
 	for _, status := range pod.Status.InitContainerStatuses {
-		if restartable[status.Name] && status.State.Running != nil && !status.Ready {
-			bitingContainers[status.Name] = true
+		if restartable[status.Name] && status.State.Running != nil && (ready || !status.Ready) {
+			eligibleContainers[status.Name] = true
 		}
 	}
 	for _, status := range pod.Status.ContainerStatuses {
-		if status.State.Running != nil && !status.Ready {
-			bitingContainers[status.Name] = true
+		if status.State.Running != nil && (ready || !status.Ready) {
+			eligibleContainers[status.Name] = true
 		}
 	}
 	var out []StaleSecretEnvCheck
 	for _, check := range checks {
-		if check.EvidenceSource == staleSecretEvidenceObservedChange && bitingContainers[check.Container] {
+		if check.EvidenceSource == staleSecretEvidenceObservedChange && eligibleContainers[check.Container] {
 			out = append(out, check)
 		}
 	}
-	return out
+	return out, ready
 }
 
 func staleSecretEnvDetectionMessage(checks []StaleSecretEnvCheck) string {

@@ -110,7 +110,7 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 	}
 	change := secretHistoryEvent(changedAt, "shop", "db-conn", "data (modified keys)", []string{"password"})
 
-	t.Run("healthy is FYI only", func(t *testing.T) {
+	t.Run("Ready pod with observed key change promotes", func(t *testing.T) {
 		pod := staleSecretEnvPod("catalog-healthy", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
 		cache := envHistoryTestCache(t, pod, secret)
 		setEnvHistoryEvents(t, change)
@@ -118,8 +118,29 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		if len(checks) != 1 {
 			t.Fatalf("got %d stale Secret env facts, want 1: %+v", len(checks), checks)
 		}
-		if detections := detectStaleSecretEnv(cache, "shop", now); len(detections) != 0 {
-			t.Fatalf("healthy stale pod must remain FYI-only: %+v", detections)
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || detections[0].Severity != "warning" ||
+			detections[0].Kind != "Pod" || detections[0].Name != pod.Name || detections[0].Fingerprint != "stale-secret-env" {
+			t.Fatalf("unexpected Ready-pod detection: %+v", detections)
+		}
+		detection := detections[0]
+		if !strings.Contains(detection.Message, "is Ready") || !strings.Contains(detection.Message, "may still hold the pre-change value") ||
+			!strings.Contains(detection.Cause, "does not refresh") || !strings.Contains(detection.Action, "Confirm no replacement") {
+			t.Fatalf("Ready-pod detection did not preserve evidence and uncertainty: %+v", detection)
+		}
+	})
+
+	t.Run("Ready pod consumes an operator-owned Secret rotation", func(t *testing.T) {
+		pod := staleSecretEnvPod("catalog-external-secret", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, secret)
+		managedChange := change
+		managedChange.ID = "managed-secret-change"
+		managedChange.Owner = &timeline.OwnerInfo{Kind: "ExternalSecret", Name: "db-conn"}
+		setEnvHistoryEvents(t, managedChange)
+
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || detections[0].Name != pod.Name {
+			t.Fatalf("owner-bearing Secret updates must remain exact observed evidence: %+v", detections)
 		}
 	})
 
@@ -134,6 +155,11 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		detections := detectStaleSecretEnv(cache, "shop", now)
 		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || detections[0].Severity != "warning" || detections[0].Kind != "Pod" || detections[0].Name != pod.Name || detections[0].Fingerprint != "stale-secret-env" {
 			t.Fatalf("unexpected promoted detection: %+v", detections)
+		}
+		if detections[0].Message != "Container app is not Ready and may be running a stale env value for Secret/db-conn key password; restart the pod to refresh it." ||
+			detections[0].Cause != "A running container loaded a Secret-backed environment value before Radar observed that Secret key change." ||
+			detections[0].Action != "Restart the pod so its containers re-read Secret-backed environment variables." {
+			t.Fatalf("not-Ready detection contract changed: %+v", detections[0])
 		}
 		encoded, err := json.Marshal(struct {
 			Checks     []StaleSecretEnvCheck `json:"checks"`
@@ -175,10 +201,41 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 	})
 
 	t.Run("restart after change suppresses", func(t *testing.T) {
-		pod := staleSecretEnvPod("restarted", changedAt.Add(time.Second), false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		pod := staleSecretEnvPod("restarted", changedAt.Add(time.Second), true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
 		cache := envHistoryTestCache(t, pod, secret)
 		if checks := findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{change}); len(checks) != 0 {
 			t.Fatalf("post-change start must suppress stale fact: %+v", checks)
+		}
+		setEnvHistoryEvents(t, change)
+		if detections := detectStaleSecretEnv(cache, "shop", now); len(detections) != 0 {
+			t.Fatalf("post-change Ready pod must not produce an issue: %+v", detections)
+		}
+	})
+
+	t.Run("terminating Ready pod is ignored", func(t *testing.T) {
+		pod := staleSecretEnvPod("terminating", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		deletedAt := metav1.NewTime(now.Add(-time.Second))
+		pod.DeletionTimestamp = &deletedAt
+		cache := envHistoryTestCache(t, pod, secret)
+		setEnvHistoryEvents(t, change)
+		if detections := detectStaleSecretEnv(cache, "shop", now); len(detections) != 0 {
+			t.Fatalf("terminating pod must not produce a stale-env issue: %+v", detections)
+		}
+	})
+
+	t.Run("Ready issue describes only containers started before the change", func(t *testing.T) {
+		pod := staleSecretEnvPod("catalog-mixed-starts", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: "sidecar", Env: []corev1.EnvVar{secretKeyEnv("DB_PASSWORD", "db-conn", "password")}})
+		pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, corev1.ContainerStatus{
+			Name: "sidecar", Ready: true,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(changedAt.Add(time.Second))}},
+		})
+		cache := envHistoryTestCache(t, pod, secret)
+		setEnvHistoryEvents(t, change)
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || !strings.Contains(detections[0].Message, "a Secret-backed environment value") ||
+			strings.Contains(detections[0].Message, "2 Secret-backed") {
+			t.Fatalf("Ready issue must include only pre-change container instances: %+v", detections)
 		}
 	})
 
@@ -343,6 +400,26 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("Ready restartable init sidecar promotes", func(t *testing.T) {
+		pod := staleSecretEnvPod("sidecar-ready", startedAt, true)
+		pod.Spec.InitContainers = []corev1.Container{{
+			Name:          "vault-agent",
+			RestartPolicy: alwaysRestartPolicy(),
+			Env:           []corev1.EnvVar{secretKeyEnv("DB_PASSWORD", "db-conn", "password")},
+		}}
+		pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+			Name: "vault-agent", Ready: true,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}},
+		}}
+		cache := envHistoryTestCache(t, pod, secret)
+		setEnvHistoryEvents(t, change)
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" ||
+			!strings.Contains(detections[0].Message, "is Ready") {
+			t.Fatalf("Ready restartable init sidecar must promote from exact observed evidence: %+v", detections)
+		}
+	})
+
 	t.Run("regular init container is not detected", func(t *testing.T) {
 		pod := staleSecretEnvPod("init-only", startedAt, false)
 		pod.Spec.Containers = []corev1.Container{{Name: "app"}}
@@ -490,6 +567,9 @@ func TestStaleSecretEnvManagedFieldsFallback(t *testing.T) {
 		if len(checks) != 1 || checks[0].EvidenceSource != staleSecretEvidenceObservedChange || checks[0].Key != "password" {
 			t.Fatalf("older precise evidence should win over managedFields fallback: %+v", checks)
 		}
+		if detections := detectStaleSecretEnv(cache, "shop", now); len(detections) != 1 || detections[0].Name != pod.Name {
+			t.Fatalf("live issue horizon must align with precise diagnostic history: %+v", detections)
+		}
 	})
 
 	t.Run("pre-start write and restart suppress", func(t *testing.T) {
@@ -535,8 +615,8 @@ func TestStaleSecretEnvManagedFieldsFallback(t *testing.T) {
 		if len(checks) != 1 {
 			t.Fatalf("data-owning manager write should produce one hedged FYI: %+v", checks)
 		}
-		if biting := staleSecretEnvBitingChecks(pod, checks); len(biting) != 0 {
-			t.Fatalf("managedFields fallback must never enter issue promotion: %+v", biting)
+		if issueChecks, _ := staleSecretEnvIssueChecks(pod, checks); len(issueChecks) != 0 {
+			t.Fatalf("managedFields fallback must never enter issue promotion: %+v", issueChecks)
 		}
 	})
 
@@ -950,6 +1030,226 @@ func TestStaleSecretEnvDetectionResolvesWorkloadOwner(t *testing.T) {
 	detections := detectStaleSecretEnv(cache, "shop", now)
 	if len(detections) != 1 || detections[0].OwnerGroup != "apps" || detections[0].OwnerKind != "Deployment" || detections[0].OwnerName != "catalog" {
 		t.Fatalf("stale pod detection did not resolve stable workload owner: %+v", detections)
+	}
+}
+
+func TestStaleSecretEnvReadyWorkloadAggregationAndRolloutSuppression(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	changedAt := now.Add(-time.Minute)
+	startedAt := changedAt.Add(-time.Minute)
+	controller := true
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", UID: types.UID("dep")}}
+	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+		Name: "catalog-abc", Namespace: "shop", UID: types.UID("rs"),
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: &controller}},
+	}}
+	replacementReplicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+		Name: "catalog-def", Namespace: "shop", UID: types.UID("replacement-rs"),
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: &controller}},
+	}}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-conn", Namespace: "shop"}}
+	change := secretHistoryEvent(changedAt, "shop", "db-conn", "data (modified keys)", []string{"password"})
+	ownedPodForReplicaSet := func(replicaSet *appsv1.ReplicaSet, name string, start time.Time, ready bool) *corev1.Pod {
+		pod := staleSecretEnvPod(name, start, ready, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		pod.OwnerReferences = []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: replicaSet.Name, UID: replicaSet.UID, Controller: &controller}}
+		return pod
+	}
+	ownedPod := func(name string, start time.Time, ready bool) *corev1.Pod {
+		return ownedPodForReplicaSet(replicaSet, name, start, ready)
+	}
+
+	t.Run("Ready replicas aggregate to one workload issue", func(t *testing.T) {
+		first := ownedPod("catalog-abc-1", startedAt, true)
+		second := ownedPod("catalog-abc-2", startedAt, true)
+		cache := envHistoryTestCache(t, deployment, replicaSet, first, second, secret)
+		setEnvHistoryEvents(t, change)
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Group != "apps" || detections[0].Kind != "Deployment" ||
+			detections[0].Name != "catalog" || detections[0].OwnerKind != "" {
+			t.Fatalf("Ready replicas did not aggregate under the workload: %+v", detections)
+		}
+		if !strings.Contains(detections[0].Message, "2 Ready pods") || !strings.Contains(detections[0].Message, "2 Secret-backed environment values") ||
+			!strings.Contains(detections[0].Action, "Confirm no rollout") {
+			t.Fatalf("aggregated workload issue is not operationally clear: %+v", detections[0])
+		}
+	})
+
+	t.Run("post-change sibling suppresses an in-progress rollout", func(t *testing.T) {
+		oldPod := ownedPod("catalog-abc-old", startedAt, true)
+		newPod := ownedPodForReplicaSet(replacementReplicaSet, "catalog-def-new", changedAt.Add(time.Second), true)
+		cache := envHistoryTestCache(t, deployment, replicaSet, replacementReplicaSet, oldPod, newPod, secret)
+		setEnvHistoryEvents(t, change)
+		if detections := detectStaleSecretEnv(cache, "shop", now); len(detections) != 0 {
+			t.Fatalf("a Ready replacement revision consuming the changed key must suppress rollout noise: %+v", detections)
+		}
+	})
+
+	t.Run("post-change init sidecar sibling suppresses an in-progress rollout", func(t *testing.T) {
+		oldPod := ownedPod("catalog-abc-old", startedAt, true)
+		newPod := ownedPodForReplicaSet(replacementReplicaSet, "catalog-def-new", changedAt.Add(time.Second), true)
+		for _, pod := range []*corev1.Pod{oldPod, newPod} {
+			start := pod.Status.ContainerStatuses[0].State.Running.StartedAt
+			pod.Spec.Containers[0].Env = nil
+			pod.Spec.InitContainers = []corev1.Container{{
+				Name:          "vault-agent",
+				RestartPolicy: alwaysRestartPolicy(),
+				Env:           []corev1.EnvVar{secretKeyEnv("DB_PASSWORD", "db-conn", "password")},
+			}}
+			pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+				Name: "vault-agent", Ready: true,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: start}},
+			}}
+		}
+		cache := envHistoryTestCache(t, deployment, replicaSet, replacementReplicaSet, oldPod, newPod, secret)
+		setEnvHistoryEvents(t, change)
+		if detections := detectStaleSecretEnv(cache, "shop", now); len(detections) != 0 {
+			t.Fatalf("a Ready replacement revision with the same restartable init sidecar must suppress rollout noise: %+v", detections)
+		}
+	})
+
+	t.Run("same-revision replacement does not suppress indefinitely", func(t *testing.T) {
+		oldPod := ownedPod("catalog-abc-old", startedAt, true)
+		manuallyReplacedPod := ownedPod("catalog-abc-new", changedAt.Add(time.Second), true)
+		cache := envHistoryTestCache(t, deployment, replicaSet, oldPod, manuallyReplacedPod, secret)
+		setEnvHistoryEvents(t, change)
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Kind != "Deployment" || detections[0].Name != deployment.Name {
+			t.Fatalf("same-revision sibling must not hide a stale pod indefinitely: %+v", detections)
+		}
+	})
+
+	t.Run("old replacement evidence does not suppress indefinitely", func(t *testing.T) {
+		olderChangeAt := now.Add(-30 * time.Minute)
+		oldPod := ownedPod("catalog-abc-old", olderChangeAt.Add(-time.Minute), true)
+		oldReplacement := ownedPodForReplicaSet(replacementReplicaSet, "catalog-def-old", olderChangeAt.Add(time.Minute), true)
+		cache := envHistoryTestCache(t, deployment, replicaSet, replacementReplicaSet, oldPod, oldReplacement, secret)
+		setEnvHistoryEvents(t, secretHistoryEvent(olderChangeAt, "shop", "db-conn", "data (modified keys)", []string{"password"}))
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Kind != "Deployment" || detections[0].Name != deployment.Name {
+			t.Fatalf("expired rollout evidence must not hide a stale pod indefinitely: %+v", detections)
+		}
+	})
+
+	t.Run("replacement revision must consume the same Secret key", func(t *testing.T) {
+		oldPod := ownedPod("catalog-abc-old", startedAt, true)
+		newPod := ownedPodForReplicaSet(replacementReplicaSet, "catalog-def-new", changedAt.Add(time.Second), true)
+		newPod.Spec.Containers[0].Env = []corev1.EnvVar{secretKeyEnv("OTHER", "other-secret", "token")}
+		cache := envHistoryTestCache(t, deployment, replicaSet, replacementReplicaSet, oldPod, newPod, secret)
+		setEnvHistoryEvents(t, change)
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Kind != "Deployment" || detections[0].Name != deployment.Name {
+			t.Fatalf("an unrelated replacement revision must not suppress the stale key: %+v", detections)
+		}
+	})
+
+	t.Run("not-Ready evidence takes precedence over the Ready summary", func(t *testing.T) {
+		readyPod := ownedPod("catalog-abc-ready", startedAt, true)
+		brokenPod := ownedPod("catalog-abc-broken", startedAt, false)
+		cache := envHistoryTestCache(t, deployment, replicaSet, readyPod, brokenPod, secret)
+		setEnvHistoryEvents(t, change)
+		detections := detectStaleSecretEnv(cache, "shop", now)
+		if len(detections) != 1 || detections[0].Kind != "Pod" || detections[0].Name != brokenPod.Name ||
+			detections[0].OwnerKind != "Deployment" || !strings.Contains(detections[0].Message, "is not Ready") {
+			t.Fatalf("not-Ready pod must retain the established issue contract without a duplicate Ready summary: %+v", detections)
+		}
+	})
+}
+
+func TestStaleSecretEnvReadySubjectKeepsOwnerIdentityAndSafeAction(t *testing.T) {
+	controller := true
+	pod := staleSecretEnvPod("report-abc", time.Now().Add(-time.Minute), true)
+	pod.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "batch/v1", Kind: "Job", Name: "report", Controller: &controller,
+	}}
+
+	subject := staleSecretEnvSubjectForPod(nil, pod)
+	if subject.group != "batch" || subject.kind != "Job" || subject.name != "report" || subject.restartable {
+		t.Fatalf("non-restartable Job owner must retain stable owner identity without restart capability: %+v", subject)
+	}
+	if action := staleSecretEnvReadyAction(subject); !strings.Contains(action, "Job/report's normal controller workflow") ||
+		strings.Contains(action, "restart Job/") {
+		t.Fatalf("non-restartable controller received unsafe workload guidance: %q", action)
+	}
+}
+
+func TestStaleSecretEnvNonRestartableOwnerDoesNotDuplicateReadyAndNotReady(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	changedAt := now.Add(-time.Minute)
+	controller := true
+	ownedPod := func(name string, ready bool) *corev1.Pod {
+		pod := staleSecretEnvPod(name, changedAt.Add(-time.Minute), ready, secretKeyEnv("TOKEN", "job-secret", "token"))
+		pod.OwnerReferences = []metav1.OwnerReference{{
+			APIVersion: "batch/v1", Kind: "Job", Name: "report", UID: types.UID("job"), Controller: &controller,
+		}}
+		return pod
+	}
+	readyPod := ownedPod("report-ready", true)
+	notReadyPod := ownedPod("report-not-ready", false)
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "job-secret", Namespace: "shop"}}
+	readyCache := envHistoryTestCache(t, readyPod.DeepCopy(), secret.DeepCopy())
+	setEnvHistoryEvents(t, secretHistoryEvent(changedAt, "shop", "job-secret", "data (modified keys)", []string{"token"}))
+	readyDetections := detectStaleSecretEnv(readyCache, "shop", now)
+	if len(readyDetections) != 1 || readyDetections[0].Group != "batch" || readyDetections[0].Kind != "Job" ||
+		readyDetections[0].Name != "report" || !strings.Contains(readyDetections[0].Message, "has a Ready pod") ||
+		strings.Contains(readyDetections[0].Message, "Job/report is Ready") || strings.Contains(readyDetections[0].Action, "restart Job/") {
+		t.Fatalf("Ready Job-owned pod lost stable identity or received unsafe wording: %+v", readyDetections)
+	}
+
+	cache := envHistoryTestCache(t, readyPod, notReadyPod, secret)
+	setEnvHistoryEvents(t, secretHistoryEvent(changedAt, "shop", "job-secret", "data (modified keys)", []string{"token"}))
+
+	detections := detectStaleSecretEnv(cache, "shop", now)
+	if len(detections) != 1 || detections[0].Kind != "Pod" || detections[0].Name != notReadyPod.Name ||
+		detections[0].OwnerGroup != "batch" || detections[0].OwnerKind != "Job" || detections[0].OwnerName != "report" {
+		t.Fatalf("not-Ready evidence must dominate without a duplicate Ready Job issue: %+v", detections)
+	}
+}
+
+func TestStaleSecretEnvRolloutEvidenceIndexBoundsReplacementCandidates(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	controller := true
+	var pods []*corev1.Pod
+	for i := 0; i < 100; i++ {
+		pod := staleSecretEnvPod(fmt.Sprintf("catalog-%03d", i), now.Add(-time.Minute), true, secretKeyEnv("PASSWORD", "db-conn", "password"))
+		pod.OwnerReferences = []metav1.OwnerReference{{
+			APIVersion: "apps/v1", Kind: "ReplicaSet", Name: fmt.Sprintf("catalog-%03d", i),
+			UID: types.UID(fmt.Sprintf("rs-%03d", i)), Controller: &controller,
+		}}
+		pods = append(pods, pod)
+	}
+	subject := staleSecretEnvSubject{group: "apps", kind: "Deployment", namespace: "shop", name: "catalog", restartable: true}
+	evidence := newStaleSecretEnvRolloutEvidence(subject, pods, now)
+	key := staleSecretEnvConsumption{container: "app", secret: "db-conn", key: "password"}
+	if got := len(evidence.replacements[key]); got != 2 {
+		t.Fatalf("replacement candidates = %d, want a lookup bounded to the two newest revisions", got)
+	}
+	check := StaleSecretEnvCheck{
+		PodName: pods[0].Name, Container: "app", SecretName: "db-conn", Key: "password",
+		SecretChangedAt: now.Add(-2 * time.Minute),
+	}
+	if !evidence.supersedes(check) {
+		t.Fatal("bounded replacement index lost valid evidence from another revision")
+	}
+}
+
+func TestQuerySecretDataHistoryFailsClosedWhenReferencedHistorySaturates(t *testing.T) {
+	timeline.ResetStore()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: maxSecretDataHistoryEvents + 1}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	t.Cleanup(timeline.ResetStore)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	pod := staleSecretEnvPod("catalog", now.Add(-time.Hour), true, secretKeyEnv("PASSWORD", "db-conn", "password"))
+	for i := 0; i < maxSecretDataHistoryEvents; i++ {
+		event := secretHistoryEvent(now.Add(-time.Duration(i)*time.Second), "shop", "db-conn", "data (modified keys)", []string{"password"})
+		event.ID = fmt.Sprintf("secret-saturation-%04d", i)
+		if err := timeline.RecordEvent(context.Background(), event); err != nil {
+			t.Fatalf("RecordEvent %d: %v", i, err)
+		}
+	}
+	if events := querySecretDataHistory(context.Background(), "", []*corev1.Pod{pod}, now.Add(-24*time.Hour)); len(events) != 0 {
+		t.Fatalf("saturated history must fail closed instead of returning a misleading partial set: %d events", len(events))
 	}
 }
 

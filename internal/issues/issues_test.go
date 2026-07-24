@@ -314,6 +314,43 @@ func TestCompose_StaleSecretEnvSurvivesAsStableWorkloadIssue(t *testing.T) {
 	}
 }
 
+func TestCompose_ReadyStaleSecretEnvWorkloadDetectionKeepsAgentGuidance(t *testing.T) {
+	const message = "Deployment/catalog has 2 Ready pods whose running containers loaded 2 Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values."
+	const cause = "Radar observed consumed Secret keys change after these Ready container instances started; Kubernetes does not refresh Secret-backed environment variables in running containers."
+	const action = "Confirm no rollout is already replacing the affected pods, then restart Deployment/catalog so its containers re-read Secret-backed environment variables."
+	p := &fakeProvider{problems: []k8s.Detection{{
+		Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "catalog",
+		Severity: "warning", Reason: "StaleSecretEnv", Message: message,
+		Fingerprint: "stale-secret-env", Cause: cause, Action: action,
+	}}}
+
+	out := Compose(p, Filters{Grouped: true})
+	if len(out) != 1 {
+		t.Fatalf("Ready stale-env workload detection was dropped or duplicated: %+v", out)
+	}
+	issue := out[0]
+	if issue.Group != "apps" || issue.Kind != "Deployment" || issue.Namespace != "shop" || issue.Name != "catalog" ||
+		issue.Category != issuesapi.CategoryInvalidConfiguration || issue.Message != message || issue.Cause != cause || issue.Action != action {
+		t.Fatalf("Ready stale-env issue lost its workload identity or agent guidance: %+v", issue)
+	}
+}
+
+func TestCompose_StaleSecretEnvIdentityStableAcrossReadyTransition(t *testing.T) {
+	ready := Compose(&fakeProvider{problems: []k8s.Detection{{
+		Group: "batch", Kind: "Job", Namespace: "shop", Name: "report",
+		Severity: "warning", Reason: "StaleSecretEnv", Fingerprint: "stale-secret-env",
+	}}}, Filters{Grouped: true})
+	notReady := Compose(&fakeProvider{problems: []k8s.Detection{{
+		Kind: "Pod", Namespace: "shop", Name: "report-abc",
+		OwnerGroup: "batch", OwnerKind: "Job", OwnerName: "report",
+		Severity: "warning", Reason: "StaleSecretEnv", Fingerprint: "stale-secret-env",
+	}}}, Filters{Grouped: true})
+
+	if len(ready) != 1 || len(notReady) != 1 || ready[0].ID == "" || ready[0].ID != notReady[0].ID {
+		t.Fatalf("Ready and not-Ready exposure re-keyed the same Job-owned stale-env condition: ready=%+v notReady=%+v", ready, notReady)
+	}
+}
+
 func TestCompose_GroupedKindFilterMatchesSubject(t *testing.T) {
 	// A crashlooping Deployment is evidenced by Pod rows that fold under the
 	// Deployment subject. On the GROUPED surface, kind=Deployment must return
