@@ -1,5 +1,7 @@
 # Radar
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fskyhook-io%2Fradar.svg)](https://mcptoplist.com/server/glama%2Fskyhook-io%2Fradar)
+
 <a href="https://www.producthunt.com/products/radar-7?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1130618&theme=neutral&period=daily" alt="Radar - The missing open-source Kubernetes UI | Product Hunt" width="250" height="54" /></a>
 
 **The missing open-source Kubernetes UI.**
