@@ -117,14 +117,14 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const aiAvailable = diag.available && diag.agents.length > 0
   const [aiDraft, setAiDraft] = useState<AIDraft>({
     agent: diag.selectedAgent,
-    isolated: diag.isolated,
+    profile: diag.profile,
     model: diag.model,
     effort: diag.effort,
   })
   const [aiSaved, setAiSaved] = useState(false)
   const aiDirty =
     aiDraft.agent !== diag.selectedAgent ||
-    aiDraft.isolated !== diag.isolated ||
+    aiDraft.profile !== diag.profile ||
     aiDraft.model !== diag.model ||
     aiDraft.effort !== diag.effort
 
@@ -158,7 +158,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     setAiSaved(false)
     setAiDraft({
       agent: diag.selectedAgent,
-      isolated: diag.isolated,
+      profile: diag.profile,
       model: diag.model,
       effort: diag.effort,
     })
@@ -234,7 +234,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   // agent first, then restore the draft's model/effort.
   const saveAi = useCallback(() => {
     diag.setSelectedAgent(aiDraft.agent)
-    diag.setIsolated(aiDraft.isolated)
+    diag.setProfile(aiDraft.profile)
     diag.setModel(aiDraft.model)
     diag.setEffort(aiDraft.effort)
     setAiSaved(true)

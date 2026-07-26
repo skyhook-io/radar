@@ -114,3 +114,29 @@ func TestInterleavedFlagParsing(t *testing.T) {
 		t.Fatalf("flags not parsed: ns=%q json=%v", o.namespace, o.jsonOut)
 	}
 }
+
+func TestExecutionProfile(t *testing.T) {
+	cases := []struct {
+		agent, requested string
+		want             string
+		wantErr          bool
+	}{
+		{"codex", "", "safeguarded", false},
+		{"codex", "full-local", "full-local", false},
+		{"claude", "full-local", "", true},
+		{"cursor-agent", "", "full-local", false},
+		{"", "", "", true},
+	}
+	for _, tc := range cases {
+		got, err := executionProfile(tc.agent, tc.requested)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("executionProfile(%q, %q) succeeded, want error", tc.agent, tc.requested)
+			}
+			continue
+		}
+		if err != nil || string(got) != tc.want {
+			t.Errorf("executionProfile(%q, %q) = %q, %v; want %q", tc.agent, tc.requested, got, err, tc.want)
+		}
+	}
+}

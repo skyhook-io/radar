@@ -25,6 +25,16 @@ type Agent interface {
 	parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis
 }
 
+// ExecutionProfile describes how Radar starts a local agent. It is a product
+// contract, not a claim about a particular CLI flag: safeguarded is available
+// only when Radar can enforce the restrictions for that agent.
+type ExecutionProfile string
+
+const (
+	ExecutionProfileSafeguarded ExecutionProfile = "safeguarded"
+	ExecutionProfileFullLocal   ExecutionProfile = "full-local"
+)
+
 // turnSpec is everything an Agent needs to build one turn, independent of CLI.
 type turnSpec struct {
 	mcpURL       string // radar MCP endpoint (read-only or full) to point the agent at
@@ -32,7 +42,7 @@ type turnSpec struct {
 	systemPrompt string // SRE+security framing; set only on the first turn (empty on resume)
 	sessionID    string // resume target; empty means a fresh session
 	apply        bool   // user-confirmed remediation turn (write tools allowed)
-	isolated     bool   // run without the user's own CLI config (Codex only)
+	profile      ExecutionProfile
 	model        string // optional model override; empty = the CLI's default
 	effort       string // optional reasoning effort (Codex only); empty = default
 	maxTurns     int

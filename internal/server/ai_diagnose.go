@@ -124,8 +124,8 @@ func managedByFromMeta(obj *unstructured.Unstructured) string {
 // acknowledgment covers the web panel and the CLI.
 func currentConsents() map[string]bool {
 	return map[string]bool{
-		"standard": config.AIConsentGiven("standard"),
-		"cursor":   config.AIConsentGiven("cursor"),
+		"safeguarded": config.AIConsentGiven("safeguarded"),
+		"full-local":  config.AIConsentGiven("full-local"),
 	}
 }
 
@@ -143,8 +143,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDiagnoseConsent records the user's acknowledgment of the current
-// disclosure for a surface ("standard" = Claude/Codex, "cursor" = Cursor's
-// distinct trust model). Doesn't require a connected cluster — consent can be
+// disclosure for an execution profile. Doesn't require a connected cluster — consent can be
 // given while Radar is still connecting.
 func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 	if !localOriginOK(r) {
@@ -163,7 +162,7 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if config.AIConsentVersion(body.Surface) == "" {
-		s.writeError(w, http.StatusBadRequest, "surface must be \"standard\" or \"cursor\"")
+		s.writeError(w, http.StatusBadRequest, "surface must be \"safeguarded\" or \"full-local\"")
 		return
 	}
 	if err := config.RecordAIConsent(body.Surface); err != nil {
@@ -227,7 +226,7 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Kind, Namespace, Name string
 		Agent                 string `json:"agent"`
-		Isolated              *bool  `json:"isolated"` // pointer: default ISOLATED when omitted
+		Profile               string `json:"profile"`
 		Model                 string `json:"model"`
 		Effort                string `json:"effort"`
 	}
@@ -249,15 +248,21 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	agent := s.aiRuns.AgentName(strings.TrimSpace(body.Agent))
-	// The server owns the consent store, so it enforces it: spawning an agent
-	// and shipping cluster data to a model provider must not depend on client
-	// code remembering to check. Surface derives from the RESOLVED agent (an
-	// unknown name falls back to the default, never across trust surfaces).
-	if !config.AIConsentGiven(ai.ConsentSurfaceFor(agent)) {
-		s.writeError(w, http.StatusForbidden, "AI disclosure not acknowledged for this agent — approve the consent prompt first")
+	profile := ai.ExecutionProfile(strings.TrimSpace(body.Profile))
+	if profile == "" {
+		profile = ai.DefaultProfileFor(agent)
+	}
+	if !ai.SupportsProfile(agent, profile) {
+		s.writeError(w, http.StatusBadRequest, "selected execution profile is not available for this agent")
 		return
 	}
-	isolated := body.Isolated == nil || *body.Isolated
+	// The server owns the consent store, so it enforces it: spawning an agent
+	// and shipping cluster data to a model provider must not depend on client
+	// code remembering to check. Surface derives from the effective profile.
+	if !config.AIConsentGiven(ai.ConsentSurfaceFor(profile)) {
+		s.writeError(w, http.StatusForbidden, "AI disclosure not acknowledged for this execution profile — approve the consent prompt first")
+		return
+	}
 	model := strings.TrimSpace(body.Model)
 	if len(model) > 100 {
 		s.writeError(w, http.StatusBadRequest, "model name too long")
@@ -273,7 +278,7 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	// than relying on the agent to self-report it. Best effort: "" (unknown) on miss.
 	managedBy := s.detectManagedBy(r.Context(), kind, namespace, name)
 	health := s.detectDiagnoseHealth(r.Context(), kind, namespace, name)
-	run, err := s.aiRuns.Start(kind, namespace, name, agent, isolated, model, effort, managedBy, health)
+	run, err := s.aiRuns.Start(kind, namespace, name, agent, profile, model, effort, managedBy, health)
 	if err != nil {
 		if errors.Is(err, ai.ErrAtCapacity) {
 			s.writeError(w, http.StatusConflict, "too many investigations running — stop or finish one first")

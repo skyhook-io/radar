@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -19,6 +20,9 @@ func (a *claudeAgent) Name() string { return "claude" }
 func (a *claudeAgent) SigninCmd() string { return "claude auth login" }
 
 func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
+	if s.profile != ExecutionProfileSafeguarded {
+		return nil, nil, fmt.Errorf("ai: Claude does not support execution profile %q", s.profile)
+	}
 	cfgPath, cleanup, err := writeMCPConfig(s.mcpURL)
 	if err != nil {
 		return nil, nil, err

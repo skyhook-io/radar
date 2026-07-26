@@ -41,23 +41,23 @@ func TestLocalOriginOK(t *testing.T) {
 // both surfaces' checks, per disclosure surface.
 func TestConsentMachineScoped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if c := currentConsents(); c["standard"] || c["cursor"] {
+	if c := currentConsents(); c["safeguarded"] || c["full-local"] {
 		t.Fatalf("fresh HOME must have no consent, got %v", c)
 	}
-	if err := config.RecordAIConsent("standard"); err != nil {
+	if err := config.RecordAIConsent("safeguarded"); err != nil {
 		t.Fatal(err)
 	}
 	c := currentConsents()
-	if !c["standard"] || c["cursor"] {
-		t.Fatalf("standard consent must not cover cursor's surface: %v", c)
+	if !c["safeguarded"] || c["full-local"] {
+		t.Fatalf("safeguarded consent must not cover full-local: %v", c)
 	}
 	// A stale (older-version) acknowledgment must not count.
 	if _, err := config.Update(func(c *config.Config) {
-		c.AIConsent["cursor"] = "v1"
+		c.AIConsent["full-local"] = "v0"
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if currentConsents()["cursor"] {
+	if currentConsents()["full-local"] {
 		t.Fatal("an older disclosure version must not satisfy consent")
 	}
 }

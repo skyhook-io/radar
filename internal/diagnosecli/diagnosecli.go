@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -61,6 +62,7 @@ func normalizeKind(k string) string {
 type options struct {
 	namespace  string
 	agent      string
+	profile    string
 	server     string
 	kubeconfig string
 	standalone bool
@@ -75,6 +77,7 @@ func newFlagSet() (*flag.FlagSet, *options) {
 	fs.StringVar(&o.namespace, "n", "", "Namespace of the resource")
 	fs.StringVar(&o.namespace, "namespace", "", "Namespace of the resource")
 	fs.StringVar(&o.agent, "agent", "", "Agent backend to use (claude|codex|cursor-agent; default = server's pick)")
+	fs.StringVar(&o.profile, "profile", "", "Execution profile (safeguarded|full-local; default = agent's safest available profile)")
 	fs.StringVar(&o.server, "server", "", "Radar server URL (default: discover the running instance via ~/.radar/mcp-port)")
 	fs.BoolVar(&o.jsonOut, "json", false, "Print the final verdict as JSON on stdout (progress goes to stderr)")
 	fs.BoolVar(&o.open, "open", false, "Also open the investigation in the Radar UI")
@@ -165,14 +168,19 @@ Flags:
 		// read/write the shared machine-scoped store (~/.radar/config.json)
 		// directly — the ephemeral server then sees it as already given.
 		effective := ai.EffectiveAgent(o.agent, ai.DetectAgents(context.Background(), false))
-		surface := ai.ConsentSurfaceFor(effective)
+		profile, err := executionProfile(effective, o.profile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		surface := ai.ConsentSurfaceFor(profile)
 		if !consentGivenLocal(surface) {
 			if o.yes {
 				if err := recordConsentLocal(surface); err != nil {
 					fmt.Fprintf(os.Stderr, "couldn't record consent: %v\n", err)
 					return 1
 				}
-			} else if !promptConsent(consentLabel(effective), surface, recordConsentLocal) {
+			} else if !promptConsent(effective, surface, recordConsentLocal) {
 				fmt.Fprintln(os.Stderr, "aborted")
 				return 1
 			}
@@ -204,7 +212,12 @@ Flags:
 	}
 
 	effective := ai.EffectiveAgent(o.agent, agents.Agents)
-	surface := ai.ConsentSurfaceFor(effective)
+	profile, err := executionProfile(effective, o.profile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	surface := ai.ConsentSurfaceFor(profile)
 	if !agents.Consented[surface] {
 		if o.yes {
 			// --yes acknowledges the disclosure; the server enforces consent at
@@ -213,13 +226,13 @@ Flags:
 				fmt.Fprintf(os.Stderr, "couldn't record consent: %v\n", err)
 				return 1
 			}
-		} else if !promptConsent(consentLabel(effective), surface, func(sf string) error { return recordConsentHTTP(base, sf) }) {
+		} else if !promptConsent(effective, surface, func(sf string) error { return recordConsentHTTP(base, sf) }) {
 			fmt.Fprintln(os.Stderr, "aborted")
 			return 1
 		}
 	}
 
-	run, err := startRun(base, kind, o.namespace, name, o.agent)
+	run, err := startRun(base, kind, o.namespace, name, o.agent, profile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -315,21 +328,52 @@ func consentLabel(effective string) string {
 	return ai.AgentLabel(effective)
 }
 
+func executionProfile(agent, requested string) (ai.ExecutionProfile, error) {
+	if agent == "" {
+		return "", errors.New("no supported AI agent found")
+	}
+	profile := ai.DefaultProfileFor(agent)
+	if requested != "" {
+		profile = ai.ExecutionProfile(requested)
+	}
+	if !ai.SupportsProfile(agent, profile) {
+		return "", fmt.Errorf("%s does not support the %q execution profile", consentLabel(agent), profile)
+	}
+	return profile, nil
+}
+
 // promptConsent mirrors the UI's one-time consent card. Interactive terminals
 // get a real y/N gate; non-interactive callers (CI) get the disclosure on
 // stderr and proceed — an explicit `radar diagnose` invocation in a script is
 // already an informed act, and a blocking prompt there would just break CI.
 // record persists the acknowledgment to the shared machine-scoped store.
-func promptConsent(agentLabel, surface string, record func(surface string) error) bool {
+func promptConsent(agent, surface string, record func(surface string) error) bool {
+	agentLabel := consentLabel(agent)
 	notice := fmt.Sprintf(`This runs your own %s on your machine — no Radar cloud, no API key.
 Radar sends the resource's spec, recent events, and pod logs to it (and on to
-its model provider under your account). Through Radar the agent can only READ
-your cluster. Transcripts are kept in your local Radar history until cleared.
+its model provider under your account). Transcripts are kept in your local Radar
+history until cleared.
 `, agentLabel)
-	if surface == "cursor" {
-		notice += `Note: Cursor also loads your own global MCP servers (Radar can't exclude
-them) — if any of those can make changes, Cursor could use them.
+	if surface == "full-local" {
+		notice += `Radar's own investigation tools are read-only. Full local setup also uses
+your agent's other configured tools and MCP servers, which Radar does not
+constrain. They may access local files or the network and may be able to change
+your cluster.
 `
+		if agent == "cursor-agent" {
+			notice += `Cursor always loads your global MCP servers; Radar cannot exclude them.
+`
+		}
+	} else {
+		notice += `Through Radar the agent can only READ your cluster. Radar safeguards limit
+the agent to Radar's investigation tools and exclude your other agent
+configuration and MCP servers.
+`
+		if agent == "codex" {
+			notice += `Codex's sandboxed shell can still read files on this machine; it cannot
+write or reach the network.
+`
+		}
 	}
 	fmt.Fprint(os.Stderr, notice)
 	// A real ioctl-backed check — os.ModeCharDevice would misread /dev/null
@@ -381,9 +425,9 @@ type runSummary struct {
 	} `json:"health"`
 }
 
-func startRun(base, kind, namespace, name, agent string) (runSummary, error) {
+func startRun(base, kind, namespace, name, agent string, profile ai.ExecutionProfile) (runSummary, error) {
 	body, _ := json.Marshal(map[string]any{
-		"kind": kind, "namespace": namespace, "name": name, "agent": agent,
+		"kind": kind, "namespace": namespace, "name": name, "agent": agent, "profile": profile,
 	})
 	resp, err := http.Post(base+"/api/diagnose/runs", "application/json", strings.NewReader(string(body)))
 	if err != nil {

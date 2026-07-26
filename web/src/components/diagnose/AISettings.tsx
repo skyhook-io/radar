@@ -5,12 +5,16 @@
 // Settings tabs' layout — this renders only the controls (no card, no heading).
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
-import { clearHistory, type AgentInfo } from "../../api/diagnose";
+import {
+  clearHistory,
+  type AgentInfo,
+  type ExecutionProfile,
+} from "../../api/diagnose";
 import { AgentControls } from "./parts";
 
 export interface AIDraft {
   agent: string;
-  isolated: boolean;
+  profile: ExecutionProfile;
   model: string;
   effort: string;
 }
@@ -120,17 +124,26 @@ export function AISettingsSection({
         // The agent, its model, and how it runs are all fixed by the host — none
         // of the local BYO-agent knobs apply, so there's nothing to configure.
         <p className="text-xs leading-snug text-theme-text-tertiary">
-          {agentLabel} manages the model and how it runs — there&apos;s nothing to
-          configure here.
+          {agentLabel} manages the model and how it runs — there&apos;s nothing
+          to configure here.
         </p>
       ) : (
         <AgentControls
           agents={agents}
           selectedAgent={draft.agent}
           // Model + effort are agent-specific; reset them when the agent changes.
-          onSelectAgent={(a) => onChange({ agent: a, model: "", effort: "" })}
-          isolated={draft.isolated}
-          onSetIsolated={(v) => onChange({ isolated: v })}
+          onSelectAgent={(a) =>
+            onChange({
+              agent: a,
+              profile:
+                agents.find((agent) => agent.name === a)?.profiles?.[0] ??
+                "safeguarded",
+              model: "",
+              effort: "",
+            })
+          }
+          profile={draft.profile}
+          onSetProfile={(v) => onChange({ profile: v })}
           model={draft.model}
           onSetModel={(v) => onChange({ model: v })}
           effort={draft.effort}

@@ -60,11 +60,8 @@ type Request struct {
 	// Agent selects which backend CLI drives this turn ("claude"/"codex"). Empty
 	// uses the Diagnoser's default. A run picks once at Start and reuses it.
 	Agent string
-	// Isolated runs the agent without the user's own CLI config (other MCP servers,
-	// guidelines, project files) — the default. When false ("my setup"), the agent
-	// runs with the user's full environment. Only the Codex backend distinguishes
-	// the two; Claude is always strict-MCP-config contained.
-	Isolated bool
+	// Profile is selected and validated before the run starts.
+	Profile ExecutionProfile
 	// Model optionally overrides the CLI's default model (e.g. "opus", "sonnet" for
 	// Claude; a model slug for Codex). Empty leaves the agent's own default.
 	Model string
@@ -352,6 +349,13 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	if agent == nil {
 		return Diagnosis{}, ErrNoCLI
 	}
+	profile := req.Profile
+	if profile == "" {
+		profile = DefaultProfileFor(agent.Name())
+	}
+	if !SupportsProfile(agent.Name(), profile) {
+		return Diagnosis{}, fmt.Errorf("ai: %s does not support execution profile %q", AgentLabel(agent.Name()), profile)
+	}
 
 	// Read-only investigation turns get the read-only MCP mount; an apply turn
 	// (user-confirmed) gets the full mount with write tools.
@@ -382,7 +386,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 
 	cmd, cleanup, err := agent.command(ctx, turnSpec{
 		mcpURL: mcpURL, prompt: prompt, systemPrompt: sys,
-		sessionID: sessionID, apply: req.Apply, isolated: req.Isolated,
+		sessionID: sessionID, apply: req.Apply, profile: profile,
 		model: req.Model, effort: req.Effort, maxTurns: maxTurns(),
 		workdir: req.WorkDir,
 	})
