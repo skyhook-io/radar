@@ -11,6 +11,7 @@ export interface AgentInfo {
   present: boolean;
   supported: boolean;
   profiles?: ExecutionProfile[];
+  consentSurfaces?: Partial<Record<ExecutionProfile, string>>;
   hosted?: boolean;
 }
 

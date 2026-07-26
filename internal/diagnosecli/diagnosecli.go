@@ -173,14 +173,14 @@ Flags:
 			fmt.Fprintln(os.Stderr, err)
 			return 2
 		}
-		surface := ai.ConsentSurfaceFor(profile)
+		surface := ai.ConsentSurfaceFor(effective, profile)
 		if !consentGivenLocal(surface) {
 			if o.yes {
 				if err := recordConsentLocal(surface); err != nil {
 					fmt.Fprintf(os.Stderr, "couldn't record consent: %v\n", err)
 					return 1
 				}
-			} else if !promptConsent(effective, surface, recordConsentLocal) {
+			} else if !promptConsent(effective, profile, surface, recordConsentLocal) {
 				fmt.Fprintln(os.Stderr, "aborted")
 				return 1
 			}
@@ -217,7 +217,7 @@ Flags:
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	surface := ai.ConsentSurfaceFor(profile)
+	surface := ai.ConsentSurfaceFor(effective, profile)
 	if !agents.Consented[surface] {
 		if o.yes {
 			// --yes acknowledges the disclosure; the server enforces consent at
@@ -226,7 +226,7 @@ Flags:
 				fmt.Fprintf(os.Stderr, "couldn't record consent: %v\n", err)
 				return 1
 			}
-		} else if !promptConsent(effective, surface, func(sf string) error { return recordConsentHTTP(base, sf) }) {
+		} else if !promptConsent(effective, profile, surface, func(sf string) error { return recordConsentHTTP(base, sf) }) {
 			fmt.Fprintln(os.Stderr, "aborted")
 			return 1
 		}
@@ -347,30 +347,35 @@ func executionProfile(agent, requested string) (ai.ExecutionProfile, error) {
 // stderr and proceed — an explicit `radar diagnose` invocation in a script is
 // already an informed act, and a blocking prompt there would just break CI.
 // record persists the acknowledgment to the shared machine-scoped store.
-func promptConsent(agent, surface string, record func(surface string) error) bool {
+func promptConsent(agent string, profile ai.ExecutionProfile, surface string, record func(surface string) error) bool {
 	agentLabel := consentLabel(agent)
 	notice := fmt.Sprintf(`This runs your own %s on your machine — no Radar cloud, no API key.
 Radar sends the resource's spec, recent events, and pod logs to it (and on to
 its model provider under your account). Transcripts are kept in your local Radar
 history until cleared.
 `, agentLabel)
-	if surface == "full-local" {
-		notice += `Radar's own investigation tools are read-only. Full local setup also uses
-your agent's other configured tools and MCP servers, which Radar does not
-constrain. They may access local files or the network and may be able to change
-your cluster.
+	if profile == ai.ExecutionProfileFullLocal {
+		notice += `Full local setup uses your agent's normal configuration and other configured
+tools and MCP servers. Radar cannot constrain that external tooling; it may
+access local files or the network and may be able to change your cluster.
+Radar still enables the agent CLI's own sandbox, but that sandbox does not
+constrain external MCP servers.
 `
 		if agent == "cursor-agent" {
 			notice += `Cursor always loads your global MCP servers; Radar cannot exclude them.
 `
 		}
 	} else {
-		notice += `Through Radar the agent can only READ your cluster. Radar safeguards limit
-the agent to Radar's investigation tools and exclude your other agent
-configuration and MCP servers.
+		notice += `Radar's investigation tools can only READ your cluster.
 `
-		if agent == "codex" {
-			notice += `Codex's sandboxed shell can still read files on this machine; it cannot
+		if agent == "claude" {
+			notice += `Radar safeguards disable Claude's built-in tools and limit MCP access to
+Radar's read-only investigation tools. Your Claude settings, hooks, and
+CLAUDE.md instructions still apply and are outside Radar's control.
+`
+		} else if agent == "codex" {
+			notice += `Radar safeguards exclude your Codex configuration and other MCP servers.
+Codex's sandboxed shell can still read files on this machine; it cannot
 write or reach the network.
 `
 		}

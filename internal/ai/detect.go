@@ -17,8 +17,9 @@ type AgentInfo struct {
 	// Supported is true when Radar can actually DRIVE this CLI (we parse its
 	// stream-json). Detected-but-unsupported CLIs are shown so the user knows
 	// they exist, but can't be selected to run an investigation yet.
-	Supported bool               `json:"supported"`
-	Profiles  []ExecutionProfile `json:"profiles,omitempty"`
+	Supported       bool                        `json:"supported"`
+	Profiles        []ExecutionProfile          `json:"profiles,omitempty"`
+	ConsentSurfaces map[ExecutionProfile]string `json:"consentSurfaces,omitempty"`
 }
 
 // knownAgents are the CLI names we probe for — a FIXED list. We never exec a
@@ -91,10 +92,33 @@ func SupportsProfile(agent string, profile ExecutionProfile) bool {
 	return false
 }
 
-// ConsentSurfaceFor is profile-based: consent must describe the process that
-// will execute, not merely the binary selected in Settings.
-func ConsentSurfaceFor(profile ExecutionProfile) string {
-	return string(profile)
+func ConsentSurfaceFor(agent string, profile ExecutionProfile) string {
+	if !SupportsProfile(agent, profile) {
+		return ""
+	}
+	return agent + ":" + string(profile)
+}
+
+func ConsentSurfacesFor(agent string) map[ExecutionProfile]string {
+	profiles := ProfilesFor(agent)
+	if len(profiles) == 0 {
+		return nil
+	}
+	surfaces := make(map[ExecutionProfile]string, len(profiles))
+	for _, profile := range profiles {
+		surfaces[profile] = ConsentSurfaceFor(agent, profile)
+	}
+	return surfaces
+}
+
+func AllConsentSurfaces() []string {
+	var surfaces []string
+	for _, agent := range agentCLICandidates {
+		for _, profile := range ProfilesFor(agent) {
+			surfaces = append(surfaces, ConsentSurfaceFor(agent, profile))
+		}
+	}
+	return surfaces
 }
 
 // supportedAgents are the CLIs we can drive today (have a stream-json parser).
@@ -123,12 +147,13 @@ func DetectAgents(ctx context.Context, withVersions bool) []AgentInfo {
 			continue
 		}
 		info := AgentInfo{
-			Name:      name,
-			Label:     agentLabels[name],
-			Path:      path,
-			Present:   true,
-			Supported: isSupportedAgent(name),
-			Profiles:  ProfilesFor(name),
+			Name:            name,
+			Label:           agentLabels[name],
+			Path:            path,
+			Present:         true,
+			Supported:       isSupportedAgent(name),
+			Profiles:        ProfilesFor(name),
+			ConsentSurfaces: ConsentSurfacesFor(name),
 		}
 		if withVersions {
 			info.Version = probeVersion(ctx, path)

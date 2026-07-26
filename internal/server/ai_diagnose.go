@@ -123,23 +123,56 @@ func managedByFromMeta(obj *unstructured.Unstructured) string {
 // truth with the CLI). Machine-scoped (~/.radar/config.json): one
 // acknowledgment covers the web panel and the CLI.
 func currentConsents() map[string]bool {
-	return map[string]bool{
-		"safeguarded": config.AIConsentGiven("safeguarded"),
-		"full-local":  config.AIConsentGiven("full-local"),
+	consents := make(map[string]bool)
+	for _, surface := range ai.AllConsentSurfaces() {
+		consents[surface] = config.AIConsentGiven(surface)
 	}
+	return consents
 }
 
-// handleListAgents reports the local agent CLIs detected on PATH, for the OSS
-// "AI Agent" picker. Safe: only fixed known names are probed (see ai.DetectAgents).
+// handleListAgents reports local agent CLIs for the OSS "AI Agent" picker.
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	// Version probing is slow (execs `<cli> --version`); only do it when asked
 	// (e.g. a settings/picker view) so the Diagnose button's check stays instant.
 	withVersions := r.URL.Query().Get("versions") == "1"
+	var agents []ai.AgentInfo
+	if s.aiDiagnoser != nil {
+		// The initialized Diagnoser is authoritative when an explicit CLI override
+		// narrows the backend set or points at a binary outside PATH.
+		agents = ai.DetectAgents(r.Context(), false)
+		agents = mergeDetectedWithDrivable(agents, s.aiDiagnoser.AgentInfos(r.Context(), withVersions))
+	} else {
+		agents = ai.DetectAgents(r.Context(), withVersions)
+	}
 	s.writeJSON(w, map[string]any{
-		"agents":    ai.DetectAgents(r.Context(), withVersions),
+		"agents":    agents,
 		"enabled":   s.aiRuns != nil,
 		"consented": currentConsents(),
 	})
+}
+
+func mergeDetectedWithDrivable(detected, drivable []ai.AgentInfo) []ai.AgentInfo {
+	byName := make(map[string]ai.AgentInfo, len(drivable))
+	for _, info := range drivable {
+		byName[info.Name] = info
+	}
+	seen := make(map[string]bool, len(detected))
+	for i := range detected {
+		seen[detected[i].Name] = true
+		if actual, ok := byName[detected[i].Name]; ok {
+			detected[i] = actual
+		} else {
+			detected[i].Supported = false
+			detected[i].Profiles = nil
+			detected[i].ConsentSurfaces = nil
+		}
+	}
+	for _, actual := range drivable {
+		if !seen[actual.Name] {
+			detected = append(detected, actual)
+		}
+	}
+	return detected
 }
 
 // handleDiagnoseConsent records the user's acknowledgment of the current
@@ -162,7 +195,7 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if config.AIConsentVersion(body.Surface) == "" {
-		s.writeError(w, http.StatusBadRequest, "surface must be \"safeguarded\" or \"full-local\"")
+		s.writeError(w, http.StatusBadRequest, "unknown AI consent surface")
 		return
 	}
 	if err := config.RecordAIConsent(body.Surface); err != nil {
@@ -258,8 +291,9 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	}
 	// The server owns the consent store, so it enforces it: spawning an agent
 	// and shipping cluster data to a model provider must not depend on client
-	// code remembering to check. Surface derives from the effective profile.
-	if !config.AIConsentGiven(ai.ConsentSurfaceFor(profile)) {
+	// code remembering to check. Surface derives from the effective agent and
+	// profile because their disclosures can differ.
+	if !config.AIConsentGiven(ai.ConsentSurfaceFor(agent, profile)) {
 		s.writeError(w, http.StatusForbidden, "AI disclosure not acknowledged for this execution profile — approve the consent prompt first")
 		return
 	}

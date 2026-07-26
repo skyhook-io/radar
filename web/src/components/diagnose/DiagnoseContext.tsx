@@ -160,11 +160,7 @@ function writeStored(key: string, value: string) {
 export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [available, setAvailable] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [consented, setConsented] = useState<Record<string, boolean>>({
-    standard: false,
-    safeguarded: false,
-    "full-local": false,
-  });
+  const [consented, setConsented] = useState<Record<string, boolean>>({});
   const [selectedAgent, setSelectedAgentState] = useState<string>(
     () => readStored(AGENT_KEY) || "",
   );
@@ -206,13 +202,15 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     fetchAgents()
       .then((r) => {
         if (!live) return;
-        setAvailable(r.enabled);
-        setConsented({
-          standard: !!r.consented?.standard,
-          safeguarded: !!r.consented?.safeguarded,
-          "full-local": !!r.consented?.["full-local"],
-        });
-        const supported = r.agents.filter((a) => a.supported);
+        setConsented(r.consented ?? {});
+        const supported = r.agents.filter(
+          (a) =>
+            a.supported &&
+            (a.hosted ||
+              (!!a.profiles?.length &&
+                a.profiles.every((p) => !!a.consentSurfaces?.[p]))),
+        );
+        setAvailable(r.enabled && supported.length > 0);
         setAgents(supported);
         // Keep the stored pick only if it's still installed; else default to the
         // first supported agent (matches the server's default selection).
@@ -223,9 +221,9 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
             : (supported[0]?.name ?? "");
         setSelectedAgentState(next);
         const profiles = supported.find((a) => a.name === next)?.profiles ?? [];
-        if (!profiles.includes(profile)) {
-          setProfileState(profiles[0] ?? "safeguarded");
-          writeStored(PROFILE_KEY, profiles[0] ?? "safeguarded");
+        if (!profiles.includes(profile) && profiles[0]) {
+          setProfileState(profiles[0]);
+          writeStored(PROFILE_KEY, profiles[0]);
         }
         // Model/effort are agent-specific; if the stored agent is gone, its values
         // don't apply to the fallback agent (e.g. a Codex slug under Claude) — drop them.
@@ -275,12 +273,14 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const effectiveProfile =
     selectedAgentInfo?.profiles?.includes(profile)
       ? profile
-      : (selectedAgentInfo?.profiles?.[0] ?? "safeguarded");
+      : (selectedAgentInfo?.profiles?.[0] ?? profile);
   const agentLabel = agentLabelFor(selectedAgent, selectedAgentInfo?.label);
   const hosted = !!selectedAgentInfo?.hosted;
   // Hosted Radar uses its existing per-user disclosure surface and supplies its
   // own copy. Local agents use the execution profile as the consent contract.
-  const consentSurface = hosted ? "standard" : effectiveProfile;
+  const consentSurface = hosted
+    ? "standard"
+    : (selectedAgentInfo?.consentSurfaces?.[effectiveProfile] ?? "");
 
   useEffect(() => {
     const onResize = () => setViewportW(window.innerWidth);
@@ -368,6 +368,12 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     (t: Target) => {
       setStartError(null);
       setOpen(true);
+      if (!hosted && !consentSurface) {
+        setPendingTarget(null);
+        setStartError("Radar can’t run this agent with a verified execution profile.");
+        setView("investigation");
+        return;
+      }
       if (!consentedRef.current[consentSurface]) {
         setPendingTarget(t);
         setView("investigation");
@@ -376,7 +382,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       setView("investigation");
       startRunRef.current(t);
     },
-    [consentSurface],
+    [consentSurface, hosted],
   );
   const openRun = useCallback((id: string) => {
     setStartError(null);
@@ -417,6 +423,10 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const consentBusyRef = useRef(false);
   const approveConsent = useCallback(() => {
     if (consentBusyRef.current) return;
+    if (!consentSurface) {
+      setStartError("Radar can’t record consent for this agent.");
+      return;
+    }
     consentBusyRef.current = true;
     setStartError(null);
     const t = pendingTarget;

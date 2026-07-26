@@ -147,7 +147,7 @@ func TestEvictKeepsRunning(t *testing.T) {
 }
 
 // TestRunMatchesTarget pins the Start focus-existing key: same resource+cluster
-// focuses only when the agent AND isolation mode also match, so a different mode
+// focuses only when the agent AND execution profile also match, so a different profile
 // starts its own run instead of silently reusing one.
 func TestRunMatchesTarget(t *testing.T) {
 	r := &Run{
@@ -161,7 +161,7 @@ func TestRunMatchesTarget(t *testing.T) {
 		t.Error("different agent must NOT match")
 	}
 	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", ExecutionProfileFullLocal, "o3", "high") {
-		t.Error("different isolation mode must NOT match")
+		t.Error("different execution profile must NOT match")
 	}
 	if r.matchesTarget("Deployment", "ns", "app", "other", "codex", ExecutionProfileSafeguarded, "o3", "high") {
 		t.Error("different cluster context must NOT match")

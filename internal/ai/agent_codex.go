@@ -24,6 +24,8 @@ type codexAgent struct{ bin string }
 
 func (a *codexAgent) Name() string { return "codex" }
 
+func (a *codexAgent) Path() string { return a.bin }
+
 func (a *codexAgent) SigninCmd() string { return "codex login" }
 
 func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
@@ -40,7 +42,7 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	}
 	mcpCfg := fmt.Sprintf("mcp_servers.radar.url=%q", s.mcpURL)
 
-	// Always start from the base flags; isolation adds --ignore-user-config, an
+	// Always start from the base flags; safeguards add --ignore-user-config, an
 	// empty cwd, and a minimal env. Full-local keeps the user's config (their other
 	// MCP servers, guidelines), their full env, and their home cwd. The shell stays
 	// --sandbox read-only in BOTH modes — but the "cluster writes go only through

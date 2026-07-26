@@ -57,7 +57,7 @@ type Config struct {
 	// AIHistoryDBPath overrides the history DB location (default ~/.radar/ai-runs.db).
 	AIHistoryDBPath string `json:"aiHistoryDbPath,omitempty"`
 	// AIConsent records the acknowledged AI-diagnosis disclosure version per
-	// execution profile ("safeguarded", "full-local"). Machine-scoped on purpose: consent gates a
+	// agent execution profile. Machine-scoped on purpose: consent gates a
 	// machine-scoped action (spawn this machine's agent CLI, persist transcripts
 	// to this machine's disk), so one acknowledgment covers the web panel and
 	// the `radar diagnose` CLI alike.
@@ -69,8 +69,10 @@ type Config struct {
 // the consent copy's claims change materially, and prior acknowledgments stop
 // counting everywhere at once.
 var aiConsentVersions = map[string]string{
-	"safeguarded": "v1",
-	"full-local":  "v1",
+	"claude:safeguarded":      "v1",
+	"codex:safeguarded":       "v1",
+	"codex:full-local":        "v1",
+	"cursor-agent:full-local": "v1",
 }
 
 // AIConsentVersion returns the current disclosure version for a surface

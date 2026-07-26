@@ -35,7 +35,7 @@ function capWord(s: string): string {
 }
 
 // buildConfigLine renders the active AI config as the header subtitle. Codex shows
-// its isolation mode + effective reasoning effort (Default → medium); a model
+// its execution profile + effective reasoning effort (Default → medium); a model
 // override is shown for either agent. Reflects a run's recorded settings, or the
 // current defaults on Home.
 function buildConfigLine(cfg: {
@@ -185,7 +185,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     ? agentLabelFor(activeRun.agent)
     : d.agentLabel;
   // Header subtitle: the config a focused run actually used (it records agent /
-  // isolation / model / effort), or the current defaults on Home. Codex shows mode
+  // profile / model / effort), or the current defaults on Home. Codex shows mode
   // + reasoning effort; model is shown only when overridden. Clicking opens Settings.
   const configLine = buildConfigLine(
     activeRun ?? {

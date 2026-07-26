@@ -132,16 +132,17 @@ export function AISettingsSection({
           agents={agents}
           selectedAgent={draft.agent}
           // Model + effort are agent-specific; reset them when the agent changes.
-          onSelectAgent={(a) =>
+          onSelectAgent={(a) => {
+            const nextProfile = agents.find(
+              (agent) => agent.name === a,
+            )?.profiles?.[0];
             onChange({
               agent: a,
-              profile:
-                agents.find((agent) => agent.name === a)?.profiles?.[0] ??
-                "safeguarded",
+              profile: nextProfile ?? draft.profile,
               model: "",
               effort: "",
-            })
-          }
+            });
+          }}
           profile={draft.profile}
           onSetProfile={(v) => onChange({ profile: v })}
           model={draft.model}

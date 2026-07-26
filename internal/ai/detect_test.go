@@ -29,6 +29,33 @@ func TestExecutionProfiles(t *testing.T) {
 	}
 }
 
+func TestEverySupportedAgentDeclaresProfiles(t *testing.T) {
+	for _, agent := range agentCLICandidates {
+		if len(ProfilesFor(agent)) == 0 {
+			t.Errorf("supported agent %q declares no execution profiles", agent)
+		}
+	}
+}
+
+func TestConsentSurfacesMatchTheExactAgentProfile(t *testing.T) {
+	cases := []struct {
+		agent   string
+		profile ExecutionProfile
+		want    string
+	}{
+		{"claude", ExecutionProfileSafeguarded, "claude:safeguarded"},
+		{"codex", ExecutionProfileSafeguarded, "codex:safeguarded"},
+		{"codex", ExecutionProfileFullLocal, "codex:full-local"},
+		{"cursor-agent", ExecutionProfileFullLocal, "cursor-agent:full-local"},
+		{"claude", ExecutionProfileFullLocal, ""},
+	}
+	for _, c := range cases {
+		if got := ConsentSurfaceFor(c.agent, c.profile); got != c.want {
+			t.Errorf("ConsentSurfaceFor(%q, %q) = %q, want %q", c.agent, c.profile, got, c.want)
+		}
+	}
+}
+
 func TestEffectiveAgentMatchesServerResolution(t *testing.T) {
 	agents := []AgentInfo{
 		{Name: "claude", Supported: false},
@@ -49,7 +76,8 @@ func TestEffectiveAgentMatchesServerResolution(t *testing.T) {
 	if got := EffectiveAgent("", nil); got != "" {
 		t.Errorf("no supported agents should resolve to \"\", got %q", got)
 	}
-	if ConsentSurfaceFor(DefaultProfileFor(EffectiveAgent("", agents))) != "full-local" {
-		t.Error("empty pick with Cursor as default must gate on the full-local surface")
+	effective := EffectiveAgent("", agents)
+	if ConsentSurfaceFor(effective, DefaultProfileFor(effective)) != "cursor-agent:full-local" {
+		t.Error("empty pick with Cursor as default must gate on Cursor's full-local surface")
 	}
 }

@@ -195,8 +195,15 @@ func TestCursorHelpSupportsTrust(t *testing.T) {
 	if !cursorHelpSupportsTrust("  --trust  Trust the current workspace without prompting") {
 		t.Fatal("expected --trust to be detected from Cursor help")
 	}
-	if cursorHelpSupportsTrust("  --force  Run everything") {
-		t.Fatal("must not infer --trust when it is absent from Cursor help")
+	for _, help := range []string{
+		"  --force  Run everything",
+		"  --trusted-domains  Trust listed domains",
+		"  --no-trust  Disable workspace trust",
+		"Removed: --trust is no longer supported",
+	} {
+		if cursorHelpSupportsTrust(help) {
+			t.Fatalf("must not infer --trust from %q", help)
+		}
 	}
 }
 

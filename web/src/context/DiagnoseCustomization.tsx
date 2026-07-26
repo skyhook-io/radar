@@ -41,7 +41,7 @@ export type DiagnoseConsentCopy = {
   /** Detail list under the body; each entry is rendered as its own "•" row. */
   bullets?: ReactNode[];
   /** Label for the settings link. `null` hides it — for hosts with one fixed
-   *  agent and no isolation choice, where it would open an empty dialog. */
+   *  agent and no execution-profile choice, where it would open an empty dialog. */
   settingsLabel?: string | null;
   approveLabel?: string;
 };

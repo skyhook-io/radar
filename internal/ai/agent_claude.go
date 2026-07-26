@@ -17,6 +17,8 @@ type claudeAgent struct{ bin string }
 
 func (a *claudeAgent) Name() string { return "claude" }
 
+func (a *claudeAgent) Path() string { return a.bin }
+
 func (a *claudeAgent) SigninCmd() string { return "claude auth login" }
 
 func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {

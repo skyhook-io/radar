@@ -185,6 +185,15 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
+  useEffect(() => {
+    if (!open || diag.agents.length === 0) return
+    setAiDraft((current) => {
+      const profiles = diag.agents.find((agent) => agent.name === current.agent)?.profiles ?? []
+      if (profiles.length === 0 || profiles.includes(current.profile)) return current
+      return { ...current, profile: profiles[0] }
+    })
+  }, [open, diag.agents])
+
   const updateConfigField = useCallback(<K extends keyof Config>(field: K, value: Config[K]) => {
     setEditedConfig((prev) => ({ ...prev, [field]: value }))
     setSaveMessage(null)

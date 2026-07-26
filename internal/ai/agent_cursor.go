@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +41,8 @@ type cursorAgent struct {
 }
 
 func (a *cursorAgent) Name() string { return "cursor-agent" }
+
+func (a *cursorAgent) Path() string { return a.bin }
 
 func (a *cursorAgent) SigninCmd() string { return "cursor-agent login" }
 
@@ -116,11 +120,14 @@ func (a *cursorAgent) supportsTrust() (bool, error) {
 	}
 	a.trust = cursorHelpSupportsTrust(string(out))
 	a.trustKnown = true
+	log.Printf("[ai] cursor-agent --trust supported=%v", a.trust)
 	return a.trust, nil
 }
 
+var cursorTrustFlag = regexp.MustCompile(`(?m)^[[:space:]]*(-[[:alnum:]],?[[:space:]]+)?--trust([[:space:],=]|$)`)
+
 func cursorHelpSupportsTrust(help string) bool {
-	return strings.Contains(help, "--trust")
+	return cursorTrustFlag.MatchString(help)
 }
 
 // writeCursorMCPConfig points Cursor at radar's MCP via the workspace-local config

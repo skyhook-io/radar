@@ -310,6 +310,31 @@ func NewDetected(ctx context.Context) (*Diagnoser, error) {
 // DefaultAgent is the backend chosen when a run doesn't name one.
 func (d *Diagnoser) DefaultAgent() string { return d.defName }
 
+// AgentInfos reports the exact backends this Diagnoser can drive.
+func (d *Diagnoser) AgentInfos(ctx context.Context, withVersions bool) []AgentInfo {
+	var infos []AgentInfo
+	for _, name := range agentCLICandidates {
+		agent, ok := d.agents[name]
+		if !ok {
+			continue
+		}
+		info := AgentInfo{
+			Name:            name,
+			Label:           AgentLabel(name),
+			Path:            agent.Path(),
+			Present:         true,
+			Supported:       true,
+			Profiles:        ProfilesFor(name),
+			ConsentSurfaces: ConsentSurfacesFor(name),
+		}
+		if withVersions {
+			info.Version = probeVersion(ctx, agent.Path())
+		}
+		infos = append(infos, info)
+	}
+	return infos
+}
+
 // AgentName normalizes a client-requested backend name to one that actually
 // exists, falling back to the default — so a run records the agent it really used.
 func (d *Diagnoser) AgentName(name string) string {

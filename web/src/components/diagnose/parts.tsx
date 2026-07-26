@@ -33,8 +33,8 @@ import {
 import { StatusDot } from "@skyhook-io/k8s-ui";
 import { Markdown } from "../ui/Markdown";
 
-// Segmented two-or-more-way selector — shared shape for the agent picker and the
-// isolation toggle.
+// Segmented two-or-more-way selector — shared shape for the agent and execution
+// profile pickers.
 function Segmented<T extends string | boolean>({
   label,
   options,
@@ -257,6 +257,9 @@ export function AgentControls({
   const isClaude = selectedAgent === "claude";
   const isCursor = selectedAgent === "cursor-agent";
   const profiles = agents.find((a) => a.name === selectedAgent)?.profiles ?? [];
+  const shownProfile = profiles.includes(profile)
+    ? profile
+    : (profiles[0] ?? profile);
   const profileLabels: Record<ExecutionProfile, string> = {
     safeguarded: "Radar safeguards",
     "full-local": "Full local setup",
@@ -277,42 +280,60 @@ export function AgentControls({
       {profiles.length > 0 && (
         <div>
           {profiles.length > 1 ? (
-            <Segmented<ExecutionProfile>
-              label="How Radar runs it"
-              value={profile}
-              onChange={onSetProfile}
-              options={profiles.map((value) => ({
-                value,
-                label: profileLabels[value],
-              }))}
-            />
-          ) : (
             <>
-              <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
-                How Radar runs it
-              </div>
-              <div className="rounded-md border border-theme-border bg-theme-base px-2.5 py-1.5 text-xs text-theme-text-primary">
-                {profileLabels[profiles[0]]}
-              </div>
+              <Segmented<ExecutionProfile>
+                label="How Radar runs it"
+                value={shownProfile}
+                onChange={onSetProfile}
+                options={profiles.map((value) => ({
+                  value,
+                  label: profileLabels[value],
+                }))}
+              />
+              {shownProfile === "safeguarded" ? (
+                <p className="mt-1.5 text-[11px] leading-snug text-theme-text-tertiary">
+                  {isCodex
+                    ? "Radar excludes your Codex configuration and other MCP servers. Codex’s sandboxed shell can still read files on this machine; it cannot write or reach the network."
+                    : "Radar uses this agent’s safeguarded execution profile. Review the agent’s documented restrictions before continuing."}
+                </p>
+              ) : (
+                <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
+                  <span>
+                    Uses your agent&apos;s normal configuration and other
+                    configured tools and MCP servers. Radar cannot constrain that
+                    external tooling; it may access local files or the network
+                    and may be able to change your cluster. Radar still enables
+                    the agent CLI&apos;s own sandbox, but that sandbox does not
+                    constrain external MCP servers. Choose this only when you
+                    need that setup.
+                  </span>
+                </div>
+              )}
             </>
-          )}
-          {profile === "safeguarded" ? (
-            <p className="mt-1.5 text-[11px] leading-snug text-theme-text-tertiary">
-              Radar limits the agent to its investigation tools and excludes
-              your other agent configuration.
-              {isCodex &&
-                " Codex’s sandboxed shell can still read files on this machine; it cannot write or reach the network."}
-            </p>
+          ) : shownProfile === "safeguarded" ? (
+            <div className="flex items-start gap-1.5 rounded border border-theme-border bg-theme-base p-2 text-[11px] leading-snug text-theme-text-secondary">
+              <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0 text-accent" />
+              <span>
+                Radar always runs this agent with safeguards.
+                {isClaude
+                  ? " Claude’s built-in tools are disabled, and MCP access is limited to Radar’s read-only investigation tools. Your Claude settings, hooks, and CLAUDE.md instructions still apply and are outside Radar’s control."
+                  : isCodex
+                    ? " Your Codex configuration and other MCP servers are excluded. Codex’s sandboxed shell can still read files on this machine; it cannot write or reach the network."
+                    : " Review the agent’s documented restrictions before continuing."}
+              </span>
+            </div>
           ) : (
-            <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
+            <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
               <span>
-                Uses your agent&apos;s normal configuration and other configured
-                tools and MCP servers. Radar does not constrain those tools;
-                they may access local files or the network and may be able to
-                change your cluster. Choose this only when you need that setup.
+                This agent only supports Full local setup. Radar cannot constrain
+                its external tools or MCP servers; they may access local files
+                or the network and may be able to change your cluster. Radar
+                still enables the agent CLI&apos;s own sandbox, but that sandbox
+                does not constrain external MCP servers.
                 {isCursor &&
-                  " Cursor always loads your global MCP servers; Radar cannot exclude them."}
+                  " Cursor always loads your global MCP servers, so Radar cannot exclude them."}
               </span>
             </div>
           )}
@@ -326,7 +347,7 @@ export function AgentControls({
           onChange={onSetModel}
           hint="Aliases always resolve to the latest of that tier."
         />
-      ) : (
+      ) : isCodex || isCursor ? (
         <TextField
           label="Model"
           value={model}
@@ -339,10 +360,18 @@ export function AgentControls({
           hint={
             isCursor
               ? "Leave empty for your Cursor default, or enter a model slug Cursor supports."
-              : profile === "full-local"
+              : shownProfile === "full-local"
                 ? "Full local setup uses your own Codex config's model; set a slug here to override it."
                 : "Leave empty for Codex's default, or enter a model your Codex version supports."
           }
+        />
+      ) : (
+        <TextField
+          label="Model"
+          value={model}
+          placeholder="Default"
+          onChange={onSetModel}
+          hint="Leave empty for the agent's default, or enter a model identifier it supports."
         />
       )}
       {isCodex && (
@@ -613,10 +642,12 @@ function ConsentCardShell({
   bullets,
   settingsLabel,
   approveLabel = "Approve & investigate",
+  warning = false,
   onOpenSettings,
   onApprove,
   onCancel,
 }: DiagnoseConsentCopy & {
+  warning?: boolean;
   onOpenSettings?: () => void;
   onApprove: () => void;
   onCancel: () => void;
@@ -628,9 +659,19 @@ function ConsentCardShell({
       ? "Change the agent and how it runs in Settings"
       : settingsLabel;
   return (
-    <div className="rounded-lg border border-theme-border bg-theme-elevated p-4">
+    <div
+      className={
+        warning
+          ? "rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
+          : "rounded-lg border border-theme-border bg-theme-elevated p-4"
+      }
+    >
       <div className="mb-2 flex items-center gap-2">
-        <ShieldCheck className="h-4 w-4 text-accent" />
+        {warning ? (
+          <AlertTriangle className="h-4 w-4 text-amber-500" />
+        ) : (
+          <ShieldCheck className="h-4 w-4 text-accent" />
+        )}
         <div className="text-sm font-medium text-theme-text-primary">
           {title}
         </div>
@@ -704,6 +745,7 @@ export function ConsentCard({
   return (
     <ConsentCardShell
       {...chrome}
+      warning={profile === "full-local"}
       approveLabel={
         profile === "full-local"
           ? "Continue with full local setup"
@@ -711,8 +753,8 @@ export function ConsentCard({
       }
       title={
         profile === "safeguarded"
-          ? "Run a read-only AI investigation?"
-          : "Run an AI investigation?"
+          ? "Run an AI investigation with Radar safeguards?"
+          : "Run with your agent’s full local setup?"
       }
       body={
         <>
@@ -727,42 +769,55 @@ export function ConsentCard({
           {profile === "safeguarded" && (
             <>
               {" "}
-              Through Radar the agent can only{" "}
-              <span className="font-medium">read</span> your cluster during this
-              investigation.
+              Radar&apos;s investigation tools can only{" "}
+              <span className="font-medium">read</span> your cluster.
             </>
           )}
         </>
       }
-      bullets={[
-        profile === "safeguarded" ? (
-          <>
-            Radar safeguards: only Radar&apos;s read-only investigation tools —
-            your other agent configuration and MCP servers are excluded.
-            {agent === "codex" && (
+      bullets={
+        profile === "safeguarded"
+          ? [
+              agent === "claude" ? (
+                <>
+                  Radar safeguards disable Claude&apos;s built-in tools and limit
+                  MCP access to Radar&apos;s read-only investigation tools. Your
+                  Claude settings, hooks, and CLAUDE.md instructions still apply
+                  and are outside Radar&apos;s control.
+                </>
+              ) : agent === "codex" ? (
+                <>
+                  Radar safeguards exclude your Codex configuration and other MCP
+                  servers. Codex&apos;s sandboxed shell can still read files on
+                  this machine; it cannot write or reach the network.
+                </>
+              ) : (
+                <>
+                  Radar uses this agent&apos;s safeguarded execution profile.
+                  Review the agent&apos;s documented restrictions before
+                  continuing.
+                </>
+              ),
+            ]
+          : [
               <>
-                {" "}
-                Codex&apos;s sandboxed shell can still read files on this
-                machine; it cannot write or reach the network.
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            Full local setup: Radar&apos;s own investigation tools are read-only,
-            but the agent&apos;s other configured tools and MCP servers are not
-            constrained by Radar. They may access local files or the network and
-            may be able to change your cluster.
-            {agent === "cursor-agent" && (
+                Radar cannot constrain the agent&apos;s other configured tools or
+                MCP servers. They may access local files or the network and may
+                be able to change your cluster.
+              </>,
               <>
-                {" "}
-                Cursor always loads your global MCP servers; Radar cannot exclude
-                them.
-              </>
-            )}
-          </>
-        ),
-      ]}
+                Radar still enables the agent CLI&apos;s own sandbox, but that
+                sandbox does not constrain external MCP servers.
+                {agent === "cursor-agent" && (
+                  <>
+                    {" "}
+                    Cursor always loads your global MCP servers; Radar cannot
+                    exclude them.
+                  </>
+                )}
+              </>,
+            ]
+      }
     />
   );
 }
