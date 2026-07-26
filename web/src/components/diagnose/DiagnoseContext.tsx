@@ -221,7 +221,9 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
             : (supported[0]?.name ?? "");
         setSelectedAgentState(next);
         const profiles = supported.find((a) => a.name === next)?.profiles ?? [];
-        if (!profiles.includes(profile) && profiles[0]) {
+        const storedProfile =
+          (readStored(PROFILE_KEY) as ExecutionProfile) || "safeguarded";
+        if (!profiles.includes(storedProfile) && profiles[0]) {
           setProfileState(profiles[0]);
           writeStored(PROFILE_KEY, profiles[0]);
         }
