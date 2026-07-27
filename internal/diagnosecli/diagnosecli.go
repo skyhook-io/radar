@@ -361,7 +361,7 @@ func promptConsent(agent string, profile ai.ExecutionProfile, surface string, re
 Radar sends the resource's spec, recent events, and pod logs to it (and on to
 its model provider under your account). Transcripts are kept in your local Radar
 history until cleared.
-	`, agentLabel)
+`, agentLabel)
 	if profile == ai.ExecutionProfileFullLocal {
 		notice += fmt.Sprintf(`Your %s setup uses its normal configuration and other configured
 tools and MCP servers. Radar cannot constrain that external tooling; it may
