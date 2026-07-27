@@ -34,6 +34,12 @@ func TestNormalizeBasePath(t *testing.T) {
 		{name: "space rejected", raw: "/rad ar", wantErr: true},
 		{name: "percent encoding rejected", raw: "/rad%2Far", wantErr: true},
 		{name: "unreserved characters allowed", raw: "/radar-v2_1.0~beta", want: "/radar-v2_1.0~beta"},
+		// Scheme-relative forms would turn the redirect Location into an
+		// off-origin URL, so they must never normalize successfully.
+		{name: "protocol-relative rejected", raw: "//evil.com", wantErr: true},
+		{name: "backslash second position rejected", raw: `/\evil.com`, wantErr: true},
+		{name: "double backslash rejected", raw: `\\evil.com`, wantErr: true},
+		{name: "encoded protocol-relative rejected", raw: "/%2f%2fevil.com", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -179,6 +185,41 @@ func TestServerMountsRoutesUnderBasePath(t *testing.T) {
 	}
 	if got := bareResp.Header().Get("Location"); got != "/radar/?namespace=default" {
 		t.Fatalf("bare prefix Location = %q, want /radar/?namespace=default", got)
+	}
+}
+
+// Both base-path redirects echo the request's query string, so their Location
+// must stay same-origin no matter what the caller sends: a value that browsers
+// read as scheme-relative ("//host", "/\host") would be an open redirect.
+func TestBasePathRedirectsStaySameOrigin(t *testing.T) {
+	hostileQueries := []string{
+		"//evil.com", `/\evil.com`, "http://evil.com", "https:%2f%2fevil.com",
+		"a=b&c=//evil.com", "%0d%0aSet-Cookie:+evil=1", "?=//evil.com",
+	}
+
+	for _, basePath := range []string{"/radar", "/tools/radar"} {
+		srv := New(Config{DevMode: true, BasePath: basePath})
+		for _, q := range hostileQueries {
+			for _, target := range []string{"/?" + q, basePath + "?" + q} {
+				resp := httptest.NewRecorder()
+				srv.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodGet, target, nil))
+
+				loc := resp.Header().Get("Location")
+				if !strings.HasPrefix(loc, basePath+"/") {
+					t.Errorf("GET %s: Location = %q, want it to start with %q", target, loc, basePath+"/")
+					continue
+				}
+				// A Location the browser resolves against another origin always
+				// begins "//" or "/\" — the prefix check above already rules
+				// that out, but assert it directly so the intent is explicit.
+				if strings.HasPrefix(loc, "//") || strings.HasPrefix(loc, `/\`) {
+					t.Errorf("GET %s: Location = %q is scheme-relative (open redirect)", target, loc)
+				}
+				if strings.ContainsAny(loc, "\r\n") {
+					t.Errorf("GET %s: Location = %q contains CR/LF (header injection)", target, loc)
+				}
+			}
+		}
 	}
 }
 
