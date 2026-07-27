@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/skyhook-io/radar/pkg/auth"
 )
 
 func TestNormalizeBasePath(t *testing.T) {
@@ -26,6 +28,12 @@ func TestNormalizeBasePath(t *testing.T) {
 		{name: "url rejected", raw: "https://example.com/radar", wantErr: true},
 		{name: "route pattern rejected", raw: "/{tenant}/radar", wantErr: true},
 		{name: "dot segment rejected", raw: "/radar/../api", wantErr: true},
+		{name: "quote rejected", raw: `/rad"ar`, wantErr: true},
+		{name: "angle bracket rejected", raw: "/rad<script>ar", wantErr: true},
+		{name: "backslash rejected", raw: `/rad\ar`, wantErr: true},
+		{name: "space rejected", raw: "/rad ar", wantErr: true},
+		{name: "percent encoding rejected", raw: "/rad%2Far", wantErr: true},
+		{name: "unreserved characters allowed", raw: "/radar-v2_1.0~beta", want: "/radar-v2_1.0~beta"},
 	}
 
 	for _, tt := range tests {
@@ -124,8 +132,10 @@ func TestFrontendHandlerRewritesIndexFallbackButNotAssets(t *testing.T) {
 		t.Fatalf("client-route fallback did not rewrite asset src:\n%s", indexBody)
 	}
 
+	// Root-relative: basePathHandler strips the prefix before the frontend
+	// handler sees the request.
 	assetResp := httptest.NewRecorder()
-	handler.ServeHTTP(assetResp, httptest.NewRequest(http.MethodGet, "/radar/assets/index.js", nil))
+	handler.ServeHTTP(assetResp, httptest.NewRequest(http.MethodGet, "/assets/index.js", nil))
 	if assetResp.Code != http.StatusOK {
 		t.Fatalf("asset status = %d, want 200", assetResp.Code)
 	}
@@ -160,5 +170,49 @@ func TestServerMountsRoutesUnderBasePath(t *testing.T) {
 	srv.Handler().ServeHTTP(prefixedResp, httptest.NewRequest(http.MethodGet, "/radar/api/health", nil))
 	if prefixedResp.Code != http.StatusOK {
 		t.Fatalf("prefixed API status = %d, want 200", prefixedResp.Code)
+	}
+
+	bareResp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(bareResp, httptest.NewRequest(http.MethodGet, "/radar?namespace=default", nil))
+	if bareResp.Code != http.StatusMovedPermanently {
+		t.Fatalf("bare prefix status = %d, want 301", bareResp.Code)
+	}
+	if got := bareResp.Header().Get("Location"); got != "/radar/?namespace=default" {
+		t.Fatalf("bare prefix Location = %q, want /radar/?namespace=default", got)
+	}
+}
+
+// A base path must not become an authentication bypass. chi's Mount leaves
+// r.URL.Path prefixed, and the auth middleware treats paths outside /api, /mcp
+// and /debug as public static content — so before the prefix was stripped at the
+// router edge, every prefixed endpoint (including the /debug/pprof heap dump of
+// the whole informer cache) served unauthenticated.
+func TestBasePathDoesNotBypassAuth(t *testing.T) {
+	protected := []string{"/api/config", "/api/resources/pods", "/debug/pprof/heap", "/api/auth/whoami"}
+
+	// Proxy mode only: the exemption logic under test lives in
+	// auth.Authenticate and is mode-independent, and OIDC mode would need a
+	// reachable issuer for discovery.
+	for _, basePath := range []string{"", "/radar", "/tools/radar"} {
+		srv := New(Config{
+			DevMode:    true,
+			BasePath:   basePath,
+			AuthConfig: auth.Config{Mode: "proxy"},
+		})
+		for _, path := range protected {
+			resp := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodGet, basePath+path, nil))
+			if resp.Code != http.StatusUnauthorized {
+				t.Errorf("basePath=%q GET %s: status = %d, want 401 (unauthenticated request must be rejected)",
+					basePath, basePath+path, resp.Code)
+			}
+		}
+
+		// /api/health stays public for kubelet probes, under the prefix too.
+		healthResp := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(healthResp, httptest.NewRequest(http.MethodGet, basePath+"/api/health", nil))
+		if healthResp.Code != http.StatusOK {
+			t.Errorf("basePath=%q: health status = %d, want 200", basePath, healthResp.Code)
+		}
 	}
 }

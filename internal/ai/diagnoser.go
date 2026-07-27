@@ -42,6 +42,9 @@ type Request struct {
 	Name      string
 	// MCPPort is the port Radar's own MCP server listens on (localhost).
 	MCPPort int
+	// MCPBasePath is Radar's --base-path prefix ("" at the root). The MCP mounts
+	// live under it, so the loopback URL handed to the agent must carry it too.
+	MCPBasePath string
 	// SessionID, when set, resumes a prior CLI session (multi-turn) so the agent
 	// keeps full context (prior tool results + reasoning) without re-investigating.
 	SessionID string
@@ -388,7 +391,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	if !req.Apply {
 		path = "/mcp-readonly"
 	}
-	mcpURL := fmt.Sprintf("http://localhost:%d%s", req.MCPPort, path)
+	mcpURL := fmt.Sprintf("http://localhost:%d%s%s", req.MCPPort, req.MCPBasePath, path)
 
 	// An apply turn runs in a FRESH session, not a resume: it acts only on the
 	// user-confirmed fix text + target, so untrusted cluster data ingested during

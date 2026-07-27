@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { User, LogOut } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuthMe } from '../api/client'
+import { routePath } from '../api/config'
 import { Tooltip } from './ui/Tooltip'
 import { useQueryClient } from '@tanstack/react-query'
 
@@ -33,9 +34,9 @@ export function UserMenu({ variant = 'topbar', pinned = true }: UserMenuProps = 
   }, [isOpen])
 
   const handleLogout = useCallback(async () => {
-    let redirectTo = '/'
+    let redirectTo = routePath('/')
     try {
-      const res = await fetch('/auth/logout', { credentials: 'same-origin' })
+      const res = await fetch(routePath('/auth/logout'), { credentials: 'same-origin' })
       const data = await res.json()
       if (data.redirectTo) {
         redirectTo = data.redirectTo

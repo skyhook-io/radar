@@ -59,6 +59,13 @@ ingress:
 
 Then open `https://tools.your-domain.com/radar/`. Do not set `basePath` when your ingress already rewrites `/radar` to `/`.
 
+Path segments accept letters, digits, `-`, `_`, `.` and `~`. Radar serves the app
+**only** under the prefix — requests to unprefixed paths get a 404, so update any
+external health checks or scrapers that hit `/api/health` or `/metrics` directly
+(the chart's own probes follow `basePath` automatically). `basePath` is not
+supported together with Radar Cloud (`--cloud-url`), where the Hub owns the URL
+path.
+
 ### With Basic Authentication
 
 1. **Create the auth secret:**

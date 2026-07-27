@@ -208,6 +208,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid --base-path %q: %v", *basePath, err)
 	}
+	// Radar Hub forwards root-relative paths over the tunnel and the ordinary
+	// listener is health-only at the literal /api/health, so a prefixed router
+	// would 404 both. Fail loudly instead of coming up broken.
+	if normalizedBasePath != "" && *cloudURL != "" {
+		log.Fatalf("--base-path is not supported with --cloud-url: Radar Hub owns the URL path when Radar runs in Cloud mode")
+	}
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
 	if err != nil {
 		log.Fatalf("Invalid --timeline-max-size %q: %v", *timelineMaxSize, err)

@@ -30,8 +30,16 @@ function getRuntimeAssetBase(): string {
   const configured = runtime?.assetBase?.replace(/\/+$/, '')
   if (configured) return configured
 
+  // A Worker has its own global scope, so it never sees the runtime config the
+  // server injects into index.html — but its own script URL sits at
+  // `<base>/assets/<chunk>.js`, so the base can be recovered from it. Restricted
+  // to worker scopes on purpose: on the main thread `pathname` is an app route,
+  // which may legitimately contain an "/assets/" segment (a namespace or
+  // resource named "assets") and would yield a bogus prefix for every asset.
+  if (typeof window !== 'undefined') return ''
   const pathname = globalThis.location?.pathname ?? ''
-  const assetsIndex = pathname.indexOf('/assets/')
+  // lastIndexOf, not indexOf: the base path itself may contain "/assets/".
+  const assetsIndex = pathname.lastIndexOf('/assets/')
   if (assetsIndex > 0) return pathname.slice(0, assetsIndex)
   return ''
 }

@@ -221,7 +221,7 @@ func New(cfg Config) *Server {
 					store = st
 				}
 			}
-			s.aiRuns = ai.NewRunManager(d, s.ActualPort, k8s.GetContextName, store)
+			s.aiRuns = ai.NewRunManager(d, s.ActualPort, s.basePath, k8s.GetContextName, store)
 			if historyBroken {
 				// Persistence was requested but isn't working — the UI must say
 				// history won't survive a restart, not just a log line.
@@ -319,23 +319,42 @@ func (s *Server) setupRoutes() {
 		appRouter := chi.NewRouter()
 		s.setupAppRoutes(appRouter)
 		s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
-			target := s.basePath + "/"
-			if r.URL.RawQuery != "" {
-				target += "?" + r.URL.RawQuery
-			}
-			http.Redirect(w, r, target, http.StatusFound)
+			http.Redirect(w, r, s.basePath+"/"+querySuffix(r), http.StatusFound)
 		})
-		s.router.Get(s.basePath, func(w http.ResponseWriter, r *http.Request) {
-			target := s.basePath + "/"
-			if r.URL.RawQuery != "" {
-				target += "?" + r.URL.RawQuery
-			}
-			http.Redirect(w, r, target, http.StatusMovedPermanently)
-		})
-		s.router.Mount(s.basePath, appRouter)
+		s.router.Mount(s.basePath, s.basePathHandler(appRouter))
 		return
 	}
 	s.setupAppRoutes(s.router)
+}
+
+// basePathHandler adapts the prefixed public URL space to the app router, which
+// is written as if it owned the origin's root.
+//
+// The prefix MUST be stripped from r.URL.Path before any app middleware runs:
+// chi's Mount only rewrites the routing context's RoutePath and leaves
+// r.URL.Path prefixed, but the auth middleware matches on r.URL.Path and treats
+// anything outside /api, /mcp and /debug as public static content. A prefixed
+// path therefore looked public and skipped authentication entirely — including
+// /debug/pprof, which dumps the whole informer cache. Stripping here keeps that
+// translation at the single edge instead of every absolute-path check inside.
+func (s *Server) basePathHandler(app http.Handler) http.Handler {
+	stripped := http.StripPrefix(s.basePath, app)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Canonicalize the bare prefix to a trailing slash so the app always
+		// sees a rooted path.
+		if r.URL.Path == s.basePath {
+			http.Redirect(w, r, s.basePath+"/"+querySuffix(r), http.StatusMovedPermanently)
+			return
+		}
+		stripped.ServeHTTP(w, r)
+	})
+}
+
+func querySuffix(r *http.Request) string {
+	if r.URL.RawQuery == "" {
+		return ""
+	}
+	return "?" + r.URL.RawQuery
 }
 
 func (s *Server) setupAppRoutes(r chi.Router) {
@@ -764,21 +783,30 @@ func NormalizeBasePath(raw string) (string, error) {
 	if p == "" || p == "/" {
 		return "", nil
 	}
-	if strings.ContainsAny(p, "?#") {
-		return "", fmt.Errorf("must be a path only, without query or fragment")
-	}
-	if strings.ContainsAny(p, "{}*") {
-		return "", fmt.Errorf("must not contain route pattern characters")
-	}
 	if strings.Contains(p, "://") || strings.HasPrefix(p, "//") {
 		return "", fmt.Errorf("must be a path, not a URL")
 	}
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p
 	}
+	// Allowlist rather than a blocklist: the value is interpolated into a chi
+	// route pattern and into href/src attributes of the served index.html, so
+	// anything outside unreserved RFC 3986 path characters is rejected up front
+	// instead of relying on each consumer to escape it. Also blocks %-encoding,
+	// which would make the configured prefix and the routed path disagree.
 	for _, segment := range strings.Split(p, "/") {
+		if segment == "" {
+			continue
+		}
 		if segment == "." || segment == ".." {
 			return "", fmt.Errorf("must not contain . or .. path segments")
+		}
+		for _, c := range segment {
+			isAllowed := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+				c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~'
+			if !isAllowed {
+				return "", fmt.Errorf("segment %q contains disallowed character %q — use only letters, digits, '-', '_', '.', '~'", segment, c)
+			}
 		}
 	}
 	clean := pathpkg.Clean(p)
@@ -793,21 +821,10 @@ func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 	fileServer := http.FileServer(fsys)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Paths arrive root-relative even under a base path — basePathHandler
+		// strips the prefix at the router edge. basePath is still needed to
+		// rewrite the asset URLs inside index.html.
 		path := r.URL.Path
-		serveReq := r
-		if basePath != "" {
-			switch {
-			case path == basePath:
-				path = "/"
-			case strings.HasPrefix(path, basePath+"/"):
-				path = strings.TrimPrefix(path, basePath)
-			}
-			if path != r.URL.Path {
-				serveReq = r.Clone(r.Context())
-				serveReq.URL = cloneURL(r.URL)
-				serveReq.URL.Path = path
-			}
-		}
 
 		if path == "/" || path == "/index.html" {
 			serveFrontendIndex(w, r, fsys, basePath)
@@ -831,13 +848,8 @@ func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 			return
 		}
 
-		fileServer.ServeHTTP(w, serveReq)
+		fileServer.ServeHTTP(w, r)
 	})
-}
-
-func cloneURL(u *url.URL) *url.URL {
-	cloned := *u
-	return &cloned
 }
 
 func serveFrontendIndex(w http.ResponseWriter, r *http.Request, fsys http.FileSystem, basePath string) {
