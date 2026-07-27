@@ -183,10 +183,10 @@ func TestServerMountsRoutesUnderBasePath(t *testing.T) {
 }
 
 // A base path must not become an authentication bypass. chi's Mount leaves
-// r.URL.Path prefixed, and the auth middleware treats paths outside /api, /mcp
-// and /debug as public static content — so before the prefix was stripped at the
-// router edge, every prefixed endpoint (including the /debug/pprof heap dump of
-// the whole informer cache) served unauthenticated.
+// r.URL.Path prefixed and the auth middleware treats paths outside /api, /mcp
+// and /debug as public static content, so any prefix left in place by the time
+// the middleware runs makes every endpoint read as public — including the
+// /debug/pprof heap dump of the whole informer cache.
 func TestBasePathDoesNotBypassAuth(t *testing.T) {
 	protected := []string{"/api/config", "/api/resources/pods", "/debug/pprof/heap", "/api/auth/whoami"}
 

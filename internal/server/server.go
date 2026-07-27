@@ -330,13 +330,13 @@ func (s *Server) setupRoutes() {
 // basePathHandler adapts the prefixed public URL space to the app router, which
 // is written as if it owned the origin's root.
 //
-// The prefix MUST be stripped from r.URL.Path before any app middleware runs:
+// The prefix MUST be stripped from r.URL.Path before any app middleware runs.
 // chi's Mount only rewrites the routing context's RoutePath and leaves
-// r.URL.Path prefixed, but the auth middleware matches on r.URL.Path and treats
-// anything outside /api, /mcp and /debug as public static content. A prefixed
-// path therefore looked public and skipped authentication entirely — including
-// /debug/pprof, which dumps the whole informer cache. Stripping here keeps that
-// translation at the single edge instead of every absolute-path check inside.
+// r.URL.Path prefixed, while the auth middleware matches on r.URL.Path and
+// treats anything outside /api, /mcp and /debug as public static content — so a
+// still-prefixed path reads as public and skips authentication entirely,
+// /debug/pprof (which dumps the whole informer cache) included. Translating once
+// here keeps that concern at the edge rather than in every path check inside.
 func (s *Server) basePathHandler(app http.Handler) http.Handler {
 	stripped := http.StripPrefix(s.basePath, app)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
