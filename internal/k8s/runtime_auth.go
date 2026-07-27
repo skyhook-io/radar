@@ -145,9 +145,9 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	if !current {
 		return
 	}
-	defer cancel()
 	probe := getRuntimeAuthProbe()
 	err := probe(ctx)
+	cancel()
 	if ClassifyError(err) != "auth" {
 		runtimeAuthChecksMu.Lock()
 		runtimeAuthProbeAfter[generation] = time.Now().Add(runtimeAuthCooldown(err))
@@ -158,7 +158,10 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	}
 
 	endpointConfig, _ := GetConfigSnapshot()
-	endpointCtx, endpointCancel := context.WithTimeout(ctx, runtimeAuthEndpointProbeTimeout)
+	endpointCtx, endpointCancel, current := newOperationContextForGeneration(operationGeneration, runtimeAuthEndpointProbeTimeout)
+	if !current {
+		return
+	}
 	endpointErr := getRuntimeAuthEndpointProbe()(endpointCtx, endpointConfig)
 	endpointCancel()
 	if endpointErr != nil {

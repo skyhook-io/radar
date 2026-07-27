@@ -377,6 +377,27 @@ func TestRuntimeAuthFailureKeepsStateWhenEndpointIsUnreachable(t *testing.T) {
 	}
 }
 
+func TestRuntimeAuthEndpointProbeGetsIndependentDeadline(t *testing.T) {
+	prepareRuntimeAuthTest(t)
+	operationGeneration := currentOperationGen()
+
+	confirmationCtx, confirmationCancel, current := newOperationContextForGeneration(operationGeneration, time.Millisecond)
+	if !current {
+		t.Fatal("confirmation context generation was unexpectedly stale")
+	}
+	<-confirmationCtx.Done()
+	confirmationCancel()
+
+	endpointCtx, endpointCancel, current := newOperationContextForGeneration(operationGeneration, time.Second)
+	if !current {
+		t.Fatal("endpoint context generation was unexpectedly stale")
+	}
+	defer endpointCancel()
+	if err := endpointCtx.Err(); err != nil {
+		t.Fatalf("endpoint context inherited the exhausted confirmation deadline: %v", err)
+	}
+}
+
 func TestDefaultRuntimeAuthEndpointProbeSkipsExecAuthentication(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

@@ -19,6 +19,10 @@ interface ConnectionStatusResponse extends ConnectionState {
   contexts: ContextInfo[]
 }
 
+interface PolledConnectionStatus extends ConnectionStatusResponse {
+  sseGenerationAtStart: number
+}
+
 interface ConnectionContextValue {
   connection: ConnectionState
   contexts: ContextInfo[]
@@ -49,11 +53,14 @@ export function shouldAutoRetryConnection(errorType?: string): boolean {
 export function shouldApplyPolledConnection(
   currentState: ConnectionStateType,
   polledState: ConnectionStateType,
+  pollSSEGeneration: number,
+  currentSSEGeneration: number,
 ): boolean {
-  return currentState !== 'connected' || polledState !== 'connecting'
+  return pollSSEGeneration === currentSSEGeneration
+    && (currentState !== 'connected' || polledState !== 'connecting')
 }
 
-async function fetchConnectionStatus(): Promise<ConnectionStatusResponse> {
+async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<PolledConnectionStatus> {
   // apiFetch handles a 401 globally (re-auth redirect). These endpoints are
   // no longer auth-exempt, so a session that expires while the connection-
   // error screen is parked open must route through that path rather than
@@ -62,7 +69,8 @@ async function fetchConnectionStatus(): Promise<ConnectionStatusResponse> {
   if (!response.ok) {
     throw new Error('Failed to fetch connection status')
   }
-  return response.json()
+  const status = await response.json() as ConnectionStatusResponse
+  return { ...status, sseGenerationAtStart }
 }
 
 async function retryConnection(): Promise<ConnectionState> {
@@ -87,6 +95,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // Track whether SSE has delivered connection state so retry races prefer its
   // immediate recovery signal over an older failed request.
   const sseActiveRef = useRef(false)
+  const sseGenerationRef = useRef(0)
   // Track whether we've reached 'connected' at least once. Distinguishes the
   // initial connect (bootstrap queries already fetched while 'connecting') from
   // a reconnect after a drop (cache may be stale across the gap).
@@ -110,9 +119,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // Fetch initial connection status
   // Poll quickly while connecting and slowly otherwise so a dropped SSE state
   // frame cannot leave the UI stuck on stale connection state.
-  const { data } = useQuery<ConnectionStatusResponse>({
+  const { data } = useQuery<PolledConnectionStatus>({
     queryKey: ['connection-status'],
-    queryFn: fetchConnectionStatus,
+    queryFn: () => fetchConnectionStatus(sseGenerationRef.current),
     staleTime: 500, // Allow frequent refetches while connecting
     refetchInterval: connection.state === 'connecting' ? 500 : CONNECTION_STATUS_FALLBACK_POLL_MS,
     refetchOnWindowFocus: false,
@@ -123,7 +132,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     if (data) {
       setContexts(data.contexts || [])
       setConnection(current => {
-        if (!shouldApplyPolledConnection(current.state, data.state)) {
+        if (!shouldApplyPolledConnection(
+          current.state,
+          data.state,
+          data.sseGenerationAtStart,
+          sseGenerationRef.current,
+        )) {
           return current
         }
         return {
@@ -255,6 +269,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const updateFromSSE = useCallback((status: ConnectionState) => {
     // Mark SSE as active - it's now the authoritative source for connection state
     sseActiveRef.current = true
+    sseGenerationRef.current += 1
     setConnection(prev => {
       // Don't transition back to 'connecting' from 'connected'. This happens when the
       // pod restarts and the SSE reconnects while the new pod's K8s cache is still
